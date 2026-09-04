@@ -40,7 +40,9 @@ def _printable_ascii_header(value: str | None, *, max_length: int) -> str | None
     return normalized
 
 
-def _client_version_code(value: str | None) -> int | None:
+def parse_client_version_code(value: str | None) -> int | None:
+    """Parse the bounded positive integer used by every native-version header."""
+
     try:
         parsed = int((value or "").strip())
     except ValueError:
@@ -137,7 +139,7 @@ class ClientCompatibilityMiddleware(BaseHTTPMiddleware):
                     }
                 },
             )
-        version_code = _client_version_code(version_raw)
+        version_code = parse_client_version_code(version_raw)
         if version_code is None:
             return self._reject(
                 platform=platform,
@@ -275,7 +277,9 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         platform = (request.headers.get("X-Client-Platform") or "web").strip().lower()
         if platform not in {"android", "ios", "web"}:
             platform = "web"
-        client_version_code = _client_version_code(request.headers.get("X-Client-Version-Code"))
+        client_version_code = parse_client_version_code(
+            request.headers.get("X-Client-Version-Code")
+        )
         action_id = _printable_ascii_header(
             request.headers.get("X-Client-Action-Id"), max_length=100
         ) or _printable_ascii_header(request.headers.get("Idempotency-Key"), max_length=100)

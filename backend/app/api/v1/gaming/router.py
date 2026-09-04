@@ -33,6 +33,7 @@ from app.core.errors import (
     NotFoundError,
 )
 from app.core.idempotency import check_or_reserve, store_response
+from app.core.middleware import parse_client_version_code
 from app.core.permissions import requires
 from app.core.pricing_lock import require_pricing_unlock
 from app.core.tenant import TenantContext
@@ -2083,6 +2084,7 @@ async def list_packages(
 
 @router.get("/sessions", response_model=list[SessionRead])
 async def list_sessions(
+    request: Request,
     session: SessionDep,
     status_filter: str | None = Query(default=None, alias="status"),
     unbilled_only: bool = Query(default=False),
@@ -2096,17 +2098,43 @@ async def list_sessions(
         )
     if status_filter:
         stmt = stmt.where(GamingSession.status == status_filter)
+    include_cancelled_for_code21 = False
     if unbilled_only:
-        stmt = stmt.where(
-            or_(
-                GamingSession.status.in_(("active", "paused")),
-                (
-                    (GamingSession.status == "ended")
-                    & GamingSession.order_id.is_(None)
-                ),
-            )
+        unbilled_filter = or_(
+            GamingSession.status.in_(("active", "paused")),
+            (
+                (GamingSession.status == "ended")
+                & GamingSession.order_id.is_(None)
+            ),
         )
-    stmt = stmt.order_by(GamingSession.start_at.desc()).limit(limit)
+        # Android Code 21 can reconcile a stale local Stop only when a pull
+        # returns the authoritative terminal session row. A cancellation made
+        # from web otherwise remains hidden by the ordinary unbilled filter.
+        # Code 22+ performs an exact lookup for missing local lifecycle IDs;
+        # web and all other clients keep the strict unbilled contract.
+        client_platform = request.headers.get("X-Client-Platform", "").strip().lower()
+        client_version_code = parse_client_version_code(
+            request.headers.get("X-Client-Version-Code")
+        )
+        include_cancelled_for_code21 = (
+            client_platform == "android" and client_version_code == 21
+        )
+        if include_cancelled_for_code21:
+            unbilled_filter = or_(
+                unbilled_filter,
+                GamingSession.status == "cancelled",
+            )
+        stmt = stmt.where(unbilled_filter)
+    if unbilled_only and include_cancelled_for_code21:
+        # Preserve every operational obligation ahead of compatibility-only
+        # cancellation history when the caller supplies a bounded limit.
+        stmt = stmt.order_by(
+            (GamingSession.status == "cancelled").asc(),
+            GamingSession.start_at.desc(),
+        )
+    else:
+        stmt = stmt.order_by(GamingSession.start_at.desc())
+    stmt = stmt.limit(limit)
     rows = (await session.execute(stmt)).scalars().all()
     return [session_read(row) for row in rows]
 
