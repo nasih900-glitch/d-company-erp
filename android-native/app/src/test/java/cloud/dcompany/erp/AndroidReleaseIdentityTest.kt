@@ -1,14 +1,22 @@
 package cloud.dcompany.erp
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Test
 
 /** Guards the installable Android artifact identity against accidental reuse. */
 class AndroidReleaseIdentityTest {
     @Test
-    fun `code 24 artifact has the expected package and semantic version`() {
-        assertEquals("cloud.dcompany.erp", BuildConfig.APPLICATION_ID)
+    fun `code 24 artifact keeps production and isolated audit identities distinct`() {
         assertEquals(24, BuildConfig.VERSION_CODE)
-        assertEquals("3.1.13", BuildConfig.VERSION_NAME)
+        if (BuildConfig.BUILD_TYPE == "physicalAudit") {
+            assertEquals("cloud.dcompany.erp.physicalaudit", BuildConfig.APPLICATION_ID)
+            assertEquals("3.1.13-physical-audit", BuildConfig.VERSION_NAME)
+            assertEquals("managed", BuildConfig.DISTRIBUTION_CHANNEL)
+            assertFalse(BuildConfig.DIRECT_UPDATES_ENABLED)
+        } else {
+            assertEquals("cloud.dcompany.erp", BuildConfig.APPLICATION_ID)
+            assertEquals("3.1.13", BuildConfig.VERSION_NAME)
+        }
     }
 }

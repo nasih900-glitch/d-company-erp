@@ -11,23 +11,26 @@ Current direct-channel release candidate:
 | --- | --- |
 | App name | `D Company` |
 | Package name | `cloud.dcompany.erp` |
-| Version name | `3.1.12` |
-| Version code | `23` |
+| Version name | `3.1.13` |
+| Version code | `24` |
 | Minimum compatible client code | `8` |
 | Production API | `https://dcompany.duckdns.org/api/v1/` |
 
-The signed `3.1.3` code-`14` direct-release APK remains the manual partner
-baseline. Code `15` (`3.1.4`) is immutable held audit history and the first
+The signed `3.1.3` code-`14` direct-release APK is historical manual-partner
+baseline evidence; it is not the current upgrade predecessor. Code `15`
+(`3.1.4`) is immutable held audit history and the first
 server-registry-eligible identity; it is not the current activation target.
 Codes `16` (`3.1.5`) and `17` (`3.1.6`) are immutable predecessors. Tag
 `v3.1.7` / code `18`, `v3.1.8` / code `19`, and `v3.1.9` / code `20` failed before
 signing and must not be reused. Code `21` (`3.1.10`) is immutable signed
 predecessor history. Code `22` (`3.1.11`) was superseded before signing and
-must not be approved or activated. Code `23` (`3.1.12`) is the current
-direct-channel candidate only. Do not upload it to Play
+must not be approved or activated. Code `23` (`3.1.12`) was also superseded
+without an authorised signed artifact. Code `24` (`3.1.13`) is the current
+**unsigned** direct-channel candidate only. Do not upload it to Play
 or register, stage, advertise, or activate it without the green tagged workflow
-and reviewed rollout procedure. Physical Redmi Pad 2 acceptance remains a
-separate gate.
+and reviewed rollout procedure. Code `21` (`3.1.10`) is its signed
+same-channel upgrade predecessor. Physical Redmi Pad 2 acceptance remains a
+separate gate. Candidate database migrations currently run through `0071`.
 
 The rest of this document is a future Play-channel playbook; it is not an
 instruction to upload the current direct candidate. Do not mix direct delivery
@@ -47,7 +50,8 @@ repository release workflow and verify all of the following:
 - Android JVM tests, compilation, lint, assembly, and emulator instrumentation
   pass;
 - the future bundle metadata says package `cloud.dcompany.erp`, the deliberately
-  chosen new version/code above `20`, and the production HTTPS API above;
+  chosen new version/code above every direct-channel identity already used, and
+  the production HTTPS API above;
 - APK/AAB signatures and the published SHA-256 checksums verify;
 - no test active session, unpaid held order, pending cancellation, or open test
   shift remains in the acceptance environment;
@@ -61,10 +65,11 @@ API-35 emulator installation and a signed same-channel in-place upgrade are
 required, but they are not physical Redmi Pad proof.
 Uploading to an internal track also does not deploy the backend or web ERP to
 production. Keep client code `8` as the compatibility floor. The current
-code-`14` partner baseline remains a manual install and must never be advertised
-as a server update. A Play rollout uses Play delivery rather than the direct APK
-URL; do not configure both channels for one active fleet. GST validation is
-outside the current Android acceptance scope.
+signed direct-channel predecessor is Code `21`; historical code `14` remains a
+manual-install record and must never be advertised as a server update. A Play
+rollout uses Play delivery rather than the direct APK URL; do not configure both
+channels for one active fleet. GST validation is outside the current Android
+acceptance scope.
 
 ## 1. Create or use the correct developer account
 
@@ -147,10 +152,10 @@ Never commit review credentials or real customer data. Internal-test artifacts
 may receive lighter listing treatment, but privacy and access answers must still
 be accurate before any broader rollout.
 
-## 5. Upload a future Play build (not direct code 14, 15, or 16)
+## 5. Upload a future Play build (not the current direct Code 24 candidate)
 
-Do not perform this section for the current manual partner rollout. First choose
-Play as the fleet's deliberate future delivery channel, assign a version code
+Do not perform this section for the current direct-channel candidate. First
+choose Play as the fleet's deliberate future delivery channel, assign a version code
 higher than every code already used by either direct or Play delivery, and run
 the full same-channel upgrade gate.
 
@@ -162,7 +167,7 @@ the full same-channel upgrade gate.
 4. Confirm Play reads package `cloud.dcompany.erp` and the exact newly assigned
    version name/code from the bundle. It must be greater than every code already
    used by direct or Play delivery; for the current history, that means greater
-   than code `16`.
+   than code `24`.
 5. Use a release name that exactly records that version name and code.
 6. Add concise notes such as: `Gaming Centre command workspace, canonical
    receipt history, reliable real-time refresh, and offline recovery.`

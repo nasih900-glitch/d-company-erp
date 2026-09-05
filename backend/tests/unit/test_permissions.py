@@ -129,6 +129,7 @@ def test_auditor_role_is_read_only() -> None:
 
     # No write/refund/void/shift/admin permission of any kind survives.
     mutating = {
+        "pos.refund.reconcile",
         "pos.write",
         "pos.void",
         "pos.refund",

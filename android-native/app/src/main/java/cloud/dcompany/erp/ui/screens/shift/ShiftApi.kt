@@ -44,6 +44,14 @@ data class ShiftDetail(
     @SerialName("opened_by") val openedByUserId: String? = null,
     @SerialName("opened_by_name") val openedByName: String? = null,
     @SerialName("opened_by_email") val openedByEmail: String? = null,
+    // Backward-compatible receipt fact only. Unkeyed web opens can still use
+    // the post-0069 protocol, so recovery must use openingProtocolRevision.
+    @SerialName("opening_receipt_recorded") val openingReceiptRecorded: Boolean? = null,
+    // Null means either a pre-0069 server or a row migrated from before 0069.
+    // Every post-0069 opening, including an unkeyed web open, reports 1.
+    @SerialName("opening_protocol_revision") val openingProtocolRevision: Int? = null,
+    /** Client class only; the server never exposes the causal opening key. */
+    @SerialName("opening_client_platform") val openingClientPlatform: String? = null,
     @SerialName("closed_by") val closedByUserId: String? = null,
     @SerialName("closed_by_name") val closedByName: String? = null,
     @SerialName("closed_by_email") val closedByEmail: String? = null,
@@ -91,6 +99,7 @@ interface ShiftApi {
     suspend fun open(
         @Body body: ShiftOpenBody,
         @Header("Idempotency-Key") key: String,
+        @Header("X-Installation-Id") installationId: String,
         @HeaderMap provenance: Map<String, String> = emptyMap(),
     ): ShiftOpenResult
 
@@ -99,6 +108,7 @@ interface ShiftApi {
         @Path("id") id: String,
         @Body body: ShiftCloseBody,
         @Header("Idempotency-Key") key: String,
+        @Header("X-Installation-Id") installationId: String,
         @HeaderMap provenance: Map<String, String> = emptyMap(),
     ): ShiftCloseResult
 }

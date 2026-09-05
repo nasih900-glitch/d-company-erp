@@ -8,8 +8,10 @@ screen needs.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
+from hashlib import sha256
 from typing import Any, Literal
 from uuid import UUID, uuid4
 
@@ -29,6 +31,7 @@ from app.core.errors import (
 )
 from app.core.idempotency import check_or_reserve, store_response
 from app.core.logging import get_logger
+from app.core.middleware import parse_client_version_code
 from app.core.money import apportion
 from app.core.permissions import requires
 from app.core.tenant import TenantContext
@@ -55,6 +58,7 @@ from app.models import (
     Refund,
     Supplier,
     SupplierPayment,
+    Shift,
     TipPayout,
     User,
 )
@@ -78,6 +82,7 @@ from app.services.accounting.purchases import (
 )
 from app.services.integrations.google_sheets import push_manual_collection_to_sheet
 from app.services.reports import ReportsAggregator
+from app.services.reports.aggregator import CostingConfidence, PnLReport
 from app.services.reports.business_metrics import (
     compute_business_metrics,
     compute_distributable_capacity,
@@ -106,6 +111,14 @@ LEGACY_LIQUID_CASH_ACCOUNT_CODES = frozenset({"1000", "1010", "1110"})
 SETTLEMENT_RECEIVABLE_ACCOUNT_CODES = frozenset({"1100", "1110", "1120", "1210"})
 RECONCILIATION_ACCOUNT_CODES = frozenset({"1185", "1190"})
 COMPANY_WIDE_FINANCE_ROLES = frozenset({"owner", "partner", "auditor"})
+EXPENSE_CASH_PAID_OUT_UNAVAILABLE = (
+    "Cash paid-outs cannot be recorded as ordinary Finance expenses yet because "
+    "these entries are not linked to the open shift drawer. Use UPI, bank transfer, "
+    "or business debit card. Cash paid-outs require the shift-linked drawer workflow."
+)
+CODE21_CASH_EXPENSE_VERSION = 21
+CODE21_CASH_EXPENSE_RECEIPT_REVISION = 51
+CODE21_CASH_EXPENSE_CLOCK_WINDOW = timedelta(minutes=5)
 
 
 # ---------------------------------------------------------------- DTOs
@@ -141,6 +154,11 @@ class ExpenseRead(BaseModel):
     vendor_name: str | None
     invoice_no: str | None
     note: str | None
+    # Present only for the narrow shift-linked Code 21 cash-expense recovery
+    # contract.  They are optional so cached responses and older clients keep
+    # their existing wire shape/decoder compatibility.
+    shift_id: UUID | None = None
+    created_by: UUID | None = None
     voided_at: datetime | None = None
     voided_by: UUID | None = None
     void_reason: str | None = None
@@ -341,13 +359,29 @@ class PartnerProfitShare(BaseModel):
     name: str
     share_pct: float
     capital_balance_minor: int  # invest - withdraw, all-time
-    profit_share_minor: int  # this period's net profit, split by share_pct
+    # Compatibility value for pre-Code-24 clients. It is zero, never a guessed
+    # allocation, while authoritative_profit_share_minor is unavailable.
+    profit_share_minor: int
+    authoritative_profit_share_minor: int | None = None
+
+
+class AllocationConfidenceRead(BaseModel):
+    """Whether a profit-derived partner allocation is safe to act on."""
+
+    status: Literal["authoritative", "costing_incomplete", "costing_unavailable"]
+    inventory_orders_checked: int
+    inventory_lines_checked: int
+    unresolved_order_count: int
+    reason: str | None = None
 
 
 class PartnerPLReport(BaseModel):
     period_start: date
     period_end: date
     net_profit_minor: int
+    allocation_status: Literal["authoritative", "costing_incomplete", "costing_unavailable"]
+    allocation_unavailable_reason: str | None = None
+    costing_confidence: AllocationConfidenceRead
     partners: list[PartnerProfitShare]
 
 
@@ -357,7 +391,10 @@ class DistributablePartnerShare(BaseModel):
     share_pct: float
     capital_balance_minor: int  # invest - withdraw, all-time (unchanged by this report)
     lifetime_withdrawn_minor: int  # withdrawals only, all-time
-    distributable_share_minor: int  # this partner's slice of safe_to_distribute_minor
+    # Compatibility value for old clients. It is zero when costing is not
+    # authoritative; current clients use the nullable field below.
+    distributable_share_minor: int
+    authoritative_distributable_share_minor: int | None = None
 
 
 class CashPositionRead(BaseModel):
@@ -416,6 +453,44 @@ def _cash_position_from_ledger(
     return position, legacy_liquid_cash_minor
 
 
+def _allocation_confidence(report: PnLReport) -> AllocationConfidenceRead:
+    confidence: CostingConfidence | None = report.costing_confidence
+    if confidence is None:
+        return AllocationConfidenceRead(
+            status="costing_unavailable",
+            inventory_orders_checked=0,
+            inventory_lines_checked=0,
+            unresolved_order_count=0,
+            reason=(
+                "Partner allocations are unavailable because historical product "
+                "costing was not evaluated with this profit snapshot. Refresh Finance; "
+                "if this persists, ask an owner to check the server update."
+            ),
+        )
+    if confidence.is_authoritative:
+        return AllocationConfidenceRead(
+            status="authoritative",
+            inventory_orders_checked=confidence.inventory_orders_checked,
+            inventory_lines_checked=confidence.inventory_lines_checked,
+            unresolved_order_count=0,
+        )
+
+    count = confidence.unresolved_order_count
+    order_word = "order" if count == 1 else "orders"
+    return AllocationConfidenceRead(
+        status="costing_incomplete",
+        inventory_orders_checked=confidence.inventory_orders_checked,
+        inventory_lines_checked=confidence.inventory_lines_checked,
+        unresolved_order_count=count,
+        reason=(
+            f"Partner allocations are unavailable because {count} paid or refunded "
+            f"{order_word} containing food, drinks, or shisha cannot be reconciled "
+            "to complete positive-cost inventory movements. Reconcile the product "
+            "recipe and stock cost history, then refresh Finance."
+        ),
+    )
+
+
 class DistributableProfitReport(BaseModel):
     """How much the partners can safely take out right now, not just this period's paper profit.
 
@@ -441,7 +516,13 @@ class DistributableProfitReport(BaseModel):
     cash_position: CashPositionRead
     profit_based_capacity_minor: int
     cash_based_capacity_minor: int
+    # Compatibility value retained for signed Code 21. It is forced to zero
+    # when a physical sale has unresolved COGS so old clients also fail closed.
     safe_to_distribute_minor: int
+    authoritative_safe_to_distribute_minor: int | None = None
+    allocation_status: Literal["authoritative", "costing_incomplete", "costing_unavailable"]
+    allocation_unavailable_reason: str | None = None
+    costing_confidence: AllocationConfidenceRead
     partners: list[DistributablePartnerShare]
 
 
@@ -625,10 +706,180 @@ def _expense_read(row: Expense) -> ExpenseRead:
         vendor_name=row.vendor_name,
         invoice_no=row.invoice_no,
         note=row.note,
+        shift_id=row.shift_id,
+        created_by=row.created_by,
         voided_at=row.voided_at,
         voided_by=row.voided_by,
         void_reason=row.void_reason,
         is_voided=row.voided_at is not None,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _Code21CashExpenseCapture:
+    """Untrusted compatibility metadata after strict structural validation.
+
+    The version header routes a deployed-client compatibility path; it never
+    grants authority.  ``finance.write`` plus the authenticated exact
+    branch/terminal/open-shift scope remain the authorization boundary.
+    """
+
+    occurred_at: datetime
+    paid_at: datetime
+    receipt_hash: str
+
+
+def _is_code21_android_request(request: Request) -> bool:
+    headers = getattr(request, "headers", {})
+    return (
+        headers.get("X-Client-Platform", "").strip().lower() == "android"
+        and parse_client_version_code(headers.get("X-Client-Version-Code"))
+        == CODE21_CASH_EXPENSE_VERSION
+    )
+
+
+def _read_code21_cash_expense_capture(
+    request: Request,
+    *,
+    idempotency_key: str,
+    request_hash: str,
+    paid_at: datetime,
+    now: datetime,
+) -> _Code21CashExpenseCapture:
+    """Validate the exact provenance emitted by the signed Code 21 outbox."""
+
+    if not _is_code21_android_request(request):
+        raise BusinessRuleError(EXPENSE_CASH_PAID_OUT_UNAVAILABLE)
+    if not idempotency_key.startswith("expense:"):
+        raise BusinessRuleError(
+            "The saved cash expense has an invalid action identity. Retry it from "
+            "the original tablet; do not enter the expense again."
+        )
+    try:
+        local_id = UUID(idempotency_key.removeprefix("expense:"))
+    except ValueError as exc:
+        raise BusinessRuleError(
+            "The saved cash expense has an invalid action identity. Retry it from "
+            "the original tablet; do not enter the expense again."
+        ) from exc
+    if idempotency_key != f"expense:{local_id}":
+        raise BusinessRuleError(
+            "The saved cash expense action identity is not canonical. Retry it from "
+            "the original tablet; do not enter the expense again."
+        )
+    if request.headers.get("X-Offline-Captured", "").strip().lower() != "true":
+        raise BusinessRuleError(
+            "Cash expenses from this app must come from its durable saved-work queue. "
+            "Nothing was recorded; retry from the original tablet."
+        )
+    if request.headers.get("X-Client-Action-Id", "").strip() != idempotency_key:
+        raise BusinessRuleError(
+            "The saved cash expense action does not match its Idempotency-Key. "
+            "Nothing was recorded; retry from the original tablet."
+        )
+    raw_occurred_at = request.headers.get("X-Client-Occurred-At", "").strip()
+    try:
+        occurred_at = datetime.fromisoformat(raw_occurred_at.replace("Z", "+00:00"))
+        if occurred_at.tzinfo is None:
+            raise ValueError("timezone required")
+        occurred_at = occurred_at.astimezone(timezone.utc)
+    except (TypeError, ValueError) as exc:
+        raise BusinessRuleError(
+            "The saved cash expense needs a valid captured time including timezone. "
+            "Nothing was recorded; correct the tablet clock and retry."
+        ) from exc
+    if paid_at.tzinfo is None:
+        raise BusinessRuleError(
+            "Cash expense payment time must include a timezone. Nothing was recorded."
+        )
+    paid_at_utc = paid_at.astimezone(timezone.utc)
+    if occurred_at > now or paid_at_utc > now:
+        raise BusinessRuleError(
+            "The saved cash expense time is in the future. Nothing was recorded; "
+            "correct the tablet clock and retry from the original saved entry."
+        )
+    if abs(occurred_at - paid_at_utc) > CODE21_CASH_EXPENSE_CLOCK_WINDOW:
+        raise BusinessRuleError(
+            "The saved cash expense payment time does not match when the tablet "
+            "captured it. Nothing was recorded; ask an owner to review the saved entry."
+        )
+    receipt_hash = sha256(
+        (
+            "code21-cash-expense-v1\n"
+            f"{request_hash}\n{occurred_at.isoformat()}\n{paid_at_utc.isoformat()}"
+        ).encode()
+    ).hexdigest()
+    return _Code21CashExpenseCapture(
+        occurred_at=occurred_at,
+        paid_at=paid_at_utc,
+        receipt_hash=receipt_hash,
+    )
+
+
+async def _existing_code21_cash_expense_receipt(
+    session: SessionDep,
+    *,
+    idempotency_key: str,
+    tenant: TenantContext,
+) -> Expense | None:
+    """Find a durable receipt before the generic idempotency cache lookup."""
+
+    return (
+        await session.execute(
+            select(Expense).where(
+                Expense.company_id == tenant.company_id,
+                Expense.idempotency_key == idempotency_key,
+                Expense.source_integrity_revision
+                == CODE21_CASH_EXPENSE_RECEIPT_REVISION,
+            )
+        )
+    ).scalar_one_or_none()
+
+
+async def _validate_code21_cash_expense_replay(
+    session: SessionDep,
+    *,
+    row: Expense,
+    capture: _Code21CashExpenseCapture,
+    tenant: TenantContext,
+) -> ExpenseRead:
+    """Return only the original actor/scope/body receipt, including after close."""
+
+    if row.request_hash != capture.receipt_hash:
+        raise IdempotencyConflict(
+            "Idempotency-Key reused with different cash-expense provenance",
+            details={"key": row.idempotency_key},
+        )
+    if row.created_by != tenant.user_id:
+        raise IdempotencyConflict(
+            "Idempotency-Key reused by a different user",
+            details={"key": row.idempotency_key},
+        )
+    shift = await session.get(Shift, row.shift_id)
+    if (
+        shift is None
+        or shift.company_id != tenant.company_id
+        or shift.branch_id != row.branch_id
+    ):
+        raise BusinessRuleError(
+            "The saved cash expense has an invalid shift receipt. Do not enter it "
+            "again; ask an owner to reconcile the original record."
+        )
+    if tenant.branch_id != row.branch_id or tenant.terminal_id != shift.terminal_id:
+        raise IdempotencyConflict(
+            "Idempotency-Key reused from a different branch or terminal",
+            details={"key": row.idempotency_key},
+        )
+    # Reconstruct the original create response. A later reasoned void remains
+    # authoritative, but it must not turn an old create replay into a different
+    # response or cause Code 21 to enqueue a duplicate.
+    return _expense_read(row).model_copy(
+        update={
+            "voided_at": None,
+            "voided_by": None,
+            "void_reason": None,
+            "is_voided": False,
+        }
     )
 
 
@@ -681,6 +932,34 @@ async def create_expense(
     tenant: TenantContext = Depends(requires("finance.write")),
 ) -> ExpenseRead:
     idempotency_key, request_hash = _require_idempotency(request, what="expense")
+    cash_capture: _Code21CashExpenseCapture | None = None
+
+    # A Code 21 cash receipt outlives the generic idempotency cache. Looking it
+    # up before reserving that short-lived key prevents a lost response from
+    # decrementing the drawer a second time after cache cleanup. The initial
+    # platform/version check is routing only; the helper below still validates
+    # provenance, actor and exact authenticated workspace.
+    if payload.paid_via == "cash" and _is_code21_android_request(request):
+        cash_capture = _read_code21_cash_expense_capture(
+            request,
+            idempotency_key=idempotency_key,
+            request_hash=request_hash,
+            paid_at=payload.paid_at,
+            now=datetime.now(timezone.utc),
+        )
+        durable_receipt = await _existing_code21_cash_expense_receipt(
+            session,
+            idempotency_key=idempotency_key,
+            tenant=tenant,
+        )
+        if durable_receipt is not None:
+            return await _validate_code21_cash_expense_replay(
+                session,
+                row=durable_receipt,
+                capture=cash_capture,
+                tenant=tenant,
+            )
+
     replay = await check_or_reserve(
         session,
         key=idempotency_key,
@@ -689,7 +968,125 @@ async def create_expense(
         terminal_id=None,
     )
     if replay:
-        return ExpenseRead.model_validate(replay["body"])
+        response = ExpenseRead.model_validate(replay["body"])
+        # Revision-51 cached responses must pass the same exact provenance and
+        # terminal checks as their durable form. Historical cash responses have
+        # no shift_id and retain the previous exact-idempotency replay behavior.
+        if payload.paid_via == "cash" and response.shift_id is not None:
+            if cash_capture is None:
+                cash_capture = _read_code21_cash_expense_capture(
+                    request,
+                    idempotency_key=idempotency_key,
+                    request_hash=request_hash,
+                    paid_at=payload.paid_at,
+                    now=datetime.now(timezone.utc),
+                )
+            durable_receipt = await _existing_code21_cash_expense_receipt(
+                session,
+                idempotency_key=idempotency_key,
+                tenant=tenant,
+            )
+            if durable_receipt is None:
+                raise BusinessRuleError(
+                    "The saved cash expense receipt is missing. Do not enter it again; "
+                    "ask an owner to reconcile the original request."
+                )
+            return await _validate_code21_cash_expense_replay(
+                session,
+                row=durable_receipt,
+                capture=cash_capture,
+                tenant=tenant,
+            )
+        return response
+
+    # Keep accepting ``cash`` in the wire schema so deployed clients receive a
+    # clear business-rule response instead of an opaque validation error. Code
+    # 24+ never offers cash here; this is a narrowly gated recovery contract for
+    # already-deployed Code 21 outbox rows.
+    if payload.paid_via == "cash":
+        if cash_capture is None:
+            cash_capture = _read_code21_cash_expense_capture(
+                request,
+                idempotency_key=idempotency_key,
+                request_hash=request_hash,
+                paid_at=payload.paid_at,
+                now=datetime.now(timezone.utc),
+            )
+        if tenant.branch_id is None:
+            raise BusinessRuleError(
+                "This account has no branch assigned. Assign one before recording "
+                "a cash expense."
+            )
+        if tenant.terminal_id is None:
+            raise BusinessRuleError(
+                "This saved cash expense is not linked to a workspace. Reconnect on "
+                "the original tablet and retry; nothing was recorded."
+            )
+        if payload.branch_id != tenant.branch_id:
+            raise NotFoundError("branch not found")
+        shift = (
+            await session.execute(
+                select(Shift)
+                .where(
+                    Shift.company_id == tenant.company_id,
+                    Shift.branch_id == tenant.branch_id,
+                    Shift.terminal_id == tenant.terminal_id,
+                    Shift.status == "open",
+                )
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if shift is None:
+            raise BusinessRuleError(
+                "No open shift matches this branch and workspace. The saved cash "
+                "expense was not recorded; open the correct shift or ask an owner "
+                "to reconcile it without entering it twice."
+            )
+        if (
+            cash_capture.occurred_at < shift.opened_at
+            or cash_capture.paid_at < shift.opened_at
+        ):
+            raise BusinessRuleError(
+                "This cash expense was captured before the current shift opened. "
+                "It was not moved into a later drawer; ask an owner to reconcile "
+                "the saved entry."
+            )
+        available_minor = int(shift.expected_minor or 0)
+        if payload.amount_minor > available_minor:
+            raise BusinessRuleError(
+                "This cash expense exceeds the cash expected in the open drawer. "
+                "Nothing was recorded; check the amount and reconcile the shift cash."
+            )
+
+        await _validate_expense_references(
+            session,
+            company_id=tenant.company_id,
+            branch_id=payload.branch_id,
+            category_id=payload.category_id,
+            supplier_id=payload.supplier_id,
+            ocr_extraction_id=payload.ocr_extraction_id,
+        )
+        ex = Expense(
+            id=uuid4(),
+            company_id=tenant.company_id,
+            shift_id=shift.id,
+            idempotency_key=idempotency_key,
+            request_hash=cash_capture.receipt_hash,
+            created_by=tenant.user_id,
+            source_integrity_revision=CODE21_CASH_EXPENSE_RECEIPT_REVISION,
+            **payload.model_dump(),
+        )
+        session.add(ex)
+        shift.expected_minor = available_minor - payload.amount_minor
+        await session.flush()
+        response = _expense_read(ex)
+        await store_response(
+            session,
+            key=idempotency_key,
+            status_code=status.HTTP_201_CREATED,
+            body=response.model_dump(mode="json"),
+        )
+        return response
 
     if not tenant.in_branch(payload.branch_id):
         raise NotFoundError("branch not found")
@@ -745,6 +1142,9 @@ async def _void_expense(
     session: SessionDep,
     tenant: TenantContext,
 ) -> Expense:
+    normalized_reason = reason.strip()
+    if len(normalized_reason) < 3:
+        raise BusinessRuleError("void reason must contain at least 3 characters")
     probe = await session.get(Expense, expense_id)
     if (
         probe is None
@@ -753,6 +1153,22 @@ async def _void_expense(
         or not tenant.in_branch(probe.branch_id)
     ):
         raise NotFoundError("expense not found")
+
+    # Cash expense voids alter the drawer a second time. Follow the same
+    # Shift -> child lock order as shift close and cash settlement, so close
+    # cannot snapshot expected cash between the reasoned void and its reversal.
+    shift: Shift | None = None
+    is_shift_linked_cash = (
+        probe.source_integrity_revision == CODE21_CASH_EXPENSE_RECEIPT_REVISION
+        and probe.paid_via == "cash"
+        and probe.shift_id is not None
+    )
+    if is_shift_linked_cash and probe.voided_at is None:
+        shift = (
+            await session.execute(
+                select(Shift).where(Shift.id == probe.shift_id).with_for_update()
+            )
+        ).scalar_one_or_none()
     row = (
         await session.execute(
             select(Expense)
@@ -767,18 +1183,39 @@ async def _void_expense(
     if row is None or not tenant.in_branch(row.branch_id):
         raise NotFoundError("expense not found")
 
-    normalized_reason = reason.strip()
-    if len(normalized_reason) < 3:
-        raise BusinessRuleError("void reason must contain at least 3 characters")
     if row.voided_at is not None:
         if row.void_reason != normalized_reason:
             raise BusinessRuleError("expense is already voided with a different reason")
         return row
 
+    if is_shift_linked_cash:
+        if (
+            shift is None
+            or shift.company_id != tenant.company_id
+            or shift.branch_id != row.branch_id
+        ):
+            raise BusinessRuleError(
+                "This cash expense has an invalid shift receipt. It was not voided; "
+                "ask an owner to reconcile the original drawer movement."
+            )
+        if tenant.branch_id != row.branch_id or tenant.terminal_id != shift.terminal_id:
+            raise BusinessRuleError(
+                "This cash expense belongs to a different branch or workspace. "
+                "Return to its original workspace before voiding it."
+            )
+        if shift.status != "open":
+            raise BusinessRuleError(
+                "This cash expense belongs to a closed shift and cannot change that "
+                "shift's saved closing cash. Record an audited correction in the "
+                "current period instead."
+            )
+        shift.expected_minor = int(shift.expected_minor or 0) + int(row.amount_minor)
+
     row.voided_at = datetime.now(timezone.utc)
     row.voided_by = tenant.user_id
     row.void_reason = normalized_reason
-    row.source_integrity_revision = 50
+    if row.source_integrity_revision is None:
+        row.source_integrity_revision = 50
     await session.flush()
     return row
 
@@ -2169,12 +2606,14 @@ async def partner_profit_split(
     period_end: date | None = None,
     tenant: TenantContext = Depends(requires("finance.read")),
 ) -> PartnerPLReport:
-    """Split the same operational net profit across partners by share_pct.
+    """Return operational net profit and, only when costed, partner shares.
 
     Net profit only — construction/setup money the partners put in lives in
     CapitalEntry (type=invest), never in Expense, so it never depresses this
-    number. A negative net_profit_minor still splits by share_pct (each
-    partner absorbs their share of a loss), same formula either way.
+    number. The P&L remains visible as provisional if any historical physical
+    sale lacks complete positive-cost FIFO evidence, but its partner amounts
+    remain unavailable. A cost-complete negative result still splits by
+    share_pct (each partner absorbs their share of a loss).
     """
     _require_company_wide_finance(tenant, subject="Partner profit allocation")
     timezone_name = await company_timezone(session, tenant.company_id)
@@ -2189,6 +2628,7 @@ async def partner_profit_split(
         period_end=period_end,
         period="custom",
         label=f"{period_start.isoformat()} to {period_end.isoformat()}",
+        include_costing_confidence=True,
     )
     partners = (
         await session.execute(
@@ -2197,14 +2637,21 @@ async def partner_profit_split(
             .order_by(Partner.name)
         )
     ).scalars().all()
-    shares = apportion(
-        report.net_profit_minor,
-        _authoritative_partner_weights(partners),
+    partner_weights = _authoritative_partner_weights(partners)
+    confidence = _allocation_confidence(report)
+    allocation_available = confidence.status == "authoritative"
+    shares = (
+        apportion(report.net_profit_minor, partner_weights)
+        if allocation_available
+        else [0] * len(partners)
     )
     return PartnerPLReport(
         period_start=period_start,
         period_end=period_end,
         net_profit_minor=report.net_profit_minor,
+        allocation_status=confidence.status,
+        allocation_unavailable_reason=confidence.reason,
+        costing_confidence=confidence,
         partners=[
             PartnerProfitShare(
                 partner_id=p.id,
@@ -2212,6 +2659,9 @@ async def partner_profit_split(
                 share_pct=float(p.share_pct),
                 capital_balance_minor=await _partner_balance(session, p.id),
                 profit_share_minor=share,
+                authoritative_profit_share_minor=(
+                    share if allocation_available else None
+                ),
             )
             for p, share in zip(partners, shares, strict=True)
         ],
@@ -2223,7 +2673,7 @@ async def distributable_profit(
     session: SessionDep,
     tenant: TenantContext = Depends(requires("finance.read")),
 ) -> DistributableProfitReport:
-    """How much can the partners safely take out right now, all-time.
+    """Return the all-time partner distribution cap when it is authoritative.
 
     Unlike /pnl/partners (one period's paper profit split by share), this
     looks at the whole history: real operating profit since inception, minus
@@ -2231,6 +2681,8 @@ async def distributable_profit(
     running costs — then capped by actual liquid cash on hand, since profit
     on the books and cash in the bank are not the same thing once money is
     tied up in stock, equipment, or provider settlement receivables.
+    If historical physical-sale COGS is incomplete, the underlying provisional
+    P&L remains visible but every allocation/cap field fails closed.
     """
     _require_company_wide_finance(tenant, subject="Partner distribution capacity")
     timezone_name = await company_timezone(session, tenant.company_id)
@@ -2246,7 +2698,10 @@ async def distributable_profit(
         period_end=today,
         period="custom",
         label=f"{since.isoformat()} to {today.isoformat()}",
+        include_costing_confidence=True,
     )
+    confidence = _allocation_confidence(lifetime)
+    allocation_available = confidence.status == "authoritative"
 
     trailing_start = today - timedelta(days=90)
     trailing = await ReportsAggregator(session).aggregate(
@@ -2294,9 +2749,11 @@ async def distributable_profit(
         reserve_months=DISTRIBUTION_RESERVE_MONTHS,
         liquid_cash_minor=cash_position.spendable_cash_bank_minor,
     )
-    shares = apportion(
-        capacity.safe_to_distribute_minor,
-        _authoritative_partner_weights(partners),
+    partner_weights = _authoritative_partner_weights(partners)
+    shares = (
+        apportion(capacity.safe_to_distribute_minor, partner_weights)
+        if allocation_available
+        else [0] * len(partners)
     )
 
     return DistributableProfitReport(
@@ -2310,9 +2767,21 @@ async def distributable_profit(
         liquid_cash_minor=legacy_liquid_cash_minor,
         spendable_cash_bank_minor=cash_position.spendable_cash_bank_minor,
         cash_position=cash_position,
-        profit_based_capacity_minor=capacity.profit_based_capacity_minor,
-        cash_based_capacity_minor=capacity.cash_based_capacity_minor,
-        safe_to_distribute_minor=capacity.safe_to_distribute_minor,
+        profit_based_capacity_minor=(
+            capacity.profit_based_capacity_minor if allocation_available else 0
+        ),
+        cash_based_capacity_minor=(
+            capacity.cash_based_capacity_minor if allocation_available else 0
+        ),
+        safe_to_distribute_minor=(
+            capacity.safe_to_distribute_minor if allocation_available else 0
+        ),
+        authoritative_safe_to_distribute_minor=(
+            capacity.safe_to_distribute_minor if allocation_available else None
+        ),
+        allocation_status=confidence.status,
+        allocation_unavailable_reason=confidence.reason,
+        costing_confidence=confidence,
         partners=[
             DistributablePartnerShare(
                 partner_id=p.id,
@@ -2321,6 +2790,9 @@ async def distributable_profit(
                 capital_balance_minor=await _partner_balance(session, p.id),
                 lifetime_withdrawn_minor=withdrawn_by_partner.get(p.id, 0),
                 distributable_share_minor=share,
+                authoritative_distributable_share_minor=(
+                    share if allocation_available else None
+                ),
             )
             for p, share in zip(partners, shares, strict=True)
         ],

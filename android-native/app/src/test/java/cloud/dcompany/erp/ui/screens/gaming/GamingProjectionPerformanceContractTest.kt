@@ -56,12 +56,22 @@ class GamingProjectionPerformanceContractTest {
         )
 
         assertTrue(
-            "Category names must be indexed before filtering Gaming add-ons",
-            "val categoryNameById = references.categories.associate" in projection,
+            "Categories must have exactly one indexed lookup before filtering Gaming add-ons",
+            Regex("val categoriesById = references\\.categories\\.associateBy \\{ it\\.id \\}")
+                .findAll(projection)
+                .count() == 1,
         )
         assertTrue(
             "The add-on policy must use the category index",
-            "categoryName = categoryNameById[item.categoryId]" in projection,
+            "val category = categoriesById[item.categoryId]" in projection,
+        )
+        assertTrue(
+            "The indexed category must supply its display name",
+            "categoryName = category?.name" in projection,
+        )
+        assertTrue(
+            "The indexed category must supply its stable Gaming classification",
+            "isGamingCentreCatalog = category?.isGamingCentreCatalog" in projection,
         )
         assertFalse(
             "Do not scan every category again for every menu item",

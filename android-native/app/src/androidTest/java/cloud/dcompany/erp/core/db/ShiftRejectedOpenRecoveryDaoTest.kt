@@ -343,6 +343,102 @@ class ShiftRejectedOpenRecoveryDaoTest {
         assertEquals(current.serverShiftId, db.shiftDao().serverOpen(TERMINAL)?.serverShiftId)
     }
 
+    @Test
+    fun capturedOpeningNeverLinksMatchingEmployeeCashAndTimeWithDependentSale() = runBlocking {
+        db.shiftDao().insert(rejectedShift())
+        val captured = LocalOrderEntity(
+            localId = "captured-sale",
+            shiftId = LOCAL_ID,
+            type = "dine_in",
+            estimateMinor = 1_000,
+            paymentMethod = "cash",
+            tenderedMinor = 1_000,
+            createdAtMillis = 1_500,
+            syncState = SyncState.PENDING,
+        )
+        db.orderDao().capture(captured, emptyList())
+        val current = serverShift("different-durable-receipt", openedAtMillis = 1_000)
+            .copy(verifiedAtMillis = 1_000_000)
+        recordVerifiedShift(current)
+
+        val result = resolveVerifiedShift(current)
+
+        assertEquals(RejectedOpenRecoveryStatus.DEPENDENT_WORK, result.status)
+        assertEquals(ShiftState.OPEN_REJECTED, db.shiftDao().byLocalId(LOCAL_ID)?.state)
+        assertNull(db.shiftDao().byLocalId(LOCAL_ID)?.serverShiftId)
+        assertEquals(captured, db.orderDao().withLines(captured.localId)?.order)
+        assertEquals(1, db.shiftDao().exactDependentRecordCount(LOCAL_ID))
+        assertEquals(current, db.shiftDao().serverOpen(TERMINAL))
+    }
+
+    @Test
+    fun capturedOpeningMayClearOnlyEmptyAttemptWithoutHeuristicLink() = runBlocking {
+        db.shiftDao().insert(rejectedShift())
+        val current = serverShift("different-durable-receipt", openedAtMillis = 1_000)
+            .copy(verifiedAtMillis = 1_000_000)
+        recordVerifiedShift(current)
+
+        val result = resolveVerifiedShift(current)
+
+        assertEquals(RejectedOpenRecoveryStatus.DISCARDED, result.status)
+        assertEquals(ShiftState.OPEN_DISCARDED, db.shiftDao().byLocalId(LOCAL_ID)?.state)
+        assertNull(db.shiftDao().byLocalId(LOCAL_ID)?.serverShiftId)
+        assertEquals(true, db.shiftDao().byLocalId(LOCAL_ID)?.lastError.orEmpty()
+            .contains("Server refused this shift open."))
+        assertEquals(current, db.shiftDao().serverOpen(TERMINAL))
+    }
+
+    @Test
+    fun explicitlyVerifiedLegacyServerRetainsBoundedOpeningRaceRecovery() = runBlocking {
+        db.shiftDao().insert(rejectedShift())
+        val captured = LocalOrderEntity(
+            localId = "legacy-lost-response-sale",
+            shiftId = LOCAL_ID,
+            type = "dine_in",
+            estimateMinor = 1_000,
+            paymentMethod = "cash",
+            tenderedMinor = 1_000,
+            createdAtMillis = 1_500,
+            syncState = SyncState.PENDING,
+        )
+        db.orderDao().capture(captured, emptyList())
+        val current = serverShift("legacy-race", openedAtMillis = 1_001)
+            .copy(verifiedAtMillis = 1_000_000)
+        recordVerifiedShift(current)
+
+        val result = resolveVerifiedShift(current, allowLegacyOpeningMatch = true)
+
+        assertEquals(RejectedOpenRecoveryStatus.APPLIED, result.status)
+        // The duplicate local opening is retained as a superseded receipt;
+        // the live cache, not a second OPEN_SYNCED row, owns the current till.
+        assertEquals(ShiftState.OPEN_SUPERSEDED, db.shiftDao().byLocalId(LOCAL_ID)?.state)
+        assertEquals(current.serverShiftId, db.shiftDao().byLocalId(LOCAL_ID)?.serverShiftId)
+        assertNull(db.shiftDao().currentForTerminal(TERMINAL))
+        assertEquals(current, db.shiftDao().serverOpen(TERMINAL))
+        assertEquals(captured, db.orderDao().withLines(captured.localId)?.order)
+        assertEquals(1, db.shiftDao().exactDependentRecordCount(LOCAL_ID))
+    }
+
+    private suspend fun recordVerifiedShift(current: ServerOpenShiftEntity) {
+        db.shiftDao().reconcileServerOpen(TERMINAL, current, current.verifiedAtMillis)
+        db.syncMetaDao().put(SyncMetaEntity("shifts", current.verifiedAtMillis))
+    }
+
+    private suspend fun resolveVerifiedShift(
+        current: ServerOpenShiftEntity,
+        allowLegacyOpeningMatch: Boolean = false,
+    ) = db.shiftDao().resolveRejectedOpenAgainstVerifiedServer(
+        localId = LOCAL_ID,
+        terminalId = TERMINAL,
+        branchId = BRANCH,
+        serverShiftId = current.serverShiftId,
+        serverOpenedByUserId = current.openedByUserId,
+        serverOpeningFloatMinor = current.openingFloatMinor,
+        serverOpenedAtMillis = current.openedAtMillis,
+        verifiedAtMillis = current.verifiedAtMillis,
+        allowLegacyOpeningMatch = allowLegacyOpeningMatch,
+    )
+
     private fun rejectedShift() = LocalShiftEntity(
         localId = LOCAL_ID,
         terminalId = TERMINAL,

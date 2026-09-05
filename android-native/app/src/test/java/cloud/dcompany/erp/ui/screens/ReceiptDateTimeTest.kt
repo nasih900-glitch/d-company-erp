@@ -1,10 +1,28 @@
 package cloud.dcompany.erp.ui.screens
 
 import java.util.TimeZone
+import java.time.Instant
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class ReceiptDateTimeTest {
+    @Test
+    fun `gaming clock and shift history share receipt IST regardless of device timezone`() {
+        val original = TimeZone.getDefault()
+        val wire = "2026-09-04T18:30:00Z"
+        try {
+            for (zone in listOf("Europe/London", "Asia/Kolkata", "America/Los_Angeles")) {
+                TimeZone.setDefault(TimeZone.getTimeZone(zone))
+                assertEquals("12:00 AM IST", wire.businessClockTime())
+                assertEquals(wire.receiptDateTime(), Instant.parse(wire).toEpochMilli().businessDateTime())
+                assertEquals("05 Sep 2026 · 12:00 AM IST", Instant.parse(wire).toEpochMilli().businessDateTime())
+            }
+        } finally {
+            TimeZone.setDefault(original)
+        }
+        assertEquals("Time unavailable", "invalid".businessClockTime())
+    }
+
     @Test
     fun `payment display follows the shop day regardless of the device timezone`() {
         val original = TimeZone.getDefault()

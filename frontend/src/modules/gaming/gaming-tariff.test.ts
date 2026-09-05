@@ -11,6 +11,10 @@ describe('gaming tariff controller charges', () => {
   it('charges per started hour with one-hour minimum', () => {
     expect(extraControllerSurchargeMinor(1, 30)).toBe(3_000);
     expect(extraControllerSurchargeMinor(1, 60)).toBe(3_000);
+    expect(extraControllerSurchargeMinor(1, 61)).toBe(6_000);
+    expect(extraControllerSurchargeMinor(1, 90)).toBe(6_000);
+    expect(extraControllerSurchargeMinor(1, 120)).toBe(6_000);
+    expect(extraControllerSurchargeMinor(1, 121)).toBe(9_000);
     expect(extraControllerSurchargeMinor(2, 90)).toBe(12_000);
   });
 

@@ -50,16 +50,21 @@ class CategoryRead(BaseModel):
     id: UUID
     name: str
     sort_order: int
+    # Default only applies when replaying an idempotency receipt written by a
+    # pre-0070 server. Fresh reads always return the persisted value.
+    is_gaming_centre_catalog: bool = False
 
 
 class CategoryCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     sort_order: int = 0
+    is_gaming_centre_catalog: bool = False
 
 
 class CategoryUpdate(BaseModel):
     name: str | None = None
     sort_order: int | None = None
+    is_gaming_centre_catalog: bool | None = None
 
 
 def _clean_name(value: str) -> str:
@@ -397,7 +402,15 @@ async def list_categories(
             .order_by(MenuCategory.sort_order)
         )
     ).scalars().all()
-    return [CategoryRead(id=r.id, name=r.name, sort_order=r.sort_order) for r in rows]
+    return [
+        CategoryRead(
+            id=r.id,
+            name=r.name,
+            sort_order=r.sort_order,
+            is_gaming_centre_catalog=r.is_gaming_centre_catalog,
+        )
+        for r in rows
+    ]
 
 
 @router.post("/categories", response_model=CategoryRead, status_code=status.HTTP_201_CREATED)
@@ -425,6 +438,7 @@ async def create_category(
         company_id=tenant.company_id,
         name=payload.name,
         sort_order=payload.sort_order,
+        is_gaming_centre_catalog=payload.is_gaming_centre_catalog,
     )
     session.add(c)
     try:
@@ -439,7 +453,12 @@ async def create_category(
         await session.rollback()
         raise ConflictError(f"A category named '{payload.name}' already exists") from exc
 
-    response = CategoryRead(id=c.id, name=c.name, sort_order=c.sort_order)
+    response = CategoryRead(
+        id=c.id,
+        name=c.name,
+        sort_order=c.sort_order,
+        is_gaming_centre_catalog=c.is_gaming_centre_catalog,
+    )
     if idempotency_key:
         await store_response(
             session,
@@ -462,8 +481,15 @@ async def update_category(
         raise NotFoundError("category not found")
     if payload.name is not None: c.name = payload.name
     if payload.sort_order is not None: c.sort_order = payload.sort_order
+    if payload.is_gaming_centre_catalog is not None:
+        c.is_gaming_centre_catalog = payload.is_gaming_centre_catalog
     await session.flush()
-    return CategoryRead(id=c.id, name=c.name, sort_order=c.sort_order)
+    return CategoryRead(
+        id=c.id,
+        name=c.name,
+        sort_order=c.sort_order,
+        is_gaming_centre_catalog=c.is_gaming_centre_catalog,
+    )
 
 
 @router.delete("/categories/{category_id}", status_code=status.HTTP_204_NO_CONTENT)

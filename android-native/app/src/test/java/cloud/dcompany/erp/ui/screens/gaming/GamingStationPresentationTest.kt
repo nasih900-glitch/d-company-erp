@@ -584,7 +584,10 @@ class GamingStationPresentationTest {
     fun `controller surcharge matches the fixed started-hour rule`() {
         assertEquals(3_000L, extraControllerSurchargeMinor(extraControllers = 1, durationMinutes = 15))
         assertEquals(3_000L, extraControllerSurchargeMinor(extraControllers = 1, durationMinutes = 60))
+        assertEquals(6_000L, extraControllerSurchargeMinor(extraControllers = 1, durationMinutes = 61))
         assertEquals(6_000L, extraControllerSurchargeMinor(extraControllers = 1, durationMinutes = 90))
+        assertEquals(6_000L, extraControllerSurchargeMinor(extraControllers = 1, durationMinutes = 120))
+        assertEquals(9_000L, extraControllerSurchargeMinor(extraControllers = 1, durationMinutes = 121))
         assertEquals(12_000L, extraControllerSurchargeMinor(extraControllers = 2, durationMinutes = 90))
         assertEquals(0L, extraControllerSurchargeMinor(extraControllers = 0, durationMinutes = 90))
     }

@@ -38,6 +38,8 @@ jobs:
         with: { python-version: '3.11', cache: 'pip' }
       - run: pip install -r backend/requirements.txt
       - run: pip install ruff mypy pytest pytest-asyncio pytest-cov pip-audit
+      - name: Test operational monitoring contracts
+        run: python3 -m unittest discover -s tests -p 'test_ops_monitoring.py'
       # Blocking: audit the exact dependency set installed into the production image.
       # requirements.lock is the fully pinned closure that infra/docker/backend.Dockerfile
       # actually installs into the production image — it's what's deployed, so it's the gate.
@@ -91,7 +93,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Test Android release and server-delivery contracts
-        run: python3 -m unittest discover -s tests -p 'test_android_release*.py'
+        run: python3 -m unittest discover -s tests -p 'test_android_*.py'
       - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:
           distribution: temurin
@@ -102,6 +104,7 @@ jobs:
             android-native/gradle.properties
             android-native/gradle/wrapper/gradle-wrapper.properties
             android-native/app/*.gradle.kts
+            android-native/audit-driver/*.gradle.kts
       - uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
       # Keep release and debug Kotlin compilation in separate Gradle processes.
       # A single combined invocation can compile both variants concurrently and
@@ -112,14 +115,21 @@ jobs:
           ./gradlew --no-daemon --max-workers=1 --stacktrace
           '-Dorg.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8'
           -Pkotlin.compiler.execution.strategy=in-process
-          lintRelease assembleRelease bundleRelease
+          :app:lintRelease :app:assembleRelease :app:bundleRelease
       - name: Run Android JVM tests
         working-directory: android-native
         run: >-
           ./gradlew --no-daemon --max-workers=1 --stacktrace
           '-Dorg.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8'
           -Pkotlin.compiler.execution.strategy=in-process
-          testDebugUnitTest
+          :app:testDebugUnitTest
+      - name: Compile isolated physical-audit driver (secretless)
+        working-directory: android-native
+        run: >-
+          ./gradlew --no-daemon --max-workers=1 --stacktrace
+          '-Dorg.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8'
+          -Pkotlin.compiler.execution.strategy=in-process
+          :audit-driver:assembleDebug :audit-driver:assembleDebugAndroidTest
       # GitHub's Linux runner exposes /dev/kvm, but the runner user is not
       # consistently granted access. Without KVM the API-35 emulator can take
       # several minutes to boot and the instrumentation process may be killed

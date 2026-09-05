@@ -64,7 +64,6 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cloud.dcompany.erp.core.auth.FinanceAccess
 import cloud.dcompany.erp.core.money.parseRupeesToMinor
-import cloud.dcompany.erp.core.net.CostingCoverage
 import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.ui.WorkspaceFeatureProfiles
 import cloud.dcompany.erp.ui.WorkspacePresentationPolicy
@@ -321,16 +320,16 @@ private fun OverviewTab(state: FinanceUiState, presentation: WorkspacePresentati
                     if (pl.netProfitMinor < 0) Tone.Bad else Tone.Default,
                 ),
                 distributable?.let {
-                    val spendable = it.authoritativeSpendableCashMinor()
+                    val cap = it.authoritativeDistributionCapMinor()
                     StatSpec(
-                        "Safe-to-distribute cap",
-                        if (spendable == null) "Unavailable" else it.safeToDistributeMinor.asRupees(),
-                        if (spendable == null) {
-                            CASH_CONTRACT_UNAVAILABLE
+                        "Partner distribution cap",
+                        cap?.asRupees() ?: "Unavailable",
+                        if (cap == null) {
+                            it.authoritativeAllocationUnavailableReason()
                         } else {
                             "lower of profit-based and spendable-cash capacity after reserve"
                         },
-                        if (spendable == null) Tone.Bad else Tone.Default,
+                        if (cap == null) Tone.Bad else Tone.Default,
                     )
                 },
                 distributable?.let {
@@ -1067,7 +1066,7 @@ private fun PartnersTab(state: FinanceUiState, vm: FinanceViewModel, canWrite: B
         }
         state.allocationWarning?.let { AllocationUnavailableNotice(it) }
         if (distributable != null) {
-            DistributableCard(distributable, state.verifiedCostingCoverage)
+            DistributableCard(distributable)
         }
 
         if (state.partners.isEmpty()) {
@@ -1088,8 +1087,12 @@ private fun PartnersTab(state: FinanceUiState, vm: FinanceViewModel, canWrite: B
             color = Brand.ForegroundMuted,
         )
 
-        val shareByPartnerId = if (distributable?.authoritativeSpendableCashMinor() != null) {
-            distributable.partners.associateBy { it.partnerId }
+        val shareByPartnerId = if (distributable?.authoritativeDistributionCapMinor() != null) {
+            distributable.partners.mapNotNull { share ->
+                distributable.authoritativePartnerDistributionMinor(share)?.let { amount ->
+                    share.partnerId to (share to amount)
+                }
+            }.toMap()
         } else {
             emptyMap()
         }
@@ -1129,97 +1132,115 @@ private fun AllocationUnavailableNotice(reason: String) {
 }
 
 @Composable
-private fun DistributableCard(d: DistributableProfit, costing: CostingCoverage?) {
+private fun DistributableCard(d: DistributableProfit) {
     val spendable = d.authoritativeSpendableCashMinor()
-    Panel(border = if (costing?.isComplete == true) Brand.BorderSubtle else Brand.Warning) {
+    val distributionCap = d.authoritativeDistributionCapMinor()
+    val distributionUnavailable = distributionCap == null
+    Panel(border = if (distributionUnavailable) Brand.Warning else Brand.BorderSubtle) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Column(Modifier.weight(1f).padding(end = 12.dp)) {
                 Text(
-                    "Safe-to-distribute cap · server calculation",
+                    if (distributionUnavailable) {
+                        "Partner distribution unavailable"
+                    } else {
+                        "Safe-to-distribute cap · server calculation"
+                    },
                     style = MaterialTheme.typography.titleLarge,
                     color = Brand.Foreground,
                 )
                 Text(
-                    "The lower of profit-based capacity and spendable-cash capacity after a " +
-                        "${d.reserveMonths}-month operating reserve. Lifetime profit already includes " +
-                        "${d.lifetimeDepreciationMinor.asRupees()} of server-calculated depreciation.",
+                    if (distributionUnavailable) {
+                        "The provisional operating result remains visible, but no amount is presented " +
+                            "as safe to withdraw until historical product costs reconcile."
+                    } else {
+                        "The lower of profit-based capacity and spendable-cash capacity after a " +
+                            "${d.reserveMonths}-month operating reserve. Lifetime profit already " +
+                            "includes ${d.lifetimeDepreciationMinor.asRupees()} of server-calculated depreciation."
+                    },
                     style = MaterialTheme.typography.labelSmall,
                     color = Brand.ForegroundMuted,
                 )
             }
             Text(
-                if (spendable == null) "Unavailable" else d.safeToDistributeMinor.asRupees(),
+                distributionCap?.asRupees() ?: "Unavailable",
                 style = MaterialTheme.typography.headlineMedium,
-                color = if (spendable == null) Brand.Warning else Brand.Foreground,
+                color = if (distributionUnavailable) Brand.Warning else Brand.Foreground,
             )
         }
         Spacer(Modifier.height(10.dp))
         HairLine()
         Spacer(Modifier.height(10.dp))
-        StatGrid(
-            listOf(
-                StatSpec(
-                    "Lifetime profit (after depreciation)",
-                    d.lifetimeNetProfitMinor.asRupees(),
-                    tone = if (d.lifetimeNetProfitMinor < 0) Tone.Bad else Tone.Default,
+        if (distributionUnavailable) {
+            StatGrid(
+                listOf(
+                    StatSpec(
+                        "Provisional lifetime profit (after depreciation)",
+                        d.lifetimeNetProfitMinor.asRupees(),
+                        tone = if (d.lifetimeNetProfitMinor < 0) Tone.Bad else Tone.Default,
+                    ),
+                    StatSpec(
+                        "Historical costing check",
+                        d.costingConfidence?.let { confidence ->
+                            countLabel(confidence.unresolvedOrderCount, "order") + " need reconciliation"
+                        } ?: "Not available from server",
+                        d.authoritativeAllocationUnavailableReason(),
+                        Tone.Bad,
+                    ),
                 ),
-                StatSpec("Already withdrawn", d.lifetimeWithdrawnMinor.asRupees()),
-                StatSpec(
-                    "Reserve kept back",
-                    d.reserveMinor.asRupees(),
-                    "${d.reserveMonths} months at ${d.avgMonthlyCostMinor.asRupees()}/month",
-                ),
-                StatSpec(
-                    SPENDABLE_FUNDS_LABEL,
-                    spendable?.asRupees() ?: "Unavailable",
-                    if (spendable == null) CASH_CONTRACT_UNAVAILABLE else SPENDABLE_FUNDS_DETAIL,
-                    if (spendable == null || spendable < 0) Tone.Bad else Tone.Default,
-                ),
-            ),
-            columns = 4,
-            surface = Brand.SurfaceRaised,
-        )
-        d.cashPosition?.let { position ->
-            Spacer(Modifier.height(8.dp))
-            Text(
-                "Provider settlement receivables: " +
-                    position.settlementReceivablesMinor.asRupees() +
-                    " · UPI/QR ${position.upiQrClearingMinor.asRupees()}" +
-                    " · Card ${position.cardClearingMinor.asRupees()}" +
-                    " · Wallet ${position.walletClearingMinor.asRupees()}",
-                style = MaterialTheme.typography.labelSmall,
-                color = Brand.ForegroundMuted,
+                columns = 2,
+                surface = Brand.SurfaceRaised,
             )
-        }
-        if (spendable == null) {
-            Spacer(Modifier.height(10.dp))
             Text(
-                CASH_CONTRACT_UNAVAILABLE,
+                d.authoritativeAllocationUnavailableReason(),
                 style = MaterialTheme.typography.labelSmall,
                 color = Brand.Warning,
+                modifier = Modifier.padding(top = 10.dp),
             )
-        } else if (d.cashBasedCapacityMinor < d.profitBasedCapacityMinor) {
-            Spacer(Modifier.height(10.dp))
-            Text(
-                "Limited by spendable cash, not by profit — some value may be tied up in " +
-                    "stock, equipment, or provider settlement receivables.",
-                style = MaterialTheme.typography.labelSmall,
-                color = Brand.Warning,
+        } else {
+            StatGrid(
+                listOf(
+                    StatSpec(
+                        "Lifetime profit (after depreciation)",
+                        d.lifetimeNetProfitMinor.asRupees(),
+                        tone = if (d.lifetimeNetProfitMinor < 0) Tone.Bad else Tone.Default,
+                    ),
+                    StatSpec("Already withdrawn", d.lifetimeWithdrawnMinor.asRupees()),
+                    StatSpec(
+                        "Reserve kept back",
+                        d.reserveMinor.asRupees(),
+                        "${d.reserveMonths} months at ${d.avgMonthlyCostMinor.asRupees()}/month",
+                    ),
+                    StatSpec(
+                        SPENDABLE_FUNDS_LABEL,
+                        spendable?.asRupees() ?: "Unavailable",
+                        if (spendable == null) CASH_CONTRACT_UNAVAILABLE else SPENDABLE_FUNDS_DETAIL,
+                        if (spendable == null || spendable < 0) Tone.Bad else Tone.Default,
+                    ),
+                ),
+                columns = 4,
+                surface = Brand.SurfaceRaised,
             )
-        }
-        if (costing?.isComplete != true) {
-            Text(
-                if (costing == null) {
-                    "Costing coverage could not be verified. Do not distribute from this figure until " +
-                        "Finance refreshes and confirms recipe and ingredient costing."
-                } else {
-                    "Costing is incomplete, so profit-based distribution capacity may be overstated. " +
-                        "Do not distribute from this figure until recipe and ingredient costing is reconciled."
-                },
-                style = MaterialTheme.typography.labelSmall,
-                color = Brand.Warning,
-                modifier = Modifier.padding(top = 8.dp),
-            )
+            d.cashPosition?.let { position ->
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Provider settlement receivables: " +
+                        position.settlementReceivablesMinor.asRupees() +
+                        " · UPI/QR ${position.upiQrClearingMinor.asRupees()}" +
+                        " · Card ${position.cardClearingMinor.asRupees()}" +
+                        " · Wallet ${position.walletClearingMinor.asRupees()}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Brand.ForegroundMuted,
+                )
+            }
+            if (spendable != null && d.cashBasedCapacityMinor < d.profitBasedCapacityMinor) {
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    "Limited by spendable cash, not by profit — some value may be tied up in " +
+                        "stock, equipment, or provider settlement receivables.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Brand.Warning,
+                )
+            }
         }
         Text(
             "As of ${d.asOf.asDay()}",
@@ -1233,7 +1254,7 @@ private fun DistributableCard(d: DistributableProfit, costing: CostingCoverage?)
 @Composable
 private fun PartnerCard(
     partner: Partner,
-    share: DistributablePartnerShare?,
+    share: Pair<DistributablePartnerShare, Long>?,
     canRecordCapital: Boolean,
     onRecordCapital: () -> Unit,
 ) {
@@ -1270,6 +1291,7 @@ private fun PartnerCard(
             }
         }
         if (share != null) {
+            val (shareRecord, authoritativeAmount) = share
             Spacer(Modifier.height(10.dp))
             HairLine()
             Spacer(Modifier.height(10.dp))
@@ -1285,13 +1307,13 @@ private fun PartnerCard(
                         color = Brand.ForegroundMuted,
                     )
                     Text(
-                        "Withdrawn to date: ${share.lifetimeWithdrawnMinor.asRupees()}",
+                        "Withdrawn to date: ${shareRecord.lifetimeWithdrawnMinor.asRupees()}",
                         style = MaterialTheme.typography.labelSmall,
                         color = Brand.ForegroundMuted,
                     )
                 }
                 Text(
-                    share.distributableShareMinor.asRupees(),
+                    authoritativeAmount.asRupees(),
                     style = MaterialTheme.typography.titleLarge,
                     color = Brand.Foreground,
                 )
@@ -1965,7 +1987,7 @@ private fun ExpenseCreateDialog(state: FinanceUiState, vm: FinanceViewModel) {
     var branchId by remember { mutableStateOf(state.branches.firstOrNull()?.id ?: "") }
     var categoryId by remember { mutableStateOf(state.categoryNames.keys.firstOrNull() ?: "") }
     var amountRupees by remember { mutableStateOf("") }
-    var paidVia by remember { mutableStateOf("cash") }
+    var paidVia by remember { mutableStateOf(ExpensePaymentPolicy.DefaultRail) }
     var vendorName by remember { mutableStateOf("") }
     var invoiceNo by remember { mutableStateOf("") }
     var note by remember { mutableStateOf("") }
@@ -2013,17 +2035,12 @@ private fun ExpenseCreateDialog(state: FinanceUiState, vm: FinanceViewModel) {
         PickerField(
             "Paid via",
             paidViaLabel(paidVia),
-            listOf(
-                "cash" to "Cash",
-                "upi" to "UPI (from business bank)",
-                "card" to "Business debit card",
-                "bank" to "Bank transfer",
-            ),
+            ExpensePaymentPolicy.Options.map { it.value to it.label },
         ) { paidVia = it }
         Text(
-            "UPI and business debit-card expenses reduce the Bank balance. " +
-                "Business credit-card liabilities are not supported yet; do not record " +
-                "a credit-card purchase as Card.",
+            ExpensePaymentPolicy.CashDrawerGuidance + " UPI and business debit-card " +
+                "expenses reduce the Bank balance. Business credit-card liabilities are not " +
+                "supported yet; do not record a credit-card purchase as Card.",
             style = MaterialTheme.typography.labelSmall,
             color = Brand.ForegroundMuted,
         )

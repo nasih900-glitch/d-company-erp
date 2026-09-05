@@ -64,6 +64,19 @@ DRINKS = (
 )
 
 
+def ensure_gaming_centre_catalog(category: MenuCategory) -> bool:
+    """Enable the script's exact category without changing presentation data.
+
+    Returns whether the persistent flag changed so an idempotent rerun can
+    report the repair. Callers deliberately select the category by company and
+    the script-owned name before invoking this helper.
+    """
+    if category.is_gaming_centre_catalog is True:
+        return False
+    category.is_gaming_centre_catalog = True
+    return True
+
+
 async def run() -> None:
     async with AsyncSessionLocal() as s:
         company = (await s.execute(select(Company).limit(1))).scalar_one_or_none()
@@ -100,9 +113,17 @@ async def run() -> None:
             )
         ).scalar_one_or_none()
         if not category:
-            category = MenuCategory(id=uuid4(), company_id=company.id, name=CATEGORY_NAME, sort_order=50)
+            category = MenuCategory(
+                id=uuid4(),
+                company_id=company.id,
+                name=CATEGORY_NAME,
+                sort_order=50,
+                is_gaming_centre_catalog=True,
+            )
             s.add(category)
             print(f"Created menu category {CATEGORY_NAME!r}.")
+        elif ensure_gaming_centre_catalog(category):
+            print(f"Menu category {CATEGORY_NAME!r} exists — enabled for Gaming sales.")
         await s.flush()
 
         for drink in DRINKS:

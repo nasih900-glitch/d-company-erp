@@ -11,6 +11,7 @@
  *   3. Close the shift — variance is recorded
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   Receipt, Loader2, AlertCircle, RefreshCw, Eye, Lock, ShieldCheck,
   ClipboardList, X, Gamepad2, CreditCard, UserRound, ChevronDown,
@@ -25,6 +26,7 @@ import { profileMembershipMoneyLabel } from '@/lib/product-profile';
 import {
   orders, receipts, shifts,
   type OrderListItemDTO, type ReceiptHistoryDTO, type ShiftDTO,
+  type ShiftRecoveryCloseDTO,
 } from '@/lib/erp-api';
 import Modal from '@/components/ui/Modal';
 import { useNotifications } from '@/components/ui/Notifications';
@@ -54,12 +56,17 @@ import {
 } from './order-recovery-policy';
 
 type Tab = 'orders' | 'shifts';
+
+export function operationsInitialTab(searchParams: Pick<URLSearchParams, 'get'>): Tab {
+  return searchParams.get('tab') === 'shifts' ? 'shifts' : 'orders';
+}
 // Fallback only — real-time push (see subscribeRealtime below) is what
 // actually keeps this current; this just covers a missed/dropped push.
 const OPERATIONS_POLL_MS = 120_000;
 
 export default function OrdersAndShiftsScreen() {
-  const [tab, setTab] = useState<Tab>('orders');
+  const [searchParams] = useSearchParams();
+  const [tab, setTab] = useState<Tab>(() => operationsInitialTab(searchParams));
 
   return (
     <div>
@@ -954,7 +961,7 @@ function signedMoney(value: number): string {
 // ============================================================================
 // Shifts
 // ============================================================================
-type ShiftAction = 'load' | 'open' | 'close';
+type ShiftAction = 'load' | 'open' | 'close' | 'recovery-close';
 
 const LEGACY_SHIFT_OPERATOR_ROLES = new Set([
   'super_owner', 'co_owner', 'owner', 'manager', 'cashier',
@@ -963,6 +970,7 @@ const LEGACY_SHIFT_OPERATOR_ROLES = new Set([
 interface ShiftPermissionIdentity {
   roles?: string[];
   protected_access?: boolean | null;
+  audit_access?: boolean | null;
   effective_permissions?: string[];
 }
 
@@ -1018,6 +1026,21 @@ export function shiftWorkspaceLabel(
   return 'Legacy workspace';
 }
 
+/** New-protocol Android shifts retain a causal Room lifecycle for safe close. */
+export function isAndroidOriginShift(shift: ShiftDTO): boolean {
+  return shift.status === 'open'
+    && shift.opening_protocol_revision === 1
+    && shift.opening_client_platform === 'android';
+}
+
+/** This last-resort path is narrower than general protected operational access. */
+export function canRecoverAndroidShift(
+  identity: ShiftPermissionIdentity | null | undefined,
+  shift: ShiftDTO,
+): boolean {
+  return Boolean(identity?.audit_access && isAndroidOriginShift(shift));
+}
+
 /** Turn server/business-rule failures into a next action a new employee can follow. */
 export function shiftActionErrorMessage(error: unknown, action: ShiftAction): string {
   const raw = error instanceof Error ? error.message.trim() : '';
@@ -1030,9 +1053,14 @@ export function shiftActionErrorMessage(error: unknown, action: ShiftAction): st
       ? 'Shift information could not be refreshed. Check the connection; the last confirmed information remains on screen.'
       : action === 'open'
         ? 'Shift opening could not be confirmed because the response was interrupted. Refresh Shifts first. If an open shift appears, use it; otherwise retry the same opening amount once.'
-        : 'Shift closure could not be confirmed because the response was interrupted. Do not enter a different cash count or open another shift. Reconnect, refresh Shifts, then retry the same count once only if this shift still shows open.';
+        : action === 'recovery-close'
+          ? 'Protected recovery could not be confirmed because the response was interrupted. Keep the originating tablet isolated. Do not change the cash count or reason; refresh Shifts, then retry this exact recovery once only if the shift still shows open.'
+          : 'Shift closure could not be confirmed because the response was interrupted. Do not enter a different cash count or open another shift. Reconnect, refresh Shifts, then retry the same count once only if this shift still shows open.';
   }
   if (status === 403) {
+    if (action === 'recovery-close') {
+      return 'Only the protected audit owner can use Android shift recovery. The shift remains open; close it from the originating tablet or ask the protected audit owner.';
+    }
     return action === 'close'
       ? 'Your account does not currently have Close shift access. The shift is still open. Ask the owner to restore the Shift permission, then retry.'
       : 'Your account does not have permission for this shift action. Ask the owner to restore the Shift permission.';
@@ -1065,6 +1093,9 @@ export function shiftActionErrorMessage(error: unknown, action: ShiftAction): st
 
   if (action === 'load') return `${message} Retry the refresh; no shift information was changed.`;
   if (action === 'open') return `${message} The shift was not opened. Review the message and retry once.`;
+  if (action === 'recovery-close') {
+    return `${message} The shift remains open. Keep the originating tablet isolated, resolve the reported blocker, refresh Shifts, then retry this same recovery.`;
+  }
   return `${message} The shift remains open. Resolve the reported item, refresh Shifts, and retry once.`;
 }
 
@@ -1073,18 +1104,23 @@ export function OpenShiftStatusPanel({
   workspaceName,
   currentUserId,
   canClose,
+  canRecover = false,
   closing = false,
   onClose,
+  onRecover,
 }: {
   shift: ShiftDTO;
   workspaceName: string;
   currentUserId: string | undefined;
   canClose: boolean;
+  canRecover?: boolean;
   closing?: boolean;
   onClose: () => void;
+  onRecover?: () => void;
 }) {
   const opener = shiftOpenerLabel(shift);
   const openedByCurrentUser = shift.opened_by === currentUserId;
+  const requiresOriginTablet = isAndroidOriginShift(shift);
 
   return (
     <section
@@ -1110,16 +1146,22 @@ export function OpenShiftStatusPanel({
             </span>
           </div>
           <p className="mt-2 text-xs text-fg-muted">
-            Continue using this shared shift. When work is finished, count the drawer and close it here.
-            Any staff member with Close shift access can close it; the closer is recorded under their own account.
+            {requiresOriginTablet
+              ? 'This shift was opened by the Android tablet. Close it from that originating app so any saved offline work drains before the drawer closes.'
+              : 'Continue using this shared shift. When work is finished, count the drawer and close it here. Any staff member with Close shift access can close it; the closer is recorded under their own account.'}
           </p>
-          {!canClose && (
+          {!canClose && !requiresOriginTablet && (
             <p className="mt-2 text-xs text-accent-gold" role="status">
               Your account can view this shift but cannot close it. Ask a staff member with Close shift access.
             </p>
           )}
+          {requiresOriginTablet && !canRecover && (
+            <p className="mt-2 text-xs text-accent-gold" role="status">
+              If the tablet is stuck or unavailable, ask the protected audit owner to use the separate audited recovery flow.
+            </p>
+          )}
         </div>
-        {canClose && (
+        {!requiresOriginTablet && canClose && (
           <button
             type="button"
             className="btn btn-primary shrink-0"
@@ -1129,6 +1171,18 @@ export function OpenShiftStatusPanel({
           >
             {closing ? <Loader2 className="animate-spin" size={14}/> : <Lock size={14}/>}
             {closing ? 'Opening cash count…' : 'Count & close shift'}
+          </button>
+        )}
+        {requiresOriginTablet && canRecover && onRecover && (
+          <button
+            type="button"
+            className="btn btn-ghost shrink-0 border border-accent-bad/45 text-accent-bad"
+            onClick={onRecover}
+            disabled={closing}
+            aria-label={`Recover Android shift opened by ${opener}`}
+          >
+            <ShieldCheck size={14}/>
+            Recover Android shift
           </button>
         )}
       </div>
@@ -1169,6 +1223,7 @@ function ShiftsTab() {
   const [refreshing, setRefreshing] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [closing, setClosing] = useState<ShiftDTO | null>(null);
+  const [recovering, setRecovering] = useState<ShiftDTO | null>(null);
   const [opening, setOpening] = useState(false);
   const requestSequence = useRef(0);
   const initialLoadComplete = useRef(false);
@@ -1309,8 +1364,10 @@ function ShiftsTab() {
           workspaceName={shiftWorkspaceLabel(openShift, terminalOptions)}
           currentUserId={me?.user_id}
           canClose={canCloseShift}
-          closing={closing?.id === openShift.id}
+          canRecover={canRecoverAndroidShift(me, openShift)}
+          closing={closing?.id === openShift.id || recovering?.id === openShift.id}
           onClose={() => setClosing(openShift)}
+          onRecover={() => setRecovering(openShift)}
         />
       )}
 
@@ -1355,7 +1412,7 @@ function ShiftsTab() {
                     </div>
                   )}
                 </div>
-                {s.status === 'open' && canCloseShift && (
+                {s.status === 'open' && canCloseShift && !isAndroidOriginShift(s) && (
                   <button
                     type="button"
                     className="btn btn-primary"
@@ -1364,6 +1421,17 @@ function ShiftsTab() {
                     aria-label={`Close shift opened by ${shiftOpenerLabel(s)}`}
                   >
                     <Lock size={14}/> Close shift
+                  </button>
+                )}
+                {canRecoverAndroidShift(me, s) && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost border border-accent-bad/45 text-accent-bad"
+                    onClick={() => setRecovering(s)}
+                    disabled={Boolean(closing || recovering)}
+                    aria-label={`Recover Android shift opened by ${shiftOpenerLabel(s)}`}
+                  >
+                    <ShieldCheck size={14}/> Recover Android shift
                   </button>
                 )}
               </div>
@@ -1420,6 +1488,17 @@ function ShiftsTab() {
           onClose={() => setClosing(null)}
           onSuccess={() => { setClosing(null); void load(false); }}
           onError={() => refreshAfterCloseFailure(closing.id)}
+        />
+      )}
+      {recovering && (
+        <RecoverAndroidShiftForm
+          shift={recovering}
+          currentUserId={me?.user_id}
+          currentStaffName={me?.name || me?.email || 'Protected audit owner'}
+          workspaceName={shiftWorkspaceLabel(recovering, terminalOptions)}
+          onClose={() => setRecovering(null)}
+          onSuccess={() => { setRecovering(null); void load(false); }}
+          onError={() => refreshAfterCloseFailure(recovering.id)}
         />
       )}
     </div>
@@ -1816,6 +1895,251 @@ function CloseShiftForm({
               : ambiguousCountedMinor !== null
                 ? `Retry same ${inr(ambiguousCountedMinor)} count`
                 : 'Close shift'}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+export function RecoverAndroidShiftForm({
+  shift,
+  currentUserId,
+  currentStaffName,
+  workspaceName,
+  onClose,
+  onSuccess,
+  onError,
+}: {
+  shift: ShiftDTO;
+  currentUserId: string | undefined;
+  currentStaffName: string;
+  workspaceName: string;
+  onClose: () => void;
+  onSuccess: () => void;
+  onError: () => Promise<ShiftDTO | null>;
+}) {
+  const notifications = useNotifications();
+  const [counted, setCounted] = useState('');
+  const [reason, setReason] = useState('');
+  const [quarantined, setQuarantined] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [result, setResult] = useState<{
+    variance_minor: number;
+    closed_by?: string | null;
+    closed_by_name?: string | null;
+  } | null>(null);
+  const [ambiguousPayload, setAmbiguousPayload] = useState<ShiftRecoveryCloseDTO | null>(null);
+  const [intent] = useState(() => new StableMutationIntent<ShiftRecoveryCloseDTO>({
+    prefix: 'shift-recovery-close:web',
+  }));
+  const submissionInFlight = useRef(false);
+  const opener = shiftOpenerLabel(shift);
+  const normalizedReason = reason.trim().replace(/\s+/g, ' ');
+  const parsedCountedMinor = parseRupeesToMinor(counted);
+  const canSubmit = !busy && (
+    ambiguousPayload !== null
+      || (quarantined && normalizedReason.length >= 12 && parsedCountedMinor !== null)
+  );
+
+  const close = () => {
+    if (submissionInFlight.current) return;
+    if (ambiguousPayload) {
+      const message = 'This recovery result is still unconfirmed. Keep the tablet isolated and retry the exact locked recovery after reconnecting.';
+      setErr(message);
+      notifications.error(message, { title: 'Recovery details are locked' });
+      return;
+    }
+    onClose();
+  };
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    if (submissionInFlight.current) return;
+    if (!ambiguousPayload && parsedCountedMinor === null) {
+      const message = 'Counted cash must be a non-negative amount with at most two decimals.';
+      setErr(message);
+      notifications.error(message, { title: 'Check the cash count' });
+      return;
+    }
+    if (!ambiguousPayload && normalizedReason.length < 12) {
+      const message = 'Explain why protected recovery is necessary in at least 12 characters.';
+      setErr(message);
+      notifications.error(message, { title: 'Recovery reason required' });
+      return;
+    }
+    if (!ambiguousPayload && !quarantined) {
+      const message = 'Confirm that the originating tablet app is isolated before recovery.';
+      setErr(message);
+      notifications.error(message, { title: 'Tablet isolation not confirmed' });
+      return;
+    }
+    const payload: ShiftRecoveryCloseDTO = ambiguousPayload ?? {
+      // Guarded above; TypeScript does not narrow a value captured by the
+      // render, so retain the explicit assertion at this construction point.
+      counted_minor: parsedCountedMinor as number,
+      reason: normalizedReason,
+      acknowledge_origin_tablet_quarantined: true,
+    };
+    const attempt = intent.resolve(
+      `${shift.id}|${payload.counted_minor}|${payload.reason}|quarantined`,
+      () => payload,
+    );
+    submissionInFlight.current = true;
+    setBusy(true);
+    setErr(null);
+    try {
+      const response = await shifts.recoverAndroidClose(
+        shift.id,
+        attempt.payload,
+        attempt.idempotencyKey,
+      );
+      intent.confirmSuccess(attempt);
+      setAmbiguousPayload(null);
+      setResult(response);
+      notifications.success(
+        `Protected recovery closed the shift under ${currentStaffName}. The reason, cash count and server checks were added to Audit Log.`,
+        { title: 'Android shift recovered' },
+      );
+    } catch (error) {
+      const refreshedShift = await onError();
+      if (
+        refreshedShift?.status === 'closed'
+        && refreshedShift.counted_minor === attempt.payload.counted_minor
+      ) {
+        intent.confirmSuccess(attempt);
+        setAmbiguousPayload(null);
+        setResult({
+          variance_minor: refreshedShift.variance_minor ?? 0,
+          closed_by: refreshedShift.closed_by,
+          closed_by_name: refreshedShift.closed_by_name,
+        });
+        notifications.success(
+          'The response was interrupted, but a refresh confirmed the protected recovery with the same cash count.',
+          { title: 'Android shift recovery confirmed' },
+        );
+      } else {
+        const unknown = isUnknownShiftMutationOutcome(error);
+        if (unknown) setAmbiguousPayload(attempt.payload);
+        const message = shiftActionErrorMessage(error, 'recovery-close');
+        setErr(message);
+        notifications.error(message, {
+          title: unknown ? 'Recovery needs confirmation' : 'Recovery was blocked',
+        });
+      }
+    } finally {
+      submissionInFlight.current = false;
+      setBusy(false);
+    }
+  }
+
+  if (result) {
+    const closer = result.closed_by_name?.trim()
+      || (result.closed_by === currentUserId ? currentStaffName : 'Protected audit owner');
+    return (
+      <Modal open onClose={onSuccess} title="Android shift recovered">
+        <div className="space-y-3">
+          <div className="rounded-xl border border-accent-good/35 bg-accent-good/10 p-4 text-sm">
+            <p className="font-semibold text-accent-good">Protected recovery is recorded</p>
+            <p className="mt-1 text-fg-muted">
+              Closed by {closer}. Audit Log retains the reason, drawer count, originating client and acknowledgement.
+            </p>
+          </div>
+          <Row label="Opened by" value={opener}/>
+          <Row label="Workspace" value={workspaceName}/>
+          <Row label="Variance" value={signedMoney(result.variance_minor)} bold/>
+          <button type="button" className="btn btn-primary w-full" onClick={onSuccess}>Done</button>
+        </div>
+      </Modal>
+    );
+  }
+
+  return (
+    <Modal open onClose={close} title={`Recover Android shift · ${workspaceName}`}>
+      <form onSubmit={submit} className="space-y-4">
+        <div className="rounded-xl border border-accent-bad/40 bg-accent-bad/10 p-3 text-sm">
+          <p className="font-semibold text-accent-bad">Last-resort protected-owner recovery</p>
+          <p className="mt-1 text-fg-muted">
+            {opener} opened this shift from the Android tablet {formatDateTime(shift.opened_at)}.
+            Use this only when that originating app cannot complete its saved close.
+          </p>
+        </div>
+
+        <div className="rounded-xl border border-bg-border bg-bg-raised/35 p-3 text-sm">
+          <p className="font-medium">What the server checks before closing</p>
+          <p className="mt-1 text-fg-muted">
+            Open or held orders, running or unbilled gaming sessions, kitchen cancellations,
+            membership tasks and refunds are checked again under a database lock. Any exact
+            blocker will be shown here and the shift will remain open.
+          </p>
+        </div>
+
+        <Field label="Counted cash (₹) — exact physical drawer total">
+          <input
+            type="number"
+            required
+            min={0}
+            step="0.01"
+            autoFocus
+            className="input font-mono text-right text-xl"
+            value={ambiguousPayload ? String(ambiguousPayload.counted_minor / 100) : counted}
+            disabled={busy || ambiguousPayload !== null}
+            onChange={(event) => setCounted(event.target.value)}
+          />
+        </Field>
+
+        <label className="block">
+          <span className="text-xs text-fg-muted">Recovery reason — stored in Audit Log</span>
+          <textarea
+            className="input mt-1 min-h-24 resize-y"
+            required
+            minLength={12}
+            maxLength={500}
+            value={ambiguousPayload?.reason ?? reason}
+            disabled={busy || ambiguousPayload !== null}
+            onChange={(event) => setReason(event.target.value)}
+            placeholder="Example: Tablet app was isolated after its saved close repeatedly failed to sync."
+          />
+          <span className="mt-1 block text-[11px] text-fg-muted">
+            Explain what failed and how the tablet was isolated. Minimum 12 characters.
+          </span>
+        </label>
+
+        <label className="flex items-start gap-3 rounded-xl border border-accent-bad/35 bg-bg-raised/35 p-3 text-sm">
+          <input
+            type="checkbox"
+            className="mt-1 h-4 w-4 accent-[var(--accent)]"
+            checked={ambiguousPayload !== null || quarantined}
+            disabled={busy || ambiguousPayload !== null}
+            onChange={(event) => setQuarantined(event.target.checked)}
+          />
+          <span>
+            <strong>I confirm the originating tablet app is isolated.</strong>{' '}
+            It will not be used or reconnected until this recovery is reviewed. I understand
+            that any work which existed only on that tablet may need separate audited reconciliation
+            and this close cannot be silently undone.
+          </span>
+        </label>
+
+        {err && <ErrorRow text={err}/>}
+        {ambiguousPayload && (
+          <div className="rounded-xl border border-accent-gold/40 bg-accent-gold/10 p-3 text-sm" role="status" aria-live="polite">
+            <p className="font-semibold text-accent-gold">Unconfirmed recovery · details locked</p>
+            <p className="mt-1 text-fg-muted">
+              Keep the tablet isolated. Refresh, then retry the exact {inr(ambiguousPayload.counted_minor)}
+              cash count and identical audit reason. Do not create a second recovery intent.
+            </p>
+          </div>
+        )}
+
+        <div className="flex justify-end gap-2 pt-1">
+          <button type="button" className="btn btn-ghost" onClick={close} disabled={busy || ambiguousPayload !== null}>
+            Cancel
+          </button>
+          <button type="submit" className="btn btn-danger" disabled={!canSubmit}>
+            {busy ? <Loader2 className="animate-spin" size={14}/> : <ShieldCheck size={14}/>}
+            {busy ? 'Checking every blocker…' : ambiguousPayload ? 'Retry exact recovery' : 'Recover & close shift'}
           </button>
         </div>
       </form>

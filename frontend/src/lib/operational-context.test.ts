@@ -8,6 +8,7 @@ import {
   canReconcileRealtimePosShift,
   hasOrdinaryPosDraftShiftConflict,
   invalidateRealtimeShiftRefresh,
+  isOperationalContextError,
   resolvePosAccountableShiftId,
   resolveOpenShift,
   resolveRealtimeOpenShift,
@@ -196,10 +197,16 @@ describe('required open shift resolution', () => {
   });
 
   it('never opens a shift itself — rejects with an actionable message when none exists', async () => {
-    await expect(resolveRequiredOpenShift({
+    const operation = resolveRequiredOpenShift({
       scope: { companyId: 'company-a', branchId: branchA, terminalId: terminalA },
       listOpenShifts: async () => [],
-    })).rejects.toThrow('Open a shift from the Shift tab');
+    });
+
+    await expect(operation).rejects.toThrow('Open a shift from the Shift tab');
+    await operation.catch((error: unknown) => {
+      expect(isOperationalContextError(error)).toBe(true);
+      expect((error as { code?: string }).code).toBe('operational_precondition');
+    });
   });
 
   it('keeps the ordinary no-shift message simple but names a real device conflict', () => {

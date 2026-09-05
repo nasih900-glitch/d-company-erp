@@ -26,4 +26,12 @@ describe('latest verified snapshot', () => {
     expect(isCurrent()).toBe(false);
     expect(gate.begin()()).toBe(true);
   });
+
+  it('invalidates a prior online response when a replacement load exits offline or loses scope', async () => {
+    const gate = new LatestRequestGate();
+    const onlineResponse = gate.begin();
+    // Offline/permission preflight must begin a new generation before returning.
+    gate.begin();
+    expect(onlineResponse()).toBe(false);
+  });
 });

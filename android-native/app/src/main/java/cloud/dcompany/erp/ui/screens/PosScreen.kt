@@ -27,9 +27,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -2659,6 +2662,16 @@ internal fun heldDiscountEntryError(discountText: String, maxMinor: Long): Strin
 private fun heldDiscountMinor(discountText: String): Long? =
     if (discountText.isBlank()) 0L else parseRupeesToMinor(discountText)
 
+/** Android 12+ dialog windows must expose IME insets to the root content. */
+internal val posImeAwareDialogProperties = androidx.compose.ui.window.DialogProperties(
+    usePlatformDefaultWidth = false,
+    decorFitsSystemWindows = false,
+)
+
+private fun Modifier.posPaymentDialogInsets(): Modifier =
+    widthIn(max = 600.dp).fillMaxWidth(0.92f)
+        .statusBarsPadding().navigationBarsPadding().imePadding()
+
 @Composable
 private fun HeldOrderReviewDialog(
     review: HeldOrderReview,
@@ -2687,6 +2700,8 @@ private fun HeldOrderReviewDialog(
         onDismissRequest = { if (!busy) onDismiss() },
         containerColor = Brand.SurfaceOverlay,
         shape = Radius.shapeLg,
+        modifier = Modifier.posPaymentDialogInsets(),
+        properties = posImeAwareDialogProperties,
         title = {
             Text(
                 review.sourceLabel?.let { "Review $it" }
@@ -2696,7 +2711,7 @@ private fun HeldOrderReviewDialog(
         text = {
             Column(
                 Modifier.fillMaxWidth().heightIn(max = 540.dp)
-                    .verticalScroll(rememberScrollState()).imePadding(),
+                    .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(Spacing.md),
             ) {
                 Text(
@@ -2931,10 +2946,12 @@ private fun DirectCheckoutReviewDialog(
         onDismissRequest = { if (!busy) onDismiss() },
         containerColor = Brand.SurfaceOverlay,
         shape = Radius.shapeLg,
+        modifier = Modifier.posPaymentDialogInsets(),
+        properties = posImeAwareDialogProperties,
         title = { Text("Review live bill · ${review.totalMinor.asRupees()}") },
         text = {
             Column(
-                Modifier.verticalScroll(rememberScrollState()).imePadding(),
+                Modifier.heightIn(max = 540.dp).verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(Spacing.md),
             ) {
                 Text(
@@ -3157,6 +3174,8 @@ private fun PayDialog(
         onDismissRequest = { if (!confirmationConsumed) onDismiss() },
         containerColor = Brand.SurfaceOverlay,
         shape = Radius.shapeLg,
+        modifier = Modifier.posPaymentDialogInsets(),
+        properties = posImeAwareDialogProperties,
         title = {
             Text(
                 paymentSubject?.let { "$it · ${dueMinor.asRupees()}" }
@@ -3166,8 +3185,8 @@ private fun PayDialog(
         text = {
             Column(
                 modifier = Modifier
-                    .verticalScroll(rememberScrollState())
-                    .imePadding(),
+                    .heightIn(max = 540.dp)
+                    .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(Spacing.md),
             ) {
                 if (verifiedSharedOrder) {

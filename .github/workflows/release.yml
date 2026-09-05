@@ -73,7 +73,7 @@ jobs:
             exit 1
           fi
           python3 scripts/verify_android_release_version.py --tag "$RELEASE_REF"
-          python3 -m unittest discover -s tests -p 'test_android_release*.py'
+          python3 -m unittest discover -s tests -p 'test_android_*.py'
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.11'
@@ -84,6 +84,8 @@ jobs:
           python -m pip install -r backend/requirements.lock
           python -m pip install pytest pytest-asyncio pytest-cov pip-audit
           python -m pip_audit -r backend/requirements.lock
+      - name: Test operational monitoring contracts
+        run: python3 -m unittest discover -s tests -p 'test_ops_monitoring.py'
       - name: Apply migrations to a fresh PostgreSQL database
         working-directory: backend
         env:
@@ -208,8 +210,8 @@ jobs:
           # Compile the two release variants in separate Gradle processes. The
           # Compose compiler otherwise holds both IR trees concurrently and can
           # exhaust the 7 GB hosted runner before lint begins.
-          gradle_release lintRelease
-          gradle_release lintDirectRelease
+          gradle_release :app:lintRelease
+          gradle_release :app:lintDirectRelease
       - name: Run Play and direct Android release JVM tests
         working-directory: android-native
         run: |
@@ -219,8 +221,8 @@ jobs:
               '-Dorg.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8' \
               -Pkotlin.compiler.execution.strategy=in-process "$@"
           }
-          gradle_release testReleaseUnitTest
-          gradle_release testDirectReleaseUnitTest
+          gradle_release :app:testReleaseUnitTest
+          gradle_release :app:testDirectReleaseUnitTest
       # Compile distributable bytes before the long-lived signing key exists on
       # the runner. Gradle plugins and dependency code must never be able to
       # read or exfiltrate that key, even if an upstream repository is breached.
@@ -235,8 +237,8 @@ jobs:
               '-Dorg.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8' \
               -Pkotlin.compiler.execution.strategy=in-process "$@"
           }
-          gradle_release assembleRelease bundleRelease
-          gradle_release assembleDirectRelease
+          gradle_release :app:assembleRelease :app:bundleRelease
+          gradle_release :app:assembleDirectRelease
       - name: Package unsigned artifacts for the isolated signer
         run: |
           set -euo pipefail

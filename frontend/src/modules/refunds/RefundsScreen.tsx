@@ -24,7 +24,7 @@ import Modal from '@/components/ui/Modal';
 import { SkeletonCard } from '@/components/ui/Skeleton';
 import { useNotifications } from '@/components/ui/Notifications';
 import { useOnlineStatus } from '@/hooks/useOnlineStatus';
-import { hasAdminSystemAccess } from '@/lib/admin-access';
+import { useLatestRequest } from '@/hooks/useLatestRequest';
 import { LIVE_MODE } from '@/lib/demo';
 import {
   orders,
@@ -51,6 +51,7 @@ import { RefundTaskControls } from './RefundTaskControls';
 import {
   allowedRefundActions,
   canAccessRefunds,
+  canReconcileRefunds,
   makeRefundActionId,
   paymentMethodLabel,
   refundModeAllowed,
@@ -111,7 +112,7 @@ function formatDate(value: string | null): string {
   });
 }
 
-function taskActionDisabledReason({
+export function taskActionDisabledReason({
   task,
   online,
   uncertain,
@@ -119,7 +120,7 @@ function taskActionDisabledReason({
   canManageCurrentShift,
   currentUserId,
   protectedAccess,
-  adminSystemAccess,
+  refundReconcileAccess,
 }: {
   task: PosRefundRequestDTO;
   online: boolean;
@@ -128,7 +129,7 @@ function taskActionDisabledReason({
   canManageCurrentShift: boolean;
   currentUserId: string | null;
   protectedAccess: boolean;
-  adminSystemAccess: boolean;
+  refundReconcileAccess: boolean;
 }): string | null {
   if (uncertain) {
     return 'The last money action did not return a definite result. Do not pay again. Recheck the server state first.';
@@ -138,7 +139,14 @@ function taskActionDisabledReason({
   if (currentShift.id !== task.shift_id) {
     return 'This refund belongs to a different shift. Return to its exact terminal and shift; do not move money here.';
   }
+  const canResolveFailedProviderPayout =
+    task.status === 'provider_payout_in_progress'
+    && refundReconcileAccess;
   if (!canManageCurrentShift) {
+    if (canResolveFailedProviderPayout) return null;
+    if (task.status === 'provider_payout_in_progress') {
+      return `This shift was opened by ${currentShift.opened_by_name || 'another employee'}. Only the opener or a protected owner may record a completed payout. Someone with Refund reconciliation access may resolve a verified failed payout.`;
+    }
     return `This shift was opened by ${currentShift.opened_by_name || 'another employee'}. They or a protected owner must continue.`;
   }
   if (
@@ -152,11 +160,12 @@ function taskActionDisabledReason({
     task.status === 'provider_payout_in_progress'
     && task.provider_payout_started_by !== currentUserId
     && !protectedAccess
+    && !canResolveFailedProviderPayout
   ) {
-    return `${actor(task.provider_payout_started_by_name, task.provider_payout_started_by) || 'Another employee'} started this provider payout. They must finish it.`;
+    return `${actor(task.provider_payout_started_by_name, task.provider_payout_started_by) || 'Another employee'} started this provider payout. They or a protected owner must record a completed payout. Someone with Refund reconciliation access may resolve a verified failed payout.`;
   }
-  if (task.status === 'provider_payout_in_progress' && protectedAccess && !adminSystemAccess) {
-    return 'Record the provider completion if it succeeded. A verified failed-payout resolution is reserved for the designated protected system owner.';
+  if (task.status === 'provider_payout_in_progress' && protectedAccess && !refundReconcileAccess) {
+    return 'Record the provider completion if it succeeded. Resolving a failed payout needs the refund reconciliation permission; refresh your account after the server is updated.';
   }
   return null;
 }
@@ -181,32 +190,38 @@ export default function RefundsScreen() {
   const [uncertainTaskIds, setUncertainTaskIds] = useState<Set<string>>(() => new Set());
   const [recoveryAssessments, setRecoveryAssessments] = useState<RefundRecoveryAssessment[]>([]);
   const [staleOrderIds, setStaleOrderIds] = useState<Set<string>>(() => new Set());
-  const requestSequence = useRef(0);
+  const requests = useLatestRequest();
+  const mutationBusyRef = useRef(false);
   const recoveryRef = useRef<RefundRecoveryAssessment[]>([]);
 
   const load = useCallback(async ({
     initial = false,
   }: { initial?: boolean } = {}): Promise<boolean> => {
+    // Invalidate in-flight reads even when the next scope is offline or denied.
+    const isCurrent = requests.begin();
     if (!LIVE_MODE) {
       setLoading(false);
+      setRefreshing(false);
       return true;
     }
     if (!canAccess) {
       setLoading(false);
+      setRefreshing(false);
       return false;
     }
     if (!terminalReady || !terminalId || !me?.branch_id) {
       setLoadError(terminalIssue || 'Select this device’s shop terminal before opening Refunds.');
       setLoading(false);
+      setRefreshing(false);
       return false;
     }
     if (!online) {
       setLoadError('Refunds are online-only. Reconnect to load authoritative order and payout state.');
       setLoading(false);
+      setRefreshing(false);
       return false;
     }
 
-    const sequence = ++requestSequence.current;
     if (initial) setLoading(true);
     else setRefreshing(true);
     setLoadError(null);
@@ -219,7 +234,7 @@ export default function RefundsScreen() {
         refunds.listRequests({ unresolved: false, limit: 100 }),
         shifts.list(true),
       ]);
-      if (sequence !== requestSequence.current) return false;
+      if (!isCurrent()) return false;
 
       const scope = {
         companyId: me.company_id,
@@ -275,15 +290,15 @@ export default function RefundsScreen() {
       setUncertainTaskIds(new Set(activeRecovery.map((assessment) => assessment.checkpoint.taskId)));
       return true;
     } catch (error) {
-      if (sequence === requestSequence.current) setLoadError((error as Error).message);
+      if (isCurrent()) setLoadError((error as Error).message);
       return false;
     } finally {
-      if (sequence === requestSequence.current) {
+      if (isCurrent()) {
         setLoading(false);
         setRefreshing(false);
       }
     }
-  }, [canAccess, me, online, terminalId, terminalIssue, terminalReady]);
+  }, [canAccess, me, online, requests, terminalId, terminalIssue, terminalReady]);
 
   useEffect(() => { void load({ initial: true }); }, [load]);
 
@@ -306,7 +321,7 @@ export default function RefundsScreen() {
     currentShift
     && (currentShift.opened_by === me?.user_id || me?.protected_access),
   );
-  const adminSystemAccess = hasAdminSystemAccess(me);
+  const refundReconcileAccess = canReconcileRefunds(me);
   const recoveryByTask = useMemo(
     () => new Map(recoveryAssessments.map((assessment) => [assessment.checkpoint.taskId, assessment])),
     [recoveryAssessments],
@@ -374,7 +389,8 @@ export default function RefundsScreen() {
     mode: 'cash' | 'original';
     note: string;
   }) {
-    if (!online || !currentShift || !canManageCurrentShift || busyKey) return;
+    if (!online || !currentShift || !canManageCurrentShift || busyKey || mutationBusyRef.current) return;
+    mutationBusyRef.current = true;
     const actionId = makeRefundActionId('request');
     setBusyKey(`create:${order.id}`);
     setActionError(null);
@@ -406,6 +422,7 @@ export default function RefundsScreen() {
       );
       await load();
     } finally {
+      mutationBusyRef.current = false;
       setBusyKey(null);
     }
   }
@@ -441,7 +458,7 @@ export default function RefundsScreen() {
     evidence: ActionEvidence,
     recoveryCheckpoint: RefundRecoveryCheckpoint | null,
   ) {
-    if (!online || !currentShift || currentShift.id !== task.shift_id || busyKey) return;
+    if (!online || !currentShift || currentShift.id !== task.shift_id || busyKey || mutationBusyRef.current) return;
     if (
       recoveryCheckpoint
       && (
@@ -457,7 +474,7 @@ export default function RefundsScreen() {
     const permitted = allowedRefundActions(task, {
       userId: me?.user_id ?? null,
       protectedAccess: Boolean(me?.protected_access),
-      adminSystemAccess,
+      refundReconcileAccess,
       currentShiftId: currentShift.id,
       canManageCurrentShift,
       online,
@@ -469,6 +486,7 @@ export default function RefundsScreen() {
       setActionError('This account, shift or server state no longer permits that refund action. Refresh and do not move money again.');
       return;
     }
+    mutationBusyRef.current = true;
     setBusyKey(task.id);
     setActionError(null);
     const settlementAction = action === 'settle_cash' || action === 'settle_provider';
@@ -644,6 +662,7 @@ export default function RefundsScreen() {
       // is read-only and cannot convert this into a new physical payout.
       await load();
     } finally {
+      mutationBusyRef.current = false;
       setBusyKey(null);
     }
   }
@@ -663,7 +682,9 @@ export default function RefundsScreen() {
   const shiftMessage = shiftResolution && shiftResolution.kind !== 'ready'
     ? shiftResolutionMessage(shiftResolution)
     : currentShift && !canManageCurrentShift
-      ? `Shift opened by ${currentShift.opened_by_name || 'another employee'}. They or a protected owner must manage refund money.`
+      ? refundReconcileAccess
+        ? `Shift opened by ${currentShift.opened_by_name || 'another employee'}. Only the opener or a protected owner may move refund money. Your Refund reconciliation access can resolve a verified failed provider payout on this exact shift.`
+        : `Shift opened by ${currentShift.opened_by_name || 'another employee'}. They or a protected owner must manage refund money.`
       : null;
 
   return (
@@ -753,7 +774,7 @@ export default function RefundsScreen() {
               const actions = allowedRefundActions(task, {
                 userId: me?.user_id ?? null,
                 protectedAccess: Boolean(me?.protected_access),
-                adminSystemAccess,
+                refundReconcileAccess,
                 currentShiftId: currentShift?.id ?? null,
                 canManageCurrentShift,
                 online,
@@ -767,13 +788,13 @@ export default function RefundsScreen() {
                 canManageCurrentShift,
                 currentUserId: me?.user_id ?? null,
                 protectedAccess: Boolean(me?.protected_access),
-                adminSystemAccess,
+                refundReconcileAccess,
               });
               const recoveryPermitted = recovery?.state === 'retryable'
                 && allowedRefundActions(task, {
                   userId: me?.user_id ?? null,
                   protectedAccess: Boolean(me?.protected_access),
-                  adminSystemAccess,
+                  refundReconcileAccess,
                   currentShiftId: currentShift?.id ?? null,
                   canManageCurrentShift,
                   online,
@@ -788,7 +809,7 @@ export default function RefundsScreen() {
                   canManageCurrentShift,
                   currentUserId: me?.user_id ?? null,
                   protectedAccess: Boolean(me?.protected_access),
-                  adminSystemAccess,
+                  refundReconcileAccess,
                 })
                 : null;
               return (

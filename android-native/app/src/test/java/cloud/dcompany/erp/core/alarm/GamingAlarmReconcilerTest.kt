@@ -11,6 +11,34 @@ class GamingAlarmReconcilerTest {
     private val station = GamingStationEntity("station-1", "PS5", "PS5 One", "ps5", 12_000, true)
 
     @Test
+    fun `authoritative pause cancels stale local alarm and resume uses new server deadline`() {
+        val cached = GamingSessionCacheEntity(
+            id = "server-session", stationId = station.id, status = "paused",
+            startAtMillis = 1_000, pausedAtMillis = 30_000, pausedDurationMs = 0,
+            pauseVersion = 1, timerEndsAtMillis = null,
+        )
+        val staleLocal = LocalGamingSessionEntity(
+            localId = "local-session", serverId = cached.id, stationId = station.id,
+            startedAtMillis = 1_000, state = GamingSessionState.START_SYNCED,
+            status = "active", timerEndsAtMillis = 61_000,
+        )
+        assertEquals(emptyList<GamingAlarmCandidate>(), gamingAlarmCandidates(
+            listOf(cached), listOf(staleLocal), listOf(station),
+        ))
+        assertEquals(
+            listOf(GamingAlarmCandidate(cached.id, station.id, station.name, 91_123)),
+            gamingAlarmCandidates(
+                listOf(cached.copy(status = "active", pausedAtMillis = null,
+                    pausedDurationMs = 30_123, pauseVersion = 2, timerEndsAtMillis = 91_123)),
+                listOf(staleLocal), listOf(station),
+            ),
+        )
+        assertEquals(emptyList<GamingAlarmCandidate>(), gamingAlarmCandidates(
+            emptyList(), listOf(staleLocal.copy(status = "paused")), listOf(station),
+        ))
+    }
+
+    @Test
     fun `pending local stop keeps server alarm until stop is confirmed`() {
         val cache = listOf(
             GamingSessionCacheEntity(

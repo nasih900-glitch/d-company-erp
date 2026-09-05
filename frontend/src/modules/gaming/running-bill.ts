@@ -23,9 +23,8 @@ export function runningBillMinor(snapshot: RunningBillSnapshot): number | null {
   const rate = snapshot.ratePerHourMinor;
   if (rate == null || !Number.isSafeInteger(rate) || rate < 0) return null;
 
-  const elapsedMs = Number.isFinite(snapshot.elapsedMs)
-    ? Math.max(0, snapshot.elapsedMs)
-    : 0;
+  if (!Number.isFinite(snapshot.elapsedMs)) return null;
+  const elapsedMs = Math.max(0, snapshot.elapsedMs);
   const billableMinutes = elapsedMs > 0 ? Math.ceil(elapsedMs / 60_000) : 0;
   return Math.ceil((billableMinutes * rate) / 60);
 }

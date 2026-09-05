@@ -30,10 +30,13 @@ tariff, exact extension billing, held-bill discounts, session recovery and all
 earlier connectivity, privacy-preserving diagnostics, offline outbox,
 authentication and remote-assistance contracts. It removes opener identity as
 an extra shift-close restriction: any authenticated employee with
-`pos.shift.close` may close the one shared shift, while the immutable history
-retains both opener and closer and all unpaid-work blockers remain enforced. It
-still requires exactly one server-confirmed Hybrid Gaming + POS workspace for
-the active shop. A green
+`pos.shift.close` on the originating Android installation may close the shared
+shift, while immutable history retains both opener and closer and all unpaid or
+unsynchronised-work blockers remain enforced. A reinstall, different device, or
+browser must not silently assume ownership of an Android-origin shift; the
+protected audit owner instead has an explicit reasoned and audited web recovery
+flow after the original installation is quarantined. It still requires exactly
+one server-confirmed Hybrid Gaming + POS workspace for the active shop. A green
 local build does not prove authenticated workflows on a physical Redmi Pad 2
 or production deployment: those remain explicit release gates.
 
@@ -151,14 +154,14 @@ Use JDK 17 and the checked-in Gradle wrapper:
 cd android-native
 
 ./gradlew \
-  testDebugUnitTest \
-  compileDebugKotlin \
-  compileDebugAndroidTestKotlin \
-  lintDebug \
-  assembleDebug
+  :app:testDebugUnitTest \
+  :app:compileDebugKotlin \
+  :app:compileDebugAndroidTestKotlin \
+  :app:lintDebug \
+  :app:assembleDebug
 
 # Requires a running Android emulator or connected test device.
-./gradlew connectedDebugAndroidTest
+./gradlew :app:connectedDebugAndroidTest
 ```
 
 For an isolated backend on the host machine, build the emulator APK with:
@@ -166,7 +169,7 @@ For an isolated backend on the host machine, build the emulator APK with:
 ```bash
 ./gradlew \
   -Pdcompany.debugApiBaseUrl=http://10.0.2.2:8788/api/v1/ \
-  assembleDebug
+  :app:assembleDebug
 ```
 
 That property is for test builds only. Never distribute a debug APK or use a
@@ -181,7 +184,7 @@ updated with that same signing lineage. The archived Capacitor wrapper uses a
 different application ID and is not an upgrade source or release target.
 
 `keystore.properties` and the keystore are gitignored. Keep them outside source
-control and back them up securely. A local `assembleRelease` without the
+control and back them up securely. A local `:app:assembleRelease` without the
 properties can produce an unsigned artifact; it is not distributable. The
 repository release workflow is the supported path because it runs release
 tests, lint, emulator instrumentation and signature verification before

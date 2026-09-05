@@ -9,34 +9,31 @@ import org.junit.Test
 
 /**
  * The Android callback itself cannot be instantiated in a local JVM test, but
- * this source contract protects the handover rule that prevents a departing
- * Wi-Fi network from flashing the whole ERP offline while a replacement
- * default network is already validated.
+ * this source contract ensures callbacks consume the framework's ordered
+ * facts instead of making synchronous reads that can return stale state.
+ * The pure tracker tests cover handover, loss and outdated capabilities.
  */
 class ConnectivityObserverContractTest {
 
     @Test
-    fun `default network callbacks re-read the active network`() {
+    fun `default network callbacks use ordered facts without synchronous rereads`() {
         val source = Files.newBufferedReader(
             projectRoot().resolve(
                 "src/main/java/cloud/dcompany/erp/core/net/ConnectivityCoordinator.kt",
             ),
         ).use { it.readText() }
         val callback = source.substringAfter("registerDefaultNetworkCallback(")
-            .substringBefore("private fun refresh()")
+            .substringBefore("private suspend fun process(")
 
-        assertTrue("override fun onAvailable(network: Network) = refresh()" in callback)
-        assertTrue("override fun onLost(network: Network) = refresh()" in callback)
-        assertTrue(
-            Regex(
-                """override fun onCapabilitiesChanged\([\s\S]*?\) = refresh\(\)""",
-            ).containsMatchIn(callback),
-        )
-        assertFalse(
-            "A lost callback is not proof that the replacement default network is offline",
-            Regex("""onLost\([^)]*\)\s*=\s*offerNetworkState\(false\)""")
-                .containsMatchIn(callback),
-        )
+        assertTrue("networkCallbacks.available(network)" in callback)
+        assertTrue("networkCallbacks.lost(network)" in callback)
+        assertTrue("networkCallbacks.capabilitiesChanged(network, caps.isValidatedInternet())" in callback)
+        assertFalse("Callbacks must not re-read an old default network", "currentlyValidated()" in callback)
+        assertFalse("Callbacks must use their ordered capabilities argument", "getNetworkCapabilities(" in callback)
+        assertFalse("Callbacks must not query default-network state", "activeNetwork" in callback)
+        assertFalse("Startup must not seed a snapshot that can become stale before registration", "manager?.activeNetwork" in source)
+        assertFalse("Only ordered callback capabilities may establish network state", "getNetworkCapabilities(" in source)
+        assertTrue("First ordered capabilities must skip the recovery-only delay", "initialObservation = !receivedNetworkCapabilities" in callback)
     }
 
     private fun projectRoot(): Path {

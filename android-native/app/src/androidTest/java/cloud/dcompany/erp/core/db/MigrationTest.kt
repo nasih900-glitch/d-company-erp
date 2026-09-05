@@ -2407,6 +2407,137 @@ class MigrationTest {
     }
 
     @Test
+    fun migrate42To43PreservesPendingStopAndAddsFailClosedPauseSnapshot() {
+        helper.createDatabase(dbName, 42).apply {
+            execSQL(
+                "INSERT INTO gaming_session_cache " +
+                    "(id, stationId, status, startAtMillis, extraControllers, timerEndsAtMillis) VALUES " +
+                    "('session-1', 'station-1', 'active', 1000, 0, 61000)",
+            )
+            execSQL(
+                "INSERT INTO local_gaming_sessions " +
+                    "(localId, serverId, stationId, startedAtMillis, endAtMillis, state, status, extraControllers) VALUES " +
+                    "('local-session-1', 'session-1', 'station-1', 1000, 31000, 'stop_pending', 'stopping', 0)",
+            )
+            close()
+        }
+        val migrated = helper.runMigrationsAndValidate(dbName, 43, true, MIGRATION_42_43)
+        migrated.query(
+            "SELECT timerEndsAtMillis, pausedAtMillis, pausedDurationMs, pauseVersion, " +
+                "lastPauseTransitionAtMillis, pauseAvailable FROM gaming_session_cache WHERE id = 'session-1'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(61_000L, cursor.getLong(0))
+            for (index in 1..4) assertTrue(cursor.isNull(index))
+            assertEquals(0, cursor.getInt(5))
+        }
+        migrated.query(
+            "SELECT serverId, state, endAtMillis FROM local_gaming_sessions WHERE localId = 'local-session-1'",
+        ).use { cursor ->
+            assertTrue("Pending stop must survive without a changed identity or capture time", cursor.moveToFirst())
+            assertEquals("session-1", cursor.getString(0))
+            assertEquals("stop_pending", cursor.getString(1))
+            assertEquals(31_000L, cursor.getLong(2))
+        }
+        migrated.close()
+    }
+
+    @Test
+    fun migrate43To44BackfillsStableGamingCatalogueWithoutTouchingCapturedWork() {
+        helper.createDatabase(dbName, 43).apply {
+            execSQL(
+                "INSERT INTO menu_categories (id, name, sortOrder) VALUES " +
+                    "('drinks', 'Soft Drinks', 1), ('cafe', 'Coffee', 2)",
+            )
+            execSQL(
+                "INSERT INTO local_orders " +
+                    "(localId, shiftId, type, estimateMinor, paymentMethod, tenderedMinor, " +
+                    "tipMinor, createdAtMillis, syncState) VALUES " +
+                    "('pending-sale', 'shift-1', 'takeaway', 8000, 'cash', 8000, 0, 1000, 'pending')",
+            )
+            close()
+        }
+
+        val migrated = helper.runMigrationsAndValidate(dbName, 44, true, MIGRATION_43_44)
+        migrated.query(
+            "SELECT isGamingCentreCatalog FROM menu_categories WHERE id = 'drinks'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(1, cursor.getInt(0))
+        }
+        migrated.execSQL("UPDATE menu_categories SET name = 'Cold cabinet' WHERE id = 'drinks'")
+        migrated.query(
+            "SELECT name, isGamingCentreCatalog FROM menu_categories WHERE id = 'drinks'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("Cold cabinet", cursor.getString(0))
+            assertEquals(1, cursor.getInt(1))
+        }
+        migrated.query(
+            "SELECT isGamingCentreCatalog FROM menu_categories WHERE id = 'cafe'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertTrue(cursor.isNull(0))
+        }
+        migrated.query(
+            "SELECT estimateMinor, syncState FROM local_orders WHERE localId = 'pending-sale'",
+        ).use { cursor ->
+            assertTrue("Pending sale must survive a reference-cache migration", cursor.moveToFirst())
+            assertEquals(8_000L, cursor.getLong(0))
+            assertEquals("pending", cursor.getString(1))
+        }
+        migrated.close()
+    }
+
+    @Test
+    fun migrate44To45PreservesPendingCategoryWritesAndAddsClassificationIntent() {
+        helper.createDatabase(dbName, 44).apply {
+            execSQL(
+                "INSERT INTO local_menu_categories " +
+                "(localId, serverId, name, sortOrder, createdAtMillis, state, version) VALUES " +
+                    "('create-1', NULL, 'Packaged counter', 3, 1000, 'pending', 2), " +
+                    "('edit-1', 'server-category', 'Cold cabinet', 4, 2000, 'pending', 7), " +
+                    "('legacy-create', NULL, ' Soft Drinks ', 5, 3000, 'pending', 1)",
+            )
+            close()
+        }
+
+        val migrated = helper.runMigrationsAndValidate(dbName, 45, true, MIGRATION_44_45)
+        migrated.query(
+            "SELECT localId, serverId, name, sortOrder, state, version, isGamingCentreCatalog " +
+                "FROM local_menu_categories ORDER BY localId",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("create-1", cursor.getString(0))
+            assertTrue(cursor.isNull(1))
+            assertEquals("Packaged counter", cursor.getString(2))
+            assertEquals(3, cursor.getInt(3))
+            assertEquals("pending", cursor.getString(4))
+            assertEquals(2L, cursor.getLong(5))
+            assertTrue(cursor.isNull(6))
+
+            assertTrue(cursor.moveToNext())
+            assertEquals("edit-1", cursor.getString(0))
+            assertEquals("server-category", cursor.getString(1))
+            assertEquals("Cold cabinet", cursor.getString(2))
+            assertEquals(4, cursor.getInt(3))
+            assertEquals("pending", cursor.getString(4))
+            assertEquals(7L, cursor.getLong(5))
+            assertTrue(cursor.isNull(6))
+
+            assertTrue(cursor.moveToNext())
+            assertEquals("legacy-create", cursor.getString(0))
+            assertTrue(cursor.isNull(1))
+            assertEquals(" Soft Drinks ", cursor.getString(2))
+            assertEquals(5, cursor.getInt(3))
+            assertEquals("pending", cursor.getString(4))
+            assertEquals(1L, cursor.getLong(5))
+            assertEquals(1, cursor.getInt(6))
+        }
+        migrated.close()
+    }
+
+    @Test
     fun migrate41To42PreservesShiftHistoryAndAddsCloserAttribution() {
         helper.createDatabase(dbName, 41).apply {
             execSQL(

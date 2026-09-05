@@ -25,6 +25,7 @@ PERMISSIONS: dict[str, str] = {
     "pos.write": "Create / modify orders",
     "pos.void": "Void an order line",
     "pos.refund": "Issue a refund",
+    "pos.refund.reconcile": "Reconcile provider refund failures and supporting evidence",
     # Legacy permission code retained for API/role compatibility. There is no
     # cashier cap: any non-zero manual order discount is manager/owner-only.
     "pos.discount.large": "Apply a manual order discount",
@@ -161,6 +162,7 @@ MANAGER_ACCESS = {
 }
 
 OWNER_ACCESS = MANAGER_ACCESS | {
+    "pos.refund.reconcile",
     "finance.assets.write",
     "staff.payroll.write",
     "settings.manage",
@@ -194,6 +196,7 @@ AUDITOR_ACCESS = {
 # or "enable Staff" grant role administration. Overrides may still disable and
 # re-enable the safe subset already assigned to a role.
 HIGH_TRUST_PERMISSIONS = {
+    "pos.refund.reconcile",
     "pos.void",
     "pos.refund",
     "pos.discount.large",
@@ -317,7 +320,10 @@ async def _has_permission(session, tenant: TenantContext, perm: str) -> bool:
     # protected_access blanket bypass. A co-owner may override operational
     # gates and receives dedicated settings/membership management, but only
     # the designated protected owner (audit_access=True) can read Audit Log,
-    # Access Control, the support inbox, or evidence-reconciliation controls.
+    # Access Control, the support inbox, or protected system/membership
+    # evidence controls. Operational POS refund evidence reconciliation is a
+    # separate, narrowly scoped permission and intentionally does not use this
+    # bypass.
     if perm in {"admin.audit.read", "admin.system"}:
         return tenant.audit_access
     if tenant.protected_access:

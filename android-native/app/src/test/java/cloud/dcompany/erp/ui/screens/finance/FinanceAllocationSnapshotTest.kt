@@ -150,5 +150,13 @@ class FinanceAllocationSnapshotTest {
         reserveMonths = 6, avgMonthlyCostMinor = 0, reserveMinor = 0,
         liquidCashMinor = 70_000, profitBasedCapacityMinor = 37_700,
         cashBasedCapacityMinor = 70_000, safeToDistributeMinor = 37_700,
+        authoritativeSafeToDistributeMinor = 37_700,
+        allocationStatus = "authoritative",
+        costingConfidence = AllocationCostingConfidence(
+            status = "authoritative",
+            inventoryOrdersChecked = 0,
+            inventoryLinesChecked = 0,
+            unresolvedOrderCount = 0,
+        ),
     )
 }

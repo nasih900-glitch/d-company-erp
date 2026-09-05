@@ -31,6 +31,24 @@ val debugApiBaseUrl = providers.gradleProperty("dcompany.debugApiBaseUrl")
     ?.takeIf(String::isNotEmpty)
     ?: productionApiBaseUrl
 val debugApiUri = runCatching { URI(debugApiBaseUrl) }.getOrNull()
+// Test-only authenticated cloud-device workflows use a short-lived tunnel to
+// a synthetic database. This value never reaches debug/release/directRelease.
+val physicalAuditApiBaseUrl = providers.gradleProperty("dcompany.physicalAuditApiBaseUrl")
+    .orNull?.trim()?.takeIf(String::isNotEmpty)
+    ?: "https://invalid.dcompany.test/api/v1/"
+val physicalAuditApiUri = runCatching { URI(physicalAuditApiBaseUrl) }.getOrNull()
+require(
+    physicalAuditApiUri?.scheme == "https" &&
+        (physicalAuditApiUri.host == "invalid.dcompany.test" ||
+            physicalAuditApiUri.host?.endsWith(".trycloudflare.com") == true) &&
+        physicalAuditApiUri.rawPath == "/api/v1/" &&
+        physicalAuditApiUri.rawUserInfo == null &&
+        physicalAuditApiUri.rawQuery == null &&
+        physicalAuditApiUri.rawFragment == null &&
+        physicalAuditApiUri.port == -1,
+) {
+    "physicalAudit requires the isolated invalid host or a temporary HTTPS trycloudflare test tunnel at /api/v1/."
+}
 val androidTestBuildType = providers.gradleProperty("dcompany.androidTestBuildType")
     .orNull
     ?.trim()
@@ -114,16 +132,18 @@ android {
         create("physicalAudit") {
             initWith(getByName("release"))
             matchingFallbacks += "release"
+            // A disposable audit APK must never consume the production signer.
+            signingConfig = signingConfigs.getByName("debug")
             applicationIdSuffix = ".physicalaudit"
             versionNameSuffix = "-physical-audit"
             buildConfigField(
                 "String",
                 "API_BASE_URL",
-                buildConfigString("https://invalid.dcompany.test/api/v1/"),
+                buildConfigString(physicalAuditApiBaseUrl),
             )
             buildConfigField("boolean", "DIRECT_UPDATES_ENABLED", "false")
             // Reuse the already-supported managed-client wire value. The
-            // isolated application id and invalid HTTPS endpoint distinguish
+            // isolated application id and synthetic HTTPS endpoint distinguish
             // this QA build without weakening the production API contract.
             buildConfigField("String", "DISTRIBUTION_CHANNEL", buildConfigString("managed"))
         }

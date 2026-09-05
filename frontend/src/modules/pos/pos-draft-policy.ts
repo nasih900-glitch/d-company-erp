@@ -103,6 +103,23 @@ interface CartQuantityLine {
   qty: number;
 }
 
+interface BillQuantityLine {
+  qty: number;
+}
+
+/**
+ * The visible bill can contain a server-backed incoming order, local counter
+ * items, or (during recovery) both. Count quantities from every visible line
+ * so a Gaming-only bill never appears as an empty cart.
+ */
+export function posVisibleBillQuantity(
+  localLines: readonly BillQuantityLine[],
+  incomingLines: readonly BillQuantityLine[] = [],
+): number {
+  return [...incomingLines, ...localLines]
+    .reduce((total, line) => total + Math.max(0, line.qty), 0);
+}
+
 /** Pure cart transition so the caller can durably commit an empty-cart delete first. */
 export function adjustPosCart<T extends CartQuantityLine>(
   cart: readonly T[],

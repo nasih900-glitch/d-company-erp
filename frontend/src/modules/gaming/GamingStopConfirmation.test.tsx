@@ -40,4 +40,11 @@ describe('GamingStopConfirmation', () => {
     expect(markup).toContain('amount is not available');
     expect(markup.match(/disabled=""/g)).toHaveLength(2);
   });
+
+  it('labels missing elapsed evidence without showing NaN or inventing zero minutes', () => {
+    const markup = renderToStaticMarkup(<GamingStopConfirmation stationName="PS5" elapsedMinutes={Number.NaN} estimatedAmountMinor={null} fixedPrice={false} busy={false} onConfirm={vi.fn()} onCancel={vi.fn()}/>);
+    expect(markup).toContain('Elapsed time could not be verified');
+    expect(markup).not.toContain('NaN');
+    expect(markup).toContain('server confirms the final time and amount');
+  });
 });

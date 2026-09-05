@@ -28,25 +28,31 @@ APK with a strictly higher Android version code.
 ## Current rollout boundary
 
 Do not place the signed `3.1.3` (code `14`) partner-review APK in this directory.
-It is the manually sent partner baseline after the coordinated production smoke
-and must not be hosted, registered, or advertised through the server.
+It is historical manually sent partner-baseline evidence and must not be hosted,
+registered, or advertised through the server. It is not the current upgrade
+predecessor; signed Code `21` (`3.1.10`) is.
 
 Code `15` (`3.1.4`) is the first identity eligible for this server-hosted
 registry, but it remains a held audit build. Codes `16` and `17` are immutable
 upgrade-proof predecessors. Tags `v3.1.7` (code `18`), `v3.1.8` (code `19`),
 and `v3.1.9` (code `20`) failed before signing and must not be reused. Code
 `21` (`3.1.10`) is immutable signed predecessor history. Code `22` (`3.1.11`)
-was superseded before signing and must not be approved or activated. The
-current server-delivery candidate is the distinct, tagged CI artifact
-`3.1.12` (code `23`). Before
-activation, verify the
+was superseded before signing and must not be approved or activated. Code `23`
+(`3.1.12`) was also superseded without an authorised signed artifact. The
+current server-delivery candidate is the **unsigned** `3.1.13` (code `24`)
+source at migration `0071`; it is not yet a signed, tagged release artifact.
+Before any staging or activation, obtain the exact artifact from the protected
+green `v3.1.13` workflow and verify the
 immutable HTTPS bytes, SHA-256, byte size, package, version, expected signer and
 an in-place upgrade from the signed code-`21` predecessor. Android
-still requires the employee to approve installation.
+still requires the employee to approve installation. Until those gates and
+production deployment pass, Code 24 is not approved, advertised, active or
+partner-installable.
 
 Do not direct a tablet to the obsolete `3.1.0` APK as a current bootstrap. Use
-the verified, same-signer code-`21` direct predecessor, or install the current code
-manually in place when the installed build cannot prove update capability.
-Never uninstall while offline work is pending. After a verified direct build is
-installed, future server offers can be downloaded, verified, and handed to
-Android's installer by the app itself.
+the verified, same-signer code-`21` direct predecessor. Code 24 may be installed
+manually in place only after the protected workflow has produced and verified
+its signed artifact; never use an unsigned local candidate. Never uninstall
+while offline work is pending. After a verified direct build is installed,
+future server offers can be downloaded, verified, and handed to Android's
+installer by the app itself.

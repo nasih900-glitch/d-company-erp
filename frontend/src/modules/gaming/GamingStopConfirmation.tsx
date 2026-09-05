@@ -31,7 +31,10 @@ export function GamingStopConfirmation({
         <div className="space-y-2 text-sm text-fg-muted">
           <p>{amountDescription}</p>
           <p>
-            Elapsed time is approximately {Math.max(1, elapsedMinutes)} min. Ending now moves this
+            {Number.isFinite(elapsedMinutes)
+              ? `Elapsed time is approximately ${Math.max(1, elapsedMinutes)} min. `
+              : 'Elapsed time could not be verified on this screen. '}
+            Ending now moves this
             session to Payment Due; the server confirms the final time and amount before saving.
           </p>
         </div>

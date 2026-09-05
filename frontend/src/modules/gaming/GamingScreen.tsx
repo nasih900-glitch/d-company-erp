@@ -6,7 +6,7 @@
  *  - Edit / disable / delete station (admin)
  *  - Start session (live mode hits backend; demo runs a JS timer)
  *  - Stop session (records elapsed × rate; payment remains an explicit POS step)
- *  - Pause session (demo only — hidden in live mode until the backend supports it)
+ *  - Shared pause/resume (server-authoritative, versioned, online-only)
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -30,9 +30,11 @@ import {
   gaming,
   menu as menuApi,
   shifts,
+  type GameSessionDTO,
   type GamingPackageDTO,
   type GamingPosTargetShiftDTO,
   type GamingSessionAddonDTO,
+  type LegacyPausedSessionResolutionDTO,
   type MenuItemDTO,
   type StationDTO,
 } from '@/lib/erp-api';
@@ -77,6 +79,7 @@ import {
 } from './paid-extension-attempt';
 import { resolveGamingPosRoute } from './gaming-pos-handoff';
 import { runningBillMinor } from './running-bill';
+import { mayApplyRunningSessionReceipt, playedSessionMilliseconds, serverPauseClock } from './session-pause';
 import { sessionTimerMinutesForLocalState } from './session-start-snapshot';
 import {
   SessionAddonPickerModal,
@@ -136,6 +139,17 @@ type LocalSession = {
   status: 'active' | 'paused' | 'ended';
   pausedMs: number;
   pause_started_at?: number;
+  pause_version?: number;
+  pause_available?: boolean;
+  // Raw server lifecycle evidence retained for the protected compare-and-swap
+  // recovery. Undefined means an older server did not provide enough proof.
+  paused_at?: string | null;
+  paused_duration_ms?: number;
+  last_pause_transition_at?: string | null;
+  end_at?: string | null;
+  billable_minutes?: number | null;
+  amount_minor?: number | null;
+  order_id?: string | null;
   backend_session_id?: string;
   timer_minutes?: number | null;
   timer_ends_at?: number | null;
@@ -157,6 +171,107 @@ type LocalSession = {
   // open-ended (non-package) session, which bills off elapsed time instead.
   locked_amount_minor?: number | null;
 };
+
+export type LegacyPausedSessionEvidence = Pick<
+  LocalSession,
+  | 'status'
+  | 'start_at'
+  | 'paused_at'
+  | 'paused_duration_ms'
+  | 'pause_version'
+  | 'last_pause_transition_at'
+  | 'end_at'
+  | 'billable_minutes'
+  | 'amount_minor'
+  | 'order_id'
+>;
+
+export function hasLegacyPausedTimingGap(
+  session: LegacyPausedSessionEvidence | null | undefined,
+): boolean {
+  return Boolean(
+    session
+    && session.status === 'paused'
+    && Number.isFinite(session.start_at)
+    && session.paused_at === null
+    && session.pause_version === 0
+    && session.last_pause_transition_at === null
+    && session.end_at === null
+    && session.billable_minutes === null
+    && session.order_id === null
+    && Number.isSafeInteger(session.paused_duration_ms)
+    && (session.paused_duration_ms ?? -1) >= 0
+    && (
+      session.amount_minor === null
+      || (Number.isSafeInteger(session.amount_minor) && (session.amount_minor ?? -1) >= 0)
+    )
+  );
+}
+
+export function canResolveLegacyPausedSession(
+  session: LegacyPausedSessionEvidence | null | undefined,
+  auditAccess: boolean,
+): boolean {
+  return auditAccess && hasLegacyPausedTimingGap(session);
+}
+
+export type LegacyPauseResolutionFormResult =
+  | {
+      ok: true;
+      value: Pick<
+        LegacyPausedSessionResolutionDTO,
+        'ended_at' | 'billable_minutes' | 'amount_minor' | 'timing_evidence_reviewed' | 'reason'
+      >;
+    }
+  | { ok: false; error: string };
+
+export function validateLegacyPauseResolutionForm(input: {
+  endedAtLocal: string;
+  sessionStartedAt: number;
+  billableMinutes: string;
+  amountRupees: string;
+  reason: string;
+  timingEvidenceReviewed: boolean;
+}): LegacyPauseResolutionFormResult {
+  if (!input.endedAtLocal.trim()) {
+    return { ok: false, error: 'Enter the reviewed final session time.' };
+  }
+  const endedAt = new Date(input.endedAtLocal);
+  if (!Number.isFinite(endedAt.getTime())) {
+    return { ok: false, error: 'Enter a valid final session time.' };
+  }
+  if (!Number.isFinite(input.sessionStartedAt) || endedAt.getTime() < input.sessionStartedAt) {
+    return { ok: false, error: 'Final session time cannot be before the recorded start time.' };
+  }
+  if (!/^\d+$/.test(input.billableMinutes.trim())) {
+    return { ok: false, error: 'Enter billable minutes as a whole non-negative number.' };
+  }
+  const billableMinutes = Number(input.billableMinutes);
+  if (!Number.isSafeInteger(billableMinutes) || billableMinutes > 10_000_000) {
+    return { ok: false, error: 'Billable minutes are outside the supported range.' };
+  }
+  const amountMinor = parseRupeesToMinor(input.amountRupees);
+  if (amountMinor === null || amountMinor > 9_999_999_999) {
+    return { ok: false, error: 'Enter the verified final amount with at most two decimals.' };
+  }
+  const reason = input.reason.trim();
+  if (reason.length < 3 || reason.length > 500) {
+    return { ok: false, error: 'Enter an audit reason between 3 and 500 characters.' };
+  }
+  if (!input.timingEvidenceReviewed) {
+    return { ok: false, error: 'Confirm that you reviewed the timing evidence.' };
+  }
+  return {
+    ok: true,
+    value: {
+      ended_at: endedAt.toISOString(),
+      billable_minutes: billableMinutes,
+      amount_minor: amountMinor,
+      timing_evidence_reviewed: true,
+      reason,
+    },
+  };
+}
 
 const DURATION_PRESETS = [
   { label: 'No timer', minutes: null },
@@ -391,12 +506,21 @@ export default function GamingScreen() {
   const [pendingReconciliation, setPendingReconciliation] = useState<PendingReconciliation | null>(null);
   const [pendingPosHandoff, setPendingPosHandoff] = useState<PendingPosHandoff | null>(null);
   const [pendingStopTarget, setPendingStopTarget] = useState<StationDTO | null>(null);
+  const [pendingPauseTarget, setPendingPauseTarget] = useState<StationDTO | null>(null);
+  const [changingPause, setChangingPause] = useState<string | null>(null);
   const [stoppingSession, setStoppingSession] = useState<string | null>(null);
   const [cancelStationTarget, setCancelStationTarget] = useState<StationDTO | null>(null);
   const [repairStationTarget, setRepairStationTarget] = useState<StationDTO | null>(null);
   const [repairingBilling, setRepairingBilling] = useState<string | null>(null);
+  const [legacyPauseResolutionTarget, setLegacyPauseResolutionTarget] = useState<StationDTO | null>(null);
+  const [resolvingLegacyPause, setResolvingLegacyPause] = useState<string | null>(null);
+  const [legacyPauseResolutionError, setLegacyPauseResolutionError] = useState<string | null>(null);
   const [paidExtensionReceiptRevision, setPaidExtensionReceiptRevision] = useState(0);
   const repairKeyRef = useRef<string | null>(null);
+  const legacyPauseResolutionAttemptRef = useRef<{
+    fingerprint: string;
+    key: string;
+  } | null>(null);
   const [addonModalTarget, setAddonModalTarget] = useState<AddonModalTarget | null>(null);
   const [addonVoidTarget, setAddonVoidTarget] = useState<AddonVoidTarget | null>(null);
   const [addonCreateAttempt, setAddonCreateAttempt] = useState<DurableGamingAddonCreateAttempt | null>(null);
@@ -414,6 +538,8 @@ export default function GamingScreen() {
   const stopBusyRef = useRef(false);
   const startBusyRef = useRef(false);
   const timerMutationBusyRef = useRef(false);
+  const pauseBusyRef = useRef(false);
+  const pauseAttemptRef = useRef<{ fingerprint: string; key: string } | null>(null);
   const refreshGenerationRef = useRef(0);
   const hasVerifiedBoardRef = useRef(false);
 
@@ -651,20 +777,15 @@ export default function GamingScreen() {
           }));
         const [
           stationRows,
-          activeSessions,
-          pausedSessions,
-          endedSessions,
+          operationalSessions,
           packageRows,
           shiftContext,
           catalogResult,
         ] = await Promise.all([
           gaming.listStations(),
-          gaming.listSessions('active'),
-          gaming.listSessions('paused'),
-          // Only stopped sessions still awaiting POS matter operationally.
-          // Fetch enough to cover every station instead of letting paid
-          // history push an older unbilled session out of the default window.
-          gaming.listSessions('ended', { unbilledOnly: true, limit: 500 }),
+          // One authoritative board snapshot, not separate active/paused/ended
+          // reads that can contradict one another during a transition.
+          gaming.listOperationalSessions(),
           gaming.listPackages(),
           shiftContextPromise,
           loadGamingCentreAddonCatalog()
@@ -677,6 +798,9 @@ export default function GamingScreen() {
             })),
         ]);
         if (!refresh.isCurrent()) return;
+        const activeSessions = operationalSessions.filter((session) => session.status === 'active');
+        const pausedSessions = operationalSessions.filter((session) => session.status === 'paused');
+        const endedSessions = operationalSessions.filter((session) => session.status === 'ended' && !session.order_id);
         const nextStations = stationRows.filter((station) => isAppStoreAllowedType(station.type));
         const nextPackages = packageRows.map(normalizeGamingPackage);
         const visibleSessions = gridVisibleGamingSessions(
@@ -725,12 +849,9 @@ export default function GamingScreen() {
         ));
         // Rehydrate running sessions, AND any stopped-but-not-yet-sent session,
         // so a page refresh never silently drops an unbilled amount from view.
-        setSessions((prev) => {
+        setSessions(() => {
           const next: Record<string, LocalSession> = {};
           for (const gs of [...activeSessions, ...pausedSessions]) {
-            const previous = prev[gs.station_id]?.backend_session_id === gs.id
-              ? prev[gs.station_id]
-              : undefined;
             // Always apply the server's current financial/timer snapshot. Reusing
             // the whole previous object made realtime refreshes silently ignore a
             // paid extension confirmed from this or another terminal.
@@ -739,8 +860,15 @@ export default function GamingScreen() {
               shift_id: gs.shift_id,
               start_at: new Date(gs.start_at).getTime(),
               status: gs.status === 'paused' ? 'paused' : 'active',
-              pausedMs: Math.max(0, gs.paused_minutes) * 60_000,
-              pause_started_at: gs.status === 'paused' ? previous?.pause_started_at : undefined,
+              ...serverPauseClock(gs),
+              pause_available: gs.pause_available === true,
+              paused_at: gs.paused_at,
+              paused_duration_ms: gs.paused_duration_ms,
+              last_pause_transition_at: gs.last_pause_transition_at,
+              end_at: gs.end_at,
+              billable_minutes: gs.billable_minutes,
+              amount_minor: gs.amount_minor,
+              order_id: gs.order_id,
               backend_session_id: gs.id,
               timer_minutes: gs.timer_minutes,
               timer_ends_at: gs.timer_ends_at ? new Date(gs.timer_ends_at).getTime() : null,
@@ -773,6 +901,14 @@ export default function GamingScreen() {
               locked_amount_minor: gs.billing_mode === 'hourly' ? null : gs.amount_minor,
               ended_minutes: gs.billable_minutes ?? 0,
               ended_amount_minor: gs.amount_minor,
+              paused_at: gs.paused_at,
+              paused_duration_ms: gs.paused_duration_ms,
+              pause_version: gs.pause_version,
+              last_pause_transition_at: gs.last_pause_transition_at,
+              end_at: gs.end_at,
+              billable_minutes: gs.billable_minutes,
+              amount_minor: gs.amount_minor,
+              order_id: gs.order_id,
             };
           }
           return next;
@@ -821,7 +957,7 @@ export default function GamingScreen() {
       setTick((n) => n + 1);
       const now = Date.now();
       for (const s of Object.values(sessionsRef.current)) {
-        if (!s.timer_ends_at || now < s.timer_ends_at) continue;
+        if (s.status !== 'active' || !s.timer_ends_at || now < s.timer_ends_at) continue;
         if (mutedRef.current[s.station_id]) continue;
         const last = lastAlarmAtRef.current[s.station_id];
         if (last && now - last < ALARM_REPEAT_MS) continue;
@@ -1018,6 +1154,8 @@ export default function GamingScreen() {
     let backendId: string | undefined;
     let authoritativeStartAt = Date.now();
     let authoritativePausedMs = 0;
+    let pauseVersion: number | undefined;
+    let pauseAvailable = false;
     let authoritativeClockValid = true;
     let sourceShiftId: string | null = null;
     let timerEndsAt: number | null = timerMinutes ? Date.now() + timerMinutes * 60000 : null;
@@ -1073,7 +1211,10 @@ export default function GamingScreen() {
             { title: 'Session started — refresh required' },
           );
         }
-        authoritativePausedMs = Math.max(0, r.paused_minutes) * 60_000;
+        const pauseClock = serverPauseClock(r);
+        authoritativePausedMs = pauseClock.pausedMs;
+        pauseVersion = pauseClock.pause_version;
+        pauseAvailable = r.pause_available === true;
         sessionTimerMinutes = sessionTimerMinutesForLocalState({
           liveMode: true,
           requestedTimerMinutes: timerMinutes,
@@ -1104,6 +1245,8 @@ export default function GamingScreen() {
         start_at: authoritativeStartAt,
         status: 'active',
         pausedMs: authoritativePausedMs,
+        pause_version: pauseVersion,
+        pause_available: pauseAvailable,
         backend_session_id: backendId,
         timer_minutes: sessionTimerMinutes,
         timer_ends_at: timerEndsAt,
@@ -1137,7 +1280,8 @@ export default function GamingScreen() {
     }
     if (!requireCurrentShiftOwnership(s, 'change its timer')) return;
     if (!requireVerifiedActiveBillingMode(s, 'change its timer')) return;
-    const timerEndsAt = minutes ? s.start_at + minutes * 60000 : null;
+    const timerEndsAt = minutes && s.status !== 'paused' ? s.start_at + minutes * 60000 + s.pausedMs : null;
+    let serverResponse: GameSessionDTO | null = null;
     if (LIVE_MODE && s.backend_session_id) {
       if (!enterGamingMutation(timerMutationBusyRef)) {
         notifications.info('A timer change is already being saved. Wait for its result.', {
@@ -1146,7 +1290,7 @@ export default function GamingScreen() {
         return;
       }
       setExtendingSession(st.id);
-      try { await write.dispatch('setSessionTimer', s.backend_session_id, minutes); }
+      try { serverResponse = await write.dispatch('setSessionTimer', s.backend_session_id, minutes); }
       catch (e) {
         notifications.error((e as Error).message, { title: 'Could not update timer' });
         return;
@@ -1155,10 +1299,15 @@ export default function GamingScreen() {
         setExtendingSession(null);
       }
     }
-    setSessions((map) => ({
-      ...map,
-      [st.id]: { ...s, timer_minutes: minutes, timer_ends_at: timerEndsAt },
-    }));
+    if (serverResponse) {
+      applyRunningSessionTiming(st.id, serverResponse);
+      void load('background');
+    } else {
+      setSessions((map) => ({
+        ...map,
+        [st.id]: { ...s, timer_minutes: minutes, timer_ends_at: timerEndsAt },
+      }));
+    }
     // Re-arm: a changed timer should alarm fresh next time it expires, not immediately.
     delete lastAlarmAtRef.current[st.id];
     setMutedStations((m) => (m[st.id] ? { ...m, [st.id]: false } : m));
@@ -1166,6 +1315,28 @@ export default function GamingScreen() {
       minutes ? `${st.name} timer is now set to ${minutes} minutes.` : `${st.name} timer was cleared.`,
       { title: 'Timer updated' },
     );
+  }
+
+  function applyRunningSessionTiming(stationId: string, response: GameSessionDTO, extra: Partial<LocalSession> = {}) {
+    invalidateGamingRefresh(refreshGenerationRef);
+    setSessions((map) => {
+      if (!mayApplyRunningSessionReceipt(map[stationId], response)) return map;
+      return { ...map, [stationId]: {
+        ...map[stationId], ...extra,
+        status: response.status === 'paused' ? 'paused' : 'active',
+        ...serverPauseClock(response),
+        pause_available: response.pause_available === true,
+        paused_at: response.paused_at,
+        paused_duration_ms: response.paused_duration_ms,
+        last_pause_transition_at: response.last_pause_transition_at,
+        end_at: response.end_at,
+        billable_minutes: response.billable_minutes,
+        amount_minor: response.amount_minor,
+        order_id: response.order_id,
+        timer_minutes: response.timer_minutes,
+        timer_ends_at: response.timer_ends_at ? new Date(response.timer_ends_at).getTime() : null,
+      } };
+    });
   }
 
   async function extendTimer(st: StationDTO, addMinutes: number) {
@@ -1192,15 +1363,8 @@ export default function GamingScreen() {
           addMinutes,
           `gaming-timer:${createOperationKey()}`,
         );
-        const timerEndsAt = r.timer_ends_at ? new Date(r.timer_ends_at).getTime() : null;
-        setSessions((map) => ({
-          ...map,
-          [st.id]: {
-            ...s,
-            timer_minutes: r.timer_minutes,
-            timer_ends_at: timerEndsAt,
-          },
-        }));
+        applyRunningSessionTiming(st.id, r);
+        void load('background');
         delete lastAlarmAtRef.current[st.id];
         setMutedStations((m) => (m[st.id] ? { ...m, [st.id]: false } : m));
         notifications.success(`${addMinutes} minutes added to ${st.name}.`, {
@@ -1218,7 +1382,7 @@ export default function GamingScreen() {
       }
       return;
     }
-    const elapsedMinutesNow = Math.max(0, Math.ceil((Date.now() - s.start_at) / 60000));
+    const elapsedMinutesNow = Math.max(0, Math.ceil(playedSessionMilliseconds(s, Date.now()) / 60000));
     const baseMinutes = Math.max(s.timer_minutes ?? 0, elapsedMinutesNow);
     await setStationTimer(st, Math.min(1440, baseMinutes + addMinutes));
   }
@@ -1285,18 +1449,7 @@ export default function GamingScreen() {
             });
         persistedAttempt = attempt;
         if (station && localSession) {
-          setSessions((map) => ({
-            ...map,
-            [station.id]: {
-              ...(map[station.id] ?? localSession),
-              timer_minutes: r.timer_minutes,
-              timer_ends_at: r.timer_ends_at
-                ? new Date(r.timer_ends_at).getTime()
-                : (map[station.id] ?? localSession).timer_ends_at,
-              locked_amount_minor:
-                r.amount_minor ?? (map[station.id] ?? localSession).locked_amount_minor,
-            },
-          }));
+          applyRunningSessionTiming(station.id, r, { locked_amount_minor: r.amount_minor ?? localSession.locked_amount_minor });
           delete lastAlarmAtRef.current[station.id];
           setMutedStations((muted) =>
             muted[station.id] ? { ...muted, [station.id]: false } : muted,
@@ -1526,29 +1679,73 @@ export default function GamingScreen() {
       .sort((left, right) => (left === 'standard' ? -1 : right === 'standard' ? 1 : left.localeCompare(right)));
   }
 
-  function pauseSession(st: StationDTO) {
-    const write = requireGamingWrite('Cannot pause session');
+  async function changeSessionPause(st: StationDTO, action: 'pause' | 'resume', rawReason: string) {
+    const write = requireGamingWrite(`Cannot ${action} session`);
     if (!write.allowed) return;
     const s = sessions[st.id];
-    if (!s || s.status === 'paused') return;
-    setSessions((map) => ({
-      ...map,
-      [st.id]: { ...s, status: 'paused', pause_started_at: Date.now() },
-    }));
-  }
-  function resumeSession(st: StationDTO) {
-    const write = requireGamingWrite('Cannot resume session');
-    if (!write.allowed) return;
-    const s = sessions[st.id];
-    if (!s || s.status !== 'paused' || !s.pause_started_at) return;
-    setSessions((map) => ({
-      ...map,
-      [st.id]: {
-        ...s, status: 'active',
-        pausedMs: s.pausedMs + (Date.now() - s.pause_started_at!),
-        pause_started_at: undefined,
-      },
-    }));
+    if (!s || s.status !== (action === 'pause' ? 'active' : 'paused')) {
+      notifications.info('The session has changed. Review its current status before trying again.');
+      setPendingPauseTarget(null);
+      return;
+    }
+    const reason = rawReason.trim();
+    if (reason.length < 3 || reason.length > 500) {
+      notifications.error('Enter a reason between 3 and 500 characters.', { title: 'Reason needed' });
+      return;
+    }
+    if (!requireCurrentShiftOwnership(s, action)) return;
+    if (LIVE_MODE && (!s.backend_session_id || s.pause_version === undefined)) {
+      notifications.error('This session does not have a verified shared pause clock. Refresh Gaming; if it persists, ask the owner to update the server.', { title: 'Refresh required' });
+      return;
+    }
+    if (LIVE_MODE && action === 'pause' && !s.pause_available) {
+      notifications.info('Update active tablets before the owner enables shared pause.', { title: 'Shared pause unavailable' });
+      return;
+    }
+    if (LIVE_MODE && !navigator.onLine) {
+      notifications.error('Pause and resume need a server connection so all devices agree. Reconnect and try again; the session has not been changed here.', { title: 'Online connection required' });
+      return;
+    }
+    if (!enterGamingMutation(pauseBusyRef)) return;
+    setChangingPause(st.id);
+    invalidateGamingRefresh(refreshGenerationRef);
+    try {
+      if (LIVE_MODE && s.backend_session_id) {
+        const fingerprint = JSON.stringify([s.backend_session_id, action, s.pause_version, reason]);
+        if (pauseAttemptRef.current?.fingerprint !== fingerprint) {
+          pauseAttemptRef.current = { fingerprint, key: `gaming-${action}:${createOperationKey()}` };
+        }
+        const response = await write.dispatch(
+          action === 'pause' ? 'pauseSession' : 'resumeSession',
+          s.backend_session_id,
+          { reason, expected_pause_version: s.pause_version! },
+          pauseAttemptRef.current.key,
+        );
+        applyRunningSessionTiming(st.id, response);
+        pauseAttemptRef.current = null;
+      } else {
+        const now = Date.now();
+        const pausedFor = action === 'resume' && s.pause_started_at !== undefined ? now - s.pause_started_at : 0;
+        setSessions((map) => ({ ...map, [st.id]: {
+          ...s, status: action === 'pause' ? 'paused' : 'active',
+          pause_started_at: action === 'pause' ? now : undefined,
+          pausedMs: s.pausedMs + pausedFor,
+          timer_ends_at: s.timer_ends_at ? s.timer_ends_at + pausedFor : null,
+        } }));
+      }
+      delete lastAlarmAtRef.current[st.id];
+      setPendingPauseTarget(null);
+      notifications.success(`${st.name} ${action === 'pause' ? 'paused. Billing time is frozen.' : 'resumed. The timer is running.'}`);
+      if (LIVE_MODE) void load('background');
+    } catch (failure) {
+      const detail = failure instanceof Error ? failure.message : 'The server response could not be confirmed.';
+      notifications.error(`${detail} Refresh Gaming to check the saved status before retrying.`, { title: `${action === 'pause' ? 'Pause' : 'Resume'} not confirmed` });
+      // Do not invent a local pause or a local resume after an uncertain reply.
+      await load('foreground');
+    } finally {
+      leaveGamingMutation(pauseBusyRef);
+      setChangingPause(null);
+    }
   }
   async function stopSession(st: StationDTO) {
     const s = sessions[st.id];
@@ -1584,7 +1781,7 @@ export default function GamingScreen() {
     if (!resolvedStopShiftId) return;
     if (!requireVerifiedActiveBillingMode(s, 'stop it')) return;
     if (!requirePaidExtensionResolved(s, 'stopped')) return;
-    const elapsedMs = Date.now() - s.start_at - s.pausedMs;
+    const elapsedMs = playedSessionMilliseconds(s, Date.now());
     let elapsedMin = Math.max(1, Math.ceil(elapsedMs / 60000));
     const estimatedAmount = runningBillMinor({
       billingMode: s.billing_mode,
@@ -2048,6 +2245,90 @@ export default function GamingScreen() {
     }
   }
 
+  async function resolveLegacyPausedSession(
+    station: StationDTO,
+    selected: Extract<LegacyPauseResolutionFormResult, { ok: true }>['value'],
+  ) {
+    const write = requireGamingWrite('Cannot resolve saved session');
+    if (!write.allowed) return;
+    const current = sessions[station.id];
+    if (!canResolveLegacyPausedSession(current, Boolean(me?.audit_access))) {
+      setLegacyPauseResolutionError(
+        'This session is no longer the exact unresolved legacy pause you reviewed. Refresh Gaming and review its current state.',
+      );
+      return;
+    }
+    if (!current.backend_session_id) {
+      setLegacyPauseResolutionError(
+        'The server session identity is unavailable. Refresh Gaming before recovery.',
+      );
+      return;
+    }
+    const body: LegacyPausedSessionResolutionDTO = {
+      expected_status: 'paused',
+      expected_paused_at: null,
+      expected_pause_version: 0,
+      expected_end_at: null,
+      expected_order_id: null,
+      expected_billable_minutes: null,
+      expected_paused_duration_ms: current.paused_duration_ms!,
+      expected_amount_minor: current.amount_minor!,
+      ...selected,
+    };
+    const fingerprint = JSON.stringify([current.backend_session_id, body]);
+    if (legacyPauseResolutionAttemptRef.current?.fingerprint !== fingerprint) {
+      legacyPauseResolutionAttemptRef.current = {
+        fingerprint,
+        key: `gaming-legacy-pause-resolution:${createOperationKey()}`,
+      };
+    }
+    setLegacyPauseResolutionError(null);
+    setResolvingLegacyPause(station.id);
+    try {
+      const repaired = await write.dispatch(
+        'resolveLegacyPausedSession',
+        current.backend_session_id,
+        body,
+        legacyPauseResolutionAttemptRef.current.key,
+      );
+      setSessions((all) => ({
+        ...all,
+        [station.id]: {
+          ...current,
+          status: 'ended',
+          end_at: repaired.end_at,
+          billable_minutes: repaired.billable_minutes,
+          amount_minor: repaired.amount_minor,
+          order_id: repaired.order_id,
+          ended_minutes: repaired.billable_minutes ?? selected.billable_minutes,
+          ended_amount_minor: repaired.amount_minor,
+        },
+      }));
+      legacyPauseResolutionAttemptRef.current = null;
+      setLegacyPauseResolutionTarget(null);
+      setLegacyPauseResolutionError(null);
+      await load('background');
+      notifications.success(
+        `${station.name} was ended with the reviewed time and ${inr(repaired.amount_minor ?? selected.amount_minor)} final charge. Review it before sending to POS.`,
+        { title: 'Saved session resolved' },
+      );
+    } catch (failure) {
+      if (isAmbiguousApiError(failure)) {
+        notifications.error(
+          'The recovery response was lost. Gaming will refresh before another decision; do not submit a different time or amount yet.',
+          { title: 'Recovery not yet confirmed' },
+        );
+        await load('foreground');
+        setLegacyPauseResolutionTarget(null);
+      } else {
+        legacyPauseResolutionAttemptRef.current = null;
+        setLegacyPauseResolutionError((failure as Error).message);
+      }
+    } finally {
+      setResolvingLegacyPause(null);
+    }
+  }
+
   function storeSessionAddon(addon: GamingSessionAddonDTO) {
     setAddonsBySession((current) => {
       const existing = current[addon.gaming_session_id] ?? [];
@@ -2335,7 +2616,7 @@ export default function GamingScreen() {
   const overtimeStations = (() => {
     const now = Date.now();
     return Object.values(sessions)
-      .filter((s) => s.timer_ends_at && now >= s.timer_ends_at)
+      .filter((s) => s.status === 'active' && s.timer_ends_at && now >= s.timer_ends_at)
       .map((s) => stations.find((st) => st.id === s.station_id)?.name ?? 'Unknown station');
   })();
 
@@ -2517,13 +2798,14 @@ export default function GamingScreen() {
             const session = sessions[st.id];
             const billingMissing = session?.status === 'ended'
               && session.ended_amount_minor == null;
+            const legacyPauseTimingGap = hasLegacyPausedTimingGap(session);
+            const ownerCanResolveLegacyPause = canResolveLegacyPausedSession(
+              session,
+              Boolean(me?.audit_access),
+            );
             const legacyBillingAmbiguous = session?.billing_mode === 'legacy_ambiguous';
             const phone = sessionPhone[st.id] ?? '';
-            const elapsedMs = session
-              ? (session.status === 'paused' && session.pause_started_at
-                  ? session.pause_started_at - session.start_at - session.pausedMs
-                  : Date.now() - session.start_at - session.pausedMs)
-              : 0;
+            const elapsedMs = session ? playedSessionMilliseconds(session, Date.now()) : 0;
             const elapsedMin = Math.floor(elapsedMs / 60000);
             // A package session's price is locked in at start (see backend
             // gaming/router.py stop_session) and never grows with elapsed
@@ -2795,7 +3077,9 @@ export default function GamingScreen() {
                         <div>
                           <div className="text-xs text-fg-muted">Elapsed</div>
                           <div className="text-2xl font-bold font-mono">
-                            {Math.floor(elapsedMin / 60)}:{String(elapsedMin % 60).padStart(2, '0')}
+                            {Number.isFinite(elapsedMin)
+                              ? `${Math.floor(elapsedMin / 60)}:${String(elapsedMin % 60).padStart(2, '0')}`
+                              : 'Clock unavailable'}
                           </div>
                         </div>
                         <div className="text-right">
@@ -2818,12 +3102,47 @@ export default function GamingScreen() {
                           <Pause size={11}/> Paused
                         </div>
                       )}
+                      {legacyPauseTimingGap && (
+                        <div className="mt-2 rounded-lg border border-accent-bad/40 bg-accent-bad/10 p-2.5 text-xs text-accent-bad">
+                          <div className="flex items-start gap-1.5">
+                            <AlertCircle size={12} className="mt-0.5 shrink-0"/>
+                            <div>
+                              <div className="font-semibold">Saved pause time is incomplete</div>
+                              <div className="mt-1 text-fg-muted">
+                                This migrated session remains saved, but its original pause start was never recorded. Normal resume and end controls are locked so the system cannot guess the duration or charge.
+                              </div>
+                            </div>
+                          </div>
+                          {ownerCanResolveLegacyPause ? (
+                            <GamingMutationButton
+                              canManageSessions={canManageStations}
+                              className="btn btn-ghost mt-2 w-full border-accent-bad/50 text-accent-bad"
+                              disabled={resolvingLegacyPause !== null}
+                              onClick={() => {
+                                legacyPauseResolutionAttemptRef.current = null;
+                                setLegacyPauseResolutionError(null);
+                                setLegacyPauseResolutionTarget(st);
+                              }}
+                            >
+                              {resolvingLegacyPause === st.id
+                                ? <Loader2 size={14} className="animate-spin"/>
+                                : <AlertCircle size={14}/>} Resolve with reviewed evidence
+                            </GamingMutationButton>
+                          ) : (
+                            <div className="mt-2 font-medium">
+                              Ask the protected owner to open Gaming on the web and resolve it.
+                            </div>
+                          )}
+                        </div>
+                      )}
 
-                      {session.timer_ends_at ? (() => {
-                        const remainingMs = session.timer_ends_at! - Date.now();
+                      {session.timer_ends_at || (session.status === 'paused' && session.timer_minutes != null) ? (() => {
+                        const remainingMs = session.status === 'paused'
+                          ? session.timer_minutes! * 60_000 - elapsedMs
+                          : session.timer_ends_at! - Date.now();
                         const overtime = remainingMs <= 0;
                         const lowTime = !overtime && remainingMs <= 5 * 60000;
-                        const clock = fmtClock(Math.abs(Math.round(remainingMs / 1000)));
+                        const clock = Number.isFinite(remainingMs) ? fmtClock(Math.abs(Math.round(remainingMs / 1000))) : null;
                         const baseVariant = session.package_variant_snapshot
                           ?? (session.package_id
                             ? packages.find((item) => item.id === session.package_id && item.kind === 'base')?.variant
@@ -2847,10 +3166,10 @@ export default function GamingScreen() {
                             overtime ? 'text-accent-bad' : lowTime ? 'text-accent-gold' : 'text-fg-muted'
                           }`}>
                             <div className="flex items-center gap-1.5 text-sm font-mono font-bold">
-                              <Timer size={13}/> {overtime ? `+${clock} over` : `${clock} left`}
+                              <Timer size={13}/> {session.status === 'paused' ? 'Paused · ' : ''}{clock === null ? 'Clock unavailable' : overtime ? `+${clock} over` : `${clock} left`}
                             </div>
                             <div className="flex items-center gap-1 flex-wrap">
-                              {overtime && (
+                              {overtime && session.status === 'active' && (
                                 <button className="text-fg-muted hover:text-accent p-0.5"
                                   onClick={() => toggleMute(st.id)}
                                   title={mutedStations[st.id] ? 'Unmute alarm' : 'Mute alarm for this station'}>
@@ -2867,6 +3186,7 @@ export default function GamingScreen() {
                                     className="chip text-[10px] !border-accent-gold/50 text-accent-gold hover:!border-accent-gold"
                                     disabled={Boolean(
                                       extendingSession !== null
+                                      || legacyPauseTimingGap
                                       || paidExtensionRecoveryError
                                       || paidExtensionSubmissionMode({
                                         savedAttempt: savedPaidExtension,
@@ -2904,14 +3224,14 @@ export default function GamingScreen() {
                                   <GamingMutationButton
                                     canManageSessions={canManageStations}
                                     className="chip text-[10px] hover:border-accent"
-                                    disabled={!sessionOwned || paidExtensionLifecycleBlocked || extendingSession !== null}
+                                    disabled={!sessionOwned || legacyPauseTimingGap || paidExtensionLifecycleBlocked || extendingSession !== null}
                                     onClick={() => { void extendTimer(st, 15); }} title="Add 15 minutes">
                                     +15m
                                   </GamingMutationButton>
                                   <GamingMutationButton
                                     canManageSessions={canManageStations}
                                     className="text-fg-muted hover:text-accent-bad p-0.5"
-                                    disabled={!sessionOwned || paidExtensionLifecycleBlocked || extendingSession !== null}
+                                    disabled={!sessionOwned || legacyPauseTimingGap || paidExtensionLifecycleBlocked || extendingSession !== null}
                                     onClick={() => setStationTimer(st, null)} title="Clear timer">
                                     <X size={13}/>
                                   </GamingMutationButton>
@@ -2922,7 +3242,7 @@ export default function GamingScreen() {
                         );
                       })() : (
                         <div className="mt-2 pt-2 border-t border-bg-border flex items-center justify-between gap-2 text-xs text-fg-muted">
-                          <span className="flex items-center gap-1"><TimerOff size={12}/> No timer</span>
+                          <span className="flex items-center gap-1"><TimerOff size={12}/>{session.status === 'paused' ? 'Paused · no timer set' : 'No timer'}</span>
                           {session.billing_mode === 'legacy_ambiguous' ? (
                             <span className="text-[10px] text-accent-gold">Owner review required</span>
                           ) : (
@@ -2932,7 +3252,7 @@ export default function GamingScreen() {
                                   canManageSessions={canManageStations}
                                   key={m}
                                   className="chip text-[10px] hover:border-accent"
-                                  disabled={!sessionOwned || paidExtensionLifecycleBlocked || extendingSession !== null}
+                                  disabled={!sessionOwned || legacyPauseTimingGap || paidExtensionLifecycleBlocked || extendingSession !== null}
                                   onClick={() => { void extendTimer(st, m); }}>
                                   +{m >= 60 ? `${m / 60}h` : `${m}m`}
                                 </GamingMutationButton>
@@ -2943,11 +3263,13 @@ export default function GamingScreen() {
                       )}
                     </div>
                     <div className="flex gap-2">
-                      {!LIVE_MODE && (session.status === 'active' ? (
+                      {session.status === 'active' ? (
                         <GamingMutationButton
                           canManageSessions={canManageStations}
                           className="btn btn-ghost flex-1"
-                          onClick={() => pauseSession(st)}
+                          disabled={!sessionOwned || changingPause !== null || stoppingSession !== null || (LIVE_MODE && (!session.pause_available || session.pause_version === undefined))}
+                          title={LIVE_MODE && !session.pause_available ? 'Update active tablets before the owner enables shared pause.' : undefined}
+                          onClick={() => setPendingPauseTarget(st)}
                         >
                           <Pause size={14}/> Pause
                         </GamingMutationButton>
@@ -2955,21 +3277,25 @@ export default function GamingScreen() {
                         <GamingMutationButton
                           canManageSessions={canManageStations}
                           className="btn btn-ghost flex-1"
-                          onClick={() => resumeSession(st)}
+                          disabled={!sessionOwned || legacyPauseTimingGap || changingPause !== null || stoppingSession !== null || (LIVE_MODE && session.pause_version === undefined)}
+                          onClick={() => { void changeSessionPause(st, 'resume', 'Continue session'); }}
                         >
-                          <PlayCircle size={14}/> Resume
+                          {changingPause === st.id ? <Loader2 size={14} className="animate-spin"/> : <PlayCircle size={14}/>} Resume
                         </GamingMutationButton>
-                      ))}
+                      )}
                       <GamingMutationButton
                         canManageSessions={canManageStations}
                         className="btn btn-primary flex-1 !bg-accent-bad hover:!bg-accent-bad/80"
-                        disabled={!resolvedStopShiftId || legacyBillingAmbiguous || paidExtensionLifecycleBlocked || addonMutationPending || stoppingSession !== null}
+                        disabled={!resolvedStopShiftId || legacyBillingAmbiguous || legacyPauseTimingGap || paidExtensionLifecycleBlocked || addonMutationPending || stoppingSession !== null || changingPause !== null}
                         onClick={() => setPendingStopTarget(st)}>
                         {stoppingSession === st.id
                           ? <Loader2 size={14} className="animate-spin"/>
                           : <Square size={14}/>} End session
                       </GamingMutationButton>
                     </div>
+                    {LIVE_MODE && session.status === 'active' && !session.pause_available && (
+                      <p className="mt-2 text-xs text-fg-muted">Shared pause is unavailable. Update active tablets before the owner enables it.</p>
+                    )}
                   </>
                 ) : packagesFor(st.type, 'base').length > 0 ? (() => {
                   const allBasePackages = packagesFor(st.type, 'base');
@@ -3233,12 +3559,23 @@ export default function GamingScreen() {
             onCancel={() => { if (!extendingSession) setPendingExtension(null); }}
           />
         )}
+        {pendingPauseTarget && (
+          <PromptModal
+            title={`Pause ${pendingPauseTarget.name}`}
+            label="Reason (3–500 characters). Billing time and alarms pause for everyone."
+            placeholder="For example, controller replacement"
+            confirmLabel="Pause session"
+            minLength={3}
+            maxLength={500}
+            busy={changingPause === pendingPauseTarget.id}
+            onSubmit={(reason) => { void changeSessionPause(pendingPauseTarget, 'pause', reason); }}
+            onCancel={() => { if (!changingPause) setPendingPauseTarget(null); }}
+          />
+        )}
         {pendingStopTarget && (() => {
           const session = sessions[pendingStopTarget.id];
           if (!session || session.status === 'ended') return null;
-          const elapsedMs = session.status === 'paused' && session.pause_started_at
-            ? session.pause_started_at - session.start_at - session.pausedMs
-            : Date.now() - session.start_at - session.pausedMs;
+          const elapsedMs = playedSessionMilliseconds(session, Date.now());
           const estimatedAmountMinor = runningBillMinor({
             billingMode: session.billing_mode,
             lockedAmountMinor: session.locked_amount_minor,
@@ -3304,6 +3641,28 @@ export default function GamingScreen() {
             }}
           />
         )}
+        {me?.audit_access && legacyPauseResolutionTarget && (() => {
+          const session = sessions[legacyPauseResolutionTarget.id];
+          if (!canResolveLegacyPausedSession(session, true)) return null;
+          return (
+            <LegacyPauseResolutionModal
+              station={legacyPauseResolutionTarget}
+              session={session}
+              busy={resolvingLegacyPause === legacyPauseResolutionTarget.id}
+              requestError={legacyPauseResolutionError}
+              onSubmit={(selected) => {
+                void resolveLegacyPausedSession(legacyPauseResolutionTarget, selected);
+              }}
+              onCancel={() => {
+                if (!resolvingLegacyPause) {
+                  legacyPauseResolutionAttemptRef.current = null;
+                  setLegacyPauseResolutionError(null);
+                  setLegacyPauseResolutionTarget(null);
+                }
+              }}
+            />
+          );
+        })()}
         {deleteStationTarget && (
           <ConfirmModal
             title="Delete gaming station"
@@ -3370,6 +3729,152 @@ function PosHandoffModal({
           </button>
         </div>
       </div>
+    </Modal>
+  );
+}
+
+export function LegacyPauseResolutionModal({
+  station,
+  session,
+  busy,
+  requestError,
+  onSubmit,
+  onCancel,
+}: {
+  station: StationDTO;
+  session: LocalSession;
+  busy: boolean;
+  requestError: string | null;
+  onSubmit: (
+    selected: Extract<LegacyPauseResolutionFormResult, { ok: true }>['value'],
+  ) => void;
+  onCancel: () => void;
+}) {
+  const [endedAtLocal, setEndedAtLocal] = useState('');
+  const [billableMinutes, setBillableMinutes] = useState('');
+  const [amountRupees, setAmountRupees] = useState(
+    session.amount_minor == null ? '' : (session.amount_minor / 100).toFixed(2),
+  );
+  const [reason, setReason] = useState('');
+  const [timingEvidenceReviewed, setTimingEvidenceReviewed] = useState(false);
+  const [validation, setValidation] = useState<string | null>(null);
+
+  function submit(event: React.FormEvent) {
+    event.preventDefault();
+    const result = validateLegacyPauseResolutionForm({
+      endedAtLocal,
+      sessionStartedAt: session.start_at,
+      billableMinutes,
+      amountRupees,
+      reason,
+      timingEvidenceReviewed,
+    });
+    if (!result.ok) {
+      setValidation(result.error);
+      return;
+    }
+    setValidation(null);
+    onSubmit(result.value);
+  }
+
+  return (
+    <Modal open onClose={onCancel} title={`Resolve saved pause · ${station.name}`} size="md">
+      <form onSubmit={submit} className="space-y-3">
+        <div className="rounded-lg border border-accent-bad/40 bg-accent-bad/10 p-3 text-sm">
+          <div className="font-semibold text-accent-bad">Protected owner recovery</div>
+          <p className="mt-1 text-fg-muted">
+            The original pause start is unknowable. This action does not invent it: enter only the final time, played minutes, and charge supported by the station log, customer checkout, or another reliable record. The full correction is immutable and audited.
+          </p>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="Recorded session start">
+            <div className="input flex items-center bg-bg-raised font-mono text-sm text-fg-muted">
+              {new Date(session.start_at).toLocaleString()}
+            </div>
+          </Field>
+          <Field label="Reviewed final time">
+            <input
+              autoFocus
+              required
+              type="datetime-local"
+              className="input font-mono"
+              value={endedAtLocal}
+              onChange={(event) => setEndedAtLocal(event.target.value)}
+              disabled={busy}
+            />
+          </Field>
+          <Field label="Billable played minutes">
+            <input
+              required
+              type="number"
+              inputMode="numeric"
+              min={0}
+              max={10_000_000}
+              step={1}
+              className="input font-mono text-right"
+              value={billableMinutes}
+              onChange={(event) => setBillableMinutes(event.target.value)}
+              placeholder="0"
+              disabled={busy}
+            />
+          </Field>
+          <Field label="Verified final amount (₹)">
+            <input
+              required
+              type="number"
+              inputMode="decimal"
+              min={0}
+              step="0.01"
+              className="input font-mono text-right"
+              value={amountRupees}
+              onChange={(event) => setAmountRupees(event.target.value)}
+              placeholder="0.00"
+              disabled={busy}
+            />
+          </Field>
+        </div>
+        <div className="rounded-lg border border-bg-border bg-bg-raised p-3 text-xs text-fg-muted">
+          Known historical paused time retained by the server: <span className="font-mono font-semibold text-fg">{Math.round((session.paused_duration_ms ?? 0) / 1000)} seconds</span>. The server will reject a time, duration, or amount that conflicts with the locked hourly rate or package ledger.
+        </div>
+        <Field label="Audit reason and evidence source">
+          <textarea
+            required
+            className="input min-h-24 resize-y"
+            minLength={3}
+            maxLength={500}
+            value={reason}
+            onChange={(event) => setReason(event.target.value)}
+            placeholder="For example: reviewed handwritten station log and customer checkout at 21:35"
+            disabled={busy}
+          />
+        </Field>
+        <label className="flex min-h-12 cursor-pointer items-start gap-3 rounded-lg border border-bg-border bg-bg-raised p-3 text-sm">
+          <input
+            required
+            type="checkbox"
+            className="mt-0.5 h-5 w-5 shrink-0 accent-accent"
+            checked={timingEvidenceReviewed}
+            onChange={(event) => setTimingEvidenceReviewed(event.target.checked)}
+            disabled={busy}
+          />
+          <span>I reviewed the timing evidence and confirm these are the final operational facts. I understand the original pause time will remain unknown.</span>
+        </label>
+        {(validation || requestError) && (
+          <ErrorRow text={validation ?? requestError!}/>
+        )}
+        <div className="flex justify-end gap-2 pt-2">
+          <button type="button" className="btn btn-ghost" disabled={busy} onClick={onCancel}>
+            Keep unchanged
+          </button>
+          <button
+            type="submit"
+            className="btn btn-primary !bg-accent-bad hover:!bg-accent-bad/80"
+            disabled={busy || !timingEvidenceReviewed}
+          >
+            {busy ? <Loader2 className="animate-spin" size={14}/> : <AlertCircle size={14}/>} End with audited evidence
+          </button>
+        </div>
+      </form>
     </Modal>
   );
 }

@@ -844,6 +844,21 @@ internal fun requireCheckoutClientInstanceForReconciliation(
 }
 
 /**
+ * Every Code24 shift leg carries one app-installation UUID. Unlike a user
+ * scoped Room row, this identity survives logout and a clean account switch,
+ * so another authorised employee on the same tablet can close the shared
+ * shift. A missing identity keeps the original outbox row replayable.
+ */
+internal fun requireShiftInstallationId(provider: () -> String?): String = try {
+    CheckoutClientInstancePolicy.requireStable(provider())
+} catch (_: CheckoutClientInstanceUnavailableException) {
+    throw ApiException(
+        "This tablet could not verify its shift identity. Restart the app; the saved shift action was kept for retry.",
+        code = "shift_installation_identity_unavailable",
+    )
+}
+
+/**
  * Pulls reference data down and drains captured sales up.
  *
  * Ordering matters: sales are pushed *before* the menu is refreshed, so a
@@ -1531,7 +1546,9 @@ class SyncEngine(
      * localId/idempotency key. Clearing the attempt is intentionally stricter:
      * this method owns a fresh authenticated GET, validates branch/terminal
      * scope, and mutates Room only in the same cache lease. A matching live
-     * opening is linked only after immutable opening facts agree. An unrelated
+     * opening is linked only on a freshly verified legacy server after
+     * immutable opening facts agree. Captured-open servers instead require
+     * replay of the original POST receipt. An unrelated
      * live opening, or no live opening, may clear only an empty attempt; the
      * DAO refuses any discard while captured records use the stable identity.
      */
@@ -1620,6 +1637,11 @@ class SyncEngine(
                     "The live server shift did not match this branch and terminal. Nothing was cleared.",
                 )
             }
+            // Recovery follows the exact open shift's receipt provenance, not
+            // the terminal's current server capability. A legacy shift may
+            // remain open across the 0069 deployment.
+            val allowLegacyOpeningMatch =
+                allowsLegacyShiftOpeningMatch(detail, terminalId, branchId)
             val verifiedAt = System.currentTimeMillis()
             if (detail != null) {
                 val openedAt = runCatching { Instant.parse(detail.openedAt).toEpochMilli() }.getOrNull()
@@ -1646,6 +1668,7 @@ class SyncEngine(
                             serverOpeningFloatMinor = cached.openingFloatMinor,
                             serverOpenedAtMillis = cached.openedAtMillis,
                             verifiedAtMillis = verifiedAt,
+                            allowLegacyOpeningMatch = allowLegacyOpeningMatch,
                         )
                     }
                 }) {
@@ -1882,8 +1905,12 @@ class SyncEngine(
         reason: String,
     ): PosRefundRequestResult = mutex.withLock {
         withResourceSerialisation("orders") {
-            require(DCompanyApp.instance.shiftCache.profile.value?.protectedAccess == true) {
-                "Only a protected owner may resolve a started provider payout."
+            val profile = DCompanyApp.instance.shiftCache.profile.value
+            require(
+                profile != null && EffectivePermissions.from(profile)
+                    .has(ErpPermission.PosRefundReconcile)
+            ) {
+                "This account needs Refund reconciliation access to resolve a started provider payout."
             }
             require(providerStatus in setOf(
                 "no_matching_transaction", "provider_declined", "provider_reversed",
@@ -1903,7 +1930,11 @@ class SyncEngine(
             val serverRequestId = requireNotNull(row.serverRequestId) {
                 "This provider payout is missing its server reference. Refresh before recovery."
             }
-            val serverShiftId = requireExactRefundShift(row, includeClosingIntent = true)
+            val serverShiftId = requireExactRefundShift(
+                row,
+                includeClosingIntent = true,
+                requireShiftActor = false,
+            )
             val checkedAt = System.currentTimeMillis()
             val actionId = "pos-refund-provider-resolve:${row.localId}"
             val result = refundsApi.resolveProviderPayout(
@@ -2548,10 +2579,13 @@ class SyncEngine(
      */
     private suspend fun pushShiftOpen(row: LocalShiftEntity) {
         val dao = db.shiftDao()
+        val actionIds = shiftLifecycleActionIds(row.localId)
+        val installationId = requireShiftInstallationId(checkoutClientInstance)
         val opened = shiftApi.open(
             ShiftOpenBody(row.openingFloatMinor),
-            "shift-open:${row.localId}",
-            outboxProvenanceHeaders(row.openedAtMillis, "shift-open:${row.localId}"),
+            actionIds.open,
+            installationId,
+            outboxProvenanceHeaders(row.openedAtMillis, actionIds.open),
         )
         dao.setServerShiftId(row.localId, opened.id)
         // Guarded transition: if staff requested close while this call was in
@@ -2659,12 +2693,15 @@ class SyncEngine(
                 val serverShiftId = requireNotNull(row.serverShiftId) {
                     "A close cannot sync before its shift open is confirmed."
                 }
+                val actionIds = shiftLifecycleActionIds(row.localId)
+                val installationId = requireShiftInstallationId(checkoutClientInstance)
                 attemptedServerClose = true
                 val result = shiftApi.close(
                     serverShiftId,
                     ShiftCloseBody(countedMinor),
-                    "shift-close:${row.localId}",
-                    outboxProvenanceHeaders(row.closedAtMillis, "shift-close:${row.localId}"),
+                    actionIds.close,
+                    installationId,
+                    outboxProvenanceHeaders(row.closedAtMillis, actionIds.close),
                 )
                 dao.markClosed(row.localId, result.varianceMinor)
             } catch (cancelled: CancellationException) {
@@ -3670,6 +3707,7 @@ class SyncEngine(
     private suspend fun requireExactRefundShift(
         row: LocalRefundEntity,
         includeClosingIntent: Boolean,
+        requireShiftActor: Boolean = true,
     ): String {
         val app = DCompanyApp.instance
         val terminalId = app.terminalStore.terminalId()
@@ -3689,10 +3727,12 @@ class SyncEngine(
             db.shiftDao().serverOpen(terminalId),
             includeClosingIntent = includeClosingIntent,
         ) ?: error("The captured POS shift is not open on this terminal. Do not touch cash.")
-        val actor = ShiftActor(profile.userId, profile.protectedAccess)
-        require(resolved.canManageMoney(actor)) {
-            resolved.moneyAccessMessage(actor)
-                ?: "Only the shift opener or a protected owner may refund money from this drawer."
+        if (requireShiftActor) {
+            val actor = ShiftActor(profile.userId, profile.protectedAccess)
+            require(resolved.canManageMoney(actor)) {
+                resolved.moneyAccessMessage(actor)
+                    ?: "Only the shift opener or a protected owner may refund money from this drawer."
+            }
         }
         val resolvedBranch = resolved.server?.branchId ?: resolved.local?.branchId
         require(resolvedBranch == branchId) {
@@ -6975,7 +7015,12 @@ class SyncEngine(
                         )
                     },
                     categories = categories.map {
-                        MenuCategoryEntity(id = it.id, name = it.name, sortOrder = it.sortOrder)
+                        MenuCategoryEntity(
+                            id = it.id,
+                            name = it.name,
+                            sortOrder = it.sortOrder,
+                            isGamingCentreCatalog = it.isGamingCentreCatalog,
+                        )
                     },
                     variants = items.flatMap { item ->
                         item.variants.map { variant ->
@@ -7049,14 +7094,22 @@ class SyncEngine(
         val dao = db.menuWriteDao()
         val server = if (row.serverId == null) {
             menuApi.createCategory(
-                CategoryCreateBody(name = row.name!!, sortOrder = row.sortOrder ?: 0),
+                CategoryCreateBody(
+                    name = row.name!!,
+                    sortOrder = row.sortOrder ?: 0,
+                    isGamingCentreCatalog = row.isGamingCentreCatalog ?: false,
+                ),
                 "menu-category:${row.localId}",
                 outboxProvenanceHeaders(row.createdAtMillis, "menu-category-create:${row.localId}"),
             )
         } else {
             menuApi.updateCategory(
                 row.serverId,
-                CategoryUpdateBody(name = row.name, sortOrder = row.sortOrder),
+                CategoryUpdateBody(
+                    name = row.name,
+                    sortOrder = row.sortOrder,
+                    isGamingCentreCatalog = row.isGamingCentreCatalog,
+                ),
                 outboxProvenanceHeaders(row.createdAtMillis, "menu-category-update:${row.localId}"),
             )
         }

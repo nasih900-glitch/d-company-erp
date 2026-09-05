@@ -431,6 +431,18 @@ private fun CategoryRowItem(
                 intent = ActionIntent.Quiet,
             )
         }
+        OperationalStatusBadge(
+            label = when (cat.isGamingCentreCatalog) {
+                true -> "Gaming sales"
+                false -> "Future catalogue"
+                null -> "Gaming visibility awaiting server"
+            },
+            tone = when (cat.isGamingCentreCatalog) {
+                true -> UiTone.Success
+                false -> UiTone.Neutral
+                null -> UiTone.Warning
+            },
+        )
         if (cat.rejectedError != null) {
             Text("Sync failed: ${cat.rejectedError}", color = Brand.Danger, style = MaterialTheme.typography.labelSmall)
             ErpButton(
@@ -572,6 +584,29 @@ private fun CategoryEditorDialog(
             } else null,
             modifier = Modifier.fillMaxWidth(),
         )
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f).padding(end = Spacing.md)) {
+                Text("Show in Gaming and POS", color = Brand.Foreground)
+                Text(
+                    when (editor.isGamingCentreCatalog) {
+                        true -> "Packaged products in this category are available to gaming staff."
+                        false -> "Keep off for categories reserved for future cafe operation."
+                        null -> "The older server has not confirmed this setting; it stays unchanged unless toggled."
+                    },
+                    color = Brand.ForegroundMuted,
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            }
+            Switch(
+                checked = editor.isGamingCentreCatalog == true,
+                onCheckedChange = { onChange(editor.copy(isGamingCentreCatalog = it)) },
+                colors = SwitchDefaults.colors(checkedTrackColor = Brand.Gold),
+            )
+        }
     }
 }
 

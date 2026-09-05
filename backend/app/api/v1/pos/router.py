@@ -91,6 +91,7 @@ from app.models import (
 from app.schemas.pos import OrderModifierSnapshotRead, OrderVariantSnapshotRead
 from app.services.gaming.billing_mode import is_package_billed
 from app.services.inventory.deduction import deduct_for_order
+from app.services.pos.shift_capture import read_opening_capture
 from app.services.pos.checkout_claims import (
     CheckoutClaimGrant,
     acquire_checkout_claim,
@@ -1299,6 +1300,147 @@ class ShiftOpenRequest(BaseModel):
     opening_float_minor: int = Field(default=0, ge=0)
 
 
+_SHIFT_OPENING_PROTOCOL_REVISION = 1
+_ANDROID_SHIFT_OPEN_KEY_PREFIX = "shift-open:"
+_ANDROID_SHIFT_CLOSE_KEY_PREFIX = "shift-close:"
+_INSTALLATION_ID_HEADER = "X-Installation-Id"
+
+
+def _canonical_installation_id(request: Request | None) -> UUID | None:
+    """Read the app's random installation UUID without treating it as auth.
+
+    The UUID is a stable device-installation discriminator, not a hardware ID
+    or bearer credential. Authorization, company, branch and terminal checks
+    still run independently. Rejecting non-canonical values avoids storing two
+    textual representations for the same installation.
+    """
+    if request is None:
+        return None
+    raw = request.headers.get(_INSTALLATION_ID_HEADER, "").strip().lower()
+    if not raw:
+        return None
+    try:
+        value = UUID(raw)
+    except (ValueError, AttributeError):
+        return None
+    return value if value.version == 4 and str(value) == raw else None
+
+
+def _android_code24_or_later(request: Request | None) -> bool:
+    if request is None:
+        return False
+    try:
+        return int(request.headers.get("X-Client-Version-Code", "")) >= 24
+    except (TypeError, ValueError):
+        return False
+
+
+def _shift_opening_client_platform(
+    request: Request | None,
+    *,
+    opening_action_id: str | None,
+    was_offline: bool,
+) -> str:
+    """Bind every new shift to a protocol vintage and its client class.
+
+    Native Android opens are durable outbox actions. Requiring their canonical
+    causal prefix lets close prove that it came from the same retained local
+    lifecycle without storing a hardware identifier or trusting a staff name.
+    """
+    platform = (
+        request.headers.get("X-Client-Platform", "").strip().lower()
+        if request is not None
+        else ""
+    ) or "web"
+    if platform not in {"web", "android", "ios"}:
+        raise BusinessRuleError(
+            "The shift-opening client identity is invalid. Reload the app before "
+            "opening a shift."
+        )
+    if was_offline and platform not in {"android", "ios"}:
+        raise BusinessRuleError(
+            "Saved shift openings are accepted only from a verified native app. "
+            "Reconnect and retry from the tablet that captured this shift."
+        )
+    if platform == "android" and (
+        opening_action_id is None
+        or not opening_action_id.startswith(_ANDROID_SHIFT_OPEN_KEY_PREFIX)
+        or not opening_action_id.removeprefix(_ANDROID_SHIFT_OPEN_KEY_PREFIX).strip()
+    ):
+        raise BusinessRuleError(
+            "This Android app did not provide a durable shift identity. Update or "
+            "restart the app, then retry the same saved shift; nothing was opened."
+        )
+    return platform
+
+
+def _shift_opening_installation_id(
+    request: Request | None,
+    *,
+    platform: str,
+) -> UUID | None:
+    raw_present = bool(
+        request is not None
+        and request.headers.get(_INSTALLATION_ID_HEADER, "").strip()
+    )
+    installation_id = _canonical_installation_id(request)
+    if platform != "android":
+        return None
+    if raw_present and installation_id is None:
+        raise BusinessRuleError(
+            "This tablet sent an invalid installation identity. Restart or update "
+            "the app, then retry the same saved shift; nothing was opened."
+        )
+    # Code21 did not send the installation header. Its retained causal key is
+    # still accepted below for upgrade compatibility. Code24+ must persist the
+    # stable installation UUID so a different employee on this same tablet can
+    # close after clean account switching purges user-scoped Room rows.
+    if installation_id is None and _android_code24_or_later(request):
+        raise BusinessRuleError(
+            "This tablet could not verify its installation identity. Restart the "
+            "app, then retry the same saved shift; nothing was opened."
+        )
+    return installation_id
+
+
+def _android_shift_close_identity_matches(
+    shift: Shift,
+    request: Request | None,
+) -> bool:
+    """True only for the causal close retained by the originating tablet.
+
+    The suffix is a random local shift UUID in current Android builds. It is
+    never returned by ShiftRead, so a web or different-device close cannot
+    accidentally strand offline work captured against that lifecycle.
+    """
+    installation_id = shift.opening_client_installation_id
+    if installation_id is not None:
+        platform = (
+            request.headers.get("X-Client-Platform", "").strip().lower()
+            if request is not None
+            else ""
+        )
+        return (
+            platform == "android"
+            and _canonical_installation_id(request) == installation_id
+        )
+
+    # Code21 rows opened after 0069 have no installation UUID, but do retain
+    # the exact causal local suffix. Keep that compatibility path narrow.
+    opening_key = shift.opening_action_id or ""
+    if not opening_key.startswith(_ANDROID_SHIFT_OPEN_KEY_PREFIX):
+        return False
+    suffix = opening_key.removeprefix(_ANDROID_SHIFT_OPEN_KEY_PREFIX)
+    if not suffix:
+        return False
+    close_key = (
+        getattr(request.state, "idempotency_key", None)
+        if request is not None
+        else None
+    )
+    return close_key == f"{_ANDROID_SHIFT_CLOSE_KEY_PREFIX}{suffix}"
+
+
 def _require_idempotency(request: Request) -> tuple[str, str]:
     key = getattr(request.state, "idempotency_key", None)
     request_hash = getattr(request.state, "idempotency_request_hash", None)
@@ -1485,6 +1627,27 @@ async def _upsert_and_attach_customer(
 
 class ShiftCloseRequest(BaseModel):
     counted_minor: int = Field(ge=0)
+
+
+class ShiftRecoveryCloseRequest(BaseModel):
+    """Protected recovery for an Android-origin shift whose tablet is unavailable.
+
+    This is deliberately a separate contract from ordinary close.  A server
+    cannot inspect an offline Room queue, so the protected owner must isolate
+    the originating app before accepting that residual reconciliation risk.
+    """
+
+    counted_minor: int = Field(ge=0)
+    reason: str = Field(min_length=12, max_length=500)
+    acknowledge_origin_tablet_quarantined: Literal[True]
+
+    @field_validator("reason")
+    @classmethod
+    def normalize_reason(cls, value: str) -> str:
+        normalized = " ".join(value.split())
+        if len(normalized) < 12:
+            raise ValueError("Explain the recovery reason in at least 12 characters")
+        return normalized
 
 
 async def _paid_total(session, order_id: UUID) -> int:
@@ -4810,6 +4973,17 @@ class ShiftRead(BaseModel):
     opened_by: UUID
     opened_by_name: str | None = None
     opened_by_email: str | None = None
+    # Backward-compatible receipt fact. It is not a protocol-vintage marker:
+    # ordinary web opens are intentionally unkeyed.
+    opening_receipt_recorded: bool = False
+    # NULL identifies a shift migrated from before 0069 (or a pre-0069
+    # server). Every opening created after 0069 reports revision 1, including
+    # unkeyed web openings, so native recovery never mistakes them for legacy.
+    opening_protocol_revision: int | None = None
+    # Safe client-class fact only; the causal opening key is never exposed.
+    # Web uses this to explain why an Android-origin shift must normally be
+    # closed from its retained tablet lifecycle.
+    opening_client_platform: Literal["web", "android", "ios"] | None = None
     # NULL on open shifts and on historical shifts closed before migration
     # 0066. New closes preserve the first authenticated closer permanently.
     closed_by: UUID | None = None
@@ -5029,6 +5203,9 @@ async def list_shifts(
                 opened_by=s.opened_by,
                 opened_by_name=opener_name,
                 opened_by_email=opener_email,
+                opening_receipt_recorded=s.opening_action_id is not None,
+                opening_protocol_revision=s.opening_protocol_revision,
+                opening_client_platform=s.opening_client_platform,
                 closed_by=s.closed_by,
                 closed_by_name=closer_name,
                 closed_by_email=closer_email,
@@ -5545,6 +5722,7 @@ async def _locked_pos_refund_context(
     payload_shift_id: UUID,
     tenant: TenantContext,
     operation: str,
+    require_shift_actor: bool = True,
 ) -> tuple[Order, Shift, PosRefundRequest]:
     """Lock Order -> Shift -> request, the canonical refund lock order."""
     preflight = (
@@ -5585,12 +5763,13 @@ async def _locked_pos_refund_context(
         terminal_id=tenant.terminal_id,
         operation=operation,
     )
-    require_shift_opener(
-        shift,
-        user_id=tenant.user_id,
-        protected_access=tenant.protected_access,
-        operation=operation,
-    )
+    if require_shift_actor:
+        require_shift_opener(
+            shift,
+            user_id=tenant.user_id,
+            protected_access=tenant.protected_access,
+            operation=operation,
+        )
     refund_request = (
         await session.execute(
             select(PosRefundRequest)
@@ -7204,14 +7383,10 @@ async def resolve_pos_provider_refund_payout(
     payload: PosRefundProviderPayoutResolutionRequest,
     session: SessionDep,
     request: Request,
-    tenant: TenantContext = Depends(requires("admin.system")),
+    tenant: TenantContext = Depends(requires("pos.refund.reconcile")),
 ) -> PosRefundRequestRead:
-    """Owner resolution after durable provider proof that no payout completed."""
-    if not tenant.protected_access:
-        raise ForbiddenError(
-            "Only a protected owner can resolve a started provider payout. "
-            "Leave this task open until an owner verifies the provider record."
-        )
+    """Authorised reconciliation after durable proof that no provider payout completed."""
+    await require_permission(session, tenant, "pos.refund.reconcile")
     if not payload.provider_not_completed:
         raise BusinessRuleError(
             "Resolve a started provider payout only after checking the provider "
@@ -7244,6 +7419,11 @@ async def resolve_pos_provider_refund_payout(
         payload_shift_id=payload.shift_id,
         tenant=tenant,
         operation="resolve this started provider POS refund payout",
+        # This transition records verified proof that no provider payout
+        # happened; it does not move money.  The dedicated high-trust
+        # pos.refund.reconcile permission is therefore the authority, even
+        # when another employee opened the same exact shift.
+        require_shift_actor=False,
     )
     if refund_request.settlement_method == "cash":
         raise BusinessRuleError("This is not a provider refund payout.")
@@ -7347,20 +7527,34 @@ def _pos_refund_evidence_reconciliation_read(
     )
 
 
+def _pos_refund_evidence_scope(tenant: TenantContext) -> tuple:
+    """Keep operational evidence review inside the actor's authenticated shop.
+
+    The protected audit owner may review the company-wide immutable register.
+    Ordinary owners receive ``pos.refund.reconcile`` through a branch-scoped
+    role, so the permission must not become a cross-branch data or mutation
+    capability merely because every branch belongs to the same company.
+    """
+    conditions = [Refund.company_id == tenant.company_id]
+    if not tenant.audit_access:
+        # branch_id is normally populated by authentication. Comparing the
+        # non-null Refund column with None deliberately fails closed for a
+        # malformed/legacy branchless operational token.
+        conditions.append(Refund.branch_id == tenant.branch_id)
+    return tuple(conditions)
+
+
 @router.get(
     "/refund-evidence-reconciliations/pending",
     response_model=list[PendingPosRefundEvidenceRead],
 )
 async def list_pending_pos_refund_evidence(
     session: SessionDep,
-    tenant: TenantContext = Depends(requires("admin.system")),
+    tenant: TenantContext = Depends(requires("pos.refund.reconcile")),
     limit: int = Query(default=100, ge=1, le=200),
 ) -> list[PendingPosRefundEvidenceRead]:
     """List weak provider/time evidence that still needs owner verification."""
-    if not tenant.protected_access:
-        raise ForbiddenError(
-            "Only a protected owner can review POS refund evidence tasks."
-        )
+    await require_permission(session, tenant, "pos.refund.reconcile")
 
     async def _pending_rows(kind: str, flag_column):
         already_resolved = (
@@ -7376,7 +7570,7 @@ async def list_pending_pos_refund_evidence(
                 await session.execute(
                     select(Refund)
                     .where(
-                        Refund.company_id == tenant.company_id,
+                        *_pos_refund_evidence_scope(tenant),
                         Refund.request_id.is_not(None),
                         flag_column.is_(False),
                         ~already_resolved,
@@ -7429,20 +7623,19 @@ async def list_pending_pos_refund_evidence(
 )
 async def list_pos_refund_evidence_reconciliations(
     session: SessionDep,
-    tenant: TenantContext = Depends(requires("admin.system")),
+    tenant: TenantContext = Depends(requires("pos.refund.reconcile")),
     limit: int = Query(default=100, ge=1, le=200),
 ) -> list[PosRefundEvidenceReconciliationRead]:
     """Return the append-only owner evidence-review register."""
-    if not tenant.protected_access:
-        raise ForbiddenError(
-            "Only a protected owner can view POS refund evidence reviews."
-        )
+    await require_permission(session, tenant, "pos.refund.reconcile")
     rows = (
         await session.execute(
             select(PosRefundEvidenceReconciliation, User.name)
+            .join(Refund, Refund.id == PosRefundEvidenceReconciliation.refund_id)
             .join(User, User.id == PosRefundEvidenceReconciliation.reconciled_by)
             .where(
-                PosRefundEvidenceReconciliation.company_id == tenant.company_id
+                PosRefundEvidenceReconciliation.company_id == tenant.company_id,
+                *_pos_refund_evidence_scope(tenant),
             )
             .order_by(
                 PosRefundEvidenceReconciliation.reconciled_at.desc(),
@@ -7466,13 +7659,10 @@ async def reconcile_pos_refund_evidence(
     payload: PosRefundEvidenceReconciliationCreate,
     session: SessionDep,
     request: Request,
-    tenant: TenantContext = Depends(requires("admin.system")),
+    tenant: TenantContext = Depends(requires("pos.refund.reconcile")),
 ) -> PosRefundEvidenceReconciliationRead:
     """Append owner proof without rewriting the original Refund evidence."""
-    if not tenant.protected_access:
-        raise ForbiddenError(
-            "Only a protected owner can reconcile POS refund evidence."
-        )
+    await require_permission(session, tenant, "pos.refund.reconcile")
     clean_proof = payload.proof_reference.strip()
     clean_reason = payload.reason.strip()
     if len(clean_proof) < 3:
@@ -7498,7 +7688,7 @@ async def reconcile_pos_refund_evidence(
             select(Refund)
             .where(
                 Refund.id == payload.refund_id,
-                Refund.company_id == tenant.company_id,
+                *_pos_refund_evidence_scope(tenant),
                 Refund.request_id.is_not(None),
             )
             .with_for_update()
@@ -8122,6 +8312,7 @@ async def open_shift(
     payload: ShiftOpenRequest,
     session: SessionDep,
     tenant: TenantContext = Depends(requires("pos.shift.open")),
+    request: Request = None,
 ) -> dict:
     if tenant.terminal_id is None:
         raise BusinessRuleError("X-Terminal-Id header required to open a shift")
@@ -8172,6 +8363,43 @@ async def open_shift(
             "opening a shift."
         )
 
+    capture = read_opening_capture(request, datetime.now(timezone.utc))
+    opening_client_platform = _shift_opening_client_platform(
+        request,
+        opening_action_id=capture.key,
+        was_offline=capture.offline,
+    )
+    opening_client_installation_id = _shift_opening_installation_id(
+        request,
+        platform=opening_client_platform,
+    )
+    if capture.key:
+        receipt = (await session.execute(select(Shift).where(
+            Shift.company_id == tenant.company_id,
+            Shift.opening_action_id == capture.key,
+        ).with_for_update())).scalar_one_or_none()
+        if receipt is not None:
+            if (receipt.opening_request_hash != capture.request_hash
+                    or receipt.opened_by != tenant.user_id
+                    or receipt.terminal_id != tenant.terminal_id
+                    or receipt.branch_id != tenant.branch_id
+                    or receipt.opening_protocol_revision != _SHIFT_OPENING_PROTOCOL_REVISION
+                    or receipt.opening_client_platform != opening_client_platform
+                    # A Code21 request may have committed immediately before
+                    # the app upgraded to Code24. Its exact retained key may
+                    # replay with a newly available installation UUID; accept
+                    # the receipt without mutating its immutable NULL marker.
+                    or (
+                        receipt.opening_client_installation_id is not None
+                        and receipt.opening_client_installation_id
+                        != opening_client_installation_id
+                    )):
+                raise ConflictError("This saved shift identity was already used with different cash, time, employee or workspace. Nothing changed; review the original saved action.")
+            if receipt.status != "open":
+                raise ConflictError("This saved shift has already been closed. Ask an owner to reconcile any saved dependent sessions or bills; do not open another shift for this action.", details={"issue":"saved_shift_already_closed", "shift_id":str(receipt.id)})
+            return {"id": str(receipt.id), "status": "open"}
+    capture.require_fresh()
+
     # The locked active terminal serializes simultaneous opens. Lock the
     # matching shift row as well: if a close is already updating it, PostgreSQL
     # waits and then re-evaluates status against the committed row instead of
@@ -8186,6 +8414,12 @@ async def open_shift(
         )
     ).scalar_one_or_none()
     if existing:
+        if capture.offline:
+            raise await _shift_feedback_error(session, existing,
+                issue="saved_shift_conflicts_with_open_shift",
+                message="A different shift was opened while this tablet was offline.",
+                next_action="Keep the saved shift and its sessions for owner reconciliation. Do not move saved cash or sessions automatically into another shift.",
+                known_branch=branch, known_terminal=terminal)
         if existing.opened_by != tenant.user_id:
             raise await _shift_feedback_error(
                 session,
@@ -8214,13 +8448,33 @@ async def open_shift(
                 known_terminal=terminal,
             )
         return {"id": str(existing.id), "status": existing.status}
+    if capture.offline:
+        previous = (await session.execute(select(Shift).where(
+            Shift.company_id == tenant.company_id,
+            Shift.terminal_id == tenant.terminal_id,
+            Shift.closed_at.is_not(None),
+            Shift.closed_at > capture.opened_at,
+        ).order_by(Shift.closed_at.desc()).limit(1))).scalar_one_or_none()
+        if previous is not None:
+            raise await _shift_feedback_error(session, previous,
+                issue="saved_shift_overlaps_closed_shift",
+                message="The saved opening time overlaps an already closed shift.",
+                next_action="Ask an owner to reconcile the saved shift, sessions and cash. Nothing was discarded or moved to another shift.",
+                known_branch=branch, known_terminal=terminal)
     shift = Shift(
         id=uuid4(),
         company_id=tenant.company_id,
         branch_id=tenant.branch_id,
         terminal_id=tenant.terminal_id,
         opened_by=tenant.user_id,
-        opened_at=datetime.now(timezone.utc),
+        opened_at=capture.opened_at,
+        opening_action_id=capture.key,
+        opening_request_hash=capture.request_hash,
+        opening_received_at=capture.received_at,
+        opening_was_offline=capture.offline,
+        opening_protocol_revision=_SHIFT_OPENING_PROTOCOL_REVISION,
+        opening_client_platform=opening_client_platform,
+        opening_client_installation_id=opening_client_installation_id,
         opening_float_minor=payload.opening_float_minor,
         expected_minor=payload.opening_float_minor,
         status="open",
@@ -8229,12 +8483,14 @@ async def open_shift(
     return {"id": str(shift.id), "status": "open"}
 
 
-@router.post("/shifts/{shift_id}/close")
-async def close_shift(
+async def _close_shift_impl(
     shift_id: UUID,
     payload: ShiftCloseRequest,
     session: SessionDep,
-    tenant: TenantContext = Depends(requires("pos.shift.close")),
+    tenant: TenantContext,
+    request: Request | None,
+    *,
+    recovery: ShiftRecoveryCloseRequest | None = None,
 ) -> dict:
     shift = (
         await session.execute(
@@ -8254,6 +8510,17 @@ async def close_shift(
     # ``closed_by`` records this authenticated closer, and the automatic audit
     # record attributes the mutation to the same current user.
     if shift.status == "closed":
+        if recovery is not None:
+            raise await _shift_feedback_error(
+                session,
+                shift,
+                issue="recovery_shift_already_closed",
+                message="This shift is already closed and cannot receive a new recovery record.",
+                next_action=(
+                    "Open Shift history and review the existing close. If this was a replay, "
+                    "retry the original recovery request with the same Idempotency-Key."
+                ),
+            )
         if shift.counted_minor is None:
             raise await _shift_feedback_error(
                 session,
@@ -8292,6 +8559,44 @@ async def close_shift(
             issue="shift_not_open",
             message=f"This shift is {shift.status} and cannot be closed again.",
             next_action="Open Shift history and use the existing shift record.",
+        )
+    is_android_origin = (
+        shift.opening_protocol_revision == _SHIFT_OPENING_PROTOCOL_REVISION
+        and shift.opening_client_platform == "android"
+    )
+    if recovery is not None and not is_android_origin:
+        raise await _shift_feedback_error(
+            session,
+            shift,
+            issue="android_shift_recovery_not_applicable",
+            message="Protected Android recovery is not applicable to this shift.",
+            next_action=(
+                "Use the ordinary Close shift action. Recovery is reserved for a new-protocol "
+                "shift opened by an Android tablet that cannot complete its retained close."
+            ),
+        )
+    if (
+        is_android_origin
+        and recovery is None
+        and not _android_shift_close_identity_matches(shift, request)
+    ):
+        raise await _shift_feedback_error(
+            session,
+            shift,
+            issue="android_shift_close_requires_origin_tablet",
+            message=(
+                "This shift was opened by the Android tablet and cannot be closed "
+                "from this browser or a different app installation while saved "
+                "work may still be waiting."
+            ),
+            next_action=(
+                "On the tablet that opened it, sign in as any staff member with "
+                "Shift close access, reconnect, let all saved work finish syncing, "
+                "then close the shift there. If that app was reinstalled, is stuck, or "
+                "the tablet is unavailable, a protected audit owner can use Recover "
+                "Android shift after isolating that app and reviewing all server "
+                "blockers. Do not open another shift or re-enter sales."
+            ),
         )
     unfinished_orders = int(
         (
@@ -8558,7 +8863,7 @@ async def close_shift(
     shift.counted_minor = payload.counted_minor
     shift.variance_minor = payload.counted_minor - (shift.expected_minor or 0)
     shift.status = "closed"
-    return {
+    result = {
         "id": str(shift.id),
         "status": shift.status,
         "variance_minor": shift.variance_minor,
@@ -8566,3 +8871,103 @@ async def close_shift(
         "closed_by": str(shift.closed_by),
         "closed_by_was_opener": shift.closed_by == shift.opened_by,
     }
+    if recovery is not None:
+        result["recovery_close"] = True
+        session.add(
+            AuditLog(
+                actor_user_id=tenant.user_id,
+                company_id=tenant.company_id,
+                action="shift_android_origin_recovery_close",
+                entity_type="Shift",
+                entity_id=str(shift.id),
+                before={
+                    "status": "open",
+                    "opened_by": str(shift.opened_by),
+                    "opened_at": shift.opened_at.isoformat(),
+                    "opening_protocol_revision": shift.opening_protocol_revision,
+                    "opening_client_platform": shift.opening_client_platform,
+                    "opening_client_installation_recorded": (
+                        shift.opening_client_installation_id is not None
+                    ),
+                    "expected_minor": int(shift.expected_minor or 0),
+                },
+                after={
+                    "status": "closed",
+                    "closed_by": str(shift.closed_by),
+                    "counted_minor": int(shift.counted_minor),
+                    "variance_minor": int(shift.variance_minor),
+                    "server_blockers_checked": True,
+                    "origin_tablet_quarantined": True,
+                },
+                terminal_id=tenant.terminal_id,
+                reason=recovery.reason,
+            )
+        )
+    return result
+
+
+@router.post("/shifts/{shift_id}/close")
+async def close_shift(
+    shift_id: UUID,
+    payload: ShiftCloseRequest,
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("pos.shift.close")),
+    request: Request = None,
+) -> dict:
+    """Close normally; Android-origin shifts must retain their causal tablet key."""
+    return await _close_shift_impl(
+        shift_id,
+        payload,
+        session,
+        tenant,
+        request,
+    )
+
+
+@router.post("/shifts/{shift_id}/recover-close")
+async def recover_android_shift_close(
+    shift_id: UUID,
+    payload: ShiftRecoveryCloseRequest,
+    session: SessionDep,
+    request: Request,
+    tenant: TenantContext = Depends(requires("pos.shift.close")),
+) -> dict:
+    """Audited last-resort close when an Android shift cannot close itself.
+
+    The normal close path remains available to every authorised employee. Only
+    the designated audit owner may cross the originating-tablet boundary, and
+    only after explicitly attesting that the app is quarantined. The ordinary
+    server blockers still run inside the same locked shift transaction.
+    """
+    if not tenant.audit_access:
+        raise ForbiddenError(
+            "Only the protected audit owner can recover an Android-origin shift. "
+            "Use the tablet's ordinary Close shift action or ask the protected owner."
+        )
+    idempotency_key, request_hash = _require_idempotency(request)
+    existing_response = await check_or_reserve(
+        session,
+        key=idempotency_key,
+        request_hash=request_hash,
+        user_id=tenant.user_id,
+        terminal_id=tenant.terminal_id,
+    )
+    if existing_response:
+        return existing_response["body"]
+
+    result = await _close_shift_impl(
+        shift_id,
+        ShiftCloseRequest(counted_minor=payload.counted_minor),
+        session,
+        tenant,
+        request,
+        recovery=payload,
+    )
+    await session.flush()
+    await store_response(
+        session,
+        key=idempotency_key,
+        status_code=status.HTTP_200_OK,
+        body=result,
+    )
+    return result

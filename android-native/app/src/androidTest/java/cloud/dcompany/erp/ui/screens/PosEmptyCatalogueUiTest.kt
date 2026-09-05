@@ -6,10 +6,15 @@ import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performImeAction
+import androidx.compose.ui.test.performTextReplacement
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import cloud.dcompany.erp.core.auth.PosAccess
 import cloud.dcompany.erp.core.db.MenuItemEntity
@@ -20,6 +25,7 @@ import cloud.dcompany.erp.ui.presentationPolicy
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.DCompanyTheme
 import org.junit.Rule
+import org.junit.Assert.assertEquals
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -75,6 +81,7 @@ class PosEmptyCatalogueUiTest {
 
     @Test
     fun heldGamingBillRemainsDiscountableAndPayableWhenProductCatalogueIsEmpty() {
+        val appliedDiscounts = mutableListOf<Pair<String, Long>>()
         val state = PosUiState(
             items = emptyList(),
             operationalItems = emptyList(),
@@ -118,7 +125,7 @@ class PosEmptyCatalogueUiTest {
             ),
         )
 
-        render(state)
+        render(state, onUpdateHeldOrderDiscount = { id, amount -> appliedDiscounts += id to amount })
 
         compose.onNodeWithText("Review PS5 Station 2").assertIsDisplayed()
         compose.onNodeWithText("PS5 Station 2 · Dual · 60 min").assertIsDisplayed()
@@ -126,6 +133,16 @@ class PosEmptyCatalogueUiTest {
         compose.onNodeWithText("CONTINUE TO PAYMENT · ₹180.00")
             .assertIsDisplayed()
             .assertIsEnabled()
+        compose.onNode(hasSetTextAction()).performClick().performTextReplacement("30")
+        // Root IME handling must not leave the primary footer below the
+        // keyboard; semantic presence alone is not enough for this assertion.
+        compose.onNodeWithText("CONTINUE TO PAYMENT · ₹180.00")
+            .assertIsDisplayed().assertIsNotEnabled()
+        compose.onNode(hasSetTextAction()).performImeAction()
+        compose.onNode(hasSetTextAction()).assertIsNotFocused()
+        compose.onNodeWithText("Apply discount").performScrollTo()
+            .assertIsDisplayed().assertIsEnabled().performClick()
+        compose.runOnIdle { assertEquals(listOf("held-gaming-1" to 3_000L), appliedDiscounts) }
     }
 
     @Test
@@ -208,6 +225,7 @@ class PosEmptyCatalogueUiTest {
         state: PosUiState,
         presentation: WorkspacePresentationPolicy =
             WorkspaceFeatureProfiles.Active.presentationPolicy(),
+        onUpdateHeldOrderDiscount: (String, Long) -> Unit = { _, _ -> },
     ) {
         compose.setContent {
             DCompanyTheme {
@@ -244,7 +262,7 @@ class PosEmptyCatalogueUiTest {
                         onRetryRejectedSale = {},
                         onRetryHeldPayment = {},
                         onPrepareHeldOrder = {},
-                        onUpdateHeldOrderDiscount = { _, _ -> },
+                        onUpdateHeldOrderDiscount = onUpdateHeldOrderDiscount,
                         onContinueHeldOrder = {},
                         onConfirmHeldOrder = { _, _, _ -> },
                         onConfirmHeldOrderZero = {},

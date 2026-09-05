@@ -35,17 +35,23 @@ from app.core.errors import BusinessRuleError
 from app.core.timezone import company_timezone, local_date_bounds_utc
 from app.models import (
     Asset,
+    Batch,
     Event,
     EventTicket,
     Expense,
     ExpenseCategory,
+    GamingSession,
     ManualCollection,
+    MenuItem,
     MembershipPayment,
     MembershipRefundSettlement,
     Order,
     OrderLine,
     Payment,
+    Recipe,
+    RecipeLine,
     Refund,
+    StockMovement,
 )
 from app.services.accounting.depreciation import asset_depreciation_expense_minor
 from app.services.accounting.refund_allocation import cumulative_refunded_tip_minor
@@ -53,6 +59,15 @@ from app.services.inventory.accounting import load_inventory_value_changes
 from app.services.reports.metrics import average_ticket_minor
 
 ReportPeriod = Literal["daily", "monthly", "quarterly", "yearly", "custom"]
+_INVENTORY_COSTED_ORDER_LINE_TYPES = frozenset(
+    {"food", "drink", "dessert", "hookah"}
+)
+# The Gaming handoff creates this hidden zero-base-price item as the Shisha
+# *time service*. Its `hookah` type is needed for revenue presentation but it
+# does not consume inventory. Physical shisha/menu add-ons use their own SKU
+# and remain inside the COGS confidence check, including on a session bill.
+_NON_INVENTORY_SESSION_SKUS = frozenset({"SESSION-HOOKAH"})
+_INVENTORY_QUANTITY_QUANTUM = Decimal("0.0001")
 
 
 # ---------------------------------------------------------------------------
@@ -231,6 +246,27 @@ class ExpenseLine:
 
 
 @dataclass(frozen=True, slots=True)
+class CostingConfidence:
+    """Evidence that every physical sale in one report has recorded COGS.
+
+    Gaming, streaming and other genuine service lines do not consume inventory
+    and are deliberately excluded.  A physical sale is authoritative only when
+    its current active recipe can be reconciled exactly to the immutable sale
+    movements written for the same order and every movement has a positive
+    FIFO unit cost.  A later recipe change can therefore make an old period
+    conservatively incomplete, but can never turn missing COGS into profit.
+    """
+
+    inventory_orders_checked: int = 0
+    inventory_lines_checked: int = 0
+    unresolved_order_count: int = 0
+
+    @property
+    def is_authoritative(self) -> bool:
+        return self.unresolved_order_count == 0
+
+
+@dataclass(frozen=True, slots=True)
 class PnLReport:
     """Single, period-agnostic P&L. Same shape for daily / monthly / yearly."""
 
@@ -280,6 +316,10 @@ class PnLReport:
     # period, computed analytically — never manually entered, never a stored
     # row. See app/services/accounting/depreciation.py.
     depreciation_minor: int = 0
+    # Derived inside this exact report aggregation.  Partner allocations must
+    # never combine the money values above with a separate, potentially newer
+    # catalogue-only coverage request.
+    costing_confidence: CostingConfidence | None = None
 
     @property
     def gross_revenue_minor(self) -> int:
@@ -367,6 +407,201 @@ class ReportsAggregator:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
+    async def _costing_confidence(
+        self,
+        *,
+        company_id: UUID,
+        start_at: datetime,
+        end_at: datetime,
+        branch_id: UUID | None,
+    ) -> CostingConfidence:
+        """Cross-check physical sale lines against their recorded FIFO movements.
+
+        This is intentionally historical evidence, not merely a check of the
+        current sellable catalogue.  Missing recipes create no stock movement;
+        zero-cost shortage batches create a movement whose cost is explicitly
+        unknown.  Both cases would otherwise overstate profit.
+        """
+
+        sale_at = func.coalesce(Order.invoice_issued_at, Order.closed_at)
+        branch_predicates = (
+            (Order.branch_id == branch_id,) if branch_id is not None else ()
+        )
+        sold_rows = (
+            await self.session.execute(
+                select(
+                    Order.id,
+                    Order.branch_id,
+                    OrderLine.menu_item_id,
+                    OrderLine.qty,
+                )
+                .join(OrderLine, OrderLine.order_id == Order.id)
+                .join(MenuItem, MenuItem.id == OrderLine.menu_item_id)
+                .where(
+                    Order.company_id == company_id,
+                    *branch_predicates,
+                    sale_at >= start_at,
+                    sale_at < end_at,
+                    Order.status.in_(("paid", "refunded")),
+                    OrderLine.voided_at.is_(None),
+                    OrderLine.menu_item_type_snapshot.in_(
+                        _INVENTORY_COSTED_ORDER_LINE_TYPES
+                    ),
+                    or_(
+                        Order.type != "session",
+                        MenuItem.sku.not_in(_NON_INVENTORY_SESSION_SKUS),
+                        ~select(GamingSession.id)
+                        .where(
+                            GamingSession.company_id == company_id,
+                            GamingSession.order_id == Order.id,
+                            GamingSession.status == "ended",
+                        )
+                        .exists(),
+                    ),
+                )
+            )
+        ).all()
+        if not sold_rows:
+            return CostingConfidence()
+
+        item_ids = {row.menu_item_id for row in sold_rows}
+        recipe_rows = (
+            await self.session.execute(
+                select(
+                    Recipe.menu_item_id,
+                    Recipe.yield_qty,
+                    RecipeLine.ingredient_id,
+                    RecipeLine.qty,
+                    RecipeLine.wastage_pct,
+                )
+                .join(RecipeLine, RecipeLine.recipe_id == Recipe.id)
+                .where(
+                    Recipe.menu_item_id.in_(item_ids),
+                    Recipe.is_active.is_(True),
+                )
+            )
+        ).all()
+        recipes_by_item: dict[
+            UUID, list[tuple[Decimal, UUID, Decimal, Decimal]]
+        ] = {}
+        for row in recipe_rows:
+            recipes_by_item.setdefault(row.menu_item_id, []).append(
+                (
+                    Decimal(str(row.yield_qty if row.yield_qty is not None else 1)),
+                    row.ingredient_id,
+                    Decimal(str(row.qty)),
+                    Decimal(str(row.wastage_pct or 0)),
+                )
+            )
+
+        order_branches: dict[UUID, UUID] = {}
+        expected_raw: dict[UUID, dict[UUID, Decimal]] = {}
+        missing_recipe_orders: set[UUID] = set()
+        invalid_recipe_orders: set[UUID] = set()
+        for row in sold_rows:
+            order_branches[row.id] = row.branch_id
+            recipe_lines = recipes_by_item.get(row.menu_item_id, [])
+            if not recipe_lines:
+                missing_recipe_orders.add(row.id)
+                continue
+            line_has_positive_consumption = False
+            order_expected = expected_raw.setdefault(row.id, {})
+            order_qty = Decimal(str(row.qty))
+            if order_qty <= 0:
+                invalid_recipe_orders.add(row.id)
+                continue
+            for yield_qty, ingredient_id, recipe_qty, wastage_pct in recipe_lines:
+                if yield_qty <= 0 or recipe_qty <= 0 or wastage_pct < 0:
+                    invalid_recipe_orders.add(row.id)
+                    continue
+                raw_qty = (
+                    recipe_qty
+                    * (Decimal(1) + wastage_pct)
+                    * order_qty
+                    / yield_qty
+                )
+                if raw_qty <= 0:
+                    invalid_recipe_orders.add(row.id)
+                    continue
+                line_has_positive_consumption = True
+                order_expected[ingredient_id] = (
+                    order_expected.get(ingredient_id, Decimal(0)) + raw_qty
+                )
+            if not line_has_positive_consumption:
+                invalid_recipe_orders.add(row.id)
+
+        movement_rows = (
+            await self.session.execute(
+                select(
+                    StockMovement.ref_id,
+                    StockMovement.branch_id,
+                    Batch.ingredient_id,
+                    StockMovement.qty_delta,
+                    StockMovement.cost_per_unit_minor,
+                )
+                .join(Batch, Batch.id == StockMovement.batch_id)
+                .join(
+                    Order,
+                    (Order.id == StockMovement.ref_id)
+                    & (StockMovement.ref_type == "order"),
+                )
+                .where(
+                    Order.company_id == company_id,
+                    *branch_predicates,
+                    sale_at >= start_at,
+                    sale_at < end_at,
+                    Order.status.in_(("paid", "refunded")),
+                    StockMovement.type == "sale",
+                )
+            )
+        ).all()
+        actual_raw: dict[UUID, dict[UUID, Decimal]] = {}
+        invalid_movement_orders: set[UUID] = set()
+        for row in movement_rows:
+            order_id = row.ref_id
+            if order_id not in order_branches:
+                # The order has no physical line in this report.  Its service
+                # revenue legitimately needs no inventory cost and is outside
+                # this allocation-confidence decision.
+                continue
+            if row.branch_id != order_branches[order_id]:
+                invalid_movement_orders.add(order_id)
+            movement_qty = Decimal(str(row.qty_delta))
+            if movement_qty >= 0 or int(row.cost_per_unit_minor or 0) <= 0:
+                invalid_movement_orders.add(order_id)
+            if movement_qty < 0:
+                order_actual = actual_raw.setdefault(order_id, {})
+                order_actual[row.ingredient_id] = (
+                    order_actual.get(row.ingredient_id, Decimal(0)) - movement_qty
+                )
+
+        unresolved_orders = (
+            missing_recipe_orders | invalid_recipe_orders | invalid_movement_orders
+        )
+        for order_id in order_branches:
+            expected = {
+                ingredient_id: quantity.quantize(
+                    _INVENTORY_QUANTITY_QUANTUM,
+                    rounding=ROUND_HALF_UP,
+                )
+                for ingredient_id, quantity in expected_raw.get(order_id, {}).items()
+            }
+            actual = {
+                ingredient_id: quantity.quantize(
+                    _INVENTORY_QUANTITY_QUANTUM,
+                    rounding=ROUND_HALF_UP,
+                )
+                for ingredient_id, quantity in actual_raw.get(order_id, {}).items()
+            }
+            if not expected or expected != actual:
+                unresolved_orders.add(order_id)
+
+        return CostingConfidence(
+            inventory_orders_checked=len(order_branches),
+            inventory_lines_checked=len(sold_rows),
+            unresolved_order_count=len(unresolved_orders),
+        )
+
     async def aggregate(
         self,
         *,
@@ -376,6 +611,7 @@ class ReportsAggregator:
         period: ReportPeriod = "custom",
         label: str | None = None,
         branch_id: UUID | None = None,
+        include_costing_confidence: bool = False,
     ) -> PnLReport:
         timezone_name = await company_timezone(self.session, company_id)
         start_at, end_at = local_date_bounds_utc(
@@ -602,6 +838,20 @@ class ReportsAggregator:
             change.inventory_delta_minor
             for change in inventory_changes
             if change.movement.type in {"waste", "damage", "adjustment"}
+        )
+        # This historical reconciliation is deliberately opt-in. Ordinary
+        # P&L/report screens do not need its extra catalogue/movement queries;
+        # the two partner-allocation endpoints request it on the exact report
+        # snapshot whose profit they would otherwise apportion.
+        costing_confidence = (
+            await self._costing_confidence(
+                company_id=company_id,
+                start_at=start_at,
+                end_at=end_at,
+                branch_id=branch_id,
+            )
+            if include_costing_confidence
+            else None
         )
 
         revenue = RevenueBreakdown(
@@ -960,6 +1210,7 @@ class ReportsAggregator:
             expenses=expense_lines,
             expense_total_minor=expense_total,
             depreciation_minor=int(depreciation_minor),
+            costing_confidence=costing_confidence,
         )
 
     async def aggregate_daily(

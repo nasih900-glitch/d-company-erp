@@ -2,6 +2,7 @@ package cloud.dcompany.erp.core.auth
 
 import android.content.Context
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import cloud.dcompany.erp.core.net.Terminal
@@ -24,6 +25,7 @@ data class ValidatedTerminalDisplay(
     val branchId: String,
     /** Raw server value. Unknown future values stay unknown and fail closed in feature policy. */
     val purpose: String,
+    val offlineShiftCaptureSupported: Boolean = false,
 )
 
 internal fun confirmedTerminalId(
@@ -51,6 +53,7 @@ class TerminalStore(private val context: Context) {
     private val nameKey = stringPreferencesKey("terminal_name")
     private val branchKey = stringPreferencesKey("terminal_branch_id")
     private val purposeKey = stringPreferencesKey("terminal_purpose")
+    private val offlineShiftCaptureKey = booleanPreferencesKey("terminal_offline_shift_capture_supported")
 
     @Volatile private var cached: String? = null
     @Volatile private var persistedDisplay: ValidatedTerminalDisplay? = null
@@ -84,6 +87,7 @@ class TerminalStore(private val context: Context) {
             terminalName = prefs[nameKey],
             branchId = prefs[branchKey],
             purpose = prefs[purposeKey] ?: TerminalPurpose.HYBRID,
+            offlineShiftCaptureSupported = prefs[offlineShiftCaptureKey] ?: false,
         )
         _terminalId.value = cached
         // Loading a persisted candidate is not runtime activation. SessionViewModel
@@ -108,6 +112,7 @@ class TerminalStore(private val context: Context) {
             it.remove(nameKey)
             it.remove(branchKey)
             it.remove(purposeKey)
+            it.remove(offlineShiftCaptureKey)
         }
         // Publish only after persistence succeeds.
         cached = id
@@ -127,12 +132,14 @@ class TerminalStore(private val context: Context) {
             terminalName = terminal.name,
             branchId = terminal.branchId,
             purpose = terminal.purpose,
+            offlineShiftCaptureSupported = terminal.offlineShiftCaptureSupported,
         ) ?: throw IllegalArgumentException("A validated till must have an id and branch")
         context.terminalDataStore.edit {
             it[key] = display.terminalId
             it[nameKey] = display.terminalName
             it[branchKey] = display.branchId
             it[purposeKey] = display.purpose
+            it[offlineShiftCaptureKey] = display.offlineShiftCaptureSupported
         }
         cached = display.terminalId
         persistedDisplay = display
@@ -162,6 +169,7 @@ class TerminalStore(private val context: Context) {
         terminalName: String?,
         branchId: String?,
         purpose: String?,
+        offlineShiftCaptureSupported: Boolean = false,
     ): ValidatedTerminalDisplay? {
         val id = terminalId?.trim()?.takeIf(String::isNotEmpty) ?: return null
         val branch = branchId?.trim()?.takeIf(String::isNotEmpty) ?: return null
@@ -172,6 +180,6 @@ class TerminalStore(private val context: Context) {
         // widened into local POS authority by an older client.
         val resolvedPurpose = purpose?.trim()?.takeIf(String::isNotEmpty)
             ?: TerminalPurpose.HYBRID
-        return ValidatedTerminalDisplay(id, name, branch, resolvedPurpose)
+        return ValidatedTerminalDisplay(id, name, branch, resolvedPurpose, offlineShiftCaptureSupported)
     }
 }

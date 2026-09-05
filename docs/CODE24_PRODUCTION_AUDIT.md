@@ -125,26 +125,30 @@ release is therefore mandatory before advertising this as live fleet coverage.
   Rendered Finance stale-response/503 recovery, repeated payment taps, category
   setup, shared shift and four-user access checks passed. Gaming/POS/Shift/
   Finance at 390×844 had no horizontal overflow or unhandled page error.
-- Android final source: **934 JVM tests passed in each of Debug and DirectRelease**,
+- Android source at that audit checkpoint: **934 JVM tests passed in each of Debug and DirectRelease**,
   no failures/errors/skips; debug lint and APK build passed, including the new
   date, timer and Finance allocation recovery tests. Direct-release lint also
-  passed on the final isolated build.
-  The new debug APK installed in-place on the existing synthetic emulator.
-  The unsigned direct-install release APK also built successfully: package
+  passed on that isolated build.
+  The then-current debug APK installed in-place on the existing synthetic
+  emulator. The unsigned direct-install release APK built at that checkpoint
+  also succeeded: package
   `cloud.dcompany.erp`, code 24, version 3.1.13, 16,433,996 bytes,
   SHA-256 `e98cea17f0ec270be2b3e3d4c47cd4c3e547b3c0145df2315911e3e23dd66deb`.
   The compiled artifact contains the production HTTPS API URL and no local
   `127.0.0.1:8001` debug API URL.
-  These are unsigned local candidate bytes, not a partner-installable release.
+  These are historical unsigned local bytes, not hashes for the later source
+  containing migrations 0068–0071 and the current recovery changes, and not a
+  partner-installable release.
 - Release identity/contracts: **57 tests passed**, tag/version/code agreement
   verified as v3.1.13 / 3.1.13 / 24.
 - Physical cloud baseline: **169 tests passed on each device** (Lenovo Tab P12,
   API 35, and Samsung Galaxy Tab A8, API 34). This is real hardware executing
   component/input/Room/auth/sync tests, not an authenticated full business day
   on the partner's Redmi.
-- Final Gaming-performance physical matrix: **171 tests passed on each of the
-  same two device models**, including added timer-only and connectivity-only
-  checks. This preceded the final Finance-allocation-only correction; its later
+- Gaming-performance physical matrix at that checkpoint: **171 tests passed on
+  each of the same two device models**, including added timer-only and
+  connectivity-only checks. This preceded migrations 0068–0071 and the later
+  Finance, catalogue, refund and captured-shift recovery changes. Later
   JVM/build/render checks must not be represented as the same cloud-tested bytes.
 - Dependency audits: web `pnpm audit` and backend `pip-audit` reported no known
   vulnerabilities. This is the databases' current result, not proof that no
@@ -206,19 +210,22 @@ heuristic does not establish absence of subtle blinking or dropped display
 frames. The full video contains separate test-activity transitions and must
 not be presented as a continuous authenticated working shift.
 
-Final physical matrix:
+Historical final physical matrix for that checkpoint:
 [Firebase Test Lab results](https://console.firebase.google.com/project/erp-15f1617a/testlab/histories/bh.f12d1fd93fce5f96/matrices/6370848612567856080).
-The baseline and final APKs and raw per-device frame files are retained separately.
-The final cloud-tested app package was `cloud.dcompany.erp.physicalaudit`, version
+The historical baseline and then-final APKs and raw per-device frame files are
+retained separately.
+The historical cloud-tested app package was `cloud.dcompany.erp.physicalaudit`, version
 `3.1.13-physical-audit`, code 24, APK SHA-256
 `752761e16b12c3926183332b3aed339ef9d1031e2ce0254103118c88a0d5e4f8`;
 its test APK SHA-256 was
 `38fcda7a94e9de7dcaf173f4ef710c0bc9870d480ec69ad0dedfa304f9952721`.
-These isolated test packages cannot update the production fleet.
+These hashes identify only that earlier physical-audit checkpoint. The isolated
+test packages cannot update the production fleet and do not contain all current
+0068–0071 or captured-shift recovery changes.
 
-## Final reinstall follow-up
+## Historical reinstall follow-up before the later 0068–0071 changes
 
-The final debug APK preserved the emulator's signed-in account, three receipts,
+The then-current debug APK preserved the emulator's signed-in account, three receipts,
 closed shift, opener/closer and ₹700 zero-variance drawer. The formatted receipt
 now displays the verified `05 Sep 2026 · 3:11 AM IST` payment time.
 
@@ -240,7 +247,7 @@ incomplete-costing caveat still visible. Online process restart, offline process
 restart and reconnection retained the same report and warnings in real Room
 storage. The Partners tab correctly showed no partners, not invented allocations.
 
-Final debug APK SHA-256:
+Historical debug APK SHA-256 for that checkpoint, not the current candidate bytes:
 `265ccac5970862a1377abbf770cfc449cb67040bd0fd6d321af727bea1ab9ee9`.
 It targets the local synthetic API and is not a partner release. A prior build
 attempt was stopped after Gradle blocked reading dataless iCloud-conflict generated
@@ -295,10 +302,12 @@ Remaining gates:
 
 - Complete signed-artifact and real workflow performance acceptance; the local
   unsigned build and component comparison above alone are not that acceptance.
-- The last Code 21 production heartbeat still reported **one pending outbox
-  item**. Preserve and reconcile it. Never uninstall or clear storage to force
-  an empty queue. The app's in-place update warning is not the server installer's
-  separate zero-outbox maintenance gate.
+- During the 5 September 2026 audit, the last observed Code 21 production
+  heartbeat reported **one pending outbox item**. This is dated historical
+  telemetry, not a verified current tablet count. Refresh the same installation
+  and reconcile the exact item before rollout. Never uninstall or clear storage
+  to force an empty queue. The app's in-place update warning is not the server
+  installer's separate zero-outbox maintenance gate.
 - Create a new immutable Code 24 release and obtain normal protected GitHub
   signing approval. No signed Code 24 partner APK is currently established by
   this report. Code 23 must not be activated.
@@ -314,11 +323,12 @@ Remaining gates:
 - SMTP remains unavailable; no new mail-provider credentials or integration was
   introduced. Live Sameer role parity requires the normal authorised Staff
   workflow; historical inactive/review accounts require owner decisions.
-- Product visibility still follows approved Gaming Centre category names.
-  Unsupported category renaming can hide an otherwise valid drink/snack from
-  new-sale surfaces; clearer setup guidance does not remove that architectural
-  coupling. Do not use unsupported names without changing the classification
-  contract and retesting visibility across web and Android.
+- Code 24 product visibility uses migration 0070's stored Gaming Centre
+  classification, backfilled from approved legacy category names. After that
+  migration, editing a category's display name no longer silently removes its
+  drinks/snacks from new-sale surfaces. Verify the expected categories after the
+  coordinated upgrade; production at migration 0058 retains the older behavior
+  until migration 0070 is deployed.
 
 There is no honest zero-bug, zero-latency or all-device guarantee. Passing tests,
 signed bytes, successful deployment and real operator acceptance are distinct
@@ -341,3 +351,105 @@ The observed count of one does not identify the pending operation. If it is a
 different request or does not reconcile, retain it and inspect its details;
 do not discard it, rewrite history or bypass maintenance checks. The cancellation
 bridge has a bounded list and is not a general guarantee for every stale queue.
+
+## Addendum — 5 September 2026 final local re-audit and release identity
+
+This addendum records later evidence without rewriting the historical snapshots
+above. The current source identity is D Company ERP `3.1.13`, Android code `24`,
+and migration head `0071`. Code 24 remains an **unsigned candidate**: it is not a
+signed release, deployed backend/web build, staged or active server update,
+approved rollout, or partner-installable APK. Code 21 (`3.1.10`) remains the
+immutable signed direct-channel predecessor for the required same-lineage
+in-place upgrade. Codes 22 and 23 are unsigned superseded history and must not
+be activated.
+
+Later isolated checks recorded:
+
+- backend: 1,364 tests passed with zero failures, errors or skips; three
+  dependency deprecation warnings remained;
+- web source: 434 tests in 73 files plus lint, typecheck and production build;
+- Android source: 965 JVM tests in 170 suites, lint with 22 warnings and zero
+  errors, and debug/test/unsigned-direct APK assembly;
+- Android emulator: a corrected 55-step captured-opening workflow, a complete
+  repeated 68/68 working-shift workflow, and a separate 29-step four-network-
+  cycle/restart probe;
+- Android instrumentation: 278 distinct cases across the default 276-pass run
+  with two alarm-assumption skips and a separate granted-permission run in which
+  those two cases passed; and
+- disposable backup migration: 0058 → 0069 → 0058 → 0069 with original table
+  fingerprints and money aggregates unchanged.
+
+At that checkpoint, the disposable production-backup restore evidence stopped
+at `0069`; merely adding source migrations `0070` and `0071` did not extend it.
+The later fresh-schema rehearsal below proves the migration chain, but a fresh
+production-backup rehearsal through `0071` remains a deployment gate. A downgrade rehearsal to
+the production baseline is valid only before any post-migration business write;
+after a revision-51 cash-expense receipt or other protected new-protocol evidence
+exists, the deliberate downgrade guards must refuse destructive rollback.
+
+### Final sealed-source evidence
+
+After the final source freeze, the complete local gates were rerun from one
+isolated source copy. These results supersede the earlier addendum counts, but do
+not make the candidate signed, deployed, staged, or approved for rollout:
+
+- backend CI-style run: **1,400 passed, 0 skipped, 3 warnings**, **71%** coverage
+  in **726.38 seconds**;
+- web: lint, TypeScript typecheck, production build, and **455 tests in 77
+  files** passed;
+- dependency audits: `pnpm audit` and `pip-audit` reported no known
+  vulnerabilities;
+- Android JVM tests: **978/978** passed for `release` and **978/978** for
+  `directRelease`; release lint reported **0 errors and 22 warnings**, while
+  direct-release lint reported **0 errors and 20 warnings**;
+- unsigned Android artifacts: release APK, 16,466,236 bytes, SHA-256
+  `0bb3800d870885f7b7456b2b5cb038beb0fd0c95ba7affddc14cfeefbff1b1a7`;
+  release AAB, 16,087,535 bytes, SHA-256
+  `68cc4f4c7f0078397135d3231ae64896130ac99213f722254fcf878ee3398f3a`;
+  direct-release APK, 16,466,764 bytes, SHA-256
+  `596d78af73d224073c1f2784d3d5f1d216fde1d54035c4bc99c1a3cc5a97f621`;
+- Android instrumentation: the **280-test** run completed with **278 passes and
+  2 expected alarm-permission assumption skips**; the same two alarm cases then
+  passed **2/2** in the separate permission-granted run;
+- database migrations: a fresh `0001 -> 0071` database contained **116 public
+  tables**; the isolated schema round trip completed `0058` (**109 tables**)
+  `-> 0071` (**116**) `-> 0058` (**109**) `-> 0071` (**116**);
+- focused security, tenant-scope, refund, pause and shift recovery suite:
+  **68/68 passed**; and
+- root release/CI contract suite: **99/99 passed**.
+
+The rendered-browser retest of the two corrected final-bundle presentation
+states also passed against an isolated `0071` database: POS now gives precise
+shift-required guidance when no shift is open, and the incoming Gaming-only
+bill reports **1 item** rather than zero. The retest then completed the VR bill
+by UPI, rendered the receipt in Operations, and closed the synthetic shift at
+zero cash variance. Cleanup proved zero open shifts, zero unfinished orders,
+zero active sessions, and zero ended-unsent sessions.
+
+A fresh rendered-browser workflow then passed login, ₹500 shift open, fixed
+₹80 PS5 session, product add/quantity/required-reason void, reasoned
+pause/resume, stop, Send to POS, ₹10 discount, ₹70 UPI payment, receipt,
+Finance/Reports reconciliation, zero-variance close, and a second shift closed
+by a different non-audit employee. The non-audit employee had no Audit Log
+navigation and direct `/audit` access redirected to POS. Final isolated records
+had zero open shifts, zero active/paused or ended-unsent sessions, and ₹230 of
+payments matching ₹230 of paid orders.
+
+That rendered run also found two presentation defects: a Gaming-only POS bill
+label counted zero counter products despite containing the Gaming charge, and a
+no-open-shift POS state used a misleading backend-unreachable heading. Both
+source defects were corrected and their focused policy tests now pass: incoming
+Gaming-only server lines contribute to the bill count, and a valid no-shift
+response shows shift-required guidance. Both corrected states were then
+verified in the rendered final bundle. One immediate post-receipt transition
+briefly showed retryable connection guidance even though the backend recorded
+HTTP 200; Retry, a fresh load, and two subsequent route-transition repetitions
+all succeeded, with no browser-console error. This non-reproducible observation
+is retained in the external browser report rather than called a proven fix.
+
+The later tests do not change the decision boundary. Release still requires a
+signed Code 24 artifact from the protected workflow, exact signer/hash/manifest
+verification, preserved Code 21 outbox and same-key in-place upgrade proof, a
+fresh pre-deployment production backup plus live migration/smoke, and physical
+target-tablet acceptance. Emulator and cloud-device evidence do not prove Redmi
+Pad 2 smoothness, alarm behavior or absence of flicker.

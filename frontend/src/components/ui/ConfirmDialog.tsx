@@ -56,7 +56,7 @@ export function ConfirmModal({
 }
 
 export function PromptModal({
-  title, label, placeholder, confirmLabel = 'Confirm', required = true, danger, onSubmit, onCancel, busy,
+  title, label, placeholder, confirmLabel = 'Confirm', required = true, danger, onSubmit, onCancel, busy, minLength, maxLength,
 }: {
   title: string;
   label: string;
@@ -67,6 +67,8 @@ export function PromptModal({
   onSubmit: (value: string) => void;
   onCancel: () => void;
   busy?: boolean;
+  minLength?: number;
+  maxLength?: number;
 }) {
   const [value, setValue] = useState('');
   const handleCancel = () => {
@@ -91,6 +93,8 @@ export function PromptModal({
             placeholder={placeholder}
             autoFocus
             required={required}
+            minLength={minLength}
+            maxLength={maxLength}
           />
         </label>
         <div className="flex justify-end gap-2">

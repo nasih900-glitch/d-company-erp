@@ -10,6 +10,7 @@ import {
   mayReleaseCancelledPreparedBill,
   mayClaimCheckoutDuringHydration,
   posDraftNeedsReconciliation,
+  posVisibleBillQuantity,
 } from './pos-draft-policy';
 
 const safeState = {
@@ -104,5 +105,16 @@ describe('POS draft safety policy', () => {
     expect(adjustPosCart(oneLine, 'drink', 1)).toEqual([
       { item: { id: 'drink' }, qty: 2 },
     ]);
+  });
+
+  it('counts a Gaming-only incoming bill even when the local cart is empty', () => {
+    expect(posVisibleBillQuantity([], [{ qty: 1 }])).toBe(1);
+  });
+
+  it('counts quantities across incoming and locally recovered bill lines', () => {
+    expect(posVisibleBillQuantity(
+      [{ qty: 2 }],
+      [{ qty: 1 }, { qty: 3 }],
+    )).toBe(6);
   });
 });

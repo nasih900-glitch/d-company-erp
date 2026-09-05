@@ -127,6 +127,8 @@ export interface MenuCategoryDTO {
   id: string;
   name: string;
   sort_order: number;
+  /** Missing only while a new client is talking to a pre-0070 server. */
+  is_gaming_centre_catalog?: boolean;
 }
 
 export interface OrderLineDTO {
@@ -501,9 +503,17 @@ export const attendance = {
 // MENU — categories + items (CRUD)
 // =============================================================================
 export const menuAdmin = {
-  createCategory: (body: { name: string; sort_order?: number }) =>
+  createCategory: (body: {
+    name: string;
+    sort_order?: number;
+    is_gaming_centre_catalog?: boolean;
+  }) =>
     api.post<MenuCategoryDTO>('/menu/categories', body).then((r) => r.data),
-  updateCategory: (id: string, body: { name?: string; sort_order?: number }) =>
+  updateCategory: (id: string, body: {
+    name?: string;
+    sort_order?: number;
+    is_gaming_centre_catalog?: boolean;
+  }) =>
     api.patch<MenuCategoryDTO>(`/menu/categories/${id}`, body).then((r) => r.data),
   deleteCategory: (id: string) => api.delete(`/menu/categories/${id}`),
   createItem: (body: {
@@ -651,13 +661,16 @@ export const recipes = {
 // =============================================================================
 // FINANCE — expenses + partners + capital + assets
 // =============================================================================
+export type ExpensePaymentRail = 'cash' | 'card' | 'bank' | 'upi';
+export type ExpenseCreatePaymentRail = Exclude<ExpensePaymentRail, 'cash'>;
+
 export interface ExpenseDTO {
   id: string;
   branch_id: string;
   category_id: string;
   supplier_id: string | null;
   amount_minor: number;
-  paid_via: 'cash' | 'card' | 'bank' | 'upi';
+  paid_via: ExpensePaymentRail;
   paid_at: string;
   vendor_name: string | null;
   invoice_no: string | null;
@@ -742,13 +755,27 @@ export interface PartnerProfitShareDTO {
   name: string;
   share_pct: number;
   capital_balance_minor: number;
+  /** Compatibility value. Zero when the server cannot verify allocation costing. */
   profit_share_minor: number;
+  authoritative_profit_share_minor?: number | null;
+}
+
+export interface AllocationConfidenceDTO {
+  status: 'authoritative' | 'costing_incomplete' | 'costing_unavailable';
+  inventory_orders_checked: number;
+  inventory_lines_checked: number;
+  unresolved_order_count: number;
+  reason: string | null;
 }
 
 export interface PartnerPLReportDTO {
   period_start: string;
   period_end: string;
   net_profit_minor: number;
+  /** Optional only during a rolling backend update; absence is not authoritative. */
+  allocation_status?: 'authoritative' | 'costing_incomplete' | 'costing_unavailable';
+  allocation_unavailable_reason?: string | null;
+  costing_confidence?: AllocationConfidenceDTO;
   partners: PartnerProfitShareDTO[];
 }
 
@@ -758,7 +785,9 @@ export interface DistributablePartnerShareDTO {
   share_pct: number;
   capital_balance_minor: number;
   lifetime_withdrawn_minor: number;
+  /** Compatibility value. Zero when the server cannot verify allocation costing. */
   distributable_share_minor: number;
+  authoritative_distributable_share_minor?: number | null;
 }
 
 export interface DistributableProfitReportDTO {
@@ -770,9 +799,23 @@ export interface DistributableProfitReportDTO {
   avg_monthly_cost_minor: number;
   reserve_minor: number;
   liquid_cash_minor: number;
+  /** Optional only for rolling updates; never infer spendability from the legacy total. */
+  spendable_cash_bank_minor?: number;
+  cash_position?: {
+    cash_on_hand_minor: number;
+    bank_balance_minor: number;
+    spendable_cash_bank_minor: number;
+    settlement_receivables_minor: number;
+  };
   profit_based_capacity_minor: number;
   cash_based_capacity_minor: number;
+  /** Compatibility value. Zero when the server cannot verify allocation costing. */
   safe_to_distribute_minor: number;
+  authoritative_safe_to_distribute_minor?: number | null;
+  /** Optional only during a rolling backend update; absence is not authoritative. */
+  allocation_status?: 'authoritative' | 'costing_incomplete' | 'costing_unavailable';
+  allocation_unavailable_reason?: string | null;
+  costing_confidence?: AllocationConfidenceDTO;
   partners: DistributablePartnerShareDTO[];
 }
 
@@ -819,7 +862,7 @@ export const finance = {
   // after a flaky connection needs the header to avoid a silent duplicate.
   createExpense: (body: {
     branch_id: string; category_id: string; supplier_id?: string;
-    amount_minor: number; paid_via: 'cash' | 'card' | 'bank' | 'upi';
+    amount_minor: number; paid_via: ExpenseCreatePaymentRail;
     paid_at: string; vendor_name?: string; invoice_no?: string; note?: string;
   }, idempotencyKey: string) =>
     api.post<ExpenseDTO>('/finance/expenses', body, {
@@ -2477,10 +2520,29 @@ export interface ShiftDTO {
   opened_by: string;
   opened_by_name: string | null;
   opened_by_email: string | null;
+  /** Null is a pre-0069 row; revision 1 is the durable shift lifecycle protocol. */
+  opening_protocol_revision?: number | null;
+  /** Client class only. The server never exposes the causal tablet identity. */
+  opening_client_platform?: 'web' | 'android' | 'ios' | null;
   /** Present on servers that retain the staff identity responsible for closure. */
   closed_by?: string | null;
   closed_by_name?: string | null;
   closed_by_email?: string | null;
+}
+
+export interface ShiftCloseResultDTO {
+  id: string;
+  status: string;
+  variance_minor: number;
+  closed_by?: string | null;
+  closed_by_name?: string | null;
+  recovery_close?: boolean;
+}
+
+export interface ShiftRecoveryCloseDTO {
+  counted_minor: number;
+  reason: string;
+  acknowledge_origin_tablet_quarantined: true;
 }
 
 export const orders = {
@@ -2513,13 +2575,16 @@ export const shifts = {
     api.post<{ id: string; status: string }>('/pos/shifts/open', { opening_float_minor })
       .then((r) => r.data),
   close: (id: string, counted_minor: number) =>
-    api.post<{
-      id: string;
-      status: string;
-      variance_minor: number;
-      closed_by?: string | null;
-      closed_by_name?: string | null;
-    }>(`/pos/shifts/${id}/close`, { counted_minor })
+    api.post<ShiftCloseResultDTO>(`/pos/shifts/${id}/close`, { counted_minor })
+      .then((r) => r.data),
+  recoverAndroidClose: (
+    id: string,
+    body: ShiftRecoveryCloseDTO,
+    idempotencyKey: string,
+  ) =>
+    api.post<ShiftCloseResultDTO>(`/pos/shifts/${id}/recover-close`, body, {
+      headers: { 'Idempotency-Key': idempotencyKey },
+    })
       .then((r) => r.data),
 };
 
@@ -2846,6 +2911,14 @@ export interface GameSessionDTO {
   timer_minutes: number | null;
   timer_ends_at: string | null;
   paused_minutes: number;
+  paused_at?: string | null;
+  /** Includes any migrated legacy paused_minutes; do not add/subtract both. */
+  paused_duration_ms?: number;
+  /** Rollout gate: only new pauses are blocked on incompatible tablet fleets. */
+  pause_available?: boolean;
+  pause_version?: number;
+  last_pause_transition_at?: string | null;
+  timer_alarm_version?: number;
   billable_minutes: number | null;
   amount_minor: number | null;
   rate_per_hour_minor: number | null;
@@ -2860,6 +2933,26 @@ export interface GameSessionDTO {
   /** Absent only when talking to a pre-Code22 backend during a coordinated rollout. */
   package_pricing_tier_snapshot?: 'standard' | 'premium' | null;
   extra_controllers: number;
+}
+
+/**
+ * Protected-owner compare-and-swap evidence for a pre-authoritative-pause row.
+ * The explicit nulls are material preconditions, not optional fields.
+ */
+export interface LegacyPausedSessionResolutionDTO {
+  expected_status: 'paused';
+  expected_paused_at: null;
+  expected_pause_version: 0;
+  expected_end_at: null;
+  expected_order_id: null;
+  expected_billable_minutes: null;
+  expected_paused_duration_ms: number;
+  expected_amount_minor: number | null;
+  ended_at: string;
+  billable_minutes: number;
+  amount_minor: number;
+  timing_evidence_reviewed: true;
+  reason: string;
 }
 
 export interface GamingPackageDTO {
@@ -2976,6 +3069,11 @@ export const gaming = {
   }>) => api.patch<StationDTO>(`/gaming/stations/${id}`, body).then((r) => r.data),
   deleteStation: (id: string) => api.delete(`/gaming/stations/${id}`),
 
+  /** One database snapshot: status transitions cannot straddle separate list reads. */
+  listOperationalSessions: () => api.get<GameSessionDTO[]>('/gaming/sessions', {
+    params: { unbilled_only: true, limit: 500 },
+  }).then((r) => r.data),
+
   listSessions: (
     status?: 'active' | 'paused' | 'ended',
     options?: { unbilledOnly?: boolean; limit?: number },
@@ -3022,6 +3120,14 @@ export const gaming = {
   }).then((r) => r.data),
   setSessionTimer: (id: string, timer_minutes: number | null) =>
     api.patch<GameSessionDTO>(`/gaming/sessions/${id}/timer`, { timer_minutes }).then((r) => r.data),
+  pauseSession: (id: string, body: { reason: string; expected_pause_version: number }, idempotencyKey: string) =>
+    api.post<GameSessionDTO>(`/gaming/sessions/${id}/pause`, body, {
+      headers: { 'Idempotency-Key': idempotencyKey },
+    }).then((r) => r.data),
+  resumeSession: (id: string, body: { reason: string; expected_pause_version: number }, idempotencyKey: string) =>
+    api.post<GameSessionDTO>(`/gaming/sessions/${id}/resume`, body, {
+      headers: { 'Idempotency-Key': idempotencyKey },
+    }).then((r) => r.data),
   extendSessionTimer: (
     id: string,
     expectedTimerMinutes: number | null,
@@ -3058,6 +3164,13 @@ export const gaming = {
     api.post<GameSessionDTO>(`/gaming/sessions/${id}/stop`, undefined, {
       headers: { 'Idempotency-Key': idempotencyKey },
     }).then((r) => r.data),
+  resolveLegacyPausedSession: (
+    id: string,
+    body: LegacyPausedSessionResolutionDTO,
+    idempotencyKey: string,
+  ) => api.post<GameSessionDTO>(`/gaming/sessions/${id}/resolve-legacy-pause`, body, {
+    headers: { 'Idempotency-Key': idempotencyKey },
+  }).then((r) => r.data),
   repairSessionBilling: (
     id: string,
     amountMinor: number,

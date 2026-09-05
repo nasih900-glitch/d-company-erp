@@ -14,6 +14,7 @@
  * it remains attributed for that shift's cash and payment activity.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   Plus, Minus, Trash2, ShoppingCart, Receipt as ReceiptIcon,
   Banknote, CreditCard, Smartphone, QrCode, X, Check, Loader2,
@@ -126,8 +127,17 @@ import {
   mayReleaseCancelledPreparedBill,
   mayClaimCheckoutDuringHydration,
   posDraftNeedsReconciliation,
+  posVisibleBillQuantity,
 } from './pos-draft-policy';
 import { Skeleton } from '@/components/ui/Skeleton';
+import {
+  canRenderPosWithoutShift,
+  classifyPosInitialLoadFailure,
+  posInitialLoadFailureCopy,
+  posLoadPreconditionError,
+  posShiftIssueCopy,
+  type PosInitialLoadFailureKind,
+} from './pos-load-state';
 
 type CartLine = { item: MenuItemDTO; qty: number; unavailable?: boolean };
 type PayMethod = CheckoutPaymentMethod;
@@ -228,6 +238,7 @@ export default function LivePOSScreen() {
   // which shift owns already-started local work.
   const [localWorkShiftId, setLocalWorkShiftId] = useState<string | null>(null);
   const [shiftError, setShiftError] = useState<string | null>(null);
+  const [shiftIssueKind, setShiftIssueKind] = useState<PosInitialLoadFailureKind | null>(null);
   const [shiftCollections, setShiftCollections] = useState<{
     posMinor: number;
     membershipMinor: number;
@@ -235,6 +246,9 @@ export default function LivePOSScreen() {
   } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [initialLoadFailureKind, setInitialLoadFailureKind] =
+    useState<PosInitialLoadFailureKind | null>(null);
+  const [initialLoadAttempt, setInitialLoadAttempt] = useState(0);
   const [draftStorageConflict, setDraftStorageConflict] = useState(false);
   const [draftLeaseState, setDraftLeaseState] = useState<DraftLeaseState>(() => ({
     key: draftKey,
@@ -513,6 +527,7 @@ export default function LivePOSScreen() {
     setShowCart(false);
     setShowPay(false);
     setReceipt(null);
+    setInitialLoadFailureKind(null);
     setError(malformedStoredDraft
       ? 'A saved POS draft could not be read. It was preserved and locked; explicitly discard it only after reconciliation.'
       : draftWriterBlocked
@@ -550,17 +565,24 @@ export default function LivePOSScreen() {
       setLoading(true);
       setShiftId(null);
       setShiftError(null);
+      setShiftIssueKind(null);
       try {
         const branchId = me?.branch_id;
         const companyId = me?.company_id;
         if (!companyId || !branchId) {
-          throw new Error('This account has no branch assigned. Assign a branch before using POS.');
+          throw posLoadPreconditionError(
+            'This account has no shop assigned. Ask an owner to assign this account before using POS.',
+          );
         }
         if (!terminalReady || !terminalId) {
-          throw new Error('This device is not ready for POS. Refresh it; if the problem remains, ask an owner to check the device setup.');
+          throw posLoadPreconditionError(
+            'This device is not ready for POS. Refresh it; if the problem remains, ask an owner to check the Combined register setup.',
+          );
         }
         if (!draftKey) {
-          throw new Error('The POS recovery context could not be verified. Refresh before starting a bill.');
+          throw posLoadPreconditionError(
+            'The POS recovery context could not be verified. Refresh before starting a bill.',
+          );
         }
         const activeDraftKey = draftKey;
         const [menuResult, shiftResult] = await Promise.allSettled([
@@ -573,6 +595,10 @@ export default function LivePOSScreen() {
         if (cancelled) return;
         if (menuResult.status === 'rejected') throw menuResult.reason;
         const [all, menuCategories] = menuResult.value;
+        const available = profileOperationalCatalogItems(all, menuCategories)
+          .filter((i) => isAppStoreAllowedType(i.type));
+        const restorable = all.filter((i) => isAppStoreAllowedType(i.type));
+        setItems(available);
         let resolvedShiftId: string | null = null;
         if (shiftResult.status === 'fulfilled') {
           resolvedShiftId = shiftResult.value;
@@ -582,17 +608,19 @@ export default function LivePOSScreen() {
             || storedDraft?.resumingOrderId
             || storedDraft?.cart.length,
           );
-          if (!hasStoredWork) throw shiftResult.reason;
+          if (!hasStoredWork && !canRenderPosWithoutShift(shiftResult.reason)) {
+            throw shiftResult.reason;
+          }
           // Any durable work must remain visible even if the original shift
           // subsequently closed. Checkout recovery remains actionable under
           // its journal; an ordinary cart is restored read-only for explicit
           // reconciliation instead of deleting the only copy of its items.
+          // With no durable work, an operational precondition (most commonly
+          // no open shift) still leaves the catalogue visible and read-only;
+          // it is not a backend outage.
           setShiftError((shiftResult.reason as Error).message);
+          setShiftIssueKind(classifyPosInitialLoadFailure(shiftResult.reason));
         }
-        const available = profileOperationalCatalogItems(all, menuCategories)
-          .filter((i) => isAppStoreAllowedType(i.type));
-        const restorable = all.filter((i) => isAppStoreAllowedType(i.type));
-        setItems(available);
 
         let ordinaryDraftAccountabilityError: string | null = null;
 
@@ -850,6 +878,7 @@ export default function LivePOSScreen() {
           // to discover the current server state in the background.
           setShiftId(null);
           setShiftError(ordinaryDraftAccountabilityError);
+          setShiftIssueKind('precondition');
           setError(ordinaryDraftAccountabilityError);
         } else {
           setShiftId(resolvedShiftId);
@@ -857,6 +886,7 @@ export default function LivePOSScreen() {
         setHydratedDraftKey(activeDraftKey);
       } catch (e) {
         if (!cancelled) {
+          setInitialLoadFailureKind(classifyPosInitialLoadFailure(e));
           const recoveryCanContinue = Boolean(draftKey) && canCompletePosDraftHydrationAfterLoadFailure({
             hasStoredDraft: Boolean(storedDraft),
             hasCheckoutRecovery: Boolean(storedDraft?.retry),
@@ -866,6 +896,7 @@ export default function LivePOSScreen() {
               ? (e as Error).message
               : `${(e as Error).message} Your saved local bill remains untouched; refresh POS to recover it before taking another bill.`,
           );
+          setShiftIssueKind(classifyPosInitialLoadFailure(e));
           setError(
             storedDraft
               ? `${(e as Error).message} The saved bill is shown below and remains locked until its catalogue and server state can be verified.`
@@ -891,6 +922,7 @@ export default function LivePOSScreen() {
     me?.company_id,
     terminalId,
     terminalReady,
+    initialLoadAttempt,
   ]);
 
   useEffect(() => {
@@ -1001,6 +1033,7 @@ export default function LivePOSScreen() {
           'The shift changed on another device. Your unfinished local bill was not moved to the new shift. '
           + 'Finish its saved recovery or clear it before taking a new bill.',
         );
+        setShiftIssueKind('precondition');
         return;
       }
       if (resolution.kind !== 'ready') {
@@ -1008,6 +1041,7 @@ export default function LivePOSScreen() {
         setShiftId(null);
         setShiftCollections(null);
         setShiftError(shiftResolutionMessage(resolution));
+        setShiftIssueKind('precondition');
         return;
       }
 
@@ -1015,6 +1049,7 @@ export default function LivePOSScreen() {
       storeShiftId({ companyId, branchId, terminalId }, nextShiftId);
       setShiftId(nextShiftId);
       setShiftError(null);
+      setShiftIssueKind(null);
       setShiftCollections({
         posMinor: resolution.shift.pos_sales_minor ?? 0,
         membershipMinor: resolution.shift.membership_sales_minor ?? 0,
@@ -1272,7 +1307,7 @@ export default function LivePOSScreen() {
       return [item.name, item.sku, item.type].some((value) => value.toLowerCase().includes(q));
     });
   }, [activeCat, categories, items, q]);
-  const cartQty = useMemo(() => cart.reduce((sum, line) => sum + line.qty, 0), [cart]);
+  const visibleBillQty = posVisibleBillQuantity(cart, resumingOrder?.lines);
 
   function add(item: MenuItemDTO) {
     if (checkoutFlowInFlightRef.current) {
@@ -2883,14 +2918,19 @@ export default function LivePOSScreen() {
     && !checkoutRetry
     && !localWorkNeedsReconciliation
   ) {
+    const failureCopy = posInitialLoadFailureCopy(initialLoadFailureKind ?? 'unknown');
     return (
-      <div className="card max-w-md mx-auto mt-12">
-        <h3 className="text-lg font-bold text-accent-bad mb-2">Can't reach the backend</h3>
+      <div className="card max-w-md mx-auto mt-12" role="alert">
+        <h3 className="text-lg font-bold text-accent-bad mb-2">{failureCopy.title}</h3>
         <p className="text-sm text-fg-muted mb-3">{error}</p>
-        <p className="text-xs text-fg-muted">
-          Make sure the backend container is running: <code className="text-fg">docker compose ps</code>.
-          Then refresh.
-        </p>
+        <p className="text-xs text-fg-muted">{failureCopy.guidance}</p>
+        <button
+          type="button"
+          className="btn btn-primary mt-4"
+          onClick={() => setInitialLoadAttempt((attempt) => attempt + 1)}
+        >
+          Retry POS
+        </button>
       </div>
     );
   }
@@ -2909,6 +2949,7 @@ export default function LivePOSScreen() {
   const canDiscardLockedLocalDraft = localWorkNeedsReconciliation
     && !checkoutRetry
     && !draftWriteLeaseUnavailable;
+  const shiftIssueCopy = posShiftIssueCopy(shiftIssueKind);
 
   return (
     <div className="min-h-full pb-32 xl:grid xl:grid-cols-[minmax(0,1fr)_440px] xl:gap-6 xl:pb-0">
@@ -3017,9 +3058,21 @@ export default function LivePOSScreen() {
         )}
 
         {shiftError && (
-          <div className="mb-4 flex max-w-3xl items-start gap-2 rounded-xl border border-accent-bad/40 bg-accent-bad/10 px-3 py-2 text-sm text-accent-bad">
-            <AlertCircle size={16} className="mt-0.5 shrink-0"/>
-            <span>{shiftError}</span>
+          <div
+            className="mb-4 flex max-w-3xl items-start gap-3 rounded-xl border border-accent-gold/40 bg-accent-gold/10 px-3 py-3 text-sm"
+            role="status"
+            aria-live="polite"
+          >
+            <AlertCircle size={16} className="mt-0.5 shrink-0 text-accent-gold"/>
+            <div className="min-w-0 flex-1">
+              <p className="font-semibold text-fg">{shiftIssueCopy.title}</p>
+              <p className="mt-1 text-fg-muted">{shiftError}</p>
+            </div>
+            {shiftIssueCopy.showShiftLink && !localWorkNeedsReconciliation && (
+              <Link className="btn btn-ghost shrink-0 !py-1.5 text-xs" to="/operations?tab=shifts">
+                Go to Shifts
+              </Link>
+            )}
           </div>
         )}
 
@@ -3242,7 +3295,7 @@ export default function LivePOSScreen() {
 
       <aside className="hidden xl:flex card flex-col">
         <header className="flex items-center justify-between mb-3">
-          <h3 className="text-lg font-semibold flex items-center gap-2"><ShoppingCart size={18} /> Cart · {cartQty}</h3>
+          <h3 className="text-lg font-semibold flex items-center gap-2"><ShoppingCart size={18} /> Bill · {visibleBillQty}</h3>
               {cart.length > 0 && !checkoutRetry && (
             <button
               onClick={() => setShowCartClearConfirm(true)}
@@ -3406,7 +3459,7 @@ export default function LivePOSScreen() {
           style={{ bottom: 'max(0.75rem, calc(env(safe-area-inset-bottom) + 0.5rem))' }}
         >
           <ShoppingCart size={18}/>
-          <span className="shrink-0">{cartQty} items</span>
+          <span className="shrink-0">{visibleBillQty} {visibleBillQty === 1 ? 'item' : 'items'}</span>
           <span className="opacity-80">·</span>
           <span className="min-w-0 truncate">
             {localWorkNeedsReconciliation
@@ -3417,7 +3470,7 @@ export default function LivePOSScreen() {
       )}
 
       {showCart && (
-        <Modal title={`Cart · ${cartQty}`} onClose={() => setShowCart(false)}>
+        <Modal title={`Bill · ${visibleBillQty}`} onClose={() => setShowCart(false)}>
           <div className="space-y-3">
             {cart.map((line) => (
               <div key={line.item.id} className="border-b border-bg-border pb-3 last:border-0 last:pb-0">

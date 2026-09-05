@@ -1,8 +1,12 @@
 # D Company ERP 3.1.13 (code 24) audit candidate
 
-This is a candidate, not a declaration of production or Redmi readiness.
-It supersedes unsigned Code 23 without rewriting the immutable `v3.1.12` tag.
-The installed Code 21 lineage and minimum-compatible client code 8 remain intact.
+This is the current **unsigned** candidate, not a declaration of signing,
+deployment, activation, approval, partner installability or Redmi readiness. It
+supersedes unsigned Code 23 without rewriting the immutable `v3.1.12` tag. Code
+21 (`3.1.10`) remains the immutable signed direct-channel predecessor for the
+required in-place upgrade proof, and minimum-compatible client code 8 remains
+unchanged. The coordinated candidate identity is `3.1.13` / code `24`, with
+database migrations through `0071`.
 
 ## Corrections under verification
 
@@ -30,14 +34,26 @@ The installed Code 21 lineage and minimum-compatible client code 8 remain intact
 - Migration 0067 fixes table-specific Finance insert validation. Concurrent
   tip payouts serialize against the same payable balance; relevant refunds use
   the same company lock. Future or timezone-free payout timestamps are rejected.
+- Migration 0068 adds authoritative, reasoned Gaming pause/resume receipts.
+  Migration 0069 marks the captured-opening protocol revision and privately
+  records the originating Android installation identity. Any authorised staff
+  on that installation can close the shift; Code 21 retains its exact causal-key
+  fallback. Ordinary browser, reinstall, and different-device closes fail safe
+  so unsynchronised work cannot be stranded. A protected audit owner has a
+  separate reasoned, acknowledged, idempotent, audited web recovery flow after
+  quarantining the original installation;
+  migration 0070 stores Gaming Centre product-category eligibility independently
+  from editable display names; and migration 0071 safely binds already-deployed
+  Code 21 cash-expense outbox rows to the exact open shift drawer with a durable
+  replay receipt. Code 24 continues to offer only non-cash Finance expenses.
 - Multi-query financial reports use a single read-only consistent database
   snapshot, without changing financial write transaction isolation.
 - Product setup retains empty categories so their first item can be created.
   Gaming Centre category guidance is explicit without exposing hidden cafe
-  products. Payment completion clears obsolete in-flight warnings.
-  The existing approved-category-name restriction remains: unsupported category
-  renaming can remove its products from new-sale surfaces. This pass improves
-  setup guidance, not that underlying category classification architecture.
+  products. Payment completion clears obsolete in-flight warnings. Migration
+  0070 converts the previously name-derived Gaming Centre category decision to
+  a stored classification, so later display-name edits do not silently remove
+  an already classified category from new-sale surfaces.
 - Receipt and Finance timestamp labels are explicitly in the shop's IST zone.
   Station timer reads are localised to the timer body while status/overtime
   changes still update the action card.
@@ -70,7 +86,8 @@ feedback. Physical Redmi acceptance remains separate from cloud-device tests.
    quiesced backup, restoration proof, migration and rollback readiness.
 4. Build an immutable signed APK with the existing approved signing lineage.
    Verify package, code, version, byte size, SHA-256 and hosted HTTPS bytes.
-5. Prove in-place Code 21 upgrade and preserved data, then register and activate
+5. Prove an in-place upgrade from the signed Code 21 predecessor with preserved
+   data, then register and activate
    the owner-authorized server update. Android installation still needs consent.
 6. Obtain authenticated target-Redmi smoke, offline/restart and alarm evidence.
 

@@ -65,6 +65,13 @@ data class GameSession(
     @SerialName("end_at") val endAt: String? = null,
     @SerialName("timer_minutes") val timerMinutes: Int? = null,
     @SerialName("timer_ends_at") val timerEndsAt: String? = null,
+    @SerialName("paused_at") val pausedAt: String? = null,
+    @SerialName("paused_duration_ms") val pausedDurationMs: Long? = null,
+    @SerialName("paused_minutes") val pausedMinutes: Int = 0,
+    /** Null means the server/cache predates authoritative pause support. */
+    @SerialName("pause_version") val pauseVersion: Int? = null,
+    @SerialName("pause_available") val pauseAvailable: Boolean = false,
+    @SerialName("last_pause_transition_at") val lastPauseTransitionAt: String? = null,
     @SerialName("billable_minutes") val billableMinutes: Int? = null,
     @SerialName("amount_minor") val amountMinor: Long? = null,
     @SerialName("rate_per_hour_minor") val ratePerHourMinor: Long? = null,
@@ -113,6 +120,12 @@ data class SessionStartBody(
 
 @Serializable
 data class SessionStopBody(@SerialName("ended_at") val endedAt: String)
+
+@Serializable
+data class SessionPauseBody(
+    val reason: String,
+    @SerialName("expected_pause_version") val expectedPauseVersion: Int,
+)
 
 @Serializable
 data class SessionTimerExtendBody(
@@ -521,6 +534,20 @@ interface GamingApi {
     suspend fun transfer(
         @Path("id") id: String,
         @Body body: SessionTransferBody,
+        @Header("Idempotency-Key") key: String,
+    ): GameSession
+
+    @POST("gaming/sessions/{id}/pause")
+    suspend fun pause(
+        @Path("id") id: String,
+        @Body body: SessionPauseBody,
+        @Header("Idempotency-Key") key: String,
+    ): GameSession
+
+    @POST("gaming/sessions/{id}/resume")
+    suspend fun resume(
+        @Path("id") id: String,
+        @Body body: SessionPauseBody,
         @Header("Idempotency-Key") key: String,
     ): GameSession
 

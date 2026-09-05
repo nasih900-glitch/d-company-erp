@@ -2,18 +2,31 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { OrderListItemDTO, ShiftDTO } from '@/lib/erp-api';
+import { NotificationProvider } from '@/components/ui/Notifications';
 import {
   ExistingShiftFeedback,
   OpenShiftStatusPanel,
   OperationalOrderList,
   RecoverDirectOrderModal,
+  RecoverAndroidShiftForm,
+  canRecoverAndroidShift,
   canUseShiftPermission,
+  isAndroidOriginShift,
   isUnknownShiftMutationOutcome,
+  operationsInitialTab,
   shiftActionErrorMessage,
   shiftCloserLabel,
   shiftOpenerLabel,
   shiftWorkspaceLabel,
 } from './OrdersAndShiftsScreen';
+
+describe('Operations deep links', () => {
+  it('opens Shifts directly from actionable POS feedback', () => {
+    expect(operationsInitialTab(new URLSearchParams('tab=shifts'))).toBe('shifts');
+    expect(operationsInitialTab(new URLSearchParams('tab=orders'))).toBe('orders');
+    expect(operationsInitialTab(new URLSearchParams())).toBe('orders');
+  });
+});
 
 function order(overrides: Partial<OrderListItemDTO> = {}): OrderListItemDTO {
   return {
@@ -143,6 +156,81 @@ describe('Orders & Shifts staff-facing shift feedback', () => {
     const buttonStart = markup.indexOf('<button');
     expect(markup.slice(buttonStart, markup.indexOf('>', buttonStart)))
       .not.toContain('disabled');
+  });
+
+  it('routes Android-origin close to its tablet and exposes recovery only to the audit owner', () => {
+    const androidShift = shift({
+      opening_protocol_revision: 1,
+      opening_client_platform: 'android',
+    });
+    expect(isAndroidOriginShift(androidShift)).toBe(true);
+    expect(canRecoverAndroidShift({ audit_access: false }, androidShift)).toBe(false);
+    expect(canRecoverAndroidShift({ audit_access: true }, androidShift)).toBe(true);
+    expect(isAndroidOriginShift(shift({ opening_client_platform: 'web' }))).toBe(false);
+
+    const staffMarkup = renderToStaticMarkup(
+      <OpenShiftStatusPanel
+        shift={androidShift}
+        workspaceName="Combined register"
+        currentUserId="sameer-user-id"
+        canClose
+        onClose={vi.fn()}
+      />,
+    );
+    expect(staffMarkup).toContain('opened by the Android tablet');
+    expect(staffMarkup).toContain('ask the protected audit owner');
+    expect(staffMarkup).not.toContain('Count &amp; close shift');
+    expect(staffMarkup).not.toContain('Recover Android shift</button>');
+
+    const protectedMarkup = renderToStaticMarkup(
+      <OpenShiftStatusPanel
+        shift={androidShift}
+        workspaceName="Combined register"
+        currentUserId="nasih-user-id"
+        canClose
+        canRecover
+        onClose={vi.fn()}
+        onRecover={vi.fn()}
+      />,
+    );
+    expect(protectedMarkup).toContain('Recover Android shift');
+    expect(protectedMarkup).toContain('aria-label="Recover Android shift opened by Rafi"');
+    expect(protectedMarkup).not.toContain('Count &amp; close shift');
+  });
+
+  it('makes protected Android recovery explicit, auditable and irreversible', () => {
+    const markup = renderToStaticMarkup(
+      <NotificationProvider>
+        <RecoverAndroidShiftForm
+          shift={shift({
+            opening_protocol_revision: 1,
+            opening_client_platform: 'android',
+          })}
+          currentUserId="nasih-user-id"
+          currentStaffName="Nasih"
+          workspaceName="Combined register"
+          onClose={vi.fn()}
+          onSuccess={vi.fn()}
+          onError={vi.fn()}
+        />
+      </NotificationProvider>,
+    );
+
+    expect(markup).toContain('Last-resort protected-owner recovery');
+    expect(markup).toContain('Rafi opened this shift from the Android tablet');
+    expect(markup).toContain('What the server checks before closing');
+    expect(markup).toContain('Open or held orders');
+    expect(markup).toContain('Recovery reason — stored in Audit Log');
+    expect(markup).toContain('minLength="12"');
+    expect(markup).toContain('maxLength="500"');
+    expect(markup).toContain('originating tablet app is isolated');
+    expect(markup).toContain('cannot be silently undone');
+    const actionLabel = 'Recover &amp; close shift</button>';
+    const labelIndex = markup.lastIndexOf(actionLabel);
+    const buttonStart = markup.lastIndexOf('<button', labelIndex);
+    expect(labelIndex).toBeGreaterThan(-1);
+    expect(markup.slice(buttonStart, markup.indexOf('>', buttonStart)))
+      .toContain('disabled=""');
   });
 
   it('disables the close action while its cash-count flow is already opening', () => {

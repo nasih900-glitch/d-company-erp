@@ -8,6 +8,31 @@ import org.junit.Test
 class ConnectivityStateMachineTest {
 
     @Test
+    fun `first ordered capabilities prove readiness without cold start stability delay`() {
+        val machine = ConnectivityStateMachine()
+        machine.reduce(ConnectivityEvent.DefaultNetworkChanged)
+        val detected = machine.reduce(
+            ConnectivityEvent.NetworkChanged(
+                validated = true,
+                notifyReconnect = true,
+                initialObservation = true,
+            ),
+        )
+        assertEquals(ConnectivityPhase.VERIFYING, detected.state.phase)
+        assertFalse(detected.state.requiresRecoveryStability)
+        val proven = machine.reduce(
+            ConnectivityEvent.ProbeCompleted(detected.state.generation, successful = true),
+        )
+        assertEquals(ConnectivityPhase.ONLINE, proven.state.phase)
+        // A launch that started offline must still recheck client compatibility;
+        // an already-connected launch's caller throttle suppresses duplicates.
+        assertEquals(
+            listOf(ConnectivityEffect.NotifyValidatedReconnect, ConnectivityEffect.NotifyBackOnline),
+            proven.effects,
+        )
+    }
+
+    @Test
     fun `cold start verifies readiness without pretending it is a reconnect`() {
         val machine = ConnectivityStateMachine()
 

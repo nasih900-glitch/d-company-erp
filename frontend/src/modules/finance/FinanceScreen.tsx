@@ -43,6 +43,23 @@ import AssetsTab from './AssetsTab';
 import ManualCollectionsTab from './ManualCollectionsTab';
 import TipPayoutsTab from './TipPayoutsTab';
 import { SkeletonCard } from '@/components/ui/Skeleton';
+import {
+  allocationIsAuthoritative,
+  allocationUnavailableReason,
+  optionalCostingCoverage,
+  optionalPartnerAllocation,
+  PARTNER_CASH_UNVERIFIED,
+  verifiedDistributionCap,
+  verifiedPartnerDistribution,
+  verifiedPartnerProfitShare,
+  verifiedSpendableCash,
+} from './partner-allocation';
+import {
+  DEFAULT_EXPENSE_PAYMENT_RAIL,
+  EXPENSE_CASH_DRAWER_GUIDANCE,
+  EXPENSE_PAYMENT_OPTIONS,
+  type ExpensePaymentOption,
+} from './expense-payment-policy';
 
 type Tab = 'overview' | 'expenses' | 'collections' | 'tips' | 'partners' | 'assets';
 
@@ -109,7 +126,7 @@ function OverviewTab() {
         TAX_COMPLIANCE_UI_ENABLED ? pos.receiptBusiness().catch(() => null) : Promise.resolve(null),
         reports.daily(),
         finance.businessMetrics(),
-        insights.costingCoverage(),
+        optionalCostingCoverage(() => insights.costingCoverage()),
       ]);
       if (!isCurrent()) return;
       setErr(null);
@@ -188,17 +205,17 @@ function OverviewTab() {
         </div>
       )}
 
-      {costing && !costing.is_complete && (
+      {costing?.is_complete !== true && (
         <div className="card mb-4 border-accent-bad/50 bg-accent-bad/10 text-sm">
           <div className="flex items-start gap-2">
             <AlertCircle size={17} className="text-accent-bad mt-0.5 shrink-0"/>
             <div>
-              <b>Profit is provisional: {costing.incomplete_item_count} sellable item{costing.incomplete_item_count === 1 ? '' : 's'} lack complete costing.</b>{' '}
+              <b>{costing ? `Profit is provisional: ${costing.incomplete_item_count} sellable item${costing.incomplete_item_count === 1 ? '' : 's'} lack complete costing.` : 'Profit is provisional: product costing could not be verified.'}</b>{' '}
               Automatic COGS excludes unknown costs, so gross and operating profit may be overstated.
               Fix the listed items in <b>Menu → Recipe</b> and receive stock with a real unit cost in <b>Inventory</b> before distributing profit.
               <div className="mt-2 text-xs text-fg-muted">
-                {costing.issues.slice(0, 4).map((issue) => issue.name).join(' · ')}
-                {costing.issues.length > 4 ? ` · +${costing.issues.length - 4} more` : ''}
+                {costing?.issues.slice(0, 4).map((issue) => issue.name).join(' · ')}
+                {costing && costing.issues.length > 4 ? ` · +${costing.issues.length - 4} more` : ''}
               </div>
             </div>
           </div>
@@ -224,7 +241,7 @@ function OverviewTab() {
           />
         )}
         <Stat label="Expenses"          value={inrShort(exp)} sub={inr(exp)} tone="bad"/>
-        <Stat label="Operating profit (today)" value={inrShort(net)} sub={`${inr(net)} · after equipment depreciation`} tone={net >= 0 ? 'good' : 'bad'}/>
+        <Stat label={costing?.is_complete === true ? 'Operating profit (today)' : 'Provisional operating profit'} value={inrShort(net)} sub={`${inr(net)} · after equipment depreciation`} tone={net < 0 ? 'bad' : costing?.is_complete === true ? 'good' : undefined}/>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 md:gap-4">
@@ -281,8 +298,8 @@ function OverviewTab() {
           ) : null}
           <Divider/>
           <Row label="Less: recorded cost of goods sold" v={-data.cogs_minor}
-            sub={costing && !costing.is_complete ? 'incomplete until all sellable stock items have recipes and costed ingredients' : 'what the food/drinks/items you sold actually cost you'}/>
-          <Row label={costing && !costing.is_complete ? 'Provisional gross profit' : 'Gross profit'}
+            sub={costing?.is_complete !== true ? 'cost coverage is incomplete or unverified; unknown costs are excluded' : 'what the food/drinks/items you sold actually cost you'}/>
+          <Row label={costing?.is_complete !== true ? 'Provisional gross profit' : 'Gross profit'}
             v={data.gross_profit_minor} bold
             sub={manualCollections > 0 ? 'includes manual collections at 0% COGS' : undefined}/>
         </div>
@@ -300,14 +317,14 @@ function OverviewTab() {
       </div>
 
       <div className="card mt-3 md:mt-4">
-        <Row label="Gross profit" v={data.gross_profit_minor}/>
+        <Row label={costing?.is_complete === true ? 'Gross profit' : 'Provisional gross profit'} v={data.gross_profit_minor}/>
         <Row label="Less: total expenses" v={-exp}/>
         {data.depreciation_minor > 0 && (
           <Row label="Less: equipment depreciation" v={-data.depreciation_minor}
             sub="straight-line, computed from the asset register"/>
         )}
         <Divider/>
-        <Row label="Operating profit (today)" v={net} bold sub="after equipment depreciation"/>
+        <Row label={costing?.is_complete === true ? 'Operating profit (today)' : 'Provisional operating profit'} v={net} bold sub="after equipment depreciation"/>
       </div>
 
       <p className="text-xs text-fg-muted mt-4">
@@ -542,7 +559,7 @@ function ExpenseForm({
     branch_id: branches[0]?.id ?? '',
     category_id: cats[0]?.id ?? '',
     amount_rupees: '',
-    paid_via: 'cash' as 'cash' | 'card' | 'bank' | 'upi',
+    paid_via: DEFAULT_EXPENSE_PAYMENT_RAIL,
     paid_at: new Date().toISOString().slice(0, 16),
     vendor_name: '',
     invoice_no: '',
@@ -599,13 +616,19 @@ function ExpenseForm({
           </Field>
           <Field label="Paid via">
             <select className="input" value={form.paid_via}
-              onChange={(e) => setForm({ ...form, paid_via: e.target.value as typeof form.paid_via })}>
-              <option value="cash">Cash</option>
-              <option value="upi">UPI</option>
-              <option value="card">Card</option>
-              <option value="bank">Bank transfer</option>
+              onChange={(e) => setForm({
+                ...form,
+                paid_via: e.target.value as ExpensePaymentOption['value'],
+              })}>
+              {EXPENSE_PAYMENT_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
             </select>
           </Field>
+        </div>
+        <div className="flex items-start gap-2 rounded-xl border border-accent-gold/30 bg-accent-gold/5 p-3 text-xs text-fg-muted">
+          <AlertCircle size={14} className="mt-0.5 shrink-0 text-accent-gold"/>
+          <p>{EXPENSE_CASH_DRAWER_GUIDANCE}</p>
         </div>
         <Field label="Date / time">
           <input type="datetime-local" className="input" required value={form.paid_at}
@@ -646,6 +669,7 @@ function PartnersTab() {
   const [rows, setRows] = useState<PartnerDTO[]>([]);
   const [split, setSplit] = useState<PartnerPLReportDTO | null>(null);
   const [distributable, setDistributable] = useState<DistributableProfitReportDTO | null>(null);
+  const [allocationWarning, setAllocationWarning] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
@@ -658,25 +682,50 @@ function PartnersTab() {
     try {
       const [partners, profitSplit, distributableProfit] = await Promise.all([
         finance.listPartners(),
-        finance.partnerProfitSplit(),
-        finance.distributableProfit(),
+        optionalPartnerAllocation(() => finance.partnerProfitSplit()),
+        optionalPartnerAllocation(() => finance.distributableProfit()),
       ]);
       if (!isCurrent()) return;
       setErr(null);
       setRows(partners);
-      setSplit(profitSplit);
-      setDistributable(distributableProfit);
+      const warning = profitSplit.unavailableReason ?? distributableProfit.unavailableReason;
+      setAllocationWarning(warning);
+      setSplit(warning ? null : profitSplit.value);
+      setDistributable(warning ? null : distributableProfit.value);
     }
-    catch (e) { if (isCurrent()) setErr((e as Error).message); }
+    catch (e) {
+      if (isCurrent()) {
+        setErr((e as Error).message);
+        // Old allocation capacity must not remain actionable after a failed refresh.
+        setSplit(null);
+        setDistributable(null);
+        setAllocationWarning('Partner allocations could not be verified. Refresh before using any distribution or profit-share figure. Saved partner records remain visible below.');
+      }
+    }
     finally { if (isCurrent()) setLoading(false); }
   }, [requests]);
   useEffect(() => { void load(); }, [load]);
   useRealtimeRefresh({ resources: ['finance'], refresh: () => load(true) });
 
-  const shareByPartnerId = new Map(split?.partners.map((p) => [p.partner_id, p.profit_share_minor]) ?? []);
-  const distributableByPartnerId = new Map(
-    distributable?.partners.map((p) => [p.partner_id, p]) ?? []
-  );
+  const shareByPartnerId = new Map<string, number>();
+  for (const partner of split?.partners ?? []) {
+    const amount = split ? verifiedPartnerProfitShare(split, partner) : null;
+    if (amount !== null) shareByPartnerId.set(partner.partner_id, amount);
+  }
+  const distributableByPartnerId = new Map<string, { amount: number; withdrawn: number }>();
+  for (const partner of distributable?.partners ?? []) {
+    const amount = distributable ? verifiedPartnerDistribution(distributable, partner) : null;
+    if (amount !== null) {
+      distributableByPartnerId.set(partner.partner_id, {
+        amount,
+        withdrawn: partner.lifetime_withdrawn_minor,
+      });
+    }
+  }
+  const spendableCash = distributable ? verifiedSpendableCash(distributable) : null;
+  const distributionCap = distributable ? verifiedDistributionCap(distributable) : null;
+  const distributionUnavailable = distributable !== null && distributionCap === null;
+  const splitUnavailable = split !== null && !allocationIsAuthoritative(split);
 
   if (loading) return <SkeletonCard />;
 
@@ -686,63 +735,90 @@ function PartnersTab() {
         <p className="text-sm text-fg-muted">
           {rows.length} partner{rows.length === 1 ? '' : 's'}
         </p>
+        <div className="flex gap-2">
+        <button className="btn btn-ghost" onClick={() => void load()} aria-label="Refresh partners"><RefreshCw size={14}/> Refresh</button>
         <button className="btn btn-primary" onClick={() => setAddOpen(true)}>
           <Plus size={14}/> Add partner
         </button>
+        </div>
       </div>
 
       {err && <ErrorRow text={err}/>}
+      {allocationWarning && (
+        <div className="card mb-3 border-accent-gold/40 text-sm" role="status">
+          <b>Partner allocations unavailable.</b> {allocationWarning}
+          <p className="mt-1 text-fg-muted">Partner identity and capital history are separate from ownership allocations. No distribution or profit shares are assumed.</p>
+        </div>
+      )}
 
       {distributable && (
-        <div className="card mb-3 border-accent-good/40">
+        <div className={`card mb-3 ${distributionUnavailable ? 'border-accent-gold/40' : 'border-accent-good/40'}`} role={distributionUnavailable ? 'status' : undefined}>
           <div className="flex justify-between items-start flex-wrap gap-2 mb-3">
             <div>
-              <div className="font-bold text-sm">Safe to distribute right now</div>
+              <div className="font-bold text-sm">
+                {distributionUnavailable ? 'Partner distribution unavailable' : 'Server-calculated distribution cap'}
+              </div>
               <div className="text-[11px] text-fg-muted mt-0.5">
-                All-time profit, minus everything ever withdrawn, minus a {distributable.reserve_months}-month
-                safety buffer — capped by actual cash on hand, not just what the books say.
-                Already charges straight-line depreciation on gaming/kitchen equipment wearing out
-                ({inr(distributable.lifetime_depreciation_minor)} to date), so this is the real number,
-                not an upper bound.
+                {distributionUnavailable
+                  ? 'The provisional operating result remains visible, but no amount is presented as safe to withdraw until historical product costs reconcile.'
+                  : <>All-time profit, minus everything ever withdrawn, minus a {distributable.reserve_months}-month
+                    safety buffer — capped by posted till and bank balances, excluding unsettled provider funds.
+                    Includes {inr(distributable.lifetime_depreciation_minor)} in equipment depreciation.</>}
               </div>
             </div>
-            <div className={`text-2xl font-bold font-mono ${distributable.safe_to_distribute_minor > 0 ? 'text-accent-good' : ''}`}>
-              {inr(distributable.safe_to_distribute_minor)}
+            <div className={`text-2xl font-bold font-mono ${(distributionCap ?? 0) > 0 ? 'text-accent-good' : distributionUnavailable ? 'text-accent-gold' : ''}`}>
+              {distributionCap === null ? 'Unavailable' : inr(distributionCap)}
             </div>
           </div>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs pt-3 border-t border-bg-border/60">
+          <div className={`grid grid-cols-1 ${distributionUnavailable ? 'md:grid-cols-2' : 'md:grid-cols-4'} gap-2 text-xs pt-3 border-t border-bg-border/60`}>
             <div>
-              <div className="text-fg-muted">Lifetime profit (after depreciation)</div>
+              <div className="text-fg-muted">{distributionUnavailable ? 'Provisional lifetime profit (after depreciation)' : 'Lifetime profit (after depreciation)'}</div>
               <div className={`font-mono font-semibold ${distributable.lifetime_net_profit_minor < 0 ? 'text-accent-bad' : ''}`}>
                 {inr(distributable.lifetime_net_profit_minor)}
               </div>
             </div>
-            <div>
-              <div className="text-fg-muted">Already withdrawn</div>
-              <div className="font-mono font-semibold">{inr(distributable.lifetime_withdrawn_minor)}</div>
-            </div>
-            <div>
-              <div className="text-fg-muted">Reserve kept back</div>
-              <div className="font-mono font-semibold">{inr(distributable.reserve_minor)}</div>
-            </div>
-            <div>
-              <div className="text-fg-muted">Cash on hand</div>
-              <div className="font-mono font-semibold">{inr(distributable.liquid_cash_minor)}</div>
-            </div>
+            {distributionUnavailable ? (
+              <div>
+                <div className="text-fg-muted">Historical costing check</div>
+                <div className="font-semibold text-accent-gold">
+                  {distributable.costing_confidence
+                    ? `${distributable.costing_confidence.unresolved_order_count} order${distributable.costing_confidence.unresolved_order_count === 1 ? '' : 's'} need reconciliation`
+                    : 'Not available from the server'}
+                </div>
+              </div>
+            ) : <>
+              <div>
+                <div className="text-fg-muted">Already withdrawn</div>
+                <div className="font-mono font-semibold">{inr(distributable.lifetime_withdrawn_minor)}</div>
+              </div>
+              <div>
+                <div className="text-fg-muted">Reserve kept back</div>
+                <div className="font-mono font-semibold">{inr(distributable.reserve_minor)}</div>
+              </div>
+              <div>
+                <div className="text-fg-muted">Spendable cash · till + bank</div>
+                <div className="font-mono font-semibold">{spendableCash === null ? 'Unavailable' : inr(spendableCash)}</div>
+              </div>
+            </>}
           </div>
-          {distributable.cash_based_capacity_minor < distributable.profit_based_capacity_minor && (
+          {distributionUnavailable && <p className="text-xs text-accent-gold mt-3">{allocationUnavailableReason(distributable)}</p>}
+          {!distributionUnavailable && spendableCash === null && <p className="text-xs text-accent-gold mt-3">{PARTNER_CASH_UNVERIFIED}</p>}
+          {!distributionUnavailable && spendableCash !== null && distributable.cash_based_capacity_minor < distributable.profit_based_capacity_minor && (
             <p className="text-[11px] text-accent-gold mt-3">
-              Limited by cash on hand, not by profit — some of what you've earned is currently tied up in stock or equipment.
+              Limited by spendable funds, not by profit — some value may be tied up in stock, equipment or provider settlement receivables.
             </p>
           )}
         </div>
       )}
 
       {split && (
-        <div className="card mb-3 flex justify-between items-center flex-wrap gap-2">
-          <div className="text-sm text-fg-muted">
-            Operating profit this month ({new Date(split.period_start).toLocaleDateString('en-IN')}
-            {' – '}{new Date(split.period_end).toLocaleDateString('en-IN')}), split by ownership share
+        <div className={`card mb-3 flex justify-between items-center flex-wrap gap-2 ${splitUnavailable ? 'border-accent-gold/40' : ''}`}>
+          <div className="text-sm text-fg-muted max-w-3xl">
+            {splitUnavailable ? 'Provisional operating result' : 'Operating profit'} this month ({new Date(split.period_start).toLocaleDateString('en-IN')}
+            {' – '}{new Date(split.period_end).toLocaleDateString('en-IN')})
+            {splitUnavailable
+              ? <span className="block text-xs text-accent-gold mt-1">Partner profit shares are hidden. {allocationUnavailableReason(split)}</span>
+              : ', split by ownership share'}
           </div>
           <div className={`font-bold font-mono ${split.net_profit_minor < 0 ? 'text-accent-bad' : ''}`}>
             {inr(split.net_profit_minor)}
@@ -771,13 +847,13 @@ function PartnersTab() {
             {distributableByPartnerId.has(p.id) && (
               <div className="flex justify-between items-center text-xs mb-3 pb-3 border-b border-bg-border/60">
                 <span className="text-fg-muted">
-                  Safe to take out right now
+                  Server-calculated allocation cap
                   <span className="block text-[10px]">
-                    Withdrawn to date: {inr(distributableByPartnerId.get(p.id)?.lifetime_withdrawn_minor ?? 0)}
+                    Withdrawn to date: {inr(distributableByPartnerId.get(p.id)?.withdrawn ?? 0)}
                   </span>
                 </span>
-                <span className={`font-bold font-mono ${(distributableByPartnerId.get(p.id)?.distributable_share_minor ?? 0) > 0 ? 'text-accent-good' : ''}`}>
-                  {inr(distributableByPartnerId.get(p.id)?.distributable_share_minor ?? 0)}
+                <span className={`font-bold font-mono ${(distributableByPartnerId.get(p.id)?.amount ?? 0) > 0 ? 'text-accent-good' : ''}`}>
+                  {inr(distributableByPartnerId.get(p.id)?.amount ?? 0)}
                 </span>
               </div>
             )}

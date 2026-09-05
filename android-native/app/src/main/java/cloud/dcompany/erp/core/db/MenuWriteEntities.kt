@@ -19,7 +19,9 @@ object MenuWriteState {
  * is already mid-push (see SyncEngine.pushMenuCategoryOne), and
  * `serverId == null` means still-unsynced create / `!= null` means an edit
  * against an already-synced row, merged in `MenuViewModel.mergeCategories`.
- * `name`/`sortOrder` null on an edit row means "not touched by this edit."
+ * `name`/`sortOrder`/`isGamingCentreCatalog` null on an edit row means
+ * "not touched by this edit." A new category always stores an explicit false
+ * unless its owner enables Gaming sales in the editor.
  */
 @Entity(tableName = "local_menu_categories", indices = [Index("state"), Index("serverId")])
 data class LocalMenuCategoryEntity(
@@ -27,6 +29,7 @@ data class LocalMenuCategoryEntity(
     val serverId: String? = null,
     val name: String? = null,
     val sortOrder: Int? = null,
+    val isGamingCentreCatalog: Boolean? = null,
     val createdAtMillis: Long,
     val state: String = MenuWriteState.PENDING,
     val lastError: String? = null,

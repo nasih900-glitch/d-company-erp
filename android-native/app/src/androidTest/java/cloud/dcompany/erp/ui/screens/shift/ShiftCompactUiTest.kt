@@ -69,6 +69,9 @@ class ShiftCompactUiTest {
             }
         }
 
+        // Primary action must be visible before any scroll, not merely
+        // technically reachable below an always-expanded touch keypad.
+        compose.onNodeWithText("Open shift with ₹0.00").assertIsDisplayed()
         compose.onNodeWithContentDescription("Opening float (₹), zero")
             .performScrollTo()
             .assertIsDisplayed()
@@ -236,6 +239,7 @@ class ShiftCompactUiTest {
             }
         }
 
+        compose.onNodeWithText("Open shift with ₹0.00").assertIsDisplayed()
         compose.onNodeWithContentDescription("Opening float (₹), zero")
             .performScrollTo()
             .assertIsDisplayed()

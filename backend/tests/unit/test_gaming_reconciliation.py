@@ -208,6 +208,9 @@ def test_reconciliation_contract_is_audit_owner_only_and_requires_a_reason() -> 
     assert _route_permissions(gaming_router.repair_session_billing) == (
         "admin.audit.read",
     )
+    assert _route_permissions(gaming_router.resolve_legacy_paused_session) == (
+        "admin.audit.read",
+    )
     assert _route_permissions(gaming_router.resolve_legacy_gaming_outbox) == (
         "admin.audit.read",
     )

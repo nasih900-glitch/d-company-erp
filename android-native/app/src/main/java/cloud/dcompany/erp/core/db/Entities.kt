@@ -34,6 +34,8 @@ data class MenuCategoryEntity(
     @PrimaryKey val id: String,
     val name: String,
     val sortOrder: Int,
+    /** Null preserves the legacy-name fallback until a 0070+ server is reached. */
+    val isGamingCentreCatalog: Boolean?,
 )
 
 /** Server-owned choices that alter one menu item's unit price. */

@@ -47,8 +47,10 @@ const TYPE_LABEL = {
   event:             "Event",
   manual_collection: "Manual Collection",
   daily_report:      "Daily Report",
+  weekly_report:     "Weekly Report",
   monthly_report:    "Monthly Report",
   quarterly_report:  "Quarterly Report",
+  half_yearly_report: "Half-yearly Report",
   yearly_report:     "Yearly Report",
   ping:              "Ping",
 };
@@ -147,8 +149,8 @@ function projectRow(kind, p) {
 
   // Reports use the Description column for the period summary and the
   // money columns for revenue / GST / total.
-  if (kind === "daily_report" || kind === "monthly_report" ||
-      kind === "quarterly_report" || kind === "yearly_report") {
+  if (kind === "daily_report" || kind === "weekly_report" || kind === "monthly_report" ||
+      kind === "quarterly_report" || kind === "half_yearly_report" || kind === "yearly_report") {
     const sub = subRevenueText(p);
     return [
       date, time, label, p.period_id || p.label || "",

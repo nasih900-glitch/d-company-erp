@@ -512,8 +512,10 @@ interface ShiftDao {
 
     /**
      * Resolve one explicitly selected rejected attempt against the exact live
-     * server snapshot recorded by SyncEngine. A matching opening race is
-     * linked. A different drawer lifecycle is discarded only when no captured
+     * server snapshot recorded by SyncEngine. Legacy servers may explicitly
+     * allow bounded opening-race matching. Captured-open servers require the
+     * original POST receipt; a GET snapshot must never substitute its identity.
+     * An unlinked attempt is discarded only when no captured
      * record references the rejected local identity; otherwise it remains
      * blocked for staff recovery.
      */
@@ -528,6 +530,7 @@ interface ShiftDao {
         serverOpenedAtMillis: Long,
         verifiedAtMillis: Long,
         raceToleranceMillis: Long = REJECTED_OPEN_RACE_TOLERANCE_MILLIS,
+        allowLegacyOpeningMatch: Boolean = false,
     ): RejectedOpenRecoveryResult {
         val cached = serverOpen(terminalId)
         if (
@@ -548,33 +551,46 @@ interface ShiftDao {
             )
         }
 
-        val reconciliation = reconcileSelectedRejectedOpen(
-            localId = localId,
-            terminalId = terminalId,
-            branchId = branchId,
-            serverShiftId = serverShiftId,
-            serverOpenedByUserId = serverOpenedByUserId,
-            serverOpeningFloatMinor = serverOpeningFloatMinor,
-            serverOpenedAtMillis = serverOpenedAtMillis,
-            raceToleranceMillis = raceToleranceMillis,
-        )
-        if (reconciliation.status != RejectedOpenRecoveryStatus.UNRELATED_SERVER_SHIFT) {
-            return reconciliation
+        if (allowLegacyOpeningMatch) {
+            val reconciliation = reconcileSelectedRejectedOpen(
+                localId = localId,
+                terminalId = terminalId,
+                branchId = branchId,
+                serverShiftId = serverShiftId,
+                serverOpenedByUserId = serverOpenedByUserId,
+                serverOpeningFloatMinor = serverOpeningFloatMinor,
+                serverOpenedAtMillis = serverOpenedAtMillis,
+                raceToleranceMillis = raceToleranceMillis,
+            )
+            if (reconciliation.status != RejectedOpenRecoveryStatus.UNRELATED_SERVER_SHIFT) {
+                return reconciliation
+            }
+        } else {
+            rejectedOpenRecoveryPrecondition(
+                row = byLocalId(localId),
+                terminalId = terminalId,
+                branchId = branchId,
+                serverShiftPresent = false,
+            )?.let { return it }
         }
 
         val dependentCount = exactDependentRecordCount(localId)
         if (dependentCount != 0) {
             return RejectedOpenRecoveryResult(
                 RejectedOpenRecoveryStatus.DEPENDENT_WORK,
-                "The current live shift is a different drawer lifecycle, and the saved attempt still has $dependentCount captured record(s). It remains blocked. Resolve or close the current shift before retrying the saved attempt.",
+                if (allowLegacyOpeningMatch) {
+                    "The current live shift is a different drawer lifecycle, and the saved attempt still has $dependentCount captured record(s). It remains blocked. Resolve or close the current shift before retrying the saved attempt."
+                } else {
+                    "This saved opening still has $dependentCount captured record(s). The live shift cannot prove it is the same opening, even if its employee, cash and time match. Nothing was moved or cleared. Retry the original saved opening to verify its receipt, or ask an owner to reconcile the conflict; do not enter the sales again."
+                },
             )
         }
         val note =
-            "Cleared after live verification at $verifiedAtMillis found a different current shift and confirmed that no captured record referenced this saved attempt."
+            "Cleared after live verification at $verifiedAtMillis did not link the current shift and confirmed that no captured record referenced this saved attempt."
         return if (markRejectedOpenDiscarded(localId, note) == 1) {
             RejectedOpenRecoveryResult(
                 RejectedOpenRecoveryStatus.DISCARDED,
-                "Live verification found a different current shift and no captured work for this older attempt. Only the empty saved attempt was cleared; the current shift was not changed.",
+                "Live verification found no captured work for this saved attempt. Only the empty attempt was cleared; it was not linked to the current shift, and the current shift was not changed.",
             )
         } else {
             RejectedOpenRecoveryResult(

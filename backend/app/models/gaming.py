@@ -54,6 +54,8 @@ class Station(Base, TimestampMixin, TenantMixin):
 class GamingSession(Base, TimestampMixin, TenantMixin):
     __tablename__ = "gaming_sessions"
     __table_args__ = (
+        CheckConstraint("paused_duration_ms >= 0 AND pause_version >= 0", name="ck_gaming_pause_duration"),
+        CheckConstraint("paused_at IS NULL OR (status = 'paused' AND paused_at >= start_at)", name="ck_gaming_pause_active_time"),
         CheckConstraint(
             "package_pricing_tier_snapshot IS NULL OR "
             "package_pricing_tier_snapshot IN ('standard', 'premium')",
@@ -63,7 +65,10 @@ class GamingSession(Base, TimestampMixin, TenantMixin):
 
     id: Mapped[UUID] = _uuid_pk()
     station_id: Mapped[UUID] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("stations.id", ondelete="RESTRICT"), nullable=False, index=True
+        PG_UUID(as_uuid=True),
+        ForeignKey("stations.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
     )
     order_id: Mapped[UUID | None] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("orders.id", ondelete="SET NULL")
@@ -90,6 +95,16 @@ class GamingSession(Base, TimestampMixin, TenantMixin):
     start_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     end_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     paused_minutes: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # Includes legacy paused_minutes converted once by 0068. Never subtract
+    # both columns; paused_minutes is the whole-minute compatibility projection.
+    paused_duration_ms: Mapped[int] = mapped_column(
+        BigInteger, default=0, server_default="0", nullable=False
+    )
+    paused_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    pause_version: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    last_pause_transition_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     rate_per_hour_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
     # Persisted financial discriminator. package_id is only a nullable catalog
     # reference and may be cleared by ON DELETE SET NULL; it must never decide
@@ -119,7 +134,9 @@ class GamingSession(Base, TimestampMixin, TenantMixin):
     timer_minutes: Mapped[int | None] = mapped_column(Integer)
     billable_minutes: Mapped[int | None] = mapped_column(Integer)
     amount_minor: Mapped[int | None] = mapped_column(BigInteger)
-    status: Mapped[str] = mapped_column(String(20), default="active")  # active|paused|ended|cancelled
+    status: Mapped[str] = mapped_column(
+        String(20), default="active"
+    )  # active|paused|ended|cancelled
     cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     cancelled_by: Mapped[UUID | None] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
@@ -152,6 +169,39 @@ def _guard_gaming_session_actor_attribution(_mapper, _connection, row) -> None:
         raise ValueError(
             "gaming session POS handoff actor and timestamp must be recorded together"
         )
+
+
+class GamingPauseEvent(Base):
+    """Immutable pause/resume receipt retained beyond generic replay expiry."""
+
+    __tablename__ = "gaming_pause_events"
+    __table_args__ = (
+        UniqueConstraint("company_id", "idempotency_key", name="uq_gaming_pause_event_key"),
+        UniqueConstraint("gaming_session_id", "pause_version", name="uq_gaming_pause_event_version"),
+        CheckConstraint("action IN ('pause','resume') AND length(trim(reason)) BETWEEN 3 AND 500 AND pause_version > 0", name="ck_gaming_pause_event_payload"),
+        CheckConstraint("length(trim(idempotency_key)) > 0 AND length(request_hash) = 64", name="ck_gaming_pause_event_identity"),
+        Index("ix_gaming_pause_events_company_session", "company_id", "gaming_session_id"),
+    )
+    id: Mapped[UUID] = _uuid_pk()
+    company_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("companies.id", ondelete="RESTRICT"), nullable=False
+    )
+    gaming_session_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("gaming_sessions.id", ondelete="RESTRICT"), nullable=False
+    )
+    actor_user_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    terminal_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("terminals.id", ondelete="RESTRICT"), nullable=False
+    )
+    action: Mapped[str] = mapped_column(String(10), nullable=False)
+    reason: Mapped[str] = mapped_column(String(500), nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    pause_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    response: Mapped[dict] = mapped_column(JSONB, nullable=False)
 
 
 class GamingSessionExtension(Base, TenantMixin):

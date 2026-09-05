@@ -2,7 +2,11 @@
 
 Production-grade café + gaming-lounge ERP. POS, tables, menu, inventory (FIFO + recipes), gaming sessions, finance (double-entry), OCR receipts, staff, analytics. Multi-branch and multi-terminal from day one. Cloud-native — the web/PWA client needs a live connection to the backend; it has no offline queue.
 
-This repository is the **scaffold-stage** baseline. Architecture, schema, auth/RBAC, audit, idempotency, eventing, Docker, and CI are wired end-to-end. Every module has working endpoints; the deep business logic (recipe deduction, journal posting, OCR worker, analytics rollups) lands in subsequent sessions per the build order.
+This repository contains the implemented ERP and its release-gated web, backend,
+and native Android clients. Core Gaming, POS, shift, inventory, finance, audit,
+idempotency, offline-recovery, Docker, migration, and CI workflows are present.
+A green local checkout is still only a candidate: follow the release evidence and
+production migration gates before distributing or activating a build.
 
 ## Quickstart (Docker)
 
@@ -95,9 +99,12 @@ d-company-erp/
 - ✅ GitHub Actions CI (lint, type-check, migrations, tests, image builds)
 - ✅ pytest + vitest scaffolding with seed fixtures
 
-## What's next (per build order)
+## Release status
 
-Module deep-dives: POS pipeline (recipe deduction → journal posting → receipt rendering), gaming timer engine + tournament mode, inventory FIFO + GRN + reorder, finance reports + partner ledger, OCR worker + verification queue UI, analytics rollups + Power BI export, offline outbox replayer, role-aware UI gating.
+The current local candidate is documented in
+[`docs/CODE24_RELEASE_CANDIDATE.md`](docs/CODE24_RELEASE_CANDIDATE.md). That file
+separates source/test evidence from signing, hosted-update, physical-device, and
+production-deployment approval.
 
 ## Web and mobile apps
 
@@ -120,12 +127,15 @@ separately identified prototype, not another supported ERP app.
   links only to the live web ERP and verified artifacts from the official GitHub repository.
 
 Tagging a release that exactly matches the Android `versionName` triggers
-`.github/workflows/release.yml`. The current local release candidate is `3.1.7`
-(`18`); Android code `8` remains the minimum-compatible floor. The signed
-`3.1.3` (`14`) direct-release APK remains the manual, update-capable partner
-baseline. It must not be uploaded to the server release directory, published as
-a GitHub or Play release, or registered as an update. The public status contract
-is `/api/v1/public/client-compatibility?platform=android&version_code=<installed-code>`.
+`.github/workflows/release.yml`. The current local release candidate is the
+**unsigned** `3.1.13` (code `24`) candidate; Android code `8` remains the
+minimum-compatible floor. The signed
+`3.1.3` (`14`) direct-release APK is a historical manually distributed,
+update-capable baseline; Code `21` (`3.1.10`) is the current signed
+direct-channel predecessor for Code 24. Code 14 must not be uploaded to the
+server release directory, published as a GitHub or Play release, or registered
+as an update. The public status contract is
+`/api/v1/public/client-compatibility?platform=android&version_code=<installed-code>`.
 
 The immutable signed `3.1.2` (`13`) APK remains the predecessor used to prove
 the supported in-place upgrade to code `14`; neither signed identity may be
@@ -133,14 +143,19 @@ rebuilt with different bytes. Code `15` (`3.1.4`) is the first identity admitted
 by the server-release registry, but it is an immutable held audit build, not the
 current rollout target. Do not rebuild, overwrite, or activate it as a shortcut.
 Code `16` (`3.1.5`) and Code `17` (`3.1.6`) are immutable predecessors. Code 17
-introduced consent-gated ERP-only remote assistance. Code `18` (`3.1.7`) is a
-separate standard-premium visual candidate; it does not publish, advertise,
-stage, or activate an Android server update. The production compatibility
-defaults remain pinned until a later rollout is explicitly reviewed. Any
-eventual artifact must be newly built and signed, verified against its exact
-SHA-256, byte size, package, version and expected signer, and pass same-lineage
+introduced consent-gated ERP-only remote assistance. Codes `18` through `20`
+remain immutable failed-before-signing history. Code `21` (`3.1.10`) is the
+immutable signed direct-channel predecessor for the next in-place upgrade.
+Code `22` (`3.1.11`) and Code `23` (`3.1.12`) are unsigned, superseded
+candidates and must not be approved, staged, advertised, or activated. Code
+`24` (`3.1.13`) is the current unsigned candidate; it is not signed, deployed,
+staged, activated, approved, or partner-installable. Candidate database
+migrations currently run through `0071`. The production compatibility defaults
+remain pinned until a rollout is explicitly reviewed. Any eventual artifact
+must be newly built and signed, verified against its exact SHA-256, byte size,
+package, version and expected signer, and pass a same-lineage Code 21 to Code 24
 upgrade proof. Android still requires the employee to approve installation.
-Emulator evidence is not physical Redmi Pad 2 proof.
+Emulator or cloud-device evidence is not physical Redmi Pad 2 proof.
 
 ## License
 

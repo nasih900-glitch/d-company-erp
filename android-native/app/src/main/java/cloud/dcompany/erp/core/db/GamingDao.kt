@@ -49,7 +49,8 @@ interface GamingDao {
     @Query("SELECT * FROM gaming_session_cache ORDER BY startAtMillis DESC")
     fun observeSessionCache(): Flow<List<GamingSessionCacheEntity>>
 
-    @Query("SELECT * FROM gaming_session_cache WHERE status = 'active'")
+    // Paused identities suppress any older local deadline on another device.
+    @Query("SELECT * FROM gaming_session_cache WHERE status IN ('active', 'paused')")
     suspend fun activeSessionCacheForAlarms(): List<GamingSessionCacheEntity>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)

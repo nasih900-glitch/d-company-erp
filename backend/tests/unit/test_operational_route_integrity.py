@@ -855,6 +855,13 @@ def _shift(tenant: TenantContext, **overrides):
         "terminal_id": tenant.terminal_id,
         "opened_by": tenant.user_id,
         "opened_at": datetime.now(UTC),
+        "opening_action_id": None,
+        "opening_request_hash": None,
+        "opening_received_at": None,
+        "opening_was_offline": False,
+        "opening_protocol_revision": None,
+        "opening_client_platform": None,
+        "opening_client_installation_id": None,
         "closed_by": None,
         "closed_at": None,
         "opening_float_minor": 0,
@@ -1958,8 +1965,9 @@ async def test_close_shift_succeeds_only_after_all_financial_tasks_resolve() -> 
 
 
 @pytest.mark.asyncio
-async def test_pos_refund_evidence_reconciliation_requires_protected_owner() -> None:
-    tenant = _tenant(protected_access=False)
+async def test_pos_refund_evidence_reconciliation_requires_financial_recovery_permission() -> None:
+    from dataclasses import replace
+    tenant = replace(_tenant(protected_access=False), roles=("cashier",))
     payload = pos_router.PosRefundEvidenceReconciliationCreate(
         refund_id=uuid4(),
         evidence_kind="provider_reference",
@@ -1967,7 +1975,8 @@ async def test_pos_refund_evidence_reconciliation_requires_protected_owner() -> 
         reason="Verified against the provider dashboard",
     )
 
-    with pytest.raises(ForbiddenError, match="Only a protected owner"):
+    assert _route_permissions(pos_router.reconcile_pos_refund_evidence) == ("pos.refund.reconcile",)
+    with pytest.raises(ForbiddenError, match="missing permission: pos.refund.reconcile"):
         await pos_router.reconcile_pos_refund_evidence(
             payload,
             _Session(),

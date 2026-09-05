@@ -1,19 +1,25 @@
 package cloud.dcompany.erp.ui.screens.gaming
 
+import android.graphics.Bitmap
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.MutableLongState
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertWidthIsAtLeast
+import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.isDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.junit4.StateRestorationTester
@@ -21,15 +27,20 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performImeAction
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.dp
+import androidx.test.platform.app.InstrumentationRegistry
 import cloud.dcompany.erp.core.db.GamingSessionState
 import cloud.dcompany.erp.core.db.GamingPackageExtensionState
 import cloud.dcompany.erp.core.db.GamingLegacyResolution
@@ -37,6 +48,7 @@ import cloud.dcompany.erp.core.db.GamingLegacyResolutionAttemptState
 import cloud.dcompany.erp.core.db.LEGACY_PACKAGE_START_REVIEW_ERROR
 import cloud.dcompany.erp.ui.theme.DCompanyTheme
 import java.time.Instant
+import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -234,9 +246,127 @@ class GamingDialogUiTest {
 
         compose.onNodeWithText("01:00:00").assertIsDisplayed()
         compose.onNodeWithText("Estimated now · ₹200.00").assertIsDisplayed()
-        compose.onNodeWithText("+30 min").assertIsDisplayed()
+        compose.onNodeWithText("Extend").assertIsDisplayed()
         compose.onNodeWithText("Transfer").assertIsDisplayed()
         compose.onNodeWithText("Stop & calculate").assertIsDisplayed()
+    }
+
+    @Test
+    fun narrowCardKeepsCompleteActionLabelsAndTouchTargetsWithoutHidingStop() {
+        val station = testStation()
+        val session = mutableStateOf(
+            GameSession(
+                id = "session-narrow-actions",
+                stationId = station.id,
+                shiftId = "shift-1",
+                status = "active",
+                startAt = "2026-08-26T17:00:00Z",
+                ratePerHourMinor = 15_000,
+                pauseVersion = 0,
+                pauseAvailable = true,
+            ),
+        )
+        val actions = mutableListOf<String>()
+
+        compose.setContent {
+            DCompanyTheme {
+                Box(Modifier.width(252.dp)) {
+                    GamingStationCard(
+                        station = station,
+                        session = session.value,
+                        packageExtensionAction = null,
+                        wallClock = rememberedWallClock(
+                            Instant.parse("2026-08-26T17:05:00Z").toEpochMilli(),
+                        ),
+                        actionInProgress = false,
+                        busyHere = false,
+                        focused = false,
+                        canWrite = true,
+                        canReconcileLegacy = false,
+                        activeShiftId = "shift-1",
+                        activeShiftServerConfirmed = true,
+                        packages = emptyList(),
+                        hasTransferTarget = true,
+                        onStart = {},
+                        onStop = { actions += "stop" },
+                        onSend = {},
+                        onCancelUnbilled = {},
+                        onExtendTimer = { actions += "extend" },
+                        onExtendPackage = { _, _ -> },
+                        onTransfer = { actions += "transfer" },
+                        onReconcile = {},
+                        onRepairBilling = {},
+                        onResolveLegacyStart = {},
+                        onDiscardPackageExtension = {},
+                        onPauseResume = { actions += if (it.status == "paused") "resume" else "pause" },
+                    )
+                }
+            }
+        }
+
+        fun assertCompleteAction(label: String) {
+            compose.onNodeWithText(label).assertIsDisplayed().assertIsEnabled()
+                .assertHeightIsAtLeast(48.dp).assertWidthIsAtLeast(48.dp)
+            val layouts = mutableListOf<TextLayoutResult>()
+            compose.onNodeWithText(label, useUnmergedTree = true)
+                .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+            assertTrue("$label must expose its rendered text layout", layouts.isNotEmpty())
+            val diagnostic = layouts.joinToString { layout ->
+                "size=${layout.size}, constraints=${layout.layoutInput.constraints}, " +
+                    "paragraphWidth=${layout.multiParagraph.width}, " +
+                    "widthOverflow=${layout.didOverflowWidth}, heightOverflow=${layout.didOverflowHeight}, " +
+                    "lines=${layout.lineCount}, lineRight=${layout.getLineRight(0)}, " +
+                    "lineBottom=${layout.getLineBottom(0)}, visibleEnd=${layout.getLineEnd(0, visibleEnd = true)}, " +
+                    "fontScale=${layout.layoutInput.density.fontScale}"
+            }
+            // Compose 1.7.5 compares the shrink-wrapped Text size with the
+            // paragraph's wider layout constraint for didOverflowWidth. The
+            // captured Extend had size 86px, lineRight 86px and 130px allowed
+            // width: all glyphs fitted even though that broad flag was true.
+            // Check actual visible text and every glyph, not paragraph bounds.
+            val fullyVisible = layouts.all { layout ->
+                layout.layoutInput.text.text == label && layout.lineCount == 1 &&
+                    !layout.didOverflowHeight && !layout.isLineEllipsized(0) &&
+                    layout.getLineEnd(0) == label.length &&
+                    layout.getLineEnd(0, visibleEnd = true) == label.length &&
+                    label.indices.all { offset ->
+                        val glyph = layout.getBoundingBox(offset)
+                        // At most one physical pixel of integer-layout rounding.
+                        glyph.left >= -1f && glyph.top >= -1f &&
+                            glyph.right <= layout.size.width + 1f &&
+                            glyph.bottom <= layout.size.height + 1f
+                    }
+            }
+            if (!fullyVisible) {
+                val context = InstrumentationRegistry.getInstrumentation().targetContext
+                val file = File(context.getExternalFilesDir(null), "narrow-gaming-action-overflow.png")
+                file.outputStream().use { output ->
+                    compose.onRoot().captureToImage().asAndroidBitmap()
+                        .compress(Bitmap.CompressFormat.PNG, 100, output)
+                }
+            }
+            assertTrue(
+                "$label must not be clipped at 252dp card width: $diagnostic",
+                fullyVisible,
+            )
+        }
+
+        listOf("Extend", "Transfer", "Pause", "Stop & calculate").forEach { label ->
+            assertCompleteAction(label)
+            compose.onNodeWithText(label).performClick()
+        }
+        compose.runOnIdle {
+            assertEquals(listOf("extend", "transfer", "pause", "stop"), actions)
+            session.value = session.value.copy(
+                status = "paused",
+                pausedAt = "2026-08-26T17:05:00Z",
+                pauseVersion = 1,
+            )
+        }
+        assertCompleteAction("Resume")
+        compose.onNodeWithText("Resume").performClick()
+        compose.onNodeWithText("Stop & calculate").assertIsDisplayed()
+        compose.runOnIdle { assertEquals("resume", actions.last()) }
     }
 
     @Test

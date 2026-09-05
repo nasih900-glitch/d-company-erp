@@ -485,11 +485,13 @@ function CategoryManagerModal({
   const notifications = useNotifications();
   const [name, setName] = useState('');
   const [sortOrder, setSortOrder] = useState('0');
+  const [gamingSales, setGamingSales] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
   const [editSortOrder, setEditSortOrder] = useState('0');
+  const [editGamingSales, setEditGamingSales] = useState<boolean | undefined>(undefined);
   const [rowBusy, setRowBusy] = useState<string | null>(null);
   const [deleteCategory, setDeleteCategory] = useState<MenuCategoryDTO | null>(null);
 
@@ -499,8 +501,9 @@ function CategoryManagerModal({
       await menuAdmin.createCategory({
         name: name.trim(),
         sort_order: parseInt(sortOrder, 10) || 0,
+        is_gaming_centre_catalog: gamingSales,
       });
-      setName(''); setSortOrder('0');
+      setName(''); setSortOrder('0'); setGamingSales(false);
       onChanged();
       notifications.success('The category was created.', { title: 'Category saved' });
     } catch (e) { setErr((e as Error).message); }
@@ -508,7 +511,10 @@ function CategoryManagerModal({
   }
 
   function startEdit(c: MenuCategoryDTO) {
-    setEditingId(c.id); setEditName(c.name); setEditSortOrder(String(c.sort_order));
+    setEditingId(c.id);
+    setEditName(c.name);
+    setEditSortOrder(String(c.sort_order));
+    setEditGamingSales(c.is_gaming_centre_catalog);
   }
 
   async function saveEdit(id: string) {
@@ -517,6 +523,11 @@ function CategoryManagerModal({
       await menuAdmin.updateCategory(id, {
         name: editName.trim(),
         sort_order: parseInt(editSortOrder, 10) || 0,
+        // During a rolling update an older server omits this field. Preserve
+        // its unknown value unless the owner explicitly changes the toggle.
+        ...(editGamingSales === undefined
+          ? {}
+          : { is_gaming_centre_catalog: editGamingSales }),
       });
       setEditingId(null);
       onChanged();
@@ -561,6 +572,11 @@ function CategoryManagerModal({
                       onChange={(e) => setEditName(e.target.value)} autoFocus/>
                     <input type="number" className="input !py-1.5 !w-20 font-mono" value={editSortOrder}
                       onChange={(e) => setEditSortOrder(e.target.value)} title="Sort order (lower shows first)"/>
+                    <label className="flex min-h-10 items-center gap-2 rounded-lg border border-bg-border px-2 text-xs">
+                      <input type="checkbox" checked={editGamingSales === true}
+                        onChange={(e) => setEditGamingSales(e.target.checked)}/>
+                      {editGamingSales === undefined ? 'Gaming visibility awaiting server' : 'Gaming sales'}
+                    </label>
                     <button type="button" className="btn btn-primary !py-1.5 !px-2"
                       disabled={rowBusy === c.id} onClick={() => saveEdit(c.id)}>
                       {rowBusy === c.id ? <Loader2 className="animate-spin" size={14}/> : 'Save'}
@@ -572,6 +588,19 @@ function CategoryManagerModal({
                 ) : (
                   <>
                     <span className="flex-1 text-sm font-medium">{c.name}</span>
+                    <span className={`rounded-full px-2 py-1 text-[11px] font-semibold ${
+                      c.is_gaming_centre_catalog === true
+                        ? 'bg-accent-good/10 text-accent-good'
+                        : c.is_gaming_centre_catalog === false
+                          ? 'bg-bg-raised text-fg-muted'
+                          : 'bg-accent-gold/10 text-accent-gold'
+                    }`}>
+                      {c.is_gaming_centre_catalog === true
+                        ? 'Gaming sales'
+                        : c.is_gaming_centre_catalog === false
+                          ? 'Future catalogue'
+                          : 'Awaiting server'}
+                    </span>
                     <span className="text-xs text-fg-muted font-mono">#{c.sort_order}</span>
                     <button type="button" className="btn btn-ghost !py-1.5 !px-2" onClick={() => startEdit(c)}>
                       <Edit2 size={13}/>
@@ -596,6 +625,16 @@ function CategoryManagerModal({
             <input type="number" className="input font-mono" value={sortOrder}
               onChange={(e) => setSortOrder(e.target.value)}/>
           </Field>
+          <label className="flex min-h-11 items-start gap-3 rounded-lg border border-bg-border bg-bg-raised p-3 text-sm">
+            <input type="checkbox" className="mt-0.5" checked={gamingSales}
+              onChange={(e) => setGamingSales(e.target.checked)}/>
+            <span>
+              <span className="block font-medium text-fg-primary">Show in Gaming and POS</span>
+              <span className="mt-0.5 block text-xs text-fg-muted">
+                Use this only for packaged drinks and crisps sold during gaming operations.
+              </span>
+            </span>
+          </label>
           <div className="flex justify-end gap-2 pt-2">
             <button type="button" className="btn btn-ghost" onClick={onClose}>Done</button>
             <button type="submit" className="btn btn-primary" disabled={busy}>

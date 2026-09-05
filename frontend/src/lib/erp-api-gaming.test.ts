@@ -13,6 +13,13 @@ vi.mock('./api', () => ({
 describe('gaming paid-extension API contract', () => {
   beforeEach(() => vi.clearAllMocks());
 
+  it('loads active, paused and payment-due sessions in one operational snapshot', async () => {
+    const board = [{ id: 'a', status: 'active' }, { id: 'p', status: 'paused' }, { id: 'e', status: 'ended' }];
+    vi.mocked(api.get).mockResolvedValue({ data: board });
+    await expect(gaming.listOperationalSessions()).resolves.toEqual(board);
+    expect(api.get).toHaveBeenCalledExactlyOnceWith('/gaming/sessions', { params: { unbilled_only: true, limit: 500 } });
+  });
+
   it('sends the caller-retained idempotency key', async () => {
     const response = {
       id: 'session-1',
@@ -88,6 +95,47 @@ describe('gaming paid-extension API contract', () => {
       undefined,
       { headers: { 'Idempotency-Key': 'gaming-stop:attempt-1' } },
     );
+  });
+
+  it('sends every protected legacy-pause CAS field with a caller-owned key', async () => {
+    const body = {
+      expected_status: 'paused' as const,
+      expected_paused_at: null,
+      expected_pause_version: 0 as const,
+      expected_end_at: null,
+      expected_order_id: null,
+      expected_billable_minutes: null,
+      expected_paused_duration_ms: 180_000,
+      expected_amount_minor: null,
+      ended_at: '2026-08-25T11:00:00.000Z',
+      billable_minutes: 57,
+      amount_minor: 9_500,
+      timing_evidence_reviewed: true as const,
+      reason: 'Reviewed station log and customer checkout time',
+    };
+    vi.mocked(api.post).mockResolvedValue({
+      data: { id: 'session-1', status: 'ended', amount_minor: 9_500 },
+    });
+
+    await gaming.resolveLegacyPausedSession(
+      'session-1',
+      body,
+      'gaming-legacy-pause-resolution:attempt-1',
+    );
+
+    expect(api.post).toHaveBeenCalledWith(
+      '/gaming/sessions/session-1/resolve-legacy-pause',
+      body,
+      { headers: { 'Idempotency-Key': 'gaming-legacy-pause-resolution:attempt-1' } },
+    );
+  });
+
+  it.each(['pause', 'resume'] as const)('sends %s with audit reason, version CAS and caller-owned identity', async (action) => {
+    const response = { id: 'session-1', status: action === 'pause' ? 'paused' : 'active', pause_version: 3 };
+    vi.mocked(api.post).mockResolvedValue({ data: response });
+    const body = { reason: action === 'pause' ? 'Controller replacement' : 'Continue session', expected_pause_version: 2 };
+    await expect(gaming[action === 'pause' ? 'pauseSession' : 'resumeSession']('session-1', body, 'pause-intent-1')).resolves.toEqual(response);
+    expect(api.post).toHaveBeenCalledWith(`/gaming/sessions/session-1/${action}`, body, { headers: { 'Idempotency-Key': 'pause-intent-1' } });
   });
 
   it('loads active and voided add-ons for one Gaming session', async () => {

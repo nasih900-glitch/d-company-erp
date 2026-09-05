@@ -89,6 +89,12 @@ were retained and a newly created, migrated database was used for final proof.
 
 ## Verification boundary
 
+The counts and migration revision in this section are the dated 4 September
+backend checkpoint, not the final frozen Code 24 gate. Later migrations and
+cross-client recovery work are recorded in
+[`../../docs/CODE24_PRODUCTION_AUDIT.md`](../../docs/CODE24_PRODUCTION_AUDIT.md)
+and must be validated together on the final source before push or deployment.
+
 The browser/Android agents completed a shared synthetic-tenant shift against the
 local HTTP API. Independent PostgreSQL reconciliation found three paid orders
 totaling 37,700 minor units: 20,000 cash plus 17,700 UPI. Opening float was 50,000;

@@ -117,21 +117,25 @@ fun RefundsScreen(vm: RefundsViewModel = viewModel()) {
                     value = when {
                         !state.online -> "Offline"
                         state.canManageMoney -> "Ready"
+                        state.canReconcileRefunds -> "Limited"
                         else -> "Locked"
                     },
                     detail = when {
                         !state.online -> "Requests queue; cash payout waits"
                         state.canManageMoney -> "Server reachable"
+                        state.canReconcileRefunds -> "Failed-payout reconciliation only"
                         else -> "Shift authority required"
                     },
                     icon = when {
                         !state.online -> Icons.Default.CloudOff
                         state.canManageMoney -> Icons.Default.Payments
+                        state.canReconcileRefunds -> Icons.Default.Warning
                         else -> Icons.Default.Lock
                     },
                     tone = when {
                         !state.online -> UiTone.Warning
                         state.canManageMoney -> UiTone.Success
+                        state.canReconcileRefunds -> UiTone.Warning
                         else -> UiTone.Danger
                     },
                     modifier = modifier,
@@ -141,10 +145,14 @@ fun RefundsScreen(vm: RefundsViewModel = viewModel()) {
 
         state.moneyAccessMessage?.let { message ->
             OperationalBanner(
-                title = "Refund money actions locked",
+                title = if (state.canReconcileRefunds) {
+                    "Refund money actions limited"
+                } else {
+                    "Refund money actions locked"
+                },
                 detail = message,
-                tone = UiTone.Danger,
-                icon = Icons.Default.Lock,
+                tone = if (state.canReconcileRefunds) UiTone.Warning else UiTone.Danger,
+                icon = if (state.canReconcileRefunds) Icons.Default.Warning else Icons.Default.Lock,
             )
         }
         if (!state.online) {
@@ -153,6 +161,14 @@ fun RefundsScreen(vm: RefundsViewModel = viewModel()) {
                 detail = "Requests can be preserved locally, but cash and provider payout starts require live server acceptance.",
                 tone = UiTone.Warning,
                 icon = Icons.Default.CloudOff,
+            )
+        }
+        state.refreshError?.takeIf { state.everSynced || state.tasks.isNotEmpty() }?.let { message ->
+            OperationalBanner(
+                title = "Refund records may be out of date",
+                detail = "$message No new payout is authorised by refreshing this screen.",
+                tone = UiTone.Warning,
+                icon = Icons.Default.Warning,
             )
         }
 
@@ -168,11 +184,11 @@ fun RefundsScreen(vm: RefundsViewModel = viewModel()) {
             },
             trailing = {
                 ErpButton(
-                    text = if (state.busy) "Checking…" else "Refresh",
+                    text = if (state.refreshing) "Refreshing…" else "Refresh",
                     onClick = vm::load,
                     intent = ActionIntent.Secondary,
-                    enabled = !state.busy,
-                    busy = state.busy,
+                    enabled = !state.busy && !state.refreshing,
+                    busy = state.refreshing,
                     leadingIcon = Icons.Default.Refresh,
                 )
             },
@@ -209,6 +225,13 @@ fun RefundsScreen(vm: RefundsViewModel = viewModel()) {
                                 busy = state.busy,
                                 online = state.online,
                                 protectedAccess = state.protectedAccess,
+                                canReconcileRefunds = state.canReconcileRefunds,
+                                canResolveProviderPayout = canResolveFailedProviderPayout(
+                                    task = task,
+                                    online = state.online,
+                                    canReconcileRefunds = state.canReconcileRefunds,
+                                    currentShiftIds = state.currentShiftIds,
+                                ),
                                 canManageMoney = state.canManageMoney,
                                 onCheckNow = vm::load,
                                 onRetry = vm::retryRejected,
@@ -243,7 +266,7 @@ fun RefundsScreen(vm: RefundsViewModel = viewModel()) {
                 }
 
                 when {
-                    state.orders.isEmpty() && !state.everSynced -> item("initial-sync") {
+                    state.orders.isEmpty() && !state.everSynced && state.refreshing -> item("initial-sync") {
                         Column(
                             Modifier.fillMaxWidth().heightIn(min = 240.dp),
                             horizontalAlignment = Alignment.CenterHorizontally,
@@ -255,13 +278,18 @@ fun RefundsScreen(vm: RefundsViewModel = viewModel()) {
                                 modifier = Modifier.padding(Spacing.md),
                                 color = Brand.Foreground,
                             )
-                            ErpButton(
-                                text = "Refresh",
-                                onClick = vm::load,
-                                intent = ActionIntent.Secondary,
-                                leadingIcon = Icons.Default.Refresh,
-                            )
                         }
+                    }
+
+                    state.orders.isEmpty() && !state.everSynced -> item("initial-sync-error") {
+                        DesignedEmptyState(
+                            title = "Refund records have not loaded",
+                            body = state.refreshError
+                                ?: "Connect to the server and refresh before requesting a refund. Saved tasks are not removed.",
+                            icon = Icons.Default.Warning,
+                            primaryLabel = "Try again",
+                            onPrimary = vm::load,
+                        )
                     }
 
                     state.visible.isEmpty() -> item("empty-orders") {
@@ -521,6 +549,8 @@ private fun RefundTaskCard(
     busy: Boolean,
     online: Boolean,
     protectedAccess: Boolean,
+    canReconcileRefunds: Boolean,
+    canResolveProviderPayout: Boolean,
     canManageMoney: Boolean,
     onCheckNow: () -> Unit,
     onRetry: (String) -> Unit,
@@ -722,13 +752,17 @@ private fun RefundTaskCard(
                     intent = ActionIntent.Destructive,
                     enabled = !busy && canManageMoney,
                 )
-                if (protectedAccess) {
+                if (canReconcileRefunds) {
                     ErpButton(
-                        text = if (online) "Resolve failed payout" else "Reconnect to resolve",
+                        text = when {
+                            !online -> "Reconnect to resolve"
+                            !canResolveProviderPayout -> "Open original shift to resolve"
+                            else -> "Resolve failed payout"
+                        },
                         onClick = onResolveProvider,
                         modifier = Modifier.weight(1f),
                         intent = ActionIntent.Secondary,
-                        enabled = !busy && online && canManageMoney,
+                        enabled = !busy && canResolveProviderPayout,
                     )
                 }
             }
@@ -1326,7 +1360,7 @@ private fun ResolveProviderPayoutDialog(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Text(
-                    "Protected-owner recovery only. Search the provider for this exact ${task.amountMinor.asRupees()} payout first. " +
+                    "Refund reconciliation access is required. Search the provider for this exact ${task.amountMinor.asRupees()} payout first. " +
                         "If it succeeded, stop and record its successful reference instead.",
                 )
                 Text("Verified provider outcome", color = Brand.ForegroundMuted)

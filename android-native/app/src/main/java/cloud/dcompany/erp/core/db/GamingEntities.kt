@@ -52,6 +52,11 @@ data class GamingSessionCacheEntity(
     val endAtMillis: Long? = null,
     val timerMinutes: Int? = null,
     val timerEndsAtMillis: Long? = null,
+    val pausedAtMillis: Long? = null,
+    val pausedDurationMs: Long? = null,
+    val pauseVersion: Int? = null,
+    @ColumnInfo(defaultValue = "0") val pauseAvailable: Boolean = false,
+    val lastPauseTransitionAtMillis: Long? = null,
     val billableMinutes: Int? = null,
     val amountMinor: Long? = null,
     /** Server-locked billing snapshot; never substitute the station's current price. */

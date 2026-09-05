@@ -55,15 +55,18 @@ internal data class ConnectivityMachineState(
     val retryAttempt: Int = 0,
     val requiresRecoveryStability: Boolean = false,
     val notifyValidatedReconnectWhenOnline: Boolean = false,
+    val awaitingDefaultCapabilities: Boolean = false,
 ) {
     val presentation: ConnectivityPresentation
         get() = ConnectivityPresentation(phase)
 }
 
 internal sealed interface ConnectivityEvent {
+    data object DefaultNetworkChanged : ConnectivityEvent
     data class NetworkChanged(
         val validated: Boolean,
         val notifyReconnect: Boolean,
+        val initialObservation: Boolean = false,
     ) : ConnectivityEvent
 
     data object BackendTransportFailure : ConnectivityEvent
@@ -98,6 +101,7 @@ internal class ConnectivityStateMachine(
 
     fun reduce(event: ConnectivityEvent): ConnectivityTransition {
         val transition = when (event) {
+            ConnectivityEvent.DefaultNetworkChanged -> defaultNetworkChanged()
             is ConnectivityEvent.NetworkChanged -> networkChanged(event)
             ConnectivityEvent.BackendTransportFailure -> backendFailed()
             ConnectivityEvent.BackendHttpResponse -> backendResponded()
@@ -111,9 +115,13 @@ internal class ConnectivityStateMachine(
 
     private fun networkChanged(event: ConnectivityEvent.NetworkChanged): ConnectivityTransition {
         val wasValidated = state.phase != ConnectivityPhase.NO_NETWORK
-        if (wasValidated == event.validated) return ConnectivityTransition(state)
+        if (wasValidated == event.validated && !state.awaitingDefaultCapabilities) {
+            return ConnectivityTransition(state)
+        }
 
         val generation = state.generation + 1L
+        val healthyHandover = event.validated && state.awaitingDefaultCapabilities &&
+            state.phase == ConnectivityPhase.ONLINE
         return if (!event.validated) {
             ConnectivityTransition(
                 state.copy(
@@ -123,25 +131,40 @@ internal class ConnectivityStateMachine(
                     retryAttempt = 0,
                     requiresRecoveryStability = false,
                     notifyValidatedReconnectWhenOnline = false,
+                    awaitingDefaultCapabilities = false,
                 ),
             )
         } else {
             ConnectivityTransition(
                 state.copy(
-                    phase = ConnectivityPhase.VERIFYING,
+                    phase = if (healthyHandover) ConnectivityPhase.ONLINE else ConnectivityPhase.VERIFYING,
                     generation = generation,
                     probeInFlight = true,
                     retryAttempt = 0,
-                    requiresRecoveryStability = event.notifyReconnect,
+                    requiresRecoveryStability = event.notifyReconnect && !healthyHandover &&
+                        !event.initialObservation,
                     notifyValidatedReconnectWhenOnline = event.notifyReconnect,
+                    awaitingDefaultCapabilities = false,
                 ),
                 listOf(ConnectivityEffect.StartProbe(generation)),
             )
         }
     }
 
+    private fun defaultNetworkChanged(): ConnectivityTransition = ConnectivityTransition(
+        state.copy(
+            // Keep the last presentation until the ordered capabilities arrive,
+            // but cancel every proof/timer belonging to the departed default.
+            generation = state.generation + 1L,
+            probeInFlight = false,
+            awaitingDefaultCapabilities = true,
+        ),
+    )
+
     private fun backendFailed(): ConnectivityTransition {
-        if (state.phase == ConnectivityPhase.NO_NETWORK) return ConnectivityTransition(state)
+        if (state.phase == ConnectivityPhase.NO_NETWORK || state.awaitingDefaultCapabilities) {
+            return ConnectivityTransition(state)
+        }
 
         // SERVER_UNREACHABLE is only entered after a failed /readyz proof. Once
         // that outage is authoritative, ordinary request failures must not
@@ -193,6 +216,7 @@ internal class ConnectivityStateMachine(
             state.phase == ConnectivityPhase.NO_NETWORK ||
             state.phase == ConnectivityPhase.ONLINE ||
             state.phase == ConnectivityPhase.RECOVERING ||
+            state.awaitingDefaultCapabilities ||
             state.probeInFlight
         ) return ConnectivityTransition(state)
 
@@ -289,7 +313,9 @@ internal class ConnectivityStateMachine(
         // case is not a reconnect: firing onBackOnline would unnecessarily
         // drain every outbox, reconnect the websocket and send a heartbeat,
         // which can churn otherwise stable operational screens.
-        if (previous.phase == ConnectivityPhase.ONLINE) return emptyList()
+        if (previous.phase == ConnectivityPhase.ONLINE && !previous.notifyValidatedReconnectWhenOnline) {
+            return emptyList()
+        }
 
         return buildList {
             if (previous.notifyValidatedReconnectWhenOnline) {
@@ -307,6 +333,30 @@ internal fun connectivityRetryDelayMillis(attempt: Int): Long = when (attempt.co
     else -> 30_000L
 }
 
+/**
+ * Ordered default-network callback facts, independent of Android for testing.
+ * A new default is followed by capabilities on API 26+, so availability alone
+ * must not invent an offline flash during a healthy network handover.
+ */
+internal class DefaultNetworkCallbackTracker<N : Any> {
+    private var currentNetwork: N? = null
+
+    fun available(network: N): Boolean {
+        if (network == currentNetwork) return false
+        currentNetwork = network
+        return true
+    }
+
+    fun capabilitiesChanged(network: N, validated: Boolean): Boolean? =
+        validated.takeIf { network == currentNetwork }
+
+    fun lost(network: N): Boolean? {
+        if (network != currentNetwork) return null
+        currentNetwork = null
+        return false
+    }
+}
+
 /** Android/network adapter around the pure serialized reducer above. */
 internal class ConnectivityObserver(
     context: Context,
@@ -317,6 +367,9 @@ internal class ConnectivityObserver(
     private val manager = context.getSystemService(ConnectivityManager::class.java)
     private val events = Channel<ConnectivityEvent>(Channel.UNLIMITED)
     private val machine = ConnectivityStateMachine()
+    private val networkCallbacks = DefaultNetworkCallbackTracker<Network>()
+    // Accessed only from the ordered Android callback thread.
+    private var receivedNetworkCapabilities = false
     private val started = AtomicBoolean(false)
 
     private val _presentation = MutableStateFlow(machine.state.presentation)
@@ -355,22 +408,35 @@ internal class ConnectivityObserver(
         this.onValidatedReconnect = onValidatedReconnect
         this.onBackOnline = onBackOnline
 
-        offerNetworkState(currentlyValidated(), notifyReconnect = false)
+        // Begin at NO_NETWORK and trust registration's ordered initial facts.
+        // A pre-registration snapshot can become stale without any callback
+        // reporting its loss if the network disappears during registration.
         manager?.registerDefaultNetworkCallback(
             object : ConnectivityManager.NetworkCallback() {
-                override fun onAvailable(network: Network) = refresh()
-                // A default-network handover can report the old Wi-Fi as lost
-                // after cellular (or another Wi-Fi) is already active. Treating
-                // that callback as proof of "no network" produced a false
-                // offline/online flash even though the tablet never lost
-                // validated internet. Re-read Android's current default for
-                // every callback instead of publishing the departed network's
-                // state as the whole-device state.
-                override fun onLost(network: Network) = refresh()
+                override fun onAvailable(network: Network) {
+                    if (networkCallbacks.available(network)) {
+                        offer(ConnectivityEvent.DefaultNetworkChanged)
+                    }
+                }
+
+                override fun onLost(network: Network) {
+                    networkCallbacks.lost(network)?.let {
+                        receivedNetworkCapabilities = true
+                        offerNetworkState(it)
+                    }
+                }
+
                 override fun onCapabilitiesChanged(
                     network: Network,
                     caps: NetworkCapabilities,
-                ) = refresh()
+                ) {
+                    networkCallbacks.capabilitiesChanged(network, caps.isValidatedInternet())
+                        ?.let {
+                            val initialObservation = !receivedNetworkCapabilities
+                            receivedNetworkCapabilities = true
+                            offerNetworkState(it, initialObservation = initialObservation)
+                        }
+                }
             },
         )
     }
@@ -438,19 +504,24 @@ internal class ConnectivityObserver(
         }
     }
 
-    private fun refresh() = offerNetworkState(currentlyValidated())
+    private fun offerNetworkState(validated: Boolean, initialObservation: Boolean = false) {
+        // Compatibility recheck is independently throttled by DCompanyApp;
+        // first validation after an offline launch must still request it.
+        // Initial capabilities skip only recovery's extra stability delay.
+        offer(
+            ConnectivityEvent.NetworkChanged(
+                validated,
+                notifyReconnect = true,
+                initialObservation = initialObservation,
+            ),
+        )
+    }
 
-    private fun offerNetworkState(validated: Boolean, notifyReconnect: Boolean = true) {
-        val result = events.trySend(ConnectivityEvent.NetworkChanged(validated, notifyReconnect))
+    private fun offer(event: ConnectivityEvent) {
+        val result = events.trySend(event)
         if (result.isFailure) {
             Log.e(CONNECTIVITY_LOG_TAG, "Could not enqueue Android connectivity state")
         }
-    }
-
-    private fun currentlyValidated(): Boolean {
-        val active = manager?.activeNetwork ?: return false
-        val caps = manager.getNetworkCapabilities(active) ?: return false
-        return caps.isValidatedInternet()
     }
 }
 

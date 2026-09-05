@@ -38,6 +38,31 @@ export type ShiftResolution =
   | { kind: 'no_open_shift' }
   | { kind: 'ambiguous_open_shifts'; shifts: ShiftDTO[] };
 
+export type ShiftPreconditionKind = Exclude<ShiftResolution['kind'], 'ready'>;
+
+/**
+ * A valid server response that means operational setup or state must change
+ * before work can continue. This is deliberately tagged so screens never
+ * present "no open shift" as a network/backend outage.
+ */
+export class OperationalContextError extends Error {
+  readonly code = 'operational_precondition';
+
+  constructor(readonly precondition: ShiftPreconditionKind, message: string) {
+    super(message);
+    this.name = 'OperationalContextError';
+  }
+}
+
+export function isOperationalContextError(error: unknown): error is OperationalContextError {
+  return error instanceof OperationalContextError
+    || (
+      typeof error === 'object'
+      && error !== null
+      && (error as { code?: unknown }).code === 'operational_precondition'
+    );
+}
+
 export type RealtimeShiftResolution = ShiftResolution
   | { kind: 'local_work_conflict'; shift: ShiftDTO };
 
@@ -417,7 +442,10 @@ export async function resolveRequiredOpenShift({
   });
   if (resolution.kind !== 'ready') {
     clearStoredShift();
-    throw new Error(shiftResolutionMessage(resolution));
+    throw new OperationalContextError(
+      resolution.kind,
+      shiftResolutionMessage(resolution),
+    );
   }
   storeShiftId(scope, resolution.shift.id);
   return resolution.shift.id;

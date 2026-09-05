@@ -128,17 +128,18 @@ class AndroidReleasePipelineTest(unittest.TestCase):
         self.assertIn("-Xmx4096m", build_job)
         self.assertIn("kotlin.compiler.execution.strategy=in-process", build_job)
         self.assertIn(
-            "gradle_release lintRelease\n          gradle_release lintDirectRelease",
+            "gradle_release :app:lintRelease\n"
+            "          gradle_release :app:lintDirectRelease",
             build_job,
         )
         self.assertIn(
-            "gradle_release testReleaseUnitTest\n"
-            "          gradle_release testDirectReleaseUnitTest",
+            "gradle_release :app:testReleaseUnitTest\n"
+            "          gradle_release :app:testDirectReleaseUnitTest",
             build_job,
         )
         self.assertIn(
-            "gradle_release assembleRelease bundleRelease\n"
-            "          gradle_release assembleDirectRelease",
+            "gradle_release :app:assembleRelease :app:bundleRelease\n"
+            "          gradle_release :app:assembleDirectRelease",
             build_job,
         )
         self.assertNotIn("lintRelease lintDirectRelease", build_job)

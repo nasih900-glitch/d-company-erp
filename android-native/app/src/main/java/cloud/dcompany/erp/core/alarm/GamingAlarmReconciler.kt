@@ -49,7 +49,11 @@ internal fun gamingAlarmCandidates(
         .filter { it.status == "active" }
         .mapNotNull { row ->
             val overlay = localByServerId[row.id]
-            val endsAt = when (overlay?.state) {
+            val endsAt = if (row.pauseVersion != null) {
+                // A resumed server deadline includes precise completed pause
+                // time. Never replace it with a pre-pause local snapshot.
+                row.timerEndsAtMillis
+            } else when (overlay?.state) {
                 null -> row.timerEndsAtMillis
                 GamingSessionState.START_SYNCED,
                 GamingSessionState.STOP_PENDING,
@@ -68,7 +72,7 @@ internal fun gamingAlarmCandidates(
         }
     val fromLocal = local.asSequence()
         .filter {
-            it.timerEndsAtMillis != null &&
+            it.timerEndsAtMillis != null && it.status != "paused" &&
                 (
                     it.state == GamingSessionState.START_PENDING ||
                         it.state == GamingSessionState.START_SYNCED ||

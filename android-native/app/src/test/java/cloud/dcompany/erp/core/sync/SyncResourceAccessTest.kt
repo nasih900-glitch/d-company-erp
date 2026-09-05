@@ -105,10 +105,10 @@ class SyncResourceAccessTest {
 
         val retained = setOf(
             "shifts", "gaming", "menu", "orders", "receipts", "customers",
-            "staff", "attendance", "inventory", "finance", "settings",
+            "staff", "attendance", "inventory", "finance", "settings", "refunds",
         )
         val hidden = setOf(
-            "tables", "kitchen", "events", "memberships", "reservations", "refunds",
+            "tables", "kitchen", "events", "memberships", "reservations",
         )
 
         assertEquals(retained, retained.filterTo(linkedSetOf(), access::canPull))

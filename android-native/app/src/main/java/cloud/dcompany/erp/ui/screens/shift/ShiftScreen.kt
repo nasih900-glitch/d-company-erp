@@ -84,9 +84,7 @@ import cloud.dcompany.erp.ui.components.UiTone
 import cloud.dcompany.erp.ui.components.ViewOnlyNotice
 import cloud.dcompany.erp.ui.components.TouchMoneyEntry
 import cloud.dcompany.erp.ui.components.WholeNumberStepper
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
+import cloud.dcompany.erp.ui.screens.businessDateTime
 
 internal data class ShiftLegacyMoneyRow(
     val label: String,
@@ -292,16 +290,22 @@ internal fun CompactShiftPanels(
 @Composable
 private fun ShiftSummaryRow(state: ShiftUiState) {
     val open = state.open
+    val confirming = open != null && open.server == null && open.local?.serverShiftId == null
     val opener = open?.openedByName?.takeIf(String::isNotBlank)
         ?: open?.openedByEmail?.takeIf(String::isNotBlank)
     val cards: List<@Composable (Modifier) -> Unit> = listOf(
         { modifier ->
             CompactStatCard(
                 label = "Shift status",
-                value = if (open == null) "Closed" else "Open",
-                detail = if (open == null) "Billing requires a shift" else "Billing is available",
+                value = if (open == null) "Closed" else if (confirming) "Saved" else "Open",
+                detail = when {
+                    open == null -> "Billing requires a shift"
+                    confirming && state.offlineGamingSupported -> "Offline work can continue"
+                    confirming -> "Gaming needs server confirmation"
+                    else -> "Billing is available"
+                },
                 icon = Icons.Filled.LockClock,
-                tone = if (open == null) UiTone.Warning else UiTone.Success,
+                tone = if (open == null || confirming) UiTone.Warning else UiTone.Success,
                 modifier = modifier,
             )
         },
@@ -419,6 +423,7 @@ private fun OpenShiftCard(state: ShiftUiState, vm: ShiftViewModel, canOpen: Bool
         busy = state.busy,
         canOpen = canOpen,
         blockedByRejectedShift = state.rejectedShift != null,
+        offlineGamingSupported = state.offlineGamingSupported,
         onOpenShift = vm::openShift,
     )
 }
@@ -431,6 +436,7 @@ internal fun OpenShiftForm(
     canOpen: Boolean,
     blockedByRejectedShift: Boolean,
     onOpenShift: (Long) -> Unit,
+    offlineGamingSupported: Boolean = false,
 ) {
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -445,6 +451,22 @@ internal fun OpenShiftForm(
         subtitle = "Record the drawer cash before accepting the first payment.",
         icon = Icons.Filled.AccountBalanceWallet,
         modifier = Modifier.fillMaxWidth(),
+        action = {
+            ErpButton(
+                text = "Open shift with ${floatMinor.asRupees()}",
+                onClick = {
+                    keyboardController?.hide()
+                    focusManager.clearFocus(force = true)
+                    // Move focus off the money field before replacing the
+                    // form so OEM focus restoration cannot reopen the IME.
+                    submitFocusRequester.requestFocus()
+                    onOpenShift(floatMinor)
+                },
+                enabled = canOpen && validFloat && !blockedByRejectedShift,
+                busy = busy,
+                modifier = Modifier.focusRequester(submitFocusRequester),
+            )
+        },
     ) {
         Text(
             "Billing remains blocked until the shift is open. The opening float may be ₹0.00 when the drawer starts empty.",
@@ -452,7 +474,11 @@ internal fun OpenShiftForm(
         )
         if (!online) {
             Text(
-                "No connection — the shift opens safely on this tablet and synchronises when connectivity returns.",
+                if (offlineGamingSupported) {
+                    "No connection — this verified workspace supports saving the shift and Gaming in order for automatic sync."
+                } else {
+                    "No connection — the shift can be saved, but reconnect to confirm it before starting Gaming."
+                },
                 color = Brand.Information,
                 style = MaterialTheme.typography.labelMedium,
             )
@@ -464,25 +490,6 @@ internal fun OpenShiftForm(
             enabled = canOpen && !busy && !blockedByRejectedShift,
             presetsMinor = listOf(0L, 50_000L, 100_000L),
             modifier = Modifier.fillMaxWidth(),
-        )
-        ErpButton(
-            text = "Open shift with ${floatMinor.asRupees()}",
-            onClick = {
-                // The form is replaced immediately after a successful open.
-                // Clear its IME focus first so the old numeric keyboard cannot
-                // cover the newly rendered close-shift panel.
-                keyboardController?.hide()
-                focusManager.clearFocus(force = true)
-                // Compose buttons do not necessarily take focus after a
-                // touch/semantics click. Move focus explicitly so OEM focus
-                // restoration cannot put the IME back on the money field
-                // while the open request is in flight.
-                submitFocusRequester.requestFocus()
-                onOpenShift(floatMinor)
-            },
-            enabled = canOpen && validFloat && !blockedByRejectedShift,
-            busy = busy,
-            modifier = Modifier.fillMaxWidth().focusRequester(submitFocusRequester),
         )
     }
 }
@@ -1326,7 +1333,7 @@ private fun ShiftOwnershipSummary(
 }
 
 private fun formatHistoryDate(epochMillis: Long): String =
-    SimpleDateFormat("dd MMM, HH:mm", Locale.getDefault()).format(Date(epochMillis))
+    epochMillis.businessDateTime()
 
 @Composable
 private fun HistoryRow(s: ShiftHistoryRow) {

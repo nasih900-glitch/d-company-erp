@@ -48,7 +48,7 @@ def _payload(**overrides) -> ExpenseCreate:
         "branch_id": BRANCH_ID,
         "category_id": CATEGORY_ID,
         "amount_minor": 45_000,
-        "paid_via": "cash",
+        "paid_via": "upi",
         "paid_at": datetime(2026, 8, 22, 10, 0, tzinfo=UTC),
         "vendor_name": "Local Roasters",
         "invoice_no": "INV-2201",
@@ -120,7 +120,7 @@ async def test_create_expense_persists_correct_fields(monkeypatch) -> None:
     assert stored.company_id == COMPANY_ID
     assert stored.branch_id == BRANCH_ID
     assert stored.amount_minor == 45_000
-    assert stored.paid_via == "cash"
+    assert stored.paid_via == "upi"
     assert stored.vendor_name == "Local Roasters"
 
     assert result.id == stored.id
@@ -153,9 +153,31 @@ async def test_create_expense_is_idempotent_on_exact_replay(monkeypatch) -> None
             raise AssertionError(f"Replay attempted database mutation via {name}")
 
     response = await create_expense(
-        _payload(), _NoMutationSession(), _request(), _tenant(),
+        _payload(paid_via="cash"), _NoMutationSession(), _request(), _tenant(),
     )
     assert response == existing
+
+
+@pytest.mark.asyncio
+async def test_create_expense_rejects_new_cash_paid_out_before_business_mutation(
+    monkeypatch,
+) -> None:
+    async def reserve(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(finance_router, "check_or_reserve", reserve)
+    session = _CreateSession(branch=_branch(), category=_category())
+
+    with pytest.raises(
+        BusinessRuleError,
+        match="Cash paid-outs.*shift-linked drawer workflow",
+    ):
+        await create_expense(
+            _payload(paid_via="cash"), session, _request(), _tenant(),
+        )
+
+    assert session.added == []
+    assert session.flushes == 0
 
 
 @pytest.mark.asyncio

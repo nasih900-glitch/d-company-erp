@@ -41,6 +41,7 @@ data class ShiftUiState(
     val historyRefreshing: Boolean = false,
     val online: Boolean = false,
     val syncing: Boolean = false,
+    val offlineGamingSupported: Boolean = false,
     /** True only for the brief moment between tapping Open/Close and the local write landing — guards against a double-tap creating two rows. */
     val busy: Boolean = false,
     val operationError: String? = null,
@@ -154,6 +155,7 @@ class ShiftViewModel : ViewModel() {
         val syncing: Boolean,
         val profile: MeResponse?,
         val terminalName: String?,
+        val offlineGamingSupported: Boolean,
         val historyRefreshing: Boolean,
         val historyError: String?,
     )
@@ -222,6 +224,7 @@ class ShiftViewModel : ViewModel() {
                 syncing,
                 scope.first,
                 scope.second?.terminalName,
+                scope.second?.offlineShiftCaptureSupported == true,
                 historySync.first,
                 historySync.second,
             )
@@ -261,6 +264,7 @@ class ShiftViewModel : ViewModel() {
             historyRefreshing = session.historyRefreshing,
             online = online,
             syncing = syncing,
+            offlineGamingSupported = session.offlineGamingSupported,
             busy = interaction.busy,
             operationError = interaction.operationError,
             operationNotice = interaction.operationNotice,
@@ -363,10 +367,12 @@ class ShiftViewModel : ViewModel() {
                     return@launch
                 }
                 operationError.value = null
-                operationNotice.value = if (state.value.online) {
-                    "Shift opened on this tablet. Server confirmation is in progress; billing can begin."
+                operationNotice.value = if (state.value.offlineGamingSupported) {
+                    "Shift saved on this tablet. Gaming and supported POS work can continue offline. Saved work will sync in order; review any server conflict before taking payment again."
+                } else if (state.value.online) {
+                    "Shift saved on this tablet. POS work can be saved locally; wait for server confirmation before starting Gaming."
                 } else {
-                    "Shift opened safely on this tablet. Billing can begin, and it will sync automatically when the connection returns."
+                    "Shift saved offline. POS work can be saved locally. Reconnect to confirm this shift before starting Gaming; pending work will sync automatically."
                 }
                 app.sync.requestSync()
             } catch (_: Exception) {

@@ -3,9 +3,11 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { PosRefundRequestDTO } from '@/lib/erp-api';
 import { RefundTaskControls } from './RefundTaskControls';
+import { taskActionDisabledReason } from './RefundsScreen';
 import {
   allowedRefundActions,
   canAccessRefunds,
+  canReconcileRefunds,
   refundRailPolicy,
   refundStatusPresentation,
   type RefundActionContext,
@@ -63,7 +65,7 @@ const task: PosRefundRequestDTO = {
 const context: RefundActionContext = {
   userId: 'manager-1',
   protectedAccess: false,
-  adminSystemAccess: false,
+  refundReconcileAccess: false,
   currentShiftId: 'shift-1',
   canManageCurrentShift: true,
   online: true,
@@ -95,7 +97,7 @@ describe('web refund permission and state policy', () => {
     expect(allowedRefundActions(task, { ...context, outcomeUncertain: true })).toEqual([]);
   });
 
-  it('keeps provider failure resolution admin.system-only', () => {
+  it('requires the financial reconciliation permission, independently of audit access', () => {
     const providerTask = {
       ...task,
       settlement_method: 'upi' as const,
@@ -103,11 +105,74 @@ describe('web refund permission and state policy', () => {
       provider_payout_started_by: 'manager-1',
     };
     expect(allowedRefundActions(providerTask, {
-      ...context, protectedAccess: true, adminSystemAccess: false,
+      ...context, protectedAccess: true, refundReconcileAccess: false,
     })).toEqual(['settle_provider']);
     expect(allowedRefundActions(providerTask, {
-      ...context, protectedAccess: true, adminSystemAccess: true,
+      ...context, protectedAccess: true, refundReconcileAccess: true,
     })).toEqual(['settle_provider', 'resolve_provider']);
+  });
+
+  it('lets an exact reconciler resolve only a failed provider attempt on the same open shift', () => {
+    const providerTask = {
+      ...task,
+      settlement_method: 'upi' as const,
+      status: 'provider_payout_in_progress' as const,
+      provider_payout_started_by: 'shift-opener',
+      provider_payout_started_by_name: 'Shift opener',
+    };
+    const reconciler = {
+      ...context,
+      userId: 'reconciler',
+      canManageCurrentShift: false,
+      refundReconcileAccess: true,
+    };
+
+    expect(allowedRefundActions(providerTask, reconciler)).toEqual(['resolve_provider']);
+    expect(allowedRefundActions(providerTask, { ...reconciler, currentShiftId: 'other-shift' })).toEqual([]);
+    expect(allowedRefundActions(providerTask, { ...reconciler, online: false })).toEqual([]);
+    expect(allowedRefundActions(providerTask, { ...reconciler, outcomeUncertain: true })).toEqual([]);
+    expect(allowedRefundActions({
+      ...providerTask,
+      status: 'accepted_provider_due',
+    }, reconciler)).toEqual([]);
+    expect(allowedRefundActions(providerTask, {
+      ...reconciler,
+      refundReconcileAccess: false,
+    })).toEqual([]);
+  });
+
+  it('explains shift ownership without hiding same-shift failed-payout reconciliation', () => {
+    const providerTask = {
+      ...task,
+      settlement_method: 'upi' as const,
+      status: 'provider_payout_in_progress' as const,
+      provider_payout_started_by: 'shift-opener',
+    };
+    const currentShift = {
+      id: 'shift-1',
+      opened_by: 'shift-opener',
+      opened_by_name: 'Rafi',
+    } as Parameters<typeof taskActionDisabledReason>[0]['currentShift'];
+    const base = {
+      task: providerTask,
+      online: true,
+      uncertain: false,
+      currentShift,
+      canManageCurrentShift: false,
+      currentUserId: 'reconciler',
+      protectedAccess: false,
+      refundReconcileAccess: false,
+    };
+
+    expect(taskActionDisabledReason(base)).toContain('opened by Rafi');
+    expect(taskActionDisabledReason(base)).toContain('Refund reconciliation access');
+    expect(taskActionDisabledReason({ ...base, refundReconcileAccess: true })).toBeNull();
+  });
+
+  it('allows an operational owner with refund reconciliation permission without audit or system administration', () => {
+    expect(canReconcileRefunds({ roles: ['co_owner'], protected_access: true, audit_access: false, effective_permissions: ['pos.refund', 'pos.refund.reconcile'] })).toBe(true);
+    expect(canReconcileRefunds({ roles: ['super_owner'], protected_access: true, audit_access: true, effective_permissions: ['pos.refund', 'admin.system'] })).toBe(false);
+    expect(canReconcileRefunds({ protected_access: true })).toBe(false);
   });
 
   it('labels post-money accounting states with an explicit do-not-pay-again warning', () => {

@@ -8,7 +8,7 @@
  * Also "Push to Google Sheets" button — fires this report into the ERP Entries
  * tab in your sheet.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertTriangle, Calendar, Download, FileSpreadsheet, Loader2, Printer, ShieldCheck } from 'lucide-react';
 
 import { api } from '@/lib/api';
@@ -30,10 +30,12 @@ import {
   type CostingCoverageDTO,
   type ReceiptBusinessDTO,
 } from '@/lib/erp-api';
-import { pushToSheet, type SinkKind } from '@/lib/google-sheets';
+import { getSettings as getSheetSettings, pushToSheet, type ReportSinkKind } from '@/lib/google-sheets';
 import { useAuth } from '@/modules/auth/AuthContext';
 import { useNotifications } from '@/components/ui/Notifications';
 import { useRealtimeRefresh } from '@/hooks/useRealtimeRefresh';
+import { useLatestRequest } from '@/hooks/useLatestRequest';
+import { optionalCostingCoverage } from '@/modules/finance/partner-allocation';
 
 type Period = 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'half_yearly' | 'yearly';
 type HalfYear = 'H1' | 'H2';
@@ -137,6 +139,7 @@ interface TaxComplianceData {
 }
 
 export default function ReportsScreen() {
+  const requests = useLatestRequest();
   const notifications = useNotifications();
   const { me, demo } = useAuth();
   // Same gating shape as the sidebar's insights_reports nav items (see
@@ -148,10 +151,14 @@ export default function ReportsScreen() {
   const canViewCosting = Boolean(demo || me?.protected_access || me?.accessible_modules?.includes('finance'));
   const [period, setPeriod] = useState<Period>('daily');
   const [report, setReport] = useState<ReportData | null>(null);
+  const [reportPeriod, setReportPeriod] = useState<Period>('daily');
   const [taxHealth, setTaxHealth] = useState<TaxComplianceData | null>(null);
   const [costing, setCosting] = useState<CostingCoverageDTO | null>(null);
   const [taxError, setTaxError] = useState<string | null>(null);
   const [loading, setLoading] = useState(LIVE_MODE);
+  const [refreshing, setRefreshing] = useState(false);
+  const [pushing, setPushing] = useState(false);
+  const pushInFlight = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [receiptIdentity, setReceiptIdentity] = useState<ReceiptBusinessDTO | null>(null);
   const [timezoneReady, setTimezoneReady] = useState(!LIVE_MODE);
@@ -174,37 +181,39 @@ export default function ReportsScreen() {
 
   const load = useCallback(async (silent = false) => {
     if (!timezoneReady) return;
+    const isCurrent = requests.begin();
     if (!silent) setLoading(true);
-    setError(null);
-    setTaxError(null);
+    setRefreshing(true);
     try {
-      const data = await fetchReport(period, { onDate, weekDate, month, year, quarter, halfYear });
-      setReport(data);
+      const [data, nextCosting] = await Promise.all([
+        fetchReport(period, { onDate, weekDate, month, year, quarter, halfYear }),
+        LIVE_MODE && canViewCosting ? optionalCostingCoverage(() => insights.costingCoverage()) : Promise.resolve(null),
+      ]);
+      let nextTaxHealth: TaxComplianceData | null = null;
+      let nextTaxError: string | null = null;
       if (TAX_COMPLIANCE_UI_ENABLED) {
         try {
-          setTaxHealth(await fetchTaxCompliance(data.period_start, data.period_end));
+          nextTaxHealth = await fetchTaxCompliance(data.period_start, data.period_end);
         } catch (taxIssue) {
-          setTaxHealth(null);
-          setTaxError((taxIssue as Error).message);
+          nextTaxError = (taxIssue as Error).message;
         }
-      } else {
-        setTaxHealth(null);
       }
-      if (LIVE_MODE && canViewCosting) {
-        try {
-          setCosting(await insights.costingCoverage());
-        } catch {
-          setCosting(null);
-        }
-      } else {
+      if (!isCurrent()) return;
+      setReport(data);
+      setReportPeriod(period);
+      setTaxHealth(nextTaxHealth);
+      setTaxError(nextTaxError);
+      setCosting(nextCosting);
+      setError(null);
+    } catch (e) {
+      if (isCurrent()) {
+        setError((e as Error).message);
         setCosting(null);
       }
-    } catch (e) {
-      setError((e as Error).message);
     } finally {
-      if (!silent) setLoading(false);
+      if (isCurrent()) { setLoading(false); setRefreshing(false); }
     }
-  }, [canViewCosting, halfYear, month, onDate, period, quarter, timezoneReady, weekDate, year]);
+  }, [canViewCosting, halfYear, month, onDate, period, quarter, requests, timezoneReady, weekDate, year]);
 
   useEffect(() => { void load(); }, [load]);
   useRealtimeRefresh({
@@ -242,8 +251,11 @@ export default function ReportsScreen() {
   }, []);
 
   async function pushToSheets() {
-    if (!report) return;
-    const ok = await pushToSheet(`${period}_report` as SinkKind, {
+    if (!report || loading || refreshing || error || pushInFlight.current) return;
+    pushInFlight.current = true;
+    setPushing(true);
+    try {
+    const ok = await pushToSheet(`${reportPeriod}_report` as ReportSinkKind, {
       date: report.period_start,
       time: new Date().toTimeString().slice(0, 5),
       period_id: report.label,
@@ -264,14 +276,20 @@ export default function ReportsScreen() {
       net_profit_minor: report.net_profit_minor,
     });
     if (ok) {
-      notifications.success('Report pushed to the ERP Entries tab in Google Sheets.', {
+      notifications.success('The configured Google Sheets webhook confirmed this report was saved.', {
         title: 'Google Sheets updated',
       });
     } else {
-      notifications.error('Check the Google Sheets connection in Settings and try again.', {
+      const issue = getSheetSettings().last_error;
+      notifications.error(issue?.includes('unknown kind')
+        ? 'The connected Google Sheets script does not support this report period. Redeploy the current script from Settings → Google Sheets, or use Export CSV. Your ERP report is still saved.'
+        : 'Check the Google Sheets connection in Settings and try again. Your ERP report is still saved; Export CSV is also available.', {
         title: 'Could not push report',
       });
     }
+    } catch {
+      notifications.error('The Google Sheets request could not be confirmed. Check Settings → Google Sheets before retrying. Your ERP report is still saved; Export CSV is available.', { title: 'Could not push report' });
+    } finally { pushInFlight.current = false; setPushing(false); }
   }
 
   async function exportPeriodCsv() {
@@ -360,17 +378,17 @@ export default function ReportsScreen() {
           <p className="text-fg-muted text-sm">Gaming, counter sales and shift reconciliation</p>
         </div>
         <div className="flex gap-2">
-          <button onClick={() => window.print()} className="btn btn-ghost">
+          <button onClick={() => window.print()} className="btn btn-ghost" disabled={!report || loading || refreshing || Boolean(error)}>
             <Printer size={14}/> Print / Save PDF
           </button>
           {LIVE_MODE && canExport && (
-            <button onClick={exportPeriodCsv} className="btn btn-ghost" disabled={!report || exportingPeriod}>
+            <button onClick={exportPeriodCsv} className="btn btn-ghost" disabled={!report || loading || refreshing || Boolean(error) || exportingPeriod}>
               {exportingPeriod ? <Loader2 size={14} className="animate-spin"/> : <Download size={14}/>}
               Export CSV
             </button>
           )}
-          <button onClick={pushToSheets} className="btn btn-primary">
-            <FileSpreadsheet size={14}/> Push to Sheets
+          <button onClick={() => void pushToSheets()} className="btn btn-primary" disabled={!report || loading || refreshing || Boolean(error) || pushing}>
+            {pushing ? <Loader2 size={14} className="animate-spin"/> : <FileSpreadsheet size={14}/>} {pushing ? 'Sending…' : 'Push to Sheets'}
           </button>
         </div>
       </header>
@@ -392,24 +410,24 @@ export default function ReportsScreen() {
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-[auto_repeat(3,minmax(0,200px))] sm:items-center">
           <Calendar size={16} className="hidden text-fg-muted sm:block"/>
           {period === 'daily' && (
-            <input type="date" value={onDate} onChange={(e) => setOnDate(e.target.value)}
+            <input aria-label="Report date" type="date" value={onDate} onChange={(e) => setOnDate(e.target.value)}
               className="input !min-h-[40px] !py-2 sm:max-w-[200px]"/>
           )}
           {period === 'weekly' && (
-            <input type="date" value={weekDate} onChange={(e) => setWeekDate(e.target.value)}
+            <input aria-label="Week containing date" type="date" value={weekDate} onChange={(e) => setWeekDate(e.target.value)}
               className="input !min-h-[40px] !py-2 sm:max-w-[200px]"/>
           )}
           {period === 'monthly' && (
-            <input type="month" value={month} onChange={(e) => setMonth(e.target.value)}
+            <input aria-label="Report month" type="month" value={month} onChange={(e) => setMonth(e.target.value)}
               className="input !min-h-[40px] !py-2 sm:max-w-[200px]"/>
           )}
           {(period === 'quarterly' || period === 'half_yearly' || period === 'yearly') && (
-            <input type="text" value={year} onChange={(e) => setYear(e.target.value)}
+            <input aria-label="Financial year" type="text" value={year} onChange={(e) => setYear(e.target.value)}
               placeholder="2026-27"
               className="input !min-h-[40px] !py-2 sm:max-w-[120px]"/>
           )}
           {period === 'quarterly' && (
-            <select value={quarter} onChange={(e) => setQuarter(Number(e.target.value))}
+            <select aria-label="Financial quarter" value={quarter} onChange={(e) => setQuarter(Number(e.target.value))}
               className="input !min-h-[40px] !py-2 sm:max-w-[160px]">
               <option value={1}>Q1 (Apr-Jun)</option>
               <option value={2}>Q2 (Jul-Sep)</option>
@@ -418,7 +436,7 @@ export default function ReportsScreen() {
             </select>
           )}
           {period === 'half_yearly' && (
-            <select value={halfYear} onChange={(e) => setHalfYear(e.target.value as HalfYear)}
+            <select aria-label="Financial half-year" value={halfYear} onChange={(e) => setHalfYear(e.target.value as HalfYear)}
               className="input !min-h-[40px] !py-2 sm:max-w-[160px]">
               <option value="H1">H1 (Apr-Sep)</option>
               <option value="H2">H2 (Oct-Mar)</option>
@@ -427,7 +445,12 @@ export default function ReportsScreen() {
         </div>
       </div>
 
-      {error && <p className="text-accent-bad text-sm mb-3 print:hidden">{error}</p>}
+      {error && <div className="card mb-3 border-accent-bad/50 text-sm print:hidden" role="alert">
+        <p>{error}</p>
+        {report && <p className="mt-1 text-fg-muted">Showing the last verified report: {report.label}. It may not match your current selection. Refresh before exporting or distributing figures.</p>}
+        <button className="btn btn-ghost mt-2" onClick={() => void load()} disabled={refreshing}>Retry report</button>
+      </div>}
+      {refreshing && !loading && <p className="text-xs text-fg-muted mb-2" role="status">Refreshing report… saved figures remain visible.</p>}
 
       {loading && (
         <div className="flex items-center justify-center py-12 text-fg-muted">
@@ -440,12 +463,12 @@ export default function ReportsScreen() {
         <article className="print:text-black">
           <header className="mb-4 pb-4 border-b border-bg-border print:border-black/30">
             <h3 className="text-xl font-bold">
-              {period === 'daily' && 'Daily P&L'}
-              {period === 'weekly' && 'Weekly P&L'}
-              {period === 'monthly' && 'Monthly P&L'}
-              {period === 'quarterly' && 'Quarterly P&L'}
-              {period === 'half_yearly' && 'Half-yearly P&L'}
-              {period === 'yearly' && 'Annual P&L'}
+              {reportPeriod === 'daily' && 'Daily P&L'}
+              {reportPeriod === 'weekly' && 'Weekly P&L'}
+              {reportPeriod === 'monthly' && 'Monthly P&L'}
+              {reportPeriod === 'quarterly' && 'Quarterly P&L'}
+              {reportPeriod === 'half_yearly' && 'Half-yearly P&L'}
+              {reportPeriod === 'yearly' && 'Annual P&L'}
               <span className="ml-3 text-fg-muted print:text-black/60 font-normal">
                 {report.label}
               </span>
@@ -464,17 +487,17 @@ export default function ReportsScreen() {
             <KPI label="Tickets" value={report.tickets_count.toString()}/>
             <KPI label="Avg ticket" value={inr(report.avg_ticket_minor)}/>
             <KPI label="Net revenue" value={inr(report.net_revenue_minor)}/>
-            <KPI label="Profit margin" value={percent(report.net_profit_minor, report.net_revenue_minor)}
-              tone={report.net_profit_minor >= 0 ? 'good' : 'bad'}/>
+            <KPI label={costing?.is_complete === true ? 'Profit margin' : 'Provisional margin'} value={percent(report.net_profit_minor, report.net_revenue_minor)}
+              tone={report.net_profit_minor < 0 ? 'bad' : costing?.is_complete === true ? 'good' : undefined}/>
             <KPI label="Cost ratio" value={percent(report.cogs_minor + report.expense_total_minor, report.net_revenue_minor)}
               tone={report.cogs_minor + report.expense_total_minor <= report.net_revenue_minor ? 'good' : 'bad'}/>
-            <KPI label="Net profit" value={inr(report.net_profit_minor)}
-              tone={report.net_profit_minor >= 0 ? 'good' : 'bad'}/>
+            <KPI label={costing?.is_complete === true ? 'Net profit' : 'Provisional net profit'} value={inr(report.net_profit_minor)}
+              tone={report.net_profit_minor < 0 ? 'bad' : costing?.is_complete === true ? 'good' : undefined}/>
           </div>
 
-          {costing && !costing.is_complete && (
+          {costing?.is_complete !== true && (
             <div className="card mb-4 border-accent-bad/50 bg-accent-bad/10 text-sm print:border print:border-black/40">
-              <b>Provisional profit: {costing.incomplete_item_count} sellable inventory item{costing.incomplete_item_count === 1 ? '' : 's'} lack complete costing.</b>{' '}
+              <b>{costing ? `Provisional profit: ${costing.incomplete_item_count} sellable inventory item${costing.incomplete_item_count === 1 ? '' : 's'} lack complete costing.` : 'Provisional profit: costing coverage is unavailable.'}</b>{' '}
               Recorded COGS excludes unknown recipe or ingredient costs, so gross and net profit may be overstated.
               Resolve these items in Menu and Inventory before using this report for partner distributions.
             </div>

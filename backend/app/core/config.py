@@ -50,6 +50,9 @@ class Settings(BaseSettings):
     database_pool_size: int = 10
     database_max_overflow: int = 20
     database_echo: bool = False
+    # Keep new pause writes off until the owner upgrades active tablets. Older
+    # clients cannot freeze their display precisely; resume/stop remain usable.
+    gaming_pause_enabled: bool = False
 
     # ----- redis / queue -----
     redis_url: RedisDsn = Field(default="redis://localhost:6379/0")  # type: ignore[arg-type]

@@ -41,11 +41,10 @@ change their identity, or lower the compatibility floor.
 
 ## Current rollout boundary
 
-`3.1.3` (version code `14`) is the manual, update-capable partner baseline. Send
-that exact signed APK to the partner only after the coordinated production
-deployment and smoke test pass. Code `14` must remain unhosted, unregistered and
-unadvertised; it is the package from which the server-delivery upgrade is
-tested.
+`3.1.3` (version code `14`) is historical manual-partner baseline evidence. It
+must remain unhosted, unregistered and unadvertised; it is not the current
+rollout target or upgrade predecessor. Code `21` (`3.1.10`) is the signed
+direct-channel predecessor from which the Code 24 upgrade must be tested.
 
 Code `15` (`3.1.4`) is the first identity accepted by the server-release
 registry. It remains a held audit build and must never be activated as a
@@ -56,12 +55,16 @@ Tags `v3.1.7` (version code `18`), `v3.1.8` (version code `19`), and `v3.1.9`
 (version code `20`) failed before signing and produced no authorised APK. The
 tags are immutable and must never be moved, rebuilt, or reused. Code `21`
 (`3.1.10`) is immutable signed predecessor history. Code `22` (`3.1.11`) was
-superseded before signing and its waiting signing job must not be approved. The
-current server-delivery candidate is `3.1.12` (version code `23`). Only the
-exact signed artifact and release manifest produced together by the green
-`v3.1.12` GitHub Actions workflow may be staged. A local Gradle build or
+superseded before signing and its waiting signing job must not be approved.
+Code `23` (`3.1.12`) was also superseded without an authorised signed artifact.
+The current server-delivery candidate is the **unsigned** `3.1.13` (version code
+`24`) source at migration `0071`. Only an exact signed artifact and release
+manifest produced together by a future green `v3.1.13` GitHub Actions workflow
+may be staged. A local Gradle build or
 local evidence bundle is not release authority, even when its package and
-signer are correct.
+signer are correct. Code `21` (`3.1.10`) remains the signed same-channel
+predecessor for in-place upgrade proof. Code 24 is not currently signed,
+deployed, staged, activated, approved or partner-installable.
 
 Keep the minimum-compatible floor at code `8` during the initial rollout. A
 new build, a green workflow, a hosted APK, or a staged registry row is not
@@ -119,11 +122,12 @@ responses and network uncertainty remain blocked. The APK itself must return:
 - `Cache-Control: public, immutable, no-transform, max-age=31536000` (or longer)
 - no redirect from its same-origin versioned URL
 
-## Code 23 staging procedure
+## Code 24 staging procedure
 
 1. Confirm the code-`21` partner installation is signed by the trusted
    certificate, can check for updates, and has no pending offline work.
-2. Coordinate the application at `3.1.12` / code `23`. Run the complete
+2. Coordinate the application at `3.1.13` / code `24`, with database migrations
+   through `0071`. Run the complete
    release workflow and obtain its signed direct APK and
    `release-manifest.json` from the same workflow run.
 3. Download both files without renaming or modifying either one. First run a
@@ -131,8 +135,8 @@ responses and network uncertainty remain blocked. The APK itself must return:
 
    ```bash
    python3 ops/stage_android_release.py \
-     --manifest /secure/release-3.1.12/release-manifest.json \
-     --apk /secure/release-3.1.12/d-company-erp-v3.1.12-direct.apk \
+     --manifest /secure/release-3.1.13/release-manifest.json \
+     --apk /secure/release-3.1.13/d-company-erp-v3.1.13-direct.apk \
      --expected-signer-sha256 <trusted-release-certificate-sha256> \
      --release-notes "Gaming Centre billing and accountable shared-shift closing"
    ```
@@ -145,8 +149,8 @@ responses and network uncertainty remain blocked. The APK itself must return:
 
    ```bash
    python3 ops/stage_android_release.py \
-     --manifest /secure/release-3.1.12/release-manifest.json \
-     --apk /secure/release-3.1.12/d-company-erp-v3.1.12-direct.apk \
+     --manifest /secure/release-3.1.13/release-manifest.json \
+     --apk /secure/release-3.1.13/d-company-erp-v3.1.13-direct.apk \
      --expected-signer-sha256 <trusted-release-certificate-sha256> \
      --release-notes "Gaming Centre billing and accountable shared-shift closing" \
      --ssh-key ~/.ssh/dcompany_do \
@@ -160,11 +164,11 @@ responses and network uncertainty remain blocked. The APK itself must return:
    unadvertised immutable bytes; it must never cause a release offer.
 
 5. In the owner ERP release screen, compare version, release notes, SHA-256,
-   size, signer and source evidence. Activate only the staged code-`23` row.
+   size, signer and source evidence. Activate only the staged code-`24` row.
    The backend performs a second no-redirect public byte verification before the
    atomic status transition and records the owner action in the Audit Log.
 6. On one code-`21` tablet, refresh the update check, download, install and
-   reopen code `23`. Verify sign-in, shift, Gaming, POS settlement, offline queue
+   reopen code `24`. Verify sign-in, shift, Gaming, POS settlement, offline queue
    recovery and finance reconciliation before wider partner rollout.
 
 Do not activate an intermediate held build as its own update. Do not stage from an arbitrary

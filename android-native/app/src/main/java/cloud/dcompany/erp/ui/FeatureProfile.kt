@@ -68,15 +68,20 @@ data class WorkspaceFeatureProfile(
 }
 
 /**
- * A release-profile bridge until the backend exposes an explicit sales-channel
- * field on menu categories. Category taxonomy is less fragile than matching
- * individual product names, and the rule fails closed if a category is renamed
- * or assigned an incompatible item type.
+ * The category flag supplied by a 0070+ server is authoritative. The name map
+ * remains only as a rolling-upgrade bridge for an older server/cache where the
+ * flag is absent; it must never override an explicit false.
  */
 data class OperationalCatalogPolicy(
     private val allowedTypesByCategoryName: Map<String, Set<String>>,
     private val allowEveryAvailableItem: Boolean = false,
 ) {
+    private val allowedItemTypes = allowedTypesByCategoryName.values
+        .asSequence()
+        .flatten()
+        .map(::normalizeCatalogValue)
+        .toSet()
+
     init {
         require(allowEveryAvailableItem || allowedTypesByCategoryName.isNotEmpty())
         require(allowedTypesByCategoryName.keys.all(String::isNotBlank))
@@ -87,12 +92,16 @@ data class OperationalCatalogPolicy(
         categoryName: String?,
         itemType: String,
         isAvailable: Boolean,
+        isGamingCentreCatalog: Boolean? = null,
     ): Boolean {
         if (!isAvailable) return false
         if (allowEveryAvailableItem) return true
+        val normalizedItemType = normalizeCatalogValue(itemType)
+        if (normalizedItemType !in allowedItemTypes) return false
+        if (isGamingCentreCatalog != null) return isGamingCentreCatalog
         val allowedTypes = allowedTypesByCategoryName[normalizeCatalogValue(categoryName)]
             ?: return false
-        return normalizeCatalogValue(itemType) in allowedTypes
+        return normalizedItemType in allowedTypes
     }
 
     companion object {
@@ -146,6 +155,7 @@ object WorkspaceFeatureProfiles {
         enabled = setOf(
             WorkspaceFeature.Dashboard,
             WorkspaceFeature.Pos,
+            WorkspaceFeature.Refunds,
             WorkspaceFeature.Gaming,
             WorkspaceFeature.Shift,
             WorkspaceFeature.Inventory,
@@ -162,6 +172,7 @@ object WorkspaceFeatureProfiles {
             Destination.Dashboard,
             Destination.Gaming,
             Destination.Pos,
+            Destination.Refunds,
             Destination.Shift,
             Destination.Inventory,
             Destination.Menu,

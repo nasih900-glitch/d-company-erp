@@ -32,9 +32,14 @@ class TestExtraControllerSurcharge:
             extra_controllers=1, duration_minutes=15
         ) == EXTRA_CONTROLLER_MIN_CHARGE_MINOR
 
-    def test_two_hour_session_charges_per_hour_ceiling(self) -> None:
-        # 90 minutes ceils to 2 billable hours per controller.
+    def test_started_hour_boundaries_match_owner_policy(self) -> None:
+        # ₹30 for the first 60 minutes, ₹60 from minute 61 through minute 120,
+        # then ₹30 for each additional started hour.
+        assert extra_controller_surcharge_minor(extra_controllers=1, duration_minutes=60) == 3000
+        assert extra_controller_surcharge_minor(extra_controllers=1, duration_minutes=61) == 6000
         assert extra_controller_surcharge_minor(extra_controllers=1, duration_minutes=90) == 6000
+        assert extra_controller_surcharge_minor(extra_controllers=1, duration_minutes=120) == 6000
+        assert extra_controller_surcharge_minor(extra_controllers=1, duration_minutes=121) == 9000
 
     def test_multiple_extra_controllers_multiply_independently(self) -> None:
         assert extra_controller_surcharge_minor(extra_controllers=2, duration_minutes=60) == 6000

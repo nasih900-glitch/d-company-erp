@@ -93,6 +93,24 @@ class FinanceRefreshArchitectureTest {
             "Allocation reconciliation guidance is not shown on Overview and Partners",
             screen.split("state.allocationWarning?.let { AllocationUnavailableNotice(it) }").size == 3,
         )
+        assertTrue(
+            "Finance UI does not gate distribution amounts on the historical costing contract",
+            "authoritativeDistributionCapMinor()" in screen &&
+                "authoritativePartnerDistributionMinor(share)" in screen,
+        )
+        assertFalse(
+            "Finance UI still renders the legacy distribution cap directly",
+            "safeToDistributeMinor.asRupees()" in screen,
+        )
+        assertFalse(
+            "Finance UI still renders a legacy partner allocation directly",
+            "distributableShareMinor.asRupees()" in screen,
+        )
+        assertTrue(
+            "Incomplete historical costing has no actionable UI state",
+            "Partner distribution unavailable" in screen &&
+                "no amount is presented" in screen,
+        )
     }
 
     private fun mainSourceRoot(): Path {

@@ -32,6 +32,30 @@ from app.models.base import Base, TenantMixin, TimestampMixin, _uuid_pk
 class Shift(Base, TimestampMixin, TenantMixin):
     __tablename__ = "shifts"
     __table_args__ = (
+        UniqueConstraint("company_id", "opening_action_id", name="uq_shift_opening_action"),
+        CheckConstraint(
+            "(opening_action_id IS NULL AND opening_request_hash IS NULL AND NOT opening_was_offline) OR (opening_action_id IS NOT NULL AND opening_request_hash IS NOT NULL AND opening_received_at IS NOT NULL)",
+            name="ck_shift_opening_receipt",
+        ),
+        CheckConstraint(
+            "opening_received_at IS NULL OR opened_at <= opening_received_at",
+            name="ck_shift_capture_not_future",
+        ),
+        CheckConstraint(
+            "opening_protocol_revision IS NULL OR opening_protocol_revision = 1",
+            name="ck_shift_opening_protocol_revision",
+        ),
+        CheckConstraint(
+            "(opening_protocol_revision IS NULL AND opening_client_platform IS NULL) OR "
+            "(opening_protocol_revision = 1 AND opening_client_platform IN ('web', 'android', 'ios') "
+            "AND (opening_client_platform <> 'android' OR opening_action_id LIKE 'shift-open:%'))",
+            name="ck_shift_opening_client_identity",
+        ),
+        CheckConstraint(
+            "opening_client_installation_id IS NULL OR "
+            "(opening_protocol_revision = 1 AND opening_client_platform = 'android')",
+            name="ck_shift_opening_installation_identity",
+        ),
         CheckConstraint(
             "opening_float_minor >= 0",
             name="ck_shifts_opening_float_nonnegative",
@@ -56,6 +80,25 @@ class Shift(Base, TimestampMixin, TenantMixin):
         PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
     opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    opening_action_id: Mapped[str | None] = mapped_column(String(160))
+    opening_request_hash: Mapped[str | None] = mapped_column(String(64))
+    opening_received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    opening_was_offline: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"), nullable=False)
+    # NULL means the row predates migration 0069.  The default is installed
+    # only after old rows have been preserved as NULL, so unkeyed web opens
+    # are correctly distinguishable from genuinely legacy shift lifecycles.
+    opening_protocol_revision: Mapped[int | None] = mapped_column(
+        SmallInteger, default=1, server_default=text("1"), nullable=True
+    )
+    opening_client_platform: Mapped[str | None] = mapped_column(
+        String(20), default="web", server_default=text("'web'"), nullable=True
+    )
+    # Random app-installation identity, never a hardware identifier. It stays
+    # private to the close guard and is deliberately omitted from ShiftRead.
+    # NULL preserves pre-Code24 Android rows, which retain causal-key fallback.
+    opening_client_installation_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), nullable=True
+    )
     # Historical rows remain NULL because the pre-0066 schema did not retain
     # who closed them. New API closes record the authenticated operator once;
     # the database migration makes that attribution immutable thereafter.

@@ -138,13 +138,12 @@ import cloud.dcompany.erp.ui.components.VOID_REASON_OTHER_ID
 import cloud.dcompany.erp.ui.components.VoidReasonInput
 import cloud.dcompany.erp.ui.components.resolvedVoidReason
 import cloud.dcompany.erp.ui.screens.ProductConfigurationDialog
+import cloud.dcompany.erp.ui.screens.businessClockTime
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.theme.Spacing
 import cloud.dcompany.erp.ui.remote.RemoteSensitiveContent
 import java.time.Instant
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
 import java.util.Locale
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -196,9 +195,6 @@ private data class AddonVoidRequest(
     val session: GameSession,
     val addon: GamingSessionAddonUi,
 )
-
-private val timeFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("h:mm a")
-    .withZone(ZoneId.systemDefault())
 
 /**
  * Keeps fixed AlertDialog title/footer actions outside system navigation on
@@ -305,6 +301,7 @@ fun GamingScreen(
     var sending by remember { mutableStateOf<GameSession?>(null) }
     var cancelling by remember { mutableStateOf<GameSession?>(null) }
     var transferring by remember { mutableStateOf<GameSession?>(null) }
+    var pausing by remember { mutableStateOf<GameSession?>(null) }
     var extendingPackage by remember { mutableStateOf<PackageExtensionRequest?>(null) }
     var reconciling by remember { mutableStateOf<GameSession?>(null) }
     var repairingBilling by remember { mutableStateOf<GameSession?>(null) }
@@ -417,6 +414,7 @@ fun GamingScreen(
                         extendingPackage = PackageExtensionRequest(session, extensions)
                     },
                     onTransfer = { transferring = it },
+                    onPauseResume = { if (it.status == "paused") vm.resumeSession(it) else pausing = it },
                     onReconcile = { reconciling = it },
                     onRepairBilling = { repairingBilling = it },
                     onResolveLegacyStart = { resolvingLegacyStart = it },
@@ -617,6 +615,7 @@ fun GamingScreen(
                         canReconcileLegacy = access.canReconcileLegacySessions,
                         activeShiftId = state.activeShiftId,
                         activeShiftServerConfirmed = state.activeShiftServerConfirmed,
+                        activeShiftAllowsQueuedStart = state.activeShiftAllowsQueuedStart,
                         startTerminalBlockMessage = startTerminalBlockMessage,
                         online = state.online,
                         packages = state.packages,
@@ -633,6 +632,7 @@ fun GamingScreen(
                             extendingPackage = PackageExtensionRequest(session, extensions)
                         },
                         onTransfer = { transferring = it },
+                        onPauseResume = { if (it.status == "paused") vm.resumeSession(it) else pausing = it },
                         onReconcile = { reconciling = it },
                         onRepairBilling = { repairingBilling = it },
                         onResolveLegacyStart = { resolvingLegacyStart = it },
@@ -861,6 +861,18 @@ fun GamingScreen(
                 vm.cancelUnbilled(session, reason)
             },
         )
+        }
+    }
+
+    pausing?.takeIf { access.canManageSessions }?.let { session ->
+        RemoteSensitiveContent(enabled = true) {
+            PauseSessionDialog(
+                onDismiss = { pausing = null },
+                onPause = { reason ->
+                    pausing = null
+                    vm.pauseSession(session, reason)
+                },
+            )
         }
     }
 
@@ -1163,11 +1175,10 @@ private fun PosTargetShiftDialog(
 }
 
 internal fun posTargetShiftSupportingText(target: PosTargetShift): String {
-    val openedAt = runCatching { timeFormatter.format(Instant.parse(target.openedAt)) }
-        .getOrNull()
+    val openedAt = target.openedAt.businessClockTime()
     return buildString {
         append("Opened by ${target.openedByName}")
-        if (openedAt != null) append(" at $openedAt")
+        append(" at $openedAt")
     }
 }
 
@@ -1273,10 +1284,10 @@ private fun GamingMetrics(state: GamingUiState) {
         { modifier ->
             MetricCard(
                 title = "POS shift",
-                value = if (state.activeShiftId == null) "Required" else "Open",
-                detail = if (state.activeShiftId == null) "Open shift to start" else "Session starts enabled",
+                value = gamingShiftSummary(state.activeShiftId, state.activeShiftServerConfirmed, state.online, state.activeShiftAllowsQueuedStart).label,
+                detail = gamingShiftSummary(state.activeShiftId, state.activeShiftServerConfirmed, state.online, state.activeShiftAllowsQueuedStart).detail,
                 icon = Icons.Filled.Schedule,
-                tone = if (state.activeShiftId == null) UiTone.Warning else UiTone.Success,
+                tone = if (state.activeShiftId == null || !state.activeShiftServerConfirmed) UiTone.Warning else UiTone.Success,
                 modifier = modifier,
             )
         },
@@ -1351,6 +1362,7 @@ private fun GamingCommandWorkspace(
     onExtendTimer: (GameSession) -> Unit,
     onExtendPackage: (GameSession, List<GamingPackage>) -> Unit,
     onTransfer: (GameSession) -> Unit,
+    onPauseResume: (GameSession) -> Unit,
     onReconcile: (GameSession) -> Unit,
     onRepairBilling: (GameSession) -> Unit,
     onResolveLegacyStart: (GameSession) -> Unit,
@@ -1500,6 +1512,7 @@ private fun GamingCommandWorkspace(
                                 canReconcileLegacy = access.canReconcileLegacySessions,
                                 activeShiftId = state.activeShiftId,
                                 activeShiftServerConfirmed = state.activeShiftServerConfirmed,
+                                activeShiftAllowsQueuedStart = state.activeShiftAllowsQueuedStart,
                                 startTerminalBlockMessage = startTerminalBlockMessage,
                                 online = state.online,
                                 packages = state.packages,
@@ -1515,6 +1528,7 @@ private fun GamingCommandWorkspace(
                                 onExtendTimer = onExtendTimer,
                                 onExtendPackage = onExtendPackage,
                                 onTransfer = onTransfer,
+                                onPauseResume = onPauseResume,
                                 onReconcile = onReconcile,
                                 onRepairBilling = onRepairBilling,
                                 onResolveLegacyStart = onResolveLegacyStart,
@@ -1630,10 +1644,10 @@ private fun GamingCommandMetrics(state: GamingUiState) {
         )
         CompactStatCard(
             label = "Shift",
-            value = if (state.activeShiftId == null) "Required" else "Open",
-            detail = if (state.activeShiftId == null) "Start blocked" else "Ready",
+            value = gamingShiftSummary(state.activeShiftId, state.activeShiftServerConfirmed, state.online, state.activeShiftAllowsQueuedStart).label,
+            detail = gamingShiftSummary(state.activeShiftId, state.activeShiftServerConfirmed, state.online, state.activeShiftAllowsQueuedStart).detail,
             icon = Icons.Filled.Schedule,
-            tone = if (state.activeShiftId == null) UiTone.Warning else UiTone.Success,
+            tone = if (state.activeShiftId == null || !state.activeShiftServerConfirmed) UiTone.Warning else UiTone.Success,
             modifier = Modifier.weight(1f),
         )
     }
@@ -2070,6 +2084,7 @@ internal fun GamingStationCard(
     canReconcileLegacy: Boolean,
     activeShiftId: String?,
     activeShiftServerConfirmed: Boolean,
+    activeShiftAllowsQueuedStart: Boolean = false,
     startTerminalBlockMessage: String? = null,
     online: Boolean = true,
     packages: List<GamingPackage>,
@@ -2088,9 +2103,10 @@ internal fun GamingStationCard(
     onAddItems: (GameSession) -> Unit = {},
     onVoidAddon: (GameSession, GamingSessionAddonUi) -> Unit = { _, _ -> },
     onReviewRejectedAddon: (String) -> Unit = {},
+    onPauseResume: (GameSession) -> Unit = {},
 ) {
-    // A paused session must look paused. Without an authoritative paused-at
-    // field, freezing the local display is safer than inventing elapsed time.
+    // Only operational play ticks. Paused clocks use the server's captured
+    // pause instant, including after navigation or a process restart.
     val shouldTick = session?.status == "active" ||
         (session?.status == "starting" && session.localState == GamingSessionState.START_PENDING)
     // Re-capture when the authoritative status changes. Keying only by id made
@@ -2279,12 +2295,12 @@ internal fun GamingStationCard(
                 text = when {
                     startTerminalBlockMessage != null -> "Change terminal"
                     activeShiftId == null -> "Open POS shift to start"
-                    !activeShiftServerConfirmed -> "Waiting for shift sync"
+                    !activeShiftServerConfirmed && !activeShiftAllowsQueuedStart -> "Waiting for shift sync"
                     else -> "Start session"
                 },
                 onClick = onStart,
                 enabled = actionsEnabled && startTerminalBlockMessage == null &&
-                    activeShiftId != null && activeShiftServerConfirmed,
+                    activeShiftId != null && (activeShiftServerConfirmed || activeShiftAllowsQueuedStart),
                 busy = busyHere,
                 // Several available stations may be visible at once. A quiet
                 // repeated action keeps Review/Send as the dominant workflow.
@@ -2326,36 +2342,52 @@ internal fun GamingStationCard(
                     leadingIcon = Icons.Filled.RestaurantMenu,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                    ErpButton(
-                        text = if (session?.isPackageBilling() == true) "Extend" else "+30 min",
-                        onClick = {
-                            session?.let {
-                                if (it.isPackageBilling()) onExtendPackage(it, matchingExtensions)
-                                else onExtendTimer(it)
-                            }
-                        },
-                        enabled = session != null && actionsEnabled && ownsSession &&
-                            !alreadySettledAtPos &&
-                            !packageBillingSnapshotMissing &&
-                            (!session.isPackageBilling() || matchingExtensions.isNotEmpty()),
-                        intent = ActionIntent.Secondary,
-                        leadingIcon = Icons.Filled.Add,
-                        // Two equal actions share a 246dp card content row on
-                        // the 960 x 600dp tablet. Keep the 48dp target and icon
-                        // while avoiding Material's wide default button inset.
-                        contentPadding = PaddingValues(horizontal = Spacing.sm),
-                        modifier = Modifier.weight(1f),
-                    )
-                    ErpButton(
-                        text = "Transfer",
-                        onClick = { session?.let(onTransfer) },
-                        enabled = actionsEnabled && ownsSession && hasTransferTarget,
-                        intent = ActionIntent.Secondary,
-                        leadingIcon = Icons.Filled.SwapHoriz,
-                        contentPadding = PaddingValues(horizontal = Spacing.sm),
-                        modifier = Modifier.weight(1f),
-                    )
+                BoxWithConstraints(Modifier.fillMaxWidth()) {
+                    // Three controls share one row. Narrow grid cards keep
+                    // complete words instead of spending their text width on
+                    // decorative icons; wide command panels retain the icons.
+                    // The 48dp targets and full-width Stop below stay unchanged.
+                    val compactActions = maxWidth < 360.dp
+                    val actionSpacing = if (compactActions) Spacing.xs else Spacing.sm
+                    Row(horizontalArrangement = Arrangement.spacedBy(actionSpacing)) {
+                        ErpButton(
+                            text = if (compactActions || session?.isPackageBilling() == true) "Extend" else "+30 min",
+                            onClick = {
+                                session?.let {
+                                    if (it.isPackageBilling()) onExtendPackage(it, matchingExtensions)
+                                    else onExtendTimer(it)
+                                }
+                            },
+                            enabled = session != null && actionsEnabled && ownsSession &&
+                                !alreadySettledAtPos &&
+                                !packageBillingSnapshotMissing &&
+                                (!session.isPackageBilling() || matchingExtensions.isNotEmpty()),
+                            intent = ActionIntent.Secondary,
+                            leadingIcon = if (compactActions) null else Icons.Filled.Add,
+                            contentPadding = PaddingValues(horizontal = actionSpacing),
+                            modifier = Modifier.weight(1f),
+                        )
+                        ErpButton(
+                            text = "Transfer",
+                            onClick = { session?.let(onTransfer) },
+                            enabled = actionsEnabled && ownsSession && hasTransferTarget,
+                            intent = ActionIntent.Secondary,
+                            leadingIcon = if (compactActions) null else Icons.Filled.SwapHoriz,
+                            contentPadding = PaddingValues(horizontal = actionSpacing),
+                            modifier = Modifier.weight(1f),
+                        )
+                        ErpButton(
+                            text = if (session?.status == "paused") "Resume" else "Pause",
+                            onClick = { session?.let(onPauseResume) },
+                            enabled = session != null && actionsEnabled && ownsSession && online &&
+                                pauseActionError(session, session.status != "paused", "Operator pause") == null,
+                            intent = ActionIntent.Secondary,
+                            leadingIcon = if (compactActions) null
+                            else if (session?.status == "paused") Icons.Filled.PlayArrow else Icons.Filled.PauseCircle,
+                            contentPadding = PaddingValues(horizontal = actionSpacing),
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
                 }
                 ErpButton(
                     text = if (presentation.state == StationVisualState.StopFailed) "Retry stop" else "Stop & calculate",
@@ -2366,6 +2398,17 @@ internal fun GamingStationCard(
                     leadingIcon = Icons.Filled.StopCircle,
                     modifier = Modifier.fillMaxWidth(),
                 )
+                if (!online || session?.pauseVersion == null ||
+                    (session?.let { it.status != "paused" && !it.pauseAvailable } == true)
+                ) {
+                    Text(
+                        if (!online) "Reconnect to pause or resume safely across devices."
+                        else if (session?.pauseVersion == null) "Refresh Gaming after the server update to enable pause controls."
+                        else "Pause is not enabled yet. The owner must update all tablets before enabling it.",
+                        color = Brand.ForegroundMuted,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
             }
 
             StationVisualState.StartFailed -> {
@@ -2618,9 +2661,7 @@ private fun StationBody(
     // frozen/captured-time behavior; server data still determines billing.
     val nowMillis = if (shouldTick) wallClock.value else frozenMillis
     val startedLabel = remember(session?.startAt, session?.timerMinutes) {
-        val started = session?.startAt?.let {
-            runCatching { timeFormatter.format(Instant.parse(it)) }.getOrNull()
-        }
+        val started = session?.startAt?.businessClockTime()
         buildString {
             if (started != null) append("Started $started")
             session?.timerMinutes?.let { minutes ->
@@ -2681,7 +2722,7 @@ private fun StationBody(
         StationVisualState.Stopping,
         StationVisualState.StopFailed,
         -> {
-            if (presentation.state == StationVisualState.Paused) {
+            if (presentation.state == StationVisualState.Paused && session?.pausedAt == null) {
                 Text(
                     "Timer paused",
                     color = Brand.Warning,
@@ -2694,7 +2735,7 @@ private fun StationBody(
                     value = formatElapsed(elapsed),
                     color = if (presentation.state in setOf(StationVisualState.Overtime, StationVisualState.StopFailed)) {
                         Brand.Danger
-                    } else if (presentation.state == StationVisualState.Starting) {
+                    } else if (presentation.state in setOf(StationVisualState.Starting, StationVisualState.Paused)) {
                         Brand.Warning
                     } else {
                         Brand.Good
@@ -2716,7 +2757,7 @@ private fun StationBody(
                     } else {
                         "Booked time has ended. Stop when play finishes."
                     }
-                    StationVisualState.Paused -> "Paused on the server. Stop or resolve before reuse."
+                    StationVisualState.Paused -> "Paused on the server. Play time is frozen; resume or stop when ready."
                     StationVisualState.Stopping -> if (
                         session?.legacyOriginalCapturedStopAt != null &&
                         session.legacyOriginalCapturedStopAt != session.endAt
@@ -4364,14 +4405,8 @@ internal fun operationalActiveGamingSessionCount(sessions: List<GameSession>): I
     }
 
 /** A locally queued Stop owns an immutable tap timestamp; never keep its visible clock running. */
-internal fun elapsedMillis(session: GameSession, nowMillis: Long): Long = runCatching {
-    val effectiveEnd = if (session.status == "stopping") {
-        session.endAt?.let { Instant.parse(it).toEpochMilli() } ?: nowMillis
-    } else {
-        nowMillis
-    }
-    (effectiveEnd - Instant.parse(session.startAt).toEpochMilli()).coerceAtLeast(0L)
-}.getOrDefault(0L)
+internal fun elapsedMillis(session: GameSession, nowMillis: Long): Long =
+    sessionPlayElapsedMillis(session, nowMillis) ?: 0L
 
 /** Mirrors the fixed backend package surcharge for a session's cumulative duration. */
 internal fun extraControllerSurchargeMinor(extraControllers: Int, durationMinutes: Int): Long {
@@ -4420,16 +4455,8 @@ internal fun matchingPackageExtensions(
 /** Mirrors backend minute-ceiling and minor-unit rounding for a labelled estimate. */
 internal fun estimatedCurrentAmountMinor(session: GameSession, nowMillis: Long): Long? {
     if (session.isPackageBilling()) return session.amountMinor
-    if (session.status == "paused") return null // no authoritative paused-at snapshot on Android
     val rate = session.ratePerHourMinor ?: return null
-    val effectiveNow = if (session.status == "stopping") {
-        session.endAt?.let { runCatching { Instant.parse(it).toEpochMilli() }.getOrNull() }
-            ?: nowMillis
-    } else {
-        nowMillis
-    }
-    val start = runCatching { Instant.parse(session.startAt).toEpochMilli() }.getOrNull() ?: return null
-    val elapsedMillis = (effectiveNow - start).coerceAtLeast(0L)
+    val elapsedMillis = sessionPlayElapsedMillis(session, nowMillis) ?: return null
     val billableMinutes = if (elapsedMillis == 0L) 0L else (elapsedMillis + 59_999L) / 60_000L
     if (billableMinutes == 0L || rate <= 0L) return 0L
     return (billableMinutes * rate + 59L) / 60L

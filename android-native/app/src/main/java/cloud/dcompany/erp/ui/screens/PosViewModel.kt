@@ -681,12 +681,14 @@ class PosViewModel : ViewModel() {
         val bannerMuted = muteMatchesCurrentWork &&
             heldQueue.bannerMute.untilMillis > heldQueue.nowMillis
         val currentItems = menu.items.associateBy { it.id }
-        val categoryNames = menu.categories.associate { it.id to it.name }
+        val categoriesById = menu.categories.associateBy { it.id }
         val operationalItems = menu.items.filter { item ->
+            val category = categoriesById[item.categoryId]
             WorkspaceFeatureProfiles.Active.operationalCatalogPolicy.allows(
-                categoryName = categoryNames[item.categoryId],
+                categoryName = category?.name,
                 itemType = item.type,
                 isAvailable = item.isAvailable,
+                isGamingCentreCatalog = category?.isGamingCentreCatalog,
             )
         }
         val operationalCategoryIds = operationalItems.mapTo(linkedSetOf()) { it.categoryId }
