@@ -46,6 +46,8 @@ class PosReceiptPrintTest {
         assertTrue(html.contains("-₹10.00"))
         assertTrue(html.contains("Cash received"))
         assertTrue(html.contains("₹50.00"))
+        assertTrue(html.contains("27 Aug 2026 · 11:30 PM IST"))
+        assertFalse(html.contains("2026-08-27T18:00:00Z"))
         assertFalse(html.contains("Coffee <large>"))
     }
 

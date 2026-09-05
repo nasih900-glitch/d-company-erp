@@ -45,6 +45,15 @@ interface FinanceDao {
     @Query("UPDATE local_expenses SET syncState = 'rejected', lastError = :error WHERE localId = :localId")
     suspend fun markExpenseRejected(localId: String, error: String)
 
+    @Query("UPDATE local_expenses SET lastError = :error WHERE localId = :localId AND syncState = 'pending'")
+    suspend fun notePendingExpenseError(localId: String, error: String)
+
+    @Transaction
+    suspend fun confirmExpense(localId: String, receipt: ExpenseCacheEntity) {
+        upsertExpenseCache(listOf(receipt))
+        markExpenseSynced(localId)
+    }
+
     /** A rejected expense is parked, not auto-retried — same reasoning as CustomersViewModel.retrySync. */
     @Query(
         "UPDATE local_expenses SET syncState = 'pending', lastError = NULL " +
@@ -86,6 +95,15 @@ interface FinanceDao {
 
     @Query("UPDATE local_assets SET syncState = 'rejected', lastError = :error WHERE localId = :localId")
     suspend fun markAssetRejected(localId: String, error: String)
+
+    @Query("UPDATE local_assets SET lastError = :error WHERE localId = :localId AND syncState = 'pending'")
+    suspend fun notePendingAssetError(localId: String, error: String)
+
+    @Transaction
+    suspend fun confirmAsset(localId: String, receipt: AssetCacheEntity) {
+        upsertAssetCache(listOf(receipt))
+        markAssetSynced(localId)
+    }
 
     @Query(
         "UPDATE local_assets SET syncState = 'pending', lastError = NULL " +
@@ -147,6 +165,15 @@ interface FinanceDao {
 
     @Query("UPDATE local_capital_entries SET syncState = 'rejected', lastError = :error WHERE localId = :localId")
     suspend fun markCapitalEntryRejected(localId: String, error: String)
+
+    @Query("UPDATE local_capital_entries SET lastError = :error WHERE localId = :localId AND syncState = 'pending'")
+    suspend fun notePendingCapitalEntryError(localId: String, error: String)
+
+    @Transaction
+    suspend fun confirmCapitalEntry(localId: String, receipt: CapitalEntryCacheEntity) {
+        upsertCapitalEntryCache(listOf(receipt))
+        markCapitalEntrySynced(localId)
+    }
 
     @Query(
         "UPDATE local_capital_entries SET syncState = 'pending', lastError = NULL " +

@@ -20,30 +20,36 @@ import {
 import { inr, inrShort } from '@/lib/inr';
 import { isAppStoreAllowedType } from '@/lib/app-store-compliance';
 import { isProfileRouteEnabled, profileMembershipMoneyLabel } from '@/lib/product-profile';
-import { analytics, type DashboardKPIsDTO } from '@/lib/erp-api';
+import { analytics, insights, type CostingCoverageDTO, type DashboardKPIsDTO } from '@/lib/erp-api';
 import { useAuth } from '@/modules/auth/AuthContext';
 import { useRealtimeRefresh } from '@/hooks/useRealtimeRefresh';
-
-function todayISO(): string {
-  const d = new Date();
-  const p = (n: number) => n.toString().padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-}
+import { useLatestRequest } from '@/hooks/useLatestRequest';
 
 export default function AnalyticsScreen() {
+  const requests = useLatestRequest();
   const { me, demo } = useAuth();
   const [data, setData] = useState<DashboardKPIsDTO | null>(null);
+  const [costing, setCosting] = useState<CostingCoverageDTO | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   const load = useCallback(async (silent = false) => {
+    const isCurrent = requests.begin();
     if (!silent) setLoading(true);
-    setErr(null);
+    setRefreshing(true);
     try {
-      setData(await analytics.dashboard(todayISO()));
-    } catch (e) { setErr((e as Error).message); }
-    finally { if (!silent) setLoading(false); }
-  }, []);
+      const [snapshot, coverage] = await Promise.all([
+        analytics.dashboard(),
+        insights.costingCoverage().catch(() => null),
+      ]);
+      if (!isCurrent()) return;
+      setData(snapshot);
+      setCosting(coverage);
+      setErr(null);
+    } catch (e) { if (isCurrent()) setErr((e as Error).message); }
+    finally { if (isCurrent()) { setLoading(false); setRefreshing(false); } }
+  }, [requests]);
   useEffect(() => { void load(); }, [load]);
   useRealtimeRefresh({
     resources: ['finance', 'gaming', 'inventory', 'shifts'],
@@ -65,18 +71,25 @@ export default function AnalyticsScreen() {
         <div>
           <h2 className="text-2xl font-bold">Analytics</h2>
           <p className="text-fg-muted text-sm">
-            Today's performance · live · updates automatically
+            Today's performance{data ? ` · shop date ${data.date}` : ''} · updates automatically
           </p>
         </div>
-        <button className="btn btn-ghost" onClick={() => void load()}><RefreshCw size={14}/></button>
+        <button className="btn btn-ghost" aria-label="Refresh analytics" disabled={refreshing} onClick={() => void load()}>
+          <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''}/>
+          {refreshing ? 'Refreshing…' : 'Refresh'}
+        </button>
       </header>
 
-      {loading ? (
+      {err && (
+        <div className="card mb-4 border-accent-bad/40 bg-accent-bad/10 text-sm" role="alert">
+          <p className="font-medium text-accent-bad">{data ? 'Analytics could not refresh. These are the last verified figures.' : 'Analytics could not load.'}</p>
+          <p className="mt-1 text-fg-muted">{err} Use Refresh after the connection returns.</p>
+        </div>
+      )}
+      {loading && !data ? (
         <div className="card flex items-center gap-3 text-fg-muted">
           <Loader2 className="animate-spin" size={16}/> Loading…
         </div>
-      ) : err ? (
-        <div className="card border-accent-bad/40 bg-accent-bad/10 text-accent-bad text-sm">{err}</div>
       ) : !data ? null : (
         <>
           {empty && (
@@ -85,7 +98,16 @@ export default function AnalyticsScreen() {
             </div>
           )}
 
-          <OwnerCommandCenter data={data} canSeeProtected={Boolean(canSeeProtected)}/>
+          <OwnerCommandCenter data={data} canSeeProtected={Boolean(canSeeProtected)} costing={costing}/>
+          {costing?.is_complete !== true && (
+            <div className="card mb-4 border-accent-gold/40 bg-accent-gold/10 text-sm">
+              <p className="font-medium text-accent-gold">
+                {costing ? `Profit is provisional: ${costing.incomplete_item_count} products need complete costing.` : 'Profit confidence could not be verified.'}
+              </p>
+              <p className="mt-1 text-fg-muted">Recorded sales remain visible. Missing product costs can overstate profit; review costing before distributing it.</p>
+              <Link to="/finance" className="btn btn-ghost mt-3">Review Finance and costing</Link>
+            </div>
+          )}
 
           {/* KPI strip — revenue + orders + avg ticket + net profit */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
@@ -95,9 +117,9 @@ export default function AnalyticsScreen() {
               icon={<ShoppingBag/>}/>
             <KPI label="Avg ticket" value={inr(data.avg_ticket_minor)}         sub="per receipt"
               icon={<TrendingUp/>}/>
-            <KPI label="Operating profit (today)" value={inrShort(data.net_profit_minor)}
+            <KPI label={costing?.is_complete === true ? 'Operating profit (today)' : 'Provisional operating profit'} value={inrShort(data.net_profit_minor)}
               sub={`${inr(data.net_profit_minor)} · after equipment depreciation`}
-              icon={<TrendingUp/>} tone={data.net_profit_minor >= 0 ? 'good' : 'bad'}/>
+              icon={<TrendingUp/>} tone={costing?.is_complete !== true ? 'default' : data.net_profit_minor >= 0 ? 'good' : 'bad'}/>
           </div>
 
           {data.discounts_and_points_redeemed_minor > 0 && (
@@ -156,21 +178,25 @@ export default function AnalyticsScreen() {
   );
 }
 
-function OwnerCommandCenter({
+export function OwnerCommandCenter({
   data,
   canSeeProtected,
+  costing,
 }: {
   data: DashboardKPIsDTO;
   canSeeProtected: boolean;
+  costing: CostingCoverageDTO | null;
 }) {
+  const profitVerified = costing?.is_complete === true;
+  const needsReview = !profitVerified || data.low_stock_items > 0 || data.net_profit_minor < 0;
   const margin = data.revenue_total_minor
     ? (data.net_profit_minor / data.revenue_total_minor) * 100
     : 0;
   const health = [
     {
       label: 'Profit',
-      value: data.revenue_total_minor ? `${margin.toFixed(1)}%` : 'No sales',
-      tone: data.net_profit_minor >= 0 ? 'good' : 'bad',
+      value: !profitVerified ? costing ? 'Provisional' : 'Cost check needed' : data.revenue_total_minor ? `${margin.toFixed(1)}%` : 'No sales',
+      tone: !profitVerified ? 'default' : data.net_profit_minor >= 0 ? 'good' : 'bad',
     },
     {
       label: 'Stock',
@@ -211,9 +237,9 @@ function OwnerCommandCenter({
           <h3 className="font-semibold">Owner dashboard</h3>
           <p className="text-xs text-fg-muted">Today · profit · stock · action points</p>
         </div>
-        <div className={`chip ${data.low_stock_items || data.net_profit_minor < 0 ? 'border-accent-bad/40 text-accent-bad' : 'border-accent-good/40 text-accent-good'}`}>
-          {data.low_stock_items || data.net_profit_minor < 0 ? <AlertTriangle size={12}/> : <ShieldCheck size={12}/>}
-          {data.low_stock_items || data.net_profit_minor < 0 ? 'Needs attention' : 'Stable'}
+        <div className={`chip ${needsReview ? 'border-accent-gold/40 text-accent-gold' : 'border-accent-good/40 text-accent-good'}`}>
+          {needsReview ? <AlertTriangle size={12}/> : <ShieldCheck size={12}/>}
+          {needsReview ? 'Needs attention' : 'Stable'}
         </div>
       </div>
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 mb-4">

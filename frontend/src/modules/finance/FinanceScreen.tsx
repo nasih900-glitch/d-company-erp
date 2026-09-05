@@ -38,6 +38,7 @@ import { ConfirmModal } from '@/components/ui/ConfirmDialog';
 import Modal from '@/components/ui/Modal';
 import { useNotifications } from '@/components/ui/Notifications';
 import { useRealtimeRefresh } from '@/hooks/useRealtimeRefresh';
+import { useLatestRequest } from '@/hooks/useLatestRequest';
 import AssetsTab from './AssetsTab';
 import ManualCollectionsTab from './ManualCollectionsTab';
 import TipPayoutsTab from './TipPayoutsTab';
@@ -90,16 +91,19 @@ export default function FinanceScreen() {
 }
 
 function OverviewTab() {
+  const requests = useLatestRequest();
   const [data, setData] = useState<ReportDataDTO | null>(null);
   const [metrics, setMetrics] = useState<BusinessMetricsDTO | null>(null);
   const [costing, setCosting] = useState<CostingCoverageDTO | null>(null);
   const [gstRegistered, setGstRegistered] = useState(true);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  async function load(silent = false) {
+  const load = useCallback(async (silent = false) => {
+    const isCurrent = requests.begin();
     if (!silent) setLoading(true);
-    setErr(null);
+    setRefreshing(true);
     try {
       const [receiptIdentity, daily, businessMetrics, costingCoverage] = await Promise.all([
         TAX_COMPLIANCE_UI_ENABLED ? pos.receiptBusiness().catch(() => null) : Promise.resolve(null),
@@ -107,24 +111,30 @@ function OverviewTab() {
         finance.businessMetrics(),
         insights.costingCoverage(),
       ]);
+      if (!isCurrent()) return;
+      setErr(null);
       setData(daily);
       setMetrics(businessMetrics);
       setCosting(costingCoverage);
       setGstRegistered(receiptIdentity?.gst_registration_type !== 'unregistered');
-    } catch (e) { setErr((e as Error).message); }
-    finally { if (!silent) setLoading(false); }
-  }
-  useEffect(() => { load(); }, []);
+    } catch (e) { if (isCurrent()) setErr((e as Error).message); }
+    finally { if (isCurrent()) { setLoading(false); setRefreshing(false); } }
+  }, [requests]);
+  useEffect(() => { void load(); }, [load]);
   useRealtimeRefresh({
     resources: ['finance', 'inventory'],
     refresh: () => load(true),
   });
 
-  if (loading) {
+  if (loading && !data) {
     return <SkeletonCard />;
   }
-  if (err) return <ErrorRow text={err}/>;
-  if (!data) return null;
+  if (!data) return (
+    <div className="card space-y-3">
+      <ErrorRow text={err ?? 'Finance figures are unavailable. Retry to load the latest totals.'}/>
+      <button className="btn btn-primary" onClick={() => void load()} disabled={refreshing}>Retry finance</button>
+    </div>
+  );
 
   const rev = data.revenue;
   const tax = data.tax_collected;
@@ -148,10 +158,17 @@ function OverviewTab() {
         <p className="text-xs text-fg-muted">
           Today · {data.orders_count} order{data.orders_count === 1 ? '' : 's'} · {data.tickets_count} ticket{data.tickets_count === 1 ? '' : 's'} · Avg {inr(data.avg_ticket_minor)}
         </p>
-        <button className="btn btn-ghost !min-h-[28px] !py-1 !px-2 text-xs" onClick={() => void load()}>
-          <RefreshCw size={11}/>
+        <button className="btn btn-ghost text-xs" aria-label="Refresh finance" onClick={() => void load()} disabled={refreshing}>
+          <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''}/>
+          {refreshing ? 'Refreshing…' : 'Refresh'}
         </button>
       </div>
+      {err && (
+        <div className="mb-4 rounded-xl border border-accent-bad/40 bg-accent-bad/10 p-3 text-sm" role="alert">
+          <p className="font-medium text-accent-bad">Finance could not refresh. These are the last verified figures.</p>
+          <p className="mt-1 text-fg-muted">{err} Check the connection and use Refresh before relying on these totals.</p>
+        </div>
+      )}
       <div className="card mb-4 border-accent-gold/40 bg-accent-gold/10 text-sm">
         <b>Management cash/receipt-basis P&amp;L.</b>{' '}
         This operational view is not an accrual or statutory set of accounts.
@@ -336,6 +353,7 @@ function OverviewTab() {
 // EXPENSES TAB
 // ============================================================================
 function ExpensesTab() {
+  const requests = useLatestRequest();
   const notifications = useNotifications();
   const [rows, setRows] = useState<ExpenseDTO[]>([]);
   const [cats, setCats] = useState<ExpenseCategoryDTO[]>([]);
@@ -346,20 +364,22 @@ function ExpensesTab() {
   const [deleteExpense, setDeleteExpense] = useState<ExpenseDTO | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
 
-  async function load(silent = false) {
+  const load = useCallback(async (silent = false) => {
+    const isCurrent = requests.begin();
     if (!silent) setLoading(true);
-    setErr(null);
     try {
       const [r, c, b] = await Promise.all([
         finance.listExpenses(),
         settings.listExpenseCategories(),
         finance.listBranches(),
       ]);
+      if (!isCurrent()) return;
+      setErr(null);
       setRows(r); setCats(c); setBranches(b);
-    } catch (e) { setErr((e as Error).message); }
-    finally { if (!silent) setLoading(false); }
-  }
-  useEffect(() => { load(); }, []);
+    } catch (e) { if (isCurrent()) setErr((e as Error).message); }
+    finally { if (isCurrent()) setLoading(false); }
+  }, [requests]);
+  useEffect(() => { void load(); }, [load]);
   useRealtimeRefresh({ resources: ['finance'], refresh: () => load(true) });
 
   async function confirmDelete() {
@@ -621,6 +641,7 @@ function ExpenseForm({
 // PARTNERS TAB
 // ============================================================================
 function PartnersTab() {
+  const requests = useLatestRequest();
   const notifications = useNotifications();
   const [rows, setRows] = useState<PartnerDTO[]>([]);
   const [split, setSplit] = useState<PartnerPLReportDTO | null>(null);
@@ -631,23 +652,25 @@ function PartnersTab() {
   const [capPartner, setCapPartner] = useState<PartnerDTO | null>(null);
   const [ledgerPartner, setLedgerPartner] = useState<PartnerDTO | null>(null);
 
-  async function load(silent = false) {
+  const load = useCallback(async (silent = false) => {
+    const isCurrent = requests.begin();
     if (!silent) setLoading(true);
-    setErr(null);
     try {
       const [partners, profitSplit, distributableProfit] = await Promise.all([
         finance.listPartners(),
         finance.partnerProfitSplit(),
         finance.distributableProfit(),
       ]);
+      if (!isCurrent()) return;
+      setErr(null);
       setRows(partners);
       setSplit(profitSplit);
       setDistributable(distributableProfit);
     }
-    catch (e) { setErr((e as Error).message); }
-    finally { if (!silent) setLoading(false); }
-  }
-  useEffect(() => { load(); }, []);
+    catch (e) { if (isCurrent()) setErr((e as Error).message); }
+    finally { if (isCurrent()) setLoading(false); }
+  }, [requests]);
+  useEffect(() => { void load(); }, [load]);
   useRealtimeRefresh({ resources: ['finance'], refresh: () => load(true) });
 
   const shareByPartnerId = new Map(split?.partners.map((p) => [p.partner_id, p.profit_share_minor]) ?? []);
@@ -988,6 +1011,7 @@ function LedgerModal({
   onClose: () => void;
   onChanged: () => void;
 }) {
+  const requests = useLatestRequest();
   const notifications = useNotifications();
   const [rows, setRows] = useState<CapitalEntryDTO[]>([]);
   const [loading, setLoading] = useState(true);
@@ -995,16 +1019,17 @@ function LedgerModal({
   const [voiding, setVoiding] = useState<CapitalEntryDTO | null>(null);
 
   const load = useCallback(async (silent = false) => {
+    const isCurrent = requests.begin();
     if (!silent) setLoading(true);
-    setErr(null);
     try {
-      setRows(await finance.listCapital(partner.id, true));
+      const capital = await finance.listCapital(partner.id, true);
+      if (isCurrent()) { setRows(capital); setErr(null); }
     } catch (error) {
-      setErr((error as Error).message);
+      if (isCurrent()) setErr((error as Error).message);
     } finally {
-      if (!silent) setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
-  }, [partner.id]);
+  }, [partner.id, requests]);
 
   useEffect(() => { void load(); }, [load]);
   useRealtimeRefresh({ resources: ['finance'], refresh: () => load(true) });

@@ -654,6 +654,12 @@ interface GamingDao {
     )
     suspend fun markSessionRejected(localId: String, state: String, error: String)
 
+    @Query(
+        "UPDATE local_gaming_sessions SET lastError = :error WHERE localId = :localId " +
+            "AND state IN ('start_pending', 'stop_pending', 'send_pending')",
+    )
+    suspend fun notePendingSessionError(localId: String, error: String)
+
     // -------------------------- rejected start evidence reconciliation
 
     /** Capture or replace only a definitively rejected protected-owner attempt. */

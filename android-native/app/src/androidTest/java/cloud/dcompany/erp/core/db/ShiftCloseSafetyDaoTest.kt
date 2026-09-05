@@ -36,6 +36,43 @@ class ShiftCloseSafetyDaoTest {
     }
 
     @Test
+    fun uncertainCloseRetainsOriginalCountAndCannotContinueShift() = runBlocking {
+        db.shiftDao().insert(openShift("uncertain-close"))
+        assertEquals(
+            ShiftCloseCaptureStatus.CAPTURED,
+            safety.captureExistingClose("uncertain-close", TERMINAL, 12_500, 2_000).status,
+        )
+
+        db.shiftDao().notePendingError("uncertain-close", "Waiting to confirm the original close")
+
+        val retained = db.shiftDao().byLocalId("uncertain-close")!!
+        assertEquals(ShiftState.CLOSE_PENDING, retained.state)
+        assertEquals(12_500L, retained.countedMinor)
+        assertEquals(2_000L, retained.closedAtMillis)
+        assertEquals("Waiting to confirm the original close", retained.lastError)
+        assertEquals(0, db.shiftDao().cancelRejectedClose("uncertain-close"))
+        db.shiftDao().markClosed("uncertain-close", 0)
+        db.shiftDao().notePendingError("uncertain-close", "stale failure")
+        assertNull(db.shiftDao().byLocalId("uncertain-close")?.lastError)
+    }
+
+    @Test
+    fun uncertainOfflineSaleRetainsPaymentAmountAndStableIdentity() = runBlocking {
+        val sale = order("uncertain-sale", "shift-a", SyncState.PENDING)
+        db.orderDao().capture(sale, emptyList())
+
+        db.orderDao().notePendingError("uncertain-sale", "Receipt confirmation is waiting")
+
+        val retained = db.orderDao().withLines("uncertain-sale")!!.order
+        assertEquals(SyncState.PENDING, retained.syncState)
+        assertEquals(sale.localId, retained.localId)
+        assertEquals(sale.capturedAmountMinor, retained.capturedAmountMinor)
+        assertEquals(sale.paymentMethod, retained.paymentMethod)
+        assertEquals("Receipt confirmation is waiting", retained.lastError)
+        assertEquals(0, db.orderDao().retryRejected("uncertain-sale"))
+    }
+
+    @Test
     fun pendingExactShiftWorkCanCaptureCloseButMustDrainBeforeServerPost() = runBlocking {
         db.shiftDao().insert(openShift("shift-a"))
         db.orderDao().capture(order("sale-a", "shift-a", SyncState.PENDING), emptyList())

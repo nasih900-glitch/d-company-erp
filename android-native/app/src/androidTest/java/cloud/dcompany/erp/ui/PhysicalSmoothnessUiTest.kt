@@ -27,8 +27,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.unit.dp
 import androidx.core.app.FrameMetricsAggregator
@@ -73,48 +76,14 @@ class PhysicalComponentFrameStressUiTest {
 
     @Test
     fun workspaceChromeAndGamingCardsHaveBoundedFramesAndStableGeometry() {
-        val connection = mutableStateOf(SyncAvailabilityProblem.NONE)
-        val outbox = mutableStateOf(OutboxWorkStatus())
-        val syncing = mutableStateOf(false)
-        val busyStationId = mutableStateOf<String?>(null)
-        val wallClock = mutableLongStateOf(Instant.parse("2026-08-31T12:00:00Z").toEpochMilli())
-        val stations = physicalAuditStations()
-        val sessions = physicalAuditSessions(stations, wallClock.longValue)
-
-        compose.setContent {
-            DCompanyTheme {
-                // Match MainActivity's edge-to-edge contract exactly. The
-                // earlier component harness omitted safeDrawing, which put the
-                // saving overlay under Lenovo's tablet taskbar and made a test
-                // artifact look like an app contrast/clipping defect.
-                Surface(Modifier.fillMaxSize(), color = Brand.Background) {
-                    Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
-                        WorkspaceScaffold(
-                            destinations = listOf(Destination.Gaming, Destination.Pos, Destination.Shift),
-                            currentDestination = Destination.Gaming,
-                            employeeName = "Physical-device audit",
-                            locationLabel = "Gaming Centre",
-                            connectivityProblem = connection.value,
-                            outboxWorkStatus = outbox.value,
-                            syncing = syncing.value,
-                            canChangeTill = false,
-                            onOpenSupport = {},
-                            onChangeTill = {},
-                            onSignOut = {},
-                        ) { _, _ ->
-                            PhysicalGamingBoard(
-                                stations = stations,
-                                sessions = sessions,
-                                wallClock = wallClock,
-                                busyStationId = busyStationId.value,
-                            )
-                        }
-                    }
-                }
-            }
-        }
-        compose.waitForIdle()
-        assertTabletLandscapeConfiguration()
+        val inputs = PhysicalAuditInputs()
+        val connection = inputs.connection
+        val outbox = inputs.outbox
+        val syncing = inputs.syncing
+        val busyStationId = inputs.busyStationId
+        val wallClock = inputs.wallClock
+        val stations = inputs.stations
+        setAuditContent(inputs)
         writeScreenshot("01-gaming-online.png")
 
         val stableWorkflowBounds = compose.onNodeWithTag("physical-gaming-board")
@@ -133,9 +102,9 @@ class PhysicalComponentFrameStressUiTest {
         assertEquals(stableStationBounds, captureStationBounds(stations.take(4)))
         writeScreenshot("02-gaming-server-issue.png")
 
-        // Warm the debug component harness before measuring. This test is a
-        // device-side regression signal, not a release-app Macrobenchmark;
-        // class loading and first composition therefore stay outside the
+        // Warm the component harness before measuring. physicalAudit derives
+        // from release; this remains instrumentation, not a Macrobenchmark.
+        // Class loading and first composition therefore stay outside the
         // frame interval.
         repeat(25) { index ->
             compose.runOnIdle {
@@ -213,6 +182,172 @@ class PhysicalComponentFrameStressUiTest {
         // files before establishing a device-specific release threshold.
     }
 
+    @Test
+    fun gamingTimersAtProductionCadenceHaveStableGeometry() {
+        // Cross one real operational boundary as well as incrementing text:
+        // a timer optimization must not freeze the Active -> Overtime badge.
+        val inputs = PhysicalAuditInputs(timerBoundaryAfterMillis = 30_000L)
+        val stationName = inputs.stations[1].name
+        runIsolatedScenario(
+            inputs = inputs,
+            scenario = "component-gaming-timer-1hz",
+            sampleCount = 60,
+            cadenceMillis = 1_000L,
+            beforeWarmup = {
+                compose.onNodeWithText("00:05:00", useUnmergedTree = true).assertIsDisplayed()
+                compose.onNodeWithContentDescription("$stationName. Active.", substring = true)
+                    .assertIsDisplayed()
+            },
+            afterMeasurement = {
+                // Five warmup ticks plus sixty measured one-second ticks.
+                compose.onNodeWithText("00:06:05", useUnmergedTree = true).assertIsDisplayed()
+                compose.onNodeWithContentDescription("$stationName. Overtime.", substring = true)
+                    .assertIsDisplayed()
+            },
+        ) {
+            // Only this input changes. Production Gaming uses one lifecycle-
+            // aware one-second clock; no network/outbox work is simulated.
+            inputs.wallClock.longValue += 1_000L
+        }
+    }
+
+    @Test
+    fun connectivityAtRecoveryCadenceHasStableGeometry() {
+        val inputs = PhysicalAuditInputs()
+        val presentations = listOf(
+            SyncAvailabilityProblem.NO_NETWORK,
+            SyncAvailabilityProblem.VERIFYING,
+            SyncAvailabilityProblem.SERVER_UNREACHABLE,
+            SyncAvailabilityProblem.RECOVERING,
+            SyncAvailabilityProblem.NONE,
+        )
+        runIsolatedScenario(
+            inputs = inputs,
+            scenario = "component-connectivity-only-3s",
+            sampleCount = 30,
+            cadenceMillis = 3_000L,
+        ) { sample ->
+            // Isolate presentation cost, with an interval longer than the
+            // coordinator's recovery stabilization. This is not a network or
+            // coordinator test: session time, outbox and syncing stay fixed.
+            inputs.connection.value = presentations[sample % presentations.size]
+        }
+    }
+
+    private fun runIsolatedScenario(
+        inputs: PhysicalAuditInputs,
+        scenario: String,
+        sampleCount: Int,
+        cadenceMillis: Long,
+        beforeWarmup: () -> Unit = {},
+        afterMeasurement: () -> Unit = {},
+        update: (Int) -> Unit,
+    ) {
+        setAuditContent(inputs)
+        beforeWarmup()
+        val workflowBounds = compose.onNodeWithTag("physical-gaming-board")
+            .fetchSemanticsNode().boundsInRoot
+        val stationBounds = captureStationBounds(inputs.stations.take(4))
+        val warmupSamples = 5
+        repeat(warmupSamples) { sample ->
+            SystemClock.sleep(cadenceMillis)
+            compose.runOnIdle { update(sample) }
+            compose.waitForIdle()
+        }
+        writeScreenshot("$scenario-before.png")
+
+        val collector = FrameMetricsAggregator(FrameMetricsAggregator.TOTAL_DURATION)
+        var histogram: SparseIntArray? = null
+        var geometryMismatchCount = 0
+        var firstGeometryMismatch: String? = null
+        val startedAt = SystemClock.elapsedRealtime()
+        collector.add(compose.activity)
+        try {
+            repeat(sampleCount) { sample ->
+                // Sleep off the UI thread. Compose's virtual test clock must
+                // not turn a real one/three-second cadence into another burst.
+                SystemClock.sleep(cadenceMillis)
+                compose.runOnIdle { update(warmupSamples + sample) }
+                compose.waitForIdle()
+                val currentWorkflowBounds = compose.onNodeWithTag("physical-gaming-board")
+                    .fetchSemanticsNode().boundsInRoot
+                val currentStationBounds = captureStationBounds(inputs.stations.take(4))
+                if (currentWorkflowBounds != workflowBounds || currentStationBounds != stationBounds) {
+                    geometryMismatchCount += 1
+                    if (firstGeometryMismatch == null) firstGeometryMismatch = "sample=$sample"
+                }
+            }
+        } finally {
+            compose.waitForIdle()
+            SystemClock.sleep(250)
+            histogram = collector.remove(compose.activity)
+                ?.getOrNull(FrameMetricsAggregator.TOTAL_INDEX)
+        }
+        val measuredMillis = SystemClock.elapsedRealtime() - startedAt
+        val metrics = summarizeFrameMetrics(
+            histogram,
+            compose.activity.display?.refreshRate ?: 60f,
+        )
+        writeMetrics(
+            metrics = metrics,
+            scenario = scenario,
+            filename = "frame-metrics-$scenario.txt",
+            measurementDetails = "samples=$sampleCount cadenceMillis=$cadenceMillis " +
+                "warmupSamples=$warmupSamples measuredWallMillis=$measuredMillis " +
+                "geometryChecks=$sampleCount geometryStable=${geometryMismatchCount == 0} " +
+                "geometryMismatches=$geometryMismatchCount " +
+                "firstGeometryMismatch=${firstGeometryMismatch ?: "none"}",
+        )
+        writeScreenshot("$scenario-after.png")
+        Log.i(PHYSICAL_PERFORMANCE_LOG_TAG, metrics.asLogLine(scenario))
+        afterMeasurement()
+        // Persist the complete measured evidence before failing a geometry or
+        // sample-completeness check, so a failure never conceals its timings.
+        assertEquals("$scenario moved content: $firstGeometryMismatch", 0, geometryMismatchCount)
+        assertTrue(
+            "$scenario captured ${metrics.totalFrames} frames for $sampleCount visible updates",
+            metrics.totalFrames >= sampleCount,
+        )
+        assertEquals("$scenario contained a frozen frame", 0, metrics.frozenFrames)
+        // No percentile/jank threshold is calibrated to the observed devices.
+        // Keep slow evidence visible even when geometry and safety checks pass.
+    }
+
+    private fun setAuditContent(inputs: PhysicalAuditInputs) {
+        compose.setContent {
+            DCompanyTheme {
+                // Match MainActivity's edge-to-edge contract so the system
+                // taskbar does not overlap cards or the saving overlay.
+                Surface(Modifier.fillMaxSize(), color = Brand.Background) {
+                    Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
+                        WorkspaceScaffold(
+                            destinations = listOf(Destination.Gaming, Destination.Pos, Destination.Shift),
+                            currentDestination = Destination.Gaming,
+                            employeeName = "Physical-device audit",
+                            locationLabel = "Gaming Centre",
+                            connectivityProblem = inputs.connection.value,
+                            outboxWorkStatus = inputs.outbox.value,
+                            syncing = inputs.syncing.value,
+                            canChangeTill = false,
+                            onOpenSupport = {},
+                            onChangeTill = {},
+                            onSignOut = {},
+                        ) { _, _ ->
+                            PhysicalGamingBoard(
+                                stations = inputs.stations,
+                                sessions = inputs.sessions,
+                                wallClock = inputs.wallClock,
+                                busyStationId = inputs.busyStationId.value,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        compose.waitForIdle()
+        assertTabletLandscapeConfiguration()
+    }
+
     private fun writeScreenshot(filename: String) {
         val output = auditDirectory().resolve(filename)
         output.outputStream().use { stream ->
@@ -229,12 +364,19 @@ class PhysicalComponentFrameStressUiTest {
         }
     }
 
-    private fun writeMetrics(metrics: FrameSummary) {
+    private fun writeMetrics(
+        metrics: FrameSummary,
+        scenario: String = "component-gaming-connectivity",
+        filename: String = "frame-metrics.txt",
+        measurementDetails: String = "samples=200 cadence=idle-bounded-stress",
+    ) {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val display = context.resources.displayMetrics
-        auditDirectory().resolve("frame-metrics.txt").writeText(
+        auditDirectory().resolve(filename).writeText(
             buildString {
-                appendLine(metrics.asLogLine())
+                appendLine(metrics.asLogLine(scenario))
+                appendLine(measurementDetails)
+                appendLine("metric=FrameMetrics.TOTAL_DURATION roundedMs budgetProxy=true platformDeadlineAttribution=false")
                 appendLine("device=${Build.MANUFACTURER} ${Build.MODEL}")
                 appendLine("android=${Build.VERSION.RELEASE} api=${Build.VERSION.SDK_INT}")
                 appendLine("app=${BuildConfig.VERSION_NAME} code=${BuildConfig.VERSION_CODE}")
@@ -336,6 +478,26 @@ private fun PhysicalGamingBoard(
     }
 }
 
+private class PhysicalAuditInputs(timerBoundaryAfterMillis: Long? = null) {
+    val connection = mutableStateOf(SyncAvailabilityProblem.NONE)
+    val outbox = mutableStateOf(OutboxWorkStatus())
+    val syncing = mutableStateOf(false)
+    val busyStationId = mutableStateOf<String?>(null)
+    val wallClock = mutableLongStateOf(Instant.parse("2026-08-31T12:00:00Z").toEpochMilli())
+    val stations = physicalAuditStations()
+    val sessions = physicalAuditSessions(stations, wallClock.longValue).let { initial ->
+        if (timerBoundaryAfterMillis == null) initial else initial.mapValues { (_, session) ->
+            if (session.status == "active") {
+                session.copy(
+                    timerEndsAt = Instant.ofEpochMilli(
+                        wallClock.longValue + timerBoundaryAfterMillis,
+                    ).toString(),
+                )
+            } else session
+        }
+    }
+}
+
 private fun physicalAuditStations(): List<Station> {
     val types = listOf("ps5", "ps5", "ps5", "ps5", "racing", "shisha", "streaming", "vr")
     return types.mapIndexed { index, type ->
@@ -406,10 +568,11 @@ private data class FrameSummary(
     val severeJankPercent: Double
         get() = if (totalFrames == 0) 100.0 else severelyJankyFrames * 100.0 / totalFrames
 
-    fun asLogLine(): String =
-        "scenario=component-gaming-connectivity total=$totalFrames missedDeadline=$jankyFrames " +
-            "missedDeadlinePercent=${"%.2f".format(jankPercent)} " +
-            "severeJank=$severelyJankyFrames severeJankPercent=${"%.2f".format(severeJankPercent)} " +
+    fun asLogLine(scenario: String = "component-gaming-connectivity"): String =
+        "scenario=$scenario total=$totalFrames overBudgetProxy=$jankyFrames " +
+            "overBudgetProxyPercent=${"%.2f".format(jankPercent)} " +
+            "overTwoBudgetsProxy=$severelyJankyFrames " +
+            "overTwoBudgetsProxyPercent=${"%.2f".format(severeJankPercent)} " +
             "frozen=$frozenFrames " +
             "p50=${p50Millis}ms p90=${p90Millis}ms " +
             "p95=${p95Millis}ms p99=${p99Millis}ms refresh=${"%.1f".format(refreshRate)}Hz"

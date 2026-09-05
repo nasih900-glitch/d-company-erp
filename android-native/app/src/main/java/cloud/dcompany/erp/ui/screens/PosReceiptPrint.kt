@@ -121,7 +121,7 @@ internal fun posReceiptPrintHtml(receipt: PosReceiptEntity): String {
           <div>${(receipt.invoiceNo ?: "Order ${receipt.orderId.take(8)}").escapeReceiptHtml()}</div>
           ${receipt.sourceLabel?.takeIf(String::isNotBlank)?.let { "<div>${it.escapeReceiptHtml()}</div>" }.orEmpty()}
           ${customer?.let { "<div>${it.escapeReceiptHtml()}</div>" }.orEmpty()}
-          ${paymentTime?.let { "<div class=\"muted\">${it.escapeReceiptHtml()}</div>" }.orEmpty()}
+          ${paymentTime?.let { "<div class=\"muted\">${it.receiptDateTime().escapeReceiptHtml()}</div>" }.orEmpty()}
           <div class="rule"></div>
           <table>$lines</table>
           <div class="rule"></div>

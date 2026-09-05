@@ -128,49 +128,56 @@ export function connectRealtime(): void {
   if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
     return;
   }
+  let connection: WebSocket;
   try {
-    socket = new WebSocket(wsUrl());
+    connection = new WebSocket(wsUrl());
+    socket = connection;
   } catch {
     scheduleReconnect();
     return;
   }
 
-  socket.onopen = () => {
-    const wasReconnect = reconnectAttempt > 0;
+  connection.onopen = () => {
+    // Closing a socket is asynchronous. Events from a retired connection must
+    // never send through, disconnect, or refresh a newer login's connection.
+    if (socket !== connection) return;
     reconnectAttempt = 0;
     lastMessageAt = Date.now();
-    socket?.send(JSON.stringify({ token: readAccessToken() }));
+    try { connection.send(JSON.stringify({ token: readAccessToken() })); }
+    catch { dropAndReconnect(); return; }
     startWatchdog();
-    // Anything that changed while we were disconnected produced a "changed"
-    // frame nobody was listening to. Without this every screen keeps showing
-    // whatever it had before the drop until the next unrelated change — the
-    // connection looks healthy again while the data on screen is stale.
-    if (wasReconnect) refetchEverything();
   };
 
-  socket.onmessage = (event) => {
+  connection.onmessage = (event) => {
+    if (socket !== connection) return;
     lastMessageAt = Date.now();
     try {
       const msg = JSON.parse(event.data);
-      if (msg?.type === 'changed' && typeof msg.resource === 'string') {
+      if (msg?.type === 'connected') {
+        // The server now has this authenticated socket in its registry. A
+        // refresh before this acknowledgement can miss a change between the
+        // REST response and authentication, including on the first connection.
+        refetchEverything();
+      } else if (msg?.type === 'changed' && typeof msg.resource === 'string') {
         notify(msg.resource);
       } else if (msg?.type === 'ping') {
         // Replying is not required by the server, but a send that throws is a
         // second, earlier signal that this socket is no longer usable.
-        try { socket?.send(JSON.stringify({ type: 'pong' })); } catch { dropAndReconnect(); }
+        try { connection.send(JSON.stringify({ type: 'pong' })); } catch { dropAndReconnect(); }
       }
     } catch {
       // Non-JSON or unrecognized frame — ignore, the connection itself is what matters.
     }
   };
 
-  socket.onclose = () => {
+  connection.onclose = () => {
+    if (socket !== connection) return;
     socket = null;
     stopWatchdog();
     if (!intentionallyClosed) scheduleReconnect();
   };
 
-  socket.onerror = () => {
+  connection.onerror = () => {
     // onclose fires right after; reconnect is handled there.
   };
 }
@@ -180,8 +187,9 @@ export function disconnectRealtime(): void {
   reconnectAttempt = 0;
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   stopWatchdog();
-  socket?.close();
+  const previous = socket;
   socket = null;
+  previous?.close();
 }
 
 /** Subscribe a screen's refetch callback to a resource. Returns an unsubscribe function. */

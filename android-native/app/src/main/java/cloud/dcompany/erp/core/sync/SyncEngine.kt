@@ -17,14 +17,11 @@ import cloud.dcompany.erp.core.checkout.CheckoutClientInstanceUnavailableExcepti
 import cloud.dcompany.erp.core.checkout.DirectOrderPublishPolicy
 import cloud.dcompany.erp.core.checkout.HeldOrderClaimPolicy
 import cloud.dcompany.erp.core.db.ErpDatabase
-import cloud.dcompany.erp.core.db.AssetCacheEntity
 import cloud.dcompany.erp.core.db.CafeTableEntity
-import cloud.dcompany.erp.core.db.CapitalEntryCacheEntity
 import cloud.dcompany.erp.core.db.CanonicalReceiptSyncStateEntity
 import cloud.dcompany.erp.core.db.CustomerCacheEntity
 import cloud.dcompany.erp.core.db.EventCacheEntity
 import cloud.dcompany.erp.core.db.EventTicketCacheEntity
-import cloud.dcompany.erp.core.db.ExpenseCacheEntity
 import cloud.dcompany.erp.core.db.FloorEntity
 import cloud.dcompany.erp.core.db.LocalAssetEntity
 import cloud.dcompany.erp.core.db.LocalCapitalEntryEntity
@@ -132,7 +129,9 @@ import cloud.dcompany.erp.ui.screens.finance.ExpenseCreate
 import cloud.dcompany.erp.ui.screens.finance.FinanceApi
 import cloud.dcompany.erp.ui.screens.finance.FinanceCacheScope
 import cloud.dcompany.erp.ui.screens.finance.FinanceSnapshotKeys
+import cloud.dcompany.erp.ui.screens.finance.fetchFinanceAllocation
 import cloud.dcompany.erp.ui.screens.finance.financeCacheScopeForLease
+import cloud.dcompany.erp.ui.screens.finance.toFinanceCache
 import cloud.dcompany.erp.ui.screens.gaming.GameSession
 import cloud.dcompany.erp.ui.screens.gaming.GamingApi
 import cloud.dcompany.erp.ui.screens.gaming.SessionAddonVoidBody
@@ -2308,12 +2307,10 @@ class SyncEngine(
 
     /**
      * One unit of outbox work per row: `push` either fully succeeds or throws.
-     * A non-`ApiException` is a bug on our side (e.g. a DTO mismatch) — reject
-     * visibly rather than let it crash the app mid-sync, same reasoning as the
-     * order push below. An ambiguous `ApiException` (no answer, or the server
-     * is mid-flight) stops the whole drain so a bad link isn't hammered
-     * further; a definitive refusal is parked for a human, since retrying
-     * cannot change the answer.
+     * Critical writes supply [retainUnconfirmedWrite]: a DTO or Room failure
+     * can follow a committed request and must retain its original identity.
+     * An ambiguous response stops this drain; a definitive server refusal is
+     * parked for staff review rather than automatically replayed.
      *
      * Returns false if the drain stopped early on an ambiguous failure.
      */
@@ -2322,6 +2319,7 @@ class SyncEngine(
         markRejected: suspend (T, String) -> Unit,
         push: suspend (T) -> Unit,
         madeProgress: suspend (T) -> Boolean = { true },
+        retainUnconfirmedWrite: (suspend (T, String) -> Unit)? = null,
     ): Boolean {
         for (row in rows) {
             try {
@@ -2350,6 +2348,14 @@ class SyncEngine(
                 throw cancelled
             } catch (e: Exception) {
                 sessionAwareLastError = e.message
+                if (retainUnconfirmedWrite != null && mustReplayUnconfirmedWrite(e)) {
+                    val message = unconfirmedWriteMessage("this saved action")
+                    sessionAwareLastError = message
+                    passHadAmbiguousFailure = true
+                    retainUnconfirmedWrite(row, message)
+                    if (e is ApiException && e.status == 426) throw e
+                    return false
+                }
                 if (e !is ApiException) {
                     markRejected(row, "Could not sync this (app error): ${e.message}")
                     continue
@@ -2391,6 +2397,7 @@ class SyncEngine(
             rows = eligible,
             markRejected = { row, msg -> dao.markOpenRejected(row.localId, msg) },
             push = ::pushShiftOpen,
+            retainUnconfirmedWrite = { row, msg -> dao.notePendingError(row.localId, msg) },
         )
     }
 
@@ -2664,9 +2671,12 @@ class SyncEngine(
                 throw cancelled
             } catch (e: Exception) {
                 sessionAwareLastError = e.message
-                if (e is ApiException && e.mustPreserveOutbox) {
+                if (mustReplayUnconfirmedWrite(e)) {
+                    val message = unconfirmedWriteMessage("this shift close")
+                    sessionAwareLastError = message
                     passHadAmbiguousFailure = true
-                    if (e.status == 426) throw e
+                    dao.notePendingError(row.localId, message)
+                    if (e is ApiException && e.status == 426) throw e
                     return attemptedServerClose
                 }
                 dao.markCloseRejected(
@@ -2750,6 +2760,7 @@ class SyncEngine(
                     hasServerId = current?.serverId != null,
                 )
             },
+            retainUnconfirmedWrite = { row, msg -> dao.notePendingSessionError(row.localId, msg) },
         )
         return changedHeldQueue
     }
@@ -3195,37 +3206,10 @@ class SyncEngine(
                     },
                 )
                 db.gamingDao().replaceSessionCache(
-                    authoritativeSessions.map {
-                        GamingSessionCacheEntity(
-                            id = it.id,
-                            stationId = it.stationId,
-                            shiftId = it.shiftId,
-                            status = it.status,
-                            startAtMillis = runCatching { Instant.parse(it.startAt).toEpochMilli() }
-                                .getOrDefault(System.currentTimeMillis()),
-                            endAtMillis = it.endAt?.let { s ->
-                                runCatching { Instant.parse(s).toEpochMilli() }.getOrNull()
-                            },
-                            timerMinutes = it.timerMinutes,
-                            timerEndsAtMillis = it.timerEndsAt?.let { s ->
-                                runCatching { Instant.parse(s).toEpochMilli() }.getOrNull()
-                            },
-                            billableMinutes = it.billableMinutes,
-                            amountMinor = it.amountMinor,
-                            ratePerHourMinor = it.ratePerHourMinor,
-                            packageId = it.packageId,
-                            billingMode = it.billingMode,
-                            packagePriceMinorSnapshot = it.packagePriceMinorSnapshot,
-                            packageDurationMinutesSnapshot = it.packageDurationMinutesSnapshot,
-                            packageVariantSnapshot = it.packageVariantSnapshot,
-                            packageStationTypeSnapshot = it.packageStationTypeSnapshot,
-                            packagePricingTierSnapshot = it.packagePricingTierSnapshot,
-                            extraControllers = it.extraControllers,
-                            customerName = it.customerName,
-                            customerPhone = it.customerPhone,
-                            orderId = it.orderId,
-                        )
-                    },
+                    // A malformed server timestamp must fail the transaction;
+                    // manufacturing a new start time corrupts timers and local
+                    // billing evidence during cross-device reconciliation.
+                    authoritativeSessions.map(GameSession::toCacheEntity),
                 )
                 db.gamingDao().replaceSessionAddonCache(
                     sessionAddons.map { it.toCacheEntity() },
@@ -5063,6 +5047,7 @@ class SyncEngine(
             rows = dao.pushableExpenses(),
             markRejected = { row, msg -> dao.markExpenseRejected(row.localId, msg) },
             push = ::pushExpenseOne,
+            retainUnconfirmedWrite = { row, msg -> dao.notePendingExpenseError(row.localId, msg) },
         )
     }
 
@@ -5070,7 +5055,8 @@ class SyncEngine(
      * version-CAS needed: expense edit/delete stay web-only, so nothing can
      * amend this row out from under an in-flight push. */
     private suspend fun pushExpenseOne(row: LocalExpenseEntity) {
-        financeApi.createExpense(
+        val lease = cacheIsolation.currentLease() ?: return
+        val created = financeApi.createExpense(
             ExpenseCreate(
                 branchId = row.branchId, categoryId = row.categoryId, supplierId = row.supplierId,
                 amountMinor = row.amountMinor, paidVia = row.paidVia, paidAt = row.paidAt,
@@ -5079,8 +5065,11 @@ class SyncEngine(
             key = "expense:${row.localId}",
             provenance = outboxProvenanceHeaders(row.createdAtMillis, "expense:${row.localId}"),
         )
-        pullExpenses()
-        db.financeDao().markExpenseSynced(row.localId)
+        if (!commitToCurrentScope(lease) {
+                db.financeDao().confirmExpense(row.localId, created.toFinanceCache())
+            }
+        ) return
+        runAndRecordRefreshAlreadyLocked("finance", ::pullExpenses, lease)
     }
 
     private suspend fun pullExpenses() {
@@ -5089,14 +5078,7 @@ class SyncEngine(
             store = { rows ->
                 db.withTransaction {
                     db.financeDao().replaceExpenseCache(
-                        rows.map {
-                            ExpenseCacheEntity(
-                                id = it.id, branchId = it.branchId, categoryId = it.categoryId,
-                                supplierId = it.supplierId, amountMinor = it.amountMinor,
-                                paidVia = it.paidVia, paidAt = it.paidAt,
-                                vendorName = it.vendorName, invoiceNo = it.invoiceNo, note = it.note,
-                            )
-                        },
+                        rows.map { it.toFinanceCache() },
                     )
                     db.syncMetaDao().put(SyncMetaEntity("expenses", System.currentTimeMillis()))
                 }
@@ -5112,13 +5094,15 @@ class SyncEngine(
             rows = dao.pushableAssets(),
             markRejected = { row, msg -> dao.markAssetRejected(row.localId, msg) },
             push = ::pushAssetOne,
+            retainUnconfirmedWrite = { row, msg -> dao.notePendingAssetError(row.localId, msg) },
         )
     }
 
     /** Same insert-only reasoning as pushExpenseOne — assets have no backend
      * edit/delete endpoint at all, so there is nothing to guard against. */
     private suspend fun pushAssetOne(row: LocalAssetEntity) {
-        financeApi.createAsset(
+        val lease = cacheIsolation.currentLease() ?: return
+        val created = financeApi.createAsset(
             AssetCreate(
                 branchId = row.branchId, name = row.name, type = row.type,
                 purchaseMinor = row.purchaseMinor, purchaseDate = row.purchaseDate,
@@ -5128,8 +5112,11 @@ class SyncEngine(
             key = "asset:${row.localId}",
             provenance = outboxProvenanceHeaders(row.createdAtMillis, "asset:${row.localId}"),
         )
-        pullAssets()
-        db.financeDao().markAssetSynced(row.localId)
+        if (!commitToCurrentScope(lease) {
+                db.financeDao().confirmAsset(row.localId, created.toFinanceCache())
+            }
+        ) return
+        runAndRecordRefreshAlreadyLocked("finance", ::pullAssets, lease)
     }
 
     private suspend fun pullAssets() {
@@ -5138,16 +5125,7 @@ class SyncEngine(
             store = { rows ->
                 db.withTransaction {
                     db.financeDao().replaceAssetCache(
-                        rows.map {
-                            AssetCacheEntity(
-                                id = it.id, branchId = it.branchId, name = it.name, type = it.type,
-                                purchaseMinor = it.purchaseMinor, purchaseDate = it.purchaseDate,
-                                usefulLifeMonths = it.usefulLifeMonths, salvageMinor = it.salvageMinor,
-                                depreciationMethod = it.depreciationMethod, notes = it.notes,
-                                accumulatedDepreciationMinor = it.accumulatedDepreciationMinor,
-                                bookValueMinor = it.bookValueMinor,
-                            )
-                        },
+                        rows.map { it.toFinanceCache() },
                     )
                     db.syncMetaDao().put(SyncMetaEntity("assets", System.currentTimeMillis()))
                 }
@@ -5163,13 +5141,15 @@ class SyncEngine(
             rows = dao.pushableCapitalEntries(),
             markRejected = { row, msg -> dao.markCapitalEntryRejected(row.localId, msg) },
             push = ::pushCapitalEntryOne,
+            retainUnconfirmedWrite = { row, msg -> dao.notePendingCapitalEntryError(row.localId, msg) },
         )
     }
 
     /** Same insert-only reasoning — a capital entry is void-only after
      * creation, and void stays online-only (direct write, not queued). */
     private suspend fun pushCapitalEntryOne(row: LocalCapitalEntryEntity) {
-        financeApi.createCapitalEntry(
+        val lease = cacheIsolation.currentLease() ?: return
+        val created = financeApi.createCapitalEntry(
             CapitalEntryCreate(
                 partnerId = row.partnerId, type = row.type, amountMinor = row.amountMinor,
                 effectiveAt = row.effectiveAt, settlementAccount = row.settlementAccount,
@@ -5178,8 +5158,15 @@ class SyncEngine(
             key = "capital-entry:${row.localId}",
             provenance = outboxProvenanceHeaders(row.createdAtMillis, "capital-entry:${row.localId}"),
         )
-        pullCapitalEntriesForAlreadyLocked(row.partnerId)
-        db.financeDao().markCapitalEntrySynced(row.localId)
+        if (!commitToCurrentScope(lease) {
+                db.financeDao().confirmCapitalEntry(row.localId, created.toFinanceCache())
+            }
+        ) return
+        runAndRecordRefreshAlreadyLocked(
+            "finance",
+            { pullCapitalEntriesForAlreadyLocked(row.partnerId) },
+            lease,
+        )
     }
 
     /**
@@ -5201,15 +5188,7 @@ class SyncEngine(
             store = { rows ->
                 db.financeDao().replaceCapitalEntriesFor(
                     partnerId,
-                    rows.map {
-                        CapitalEntryCacheEntity(
-                            id = it.id, partnerId = it.partnerId, type = it.type,
-                            amountMinor = it.amountMinor, effectiveAt = it.effectiveAt,
-                            settlementAccount = it.settlementAccount, sourceRef = it.sourceRef,
-                            note = it.note, createdByName = it.createdByName, createdAt = it.createdAt,
-                            voidedAt = it.voidedAt, voidReason = it.voidReason, isVoided = it.isVoided,
-                        )
-                    },
+                    rows.map { it.toFinanceCache() },
                 )
             },
         )
@@ -5249,7 +5228,7 @@ class SyncEngine(
             // branch-bound manager still receives branch P&L/metrics but must
             // never fetch or cache another branch's partner information.
             val distributableDeferred = if (cacheScope.companyWidePartnerFinance) {
-                async { financeApi.distributable() }
+                async { fetchFinanceAllocation { financeApi.distributable() } }
             } else {
                 null
             }
@@ -7137,6 +7116,7 @@ class SyncEngine(
             rows = ready,
             markRejected = { row, msg -> dao.markRejected(row.localId, msg) },
             push = ::pushOne,
+            retainUnconfirmedWrite = { row, msg -> dao.notePendingError(row.localId, msg) },
         )
     }
 

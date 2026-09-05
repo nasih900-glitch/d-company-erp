@@ -10,6 +10,7 @@ test PostgreSQL database.
 from __future__ import annotations
 
 import asyncio
+import os
 from uuid import UUID, uuid4
 
 import pytest
@@ -35,13 +36,30 @@ from app.models import (
 from app.services.gaming.tariff_catalog import upsert_d_company_gaming_tariff
 
 
+def _require_isolated_gaming_database(database_name: str, *, in_ci: bool) -> None:
+    if database_name in {
+        "dcompany_code22_audit_20260903",
+        "dcompany_audit_test",
+        # Both GitHub workflows create this disposable PostgreSQL service DB.
+        "erp_test",
+    }:
+        return
+    message = "Gaming/POS E2E requires an explicitly allowlisted isolated audit database"
+    if in_ci:
+        pytest.fail(
+            f"{message}; CI must not silently skip the Gaming/POS release gate",
+            pytrace=False,
+        )
+    pytest.skip(message)
+
+
 @pytest_asyncio.fixture(autouse=True)
 async def require_isolated_postgres(session) -> None:
     database_name = (await session.execute(text("select current_database()"))).scalar_one()
-    if database_name != "dcompany_code22_audit_20260903":
-        pytest.skip(
-            "Code 22 Gaming/POS E2E requires the isolated dcompany_code22_audit_20260903 database"
-        )
+    _require_isolated_gaming_database(
+        database_name,
+        in_ci=os.environ.get("GITHUB_ACTIONS") == "true",
+    )
 
 
 async def _login(client, *, email: str, password: str) -> str:
@@ -812,7 +830,10 @@ async def test_other_co_owner_can_finish_cash_upi_and_close_without_audit_access
         headers=_headers(seed_owner, co_owner_token),
     )
     assert running_close.status_code == 422, running_close.text
-    assert "running gaming session" in running_close.json()["error"]["message"]
+    running_error = running_close.json()["error"]
+    assert running_error["details"]["issue"] == "running_gaming_sessions"
+    assert running_error["details"]["opened_by_name"] == "Owner"
+    assert "Open Gaming" in running_error["details"]["next_action"]
 
     cash_stopped = await client.post(
         f"/api/v1/gaming/sessions/{cash_started.json()['id']}/stop",
@@ -828,7 +849,7 @@ async def test_other_co_owner_can_finish_cash_upi_and_close_without_audit_access
         headers=_headers(seed_owner, co_owner_token),
     )
     assert unbilled_close.status_code == 422, unbilled_close.text
-    assert "not yet sent to POS" in unbilled_close.json()["error"]["message"]
+    assert unbilled_close.json()["error"]["details"]["issue"] == "unbilled_gaming_sessions"
 
     cash_sent = await client.post(
         f"/api/v1/gaming/sessions/{cash_started.json()['id']}/send-to-pos",
@@ -849,7 +870,7 @@ async def test_other_co_owner_can_finish_cash_upi_and_close_without_audit_access
         headers=_headers(seed_owner, co_owner_token),
     )
     assert held_close.status_code == 422, held_close.text
-    assert "unfinished order" in held_close.json()["error"]["message"]
+    assert held_close.json()["error"]["details"]["issue"] == "unfinished_orders"
 
     cash_order = await client.get(
         f"/api/v1/pos/orders/{cash_sent.json()['order_id']}",
@@ -952,6 +973,9 @@ async def test_other_co_owner_can_finish_cash_upi_and_close_without_audit_access
         "id": str(shift_id),
         "status": "closed",
         "variance_minor": 0,
+        "opened_by": str(seed_owner["owner"].id),
+        "closed_by": str(co_owner.id),
+        "closed_by_was_opener": False,
     }
     close_replay = await client.post(
         f"/api/v1/pos/shifts/{shift_id}/close",

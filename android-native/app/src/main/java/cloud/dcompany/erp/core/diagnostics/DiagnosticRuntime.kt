@@ -8,6 +8,7 @@ import android.content.Context
 import android.os.Build
 import android.os.Process
 import android.os.SystemClock
+import android.util.Log
 import androidx.annotation.RequiresApi
 import cloud.dcompany.erp.core.auth.AccessTokenIdentityParser
 import cloud.dcompany.erp.core.auth.CacheScope
@@ -279,125 +280,152 @@ internal object DiagnosticsRuntime {
         verifiedScopeProvider: () -> CacheScope?,
         connectivityProvider: () -> DiagnosticConnectivity = { DiagnosticConnectivity.UNKNOWN },
     ) {
-        synchronized(installLock) {
-            if (installed) return
-            val context = application.applicationContext
-            val markerStore = DiagnosticCrashMarkerStore(context)
-            val exitLedger = DiagnosticExitLedger(context)
-            val verifiedStore = DiagnosticVerifiedScopeStore(context)
-            val dao = DiagnosticDatabaseProvider.get(context).outboxDao()
-            val diagnosticOutbox = DiagnosticOutbox(
-                dao = dao,
-                scheduleDelivery = { DiagnosticSyncScheduler.enqueue(context) },
-            )
-            this.appContext = context
-            this.accessTokenProvider = accessTokenProvider
-            this.verifiedScopeProvider = verifiedScopeProvider
-            this.connectivityProvider = connectivityProvider
-            this.outbox = diagnosticOutbox
-            this.verifiedScopeStore = verifiedStore
-            installCrashHandler(markerStore)
-            DiagnosticSyncScheduler.ensurePeriodic(context)
-            installed = true
-
-            // A historical exit has no in-memory lease. Bind it only when the
-            // token identity, canonical persisted cache scope, and the scope
-            // explicitly verified by the prior process all still agree.
-            val persistedScopeHash = verifiedPersistedDiagnosticScopeHash(
-                tokenIdentity = runCatching { accessTokenProvider() }.getOrNull().orEmpty()
-                    .takeIf(String::isNotBlank)
-                    ?.let(AccessTokenIdentityParser::parse),
-                persistedCacheScope = runCatching {
-                    SharedPreferencesCacheScopeMarker(context).current()
-                }.getOrNull(),
-                persistedDiagnosticScopeHash = verifiedStore.current(),
-            )
-
-            scope.launch {
-                dao.quarantineUnboundPending()
-                val marker = markerStore.peek()
-                marker?.let {
-                    val provenMarkerScope = it.localScopeHash
-                        ?.takeIf { markerScope -> markerScope == persistedScopeHash }
-                    diagnosticOutbox.capture(it.event, provenMarkerScope)
-                    markerStore.acknowledge(it.event.clientEventId)
+        isolateDiagnosticFailure(::reportDiagnosticFailure) {
+            synchronized(installLock) {
+                if (installed) return
+                val context = application.applicationContext
+                val markerStore = DiagnosticCrashMarkerStore(context)
+                val exitLedger = DiagnosticExitLedger(context)
+                val verifiedStore = DiagnosticVerifiedScopeStore(context)
+                val dao = DiagnosticDatabaseProvider.get(context).outboxDao()
+                val diagnosticOutbox = DiagnosticOutbox(
+                    dao = dao,
+                    scheduleDelivery = {
+                        isolateDiagnosticFailure(::reportDiagnosticFailure) {
+                            DiagnosticSyncScheduler.enqueue(context)
+                        }
+                    },
+                )
+                this.appContext = context
+                this.accessTokenProvider = accessTokenProvider
+                this.verifiedScopeProvider = verifiedScopeProvider
+                this.connectivityProvider = connectivityProvider
+                this.outbox = diagnosticOutbox
+                this.verifiedScopeStore = verifiedStore
+                installCrashHandler(markerStore)
+                isolateDiagnosticFailure(::reportDiagnosticFailure) {
+                    DiagnosticSyncScheduler.ensurePeriodic(context)
                 }
-                PreviousProcessExitCapture(context, exitLedger)
-                    .read(markerCrashAtMillis = marker?.event?.occurredAtMillis)
-                    .forEach {
-                        diagnosticOutbox.capture(it, persistedScopeHash)
-                        it.localDedupeKey?.let(exitLedger::remember)
+                installed = true
+
+                // A historical exit has no in-memory lease. Bind it only when the
+                // token identity, canonical persisted cache scope, and the scope
+                // explicitly verified by the prior process all still agree.
+                val persistedScopeHash = verifiedPersistedDiagnosticScopeHash(
+                    tokenIdentity = runCatching { accessTokenProvider() }.getOrNull().orEmpty()
+                        .takeIf(String::isNotBlank)
+                        ?.let(AccessTokenIdentityParser::parse),
+                    persistedCacheScope = runCatching {
+                        SharedPreferencesCacheScopeMarker(context).current()
+                    }.getOrNull(),
+                    persistedDiagnosticScopeHash = verifiedStore.current(),
+                )
+
+                scope.launch {
+                    isolateDiagnosticFailure(::reportDiagnosticFailure) {
+                        dao.quarantineUnboundPending()
+                        val marker = markerStore.peek()
+                        marker?.let {
+                            val provenMarkerScope = it.localScopeHash
+                                ?.takeIf { markerScope -> markerScope == persistedScopeHash }
+                            diagnosticOutbox.capture(it.event, provenMarkerScope)
+                            // Only a durable insertion (or existing UUID) permits acknowledgement.
+                            markerStore.acknowledge(it.event.clientEventId)
+                        }
+                        PreviousProcessExitCapture(context, exitLedger)
+                            .read(markerCrashAtMillis = marker?.event?.occurredAtMillis)
+                            .forEach {
+                                diagnosticOutbox.capture(it, persistedScopeHash)
+                                it.localDedupeKey?.let(exitLedger::remember)
+                            }
                     }
+                }
             }
         }
     }
 
     /** Called from the one central HTTP error interceptor after classification. */
     fun recordApiFailure(observation: ApiFailureObservation) {
-        val event = ApiFailureNormalizer.normalize(observation, System.currentTimeMillis()) ?: return
-        val localScope = currentVerifiedScopeHash()
-        val key = requireNotNull(event.failureFingerprint)
-        if (!scopedState.claimApiFailure(localScope, key, SystemClock.elapsedRealtime())) return
-        capture(event, localScope)
+        isolateDiagnosticFailure(::reportDiagnosticFailure) {
+            val event = ApiFailureNormalizer.normalize(observation, System.currentTimeMillis()) ?: return
+            val localScope = currentVerifiedScopeHash()
+            val key = requireNotNull(event.failureFingerprint)
+            if (!scopedState.claimApiFailure(localScope, key, SystemClock.elapsedRealtime())) return
+            capture(event, localScope)
+        }
     }
 
     /** Called by the sync coordinator with counts only; no row/body data crosses this boundary. */
     fun recordSyncHealth(sample: SyncHealthSample, nowElapsedMillis: Long = SystemClock.elapsedRealtime()) {
-        val localScope = currentVerifiedScopeHash()
-        val signal = scopedState.evaluateSync(localScope, nowElapsedMillis, sample) ?: return
-        capture(
-            DiagnosticEvent(
-                eventType = DiagnosticEventType.SYNC_STALL,
-                severity = if (signal.durationBucket == DiagnosticDurationBucket.OVER_10M) {
-                    DiagnosticSeverity.ERROR
-                } else {
-                    DiagnosticSeverity.WARNING
-                },
-                occurredAtMillis = System.currentTimeMillis(),
-                component = DiagnosticComponent.SYNC,
-                reasonCode = "outbox_progress_stalled",
-                failureFingerprint = sha256Hex("sync|outbox_progress_stalled"),
-                durationBucket = signal.durationBucket,
-                connectivity = DiagnosticConnectivity.ONLINE,
-                pendingOutboxCount = signal.pendingOutboxCount,
-            ),
-            localScope,
-        )
+        isolateDiagnosticFailure(::reportDiagnosticFailure) {
+            val localScope = currentVerifiedScopeHash()
+            val signal = scopedState.evaluateSync(localScope, nowElapsedMillis, sample) ?: return
+            capture(
+                DiagnosticEvent(
+                    eventType = DiagnosticEventType.SYNC_STALL,
+                    severity = if (signal.durationBucket == DiagnosticDurationBucket.OVER_10M) {
+                        DiagnosticSeverity.ERROR
+                    } else {
+                        DiagnosticSeverity.WARNING
+                    },
+                    occurredAtMillis = System.currentTimeMillis(),
+                    component = DiagnosticComponent.SYNC,
+                    reasonCode = "outbox_progress_stalled",
+                    failureFingerprint = sha256Hex("sync|outbox_progress_stalled"),
+                    durationBucket = signal.durationBucket,
+                    connectivity = DiagnosticConnectivity.ONLINE,
+                    pendingOutboxCount = signal.pendingOutboxCount,
+                ),
+                localScope,
+            )
+        }
     }
 
     /** Called only after cache ownership and authenticated outbox ownership agree. */
     fun onVerifiedScopeAvailable() {
-        val localScope = currentVerifiedScopeHash()
-        scopedState.observeScope(localScope)
-        if (localScope == null) {
-            // A stale durable witness must not survive a failed verification.
-            verifiedScopeStore?.clear()
-            return
+        isolateDiagnosticFailure(::reportDiagnosticFailure) {
+            val localScope = currentVerifiedScopeHash()
+            scopedState.observeScope(localScope)
+            if (localScope == null) {
+                // A stale durable witness must not survive a failed verification.
+                verifiedScopeStore?.clear()
+                return
+            }
+            if (verifiedScopeStore?.remember(localScope) != true) {
+                // Best-effort fail closed for future process-exit attribution. The
+                // current process can still safely bind rows to its live lease.
+                verifiedScopeStore?.clear()
+            }
+            appContext?.let(DiagnosticSyncScheduler::enqueue)
         }
-        if (verifiedScopeStore?.remember(localScope) != true) {
-            // Best-effort fail closed for future process-exit attribution. The
-            // current process can still safely bind rows to its live lease.
-            verifiedScopeStore?.clear()
-        }
-        appContext?.let(DiagnosticSyncScheduler::enqueue)
     }
 
     /** Logout/lock hook: reset state and durably revoke prior exit attribution. */
     fun onScopeUnavailable() {
-        verifiedScopeStore?.clear()
-        scopedState.observeScope(null)
+        isolateDiagnosticFailure(::reportDiagnosticFailure) {
+            scopedState.observeScope(null)
+            verifiedScopeStore?.clear()
+        }
     }
 
     /** Reconnect hook for rows captured while the app had no usable link. */
     fun requestDelivery() {
-        val localScope = currentVerifiedScopeHash()
-        scopedState.observeScope(localScope)
-        if (localScope != null) appContext?.let(DiagnosticSyncScheduler::enqueue)
+        isolateDiagnosticFailure(::reportDiagnosticFailure) {
+            val localScope = currentVerifiedScopeHash()
+            scopedState.observeScope(localScope)
+            if (localScope != null) {
+                appContext?.let(DiagnosticSyncScheduler::enqueue)
+            }
+        }
     }
 
     private fun capture(event: DiagnosticEvent, localScope: String?) {
         val target = outbox ?: return
-        scope.launch { target.capture(event, localScope) }
+        scope.launch {
+            isolateDiagnosticFailure(::reportDiagnosticFailure) {
+                target.capture(event, localScope)
+            }
+        }
     }
 
     private fun currentVerifiedScopeHash(): String? {
@@ -434,6 +462,11 @@ internal object DiagnosticsRuntime {
         }
         Thread.setDefaultUncaughtExceptionHandler(handler)
     }
+}
+
+private fun reportDiagnosticFailure(failure: Exception) {
+    // Never report a telemetry failure through telemetry itself or log private messages.
+    Log.w("Diagnostics", "Optional diagnostic work failed (${failure.javaClass.simpleName}); existing evidence was kept.")
 }
 
 internal class DiagnosticRateLimiter(

@@ -36,6 +36,33 @@ class GamingDaoRecoveryTest {
     }
 
     @Test
+    fun uncertainStopRetainsCapturedTimeAndClearsOnlyOnAuthoritativeResult() = runBlocking {
+        dao.insertLocalSession(
+            LocalGamingSessionEntity(
+                localId = "uncertain-stop",
+                serverId = "server-session",
+                stationId = "station-1",
+                shiftId = "shift-1",
+                state = GamingSessionState.STOP_PENDING,
+                status = "stopping",
+                startedAtMillis = 1_000,
+                endAtMillis = 61_000,
+            ),
+        )
+
+        dao.notePendingSessionError("uncertain-stop", "Waiting to confirm the original stop")
+
+        val retained = dao.localSessionById("uncertain-stop")!!
+        assertEquals(GamingSessionState.STOP_PENDING, retained.state)
+        assertEquals(61_000L, retained.endAtMillis)
+        assertEquals("server-session", retained.serverId)
+        assertEquals("Waiting to confirm the original stop", retained.lastError)
+        dao.markSessionSent("uncertain-stop", "order-1", 100)
+        dao.notePendingSessionError("uncertain-stop", "stale failure")
+        assertNull(dao.localSessionById("uncertain-stop")?.lastError)
+    }
+
+    @Test
     fun legacyRejectedRowsRecoverIntoTheCorrectHumanResolutionQueues() = runBlocking {
         dao.insertLocalSession(legacyRow("start", serverId = null, status = "starting"))
         dao.insertLocalSession(legacyRow("stop", serverId = "session-2", status = "stopping"))

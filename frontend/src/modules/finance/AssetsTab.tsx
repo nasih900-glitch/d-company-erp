@@ -8,6 +8,7 @@ import { finance, type AssetDTO, type BranchReferenceDTO } from '@/lib/erp-api';
 import { inr, inrShort } from '@/lib/inr';
 import { rupeesToMinor } from '@/lib/manual-collections';
 import { useRealtimeRefresh } from '@/hooks/useRealtimeRefresh';
+import { useLatestRequest } from '@/hooks/useLatestRequest';
 
 // ============================================================================
 // FIXED ASSETS — equipment register (gaming, kitchen, furniture, ...),
@@ -29,6 +30,7 @@ function categoryLabel(type: string): string {
 }
 
 export default function AssetsTab() {
+  const requests = useLatestRequest();
   const notifications = useNotifications();
   const [rows, setRows] = useState<AssetDTO[]>([]);
   const [branches, setBranches] = useState<BranchReferenceDTO[]>([]);
@@ -37,21 +39,23 @@ export default function AssetsTab() {
   const [addOpen, setAddOpen] = useState(false);
 
   const load = useCallback(async (silent = false) => {
+    const isCurrent = requests.begin();
     if (!silent) setLoading(true);
-    setErr(null);
     try {
       const [assets, branchRows] = await Promise.all([
         finance.listAssets(),
         finance.listBranches(),
       ]);
+      if (!isCurrent()) return;
+      setErr(null);
       setRows(assets);
       setBranches(branchRows);
     } catch (error) {
-      setErr((error as Error).message);
+      if (isCurrent()) setErr((error as Error).message);
     } finally {
-      if (!silent) setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
-  }, []);
+  }, [requests]);
 
   useEffect(() => { void load(); }, [load]);
   useRealtimeRefresh({ resources: ['finance'], refresh: () => load(true) });

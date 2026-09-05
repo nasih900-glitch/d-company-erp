@@ -781,7 +781,7 @@ private fun PosReceiptDialog(
                         title = "Payment confirmed",
                         detail = buildString {
                             append(receipt.method.paymentMethodLabel())
-                            receipt.paidAt?.let { append(" · $it") }
+                            receipt.paidAt?.let { append(" · ${it.receiptDateTime()}") }
                         },
                         tone = UiTone.Success,
                         icon = Icons.Default.CheckCircle,

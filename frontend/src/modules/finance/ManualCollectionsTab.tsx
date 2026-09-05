@@ -23,11 +23,13 @@ import {
 } from '@/lib/manual-collections';
 import { useAuth } from '@/modules/auth/AuthContext';
 import { useRealtimeRefresh } from '@/hooks/useRealtimeRefresh';
+import { useLatestRequest } from '@/hooks/useLatestRequest';
 
 // ============================================================================
 // MANUAL COLLECTIONS — auditable off-POS / legacy daily totals
 // ============================================================================
 export default function ManualCollectionsTab() {
+  const requests = useLatestRequest();
   const { me } = useAuth();
   const notifications = useNotifications();
   const [rows, setRows] = useState<ManualCollectionDTO[]>([]);
@@ -39,23 +41,25 @@ export default function ManualCollectionsTab() {
   const [voiding, setVoiding] = useState<ManualCollectionDTO | null>(null);
 
   const load = useCallback(async (silent = false) => {
+    const isCurrent = requests.begin();
     if (!silent) setLoading(true);
-    setErr(null);
     try {
       const [collections, branchRows, receiptIdentity] = await Promise.all([
         finance.listManualCollections({ include_voided: true, limit: 500 }),
         finance.listBranches(),
         pos.receiptBusiness().catch(() => null),
       ]);
+      if (!isCurrent()) return;
+      setErr(null);
       setRows(collections);
       setBranches(branchRows);
       setCompanyTimezone(receiptIdentity?.timezone || DEFAULT_BUSINESS_TIMEZONE);
     } catch (error) {
-      setErr((error as Error).message);
+      if (isCurrent()) setErr((error as Error).message);
     } finally {
-      if (!silent) setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
-  }, []);
+  }, [requests]);
 
   useEffect(() => { void load(); }, [load]);
   useRealtimeRefresh({ resources: ['finance'], refresh: () => load(true) });

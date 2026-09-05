@@ -455,6 +455,12 @@ interface OrderDao {
         state: String = SyncState.REJECTED,
     )
 
+    @Query(
+        "UPDATE local_orders SET lastError = :error WHERE localId = :localId " +
+            "AND syncState = 'pending'",
+    )
+    suspend fun notePendingError(localId: String, error: String)
+
     /**
      * Human-authorised replay after the refusal's cause has been fixed.
      *

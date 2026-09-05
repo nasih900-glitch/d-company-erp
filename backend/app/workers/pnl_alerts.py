@@ -17,7 +17,7 @@ from typing import Literal
 
 from sqlalchemy import select
 
-from app.core.db import AsyncSessionLocal
+from app.core.db import AsyncSessionLocal, begin_report_snapshot
 from app.core.timezone import local_today
 from app.models import Company, Role, User, UserRole
 from app.services.alerts import (
@@ -221,6 +221,7 @@ async def send_reports(period: CliPeriod, *, as_of: date | None = None) -> None:
     env_recipients = _configured_recipients()
 
     async with AsyncSessionLocal() as session:
+        await begin_report_snapshot(session)
         companies = (
             await session.execute(select(Company).where(Company.deleted_at.is_(None)))
         ).scalars().all()

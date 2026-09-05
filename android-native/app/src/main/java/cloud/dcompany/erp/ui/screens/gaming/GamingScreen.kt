@@ -73,6 +73,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.State
+import androidx.compose.runtime.derivedStateOf
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -81,6 +82,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.structuralEqualityPolicy
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
@@ -2095,17 +2097,30 @@ internal fun GamingStationCard(
     // an active -> paused transition jump back to the instant the card first
     // entered composition instead of freezing when the pause was observed.
     val frozenMillis = remember(session?.id, session?.status) { System.currentTimeMillis() }
-    val nowMillis = if (shouldTick) wallClock.value else frozenMillis
 
     val hasActiveSessionAddons = sessionAddons.any {
         !it.voided && !it.isRejectedLocalAdd()
     }
-    val presentation = stationPresentation(
+    // The outer card owns actions/authority, not the per-second clock. Only a
+    // real presentation change (including crossing the overtime boundary)
+    // should recompose its header, extension choices and action buttons.
+    val presentation by remember(
         station,
         session,
-        nowMillis,
-        hasActiveAddons = hasActiveSessionAddons,
-    )
+        wallClock,
+        shouldTick,
+        frozenMillis,
+        hasActiveSessionAddons,
+    ) {
+        derivedStateOf(structuralEqualityPolicy()) {
+            stationPresentation(
+                station,
+                session,
+                if (shouldTick) wallClock.value else frozenMillis,
+                hasActiveAddons = hasActiveSessionAddons,
+            )
+        }
+    }
     // Available cards contain one short action and should not consume the same
     // height as active/payment cards with timers, billing and recovery copy.
     // Keep the operational states roomy while fitting more ready stations on
@@ -2221,19 +2236,21 @@ internal fun GamingStationCard(
             }
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 StationBody(
-                    presentation,
-                    station,
-                        session,
-                        nowMillis,
-                        activeShiftId,
-                        activeShiftServerConfirmed,
-                        online,
-                        combinedBillSnapshotMinor = session?.let {
-                            Math.addExact(
-                                it.amountMinor ?: 0L,
-                                gamingSessionAddonBillableTotalMinor(sessionAddons),
-                            )
-                        },
+                    presentation = presentation,
+                    station = station,
+                    session = session,
+                    wallClock = wallClock,
+                    shouldTick = shouldTick,
+                    frozenMillis = frozenMillis,
+                    activeShiftId = activeShiftId,
+                    activeShiftServerConfirmed = activeShiftServerConfirmed,
+                    online = online,
+                    combinedBillSnapshotMinor = session?.let {
+                        Math.addExact(
+                            it.amountMinor ?: 0L,
+                            gamingSessionAddonBillableTotalMinor(sessionAddons),
+                        )
+                    },
                 )
             }
         }
@@ -2588,12 +2605,30 @@ private fun StationBody(
     presentation: StationPresentation,
     station: Station,
     session: GameSession?,
-    nowMillis: Long,
+    wallClock: State<Long>,
+    shouldTick: Boolean,
+    frozenMillis: Long,
     activeShiftId: String?,
     activeShiftServerConfirmed: Boolean,
     online: Boolean,
     combinedBillSnapshotMinor: Long?,
 ) {
+    // Read the 1 Hz state in this small body rather than invalidating the
+    // complete station card. Paused/stopping sessions retain their previous
+    // frozen/captured-time behavior; server data still determines billing.
+    val nowMillis = if (shouldTick) wallClock.value else frozenMillis
+    val startedLabel = remember(session?.startAt, session?.timerMinutes) {
+        val started = session?.startAt?.let {
+            runCatching { timeFormatter.format(Instant.parse(it)) }.getOrNull()
+        }
+        buildString {
+            if (started != null) append("Started $started")
+            session?.timerMinutes?.let { minutes ->
+                if (isNotEmpty()) append(" · ")
+                append("${minutes}m booking")
+            }
+        }.ifEmpty { "Session in progress" }
+    }
     when (presentation.state) {
         StationVisualState.Available -> {
             Text("Ready for a new session", color = Brand.Foreground, style = MaterialTheme.typography.bodyMedium)
@@ -2667,15 +2702,8 @@ private fun StationBody(
                     style = MaterialTheme.typography.headlineMedium,
                 )
             }
-            val started = session?.startAt?.let { runCatching { timeFormatter.format(Instant.parse(it)) }.getOrNull() }
             Text(
-                buildString {
-                    if (started != null) append("Started $started")
-                    session?.timerMinutes?.let { minutes ->
-                        if (isNotEmpty()) append(" · ")
-                        append("${minutes}m booking")
-                    }
-                }.ifEmpty { "Session in progress" },
+                startedLabel,
                 color = Brand.ForegroundMuted,
                 style = MaterialTheme.typography.labelSmall,
             )

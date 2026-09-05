@@ -13,6 +13,7 @@ import { LIVE_MODE } from '@/lib/demo';
 import { CATEGORIES, MENU } from '@/lib/demo-data';
 import { inr } from '@/lib/inr';
 import { parseRupeesToMinor } from '@/lib/money-input';
+import { GAMING_CENTRE_CATALOG_GUIDANCE } from '@/lib/product-profile';
 import { APP_STORE_REVIEW, isAppStoreAllowedType } from '@/lib/app-store-compliance';
 import {
   menu, menuAdmin, inventory, recipes, type MenuItemDTO, type MenuCategoryDTO,
@@ -55,8 +56,9 @@ export default function MenuScreen() {
       if (LIVE_MODE) {
         const [c, i] = await Promise.all([menu.categories(), menu.items()]);
         const allowedItems = i.filter((item) => isAppStoreAllowedType(item.type));
-        const allowedCategoryIds = new Set(allowedItems.map((item) => item.category_id));
-        setCats(c.filter((cat) => allowedCategoryIds.has(cat.id)));
+        // Management must retain empty categories so their first item can be
+        // created. Operational POS/Gaming filtering is applied separately.
+        setCats(c);
         setItems(allowedItems);
       } else {
         setCats(CATEGORIES.map((c, idx) => ({ id: c, name: c, sort_order: idx })));
@@ -545,6 +547,9 @@ function CategoryManagerModal({
       <Modal open onClose={onClose} title="Categories">
         <div className="space-y-4">
         {err && <ErrorRow text={err}/>}
+        <p className="rounded-lg border border-bg-border bg-bg-raised p-3 text-xs text-fg-muted">
+          {GAMING_CENTRE_CATALOG_GUIDANCE}
+        </p>
 
         {cats.length > 0 && (
           <div className="space-y-2">
@@ -584,7 +589,7 @@ function CategoryManagerModal({
 
         <form onSubmit={submit} className="space-y-3 pt-2 border-t border-bg-border">
           <p className="text-xs text-fg-muted pt-2">Add a new category</p>
-          <Field label="Name (e.g. Coffee, Mocktails, Desserts)">
+          <Field label="Name (e.g. Drinks & Snacks, Crisps)">
             <input className="input" required value={name} onChange={(e) => setName(e.target.value)}/>
           </Field>
           <Field label="Sort order (lower shows first)">

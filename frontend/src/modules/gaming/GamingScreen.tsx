@@ -1626,7 +1626,7 @@ export default function GamingScreen() {
         notifications.success(
           authoritativeAmount == null
             ? `${st.name} ended after ${elapsedMin} min. Billing is unavailable; a protected owner must review it before POS handoff.`
-            : `${st.name} ended after ${elapsedMin} min. Send ${inr(authoritativeAmount)} to POS when ready to bill.`,
+            : `${st.name} ended after ${elapsedMin} min. Session charge: ${inr(authoritativeAmount)}. Send to POS to review the combined bill, including any drinks and snacks.`,
           { title: 'Session stopped' },
         );
         setPendingStopTarget(null);

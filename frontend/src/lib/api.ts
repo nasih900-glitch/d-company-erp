@@ -1,6 +1,7 @@
 import axios, { AxiosError, type AxiosRequestConfig } from 'axios';
 import { readStoredTerminalId } from './operational-context';
 import { recordFailedSupportAction } from './support-context';
+import { apiFailureMessage } from './api-error-message';
 
 /**
  * Base URL resolution order (most specific wins):
@@ -394,7 +395,7 @@ api.interceptors.response.use(
       }
     }
 
-    const message = serverMessage ?? err.message ?? 'Unknown error talking to the API';
+    const message = apiFailureMessage(serverMessage, err.response?.status);
     const enriched: ApiError = new Error(message);
     enriched.code = serverCode ?? 'network_error';
     // Callers need to tell "the server rejected this session" (401/403) apart

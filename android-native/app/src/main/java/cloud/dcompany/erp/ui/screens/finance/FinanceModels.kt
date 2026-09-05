@@ -420,7 +420,7 @@ private val DAY_SHORT: DateTimeFormatter = DateTimeFormatter.ofPattern("d MMM", 
 private fun localDateOrNull(iso: String?): LocalDate? {
     if (iso.isNullOrBlank()) return null
     return runCatching {
-        OffsetDateTime.parse(iso).atZoneSameInstant(ZoneId.systemDefault()).toLocalDate()
+        OffsetDateTime.parse(iso).atZoneSameInstant(FINANCE_BUSINESS_ZONE).toLocalDate()
     }.recoverCatching {
         LocalDateTime.parse(iso).toLocalDate()
     }.recoverCatching {

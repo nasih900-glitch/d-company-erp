@@ -282,6 +282,8 @@ private fun OverviewTab(state: FinanceUiState, presentation: WorkspacePresentati
             color = Brand.ForegroundMuted,
         )
 
+        state.allocationWarning?.let { AllocationUnavailableNotice(it) }
+
         val coverage = state.verifiedCostingCoverage
         Panel(border = if (coverage?.isComplete == true) Brand.Good else Brand.Warning) {
             Text(
@@ -1063,6 +1065,7 @@ private fun PartnersTab(state: FinanceUiState, vm: FinanceViewModel, canWrite: B
                 "Partner capital is view only — ask a protected owner to record a movement.",
             )
         }
+        state.allocationWarning?.let { AllocationUnavailableNotice(it) }
         if (distributable != null) {
             DistributableCard(distributable, state.verifiedCostingCoverage)
         }
@@ -1103,6 +1106,24 @@ private fun PartnersTab(state: FinanceUiState, vm: FinanceViewModel, canWrite: B
             "Investment records money a partner put in; capital repayment records money " +
                 "paid back. Profit share is calculated separately and does not change " +
                 "contributed capital. Corrections require an authorised reasoned void.",
+        )
+    }
+}
+
+@Composable
+private fun AllocationUnavailableNotice(reason: String) {
+    Panel(border = Brand.Warning) {
+        Text(
+            "Partner allocations unavailable",
+            color = Brand.Warning,
+            fontWeight = FontWeight.Bold,
+        )
+        Text(reason, style = MaterialTheme.typography.bodyMedium, color = Brand.Foreground)
+        Text(
+            "Sales, collections, P&L and capital history remain separate from partner allocations. " +
+                "No profit shares or distribution amounts are assumed.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = Brand.ForegroundMuted,
         )
     }
 }

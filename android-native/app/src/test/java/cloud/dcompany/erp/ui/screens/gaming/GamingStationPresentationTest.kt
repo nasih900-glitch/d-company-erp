@@ -1,6 +1,9 @@
 package cloud.dcompany.erp.ui.screens.gaming
 
 import androidx.compose.ui.unit.dp
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.structuralEqualityPolicy
 import cloud.dcompany.erp.core.db.GamingSessionState
 import cloud.dcompany.erp.core.db.GamingLegacyResolution
 import cloud.dcompany.erp.core.db.LEGACY_PACKAGE_START_REVIEW_ERROR
@@ -341,6 +344,29 @@ class GamingStationPresentationTest {
 
         assertEquals(StationVisualState.Overtime, result.state)
         assertEquals("Overtime", result.statusLabel)
+    }
+
+    @Test
+    fun `structural clock projection keeps active state stable but observes overtime boundary`() {
+        val running = session(status = "active", timerEndsAt = "2026-08-26T18:00:00Z")
+        val clock = mutableLongStateOf(now - 1_000)
+        val presentation = derivedStateOf(structuralEqualityPolicy()) {
+            stationPresentation(station, running, clock.longValue)
+        }
+        val beforeBoundary = presentation.value
+        val elapsedBefore = elapsedMillis(running, clock.longValue)
+
+        clock.longValue = now
+        assertEquals(beforeBoundary, presentation.value)
+        assertEquals(StationVisualState.Active, presentation.value.state)
+        assertEquals(elapsedBefore + 1_000, elapsedMillis(running, clock.longValue))
+
+        clock.longValue = now + 1
+        assertEquals(StationVisualState.Overtime, presentation.value.state)
+        val overtime = presentation.value
+        clock.longValue = now + 60_000
+        assertEquals(overtime, presentation.value)
+        assertEquals(61 * 60_000L, elapsedMillis(running, clock.longValue))
     }
 
     @Test

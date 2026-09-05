@@ -11,6 +11,22 @@ import org.junit.Test
 class GamingProjectionPerformanceContractTest {
 
     @Test
+    fun `station action card observes only structural status while body owns the clock`() {
+        val source = Files.newBufferedReader(
+            projectRoot().resolve("src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingScreen.kt"),
+        ).use { it.readText() }
+        val card = source.between("internal fun GamingStationCard(", "internal fun OrphanPackageExtensionBanner(")
+        val body = source.between("private fun StationBody(", "internal fun stationPresentation(")
+
+        assertTrue("Outer status must retain structural equality", "derivedStateOf(structuralEqualityPolicy())" in card)
+        assertFalse("Do not read each tick into the entire action card", "val nowMillis =" in card)
+        assertTrue("Body receives the State, not a read timestamp", "wallClock = wallClock" in card)
+        assertTrue("Visible timers must still observe the clock", "val nowMillis = if (shouldTick) wallClock.value else frozenMillis" in body)
+        assertTrue("Timer text must continue rendering actual elapsed time", "value = formatElapsed(elapsed)" in body)
+        assertTrue("Static date parsing must be keyed to source fields", "remember(session?.startAt, session?.timerMinutes)" in body)
+    }
+
+    @Test
     fun `Gaming projection mapping is dispatched away from Main`() {
         val projection = readGamingViewModel().between(
             "val state: StateFlow<GamingUiState>",

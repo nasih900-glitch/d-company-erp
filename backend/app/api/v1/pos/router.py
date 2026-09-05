@@ -5429,6 +5429,15 @@ async def _settle_pos_refund(
     provider_settled_at: datetime | None = None,
 ) -> Refund:
     """Create the immutable financial fact and all side effects exactly once."""
+    if int(order.tip_minor or 0) > 0:
+        # Refunds reduce the same company-wide Tips Payable balance used by
+        # staff payouts. Serialize those two debit paths before settlement so
+        # a later payout cannot read tips that this refund already returned.
+        await session.execute(
+            select(Company.id)
+            .where(Company.id == refund_request.company_id)
+            .with_for_update(key_share=True)
+        )
     paid_total = await _paid_total(session, order.id)
     refunded_before = await _refunded_total(session, order.id)
     amount = int(refund_request.amount_minor)

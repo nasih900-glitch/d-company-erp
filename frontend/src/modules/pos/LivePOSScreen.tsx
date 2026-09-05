@@ -65,6 +65,7 @@ import {
 } from '@/lib/operational-context';
 import {
   GAMING_CENTRE_FEATURES,
+  GAMING_CENTRE_CATALOG_GUIDANCE,
   profileOperationalCatalogItems,
   profileMembershipMoneyLabel,
   profilePosCheckoutSource,
@@ -1617,6 +1618,7 @@ export default function LivePOSScreen() {
   }
 
   function finishCheckout(paidOrder: OrderDTO) {
+    setError(null);
     setReceipt(paidOrder);
     setCheckoutRetry(null);
     setShowPay(false);
@@ -3208,7 +3210,11 @@ export default function LivePOSScreen() {
 
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
           {!filtered.length && (
-            <div className="card col-span-full text-sm text-fg-muted">No menu items match.</div>
+            <div className="card col-span-full text-sm text-fg-muted">
+              {items.length > 0
+                ? 'No products match this search or category. Clear the search or choose another category.'
+                : <>No eligible drinks or snacks are available. {GAMING_CENTRE_CATALOG_GUIDANCE}</>}
+            </div>
           )}
           {filtered.map((item) => (
             <button
@@ -4126,6 +4132,9 @@ function Modal({
     <div
       className="fixed inset-0 z-50 flex items-end md:items-center justify-center bg-bg/80 backdrop-blur-sm md:p-4 print:p-0 print:bg-white"
       onClick={locked ? undefined : onClose}
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
     >
       <div
         className={`bg-bg-surface border border-bg-border rounded-t-2xl md:rounded-2xl shadow-glow w-full ${wide ? 'md:max-w-md' : 'md:max-w-sm'} max-h-[calc(100dvh-1rem)] overflow-auto print:max-w-none print:w-auto print:bg-white print:text-black print:border-none print:shadow-none print:overflow-visible`}

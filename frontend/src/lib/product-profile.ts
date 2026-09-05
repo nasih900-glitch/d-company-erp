@@ -116,6 +116,9 @@ ReadonlyArray<ProfileOperationalCatalogRule> = Object.freeze([
   Object.freeze({ categoryName: 'Crisps', itemTypes: Object.freeze(['food']) }),
 ]);
 
+export const GAMING_CENTRE_CATALOG_GUIDANCE =
+  'In Products, mark the item available and use Soft Drinks for drinks, Snacks or Crisps for food, or Drinks & Snacks for both. Other categories are kept for later café use.';
+
 function normalizeCatalogValue(value: string): string {
   return value.trim().toLowerCase();
 }

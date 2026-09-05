@@ -66,6 +66,18 @@ class FinanceRefreshArchitectureTest {
         assertTrue("Sync does not fetch tip payouts", "financeApi.tipPayouts()" in sync)
         assertTrue("Sync does not fetch Tips Payable", "financeApi.trialBalance()" in sync)
         assertTrue(
+            "Allocation business rejection must be isolated inside its async child",
+            "async { fetchFinanceAllocation { financeApi.distributable() } }" in sync,
+        )
+        assertTrue(
+            "The atomic allocation snapshot is not Room-observed",
+            "observeSnapshot<FinanceAllocationSnapshot>(FinanceSnapshotKeys.DISTRIBUTABLE)" in source,
+        )
+        assertTrue(
+            "A previous successful allocation can accompany a newer P&L",
+            "allocationSnapshot.reportForSummary(" in source,
+        )
+        assertTrue(
             "Sync rebuilds a restricted default Finance scope instead of the profile-derived observed scope",
             "financeCacheScopeForLease(" in sync,
         )
@@ -76,6 +88,10 @@ class FinanceRefreshArchitectureTest {
         assertTrue(
             "A completed load without a summary can still render the indefinite spinner",
             "when (state.primaryContentState)" in screen,
+        )
+        assertTrue(
+            "Allocation reconciliation guidance is not shown on Overview and Partners",
+            screen.split("state.allocationWarning?.let { AllocationUnavailableNotice(it) }").size == 3,
         )
     }
 

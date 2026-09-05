@@ -121,7 +121,7 @@ class ApiException(
 
     /** No answer from the server: the request may or may not have committed. */
     val isAmbiguous: Boolean
-        get() = status == null || status >= 500 || code == "idempotency_in_progress"
+        get() = status == null || status == 408 || status >= 500 || code == "idempotency_in_progress"
 
     /** The server decided, and said no. Nothing was written. */
     val isBusinessRule: Boolean get() = code == "business_rule"

@@ -9,8 +9,8 @@ WebView.
 | Field | Value |
 | --- | --- |
 | Package / application ID | `cloud.dcompany.erp` |
-| Version name | `3.1.12` |
-| Version code | `23` |
+| Version name | `3.1.13` |
+| Version code | `24` |
 | Minimum compatible client code | `8` |
 | Minimum Android version | Android 8 (`minSdk 26`) |
 | Target Android version | Android 15 (`targetSdk 35`) |
@@ -23,8 +23,8 @@ build.
 
 ## Release status
 
-Version `3.1.12` (`23`) is the shared-shift accountability and operational
-feedback candidate following the signed `3.1.10` (`21`) delivery predecessor.
+Version `3.1.13` (`24`) is the audited recovery and finance candidate following
+the signed `3.1.10` (`21`) delivery predecessor and unsigned Code 23 candidate.
 It includes Code 22's owner-approved Standard, Premium, Simdrive and multiplayer
 tariff, exact extension billing, held-bill discounts, session recovery and all
 earlier connectivity, privacy-preserving diagnostics, offline outbox,
@@ -45,7 +45,9 @@ has no authorised APK and its failed tag must not be reused. Code `19` also has
 no authorised APK after a hosted-runner memory failure. Code `20` also has no
 authorised APK after its isolated signer rejected an unrooted SDK-tool lookup.
 Code `21` remains immutable signed predecessor history. Code `22` was superseded
-before signing and must not be approved or activated. Code `23` is the
+before signing and must not be approved or activated. Code `23` was also
+superseded before signing after the deeper production audit; its immutable
+tag and evidence remain historical. Code `24` is the
 separately gated server-delivery candidate; source preparation alone does not
 authorise hosting, registering, staging, advertising, or activating it. Rollout
 requires a separately reviewed immutable APK,
@@ -54,8 +56,9 @@ same-lineage upgrade proof. Android will still require the employee to approve
 installation. Do not raise the compatibility minimum merely because a newer
 candidate exists.
 
-See [`CODE23_RELEASE_CANDIDATE.md`](../docs/CODE23_RELEASE_CANDIDATE.md) for the
-exact inherited tariff, shared-shift changes, and release boundary.
+See [`CODE24_RELEASE_CANDIDATE.md`](../docs/CODE24_RELEASE_CANDIDATE.md) for the
+audit corrections and current release boundary, and the historical Code 23
+brief for inherited tariff and shared-shift changes.
 
 Do not give a build to café staff until all automated gates are green, a signed
 artifact has been verified, and the staff workflow in

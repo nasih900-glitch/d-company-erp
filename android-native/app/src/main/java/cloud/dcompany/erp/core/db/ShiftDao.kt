@@ -269,6 +269,12 @@ interface ShiftDao {
     @Query("UPDATE local_shifts SET state = 'close_rejected', lastError = :error WHERE localId = :localId")
     suspend fun markCloseRejected(localId: String, error: String)
 
+    @Query(
+        "UPDATE local_shifts SET lastError = :error WHERE localId = :localId " +
+            "AND state IN ('open_pending', 'close_pending')",
+    )
+    suspend fun notePendingError(localId: String, error: String)
+
     @Query("UPDATE local_shifts SET state = 'close_pending', lastError = NULL WHERE localId = :localId AND state = 'close_rejected'")
     suspend fun retryClose(localId: String): Int
 

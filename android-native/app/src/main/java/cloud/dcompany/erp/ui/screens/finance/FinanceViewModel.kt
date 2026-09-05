@@ -173,6 +173,7 @@ internal data class FinanceUiState(
     val pl: ProfitAndLoss? = null,
     val metrics: BusinessMetrics? = null,
     val distributable: DistributableProfit? = null,
+    val allocationUnavailableReason: String? = null,
     val costingCoverage: CostingCoverage? = null,
     val expenses: List<Expense> = emptyList(),
     val assets: List<Asset> = emptyList(),
@@ -226,6 +227,13 @@ internal data class FinanceUiState(
         get() = costingCoverage.takeIf {
             lastUpdatedAtMillis != null &&
                 costingCoverageUpdatedAtMillis == lastUpdatedAtMillis
+        }
+
+    val allocationWarning: String?
+        get() = if (!companyWidePartnerDataAvailable || !loaded) null else {
+            allocationUnavailableReason ?: FINANCE_ALLOCATION_NOT_VERIFIED.takeIf {
+                distributable == null
+            }
         }
 
     fun categoryName(id: String): String = categoryNames[id] ?: "—"
@@ -325,7 +333,7 @@ class FinanceViewModel : ViewModel() {
 
     private val pl = MutableStateFlow<ProfitAndLoss?>(null)
     private val metrics = MutableStateFlow<BusinessMetrics?>(null)
-    private val distributable = MutableStateFlow<DistributableProfit?>(null)
+    private val allocation = MutableStateFlow<Pair<FinanceAllocationSnapshot?, Long?>>(null to null)
     private val costingCoverage = MutableStateFlow<CostingCoverage?>(null)
     private val lastUpdatedAtMillis = MutableStateFlow<Long?>(null)
     private val costingCoverageUpdatedAtMillis = MutableStateFlow<Long?>(null)
@@ -368,7 +376,7 @@ class FinanceViewModel : ViewModel() {
     private data class FinanceTotalsState(
         val pl: ProfitAndLoss?,
         val metrics: BusinessMetrics?,
-        val distributable: DistributableProfit?,
+        val allocation: Pair<FinanceAllocationSnapshot?, Long?>,
         val costingCoverage: CostingCoverage?,
         val lastUpdatedAtMillis: Long?,
         val costingCoverageUpdatedAtMillis: Long?,
@@ -392,7 +400,7 @@ class FinanceViewModel : ViewModel() {
         combine(
             pl,
             metrics,
-            distributable,
+            allocation,
             costingCoverage,
             combine(lastUpdatedAtMillis, costingCoverageUpdatedAtMillis) { figuresAt, costingAt ->
                 figuresAt to costingAt
@@ -440,7 +448,7 @@ class FinanceViewModel : ViewModel() {
     ) { plMetricsDistributable, expenseData, assetData, refData, rest ->
         val p = plMetricsDistributable.pl
         val m = plMetricsDistributable.metrics
-        val d = plMetricsDistributable.distributable
+        val (allocationSnapshot, allocationFetchedAt) = plMetricsDistributable.allocation
         val (expenseCache, localExpenses) = expenseData
         val (assetCache, localAssets) = assetData
         val partnerList = refData.partners
@@ -463,7 +471,11 @@ class FinanceViewModel : ViewModel() {
             error = err,
             pl = p,
             metrics = m,
-            distributable = d,
+            distributable = allocationSnapshot.reportForSummary(
+                allocationFetchedAt,
+                plMetricsDistributable.lastUpdatedAtMillis,
+            ),
+            allocationUnavailableReason = allocationSnapshot?.unavailableReason,
             costingCoverage = plMetricsDistributable.costingCoverage,
             expenses = visibleFinanceRows(
                 expenseCache,
@@ -530,8 +542,8 @@ class FinanceViewModel : ViewModel() {
         observeSnapshot<BusinessMetrics>(FinanceSnapshotKeys.METRICS) { value, _ ->
             metrics.value = value
         }
-        observeSnapshot<DistributableProfit>(FinanceSnapshotKeys.DISTRIBUTABLE) { value, _ ->
-            distributable.value = value
+        observeSnapshot<FinanceAllocationSnapshot>(FinanceSnapshotKeys.DISTRIBUTABLE) { value, fetchedAt ->
+            allocation.value = value to fetchedAt
         }
         observeSnapshot<CostingCoverage>(FinanceSnapshotKeys.COSTING) { value, fetchedAt ->
             costingCoverage.value = value
@@ -712,7 +724,7 @@ class FinanceViewModel : ViewModel() {
     private fun clearSensitiveReadState() {
         pl.value = null
         metrics.value = null
-        distributable.value = null
+        allocation.value = null to null
         costingCoverage.value = null
         lastUpdatedAtMillis.value = null
         costingCoverageUpdatedAtMillis.value = null

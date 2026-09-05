@@ -766,7 +766,7 @@ private fun CloseShiftCard(
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 Text(
-                    "Close sent — waiting for server confirmation" +
+                    "Close saved — waiting for server confirmation" +
                         (if (!state.online) " (no connection right now)" else "") + ".",
                     color = Brand.Foreground,
                     fontWeight = FontWeight.SemiBold,
@@ -780,6 +780,13 @@ private fun CloseShiftCard(
                     color = Brand.ForegroundMuted,
                     style = MaterialTheme.typography.labelSmall,
                 )
+                shift.local?.lastError?.takeIf(String::isNotBlank)?.let { message ->
+                    Text(
+                        message,
+                        color = Brand.Foreground,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
             }
         }
 

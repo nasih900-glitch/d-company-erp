@@ -2246,8 +2246,8 @@ export interface DashboardKPIsDTO {
 }
 
 export const analytics = {
-  dashboard: (on_date: string) =>
-    api.get<DashboardKPIsDTO>('/analytics/dashboard', { params: { on_date } }).then((r) => r.data),
+  dashboard: (on_date?: string) =>
+    api.get<DashboardKPIsDTO>('/analytics/dashboard', { params: on_date ? { on_date } : {} }).then((r) => r.data),
   // Full period P&L CSV export (analytics.export permission).
   exportCsv: (period_start: string, period_end: string) =>
     downloadCsv(

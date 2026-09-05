@@ -14,7 +14,7 @@ from typing import Any, Literal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request, status
-from pydantic import BaseModel, Field
+from pydantic import AwareDatetime, BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import aliased
@@ -202,7 +202,7 @@ class TipPayoutCreate(BaseModel):
     branch_id: UUID
     amount_minor: int = Field(gt=0)
     method: Literal["cash", "upi", "card", "bank"]
-    paid_at: datetime
+    paid_at: AwareDatetime
     note: str = Field(min_length=3, max_length=500)
 
 
@@ -1247,16 +1247,25 @@ async def create_tip_payout(
     if replay:
         return TipPayoutRead.model_validate(replay["body"])
 
+    if payload.paid_at > datetime.now(timezone.utc):
+        raise BusinessRuleError(
+            "Tip payout time cannot be in the future. Enter when the money was "
+            "actually paid to staff, then try again."
+        )
     if not tenant.in_branch(payload.branch_id):
         raise NotFoundError("branch not found")
 
+    # Tips Payable is a company-wide balance. Lock that common owner row
+    # before reading the ledger so concurrent payouts, including ones from
+    # different branches, cannot both spend the same outstanding amount.
     branch = (
         await session.execute(
-            select(Branch).where(
+            select(Branch).join(Company, Company.id == Branch.company_id).where(
                 Branch.id == payload.branch_id,
                 Branch.company_id == tenant.company_id,
                 Branch.deleted_at.is_(None),
-            )
+                Company.deleted_at.is_(None),
+            ).with_for_update(of=Company, key_share=True)
         )
     ).scalar_one_or_none()
     if not branch:
@@ -1276,8 +1285,10 @@ async def create_tip_payout(
     )
     if payload.amount_minor > outstanding_tips_minor:
         raise BusinessRuleError(
-            f"Payout of {payload.amount_minor / 100:.2f} exceeds the "
-            f"{outstanding_tips_minor / 100:.2f} currently owed to staff in Tips Payable."
+            f"Payout of ₹{Decimal(payload.amount_minor) / 100:.2f} exceeds the "
+            f"₹{Decimal(outstanding_tips_minor) / 100:.2f} currently owed to staff "
+            "in Tips Payable. Refresh Tip payouts and review previous payouts "
+            "before entering a lower amount."
         )
 
     row = TipPayout(
