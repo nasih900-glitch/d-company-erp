@@ -36,7 +36,9 @@ The additional Code 25 work is broader than a dialog-only correction:
 - Release preparation builds from immutable source, records backend/web runtime
   identity, verifies rollback image identity, uses safe root-owned APK staging,
   rejects unsafe SSH destinations, isolates signing secrets, independently
-  rebuilds unsigned Android artifacts, and checks dependency locks.
+  rebuilds unsigned Android artifacts, and checks dependency locks. Operator
+  and backend now share a cross-tested, newline-free canonical manifest
+  fingerprint while shell transport framing remains independent.
 - Production container bases are pinned by digest. The production Python closure
   is exact-version and artifact-hash locked, and CI exercises that same closure.
 - Fresh-volume PostgreSQL readiness distinguishes the temporary initialization
@@ -53,7 +55,7 @@ Evidence must be recorded against one exact frozen commit and artifact. The
 results below are local source evidence and become release evidence only when
 reproduced by protected CI on the final commit:
 
-- Backend: all 71 migrations applied to a fresh database; 1,460 tests passed and
+- Backend: all 71 migrations applied to a fresh database; 1,461 tests passed and
   18 explicitly isolated tests were then run against their allowlisted database
   and passed. The guarded disposable end-to-end workflow passed 182 checks with
   no failures and the test database, Redis databases, SMTP sink, and processes
@@ -69,7 +71,7 @@ reproduced by protected CI on the final commit:
   permission-granted/deep-idle alarm cases then passed separately. The formerly
   intermittent Gaming recovery interaction passed 10 consecutive runs at
   2,560 x 1,600 and 320 dpi.
-- Release/security: the complete repository contract suite passed 164 tests and
+- Release/security: the complete repository contract suite passed 165 tests and
   295 subtests, with the Bash-4 installer fault-injection and real Linux
   `renameat2(RENAME_NOREPLACE)` tests skipped on macOS. The settled focused
   installer/release/staging review passed 89 tests and 114 subtests with the

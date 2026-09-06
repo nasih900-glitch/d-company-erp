@@ -61,9 +61,7 @@ FIRST_SERVER_DELIVERED_VERSION_CODE = 15
 DEFAULT_BASE_URL = "https://dcompany.duckdns.org"
 DEFAULT_REMOTE_ROOT = "/opt/d-company-erp"
 DEFAULT_ATTESTATION_ROOT = "/var/lib/dcompany-erp/android-releases/attestations"
-DEFAULT_PRODUCTION_INSTALL_LOCK = Path(
-    "/run/d-company-erp/production-install.lock"
-)
+DEFAULT_PRODUCTION_INSTALL_LOCK = Path("/run/d-company-erp/production-install.lock")
 PRODUCTION_INSTALL_LOCK = str(DEFAULT_PRODUCTION_INSTALL_LOCK)
 PRIVATE_UPLOAD_DIRECTORY_NAME = ".d-company-erp-android-release-staging"
 TRUSTED_REMOTE_OWNER_UID = 0
@@ -520,6 +518,23 @@ def canonical_json(payload: dict[str, Any]) -> bytes:
     return (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode()
 
 
+def canonical_registry_manifest(payload: dict[str, Any]) -> bytes:
+    """Encode the immutable registry manifest exactly as the backend does.
+
+    Transport messages may retain a trailing newline for shell friendliness,
+    but the persisted manifest fingerprint is a protocol boundary shared with
+    ``backend.app.services.client_updates.releases`` and must not include it.
+    Keep the explicit ASCII policy in sync with the authoritative backend
+    canonicalizer.
+    """
+    return json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    ).encode("utf-8")
+
+
 def _validated_runtime_root(raw: Any) -> str:
     if (
         not isinstance(raw, str)
@@ -727,7 +742,9 @@ def _ssh_upload_apk(
 def _validated_registration_receipt(
     response: Any, manifest: dict[str, Any]
 ) -> dict[str, Any]:
-    expected_manifest_sha256 = hashlib.sha256(canonical_json(manifest)).hexdigest()
+    expected_manifest_sha256 = hashlib.sha256(
+        canonical_registry_manifest(manifest)
+    ).hexdigest()
     if (
         not isinstance(response, dict)
         or response.get("status") != "staged"
@@ -828,7 +845,7 @@ def stage_release(args: argparse.Namespace) -> dict[str, Any]:
         apksigner_path=args.apksigner,
     )
     strict_manifest = registry_manifest(ci, release_notes=args.release_notes)
-    manifest_bytes = canonical_json(strict_manifest)
+    manifest_bytes = canonical_registry_manifest(strict_manifest)
     manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
 
     target = _validated_remote_target(

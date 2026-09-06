@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import sys
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
@@ -30,6 +32,12 @@ from app.services.client_updates.releases import (
     verify_public_apk,
 )
 from scripts.register_android_release import _parse_manifest
+
+_REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
+if str(_REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPOSITORY_ROOT))
+
+from ops.stage_android_release import canonical_registry_manifest  # noqa: E402
 
 
 def _heartbeat(**overrides) -> dict:
@@ -252,6 +260,15 @@ def test_release_manifest_is_strict_canonical_and_controlled_path_only() -> None
                 AndroidReleaseManifest.model_validate(
                     {**manifest.model_dump(), "update_url": bad_url}
                 )
+
+
+def test_operator_and_backend_share_exact_manifest_fingerprint() -> None:
+    manifest = _manifest()
+    operator_digest = hashlib.sha256(
+        canonical_registry_manifest(manifest.model_dump(mode="json"))
+    ).hexdigest()
+
+    assert operator_digest == manifest_sha256(manifest)
 
 
 @pytest.mark.parametrize(
