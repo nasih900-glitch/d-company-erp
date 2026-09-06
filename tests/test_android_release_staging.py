@@ -105,6 +105,18 @@ class AndroidReleaseStagingTest(unittest.TestCase):
         self.assertNotIn("status", payload)
         self.assertNotIn("minimum_supported_version_code", payload)
 
+    def test_registry_manifest_fingerprint_excludes_transport_newline(self) -> None:
+        payload = {"version_code": 25, "release_notes": "Code 25"}
+        expected = json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ).encode("utf-8")
+
+        self.assertEqual(expected, staging.canonical_registry_manifest(payload))
+        self.assertEqual(expected + b"\n", staging.canonical_json(payload))
+
     def test_android_tools_must_agree_with_manifest_identity(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             manifest_path, apk, _ = self.make_package(Path(temporary))
@@ -684,6 +696,15 @@ class AndroidReleaseStagingTest(unittest.TestCase):
     def test_verification_only_does_not_require_vps_credentials(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             manifest_path, apk, _ = self.make_package(Path(temporary))
+            ci_manifest = staging.load_ci_manifest(manifest_path, base_url=BASE_URL)
+            expected_registry_digest = hashlib.sha256(
+                staging.canonical_registry_manifest(
+                    staging.registry_manifest(
+                        ci_manifest,
+                        release_notes="Verified gaming update",
+                    )
+                )
+            ).hexdigest()
             args = Namespace(
                 manifest=manifest_path,
                 apk=apk,
@@ -714,6 +735,10 @@ class AndroidReleaseStagingTest(unittest.TestCase):
 
         self.assertTrue(result["ok"])
         self.assertFalse(result["applied"])
+        self.assertEqual(
+            expected_registry_digest,
+            result["plan"]["registry_manifest_sha256"],
+        )
 
     def test_staging_requires_an_independently_trusted_signer(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -855,7 +880,7 @@ class AndroidReleaseStagingTest(unittest.TestCase):
             "id": "11111111-1111-1111-1111-111111111111",
             "status": "staged",
             "manifest_sha256": hashlib.sha256(
-                staging.canonical_json(manifest)
+                staging.canonical_registry_manifest(manifest)
             ).hexdigest(),
         }
         with tempfile.TemporaryDirectory() as temporary:
@@ -1048,7 +1073,7 @@ class AndroidReleaseStagingTest(unittest.TestCase):
                 if action == "finalize":
                     self.assertEqual(runtime, payload["initial_runtime_parity"])
                     digest = hashlib.sha256(
-                        staging.canonical_json(payload["manifest"])
+                        staging.canonical_registry_manifest(payload["manifest"])
                     ).hexdigest()
                     return {
                         "ok": True,
