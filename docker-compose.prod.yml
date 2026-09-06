@@ -195,6 +195,7 @@ services:
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       FROM_EMAIL: ${FROM_EMAIL:-}
       FROM_NAME: ${FROM_NAME:-D Company ERP}
+      SEED_OWNER_EMAIL: ${SEED_OWNER_EMAIL}
       SEED_OWNER_PASSWORD: ${SEED_OWNER_PASSWORD:-}
     depends_on:
       postgres:

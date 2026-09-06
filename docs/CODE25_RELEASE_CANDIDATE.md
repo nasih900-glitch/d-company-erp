@@ -69,7 +69,7 @@ reproduced by protected CI on the final commit:
   permission-granted/deep-idle alarm cases then passed separately. The formerly
   intermittent Gaming recovery interaction passed 10 consecutive runs at
   2,560 x 1,600 and 320 dpi.
-- Release/security: the complete repository contract suite passed 163 tests and
+- Release/security: the complete repository contract suite passed 164 tests and
   295 subtests, with the Bash-4 installer fault-injection and real Linux
   `renameat2(RENAME_NOREPLACE)` tests skipped on macOS. The settled focused
   installer/release/staging review passed 89 tests and 114 subtests with the

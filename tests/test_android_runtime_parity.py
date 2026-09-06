@@ -201,6 +201,20 @@ class RuntimeParityTest(unittest.TestCase):
         self.assertIn("read_backend_build_identity()", settings)
         self.assertIn("if baked != declared:", settings)
 
+    def test_clean_production_bootstrap_receives_both_owner_credentials(self):
+        compose = yaml.safe_load((ROOT / "docker-compose.prod.yml").read_text())
+        environment = compose["services"]["backend"]["environment"]
+
+        # A fresh database runs scripts.seed from the backend entrypoint. Both
+        # fields have already passed validate-production-env.sh and must reach
+        # that process; passing only the password leaves the container in a
+        # restart loop before uvicorn can become healthy.
+        self.assertEqual("${SEED_OWNER_EMAIL}", environment["SEED_OWNER_EMAIL"])
+        self.assertEqual(
+            "${SEED_OWNER_PASSWORD:-}",
+            environment["SEED_OWNER_PASSWORD"],
+        )
+
     def test_runtime_gate_preserves_redacted_diagnostics_before_cleanup(self):
         source = (
             ROOT / "infra" / "scripts" / "verify-production-runtime-images.sh"
