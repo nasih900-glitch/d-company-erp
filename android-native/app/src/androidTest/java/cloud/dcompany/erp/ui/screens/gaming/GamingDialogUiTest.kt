@@ -1,6 +1,13 @@
 package cloud.dcompany.erp.ui.screens.gaming
 
 import android.graphics.Bitmap
+import android.accessibilityservice.AccessibilityServiceInfo
+import android.os.SystemClock
+import android.util.Log
+import android.view.InputDevice
+import android.view.Choreographer
+import android.view.MotionEvent
+import android.view.accessibility.AccessibilityWindowInfo
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
@@ -21,6 +28,7 @@ import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertWidthIsAtLeast
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.isDisplayed
+import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -33,13 +41,19 @@ import androidx.compose.ui.test.performImeAction
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextReplacement
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.platform.ViewRootForTest
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.dp
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.test.platform.app.InstrumentationRegistry
 import cloud.dcompany.erp.core.db.GamingSessionState
 import cloud.dcompany.erp.core.db.GamingPackageExtensionState
@@ -49,6 +63,9 @@ import cloud.dcompany.erp.core.db.LEGACY_PACKAGE_START_REVIEW_ERROR
 import cloud.dcompany.erp.ui.theme.DCompanyTheme
 import java.time.Instant
 import java.io.File
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import kotlin.math.abs
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -966,6 +983,9 @@ class GamingDialogUiTest {
     fun capturedStopDefaultsToAuthoritativeAcceptedStartRecovery() {
         var submittedResolution: String? = null
         var submittedReference: String? = "unexpected"
+        var submittedPayload: List<String?>? = null
+        var submissions = 0
+        var dismissals = 0
         val session = GameSession(
             id = "99999999-9999-4999-8999-999999999999",
             stationId = "station-1",
@@ -983,10 +1003,12 @@ class GamingDialogUiTest {
                     session = session,
                     stationName = "PS5 Station 1",
                     requiresOwnerStepUp = true,
-                    onDismiss = {},
-                    onConfirm = { resolution, reference, _, _, _ ->
+                    onDismiss = { dismissals++ },
+                    onConfirm = { resolution, reference, reason, email, password ->
+                        submissions++
                         submittedResolution = resolution
                         submittedReference = reference
+                        submittedPayload = listOf(resolution, reference, reason, email, password)
                     },
                 )
             }
@@ -1006,15 +1028,73 @@ class GamingDialogUiTest {
         compose.onNodeWithContentDescription("Legacy package resolution reason")
             .performScrollTo()
             .performTextReplacement("Recover the exact accepted Start and replay its Stop")
+        assertRecoveryBodyScrollsWithTouchSwipe()
         compose.onNodeWithText("Owner approve & recover")
-            .bringIntoViewIfNeeded()
+            .assertIsDisplayed()
             .assertIsEnabled()
-            .performClick()
+            .performAndroidScreenTouch()
 
         compose.runOnIdle {
             assertEquals(GamingLegacyResolution.SERVER_SESSION_RECOVERED, submittedResolution)
             assertEquals(null, submittedReference)
+            assertEquals(1, submissions)
+            assertEquals(0, dismissals)
+            assertEquals(
+                listOf(
+                    GamingLegacyResolution.SERVER_SESSION_RECOVERED,
+                    null,
+                    "Recover the exact accepted Start and replay its Stop",
+                    "owner@dcompany.test",
+                    "owner-secret",
+                ),
+                submittedPayload,
+            )
         }
+    }
+
+    @Test
+    fun legacyRecoveryBackdropDismissesWithoutSubmitting() {
+        val visible = mutableStateOf(true)
+        var dismissals = 0
+        var submissions = 0
+        compose.setContent {
+            DCompanyTheme {
+                if (visible.value) LegacyPackageResolutionDialog(
+                    session = GameSession(
+                        id = "backdrop-recovery", stationId = "station-1", shiftId = "shift-1",
+                        status = "start_failed", startAt = "2026-08-26T17:00:00Z",
+                        endAt = "2026-08-26T17:30:00Z",
+                        localState = GamingSessionState.START_REJECTED,
+                    ),
+                    stationName = "PS5 Station 1",
+                    requiresOwnerStepUp = false,
+                    onDismiss = { dismissals++; visible.value = false },
+                    onConfirm = { _, _, _, _, _ -> submissions++ },
+                )
+            }
+        }
+        val title = compose.onNodeWithText("Resolve rejected gaming start")
+        title.assertIsDisplayed()
+        InstrumentationRegistry.getInstrumentation().uiAutomation.waitForIdle(500, 5_000)
+        val titleNode = title.fetchSemanticsNode()
+        // Blank padding above the title belongs to the Surface, not backdrop.
+        injectAndroidTap(titleNode.positionOnScreen.x, titleNode.positionOnScreen.y - 8f)
+        compose.waitForIdle()
+        compose.runOnIdle {
+            assertEquals(0, dismissals)
+            assertEquals(0, submissions)
+        }
+        val root = titleNode.root as ViewRootForTest
+        val frame = compose.runOnIdle {
+            android.graphics.Rect().also(root.view::getWindowVisibleDisplayFrame)
+        }
+        injectAndroidTap(frame.left + 2f, frame.top + 2f)
+        compose.waitForIdle()
+        compose.runOnIdle {
+            assertEquals(1, dismissals)
+            assertEquals(0, submissions)
+        }
+        compose.onAllNodesWithText("Resolve rejected gaming start").assertCountEquals(0)
     }
 
     @Test
@@ -1409,6 +1489,173 @@ class GamingDialogUiTest {
 
     private fun SemanticsNodeInteraction.bringIntoViewIfNeeded(): SemanticsNodeInteraction =
         if (isDisplayed()) this else performScrollTo()
+
+    private data class DialogTouchSnapshot(
+        val bounds: Rect,
+        val clippedBounds: Rect,
+        val windowWidth: Int,
+        val windowHeight: Int,
+        val imeBottom: Int,
+        val usableBounds: Rect,
+        val minimumTouchSize: Float,
+        val imeVisible: Boolean,
+        val windowFocused: Boolean,
+        val layoutPending: Boolean,
+    ) {
+        val ready: Boolean get() = imeVisible && imeBottom > 0 && windowFocused &&
+            !layoutPending && bounds.width >= minimumTouchSize && bounds.height >= minimumTouchSize &&
+            abs(bounds.left - clippedBounds.left) <= 1 && abs(bounds.top - clippedBounds.top) <= 1 &&
+            abs(bounds.right - clippedBounds.right) <= 1 && abs(bounds.bottom - clippedBounds.bottom) <= 1 &&
+            bounds.left >= usableBounds.left && bounds.right <= usableBounds.right &&
+            bounds.top >= usableBounds.top && bounds.bottom <= usableBounds.bottom
+    }
+
+    private fun SemanticsNodeInteraction.dialogTouchSnapshot(): DialogTouchSnapshot {
+        val node = fetchSemanticsNode()
+        // boundsInWindow is clipped; position + size preserves the WHOLE button.
+        val position = node.positionOnScreen
+        val bounds = Rect(
+            position.x, position.y,
+            position.x + node.size.width, position.y + node.size.height,
+        )
+        val root = node.root as ViewRootForTest
+        val clippedInWindow = node.boundsInWindow
+        val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+        val keyboardBounds = automation.windows
+            .firstOrNull { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }
+            ?.let { android.graphics.Rect().also(it::getBoundsInScreen) }
+        return compose.runOnIdle {
+            val view = root.view
+            val screenOrigin = IntArray(2).also(view::getLocationOnScreen)
+            val windowOrigin = IntArray(2).also(view::getLocationInWindow)
+            val visibleFrame = android.graphics.Rect().also(view::getWindowVisibleDisplayFrame)
+            val insets = checkNotNull(ViewCompat.getRootWindowInsets(view))
+            val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
+            DialogTouchSnapshot(
+                bounds = bounds,
+                clippedBounds = clippedInWindow.translate(
+                    (screenOrigin[0] - windowOrigin[0]).toFloat(),
+                    (screenOrigin[1] - windowOrigin[1]).toFloat(),
+                ),
+                windowWidth = view.resources.displayMetrics.widthPixels,
+                windowHeight = view.resources.displayMetrics.heightPixels,
+                imeBottom = ime.bottom,
+                usableBounds = Rect(
+                    visibleFrame.left.toFloat(), visibleFrame.top.toFloat(),
+                    visibleFrame.right.toFloat(),
+                    minOf(visibleFrame.bottom, keyboardBounds?.top ?: 0).toFloat(),
+                ),
+                minimumTouchSize = 48 * view.resources.displayMetrics.density,
+                imeVisible = insets.isVisible(WindowInsetsCompat.Type.ime()) && keyboardBounds != null,
+                windowFocused = view.hasWindowFocus(),
+                layoutPending = root.hasPendingMeasureOrLayout || view.isLayoutRequested,
+            )
+        }
+    }
+
+    /** Wait for Android's IME/window work, not just Compose's recomposition clock. */
+    private fun SemanticsNodeInteraction.awaitImeSettledTouchTarget(): DialogTouchSnapshot {
+        // Text replacement changes editor focus and asynchronously resizes the
+        // dialog. performClick injects coordinates; a partly visible node can
+        // otherwise move after isDisplayed succeeds. Keep the IME OPEN and
+        // require the complete target above it, then perform a real touch.
+        InstrumentationRegistry.getInstrumentation().uiAutomation.waitForIdle(500, 5_000)
+        compose.waitForIdle()
+        var previous: DialogTouchSnapshot? = null
+        var stableSamples = 0
+        try {
+            compose.waitUntil(timeoutMillis = 5_000) {
+                awaitAndroidFrame()
+                val snapshot = dialogTouchSnapshot()
+                if (snapshot != previous) Log.i("GamingDialogTouch", "IME target: $snapshot")
+                stableSamples = if (snapshot.ready && snapshot == previous) stableSamples + 1 else 0
+                previous = snapshot
+                stableSamples >= 2
+            }
+        } finally {
+            saveImeScreenshot()
+        }
+        Log.i("GamingDialogTouch", "IME-open real-touch target: $previous")
+        return checkNotNull(previous)
+    }
+
+    private fun awaitAndroidFrame() {
+        val nextFrame = CountDownLatch(1)
+        InstrumentationRegistry.getInstrumentation().runOnMainSync {
+            Choreographer.getInstance().postFrameCallback { nextFrame.countDown() }
+        }
+        check(nextFrame.await(2, TimeUnit.SECONDS)) { "Android did not render another frame" }
+    }
+
+    private fun saveImeScreenshot() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        instrumentation.uiAutomation.takeScreenshot()?.let { bitmap ->
+            val file = File(
+                instrumentation.targetContext.getExternalFilesDir(null),
+                "gaming-recovery-ime-open.png",
+            )
+            file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+            bitmap.recycle()
+        }
+    }
+
+    private fun SemanticsNodeInteraction.performAndroidScreenTouch(): SemanticsNodeInteraction {
+        val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+        val originalFlags = automation.serviceInfo.flags
+        try {
+            automation.serviceInfo = automation.serviceInfo.apply {
+                flags = flags or AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
+            }
+            val settled = awaitImeSettledTouchTarget()
+            val snapshot = dialogTouchSnapshot()
+            check(snapshot.ready && snapshot == settled) {
+                "Touch target moved after settling: $snapshot"
+            }
+            injectAndroidTap(snapshot.bounds.center.x, snapshot.bounds.center.y)
+            compose.waitForIdle()
+        } finally {
+            automation.serviceInfo = automation.serviceInfo.apply { flags = originalFlags }
+        }
+        return this
+    }
+
+    private fun injectAndroidTap(x: Float, y: Float) {
+        val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+        val downTime = SystemClock.uptimeMillis()
+        for (action in listOf(MotionEvent.ACTION_DOWN, MotionEvent.ACTION_UP)) {
+            val event = MotionEvent.obtain(
+                downTime, SystemClock.uptimeMillis(), action, x, y, 0,
+            ).apply { source = InputDevice.SOURCE_TOUCHSCREEN }
+            try {
+                check(automation.injectInputEvent(event, true)) { "Android rejected touch injection" }
+            } finally {
+                event.recycle()
+            }
+        }
+    }
+
+    private fun assertRecoveryBodyScrollsWithTouchSwipe() {
+        val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+        automation.waitForIdle(500, 5_000)
+        compose.waitForIdle()
+        val scroll = compose.onNode(hasScrollAction())
+        val node = scroll.fetchSemanticsNode()
+        val before = node.config[SemanticsProperties.VerticalScrollAxisRange].value()
+        check(before > 0) { "Reason input should have scrolled the long recovery form" }
+        // Inject through Compose's duration-controlled touch clock on the
+        // actual scroll node. The former hand-built UiAutomation gesture began
+        // inside Android's left-edge exclusion zone and could be consumed by
+        // Gboard/WindowManager during a busy full suite even though every raw
+        // event reported success. The separate confirmation-button check below
+        // still uses a real Android screen-coordinate tap and proves final hit
+        // testing with the IME open.
+        scroll.performTouchInput { swipeDown(durationMillis = 500) }
+        compose.waitUntil(5_000) {
+            scroll.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value() < before
+        }
+        Log.i("GamingDialogTouch", "Touch swipe moved recovery body from $before to " +
+            scroll.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value())
+    }
 
     private fun SemanticsNodeInteraction.assertEditableTextEquals(
         expected: String,

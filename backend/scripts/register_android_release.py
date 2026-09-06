@@ -32,6 +32,7 @@ from app.services.client_updates.releases import (
     manifest_sha256,
     require_allowed_update_origin,
 )
+from app.services.client_updates.runtime_parity import RuntimeParityError, verify_runtime_parity
 
 _MAX_MANIFEST_BYTES = 16_384
 
@@ -92,6 +93,18 @@ async def register(manifest: AndroidReleaseManifest) -> dict[str, object]:
         )
     except ArtifactVerificationError as exc:
         raise SystemExit(f"Release URL rejected: {exc.code}.") from exc
+
+    try:
+        await verify_runtime_parity(
+            version_name=manifest.version_name,
+            source_git_sha=manifest.source_git_sha,
+            settings=settings,
+        )
+    except RuntimeParityError as exc:
+        raise SystemExit(
+            "Release was not staged. Deploy the matching backend and web release "
+            f"and retry runtime verification ({exc.code})."
+        ) from exc
 
     digest = manifest_sha256(manifest)
     values = manifest.model_dump(mode="python")

@@ -851,7 +851,7 @@ export default function RefundsScreen() {
             <div className="relative w-full sm:w-80">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-fg-muted" size={16}/>
               <input
-                className="input w-full pl-9"
+                className="input w-full !pl-9"
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
                 placeholder="Invoice, customer, table, station…"

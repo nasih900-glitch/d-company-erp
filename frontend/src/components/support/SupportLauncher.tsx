@@ -479,7 +479,7 @@ export default function SupportLauncher({ inboxUnread = 0 }: { inboxUnread?: num
     <>
       <button
         type="button"
-        className="fixed bottom-4 right-4 z-30 inline-flex min-h-12 items-center gap-2 rounded-2xl border border-bg-border bg-bg-surface/95 px-4 py-3 text-sm font-semibold text-fg shadow-2xl backdrop-blur transition hover:border-accent/40 hover:bg-bg-raised active:scale-[0.98]"
+        className="fixed bottom-4 right-4 z-30 inline-flex min-h-12 min-w-12 items-center justify-center gap-2 rounded-full border border-bg-border bg-bg-surface/95 px-3 py-3 text-sm font-semibold text-fg shadow-2xl backdrop-blur transition hover:border-accent/40 hover:bg-bg-raised active:scale-[0.98] sm:rounded-2xl sm:px-4"
         style={{ marginBottom: 'env(safe-area-inset-bottom)' }}
         onClick={() => {
           setFailureContext(readLastFailedSupportAction());
@@ -488,9 +488,9 @@ export default function SupportLauncher({ inboxUnread = 0 }: { inboxUnread?: num
         aria-label="Open Help and support"
       >
         <HelpCircle size={19} className="text-accent" aria-hidden="true" />
-        Help
+        <span className="hidden sm:inline">Help</span>
         {inboxUnread > 0 && (
-          <span className="grid min-w-5 place-items-center rounded-full bg-accent-bad px-1.5 py-0.5 text-[10px] text-white">
+          <span className="absolute -right-1 -top-1 grid min-w-5 place-items-center rounded-full bg-accent-bad px-1.5 py-0.5 text-[10px] text-white sm:static">
             {Math.min(inboxUnread, 99)}
           </span>
         )}

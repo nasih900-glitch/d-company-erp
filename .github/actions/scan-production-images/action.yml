@@ -1,0 +1,215 @@
+name: Scan production container images
+description: Generate SBOMs and fail on high or critical vulnerabilities in exact local images.
+
+inputs:
+  backend-image:
+    description: Exact locally built backend image tag.
+    required: true
+  frontend-image:
+    description: Exact locally built frontend image tag.
+    required: true
+  caddy-image:
+    description: Exact digest-pinned Caddy image used in production.
+    required: true
+  postgres-image:
+    description: Exact digest-pinned PostgreSQL image used in production.
+    required: true
+  redis-image:
+    description: Exact digest-pinned Redis image used in production.
+    required: true
+  minio-image:
+    description: Exact digest-pinned MinIO image used in production.
+    required: true
+  artifact-prefix:
+    description: Unique prefix for the retained security evidence.
+    required: true
+  source-git-sha:
+    description: Full source commit used to build both images.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Record exact image identities
+      shell: bash
+      env:
+        BACKEND_IMAGE: ${{ inputs.backend-image }}
+        FRONTEND_IMAGE: ${{ inputs.frontend-image }}
+        CADDY_IMAGE: ${{ inputs.caddy-image }}
+        POSTGRES_IMAGE: ${{ inputs.postgres-image }}
+        REDIS_IMAGE: ${{ inputs.redis-image }}
+        MINIO_IMAGE: ${{ inputs.minio-image }}
+        SOURCE_GIT_SHA: ${{ inputs.source-git-sha }}
+      run: |
+        set -euo pipefail
+        evidence_dir="$RUNNER_TEMP/container-security"
+        mkdir -p "$evidence_dir"
+        {
+          echo "source_git_sha=$SOURCE_GIT_SHA"
+          echo "recorded_at_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "backend_image=$BACKEND_IMAGE"
+          docker image inspect --format 'backend_image_id={{.Id}}' "$BACKEND_IMAGE"
+          echo "frontend_image=$FRONTEND_IMAGE"
+          docker image inspect --format 'frontend_image_id={{.Id}}' "$FRONTEND_IMAGE"
+          echo "caddy_image=$CADDY_IMAGE"
+          docker image inspect --format 'caddy_image_id={{.Id}}' "$CADDY_IMAGE"
+          echo "postgres_image=$POSTGRES_IMAGE"
+          docker image inspect --format 'postgres_image_id={{.Id}}' "$POSTGRES_IMAGE"
+          echo "redis_image=$REDIS_IMAGE"
+          docker image inspect --format 'redis_image_id={{.Id}}' "$REDIS_IMAGE"
+          echo "minio_image=$MINIO_IMAGE"
+          docker image inspect --format 'minio_image_id={{.Id}}' "$MINIO_IMAGE"
+        } > "$evidence_dir/image-identities.txt"
+
+    - name: Generate backend image SBOM
+      if: ${{ !cancelled() }}
+      uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+      with:
+        image: ${{ inputs.backend-image }}
+        syft-version: v1.42.3
+        format: spdx-json
+        output-file: ${{ runner.temp }}/container-security/backend.spdx.json
+        upload-artifact: false
+        upload-release-assets: false
+        dependency-snapshot: false
+
+    - name: Generate frontend image SBOM
+      if: ${{ !cancelled() }}
+      uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+      with:
+        image: ${{ inputs.frontend-image }}
+        syft-version: v1.42.3
+        format: spdx-json
+        output-file: ${{ runner.temp }}/container-security/frontend.spdx.json
+        upload-artifact: false
+        upload-release-assets: false
+        dependency-snapshot: false
+
+    - name: Generate Caddy image SBOM
+      if: ${{ !cancelled() }}
+      uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+      with:
+        image: ${{ inputs.caddy-image }}
+        syft-version: v1.42.3
+        format: spdx-json
+        output-file: ${{ runner.temp }}/container-security/caddy.spdx.json
+        upload-artifact: false
+        upload-release-assets: false
+        dependency-snapshot: false
+
+    - name: Generate PostgreSQL image SBOM
+      if: ${{ !cancelled() }}
+      uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+      with:
+        image: ${{ inputs.postgres-image }}
+        syft-version: v1.42.3
+        format: spdx-json
+        output-file: ${{ runner.temp }}/container-security/postgres.spdx.json
+        upload-artifact: false
+        upload-release-assets: false
+        dependency-snapshot: false
+
+    - name: Generate Redis image SBOM
+      if: ${{ !cancelled() }}
+      uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+      with:
+        image: ${{ inputs.redis-image }}
+        syft-version: v1.42.3
+        format: spdx-json
+        output-file: ${{ runner.temp }}/container-security/redis.spdx.json
+        upload-artifact: false
+        upload-release-assets: false
+        dependency-snapshot: false
+
+    - name: Generate MinIO image SBOM
+      if: ${{ !cancelled() }}
+      uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+      with:
+        image: ${{ inputs.minio-image }}
+        syft-version: v1.42.3
+        format: spdx-json
+        output-file: ${{ runner.temp }}/container-security/minio.spdx.json
+        upload-artifact: false
+        upload-release-assets: false
+        dependency-snapshot: false
+
+    - name: Scan backend image SBOM
+      if: ${{ !cancelled() }}
+      uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+      with:
+        sbom: ${{ runner.temp }}/container-security/backend.spdx.json
+        grype-version: v0.118.0
+        fail-build: true
+        severity-cutoff: high
+        only-fixed: false
+        output-format: json
+        output-file: ${{ runner.temp }}/container-security/backend-grype.json
+
+    - name: Scan frontend image SBOM
+      if: ${{ !cancelled() }}
+      uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+      with:
+        sbom: ${{ runner.temp }}/container-security/frontend.spdx.json
+        grype-version: v0.118.0
+        fail-build: true
+        severity-cutoff: high
+        only-fixed: false
+        output-format: json
+        output-file: ${{ runner.temp }}/container-security/frontend-grype.json
+
+    - name: Scan Caddy image SBOM
+      if: ${{ !cancelled() }}
+      uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+      with:
+        sbom: ${{ runner.temp }}/container-security/caddy.spdx.json
+        grype-version: v0.118.0
+        fail-build: true
+        severity-cutoff: high
+        only-fixed: false
+        output-format: json
+        output-file: ${{ runner.temp }}/container-security/caddy-grype.json
+
+    - name: Scan PostgreSQL image SBOM
+      if: ${{ !cancelled() }}
+      uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+      with:
+        sbom: ${{ runner.temp }}/container-security/postgres.spdx.json
+        grype-version: v0.118.0
+        fail-build: true
+        severity-cutoff: high
+        only-fixed: false
+        output-format: json
+        output-file: ${{ runner.temp }}/container-security/postgres-grype.json
+
+    - name: Scan Redis image SBOM
+      if: ${{ !cancelled() }}
+      uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+      with:
+        sbom: ${{ runner.temp }}/container-security/redis.spdx.json
+        grype-version: v0.118.0
+        fail-build: true
+        severity-cutoff: high
+        only-fixed: false
+        output-format: json
+        output-file: ${{ runner.temp }}/container-security/redis-grype.json
+
+    - name: Scan MinIO image SBOM
+      if: ${{ !cancelled() }}
+      uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+      with:
+        sbom: ${{ runner.temp }}/container-security/minio.spdx.json
+        grype-version: v0.118.0
+        fail-build: true
+        severity-cutoff: high
+        only-fixed: false
+        output-format: json
+        output-file: ${{ runner.temp }}/container-security/minio-grype.json
+
+    - name: Retain container security evidence
+      if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      with:
+        name: ${{ inputs.artifact-prefix }}-container-security
+        if-no-files-found: error
+        retention-days: 30
+        path: ${{ runner.temp }}/container-security/

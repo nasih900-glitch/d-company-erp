@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import tempfile
@@ -116,43 +117,192 @@ class AndroidReleaseStagingTest(unittest.TestCase):
         self.assertEqual(SIGNER, evidence.signing_certificate_sha256)
         self.assertTrue(evidence.verified_v2_or_newer)
 
-    def test_remote_publish_is_atomic_and_only_reuses_identical_bytes(self) -> None:
+    @patch.object(staging, "inspect_release_pair", return_value={})
+    def test_remote_publish_is_atomic_and_only_reuses_identical_bytes(
+        self, _runtime
+    ) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            parent = Path(temporary)
+            root = parent / "erp"
             release_dir = root / "releases/android"
             release_dir.mkdir(parents=True)
             filename = "d-company-erp-v3.1.4-direct.apk"
-            temporary_apk = release_dir / f".{filename}.{'a' * 32}.part"
             final_apk = release_dir / filename
             body = b"verified"
             payload = {
                 "remote_root": str(root),
-                "remote_temp": str(temporary_apk),
-                "remote_final": str(final_apk),
                 "apk_filename": filename,
                 "apk_sha256": hashlib.sha256(body).hexdigest(),
                 "apk_size_bytes": len(body),
             }
-            with patch.object(
-                staging,
-                "_atomic_rename_noreplace",
-                side_effect=lambda source, destination: os.rename(source, destination),
+            with (
+                patch.object(staging, "TRUSTED_REMOTE_OWNER_UID", os.geteuid()),
+                patch.object(staging, "TRUSTED_REMOTE_OWNER_GID", os.getegid()),
+                patch.object(
+                    staging,
+                    "_atomic_rename_noreplace_at",
+                    side_effect=lambda source_fd, source, destination_fd, destination: (
+                        os.rename(
+                            source,
+                            destination,
+                            src_dir_fd=source_fd,
+                            dst_dir_fd=destination_fd,
+                        )
+                    ),
+                ),
             ):
                 prepared = staging._remote_action("prepare", payload)
-                temporary_apk.write_bytes(body)
-                published = staging._remote_action("publish", payload)
+                published = staging._remote_action(
+                    "upload", payload, upload_stream=io.BytesIO(body)
+                )
+                self.assertTrue(prepared["ok"])
+                self.assertTrue(published["ok"])
+                self.assertEqual(body, final_apk.read_bytes())
+                resumed = staging._remote_action("prepare", payload)
+                self.assertTrue(resumed["already_published"])
 
-            self.assertTrue(prepared["ok"])
-            self.assertTrue(published["ok"])
-            self.assertEqual(body, final_apk.read_bytes())
-            resumed = staging._remote_action("prepare", payload)
-            self.assertTrue(resumed["already_published"])
+                final_apk.write_bytes(b"substituted")
+                with self.assertRaisesRegex(
+                    staging.AndroidReleaseStagingError, "different bytes"
+                ):
+                    staging._remote_action("prepare", payload)
 
-            final_apk.write_bytes(b"substituted")
-            with self.assertRaisesRegex(
-                staging.AndroidReleaseStagingError, "different bytes"
+    @patch.object(staging, "inspect_release_pair", return_value={})
+    def test_remote_upload_reservation_cannot_overwrite_symlink_victim(
+        self, _runtime
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary)
+            root = parent / "erp"
+            (root / "releases/android").mkdir(parents=True)
+            private = parent / staging.PRIVATE_UPLOAD_DIRECTORY_NAME
+            private.mkdir(mode=0o700)
+            filename = "d-company-erp-v3.1.4-direct.apk"
+            body = b"verified"
+            victim = parent / "victim"
+            victim.write_bytes(b"must-survive")
+            reserved = private / f".{filename}.{'a' * 32}.part"
+            reserved.symlink_to(victim)
+            payload = {
+                "remote_root": str(root),
+                "apk_filename": filename,
+                "apk_sha256": hashlib.sha256(body).hexdigest(),
+                "apk_size_bytes": len(body),
+            }
+            with (
+                patch.object(staging, "TRUSTED_REMOTE_OWNER_UID", os.geteuid()),
+                patch.object(staging, "TRUSTED_REMOTE_OWNER_GID", os.getegid()),
+                patch.object(
+                    staging.uuid, "uuid4", return_value=SimpleNamespace(hex="a" * 32)
+                ),
+                self.assertRaisesRegex(
+                    staging.AndroidReleaseStagingError,
+                    "reserve",
+                ),
             ):
-                staging._remote_action("prepare", payload)
+                staging._remote_action(
+                    "upload",
+                    payload,
+                    upload_stream=io.BytesIO(body),
+                )
+
+            self.assertEqual(b"must-survive", victim.read_bytes())
+            self.assertTrue(reserved.is_symlink())
+
+    @patch.object(staging, "inspect_release_pair", return_value={})
+    def test_remote_upload_directory_swap_cannot_redirect_write_to_victim(
+        self, _runtime
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary)
+            root = parent / "erp"
+            release_dir = root / "releases/android"
+            release_dir.mkdir(parents=True)
+            filename = "d-company-erp-v3.1.4-direct.apk"
+            body = b"verified"
+            payload = {
+                "remote_root": str(root),
+                "apk_filename": filename,
+                "apk_sha256": hashlib.sha256(body).hexdigest(),
+                "apk_size_bytes": len(body),
+            }
+            moved = root / "releases/android-before-swap"
+            victim: Path | None = None
+
+            def swap_then_rename(
+                source_fd, source, destination_fd, destination
+            ) -> None:
+                nonlocal victim
+                release_dir.rename(moved)
+                release_dir.mkdir()
+                victim = release_dir / filename
+                victim.write_bytes(b"must-survive")
+                os.rename(
+                    source,
+                    destination,
+                    src_dir_fd=source_fd,
+                    dst_dir_fd=destination_fd,
+                )
+
+            with (
+                patch.object(staging, "TRUSTED_REMOTE_OWNER_UID", os.geteuid()),
+                patch.object(staging, "TRUSTED_REMOTE_OWNER_GID", os.getegid()),
+                patch.object(
+                    staging,
+                    "_atomic_rename_noreplace_at",
+                    side_effect=swap_then_rename,
+                ),
+            ):
+                result = staging._remote_action(
+                    "upload",
+                    payload,
+                    upload_stream=io.BytesIO(body),
+                )
+
+            self.assertTrue(result["ok"])
+            self.assertIsNotNone(victim)
+            assert victim is not None
+            self.assertEqual(b"must-survive", victim.read_bytes())
+            self.assertEqual(body, (moved / filename).read_bytes())
+
+    @patch.object(staging, "inspect_release_pair", return_value={})
+    def test_remote_prepare_rejects_symlink_and_hardlink_destinations(
+        self, _runtime
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary)
+            root = parent / "erp"
+            release_dir = root / "releases/android"
+            release_dir.mkdir(parents=True)
+            filename = "d-company-erp-v3.1.4-direct.apk"
+            victim = parent / "victim"
+            victim.write_bytes(b"must-survive")
+            final = release_dir / filename
+            payload = {
+                "remote_root": str(root),
+                "apk_filename": filename,
+                "apk_sha256": hashlib.sha256(victim.read_bytes()).hexdigest(),
+                "apk_size_bytes": victim.stat().st_size,
+            }
+            with (
+                patch.object(staging, "TRUSTED_REMOTE_OWNER_UID", os.geteuid()),
+                patch.object(staging, "TRUSTED_REMOTE_OWNER_GID", os.getegid()),
+            ):
+                final.symlink_to(victim)
+                with self.assertRaisesRegex(
+                    staging.AndroidReleaseStagingError,
+                    "safely open",
+                ):
+                    staging._remote_action("prepare", payload)
+                final.unlink()
+                os.link(victim, final)
+                with self.assertRaisesRegex(
+                    staging.AndroidReleaseStagingError,
+                    "link",
+                ):
+                    staging._remote_action("prepare", payload)
+
+            self.assertEqual(b"must-survive", victim.read_bytes())
 
     def test_ci_manifest_schema_does_not_accept_operator_added_fields(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -248,7 +398,7 @@ class AndroidReleaseStagingTest(unittest.TestCase):
             ),
             self.assertRaisesRegex(staging.AndroidReleaseStagingError, "receipt"),
         ):
-            staging._register_staged_release(target, manifest)
+            staging._register_staged_release_on_host(target.root, manifest)
 
     def test_remote_command_fields_reject_shell_metacharacters(self) -> None:
         with self.assertRaisesRegex(staging.AndroidReleaseStagingError, "SSH host"):
@@ -260,6 +410,49 @@ class AndroidReleaseStagingTest(unittest.TestCase):
                     root="/opt/d-company-erp",
                 )
             )
+
+    def test_ssh_destination_rejects_all_leading_dash_forms(self) -> None:
+        for host in ("-V", "-Jattacker.example", "root@-Jattacker.example"):
+            with (
+                self.subTest(host=host),
+                self.assertRaisesRegex(staging.AndroidReleaseStagingError, "SSH host"),
+            ):
+                staging._validated_remote_target(
+                    staging.RemoteTarget(
+                        host=host,
+                        key=Path("/safe/key"),
+                        port=22,
+                        root="/opt/d-company-erp",
+                    )
+                )
+
+    def test_ssh_option_terminator_precedes_destination_for_json_and_upload(
+        self,
+    ) -> None:
+        target = staging.RemoteTarget(
+            host="root@example.test",
+            key=Path("/safe/key"),
+            port=22,
+            root="/opt/d-company-erp",
+        )
+        with (
+            tempfile.TemporaryDirectory() as temporary,
+            patch.object(
+                staging.subprocess,
+                "run",
+                return_value=SimpleNamespace(stdout=b'{"ok":true}'),
+            ) as run,
+        ):
+            apk = Path(temporary) / "candidate.apk"
+            apk.write_bytes(b"candidate")
+            staging._ssh_json(target, "runtime", {})
+            staging._ssh_upload_apk(target, apk, {})
+
+        for invocation in run.call_args_list:
+            command = invocation.args[0]
+            destination_index = command.index(target.host)
+            self.assertEqual("--", command[destination_index - 1])
+            self.assertNotIn("--", command[destination_index + 1 :])
 
     def test_verification_only_does_not_require_vps_credentials(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -317,6 +510,363 @@ class AndroidReleaseStagingTest(unittest.TestCase):
                 staging.AndroidReleaseStagingError, "independently trusted signer"
             ):
                 staging.stage_release(args)
+
+    def test_runtime_mismatch_rejects_apply_before_prepare_upload_or_registration(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest, apk, _ = self.make_package(root)
+            key = root / "ssh-key"
+            key.touch()
+            args = Namespace(
+                manifest=manifest,
+                apk=apk,
+                release_notes="Verified update",
+                expected_signer_sha256=SIGNER,
+                base_url=BASE_URL,
+                ssh_host="root@example.test",
+                ssh_key=key,
+                ssh_port=22,
+                remote_root="/opt/d-company-erp",
+                apkanalyzer=None,
+                apksigner=None,
+                apply=True,
+            )
+            with (
+                patch.object(staging, "verify_apk_identity_and_signer"),
+                patch.object(
+                    staging,
+                    "_ssh_json",
+                    side_effect=staging.AndroidReleaseStagingError("runtime mismatch"),
+                ) as remote,
+                patch.object(staging, "_ssh_upload_apk") as upload,
+                patch.object(staging, "_finalize_staged_release") as finalize,
+                patch.object(staging, "verify_public_artifact") as public,
+            ):
+                with self.assertRaisesRegex(
+                    staging.AndroidReleaseStagingError, "runtime mismatch"
+                ):
+                    staging.stage_release(args)
+                self.assertEqual(
+                    ["runtime"], [call.args[1] for call in remote.call_args_list]
+                )
+                upload.assert_not_called()
+                finalize.assert_not_called()
+                public.assert_not_called()
+
+    def test_remote_prepare_and_upload_recheck_runtime_before_file_work(
+        self,
+    ) -> None:
+        for action in ("prepare", "upload"):
+            with (
+                self.subTest(action=action),
+                patch.object(
+                    staging,
+                    "inspect_release_pair",
+                    side_effect=staging.RuntimeParityError("mismatch"),
+                ),
+                patch.object(staging, "_open_release_directories") as paths,
+                patch.object(staging, "_receive_and_publish_apk") as publish,
+            ):
+                with self.assertRaisesRegex(
+                    staging.AndroidReleaseStagingError, "mismatch"
+                ):
+                    staging._remote_action(
+                        action, {"remote_root": "/opt/d-company-erp"}
+                    )
+                paths.assert_not_called()
+                publish.assert_not_called()
+
+    def test_runtime_change_before_locked_finalize_prevents_registry_mutation(
+        self,
+    ) -> None:
+        initial_runtime = {
+            "version_name": "3.1.4",
+            "source_git_sha": "a" * 40,
+            "services": {"backend": {"image_id": "sha256:" + "b" * 64}},
+        }
+        changed_runtime = {
+            **initial_runtime,
+            "services": {"backend": {"image_id": "sha256:" + "c" * 64}},
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            lock_file = Path(temporary) / "production-install.lock"
+            payload = {
+                "remote_root": "/opt/d-company-erp",
+                "version_name": "3.1.4",
+                "source_git_sha": "a" * 40,
+                "initial_runtime_parity": initial_runtime,
+                "manifest": {"version_code": 15},
+            }
+            with (
+                patch.object(staging, "PRODUCTION_INSTALL_LOCK", str(lock_file)),
+                patch.object(
+                    staging, "_inspect_running_release", return_value=changed_runtime
+                ),
+                patch.object(staging, "_register_staged_release_on_host") as register,
+            ):
+                with self.assertRaisesRegex(
+                    staging.AndroidReleaseStagingError, "changed during staging"
+                ):
+                    staging._remote_action("finalize", payload)
+                register.assert_not_called()
+
+    def test_locked_finalize_holds_installer_flock_through_registration(
+        self,
+    ) -> None:
+        runtime = {
+            "version_name": "3.1.4",
+            "source_git_sha": "a" * 40,
+            "services": {
+                "backend": {"image_id": "sha256:" + "b" * 64},
+                "frontend": {"image_id": "sha256:" + "c" * 64},
+            },
+        }
+        manifest = {"version_code": 15}
+        receipt = {
+            "id": "11111111-1111-1111-1111-111111111111",
+            "status": "staged",
+            "manifest_sha256": hashlib.sha256(
+                staging.canonical_json(manifest)
+            ).hexdigest(),
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            lock_file = Path(temporary) / "production-install.lock"
+
+            def assert_lock_held(*_args, **_kwargs) -> None:
+                probe = os.open(lock_file, os.O_RDWR | os.O_CREAT, 0o600)
+                try:
+                    with self.assertRaises(BlockingIOError):
+                        staging.fcntl.flock(
+                            probe, staging.fcntl.LOCK_EX | staging.fcntl.LOCK_NB
+                        )
+                finally:
+                    os.close(probe)
+
+            events = []
+
+            def inspect(payload: dict) -> dict:
+                events.append("inspect")
+                assert_lock_held()
+                return runtime
+
+            def register(root: str, value: dict) -> dict:
+                events.append("register")
+                assert_lock_held()
+                self.assertEqual("/opt/d-company-erp", root)
+                self.assertEqual(manifest, value)
+                return receipt
+
+            payload = {
+                "remote_root": "/opt/d-company-erp",
+                "version_name": "3.1.4",
+                "source_git_sha": "a" * 40,
+                "initial_runtime_parity": runtime,
+                "manifest": manifest,
+            }
+            with (
+                patch.object(staging, "PRODUCTION_INSTALL_LOCK", str(lock_file)),
+                patch.object(staging, "_inspect_running_release", side_effect=inspect),
+                patch.object(
+                    staging,
+                    "_register_staged_release_on_host",
+                    side_effect=register,
+                ),
+            ):
+                result = staging._remote_action("finalize", payload)
+
+            self.assertEqual(["inspect", "register"], events)
+            self.assertEqual(runtime, result["runtime_parity"])
+            self.assertEqual(receipt, result["registered"])
+            with staging._production_install_lock(lock_file):
+                pass
+
+    def test_locked_finalize_fails_fast_when_installer_is_running(self) -> None:
+        payload = {
+            "remote_root": "/opt/d-company-erp",
+            "version_name": "3.1.4",
+            "source_git_sha": "a" * 40,
+            "initial_runtime_parity": {},
+            "manifest": {"version_code": 15},
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            lock_file = Path(temporary) / "production-install.lock"
+            with (
+                staging._production_install_lock(lock_file),
+                patch.object(staging, "PRODUCTION_INSTALL_LOCK", str(lock_file)),
+                patch.object(staging, "_inspect_running_release") as inspect,
+                patch.object(staging, "_register_staged_release_on_host") as register,
+            ):
+                with self.assertRaisesRegex(
+                    staging.AndroidReleaseStagingError, "already running"
+                ):
+                    staging._remote_action("finalize", payload)
+                inspect.assert_not_called()
+                register.assert_not_called()
+
+    def test_production_lock_rejects_symlink_fifo_and_hardlink_without_victim_damage(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary) / "locks"
+            parent.mkdir(mode=0o700)
+            lock_file = parent / "production-install.lock"
+            victim = Path(temporary) / "victim"
+            victim.write_bytes(b"must-survive")
+            victim.chmod(0o600)
+
+            lock_file.symlink_to(victim)
+            with (
+                self.assertRaises(staging.AndroidReleaseStagingError),
+                staging._production_install_lock(lock_file),
+            ):
+                self.fail("symlink lock must not be acquired")
+            self.assertEqual(b"must-survive", victim.read_bytes())
+
+            lock_file.unlink()
+            os.mkfifo(lock_file, 0o600)
+            with (
+                self.assertRaisesRegex(
+                    staging.AndroidReleaseStagingError,
+                    "regular|ownership|mode|link",
+                ),
+                staging._production_install_lock(lock_file),
+            ):
+                self.fail("FIFO lock must not be acquired")
+
+            lock_file.unlink()
+            os.link(victim, lock_file)
+            with (
+                self.assertRaisesRegex(
+                    staging.AndroidReleaseStagingError,
+                    "link",
+                ),
+                staging._production_install_lock(lock_file),
+            ):
+                self.fail("hard-linked lock must not be acquired")
+            self.assertEqual(b"must-survive", victim.read_bytes())
+
+    def test_production_lock_requires_private_parent_and_exact_file_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary) / "locks"
+            parent.mkdir(mode=0o755)
+            lock_file = parent / "production-install.lock"
+            with (
+                self.assertRaisesRegex(
+                    staging.AndroidReleaseStagingError,
+                    "directory",
+                ),
+                staging._production_install_lock(lock_file),
+            ):
+                self.fail("non-private lock parent must not be accepted")
+
+            parent.chmod(0o700)
+            lock_file.write_bytes(b"")
+            lock_file.chmod(0o644)
+            with (
+                self.assertRaisesRegex(
+                    staging.AndroidReleaseStagingError,
+                    "mode",
+                ),
+                staging._production_install_lock(lock_file),
+            ):
+                self.fail("weak lock mode must not be accepted")
+
+    def test_staging_uses_one_remote_finalize_after_public_verification(self) -> None:
+        runtime = {
+            "version_name": "3.1.4",
+            "source_git_sha": "a" * 40,
+            "services": {
+                "backend": {"image_id": "sha256:" + "b" * 64},
+                "frontend": {"image_id": "sha256:" + "c" * 64},
+            },
+        }
+        events = []
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest, apk, _ = self.make_package(root)
+            key = root / "ssh-key"
+            key.touch()
+            args = Namespace(
+                manifest=manifest,
+                apk=apk,
+                release_notes="Verified update",
+                expected_signer_sha256=SIGNER,
+                base_url=BASE_URL,
+                ssh_host="root@example.test",
+                ssh_key=key,
+                ssh_port=22,
+                remote_root="/opt/d-company-erp",
+                apkanalyzer=None,
+                apksigner=None,
+                apply=True,
+            )
+            tools = staging.AndroidToolEvidence(
+                apkanalyzer="apkanalyzer",
+                apksigner="apksigner",
+                application_id="cloud.dcompany.erp",
+                version_code=15,
+                version_name="3.1.4",
+                signing_certificate_sha256=SIGNER,
+                verified_v2_or_newer=True,
+            )
+
+            def remote(_target, action: str, payload: dict) -> dict:
+                events.append(action)
+                if action == "runtime":
+                    return {"ok": True, "runtime_parity": runtime}
+                if action == "prepare":
+                    return {"ok": True, "already_published": True}
+                if action == "finalize":
+                    self.assertEqual(runtime, payload["initial_runtime_parity"])
+                    digest = hashlib.sha256(
+                        staging.canonical_json(payload["manifest"])
+                    ).hexdigest()
+                    return {
+                        "ok": True,
+                        "runtime_parity": runtime,
+                        "registered": {
+                            "id": "11111111-1111-1111-1111-111111111111",
+                            "status": "staged",
+                            "manifest_sha256": digest,
+                        },
+                    }
+                if action == "attest":
+                    return {"ok": True, "attestation": "/safe/attestation.json"}
+                self.fail(f"Unexpected remote action {action}")
+
+            def public(*_args, **_kwargs) -> SimpleNamespace:
+                events.append("public")
+                return SimpleNamespace(sha256="ab" * 32, size_bytes=20, headers={})
+
+            with (
+                patch.object(
+                    staging, "verify_apk_identity_and_signer", return_value=tools
+                ),
+                patch.object(staging, "_ssh_json", side_effect=remote),
+                patch.object(staging, "verify_public_artifact", side_effect=public),
+                patch.object(staging, "_ssh_upload_apk") as upload,
+            ):
+                result = staging.stage_release(args)
+
+        self.assertEqual(["runtime", "prepare", "public", "finalize", "attest"], events)
+        self.assertEqual("staged", result["status"])
+        upload.assert_not_called()
+
+    def test_staging_and_installer_share_the_exact_lock_file(self) -> None:
+        installer = (
+            Path(__file__).resolve().parents[1] / "infra/scripts/install-on-vm.sh"
+        ).read_text(encoding="utf-8")
+        self.assertEqual(
+            "/var/lock/d-company-erp/production-install.lock",
+            staging.PRODUCTION_INSTALL_LOCK,
+        )
+        self.assertIn("LOCK_DIR=/var/lock/d-company-erp", installer)
+        self.assertIn(
+            'LOCK_FILE="$LOCK_DIR/production-install.lock"',
+            installer,
+        )
 
     def test_external_monitor_checks_headers_frequently_and_bytes_periodically(
         self,

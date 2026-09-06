@@ -102,7 +102,7 @@ d-company-erp/
 ## Release status
 
 The current local candidate is documented in
-[`docs/CODE24_RELEASE_CANDIDATE.md`](docs/CODE24_RELEASE_CANDIDATE.md). That file
+[`docs/CODE25_RELEASE_CANDIDATE.md`](docs/CODE25_RELEASE_CANDIDATE.md). That file
 separates source/test evidence from signing, hosted-update, physical-device, and
 production-deployment approval.
 
@@ -128,11 +128,11 @@ separately identified prototype, not another supported ERP app.
 
 Tagging a release that exactly matches the Android `versionName` triggers
 `.github/workflows/release.yml`. The current local release candidate is the
-**unsigned** `3.1.13` (code `24`) candidate; Android code `8` remains the
+**unsigned** `3.1.14` (code `25`) candidate; Android code `8` remains the
 minimum-compatible floor. The signed
 `3.1.3` (`14`) direct-release APK is a historical manually distributed,
 update-capable baseline; Code `21` (`3.1.10`) is the current signed
-direct-channel predecessor for Code 24. Code 14 must not be uploaded to the
+direct-channel predecessor for Code 25. Code 14 must not be uploaded to the
 server release directory, published as a GitHub or Play release, or registered
 as an update. The public status contract is
 `/api/v1/public/client-compatibility?platform=android&version_code=<installed-code>`.
@@ -148,14 +148,18 @@ remain immutable failed-before-signing history. Code `21` (`3.1.10`) is the
 immutable signed direct-channel predecessor for the next in-place upgrade.
 Code `22` (`3.1.11`) and Code `23` (`3.1.12`) are unsigned, superseded
 candidates and must not be approved, staged, advertised, or activated. Code
-`24` (`3.1.13`) is the current unsigned candidate; it is not signed, deployed,
+`24` (`3.1.13`) failed before signing and its tag remains immutable history.
+Code `25` (`3.1.14`) is the current unsigned candidate; it is not signed, deployed,
 staged, activated, approved, or partner-installable. Candidate database
 migrations currently run through `0071`. The production compatibility defaults
 remain pinned until a rollout is explicitly reviewed. Any eventual artifact
 must be newly built and signed, verified against its exact SHA-256, byte size,
-package, version and expected signer, and pass a same-lineage Code 21 to Code 24
+package, version and expected signer, and pass a same-lineage Code 21 to Code 25
 upgrade proof. Android still requires the employee to approve installation.
 Emulator or cloud-device evidence is not physical Redmi Pad 2 proof.
+
+See [`docs/CODE25_RELEASE_CANDIDATE.md`](docs/CODE25_RELEASE_CANDIDATE.md) for
+the complete candidate scope, evidence boundaries, and remaining delivery gates.
 
 ## License
 

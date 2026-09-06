@@ -81,8 +81,8 @@ android {
         // Every Room schema change must ship under a strictly newer Android
         // version code so an installed tablet upgrades in place instead of
         // requiring an uninstall that would destroy its offline outbox.
-        versionCode = 24
-        versionName = "3.1.13"
+        versionCode = 25
+        versionName = "3.1.14"
         buildConfigField("boolean", "DIRECT_UPDATES_ENABLED", "false")
         buildConfigField("String", "DISTRIBUTION_CHANNEL", buildConfigString("play"))
 
@@ -167,6 +167,15 @@ android {
 
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
+    }
+
+    // AGP's bundle-only dependency protobuf is emitted in resolution order,
+    // which is not stable across clean Gradle homes even when the resolved
+    // dependency set is locked. Google Play does not require this advisory
+    // metadata, and omitting it makes the unsigned AAB byte-reproducible so an
+    // independent secretless builder can authenticate exactly what is signed.
+    dependenciesInfo {
+        includeInBundle = false
     }
 
     // MigrationTestHelper reads the same Room-generated history that ships in

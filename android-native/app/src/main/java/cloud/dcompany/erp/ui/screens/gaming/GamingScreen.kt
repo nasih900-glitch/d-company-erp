@@ -7,6 +7,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -14,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.absoluteOffset
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -30,6 +33,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
@@ -67,9 +71,11 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.State
@@ -86,6 +92,8 @@ import androidx.compose.runtime.structuralEqualityPolicy
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -95,12 +103,16 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.paneTitle
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -3594,6 +3606,95 @@ private fun PackageExtensionDialog(
 }
 
 @Composable
+@OptIn(ExperimentalLayoutApi::class)
+private fun LegacyRecoveryDialogFrame(
+    onDismissRequest: () -> Unit,
+    text: @Composable () -> Unit,
+    confirmButton: @Composable () -> Unit,
+    dismissButton: @Composable () -> Unit,
+) {
+    Dialog(onDismissRequest = onDismissRequest, properties = gamingImeAwareDialogProperties) {
+        val view = LocalView.current
+        val density = LocalDensity.current
+        var visibleBounds by remember(view) { mutableStateOf<IntRect?>(null) }
+        DisposableEffect(view) {
+            // Compose 1.7 floating-dialog IME insets can omit the dialog's
+            // screen offset. Android's visible frame includes the real IME
+            // and system-bar bounds; convert it to this root's coordinates.
+            val listener = android.view.ViewTreeObserver.OnGlobalLayoutListener {
+                val frame = android.graphics.Rect()
+                view.getWindowVisibleDisplayFrame(frame)
+                val origin = IntArray(2)
+                view.getLocationOnScreen(origin)
+                if (view.isAttachedToWindow && view.width > 0 && view.height > 0) {
+                    val left = (frame.left - origin[0]).coerceAtLeast(0)
+                    val top = (frame.top - origin[1]).coerceAtLeast(0)
+                    val right = (frame.right - origin[0]).coerceAtMost(view.width)
+                    val bottom = (frame.bottom - origin[1]).coerceAtMost(view.height)
+                    val next = IntRect(left, top, right, bottom)
+                        .takeIf { it.width > 0 && it.height > 0 }
+                    if (visibleBounds != next) visibleBounds = next
+                }
+            }
+            view.viewTreeObserver.addOnGlobalLayoutListener(listener)
+            listener.onGlobalLayout()
+            onDispose {
+                val observer = view.viewTreeObserver
+                if (observer.isAlive) observer.removeOnGlobalLayoutListener(listener)
+            }
+        }
+        Box(Modifier.fillMaxSize()) {
+            // A sibling backdrop never participates in a field/scroll gesture.
+            Box(Modifier.matchParentSize().pointerInput(onDismissRequest) {
+                detectTapGestures { onDismissRequest() }
+            })
+            visibleBounds?.let { bounds ->
+                Box(
+                    modifier = Modifier
+                        .absoluteOffset(
+                            with(density) { bounds.left.toDp() },
+                            with(density) { bounds.top.toDp() },
+                        )
+                        .size(
+                            with(density) { bounds.width.toDp() },
+                            with(density) { bounds.height.toDp() },
+                        )
+                        .padding(Spacing.md),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Surface(
+                        modifier = Modifier.widthIn(max = 640.dp).fillMaxWidth()
+                            .semantics { paneTitle = "Resolve rejected gaming start" },
+                        color = Brand.SurfaceOverlay,
+                        contentColor = Brand.Foreground,
+                        shape = Radius.shapeLg,
+                    ) {
+                        Column(
+                            Modifier.padding(Spacing.xl),
+                            verticalArrangement = Arrangement.spacedBy(Spacing.lg),
+                        ) {
+                            Text(
+                                "Resolve rejected gaming start",
+                                style = MaterialTheme.typography.headlineSmall,
+                            )
+                            Box(Modifier.weight(1f, fill = false)) { text() }
+                            FlowRow(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(Spacing.sm, Alignment.End),
+                                verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+                            ) {
+                                dismissButton()
+                                confirmButton()
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 internal fun LegacyPackageResolutionDialog(
     session: GameSession,
     stationName: String,
@@ -3641,18 +3742,8 @@ internal fun LegacyPackageResolutionDialog(
         onDismiss()
     }
 
-    AlertDialog(
-        containerColor = Brand.SurfaceOverlay,
-        shape = Radius.shapeLg,
+    LegacyRecoveryDialogFrame(
         onDismissRequest = dismissSecurely,
-        modifier = Modifier
-            .widthIn(max = 640.dp)
-            .fillMaxWidth(0.94f)
-            .statusBarsPadding()
-            .navigationBarsPadding()
-            .imePadding(),
-        properties = gamingImeAwareDialogProperties,
-        title = { Text("Resolve rejected gaming start") },
         text = {
             Column(
                 Modifier.fillMaxWidth().heightIn(max = 560.dp).verticalScroll(rememberScrollState()),

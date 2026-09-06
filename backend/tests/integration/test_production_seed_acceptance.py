@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import os
 import subprocess
 import sys
@@ -16,6 +17,62 @@ from psycopg import sql
 from sqlalchemy.engine import make_url
 
 _BACKEND_ROOT = Path(__file__).resolve().parents[2]
+_TEST_BUILD_IDENTITY = {
+    "version_name": "9.9.9",
+    "source_git_sha": "ab" * 20,
+}
+
+
+def _write_test_build_identity(directory: Path) -> Path:
+    """Create the immutable-image identity that a production container bakes in."""
+
+    identity_path = directory / "release-identity.json"
+    identity_path.write_text(json.dumps(_TEST_BUILD_IDENTITY), encoding="utf-8")
+    return identity_path
+
+
+def _run_production_module(
+    module: str,
+    *,
+    env: dict[str, str],
+    identity_path: Path,
+    args: tuple[str, ...] = (),
+    input_text: str | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Run a production CLI as though it were inside the baked backend image."""
+
+    runner = """
+from pathlib import Path
+import runpy
+import sys
+
+from app.core import release_identity
+
+release_identity.RELEASE_IDENTITY_PATH = Path(sys.argv.pop(1))
+module_name = sys.argv.pop(1)
+runpy.run_module(module_name, run_name="__main__", alter_sys=True)
+"""
+    return subprocess.run(  # noqa: S603 - fixed interpreter and test-owned module names
+        [sys.executable, "-c", runner, str(identity_path), module, *args],
+        cwd=_BACKEND_ROOT,
+        env=env,
+        input=input_text,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def _with_test_build_identity(source: str, identity_path: Path) -> str:
+    """Point an isolated inline probe at its test-owned baked identity."""
+
+    prelude = f"""
+from pathlib import Path
+from app.core import release_identity
+
+release_identity.RELEASE_IDENTITY_PATH = Path({str(identity_path)!r})
+"""
+    return prelude + source
 
 
 @contextmanager
@@ -78,13 +135,16 @@ def _production_env(database_url: str, *, email: str, password: str) -> dict[str
         "PUBLIC_URL": "https://erp.example.com",
         "CORS_ORIGINS": '["https://erp.example.com"]',
         "ANDROID_UPDATE_ALLOWED_ORIGIN": "https://erp.example.com",
+        "APP_VERSION": _TEST_BUILD_IDENTITY["version_name"],
+        "APP_REVISION": _TEST_BUILD_IDENTITY["source_git_sha"],
     }
 
 
 @pytest.mark.integration
-def test_clean_production_seed_login_has_exact_protected_owner_access() -> None:
+def test_clean_production_seed_login_has_exact_protected_owner_access(tmp_path: Path) -> None:
     email = "first-owner@erp.example.com"
     password = "freshOwnerCredential0123456789"
+    identity_path = _write_test_build_identity(tmp_path)
     with _disposable_database("erp_seed_acceptance") as database_url:
         env = _production_env(database_url, email=email, password=password)
         migrated = subprocess.run(  # noqa: S603 - fixed module and local test DSN
@@ -97,23 +157,17 @@ def test_clean_production_seed_login_has_exact_protected_owner_access() -> None:
         )
         assert migrated.returncode == 0, migrated.stderr
 
-        seeded = subprocess.run(  # noqa: S603 - fixed repository module
-            [sys.executable, "-m", "scripts.seed"],
-            cwd=_BACKEND_ROOT,
+        seeded = _run_production_module(
+            "scripts.seed",
             env=env,
-            capture_output=True,
-            text=True,
-            check=False,
+            identity_path=identity_path,
         )
         assert seeded.returncode == 0, seeded.stderr
         assert password not in seeded.stdout + seeded.stderr
-        roles = subprocess.run(  # noqa: S603 - fixed repository module
-            [sys.executable, "-m", "scripts.ensure_roles"],
-            cwd=_BACKEND_ROOT,
+        roles = _run_production_module(
+            "scripts.ensure_roles",
             env=env,
-            capture_output=True,
-            text=True,
-            check=False,
+            identity_path=identity_path,
         )
         assert roles.returncode == 0, roles.stderr
 
@@ -124,11 +178,9 @@ def test_clean_production_seed_login_has_exact_protected_owner_access() -> None:
         )
         auditor_email = "new-auditor@erp.example.com"
         auditor_password = "temporaryAuditorCredential012345"
-        created = subprocess.run(  # noqa: S603 - fixed repository module
-            [
-                sys.executable,
-                "-m",
-                "scripts.create_user",
+        created = _run_production_module(
+            "scripts.create_user",
+            args=(
                 "--email",
                 auditor_email,
                 "--name",
@@ -136,13 +188,10 @@ def test_clean_production_seed_login_has_exact_protected_owner_access() -> None:
                 "--role",
                 "auditor",
                 "--password-stdin",
-            ],
-            cwd=_BACKEND_ROOT,
+            ),
             env=env,
-            input=f"{auditor_password}\n",
-            capture_output=True,
-            text=True,
-            check=False,
+            identity_path=identity_path,
+            input_text=f"{auditor_password}\n",
         )
         assert created.returncode == 0, created.stdout + created.stderr
         assert auditor_password not in created.stdout + created.stderr
@@ -169,11 +218,9 @@ def test_clean_production_seed_login_has_exact_protected_owner_access() -> None:
         assert created_audit == 1
 
         replacement_attempt = "mustNotOverwriteExistingUser12345"
-        duplicate = subprocess.run(  # noqa: S603 - fixed repository module
-            [
-                sys.executable,
-                "-m",
-                "scripts.create_user",
+        duplicate = _run_production_module(
+            "scripts.create_user",
+            args=(
                 "--email",
                 auditor_email,
                 "--name",
@@ -181,13 +228,10 @@ def test_clean_production_seed_login_has_exact_protected_owner_access() -> None:
                 "--role",
                 "owner",
                 "--password-stdin",
-            ],
-            cwd=_BACKEND_ROOT,
+            ),
             env=env,
-            input=f"{replacement_attempt}\n",
-            capture_output=True,
-            text=True,
-            check=False,
+            identity_path=identity_path,
+            input_text=f"{replacement_attempt}\n",
         )
         assert duplicate.returncode != 0
         assert replacement_attempt not in duplicate.stdout + duplicate.stderr
@@ -200,11 +244,9 @@ def test_clean_production_seed_login_has_exact_protected_owner_access() -> None:
         assert auditor_after == ("New Auditor", auditor_hash)
 
         protected_attempt = "mustNotOverwriteProtectedOwner12345"
-        protected = subprocess.run(  # noqa: S603 - fixed repository module
-            [
-                sys.executable,
-                "-m",
-                "scripts.create_user",
+        protected = _run_production_module(
+            "scripts.create_user",
+            args=(
                 "--email",
                 email,
                 "--name",
@@ -212,13 +254,10 @@ def test_clean_production_seed_login_has_exact_protected_owner_access() -> None:
                 "--role",
                 "owner",
                 "--password-stdin",
-            ],
-            cwd=_BACKEND_ROOT,
+            ),
             env=env,
-            input=f"{protected_attempt}\n",
-            capture_output=True,
-            text=True,
-            check=False,
+            identity_path=identity_path,
+            input_text=f"{protected_attempt}\n",
         )
         assert protected.returncode != 0
         assert protected_attempt not in protected.stdout + protected.stderr
@@ -269,7 +308,7 @@ async def main():
 asyncio.run(main())
 """
         accepted = subprocess.run(  # noqa: S603 - fixed interpreter and inline probe
-            [sys.executable, "-c", probe],
+            [sys.executable, "-c", _with_test_build_identity(probe, identity_path)],
             cwd=_BACKEND_ROOT,
             env=env,
             capture_output=True,
@@ -301,19 +340,12 @@ asyncio.run(main())
         assert active_refresh_before >= 1
 
         replacement_password = "replacementOwnerCredential987654321"
-        reset = subprocess.run(  # noqa: S603 - fixed repository module
-            [
-                sys.executable,
-                "-m",
-                "scripts.reset_owner_password",
-                "--password-stdin",
-            ],
-            cwd=_BACKEND_ROOT,
+        reset = _run_production_module(
+            "scripts.reset_owner_password",
+            args=("--password-stdin",),
             env=env,
-            input=f"{replacement_password}\n",
-            capture_output=True,
-            text=True,
-            check=False,
+            identity_path=identity_path,
+            input_text=f"{replacement_password}\n",
         )
         assert reset.returncode == 0, reset.stdout + reset.stderr
         assert password not in reset.stdout + reset.stderr
@@ -382,7 +414,11 @@ async def main():
 asyncio.run(main())
 '''
         reset_accepted = subprocess.run(  # noqa: S603 - fixed interpreter and probe
-            [sys.executable, "-c", reset_probe],
+            [
+                sys.executable,
+                "-c",
+                _with_test_build_identity(reset_probe, identity_path),
+            ],
             cwd=_BACKEND_ROOT,
             env=env,
             capture_output=True,
@@ -411,19 +447,12 @@ asyncio.run(main())
             connection.commit()
 
         refused_password = "mustNotReplaceProtectedOwnerCredential123"
-        refused = subprocess.run(  # noqa: S603 - fixed repository module
-            [
-                sys.executable,
-                "-m",
-                "scripts.reset_owner_password",
-                "--password-stdin",
-            ],
-            cwd=_BACKEND_ROOT,
+        refused = _run_production_module(
+            "scripts.reset_owner_password",
+            args=("--password-stdin",),
             env=env,
-            input=f"{refused_password}\n",
-            capture_output=True,
-            text=True,
-            check=False,
+            identity_path=identity_path,
+            input_text=f"{refused_password}\n",
         )
         assert refused.returncode != 0
         assert refused_password not in refused.stdout + refused.stderr

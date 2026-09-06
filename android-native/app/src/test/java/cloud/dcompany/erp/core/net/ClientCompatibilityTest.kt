@@ -2,6 +2,7 @@ package cloud.dcompany.erp.core.net
 
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import okhttp3.Request
@@ -92,6 +93,26 @@ class ClientCompatibilityTest {
         gate.checkAtStartup()
 
         assertEquals(ClientCompatibilityState.Supported, gate.state.value)
+    }
+
+    @Test
+    fun defaultDeadlineIncludesHeadroomForTheServerParityBound() = runBlocking {
+        assertTrue(DEFAULT_COMPATIBILITY_CHECK_TIMEOUT_MILLIS > 4_000L)
+
+        val gate = ClientCompatibilityGate(
+            checkCompatibility = {
+                delay(40L)
+                compatibility("update_available")
+            },
+            // Keep this a real scheduler-backed test, but do not make a busy
+            // CI runner prove a 10 ms wall-clock margin. Timeout behavior is
+            // covered separately by boundedStartupCheckReleasesSavedWorkspace.
+            startupTimeoutMillis = 1_000L,
+        )
+
+        gate.checkAtStartup()
+
+        assertTrue(gate.state.value is ClientCompatibilityState.UpdateAvailable)
     }
 
     @Test

@@ -22,7 +22,7 @@ DEFAULT_FRONTEND_PACKAGE_FILE = Path("frontend/package.json")
 DEFAULT_FRONTEND_LOCK_FILE = Path("frontend/package-lock.json")
 DEFAULT_FRONTEND_ENV_FILE = Path("frontend/.env.example")
 _RELEASE_TAG = re.compile(r"v[0-9]+(?:\.[0-9]+)*(?:[-+][0-9A-Za-z][0-9A-Za-z.-]*)?")
-_SNAPSHOT_SAFE_MIN_VERSION_CODE = 5
+_SNAPSHOT_SAFE_MIN_VERSION_CODE = 8
 
 
 class ReleaseVersionError(ValueError):

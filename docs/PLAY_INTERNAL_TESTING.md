@@ -11,8 +11,8 @@ Current direct-channel release candidate:
 | --- | --- |
 | App name | `D Company` |
 | Package name | `cloud.dcompany.erp` |
-| Version name | `3.1.13` |
-| Version code | `24` |
+| Version name | `3.1.14` |
+| Version code | `25` |
 | Minimum compatible client code | `8` |
 | Production API | `https://dcompany.duckdns.org/api/v1/` |
 
@@ -25,7 +25,8 @@ Codes `16` (`3.1.5`) and `17` (`3.1.6`) are immutable predecessors. Tag
 signing and must not be reused. Code `21` (`3.1.10`) is immutable signed
 predecessor history. Code `22` (`3.1.11`) was superseded before signing and
 must not be approved or activated. Code `23` (`3.1.12`) was also superseded
-without an authorised signed artifact. Code `24` (`3.1.13`) is the current
+without an authorised signed artifact. Code `24` (`3.1.13`) failed before
+signing and its tag remains immutable. Code `25` (`3.1.14`) is the current
 **unsigned** direct-channel candidate only. Do not upload it to Play
 or register, stage, advertise, or activate it without the green tagged workflow
 and reviewed rollout procedure. Code `21` (`3.1.10`) is its signed
@@ -152,7 +153,7 @@ Never commit review credentials or real customer data. Internal-test artifacts
 may receive lighter listing treatment, but privacy and access answers must still
 be accurate before any broader rollout.
 
-## 5. Upload a future Play build (not the current direct Code 24 candidate)
+## 5. Upload a future Play build (not the current direct Code 25 candidate)
 
 Do not perform this section for the current direct-channel candidate. First
 choose Play as the fleet's deliberate future delivery channel, assign a version code
@@ -167,7 +168,7 @@ the full same-channel upgrade gate.
 4. Confirm Play reads package `cloud.dcompany.erp` and the exact newly assigned
    version name/code from the bundle. It must be greater than every code already
    used by direct or Play delivery; for the current history, that means greater
-   than code `24`.
+   than code `25`.
 5. Use a release name that exactly records that version name and code.
 6. Add concise notes such as: `Gaming Centre command workspace, canonical
    receipt history, reliable real-time refresh, and offline recovery.`

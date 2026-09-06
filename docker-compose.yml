@@ -45,6 +45,10 @@ services:
     build:
       context: .
       dockerfile: infra/docker/backend.Dockerfile
+      args:
+        # Deliberately non-release identity; never eligible for APK staging.
+        APP_VERSION: "0.0.0"
+        APP_REVISION: "0000000000000000000000000000000000000000"
     environment:
       DATABASE_URL: postgresql+psycopg://erp:erp@postgres:5432/erp
       REDIS_URL: redis://redis:6379/0
@@ -67,6 +71,10 @@ services:
     build:
       context: .
       dockerfile: infra/docker/frontend.Dockerfile
+      args:
+        VITE_APP_VERSION: "0.0.0"
+        APP_VERSION: "0.0.0"
+        APP_REVISION: "0000000000000000000000000000000000000000"
     depends_on:
       - backend
     ports:

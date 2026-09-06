@@ -6,9 +6,12 @@ from httpx import ASGITransport, AsyncClient
 from pydantic import ValidationError
 from starlette.requests import Request
 
+from app.api.v1.public import router as public_router
 from app.api.v1.public.router import client_compatibility
+from app.core import config
 from app.core.config import Settings, get_settings
 from app.core.middleware import ClientCompatibilityMiddleware
+from app.core.release_identity import ReleaseIdentity
 
 
 class _ScalarResult:
@@ -26,10 +29,21 @@ class _CompatibilitySession:
     async def execute(self, _statement):
         return _ScalarResult(self.active_release)
 
+    async def rollback(self):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, _exc_type, _exc, _traceback):
+        return False
+
 
 class _ActiveRelease:
+    id = "active-release"
     version_code = 7
     version_name = "3.1.0"
+    source_git_sha = "ab" * 20
     update_url = "https://example.test/erp.apk"
     release_notes = "Gaming Centre reliability release"
     apk_sha256 = "ab" * 32
@@ -59,6 +73,12 @@ def test_backend_defaults_require_and_advertise_v8() -> None:
 async def test_android_compatibility_distinguishes_required_optional_and_current(
     monkeypatch,
 ) -> None:
+    async def verified_parity(**_kwargs):
+        return None
+
+    monkeypatch.setattr(
+        public_router, "verify_runtime_parity_for_public_offer", verified_parity
+    )
     settings = get_settings()
     monkeypatch.setattr(settings, "android_min_supported_version_code", 5)
     monkeypatch.setattr(settings, "android_latest_version_code", 7)
@@ -74,32 +94,29 @@ async def test_android_compatibility_distinguishes_required_optional_and_current
     monkeypatch.setattr(settings, "android_update_signing_cert_sha256", "cd" * 32)
 
     session = _CompatibilitySession(_ActiveRelease())
+    monkeypatch.setattr(public_router, "AsyncSessionLocal", lambda: session)
     required_response = Response()
     required = await client_compatibility(
         request=_request(),
         response=required_response,
-        session=session,
         platform="android",
         version_code=4,
     )
     optional = await client_compatibility(
         request=_request(),
         response=Response(),
-        session=session,
         platform="android",
         version_code=5,
     )
     optional_v6 = await client_compatibility(
         request=_request(),
         response=Response(),
-        session=session,
         platform="android",
         version_code=6,
     )
     supported = await client_compatibility(
         request=_request(),
         response=Response(),
-        session=session,
         platform="android",
         version_code=7,
     )
@@ -130,11 +147,15 @@ async def test_supported_android_has_no_optional_offer_without_active_release(
     monkeypatch.setattr(settings, "android_min_supported_version_code", 5)
     monkeypatch.setattr(settings, "android_latest_version_code", 99)
     monkeypatch.setattr(settings, "android_update_url", "https://example.test/legacy.apk")
+    monkeypatch.setattr(
+        public_router,
+        "AsyncSessionLocal",
+        lambda: _CompatibilitySession(),
+    )
 
     contract = await client_compatibility(
         request=_request(),
         response=Response(),
-        session=_CompatibilitySession(),
         platform="android",
         version_code=5,
     )
@@ -178,9 +199,15 @@ def test_production_native_update_url_requires_https() -> None:
         )
 
 
-def test_production_required_floor_needs_recovery_url_but_optional_registry_does_not() -> None:
+def test_production_required_floor_needs_recovery_url_but_optional_registry_does_not(
+    monkeypatch,
+) -> None:
+    identity = ReleaseIdentity(version_name="3.1.14", source_git_sha="ab" * 20)
+    monkeypatch.setattr(config, "read_backend_build_identity", lambda: identity)
     production = {
         "env": "prod",
+        "app_version": identity.version_name,
+        "app_revision": identity.source_git_sha,
         "jwt_secret": "production-secret-that-is-longer-than-thirty-two-characters",
         "remote_assistance_pairing_secret": (
             "independent-pairing-secret-longer-than-32-characters"
@@ -249,11 +276,15 @@ async def test_active_android_offer_below_raised_minimum_is_ignored(monkeypatch)
     monkeypatch.setattr(settings, "android_update_signing_cert_sha256", "12" * 32)
     stale_offer = _ActiveRelease()
     stale_offer.version_code = 9
+    monkeypatch.setattr(
+        public_router,
+        "AsyncSessionLocal",
+        lambda: _CompatibilitySession(stale_offer),
+    )
 
     required = await client_compatibility(
         request=_request(),
         response=Response(),
-        session=_CompatibilitySession(stale_offer),
         platform="android",
         version_code=8,
     )

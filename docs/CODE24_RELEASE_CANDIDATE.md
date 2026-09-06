@@ -1,6 +1,11 @@
 # D Company ERP 3.1.13 (code 24) audit candidate
 
-This is the current **unsigned** candidate, not a declaration of signing,
+Historical candidate: the immutable `v3.1.13` release failed before signing.
+It is superseded by [Code 25 / 3.1.14](CODE25_RELEASE_CANDIDATE.md), which retains
+this audit scope and adds the verified rejected-start dialog correction.
+The evidence below remains Code 24 evidence, not a signed Code 25 release claim.
+
+This was an **unsigned** candidate, not a declaration of signing,
 deployment, activation, approval, partner installability or Redmi readiness. It
 supersedes unsigned Code 23 without rewriting the immutable `v3.1.12` tag. Code
 21 (`3.1.10`) remains the immutable signed direct-channel predecessor for the

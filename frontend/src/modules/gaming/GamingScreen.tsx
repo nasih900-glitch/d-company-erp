@@ -2906,13 +2906,15 @@ export default function GamingScreen() {
                   </div>
                   {canManageStations && manageMode && (
                     <div className="flex flex-col gap-1">
-                      <button className="text-fg-muted hover:text-accent p-1"
+                      <button className="tap-target inline-flex items-center justify-center rounded-lg text-fg-muted transition-colors hover:bg-bg-raised hover:text-accent"
+                        aria-label={`Edit ${st.name}`} title={`Edit ${st.name}`}
                         onClick={() => setEdit(st)}>
-                        <Edit2 size={12}/>
+                        <Edit2 size={16}/>
                       </button>
-                      <button className="text-fg-muted hover:text-accent-bad p-1"
+                      <button className="tap-target inline-flex items-center justify-center rounded-lg text-fg-muted transition-colors hover:bg-bg-raised hover:text-accent-bad"
+                        aria-label={`Delete ${st.name}`} title={`Delete ${st.name}`}
                         onClick={() => setDeleteStationTarget(st)}>
-                        <Trash2 size={12}/>
+                        <Trash2 size={16}/>
                       </button>
                     </div>
                   )}
@@ -3170,10 +3172,11 @@ export default function GamingScreen() {
                             </div>
                             <div className="flex items-center gap-1 flex-wrap">
                               {overtime && session.status === 'active' && (
-                                <button className="text-fg-muted hover:text-accent p-0.5"
+                                <button className="tap-target inline-flex items-center justify-center rounded-lg text-fg-muted transition-colors hover:bg-bg-raised hover:text-accent"
                                   onClick={() => toggleMute(st.id)}
+                                  aria-label={mutedStations[st.id] ? `Unmute alarm for ${st.name}` : `Mute alarm for ${st.name}`}
                                   title={mutedStations[st.id] ? 'Unmute alarm' : 'Mute alarm for this station'}>
-                                  {mutedStations[st.id] ? <BellOff size={13}/> : <Bell size={13}/>}
+                                  {mutedStations[st.id] ? <BellOff size={16}/> : <Bell size={16}/>}
                                 </button>
                               )}
                               {session.billing_mode === 'legacy_ambiguous' ? (

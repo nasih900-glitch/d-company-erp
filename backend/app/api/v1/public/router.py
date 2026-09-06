@@ -10,19 +10,38 @@ prefix like /public/{company_slug}/menu.
 
 from __future__ import annotations
 
+import asyncio
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Literal
-from uuid import UUID
+from typing import TYPE_CHECKING, Literal, TypedDict
+from uuid import UUID  # noqa: TC003 - Pydantic resolves this model type at runtime.
+from weakref import WeakKeyDictionary
 
 from fastapi import APIRouter, Query, Request, Response
 from pydantic import BaseModel
 from sqlalchemy import select
 
 from app.core.config import get_settings
-from app.core.db import SessionDep
+from app.core.db import AsyncSessionLocal, SessionDep  # noqa: TC001 - FastAPI dependency.
+from app.core.logging import get_logger
 from app.models import AndroidRelease, Company, MenuCategory, MenuItem
+from app.services.client_updates.runtime_parity import (
+    RuntimeParityError,
+    verify_runtime_parity_for_public_offer,
+)
 
 router = APIRouter()
+logger = get_logger(__name__)
+
+if TYPE_CHECKING:
+    from app.core.config import Settings
+
+# Code 21's immutable client deadline is three seconds for the complete public
+# request.  Keep optional release lookup + runtime verification inside this
+# smaller server budget, reserving proxy, TLS, middleware and serialization
+# headroom.  Timeout fails closed to "supported"; it never advertises an
+# unverified artifact or blocks normal offline-capable operation.
+PUBLIC_COMPATIBILITY_OFFER_BUDGET_SECONDS = 1.75
 
 
 # ---------------------------------------------------------------- DTOs
@@ -63,12 +82,158 @@ class ClientCompatibilityDTO(BaseModel):
     checked_at: datetime
 
 
+class _AndroidOffer(TypedDict):
+    version_code: int
+    version_name: str
+    source_git_sha: str
+    update_url: str
+    release_notes: str
+    apk_sha256: str
+    apk_size_bytes: int
+    apk_signing_cert_sha256: str
+
+
+@dataclass(slots=True)
+class _PublicOfferLookupState:
+    """One shared optional-offer lookup per worker event loop.
+
+    The endpoint is unauthenticated and polled by every direct-install tablet.
+    Sharing one task prevents a slow database or identity endpoint from turning
+    those polls into unbounded database work.
+    """
+
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    in_flight: asyncio.Task[_AndroidOffer | None] | None = None
+
+
+_public_offer_lookup_states: WeakKeyDictionary[
+    asyncio.AbstractEventLoop, _PublicOfferLookupState
+] = WeakKeyDictionary()
+
+
+def _public_offer_lookup_state() -> _PublicOfferLookupState:
+    loop = asyncio.get_running_loop()
+    state = _public_offer_lookup_states.get(loop)
+    if state is None:
+        state = _PublicOfferLookupState()
+        _public_offer_lookup_states[loop] = state
+    return state
+
+
+async def _load_verified_active_direct_offer(settings: Settings) -> _AndroidOffer | None:
+    """Read, verify, and recheck an offer outside the client request session.
+
+    Database cleanup is deliberately owned by a detached, deduplicated task.
+    A broken pool or connection can therefore suppress an optional offer, but
+    it cannot hold an immutable Code 21 compatibility request past its three-
+    second client deadline.
+    """
+    async with AsyncSessionLocal() as session:
+        active_release = (
+            await session.execute(
+                select(AndroidRelease).where(
+                    AndroidRelease.channel == "direct",
+                    AndroidRelease.status == "active",
+                )
+            )
+        ).scalar_one_or_none()
+        if (
+            active_release is None
+            or active_release.version_code < settings.android_min_supported_version_code
+        ):
+            await session.rollback()
+            return None
+
+        # An active DB row survives deployment rollbacks. It is not enough to
+        # prove the currently served web/backend can support this APK. Copy the
+        # immutable offer, then close the read session before network I/O.
+        offer = _AndroidOffer(
+            version_code=active_release.version_code,
+            version_name=active_release.version_name,
+            source_git_sha=active_release.source_git_sha,
+            update_url=active_release.update_url,
+            release_notes=active_release.release_notes,
+            apk_sha256=active_release.apk_sha256,
+            apk_size_bytes=active_release.apk_size_bytes,
+            apk_signing_cert_sha256=active_release.apk_signing_cert_sha256,
+        )
+        offer_id = active_release.id
+        await session.rollback()
+
+    try:
+        await verify_runtime_parity_for_public_offer(
+            version_name=offer["version_name"],
+            source_git_sha=offer["source_git_sha"],
+            settings=settings,
+        )
+    except RuntimeParityError:
+        return None
+
+    # Withdrawal/promotion may have happened during identity I/O. Do not
+    # resurrect an offer whose owner just withdrew it.
+    async with AsyncSessionLocal() as session:
+        still_active = (
+            await session.execute(
+                select(AndroidRelease.id).where(
+                    AndroidRelease.id == offer_id,
+                    AndroidRelease.status == "active",
+                )
+            )
+        ).scalar_one_or_none()
+        await session.rollback()
+    return offer if still_active is not None else None
+
+
+async def _run_public_offer_lookup(
+    state: _PublicOfferLookupState,
+    settings: Settings,
+) -> _AndroidOffer | None:
+    try:
+        return await _load_verified_active_direct_offer(settings)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - an optional offer must fail closed
+        logger.warning(
+            "android_update.public_offer_lookup_failed",
+            error_type=type(exc).__name__,
+        )
+        return None
+    finally:
+        async with state.lock:
+            if state.in_flight is asyncio.current_task():
+                state.in_flight = None
+
+
+async def _shared_verified_active_direct_offer(settings: Settings) -> _AndroidOffer | None:
+    state = _public_offer_lookup_state()
+    async with state.lock:
+        task = state.in_flight
+        if task is None:
+            task = asyncio.create_task(
+                _run_public_offer_lookup(state, settings),
+                name="public-android-offer-lookup",
+            )
+            state.in_flight = task
+
+    # A timed-out/disconnected legacy caller must never cancel the shared work
+    # or make another poll open a second database lookup.
+    return await asyncio.shield(task)
+
+
+def _reset_public_offer_lookup_state_for_tests() -> None:
+    """Cancel and discard process-local lookup state between isolated tests."""
+    for state in tuple(_public_offer_lookup_states.values()):
+        task = state.in_flight
+        if task is not None and not task.done():
+            task.cancel()
+    _public_offer_lookup_states.clear()
+
+
 # ---------------------------------------------------------------- endpoints
 @router.get("/client-compatibility", response_model=ClientCompatibilityDTO)
 async def client_compatibility(
     request: Request,
     response: Response,
-    session: SessionDep,
     platform: Literal["android", "ios"],
     version_code: int = Query(ge=1),
 ) -> ClientCompatibilityDTO:
@@ -83,6 +248,13 @@ async def client_compatibility(
     response.headers["X-Client-Compatibility-Policy-Revision"] = str(
         settings.client_compatibility_policy_revision
     )
+    latest: int
+    update_url: str | None
+    latest_version_name: str | None
+    release_notes: str | None
+    apk_sha256: str | None
+    apk_size_bytes: int | None
+    apk_signing_cert_sha256: str | None
     if platform == "android":
         minimum = settings.android_min_supported_version_code
         # Missing means the existing direct-APK client/monitor contract. Play
@@ -92,24 +264,21 @@ async def client_compatibility(
             request.headers.get("X-Client-Distribution-Channel", "direct").strip().lower()
             or "direct"
         )
-        active_release = None
+        offer = None
         if distribution_channel == "direct":
-            active_release = (
-                await session.execute(
-                    select(AndroidRelease).where(
-                        AndroidRelease.channel == "direct",
-                        AndroidRelease.status == "active",
-                    )
-                )
-            ).scalar_one_or_none()
-        if active_release is not None and active_release.version_code >= minimum:
-            latest = active_release.version_code
-            update_url = active_release.update_url
-            latest_version_name = active_release.version_name
-            release_notes = active_release.release_notes
-            apk_sha256 = active_release.apk_sha256
-            apk_size_bytes = active_release.apk_size_bytes
-            apk_signing_cert_sha256 = active_release.apk_signing_cert_sha256
+            try:
+                async with asyncio.timeout(PUBLIC_COMPATIBILITY_OFFER_BUDGET_SECONDS):
+                    offer = await _shared_verified_active_direct_offer(settings)
+            except TimeoutError:
+                offer = None
+        if offer is not None:
+            latest = offer["version_code"]
+            update_url = offer["update_url"]
+            latest_version_name = offer["version_name"]
+            release_notes = offer["release_notes"]
+            apk_sha256 = offer["apk_sha256"]
+            apk_size_bytes = offer["apk_size_bytes"]
+            apk_signing_cert_sha256 = offer["apk_signing_cert_sha256"]
         elif version_code < minimum and distribution_channel == "direct":
             # Required-update recovery remains deploy-time policy so an owner
             # cannot accidentally strand an already-blocked client by
@@ -145,10 +314,9 @@ async def client_compatibility(
             "This app version is no longer compatible with the ERP server. "
             "Update before continuing; saved offline work will remain on this device."
         )
-    elif platform == "android" and update_url is not None and version_code < latest:
-        compatibility_status = "update_available"
-        default_message = "A newer app version is available. You can continue for now."
-    elif platform == "ios" and version_code < latest:
+    elif (
+        platform == "android" and update_url is not None and version_code < latest
+    ) or (platform == "ios" and version_code < latest):
         compatibility_status = "update_available"
         default_message = "A newer app version is available. You can continue for now."
     else:

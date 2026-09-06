@@ -50,9 +50,16 @@ def test_prod_rejects_default_jwt_secret():
         )
 
 
-def test_prod_accepts_strong_jwt_secret():
+def test_prod_accepts_strong_jwt_secret(monkeypatch):
+    from app.core import config
+    from app.core.release_identity import ReleaseIdentity
+
+    identity = ReleaseIdentity(version_name="3.1.14", source_git_sha="ab" * 20)
+    monkeypatch.setattr(config, "read_backend_build_identity", lambda: identity)
     s = _settings(
         env="prod",
+        app_version=identity.version_name,
+        app_revision=identity.source_git_sha,
         jwt_secret="k" * 48,
         remote_assistance_pairing_secret="independent-pairing-secret-longer-than-32-characters",
         remote_assistance_relay_secret="cnJycnJycnJycnJycnJycnJycnJycnJycnJycnJycnI=",

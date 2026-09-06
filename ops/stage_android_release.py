@@ -3,8 +3,8 @@
 
 This is an operator tool, not an app endpoint.  It runs from the trusted
 release workstation, verifies the exact CI manifest and APK with Android SDK
-tools, copies the APK to a temporary VPS path, publishes it with Linux
-``renameat2(RENAME_NOREPLACE)``, verifies the public HTTPS bytes, and registers
+tools, streams the APK into a private root-owned VPS directory, publishes it
+with Linux ``renameat2(RENAME_NOREPLACE)``, verifies the public HTTPS bytes, and registers
 an immutable *staged* release through the backend's internal CLI.
 
 It intentionally cannot activate or withdraw a release and never reads or
@@ -18,19 +18,22 @@ import argparse
 import base64
 import ctypes
 import errno
+import fcntl
 import hashlib
 import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import uuid
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 from urllib.parse import urlsplit
 
 try:
@@ -39,11 +42,16 @@ try:
         AndroidUpdateChannelError,
         verify_public_artifact,
     )
+    from ops.runtime_release_parity import RuntimeParityError, inspect_release_pair
 except ModuleNotFoundError:  # direct execution: python ops/stage_android_release.py
     from android_update_channel import (  # type: ignore[no-redef]
         AdvertisedAndroidRelease,
         AndroidUpdateChannelError,
         verify_public_artifact,
+    )
+    from runtime_release_parity import (  # type: ignore[no-redef]
+        RuntimeParityError,
+        inspect_release_pair,
     )
 
 
@@ -53,6 +61,13 @@ FIRST_SERVER_DELIVERED_VERSION_CODE = 15
 DEFAULT_BASE_URL = "https://dcompany.duckdns.org"
 DEFAULT_REMOTE_ROOT = "/opt/d-company-erp"
 DEFAULT_ATTESTATION_ROOT = "/var/lib/dcompany-erp/android-releases/attestations"
+DEFAULT_PRODUCTION_INSTALL_LOCK = Path(
+    "/var/lock/d-company-erp/production-install.lock"
+)
+PRODUCTION_INSTALL_LOCK = str(DEFAULT_PRODUCTION_INSTALL_LOCK)
+PRIVATE_UPLOAD_DIRECTORY_NAME = ".d-company-erp-android-release-staging"
+TRUSTED_REMOTE_OWNER_UID = 0
+TRUSTED_REMOTE_OWNER_GID = 0
 _SAFE_FILENAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\.apk$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
@@ -123,6 +138,7 @@ class RemoteTarget:
             "BatchMode=yes",
             "-o",
             "IdentitiesOnly=yes",
+            "--",
             self.host,
         ]
 
@@ -172,7 +188,13 @@ def _validated_base_url(raw: str) -> str:
 
 
 def _validated_remote_target(target: RemoteTarget) -> RemoteTarget:
-    if _SSH_HOST.fullmatch(target.host) is None:
+    user, separator, hostname = target.host.partition("@")
+    if (
+        _SSH_HOST.fullmatch(target.host) is None
+        or target.host.startswith("-")
+        or hostname.startswith("-")
+        or (separator and user.startswith("-"))
+    ):
         raise AndroidReleaseStagingError("SSH host is invalid")
     if not 1 <= target.port <= 65_535:
         raise AndroidReleaseStagingError("SSH port is invalid")
@@ -498,6 +520,129 @@ def canonical_json(payload: dict[str, Any]) -> bytes:
     return (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode()
 
 
+def _validated_runtime_root(raw: Any) -> str:
+    if (
+        not isinstance(raw, str)
+        or _REMOTE_ROOT.fullmatch(raw) is None
+        or ".." in Path(raw).parts
+        or raw == "/"
+    ):
+        raise AndroidReleaseStagingError("Runtime inspection root is invalid")
+    return raw
+
+
+def _inspect_running_release(payload: dict[str, Any]) -> dict[str, Any]:
+    root = _validated_runtime_root(payload.get("remote_root", DEFAULT_REMOTE_ROOT))
+    try:
+        return inspect_release_pair(
+            root,
+            str(Path(root) / ".env"),
+            payload.get("version_name"),
+            payload.get("source_git_sha"),
+            running=True,
+        )
+    except RuntimeParityError as exc:
+        raise AndroidReleaseStagingError(str(exc)) from exc
+
+
+@contextmanager
+def _production_install_lock(
+    lock_file: str | Path | None = None,
+) -> Iterator[None]:
+    """Exclude the hardened installer without waiting behind a deployment."""
+    path = Path(lock_file or PRODUCTION_INSTALL_LOCK)
+    if not path.is_absolute() or not path.name:
+        raise AndroidReleaseStagingError(
+            "D Company production installer lock path is invalid"
+        )
+    is_production_path = path == DEFAULT_PRODUCTION_INSTALL_LOCK
+    expected_uid = 0 if is_production_path else os.geteuid()
+    expected_gid = 0 if is_production_path else os.getegid()
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    directory = getattr(os, "O_DIRECTORY", None)
+    if nofollow is None or directory is None:
+        raise AndroidReleaseStagingError(
+            "This host cannot safely open the production installer lock"
+        )
+
+    # The installer establishes this private root-owned parent.  Creating it
+    # here is safe because the subsequent descriptor open refuses a symlink and
+    # validates the exact owner and mode before the lock pathname is touched.
+    try:
+        path.parent.mkdir(mode=0o700, parents=False, exist_ok=True)
+    except OSError as exc:
+        raise AndroidReleaseStagingError(
+            "Cannot establish the D Company production lock directory"
+        ) from exc
+
+    directory_flags = os.O_RDONLY | directory | nofollow | getattr(os, "O_CLOEXEC", 0)
+    try:
+        parent_descriptor = os.open(path.parent, directory_flags)
+    except OSError as exc:
+        raise AndroidReleaseStagingError(
+            "Cannot safely open the D Company production lock directory"
+        ) from exc
+    try:
+        parent_stat = os.fstat(parent_descriptor)
+        if (
+            not stat.S_ISDIR(parent_stat.st_mode)
+            or parent_stat.st_uid != expected_uid
+            or parent_stat.st_gid != expected_gid
+            or stat.S_IMODE(parent_stat.st_mode) != 0o700
+        ):
+            raise AndroidReleaseStagingError(
+                "D Company production lock directory failed ownership or mode validation"
+            )
+
+        lock_flags = os.O_RDWR | nofollow | getattr(os, "O_CLOEXEC", 0)
+        try:
+            descriptor = os.open(
+                path.name,
+                lock_flags | os.O_CREAT | os.O_EXCL,
+                0o600,
+                dir_fd=parent_descriptor,
+            )
+        except FileExistsError:
+            try:
+                descriptor = os.open(path.name, lock_flags, dir_fd=parent_descriptor)
+            except OSError as exc:
+                raise AndroidReleaseStagingError(
+                    "Cannot safely open the D Company production installer lock"
+                ) from exc
+        except OSError as exc:
+            raise AndroidReleaseStagingError(
+                "Cannot create the D Company production installer lock"
+            ) from exc
+
+        try:
+            lock_stat = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(lock_stat.st_mode)
+                or lock_stat.st_uid != expected_uid
+                or lock_stat.st_gid != expected_gid
+                or lock_stat.st_nlink != 1
+                or stat.S_IMODE(lock_stat.st_mode) != 0o600
+            ):
+                raise AndroidReleaseStagingError(
+                    "D Company production installer lock failed ownership, mode, or link validation"
+                )
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as exc:
+                if exc.errno in {errno.EACCES, errno.EAGAIN, errno.EWOULDBLOCK}:
+                    raise AndroidReleaseStagingError(
+                        "Another D Company production install or upgrade is already running"
+                    ) from exc
+                raise AndroidReleaseStagingError(
+                    "Cannot acquire the D Company production installer lock"
+                ) from exc
+            yield
+        finally:
+            os.close(descriptor)
+    finally:
+        os.close(parent_descriptor)
+
+
 def _ssh_json(
     target: RemoteTarget, action: str, payload: dict[str, Any]
 ) -> dict[str, Any]:
@@ -505,7 +650,6 @@ def _ssh_json(
     remote_script = f"{target.root}/ops/stage_android_release.py"
     command = [
         *target.ssh_base,
-        "--",
         "python3",
         remote_script,
         "_remote",
@@ -518,7 +662,9 @@ def _ssh_json(
             check=True,
             capture_output=True,
             text=True,
-            timeout=180,
+            # Finalization combines host inspection and the backend CLI in one
+            # remote process, so its outer timeout must exceed the CLI timeout.
+            timeout=390 if action == "finalize" else 180,
         )
         response = json.loads(result.stdout)
     except (
@@ -535,42 +681,71 @@ def _ssh_json(
     return response
 
 
-def _scp_apk(target: RemoteTarget, apk: Path, remote_path: str) -> None:
-    command = [
-        "scp",
-        "-P",
-        str(target.port),
-        "-i",
-        str(target.key),
-        "-o",
-        "BatchMode=yes",
-        "-o",
-        "IdentitiesOnly=yes",
-        "--",
-        str(apk),
-        f"{target.host}:{remote_path}",
-    ]
-    try:
-        subprocess.run(command, check=True, timeout=15 * 60)
-    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-        raise AndroidReleaseStagingError(
-            "secure copy to the release staging path failed"
-        ) from exc
-
-
-def _register_staged_release(
-    target: RemoteTarget, manifest: dict[str, Any]
+def _ssh_upload_apk(
+    target: RemoteTarget,
+    apk: Path,
+    payload: dict[str, Any],
 ) -> dict[str, Any]:
-    expected_manifest_sha256 = hashlib.sha256(canonical_json(manifest)).hexdigest()
+    """Stream the APK to a remote fd-safe uploader; never expose an SCP pathname."""
+    encoded = base64.urlsafe_b64encode(canonical_json(payload)).decode("ascii")
+    remote_script = f"{target.root}/ops/stage_android_release.py"
     command = [
         *target.ssh_base,
-        "--",
+        "python3",
+        remote_script,
+        "_remote",
+        "upload",
+        encoded,
+    ]
+    try:
+        with apk.open("rb") as stream:
+            result = subprocess.run(
+                command,
+                stdin=stream,
+                check=True,
+                capture_output=True,
+                timeout=15 * 60,
+            )
+        response = json.loads(result.stdout)
+    except (
+        OSError,
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        json.JSONDecodeError,
+    ) as exc:
+        raise AndroidReleaseStagingError("secure APK stream upload failed") from exc
+    if not isinstance(response, dict) or response.get("ok") is not True:
+        raise AndroidReleaseStagingError("remote APK upload was not acknowledged")
+    return response
+
+
+def _validated_registration_receipt(
+    response: Any, manifest: dict[str, Any]
+) -> dict[str, Any]:
+    expected_manifest_sha256 = hashlib.sha256(canonical_json(manifest)).hexdigest()
+    if (
+        not isinstance(response, dict)
+        or response.get("status") != "staged"
+        or not isinstance(response.get("id"), str)
+        or response.get("manifest_sha256") != expected_manifest_sha256
+    ):
+        raise AndroidReleaseStagingError(
+            "backend staging CLI returned an invalid receipt"
+        )
+    return response
+
+
+def _register_staged_release_on_host(
+    remote_root: str, manifest: dict[str, Any]
+) -> dict[str, Any]:
+    root = _validated_runtime_root(remote_root)
+    command = [
         "docker",
         "compose",
         "-f",
-        f"{target.root}/docker-compose.prod.yml",
+        f"{root}/docker-compose.prod.yml",
         "--env-file",
-        f"{target.root}/.env",
+        f"{root}/.env",
         "exec",
         "-T",
         "backend",
@@ -598,16 +773,35 @@ def _register_staged_release(
         raise AndroidReleaseStagingError(
             "backend refused the immutable staged-release registration"
         ) from exc
-    if (
-        not isinstance(response, dict)
-        or response.get("status") != "staged"
-        or not isinstance(response.get("id"), str)
-        or response.get("manifest_sha256") != expected_manifest_sha256
-    ):
+    return _validated_registration_receipt(response, manifest)
+
+
+def _finalize_staged_release(
+    target: RemoteTarget,
+    manifest: dict[str, Any],
+    *,
+    initial_runtime: dict[str, Any],
+    version_name: str,
+    source_git_sha: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    response = _ssh_json(
+        target,
+        "finalize",
+        {
+            "remote_root": target.root,
+            "version_name": version_name,
+            "source_git_sha": source_git_sha,
+            "initial_runtime_parity": initial_runtime,
+            "manifest": manifest,
+        },
+    )
+    final_runtime = response.get("runtime_parity")
+    if final_runtime != initial_runtime:
         raise AndroidReleaseStagingError(
-            "backend staging CLI returned an invalid receipt"
+            "Remote finalization returned inconsistent runtime evidence"
         )
-    return response
+    registered = _validated_registration_receipt(response.get("registered"), manifest)
+    return registered, final_runtime
 
 
 def stage_release(args: argparse.Namespace) -> dict[str, Any]:
@@ -640,8 +834,6 @@ def stage_release(args: argparse.Namespace) -> dict[str, Any]:
             root=args.remote_root.rstrip("/"),
         )
     )
-    token = uuid.uuid4().hex
-    remote_temp = f"{target.root}/releases/android/.{ci.apk_filename}.{token}.part"
     remote_final = f"{target.root}/releases/android/{ci.apk_filename}"
 
     plan = {
@@ -661,27 +853,32 @@ def stage_release(args: argparse.Namespace) -> dict[str, Any]:
     if not target.key.is_file():
         raise AndroidReleaseStagingError("SSH identity file does not exist")
 
+    runtime_payload = {
+        "remote_root": target.root,
+        "version_name": ci.version_name,
+        "source_git_sha": ci.git_sha,
+    }
+    # This read-only guard precedes prepare, upload, publication and registration.
+    runtime = _ssh_json(target, "runtime", runtime_payload)["runtime_parity"]
+
     prepared = _ssh_json(
         target,
         "prepare",
         {
+            **runtime_payload,
             "remote_root": target.root,
-            "remote_temp": remote_temp,
-            "remote_final": remote_final,
             "apk_filename": ci.apk_filename,
             "apk_sha256": ci.apk_sha256,
             "apk_size_bytes": ci.apk_size_bytes,
         },
     )
     if prepared.get("already_published") is not True:
-        _scp_apk(target, args.apk, remote_temp)
-        _ssh_json(
+        _ssh_upload_apk(
             target,
-            "publish",
+            args.apk,
             {
+                **runtime_payload,
                 "remote_root": target.root,
-                "remote_temp": remote_temp,
-                "remote_final": remote_final,
                 "apk_filename": ci.apk_filename,
                 "apk_sha256": ci.apk_sha256,
                 "apk_size_bytes": ci.apk_size_bytes,
@@ -701,7 +898,13 @@ def stage_release(args: argparse.Namespace) -> dict[str, Any]:
     except AndroidUpdateChannelError as exc:
         raise AndroidReleaseStagingError(str(exc)) from exc
 
-    registered = _register_staged_release(target, strict_manifest)
+    registered, final_runtime = _finalize_staged_release(
+        target,
+        strict_manifest,
+        initial_runtime=runtime,
+        version_name=ci.version_name,
+        source_git_sha=ci.git_sha,
+    )
     attestation = {
         "schema_version": 1,
         "action": "android_release_staged",
@@ -727,6 +930,7 @@ def stage_release(args: argparse.Namespace) -> dict[str, Any]:
             "workflow_run_id": ci.workflow_run_id,
             "workflow_run_attempt": ci.workflow_run_attempt,
         },
+        "runtime_parity": final_runtime,
         "authority_boundary": (
             "Staging does not advertise this release. A protected owner must activate "
             "it through the ERP after a second server-side public-byte verification."
@@ -762,40 +966,231 @@ def _decode_remote_payload(encoded: str) -> dict[str, Any]:
     return payload
 
 
-def _within_release_directory(
-    raw: Any,
-    *,
-    filename: str,
-    remote_root: Any = DEFAULT_REMOTE_ROOT,
-) -> Path:
-    if not isinstance(raw, str):
-        raise AndroidReleaseStagingError("remote path is invalid")
-    if not isinstance(remote_root, str) or not Path(remote_root).is_absolute():
-        raise AndroidReleaseStagingError("remote root is invalid")
-    raw_root = Path(remote_root)
-    if raw_root.is_symlink():
-        raise AndroidReleaseStagingError("remote root must not be a symlink")
-    root = raw_root.resolve()
-    raw_release_dir = root / "releases/android"
-    if raw_release_dir.is_symlink():
-        raise AndroidReleaseStagingError("release directory must not be a symlink")
-    if not raw_release_dir.is_dir():
-        raise AndroidReleaseStagingError("release directory does not exist")
-    release_dir = raw_release_dir.resolve()
-    if release_dir != raw_release_dir:
-        raise AndroidReleaseStagingError("release directory resolved unexpectedly")
-    candidate = Path(raw)
-    if candidate.parent.resolve() != release_dir:
-        raise AndroidReleaseStagingError("remote path escaped the release directory")
-    if filename not in candidate.name:
+def _directory_open_flags() -> int:
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    directory = getattr(os, "O_DIRECTORY", None)
+    if nofollow is None or directory is None:
         raise AndroidReleaseStagingError(
-            "remote path does not match the release filename"
+            "This host cannot safely open Android release directories"
         )
-    return candidate
+    return os.O_RDONLY | directory | nofollow | getattr(os, "O_CLOEXEC", 0)
 
 
-def _atomic_rename_noreplace(source: Path, destination: Path) -> None:
-    """Linux atomic rename that refuses an existing destination."""
+def _validate_trusted_directory(
+    descriptor: int,
+    label: str,
+    *,
+    exact_mode: int | None = None,
+) -> None:
+    metadata = os.fstat(descriptor)
+    mode = stat.S_IMODE(metadata.st_mode)
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or metadata.st_uid != TRUSTED_REMOTE_OWNER_UID
+        or metadata.st_gid != TRUSTED_REMOTE_OWNER_GID
+        or mode & 0o022
+        or (exact_mode is not None and mode != exact_mode)
+    ):
+        raise AndroidReleaseStagingError(
+            f"{label} must be a trusted root-owned directory"
+        )
+
+
+@contextmanager
+def _open_release_directories(remote_root: Any) -> Iterator[tuple[int, int]]:
+    """Hold private-upload and public-release dirfds across the whole operation."""
+    root = Path(_validated_runtime_root(remote_root))
+    flags = _directory_open_flags()
+    descriptors: list[int] = []
+    try:
+        try:
+            parent_fd = os.open(root.parent, flags)
+        except OSError as exc:
+            raise AndroidReleaseStagingError(
+                "Cannot safely open the ERP parent"
+            ) from exc
+        descriptors.append(parent_fd)
+        _validate_trusted_directory(parent_fd, "ERP parent")
+        try:
+            root_fd = os.open(root.name, flags, dir_fd=parent_fd)
+        except OSError as exc:
+            raise AndroidReleaseStagingError("Cannot safely open the ERP root") from exc
+        descriptors.append(root_fd)
+        _validate_trusted_directory(root_fd, "ERP root")
+
+        try:
+            releases_fd = os.open("releases", flags, dir_fd=root_fd)
+            descriptors.append(releases_fd)
+            _validate_trusted_directory(releases_fd, "Android releases parent")
+            public_fd = os.open("android", flags, dir_fd=releases_fd)
+            descriptors.append(public_fd)
+            _validate_trusted_directory(public_fd, "Public Android release directory")
+        except OSError as exc:
+            raise AndroidReleaseStagingError(
+                "Cannot safely open the public Android release directory"
+            ) from exc
+
+        try:
+            os.mkdir(PRIVATE_UPLOAD_DIRECTORY_NAME, 0o700, dir_fd=parent_fd)
+        except FileExistsError:
+            pass
+        except OSError as exc:
+            raise AndroidReleaseStagingError(
+                "Cannot create the private Android upload directory"
+            ) from exc
+        try:
+            staging_fd = os.open(PRIVATE_UPLOAD_DIRECTORY_NAME, flags, dir_fd=parent_fd)
+        except OSError as exc:
+            raise AndroidReleaseStagingError(
+                "Cannot safely open the private Android upload directory"
+            ) from exc
+        descriptors.append(staging_fd)
+        _validate_trusted_directory(
+            staging_fd,
+            "Private Android upload directory",
+            exact_mode=0o700,
+        )
+        yield staging_fd, public_fd
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+
+
+def _validate_regular_file_descriptor(
+    descriptor: int,
+    label: str,
+    *,
+    exact_mode: int | None = None,
+) -> None:
+    metadata = os.fstat(descriptor)
+    mode = stat.S_IMODE(metadata.st_mode)
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != TRUSTED_REMOTE_OWNER_UID
+        or metadata.st_gid != TRUSTED_REMOTE_OWNER_GID
+        or metadata.st_nlink != 1
+        or mode & 0o022
+        or (exact_mode is not None and mode != exact_mode)
+    ):
+        raise AndroidReleaseStagingError(
+            f"{label} failed regular-file ownership, link, or mode validation"
+        )
+
+
+def _open_existing_release(public_fd: int, filename: str) -> int | None:
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    if nofollow is None:
+        raise AndroidReleaseStagingError("This host cannot safely open an existing APK")
+    flags = os.O_RDONLY | os.O_NONBLOCK | nofollow | getattr(os, "O_CLOEXEC", 0)
+    try:
+        descriptor = os.open(filename, flags, dir_fd=public_fd)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise AndroidReleaseStagingError(
+            "Cannot safely open the immutable APK filename"
+        ) from exc
+    try:
+        _validate_regular_file_descriptor(descriptor, "Immutable APK")
+    except Exception:
+        os.close(descriptor)
+        raise
+    return descriptor
+
+
+def _sha256_descriptor(descriptor: int) -> tuple[str, int]:
+    digest = hashlib.sha256()
+    total = 0
+    try:
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        while chunk := os.read(descriptor, 1024 * 1024):
+            total += len(chunk)
+            digest.update(chunk)
+        os.lseek(descriptor, 0, os.SEEK_SET)
+    except OSError as exc:
+        raise AndroidReleaseStagingError(
+            "Cannot hash the staged APK descriptor"
+        ) from exc
+    return digest.hexdigest(), total
+
+
+def _existing_release_matches(
+    public_fd: int,
+    filename: str,
+    *,
+    expected_sha: str,
+    expected_size: int,
+) -> bool:
+    descriptor = _open_existing_release(public_fd, filename)
+    if descriptor is None:
+        return False
+    try:
+        actual_sha, actual_size = _sha256_descriptor(descriptor)
+    finally:
+        os.close(descriptor)
+    if actual_size != expected_size or actual_sha != expected_sha:
+        raise AndroidReleaseStagingError(
+            "immutable APK filename already exists with different bytes"
+        )
+    return True
+
+
+def _write_all(descriptor: int, content: bytes) -> None:
+    view = memoryview(content)
+    while view:
+        try:
+            written = os.write(descriptor, view)
+        except OSError as exc:
+            raise AndroidReleaseStagingError("Cannot write the staged APK") from exc
+        if written <= 0:
+            raise AndroidReleaseStagingError("Cannot write the staged APK")
+        view = view[written:]
+
+
+def _copy_exact_upload(
+    source: BinaryIO,
+    destination_fd: int,
+    *,
+    expected_sha: str,
+    expected_size: int,
+) -> None:
+    total = 0
+    digest = hashlib.sha256()
+    while True:
+        chunk = source.read(min(1024 * 1024, expected_size - total + 1))
+        if not isinstance(chunk, bytes):
+            raise AndroidReleaseStagingError("APK upload stream returned invalid bytes")
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > expected_size:
+            raise AndroidReleaseStagingError("uploaded APK exceeds the expected size")
+        digest.update(chunk)
+        _write_all(destination_fd, chunk)
+    if total != expected_size or digest.hexdigest() != expected_sha:
+        raise AndroidReleaseStagingError("uploaded APK failed exact byte verification")
+    try:
+        os.fsync(destination_fd)
+    except OSError as exc:
+        raise AndroidReleaseStagingError("Cannot sync the staged APK") from exc
+    descriptor_sha, descriptor_size = _sha256_descriptor(destination_fd)
+    if descriptor_size != expected_size or descriptor_sha != expected_sha:
+        raise AndroidReleaseStagingError(
+            "staged APK descriptor failed exact verification"
+        )
+
+
+class _ImmutableDestinationExists(AndroidReleaseStagingError):
+    pass
+
+
+def _atomic_rename_noreplace_at(
+    source_dir_fd: int,
+    source_name: str,
+    destination_dir_fd: int,
+    destination_name: str,
+) -> None:
+    """Linux dirfd-relative atomic rename that refuses an existing destination."""
     libc = ctypes.CDLL(None, use_errno=True)
     renameat2 = getattr(libc, "renameat2", None)
     if renameat2 is None:
@@ -809,82 +1204,174 @@ def _atomic_rename_noreplace(source: Path, destination: Path) -> None:
     ]
     renameat2.restype = ctypes.c_int
     result = renameat2(
-        -100,
-        os.fsencode(source),
-        -100,
-        os.fsencode(destination),
+        source_dir_fd,
+        os.fsencode(source_name),
+        destination_dir_fd,
+        os.fsencode(destination_name),
         1,  # RENAME_NOREPLACE
     )
     if result == 0:
         return
     error = ctypes.get_errno()
     if error == errno.EEXIST:
-        raise AndroidReleaseStagingError("immutable APK filename already exists")
+        raise _ImmutableDestinationExists("immutable APK filename already exists")
     raise AndroidReleaseStagingError(f"atomic APK promotion failed with errno {error}")
 
 
-def _remote_action(action: str, payload: dict[str, Any]) -> dict[str, Any]:
-    filename = payload.get("apk_filename")
-    if action in {"prepare", "publish"}:
-        if not isinstance(filename, str) or _SAFE_FILENAME.fullmatch(filename) is None:
-            raise AndroidReleaseStagingError("remote APK filename is unsafe")
-        remote_root = payload.get("remote_root", DEFAULT_REMOTE_ROOT)
-        temporary = _within_release_directory(
-            payload.get("remote_temp"),
-            filename=filename,
-            remote_root=remote_root,
-        )
-        final = _within_release_directory(
-            payload.get("remote_final"),
-            filename=filename,
-            remote_root=remote_root,
-        )
-        expected_temporary_name = re.compile(
-            rf"^\.{re.escape(filename)}\.[0-9a-f]{{32}}\.part$"
-        )
-        if expected_temporary_name.fullmatch(temporary.name) is None:
+def _receive_and_publish_apk(
+    *,
+    remote_root: str,
+    filename: str,
+    expected_sha: str,
+    expected_size: int,
+    source: BinaryIO,
+) -> dict[str, Any]:
+    """Receive, validate and atomically publish bytes using only held descriptors."""
+    with _open_release_directories(remote_root) as (staging_fd, public_fd):
+        if _existing_release_matches(
+            public_fd,
+            filename,
+            expected_sha=expected_sha,
+            expected_size=expected_size,
+        ):
+            return {"ok": True, "already_published": True}
+
+        temporary_name = f".{filename}.{uuid.uuid4().hex}.part"
+        nofollow = getattr(os, "O_NOFOLLOW", None)
+        if nofollow is None:
             raise AndroidReleaseStagingError(
-                "temporary APK path is not a generated staging name"
+                "This host cannot safely reserve an APK upload"
             )
-        if final.name != filename:
+        flags = (
+            os.O_RDWR | os.O_CREAT | os.O_EXCL | nofollow | getattr(os, "O_CLOEXEC", 0)
+        )
+        try:
+            uploaded_fd = os.open(temporary_name, flags, 0o600, dir_fd=staging_fd)
+        except OSError as exc:
             raise AndroidReleaseStagingError(
-                "final APK path does not use the exact filename"
+                "Cannot reserve a private Android upload file"
+            ) from exc
+
+        promoted = False
+        try:
+            _validate_regular_file_descriptor(
+                uploaded_fd,
+                "Reserved Android upload",
+                exact_mode=0o600,
             )
-        if action == "prepare":
-            expected_size = _positive_int(
-                payload.get("apk_size_bytes"), "apk_size_bytes"
+            _copy_exact_upload(
+                source,
+                uploaded_fd,
+                expected_sha=expected_sha,
+                expected_size=expected_size,
             )
-            expected_sha = _normalized_sha256(payload.get("apk_sha256"), "apk_sha256")
-            if final.is_symlink():
-                raise AndroidReleaseStagingError("immutable APK filename is a symlink")
-            if final.exists():
-                actual_sha, actual_size = _sha256_file(final)
-                if actual_size != expected_size or actual_sha != expected_sha:
+            os.fchmod(uploaded_fd, 0o644)
+            _validate_regular_file_descriptor(
+                uploaded_fd,
+                "Verified Android upload",
+                exact_mode=0o644,
+            )
+            os.fsync(uploaded_fd)
+            try:
+                _atomic_rename_noreplace_at(
+                    staging_fd,
+                    temporary_name,
+                    public_fd,
+                    filename,
+                )
+            except _ImmutableDestinationExists:
+                if not _existing_release_matches(
+                    public_fd,
+                    filename,
+                    expected_sha=expected_sha,
+                    expected_size=expected_size,
+                ):
                     raise AndroidReleaseStagingError(
-                        "immutable APK filename already exists with different bytes"
+                        "immutable APK destination appeared without valid bytes"
                     )
                 return {"ok": True, "already_published": True}
-            if temporary.exists() or temporary.is_symlink():
-                raise AndroidReleaseStagingError("temporary APK path already exists")
-            return {"ok": True, "already_published": False}
-        if temporary.is_symlink() or not temporary.is_file():
-            raise AndroidReleaseStagingError("uploaded APK is not a regular file")
+            promoted = True
+            os.fsync(public_fd)
+            os.fsync(staging_fd)
+        except OSError as exc:
+            raise AndroidReleaseStagingError(
+                "Secure Android APK publication failed"
+            ) from exc
+        finally:
+            os.close(uploaded_fd)
+            if not promoted:
+                try:
+                    os.unlink(temporary_name, dir_fd=staging_fd)
+                    os.fsync(staging_fd)
+                except FileNotFoundError:
+                    pass
+        return {
+            "ok": True,
+            "published": str(Path(remote_root) / "releases/android" / filename),
+        }
+
+
+def _remote_action(
+    action: str,
+    payload: dict[str, Any],
+    *,
+    upload_stream: BinaryIO | None = None,
+) -> dict[str, Any]:
+    filename = payload.get("apk_filename")
+    if action in {"runtime", "prepare", "upload"}:
+        runtime = _inspect_running_release(payload)
+        if action == "runtime":
+            return {"ok": True, "runtime_parity": runtime}
+
+    if action == "finalize":
+        root = _validated_runtime_root(payload.get("remote_root", DEFAULT_REMOTE_ROOT))
+        initial_runtime = payload.get("initial_runtime_parity")
+        manifest = payload.get("manifest")
+        if not isinstance(initial_runtime, dict):
+            raise AndroidReleaseStagingError(
+                "Initial runtime parity evidence must be an object"
+            )
+        if not isinstance(manifest, dict):
+            raise AndroidReleaseStagingError("Registry manifest must be an object")
+        with _production_install_lock():
+            final_runtime = _inspect_running_release(payload)
+            if final_runtime != initial_runtime:
+                raise AndroidReleaseStagingError(
+                    "Running ERP images changed during staging; registration was not attempted"
+                )
+            registered = _register_staged_release_on_host(root, manifest)
+        return {
+            "ok": True,
+            "runtime_parity": final_runtime,
+            "registered": registered,
+        }
+
+    if action in {"prepare", "upload"}:
+        if not isinstance(filename, str) or _SAFE_FILENAME.fullmatch(filename) is None:
+            raise AndroidReleaseStagingError("remote APK filename is unsafe")
         expected_size = _positive_int(payload.get("apk_size_bytes"), "apk_size_bytes")
         expected_sha = _normalized_sha256(payload.get("apk_sha256"), "apk_sha256")
-        actual_sha, actual_size = _sha256_file(temporary)
-        if actual_size != expected_size or actual_sha != expected_sha:
-            temporary.unlink(missing_ok=True)
-            raise AndroidReleaseStagingError(
-                "uploaded APK failed exact byte verification"
-            )
-        os.chmod(temporary, 0o644)
-        _atomic_rename_noreplace(temporary, final)
-        directory_fd = os.open(final.parent, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
-        return {"ok": True, "published": str(final)}
+        remote_root = _validated_runtime_root(
+            payload.get("remote_root", DEFAULT_REMOTE_ROOT)
+        )
+        if action == "prepare":
+            with _open_release_directories(remote_root) as (_staging_fd, public_fd):
+                already_published = _existing_release_matches(
+                    public_fd,
+                    filename,
+                    expected_sha=expected_sha,
+                    expected_size=expected_size,
+                )
+            return {"ok": True, "already_published": already_published}
+        if upload_stream is None:
+            raise AndroidReleaseStagingError("APK upload stream is required")
+        return _receive_and_publish_apk(
+            remote_root=remote_root,
+            filename=filename,
+            expected_sha=expected_sha,
+            expected_size=expected_size,
+            source=upload_stream,
+        )
 
     if action == "attest":
         release_id = payload.get("release_id")
@@ -932,7 +1419,11 @@ def _remote_action(action: str, payload: dict[str, Any]) -> dict[str, Any]:
 
 def _remote_main(action: str, encoded: str) -> int:
     try:
-        result = _remote_action(action, _decode_remote_payload(encoded))
+        result = _remote_action(
+            action,
+            _decode_remote_payload(encoded),
+            upload_stream=sys.stdin.buffer if action == "upload" else None,
+        )
         print(json.dumps(result, sort_keys=True))
         return 0
     except AndroidReleaseStagingError as exc:

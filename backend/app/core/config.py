@@ -23,6 +23,8 @@ from pydantic import (
 )
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.core.release_identity import ReleaseIdentity, read_backend_build_identity
+
 _ANDROID_COMPATIBILITY_FLOOR_VERSION_CODE = 8
 _DEV_REMOTE_RELAY_SECRET = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="  # noqa: S105
 
@@ -41,6 +43,10 @@ class Settings(BaseSettings):
     expose_docs: bool = True
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     log_format: Literal["json", "console"] = "json"
+    # Frozen runtime declarations must match the independently baked image
+    # identity in prod/staging. Mutable deployment env is not release proof.
+    app_version: str | None = Field(default=None, frozen=True)
+    app_revision: str | None = Field(default=None, frozen=True)
 
     # ----- database -----
     database_url: PostgresDsn = Field(
@@ -394,7 +400,27 @@ class Settings(BaseSettings):
                 or not self.android_update_url.path.lower().endswith(".apk")
             ):
                 raise ValueError("Verified Android direct updates require an HTTPS .apk URL")
+        if self.env in {"prod", "staging"}:
+            self.runtime_release_identity()
         return self
+
+    def runtime_release_identity(self) -> ReleaseIdentity:
+        try:
+            declared = ReleaseIdentity.model_validate({
+                "version_name": self.app_version,
+                "source_git_sha": self.app_revision,
+            })
+        except ValueError as exc:
+            raise ValueError(
+                "APP_VERSION and APP_REVISION must declare a valid release version "
+                "and exact 40-character lowercase Git SHA"
+            ) from exc
+        if self.env in {"prod", "staging"}:
+            baked = read_backend_build_identity()
+            if baked != declared:
+                raise ValueError("APP_VERSION/APP_REVISION do not match the backend image identity")
+            return baked
+        return declared
 
     @field_validator("account_security_company_id", mode="before")
     @classmethod

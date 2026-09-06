@@ -46,6 +46,16 @@ export function isSameOriginHttpApi(apiUrl: string, pageUrl: string): boolean {
   }
 }
 
+/**
+ * AbortController cancellation is normal during navigation, sign-out, and
+ * request replacement. It must not become a fake network incident in the
+ * contextual support report or alarm the operator.
+ */
+export function isExpectedRequestCancellation(error: unknown): boolean {
+  return axios.isCancel(error)
+    || (axios.isAxiosError(error) && error.code === 'ERR_CANCELED');
+}
+
 export const COOKIE_SESSION_MODE =
   typeof window !== 'undefined' &&
   isSameOriginHttpApi(BASE_URL, window.location.href);
@@ -335,6 +345,8 @@ export async function clearBrowserRefreshCookie(): Promise<void> {
 api.interceptors.response.use(
   (r) => r,
   async (err: AxiosError<{ error?: { code: string; message: string } }>) => {
+    if (isExpectedRequestCancellation(err)) return Promise.reject(err);
+
     const cfg = err.config as AxiosRequestConfig & { _retried?: boolean };
 
     // 401 → try to refresh the token once, then retry the original request.

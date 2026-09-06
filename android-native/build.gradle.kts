@@ -8,3 +8,14 @@ plugins {
     // KSP version is pinned to the Kotlin version; a mismatch fails the build.
     id("com.google.devtools.ksp") version "2.0.21-1.0.28" apply false
 }
+
+// Release builds are independently reproduced before signing. Lock every
+// resolvable project configuration so that both builders select the same
+// dependency graph, while Gradle's verification metadata authenticates the
+// bytes behind that graph.
+allprojects {
+    dependencyLocking {
+        lockAllConfigurations()
+        lockMode.set(org.gradle.api.artifacts.dsl.LockMode.STRICT)
+    }
+}

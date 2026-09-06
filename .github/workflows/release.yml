@@ -3,7 +3,8 @@
 # only after the coordinated backend migration and production smoke test. Web
 # production deploys are handled by the existing VPS deployment workflow.
 #
-# Required GitHub secrets (set in repo → Settings → Secrets and variables → Actions):
+# Required GitHub environment secrets (set only on the protected
+# `android-release-signing` environment, never at repository scope):
 #   ANDROID_KEYSTORE_BASE64         — release.keystore
 #   ANDROID_KEYSTORE_PASSWORD
 #   ANDROID_KEY_ALIAS
@@ -34,14 +35,58 @@ on:
   workflow_dispatch:
 
 jobs:
+  # Reject an already-used version before any build, artifact upload, protected
+  # environment approval, or signing-secret reference. Only an authenticated
+  # GitHub 404 proves that this immutable release name is still available.
+  release-authority:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Verify unused immutable release identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REF: ${{ github.ref_name }}
+          RELEASE_REF_TYPE: ${{ github.ref_type }}
+        run: |
+          set -euo pipefail
+          if [ "$RELEASE_REF_TYPE" != "tag" ]; then
+            echo "Android releases must run from a v* Git tag, not a branch." >&2
+            exit 1
+          fi
+          python3 scripts/verify_android_release_version.py --tag "$RELEASE_REF"
+          encoded_tag=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$RELEASE_REF")
+          response="$RUNNER_TEMP/existing-release.json"
+          if ! http_status=$(curl --silent --show-error --connect-timeout 10 --max-time 30 \
+            --output "$response" --write-out '%{http_code}' \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header 'Accept: application/vnd.github+json' \
+            --header 'X-GitHub-Api-Version: 2022-11-28' \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/tags/$encoded_tag"); then
+            echo "Could not prove that release $RELEASE_REF is unused." >&2
+            exit 1
+          fi
+          case "$http_status" in
+            404) echo "Release identity $RELEASE_REF is unused." ;;
+            200)
+              echo "Release $RELEASE_REF already exists; use a higher version." >&2
+              exit 1
+              ;;
+            *)
+              echo "GitHub release authority returned HTTP $http_status; refusing release." >&2
+              exit 1
+              ;;
+          esac
+
   # A tag can point to a commit whose branch CI never ran. Re-run the backend
   # migration/tests and complete web gate here before any release is signed.
   coordinated-release-gates:
+    needs: release-authority
     runs-on: ubuntu-latest
     timeout-minutes: 35
     services:
       postgres:
-        image: postgres:16-alpine
+        image: postgres:16-alpine@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685
         env:
           POSTGRES_USER: erp
           POSTGRES_PASSWORD: erp
@@ -53,7 +98,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
       redis:
-        image: redis:7-alpine
+        image: redis:7-alpine@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf
         ports: ['6379:6379']
         options: >-
           --health-cmd "redis-cli ping"
@@ -62,6 +107,8 @@ jobs:
           --health-retries 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Validate safe Codex task routing
+        run: python3 scripts/validate_codex_routing.py
       - name: Verify coordinated release tag and versions
         env:
           RELEASE_REF: ${{ github.ref_name }}
@@ -73,19 +120,17 @@ jobs:
             exit 1
           fi
           python3 scripts/verify_android_release_version.py --tag "$RELEASE_REF"
-          python3 -m unittest discover -s tests -p 'test_android_*.py'
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.11'
           cache: pip
-          cache-dependency-path: backend/requirements.lock
+          cache-dependency-path: backend/requirements-ci.lock
       - name: Install and audit backend dependencies
         run: |
-          python -m pip install -r backend/requirements.lock
-          python -m pip install pytest pytest-asyncio pytest-cov pip-audit
+          python -m pip install --only-binary=:all: --require-hashes -r backend/requirements-ci.lock
           python -m pip_audit -r backend/requirements.lock
-      - name: Test operational monitoring contracts
-        run: python3 -m unittest discover -s tests -p 'test_ops_monitoring.py'
+      - name: Run complete repository contract suite
+        run: python -m pytest tests
       - name: Apply migrations to a fresh PostgreSQL database
         working-directory: backend
         env:
@@ -114,11 +159,51 @@ jobs:
           npm run typecheck
           npm run test
           npm run build
+      - name: Validate production Compose and Caddy contracts
+        run: |
+          set -euo pipefail
+          docker compose -f docker-compose.prod.yml \
+            --env-file .env.production.example config --quiet
+          docker run --rm \
+            -e DOMAIN=example.test \
+            -e ACME_EMAIL=admin@example.test \
+            -v "$PWD/infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            caddy:2-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648 \
+            caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+      - name: Prove coordinated production images build with immutable identity
+        env:
+          APP_REVISION: ${{ github.sha }}
+        run: |
+          APP_VERSION=$(node -p "require('./frontend/package.json').version")
+          docker build -f infra/docker/backend.Dockerfile -t erp-backend:release-gate \
+            --build-arg APP_VERSION="$APP_VERSION" --build-arg APP_REVISION="$APP_REVISION" .
+          docker build -f infra/docker/frontend.Dockerfile -t erp-frontend:release-gate \
+            --build-arg VITE_API_URL=https://dcompany.duckdns.org/api/v1 \
+            --build-arg VITE_APP_VERSION="$APP_VERSION" \
+            --build-arg APP_VERSION="$APP_VERSION" --build-arg APP_REVISION="$APP_REVISION" .
+      - name: Pull exact production infrastructure images
+        run: |
+          docker pull caddy:2-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648
+          docker pull postgres:16-alpine@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685
+          docker pull redis:7-alpine@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf
+          docker pull minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
+      - name: Generate SBOMs and scan exact release-gate images
+        uses: ./.github/actions/scan-production-images
+        with:
+          backend-image: erp-backend:release-gate
+          frontend-image: erp-frontend:release-gate
+          caddy-image: caddy:2-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648
+          postgres-image: postgres:16-alpine@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685
+          redis-image: redis:7-alpine@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf
+          minio-image: minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
+          artifact-prefix: release-${{ github.run_id }}-${{ github.run_attempt }}
+          source-git-sha: ${{ github.sha }}
 
   # Run third-party emulator automation in a separate, secretless job and on a
   # separate runner. It must never share a workspace or Gradle cache with either
   # the unsigned build or the isolated job that receives the release keystore.
   android-instrumentation:
+    needs: release-authority
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
@@ -172,6 +257,8 @@ jobs:
     needs: [coordinated-release-gates, android-instrumentation]
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    outputs:
+      unsigned-artifact-id: ${{ steps.upload-unsigned.outputs.artifact-id }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Verify Android tag and source version
@@ -204,6 +291,7 @@ jobs:
           set -euo pipefail
           gradle_release() {
             ./gradlew --no-daemon --max-workers=1 --stacktrace \
+              --dependency-verification=strict \
               '-Dorg.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8' \
               -Pkotlin.compiler.execution.strategy=in-process "$@"
           }
@@ -218,6 +306,7 @@ jobs:
           set -euo pipefail
           gradle_release() {
             ./gradlew --no-daemon --max-workers=1 --stacktrace \
+              --dependency-verification=strict \
               '-Dorg.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8' \
               -Pkotlin.compiler.execution.strategy=in-process "$@"
           }
@@ -234,6 +323,7 @@ jobs:
           cd android-native
           gradle_release() {
             ./gradlew --no-daemon --max-workers=1 --stacktrace \
+              --dependency-verification=strict \
               '-Dorg.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8' \
               -Pkotlin.compiler.execution.strategy=in-process "$@"
           }
@@ -293,6 +383,7 @@ jobs:
               > UNSIGNED_SHA256SUMS
           )
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        id: upload-unsigned
         with:
           name: android-native-unsigned
           if-no-files-found: error
@@ -310,11 +401,118 @@ jobs:
             android-native/app/build/reports/tests/
             android-native/app/build/test-results/
 
-  # The signing key exists only on this fresh runner. No Gradle process or
-  # third-party action ever runs in this job, so unsigned-build dependencies
-  # cannot persist code that later observes the key.
-  sign-android:
+  # Rebuild the tagged source on a different secretless runner and require
+  # every handoff byte to match before the protected signing environment can
+  # start. The producer's checksum alone cannot authenticate producer output.
+  verify-android-reproducibility:
     needs: build-android
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Verify tagged source identity
+        env:
+          RELEASE_REF: ${{ github.ref_name }}
+          RELEASE_REF_TYPE: ${{ github.ref_type }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$RELEASE_REF_TYPE" = tag
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          python3 scripts/verify_android_release_version.py --tag "$RELEASE_REF"
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          artifact-ids: ${{ needs.build-android.outputs.unsigned-artifact-id }}
+          merge-multiple: true
+          path: unsigned
+      - name: Verify immutable producer handoff
+        run: |
+          set -euo pipefail
+          test -n '${{ needs.build-android.outputs.unsigned-artifact-id }}'
+          test -d unsigned
+          test ! -L unsigned
+          test "$(find unsigned -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d ' ')" = 8
+          test -z "$(find unsigned -mindepth 1 -maxdepth 1 ! -type f -print -quit)"
+          (cd unsigned && sha256sum --check --strict UNSIGNED_SHA256SUMS)
+      - name: Independently rebuild unsigned Play and direct artifacts
+        run: |
+          set -euo pipefail
+          test ! -e android-native/keystore.properties
+          test ! -e android-native/dcompany-release.keystore
+          cd android-native
+          gradle_release() {
+            ./gradlew --no-daemon --max-workers=1 --stacktrace \
+              --dependency-verification=strict \
+              '-Dorg.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8' \
+              -Pkotlin.compiler.execution.strategy=in-process "$@"
+          }
+          # Match the producer's bounded build procedure exactly. Keeping the
+          # Play and direct variants in separate Gradle processes prevents the
+          # independent verifier from becoming the release pipeline's OOM path.
+          gradle_release :app:assembleRelease :app:bundleRelease
+          gradle_release :app:assembleDirectRelease
+      - name: Match independent bytes to producer bytes
+        run: |
+          set -euo pipefail
+          play_dir='android-native/app/build/outputs/apk/release'
+          direct_dir='android-native/app/build/outputs/apk/directRelease'
+          rebuilt_aab='android-native/app/build/outputs/bundle/release/app-release.aab'
+          rebuilt_play_manifest='android-native/app/build/intermediates/merged_manifests/release/processReleaseManifest/AndroidManifest.xml'
+          rebuilt_direct_manifest='android-native/app/build/intermediates/merged_manifests/directRelease/processDirectReleaseManifest/AndroidManifest.xml'
+
+          metadata_output_file() {
+            python3 - "$1" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          metadata = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          elements = metadata.get("elements")
+          if not isinstance(elements, list) or len(elements) != 1:
+              raise SystemExit("Android APK metadata must contain exactly one element")
+          output = elements[0].get("outputFile")
+          if not isinstance(output, str) or not output.endswith(".apk") or Path(output).name != output:
+              raise SystemExit("Android APK metadata contains an unsafe output filename")
+          print(output)
+          PY
+          }
+
+          rebuilt_play_metadata="$play_dir/output-metadata.json"
+          rebuilt_direct_metadata="$direct_dir/output-metadata.json"
+          rebuilt_play="$play_dir/$(metadata_output_file "$rebuilt_play_metadata")"
+          rebuilt_direct="$direct_dir/$(metadata_output_file "$rebuilt_direct_metadata")"
+          compare_exact() {
+            local producer=$1
+            local rebuilt=$2
+            local label=$3
+            test -s "$producer"
+            test -s "$rebuilt"
+            if ! cmp --silent "$producer" "$rebuilt"; then
+              echo "Independent rebuild mismatch: $label" >&2
+              sha256sum "$producer" "$rebuilt" >&2
+              exit 1
+            fi
+          }
+
+          compare_exact unsigned/play-unsigned.apk "$rebuilt_play" 'Play APK'
+          compare_exact unsigned/direct-unsigned.apk "$rebuilt_direct" 'direct APK'
+          compare_exact unsigned/play-unsigned.aab "$rebuilt_aab" 'Play AAB'
+          compare_exact unsigned/play-output-metadata.json "$rebuilt_play_metadata" 'Play metadata'
+          compare_exact unsigned/direct-output-metadata.json "$rebuilt_direct_metadata" 'direct metadata'
+          compare_exact unsigned/play-AndroidManifest.xml "$rebuilt_play_manifest" 'Play manifest'
+          compare_exact unsigned/direct-AndroidManifest.xml "$rebuilt_direct_manifest" 'direct manifest'
+          sha256sum "$rebuilt_play" "$rebuilt_direct" "$rebuilt_aab"
+
+  # The signing key exists only after the pinned GitHub-owned setup and artifact
+  # actions have completed on this fresh runner. No Gradle build or unsigned-
+  # build dependency runs with the key, and the shell signing steps remove it
+  # before inspecting or publishing the signed archives.
+  sign-android:
+    needs: [build-android, verify-android-reproducibility]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # The repository environment requires an explicit owner approval and only
@@ -330,7 +528,8 @@ jobs:
           java-version: '17'
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: android-native-unsigned
+          artifact-ids: ${{ needs.build-android.outputs.unsigned-artifact-id }}
+          merge-multiple: true
           path: unsigned
       - name: Verify unsigned handoff and release authority
         env:
@@ -375,6 +574,34 @@ jobs:
           fi
           grep -Fxq "$install_permission" <<< "$direct_permissions"
           grep -Fq 'android:name="android.permission.REQUEST_INSTALL_PACKAGES"' unsigned/direct-AndroidManifest.xml
+      - name: Recheck immutable release identity before secret use
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REF: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          encoded_tag=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$RELEASE_REF")
+          response="$RUNNER_TEMP/pre-sign-release-probe.json"
+          if ! http_status=$(curl --silent --show-error --connect-timeout 10 --max-time 30 \
+            --output "$response" --write-out '%{http_code}' \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header 'Accept: application/vnd.github+json' \
+            --header 'X-GitHub-Api-Version: 2022-11-28' \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/tags/$encoded_tag"); then
+            echo "Could not re-prove that release $RELEASE_REF is unused." >&2
+            exit 1
+          fi
+          case "$http_status" in
+            404) ;;
+            200)
+              echo "Release $RELEASE_REF already exists; refusing to expose signing material." >&2
+              exit 1
+              ;;
+            *)
+              echo "GitHub release authority returned HTTP $http_status; refusing signing." >&2
+              exit 1
+              ;;
+          esac
       - name: Require Android signing secrets
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -655,6 +882,7 @@ jobs:
       - name: Stage draft GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           package_dir='artifacts/android-native-release'
@@ -666,6 +894,45 @@ jobs:
             "$package_dir/release-manifest.json"
             "$package_dir/SHA256SUMS"
           )
+
+          resolve_live_tag_commit() {
+            local encoded_tag response http_status
+            encoded_tag=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$GITHUB_REF_NAME")
+            response=$(mktemp "$RUNNER_TEMP/tag-commit.XXXXXX.json")
+            if ! http_status=$(curl --silent --show-error --connect-timeout 10 --max-time 30 \
+              --output "$response" --write-out '%{http_code}' \
+              --header "Authorization: Bearer $GH_TOKEN" \
+              --header 'Accept: application/vnd.github+json' \
+              --header 'X-GitHub-Api-Version: 2022-11-28' \
+              "https://api.github.com/repos/$GITHUB_REPOSITORY/commits/$encoded_tag"); then
+              rm -f "$response"
+              echo "Could not resolve live tag $GITHUB_REF_NAME; refusing publication." >&2
+              return 1
+            fi
+            if [ "$http_status" != 200 ]; then
+              rm -f "$response"
+              echo "GitHub returned HTTP $http_status while resolving live tag $GITHUB_REF_NAME." >&2
+              return 1
+            fi
+            python3 - "$response" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          response = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          sha = response.get("sha")
+          if not isinstance(sha, str) or len(sha) != 40:
+              raise SystemExit("GitHub tag resolution did not return a commit SHA")
+          print(sha)
+          PY
+            rm -f "$response"
+          }
+
+          live_tag_sha=$(resolve_live_tag_commit)
+          if [ "$live_tag_sha" != "$RELEASE_SHA" ]; then
+            echo "Tag $GITHUB_REF_NAME resolves to $live_tag_sha, not release commit $RELEASE_SHA." >&2
+            exit 1
+          fi
           gh release create "$GITHUB_REF_NAME" \
             --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
@@ -673,3 +940,13 @@ jobs:
             --title "D Company ERP $GITHUB_REF_NAME" \
             --generate-notes \
             "${release_files[@]}"
+          if ! live_tag_sha=$(resolve_live_tag_commit); then
+            gh release delete "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --yes || true
+            echo "Could not re-prove tag authority after staging; the draft was removed if reachable." >&2
+            exit 1
+          fi
+          if [ "$live_tag_sha" != "$RELEASE_SHA" ]; then
+            gh release delete "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --yes || true
+            echo "Tag $GITHUB_REF_NAME moved while the draft was staged; the draft was removed." >&2
+            exit 1
+          fi

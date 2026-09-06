@@ -21,7 +21,7 @@ x-default-logging: &default-logging
 
 services:
   caddy:
-    image: caddy:2-alpine
+    image: caddy:2-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648
     restart: unless-stopped
     logging: *default-logging
     ports:
@@ -46,7 +46,7 @@ services:
       - edge
 
   postgres:
-    image: postgres:16-alpine
+    image: postgres:16-alpine@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685
     restart: unless-stopped
     logging: *default-logging
     environment:
@@ -64,7 +64,7 @@ services:
       - backend_data
 
   redis:
-    image: redis:7-alpine
+    image: redis:7-alpine@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf
     restart: unless-stopped
     logging: *default-logging
     environment:
@@ -92,7 +92,7 @@ services:
       - backend_data
 
   minio:
-    image: minio/minio:latest
+    image: minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
     restart: unless-stopped
     logging: *default-logging
     command: server /data --console-address ":9001"
@@ -106,16 +106,20 @@ services:
       - backend_data
 
   backend:
+    image: d-company-erp-backend:${APP_REVISION:-unknown}
     build:
       context: .
       dockerfile: infra/docker/backend.Dockerfile
       args:
-        APP_VERSION: ${APP_VERSION:-3.1.13}
+        APP_VERSION: ${APP_VERSION:-3.1.14}
         APP_REVISION: ${APP_REVISION:-unknown}
     restart: unless-stopped
     logging: *default-logging
     environment:
       ENV: prod
+      # Runtime declarations are checked against the independently baked file.
+      APP_VERSION: ${APP_VERSION:-3.1.14}
+      APP_REVISION: ${APP_REVISION:-unknown}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: json
       # Safe only while backend has no published port and Caddy overwrites
@@ -193,13 +197,14 @@ services:
       - backend_data
 
   frontend:
+    image: d-company-erp-frontend:${APP_REVISION:-unknown}
     build:
       context: .
       dockerfile: infra/docker/frontend.Dockerfile
       args:
         VITE_API_URL: https://${DOMAIN}/api/v1
-        VITE_APP_VERSION: ${APP_VERSION:-3.1.13}
-        APP_VERSION: ${APP_VERSION:-3.1.13}
+        VITE_APP_VERSION: ${APP_VERSION:-3.1.14}
+        APP_VERSION: ${APP_VERSION:-3.1.14}
         APP_REVISION: ${APP_REVISION:-unknown}
     restart: unless-stopped
     logging: *default-logging

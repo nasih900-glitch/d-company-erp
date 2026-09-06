@@ -11,6 +11,7 @@ from sqlalchemy.exc import DBAPIError
 
 from app.api.v1.client_installations import router as installation_router_module
 from app.api.v1.client_updates import router as release_router_module
+from app.api.v1.public import router as public_router_module
 from app.core.config import get_settings
 from app.core.db import AsyncSessionLocal
 from app.core.errors import RateLimitError
@@ -29,6 +30,8 @@ from app.models import (
 )
 from app.models.client_update import CLIENT_INSTALLATIONS_MAX_PER_USER
 from app.services.client_updates.releases import AndroidReleaseManifest
+from app.services.client_updates.runtime_parity import RuntimeParityError
+from scripts import register_android_release as registration_module
 from scripts.register_android_release import register
 
 
@@ -546,6 +549,20 @@ async def test_only_protected_owner_can_activate_and_public_offer_tracks_active_
         verified.append(release.version_code)
 
     monkeypatch.setattr(release_router_module, "verify_public_apk", _verified)
+    async def parity_verified(**_kwargs) -> None:
+        return None
+
+    # This test isolates release ownership/state transitions. Real identity
+    # transport and fail-closed rollback cases have their own regression tests.
+    monkeypatch.setattr(release_router_module, "verify_runtime_parity", parity_verified)
+    monkeypatch.setattr(
+        release_router_module,
+        "record_verified_runtime_parity_for_public_offer",
+        parity_verified,
+    )
+    monkeypatch.setattr(
+        public_router_module, "verify_runtime_parity_for_public_offer", parity_verified
+    )
 
     co_owner_headers = _headers(seed_owner, roles=["co_owner"], audit_access=False)
     denied = await client.post(
@@ -719,6 +736,10 @@ async def test_only_protected_owner_can_activate_and_public_offer_tracks_active_
 async def test_release_registration_is_idempotent_and_rejects_conflicting_metadata(
     monkeypatch,
 ) -> None:
+    async def parity_verified(**_kwargs) -> None:
+        return None
+
+    monkeypatch.setattr(registration_module, "verify_runtime_parity", parity_verified)
     settings = get_settings()
     monkeypatch.setattr(
         settings,
@@ -783,3 +804,82 @@ async def test_database_prevents_release_metadata_rewrite_and_delete(
                 text("DELETE FROM android_releases WHERE id = :id"), {"id": release.id}
             )
         await tamper.rollback()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_runtime_parity_failure_preserves_staged_and_active_rows_and_audit(
+    client, session, seed_owner, monkeypatch,
+) -> None:
+    release = _release(version_code=27, version_name="3.1.16")
+    session.add(release)
+    await session.commit()
+    release_id = release.id
+    settings = get_settings()
+    monkeypatch.setattr(
+        settings, "android_release_controller_bindings",
+        f"{seed_owner['company'].id}:{seed_owner['owner'].id}",
+    )
+    headers = _headers(seed_owner, roles=["super_owner"], audit_access=True)
+
+    async def verified_apk(*_args, **_kwargs):
+        return None
+
+    async def mismatched_runtime(**_kwargs):
+        raise RuntimeParityError("frontend_release_mismatch")
+
+    monkeypatch.setattr(release_router_module, "verify_public_apk", verified_apk)
+    monkeypatch.setattr(release_router_module, "verify_runtime_parity", mismatched_runtime)
+    rejected = await client.post(
+        f"/api/v1/client-updates/android/releases/{release_id}/activate", headers=headers,
+    )
+    assert rejected.status_code == 503, rejected.text
+    assert "No release state was changed" in rejected.text
+    await session.rollback()
+    await session.refresh(release)
+    assert release.status == "staged"
+    assert release.activated_at is None
+    audits = (
+        await session.execute(select(AuditLog).where(AuditLog.entity_id == str(release_id)))
+    ).scalars().all()
+    assert audits == []
+
+    async def matching_runtime(**_kwargs):
+        return None
+
+    monkeypatch.setattr(release_router_module, "verify_runtime_parity", matching_runtime)
+    monkeypatch.setattr(
+        release_router_module,
+        "record_verified_runtime_parity_for_public_offer",
+        matching_runtime,
+    )
+    activated = await client.post(
+        f"/api/v1/client-updates/android/releases/{release_id}/activate", headers=headers,
+    )
+    assert activated.status_code == 200, activated.text
+    await session.rollback()
+    await session.refresh(release)
+    active_evidence = (release.status, release.activated_at, release.updated_at)
+    monkeypatch.setattr(release_router_module, "verify_runtime_parity", mismatched_runtime)
+    replay = await client.post(
+        f"/api/v1/client-updates/android/releases/{release_id}/activate", headers=headers,
+    )
+    assert replay.status_code == 503, replay.text
+    await session.rollback()
+    await session.refresh(release)
+    assert (release.status, release.activated_at, release.updated_at) == active_evidence
+    audits = (
+        await session.execute(select(AuditLog).where(AuditLog.entity_id == str(release_id)))
+    ).scalars().all()
+    assert len(audits) == 1
+    assert audits[0].action == "android_release_activate"
+
+    monkeypatch.setattr(
+        public_router_module, "verify_runtime_parity_for_public_offer", mismatched_runtime
+    )
+    offer = await client.get(
+        "/api/v1/public/client-compatibility", params={"platform": "android", "version_code": 21},
+    )
+    assert offer.status_code == 200, offer.text
+    assert offer.json()["status"] == "supported"
+    assert offer.json()["update_url"] is None

@@ -358,13 +358,16 @@ def test_production_installer_preflights_before_stack_mutation_and_hides_credent
     assert 'echo "$OWNER_PASSWORD"' not in installer
     assert "First-login password:" not in installer
     assert "Existing owner credentials were retained and are not displayed." in installer
-    assert ".deployment-rollbacks/pre-code17-" in installer
+    assert "/var/lib/dcompany-erp/deployment-rollbacks" in installer
+    assert "pre-code25-${SNAPSHOT_STAMP}.XXXXXX" in installer
     assert "pg_restore --list" in installer
     assert "check-upgrade-capacity.sh" in installer
     assert "pg_database_size('erp')" in installer
     assert "code17_restore_verify_" in installer
     assert 'git show "$PRIOR_REVISION:docker-compose.prod.yml"' in installer
     assert 'docker image tag "$image_id" "$rollback_ref"' in installer
+    assert 'docker image tag %q %q\\n\' "$image_id" "$original_ref"' in installer
+    assert 'tagged_image_id=$(docker image inspect' in installer
     assert 'docker create "$PRIOR_BACKEND_IMAGE"' in installer
     assert 'docker cp "$IMAGE_VERIFY_CONTAINER:/app/."' in installer
     assert 'docker exec -i "$EXISTING_BACKEND_CONTAINER" python' not in installer
@@ -372,14 +375,25 @@ def test_production_installer_preflights_before_stack_mutation_and_hides_credent
     assert "PRIOR_DB_HEAD\" != 0060" in installer
     assert "org.opencontainers.image.revision" in installer
     assert "CANDIDATE_APP_VERSION=$(grep '^APP_VERSION='" in installer
-    assert 'images -q "$candidate_service"' in installer
+    candidate_image_gate = "ops/runtime_release_parity.py candidate"
+    running_image_gate = "ops/runtime_release_parity.py running"
+    assert candidate_image_gate in installer
+    assert running_image_gate in installer
+    assert '--expected-images-json "$CANDIDATE_IMAGE_ATTESTATION"' in installer
+    assert installer.index(candidate_image_gate) < installer.index(database_backup)
+    assert installer.index(compose_up) < installer.index(running_image_gate)
     assert "Candidate backend/frontend image version and revision labels verified." in installer
-    assert "Expected exactly one existing Postgres container" in installer
-    assert "Expected exactly one running backend container" in installer
+    assert "Expected exactly one existing $service container" in installer
+    assert "Existing backend is not running" in installer
     assert "Persistent deployment evidence exists but .env is missing" in installer
     assert "docker volume ls" in installer
     assert "docker network ls" in installer
     assert "flock -n 9" in installer
+    assert "LOCK_DIR=/var/lock/d-company-erp" in installer
+    assert "Production lock must be root-owned, mode 0600, with one link." in installer
+    assert "git archive --format=tar \"$CURRENT_REVISION\"" in installer
+    assert '--project-directory "$CANDIDATE_BUILD_ROOT"' in installer
+    assert 'restored_image_id=$(docker inspect --format \'{{.Image}}\'' in installer
     assert "trap handle_post_ingress_failure EXIT" in installer
     assert "The current database is preserved and the quiesced dump was NOT restored." in installer
     assert "http://localhost:8000/readyz" in installer
@@ -392,7 +406,7 @@ def test_production_installer_preflights_before_stack_mutation_and_hides_credent
         "\n".join(
             (
                 "ENV=prod",
-                "APP_VERSION=3.1.13",
+                "APP_VERSION=3.1.14",
                 "APP_REVISION=" + "a" * 40,
                 "DOMAIN=erp.example.com",
                 'CORS_ORIGINS=["https://erp.example.com"]',
@@ -461,7 +475,7 @@ def test_candidate_environment_labels_fresh_and_upgrade_as_current_source(
             f"APP_REVISION={current_revision}",
             f"APP_REVISION={prior_revision}",
         )
-        .replace("APP_VERSION=3.1.13", "APP_VERSION=3.1.3"),
+        .replace("APP_VERSION=3.1.14", "APP_VERSION=3.1.3"),
         encoding="utf-8",
     )
     upgrade_candidate = tmp_path / "upgrade.env"
@@ -485,7 +499,7 @@ def test_candidate_environment_labels_fresh_and_upgrade_as_current_source(
     }
     assert prior_revision != current_revision
     assert upgrade_values["APP_REVISION"] == current_revision
-    assert upgrade_values["APP_VERSION"] == "3.1.13"
+    assert upgrade_values["APP_VERSION"] == "3.1.14"
     for retained in (
         "JWT_SECRET",
         "POSTGRES_PASSWORD",
@@ -517,7 +531,7 @@ def test_candidate_environment_labels_fresh_and_upgrade_as_current_source(
     stale_version = tmp_path / "stale-version.env"
     stale_version.write_text(
         upgrade_candidate.read_text(encoding="utf-8").replace(
-            "APP_VERSION=3.1.13", "APP_VERSION=3.1.3"
+            "APP_VERSION=3.1.14", "APP_VERSION=3.1.3"
         ),
         encoding="utf-8",
     )

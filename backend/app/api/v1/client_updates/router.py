@@ -4,22 +4,29 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from typing import Literal, cast
-from uuid import UUID
+from uuid import UUID  # noqa: TC003 - Pydantic resolves this model type at runtime.
 
 from fastapi import APIRouter, Query, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select, text
 
 from app.core.config import get_settings
-from app.core.db import SessionDep
+from app.core.db import SessionDep  # noqa: TC001 - FastAPI resolves this dependency at runtime.
 from app.core.errors import BusinessRuleError, ConflictError, NotFoundError, ServiceUnavailableError
-from app.core.release_control import ReleaseControllerDep
-from app.core.tenant import TenantContext
+from app.core.release_control import (  # noqa: TC001 - FastAPI runtime dependency.
+    ReleaseControllerDep,
+)
+from app.core.tenant import TenantContext  # noqa: TC001 - audit DTO runtime type.
 from app.models import AndroidRelease, AuditLog
 from app.services.client_updates.releases import (
     AndroidReleaseFingerprint,
     ArtifactVerificationError,
     verify_public_apk,
+)
+from app.services.client_updates.runtime_parity import (
+    RuntimeParityError,
+    record_verified_runtime_parity_for_public_offer,
+    verify_runtime_parity,
 )
 
 router = APIRouter()
@@ -74,7 +81,7 @@ def _read(release: AndroidRelease) -> AndroidReleaseRead:
         source_release_ref=release.source_release_ref,
         source_workflow_run_id=str(release.source_workflow_run_id),
         source_workflow_run_attempt=release.source_workflow_run_attempt,
-        status=cast(Literal["staged", "active", "withdrawn"], release.status),
+        status=cast("Literal['staged', 'active', 'withdrawn']", release.status),
         registered_at=release.registered_at,
         activated_at=release.activated_at,
         activated_by=release.activated_by,
@@ -183,9 +190,6 @@ async def activate_android_release(
         raise NotFoundError("Android release not found")
     before_network = _fingerprint(candidate)
     before_state = _state_token(candidate)
-    if candidate.status == "active":
-        return _read(candidate)
-
     settings = get_settings()
     if candidate.version_code < settings.android_min_supported_version_code:
         raise BusinessRuleError(
@@ -211,6 +215,20 @@ async def activate_android_release(
             details={"verification_code": exc.code},
         ) from exc
 
+    try:
+        await verify_runtime_parity(
+            version_name=before_network.version_name,
+            source_git_sha=before_network.source_git_sha,
+            settings=settings,
+        )
+    except RuntimeParityError as exc:
+        raise ServiceUnavailableError(
+            "This update cannot be offered because the live web and server release "
+            "do not yet match the APK, or their identity could not be verified. "
+            "Deploy the matching release, check the connection, then retry. "
+            "No release state was changed.",
+            details={"verification_code": exc.code},
+        ) from exc
     # Serialize direct-channel state changes only after verification.  The
     # immutable fingerprint is rechecked because status may have changed while
     # bytes were downloaded even though artifact metadata cannot be rewritten.
@@ -228,6 +246,14 @@ async def activate_android_release(
         raise ConflictError(
             "Android release state changed while it was being verified. Review and retry."
         )
+
+    if candidate.status == "active":
+        await record_verified_runtime_parity_for_public_offer(
+            version_name=before_network.version_name,
+            source_git_sha=before_network.source_git_sha,
+            settings=settings,
+        )
+        return _read(candidate)
 
     now = datetime.now(UTC)
     active_releases = (
@@ -283,6 +309,11 @@ async def activate_android_release(
         )
     )
     await session.flush()
+    await record_verified_runtime_parity_for_public_offer(
+        version_name=before_network.version_name,
+        source_git_sha=before_network.source_git_sha,
+        settings=settings,
+    )
     return _read(candidate)
 
 

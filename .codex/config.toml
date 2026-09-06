@@ -1,0 +1,6 @@
+# Project-local subagent orchestration only. The primary model and all approval
+# and permission settings remain controlled by the user or managed platform.
+[agents]
+enabled = true
+max_concurrent_threads_per_session = 4
+interrupt_message = true

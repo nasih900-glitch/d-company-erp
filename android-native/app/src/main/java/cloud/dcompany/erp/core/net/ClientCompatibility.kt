@@ -11,6 +11,8 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 
+internal const val DEFAULT_COMPATIBILITY_CHECK_TIMEOUT_MILLIS = 5_000L
+
 data class ClientUpdateNotice(
     val message: String,
     val updateUrl: String?,
@@ -47,10 +49,11 @@ sealed interface ClientCompatibilityState {
 class ClientCompatibilityGate(
     private val checkCompatibility: suspend () -> ClientCompatibilityResponse,
     // A slow compatibility endpoint must not hold the whole till behind the
-    // non-dismissible startup gate. Normal API calls still enforce HTTP 426,
-    // so three seconds preserves the fail-safe update path while letting an
-    // offline cafe reach its saved workspace promptly.
-    private val startupTimeoutMillis: Long = 3_000L,
+    // non-dismissible startup gate. The server's runtime-parity probe is
+    // bounded to four seconds; one second of transport/scheduling headroom
+    // prevents a valid update offer being cancelled at the client boundary.
+    // Normal API calls still enforce HTTP 426 when the endpoint is unavailable.
+    private val startupTimeoutMillis: Long = DEFAULT_COMPATIBILITY_CHECK_TIMEOUT_MILLIS,
     private val installedVersionCode: Int = BuildConfig.VERSION_CODE,
     private val optionalUpdateSnoozeMillis: Long = DEFAULT_OPTIONAL_UPDATE_SNOOZE_MILLIS,
     private val elapsedRealtimeMillis: () -> Long = android.os.SystemClock::elapsedRealtime,
