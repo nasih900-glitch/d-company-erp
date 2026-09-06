@@ -166,8 +166,17 @@ internal fun readBugReportSource(
     return BugReportSourceRead.Ready(output.toByteArray())
 }
 
-internal fun decodeBugReportPreview(content: ByteArray): ImageBitmap? =
-    BitmapFactory.decodeByteArray(content, 0, content.size)?.asImageBitmap()
+/** Decode the already-sanitised preview away from Compose's main thread. */
+internal suspend fun decodeBugReportPreview(content: ByteArray): ImageBitmap? =
+    withContext(Dispatchers.Default) {
+        try {
+            BitmapFactory.decodeByteArray(content, 0, content.size)?.asImageBitmap()
+        } catch (_: OutOfMemoryError) {
+            null
+        } catch (_: Exception) {
+            null
+        }
+    }
 
 private fun encodeWithinLimit(bitmap: Bitmap): ByteArray? {
     for (quality in listOf(92, 84, 76, 68)) {

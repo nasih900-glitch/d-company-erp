@@ -6,7 +6,8 @@ performs I/O at import time. All wiring happens inside `create_app`.
 
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
+import asyncio
+from contextlib import asynccontextmanager, suppress
 from typing import TYPE_CHECKING
 
 from fastapi import FastAPI, HTTPException
@@ -28,9 +29,14 @@ from app.core.middleware import (
     RequestContextMiddleware,
     TimingMiddleware,
 )
+from app.core.redis_clients import close_request_path_redis_client
 from app.events.bus import get_event_bus
 from app.events.events import OrderPaid
 from app.services.audit.recorder import install_audit_listeners
+from app.services.client_updates.runtime_parity_supervisor import (
+    maintain_public_runtime_parity,
+    refresh_active_public_runtime_parity,
+)
 from app.services.integrations.google_sheets import on_order_paid
 
 if TYPE_CHECKING:
@@ -47,9 +53,29 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     install_audit_listeners()
     get_event_bus().subscribe(OrderPaid, on_order_paid)
     logger.info("erp.startup", env=settings.env, version=app.version)
-    # Future: open redis pool, warm caches.
-    yield
-    logger.info("erp.shutdown")
+    parity_task: asyncio.Task[None] | None = None
+    if settings.env == "prod":
+        try:
+            # If an update was already active before a process restart, warm
+            # its attestation before accepting the first legacy-client poll.
+            await refresh_active_public_runtime_parity(settings)
+        except Exception as exc:  # noqa: BLE001 - startup remains fail-closed, not unavailable
+            logger.warning(
+                "android_update.runtime_attestation_startup_failed",
+                error_type=type(exc).__name__,
+            )
+        parity_task = asyncio.create_task(
+            maintain_public_runtime_parity(settings),
+            name="android-update-runtime-parity",
+        )
+    try:
+        yield
+    finally:
+        if parity_task is not None:
+            parity_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await parity_task
+        logger.info("erp.shutdown")
 
 
 def create_app() -> FastAPI:
@@ -79,6 +105,7 @@ def create_app() -> FastAPI:
         ClientCompatibilityMiddleware,
         android_minimum=settings.android_min_supported_version_code,
         android_latest=settings.android_latest_version_code,
+        policy_revision=settings.client_compatibility_policy_revision,
         android_update_url=(
             str(settings.android_update_url) if settings.android_update_url else None
         ),
@@ -136,7 +163,7 @@ def create_app() -> FastAPI:
         else:
             checks["redis"] = "ok"
         finally:
-            await redis.aclose()
+            await close_request_path_redis_client(redis)
 
         if "down" in checks.values():
             raise HTTPException(

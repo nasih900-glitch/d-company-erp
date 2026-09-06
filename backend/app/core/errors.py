@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+
+if TYPE_CHECKING:
+    from fastapi import FastAPI, Request
 
 from app.core.logging import get_logger
 
@@ -19,10 +21,17 @@ class AppError(Exception):
     status_code: int = 500
     code: str = "internal_error"
 
-    def __init__(self, message: str, *, details: dict[str, Any] | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        details: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         super().__init__(message)
         self.message = message
         self.details = details or {}
+        self.headers = headers or {}
 
 
 class NotFoundError(AppError):
@@ -33,6 +42,37 @@ class NotFoundError(AppError):
 class ConflictError(AppError):
     status_code = 409
     code = "conflict"
+
+
+class ClientTelemetryCapacityError(ConflictError):
+    """Immutable client evidence reached a configured admission ceiling."""
+
+    code = "client_telemetry_capacity"
+
+
+class ClientTelemetryIdentityConflictError(ConflictError):
+    """Native identity headers disagree with the installation heartbeat body."""
+
+    code = "client_telemetry_identity_conflict"
+
+
+class DiagnosticIdempotencyConflictError(ConflictError):
+    """A diagnostic event UUID was reused with a different immutable payload."""
+
+    code = "diagnostic_idempotency_conflict"
+
+
+class DiagnosticIngestRetryError(ConflictError):
+    """Diagnostic admission raced with another writer and is safe to retry."""
+
+    code = "diagnostic_ingest_retry"
+
+    def __init__(self, message: str) -> None:
+        super().__init__(
+            message,
+            details={"retry_after_seconds": 1},
+            headers={"Retry-After": "1"},
+        )
 
 
 class CheckoutClaimRequiredError(ConflictError):
@@ -74,19 +114,39 @@ class ForbiddenError(AppError):
     code = "forbidden"
 
 
-class IdempotencyConflict(AppError):
+class RemotePairingCodeMismatchError(ForbiddenError):
+    """Physical-tablet pairing code did not match the pending public key."""
+
+    code = "remote_pairing_code_mismatch"
+
+
+class RemoteActionGoneError(AppError):
+    """A signed device mutation targeted support state that is now terminal."""
+
+    status_code = 410
+    code = "remote_action_gone"
+
+
+class RemoteFrameTimeoutError(AppError):
+    """A tablet did not finish its bounded frame upload promptly."""
+
+    status_code = 408
+    code = "remote_frame_timeout"
+
+
+class IdempotencyConflict(AppError):  # noqa: N818 - retained public exception name
     status_code = 409
     code = "idempotency_conflict"
 
 
-class IdempotencyInProgress(AppError):
+class IdempotencyInProgress(AppError):  # noqa: N818 - retained public exception name
     """The same request may still be committing; retry with the same key."""
 
     status_code = 409
     code = "idempotency_in_progress"
 
 
-class TenantViolation(AppError):
+class TenantViolation(AppError):  # noqa: N818 - retained public exception name
     status_code = 403
     code = "tenant_violation"
 
@@ -238,6 +298,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         log.warning("app.error", code=exc.code, msg=exc.message, details=exc.details)
         return JSONResponse(
             status_code=exc.status_code,
+            headers=exc.headers,
             content={
                 "error": {
                     "code": exc.code,

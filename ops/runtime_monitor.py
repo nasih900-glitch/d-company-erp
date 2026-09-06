@@ -20,10 +20,25 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.mime.text import MIMEText
 from pathlib import Path
 from typing import Any
+
+try:
+    from ops.android_update_channel import (
+        AndroidUpdateChannelError,
+        fetch_channel_matrix,
+        verify_local_artifact,
+        verify_public_artifact,
+    )
+except ModuleNotFoundError:  # direct execution from /opt/d-company-erp/ops
+    from android_update_channel import (  # type: ignore[no-redef]
+        AndroidUpdateChannelError,
+        fetch_channel_matrix,
+        verify_local_artifact,
+        verify_public_artifact,
+    )
 
 try:
     from ops.smtp_client import alert_recipients, authenticated_smtp
@@ -36,15 +51,18 @@ ENV_FILE = ROOT / ".env"
 COMPOSE_FILE = ROOT / "docker-compose.prod.yml"
 STATE_FILE = ROOT / "ops" / ".runtime_monitor_state.json"
 LOCAL_BACKUP_DIR = Path("/var/lib/dcompany-erp/backups/auto")
+ANDROID_RELEASE_DIR = ROOT / "releases/android"
 DEFAULT_BASE_URL = "https://dcompany.duckdns.org"
 EXPECTED_SERVICES = frozenset(
-    {"caddy", "postgres", "redis", "minio", "backend", "frontend"}
+    {"caddy", "postgres", "redis", "backend", "frontend"}
 )
 ERROR_LINE_RE = re.compile(
     r'"level"\s*:\s*"(?:error|critical|fatal)"|Traceback \(most recent call last\)|'
     r"unhandled exception",
     re.IGNORECASE,
 )
+NOTIFICATION_RETRY_BASE_SECONDS = 300
+NOTIFICATION_RETRY_MAX_SECONDS = 3600
 
 
 @dataclass(frozen=True)
@@ -99,7 +117,12 @@ def load_previous_state(path: Path = STATE_FILE) -> dict[str, Any]:
     )
 
 
-def save_state(result: MonitorResult, path: Path = STATE_FILE) -> None:
+def save_state(
+    result: MonitorResult,
+    path: Path = STATE_FILE,
+    *,
+    notification_delivery: dict[str, Any] | None = None,
+) -> None:
     payload = {
         "checked_at": datetime.now(timezone.utc).isoformat(),
         "ok": result.ok,
@@ -107,6 +130,8 @@ def save_state(result: MonitorResult, path: Path = STATE_FILE) -> None:
         "metrics": result.metrics,
         "restart_counts": result.restart_counts,
     }
+    if notification_delivery is not None:
+        payload["notification_delivery"] = notification_delivery
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(".tmp")
     temporary.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
@@ -167,6 +192,58 @@ def check_public_endpoints(
                 Issue(f"http_{endpoint}", f"unreachable: {type(exc).__name__}")
             )
     return issues, metrics
+
+
+def check_android_update_channel(
+    base_url: str,
+    *,
+    release_dir: Path = ANDROID_RELEASE_DIR,
+    timeout_seconds: float = 15,
+) -> tuple[list[Issue], dict[str, float | int | str]]:
+    """Validate the active registry record, local bytes, and public headers.
+
+    Hashing the local read-only APK every five minutes is inexpensive and
+    proves the bytes Caddy can serve have not drifted.  The external monitor
+    performs a periodic full HTTPS hash; this host check uses HEAD publicly to
+    avoid transferring the same APK from the VPS back to itself every run.
+    """
+    try:
+        matrix = fetch_channel_matrix(
+            base_url,
+            baseline_version_code=14,
+            timeout_seconds=timeout_seconds,
+        )
+        probe = matrix.canonical
+        metrics: dict[str, float | int | str] = {
+            "android_minimum_version_code": probe.minimum_supported_version_code,
+            "android_latest_version_code": probe.latest_version_code,
+            "android_policy_revision": probe.policy_revision,
+            "android_release_advertised": 1 if probe.release else 0,
+            "android_probed_version_codes": ",".join(
+                str(value) for value in matrix.probed_version_codes
+            ),
+        }
+        if probe.release is None:
+            return [], metrics
+        local_path = release_dir / probe.release.filename
+        verify_local_artifact(local_path, probe.release)
+        verify_public_artifact(
+            probe.release,
+            timeout_seconds=timeout_seconds,
+            download_body=False,
+        )
+        metrics.update(
+            {
+                "android_release_version_name": probe.release.version_name,
+                "android_release_size_bytes": probe.release.size_bytes,
+                "android_release_sha256": probe.release.sha256,
+            }
+        )
+        return [], metrics
+    except AndroidUpdateChannelError as exc:
+        return [Issue("android_update_channel", str(exc))], {
+            "android_release_advertised": "unknown"
+        }
 
 
 def inspect_containers() -> list[ContainerState]:
@@ -298,7 +375,10 @@ def check_capacity(
         issues.append(
             Issue(
                 "disk_capacity",
-                f"disk usage {disk_used_percent:.1f}% is at or above {disk_warning_percent:.1f}%",
+                (
+                    f"disk usage {disk_used_percent:.1f}% is at or above "
+                    f"{disk_warning_percent:.1f}%"
+                ),
             )
         )
 
@@ -340,7 +420,10 @@ def check_backup_freshness(max_age_hours: float) -> tuple[list[Issue], float | N
         issues.append(
             Issue(
                 "backup_stale",
-                f"latest backup is {age_hours:.1f} hours old; limit is {max_age_hours:.1f}",
+                (
+                    f"latest backup is {age_hours:.1f} hours old; "
+                    f"limit is {max_age_hours:.1f}"
+                ),
             )
         )
     return issues, round(age_hours, 1)
@@ -357,6 +440,13 @@ def run_monitor(env: dict[str, str], previous: dict[str, Any]) -> MonitorResult:
     )
     issues.extend(public_issues)
     metrics.update(public_metrics)
+
+    update_issues, update_metrics = check_android_update_channel(
+        base_url,
+        timeout_seconds=_positive_float(env, "MONITOR_HTTP_TIMEOUT_SECONDS", 10),
+    )
+    issues.extend(update_issues)
+    metrics.update(update_metrics)
 
     states: list[ContainerState] = []
     restart_counts: dict[str, int] = {}
@@ -442,18 +532,169 @@ def send_notice(env: dict[str, str], subject: str, body: str) -> None:
         session.send_message(message)
 
 
-def notification_for(
-    result: MonitorResult, previous: dict[str, Any]
-) -> tuple[str, str] | None:
+def _transition_key(result: MonitorResult) -> str:
+    codes = sorted({issue.code for issue in result.issues})
+    return "issues:" + ",".join(codes) if codes else "healthy"
+
+
+def _legacy_transition_key(previous: dict[str, Any]) -> str:
     previous_issues = previous.get("issues", [])
-    previous_codes = {
-        item.get("code")
-        for item in previous_issues
-        if isinstance(item, dict) and item.get("code")
+    codes = sorted(
+        {
+            str(item.get("code"))
+            for item in previous_issues
+            if isinstance(item, dict) and item.get("code")
+        }
+    )
+    return "issues:" + ",".join(codes) if codes else "healthy"
+
+
+def _nonnegative_int(raw: object) -> int:
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _delivery_payload(previous: dict[str, Any]) -> dict[str, Any]:
+    raw = previous.get("notification_delivery")
+    if not isinstance(raw, dict):
+        # Existing state files predate explicit delivery tracking.  Preserve
+        # their established no-duplicate behavior during the upgrade.
+        return {
+            "delivered_transition_key": _legacy_transition_key(previous),
+            "pending_transition_key": None,
+            "failed_attempts": 0,
+            "next_retry_at": None,
+        }
+    delivered = raw.get("delivered_transition_key")
+    return {
+        **raw,
+        "delivered_transition_key": (
+            delivered
+            if isinstance(delivered, str)
+            else _legacy_transition_key(previous)
+        ),
+        "pending_transition_key": (
+            raw.get("pending_transition_key")
+            if isinstance(raw.get("pending_transition_key"), str)
+            else None
+        ),
+        "failed_attempts": _nonnegative_int(raw.get("failed_attempts", 0)),
+        "next_retry_at": (
+            raw.get("next_retry_at")
+            if isinstance(raw.get("next_retry_at"), str)
+            else None
+        ),
     }
-    current_codes = {issue.code for issue in result.issues}
-    if current_codes == previous_codes:
+
+
+def _parse_utc(raw: object) -> datetime | None:
+    if not isinstance(raw, str):
         return None
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def notification_delivery_without_attempt(
+    result: MonitorResult, previous: dict[str, Any]
+) -> dict[str, Any]:
+    """Carry a pending transition without falsely marking it delivered."""
+
+    delivery = _delivery_payload(previous)
+    target = _transition_key(result)
+    if delivery["delivered_transition_key"] == target:
+        return {
+            **delivery,
+            "pending_transition_key": None,
+            "failed_attempts": 0,
+            "next_retry_at": None,
+            "last_error_type": None,
+        }
+    if delivery["pending_transition_key"] != target:
+        return {
+            **delivery,
+            "pending_transition_key": target,
+            "failed_attempts": 0,
+            "next_retry_at": None,
+            "last_error_type": None,
+        }
+    return delivery
+
+
+def notification_delivery_succeeded(
+    result: MonitorResult,
+    previous: dict[str, Any],
+    *,
+    now: datetime,
+) -> dict[str, Any]:
+    delivery = _delivery_payload(previous)
+    return {
+        **delivery,
+        "delivered_transition_key": _transition_key(result),
+        "pending_transition_key": None,
+        "failed_attempts": 0,
+        "next_retry_at": None,
+        "last_error_type": None,
+        "last_delivered_at": now.astimezone(timezone.utc).isoformat(),
+    }
+
+
+def notification_delivery_failed(
+    result: MonitorResult,
+    previous: dict[str, Any],
+    *,
+    now: datetime,
+    error: Exception,
+) -> dict[str, Any]:
+    delivery = notification_delivery_without_attempt(result, previous)
+    target = _transition_key(result)
+    previous_attempts = (
+        int(delivery.get("failed_attempts", 0))
+        if delivery.get("pending_transition_key") == target
+        else 0
+    )
+    attempts = min(previous_attempts + 1, 11)
+    # Retries continue until delivery succeeds, but exponential growth is
+    # bounded so SMTP failure cannot produce either a tight loop or multi-day
+    # silence.  The five-minute monitor cadence naturally enforces the floor.
+    exponent = min(attempts - 1, 10)
+    retry_seconds = min(
+        NOTIFICATION_RETRY_BASE_SECONDS * (2**exponent),
+        NOTIFICATION_RETRY_MAX_SECONDS,
+    )
+    return {
+        **delivery,
+        "pending_transition_key": target,
+        "failed_attempts": attempts,
+        "next_retry_at": (
+            now.astimezone(timezone.utc) + timedelta(seconds=retry_seconds)
+        ).isoformat(),
+        "last_error_type": type(error).__name__,
+        "last_attempt_at": now.astimezone(timezone.utc).isoformat(),
+    }
+
+
+def notification_for(
+    result: MonitorResult,
+    previous: dict[str, Any],
+    *,
+    now: datetime | None = None,
+) -> tuple[str, str] | None:
+    delivery = _delivery_payload(previous)
+    target = _transition_key(result)
+    if target == delivery["delivered_transition_key"]:
+        return None
+    current_time = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    if delivery.get("pending_transition_key") == target:
+        next_retry_at = _parse_utc(delivery.get("next_retry_at"))
+        if next_retry_at is not None and current_time < next_retry_at:
+            return None
     if result.ok:
         return (
             "D Company ERP runtime recovered",
@@ -463,8 +704,10 @@ def notification_for(
     lines = "\n".join(f"- {issue.code}: {issue.detail}" for issue in result.issues)
     return (
         "D Company ERP runtime alert",
-        f"Production monitoring detected the following issue(s):\n\n{lines}\n\n"
-        f"Metrics:\n{json.dumps(result.metrics, indent=2, sort_keys=True)}",
+        (
+            f"Production monitoring detected the following issue(s):\n\n{lines}\n\n"
+            f"Metrics:\n{json.dumps(result.metrics, indent=2, sort_keys=True)}"
+        ),
     )
 
 
@@ -492,8 +735,10 @@ def main() -> int:
             send_notice(
                 env,
                 "D Company ERP SMTP verification",
-                "SMTP authentication, TLS negotiation, and delivery were requested by the "
-                "production release verification process.",
+                (
+                    "SMTP authentication, TLS negotiation, and delivery were "
+                    "requested by the production release verification process."
+                ),
             )
         except Exception as exc:  # noqa: BLE001 - CLI must report transport failures
             print(
@@ -506,16 +751,28 @@ def main() -> int:
 
     previous = load_previous_state()
     result = run_monitor(env, previous)
-    notice = notification_for(result, previous)
+    now = datetime.now(timezone.utc)
+    notice = notification_for(result, previous, now=now)
+    delivery = notification_delivery_without_attempt(result, previous)
+    delivery_failed = False
     if notice and not args.no_email:
         try:
             send_notice(env, *notice)
         except Exception as exc:  # noqa: BLE001 - health result must still be persisted
+            delivery_failed = True
+            delivery = notification_delivery_failed(
+                result,
+                previous,
+                now=now,
+                error=exc,
+            )
             print(
                 f"Runtime alert delivery FAILED: {type(exc).__name__}: {exc}",
                 file=sys.stderr,
             )
-    save_state(result)
+        else:
+            delivery = notification_delivery_succeeded(result, previous, now=now)
+    save_state(result, notification_delivery=delivery)
     print(
         json.dumps(
             {
@@ -526,7 +783,7 @@ def main() -> int:
             sort_keys=True,
         )
     )
-    return 0 if result.ok else 1
+    return 0 if result.ok and not delivery_failed else 1
 
 
 if __name__ == "__main__":

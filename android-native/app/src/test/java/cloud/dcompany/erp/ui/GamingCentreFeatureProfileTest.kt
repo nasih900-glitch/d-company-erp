@@ -9,7 +9,7 @@ import org.junit.Test
 
 class GamingCentreFeatureProfileTest {
     @Test
-    fun `ordinary staff receive only the five focused operational destinations`() {
+    fun `ordinary staff with refund permission receive focused operational destinations`() {
         val staff = profile(
             roles = listOf("cashier"),
             permissions = everyModulePermission,
@@ -19,6 +19,7 @@ class GamingCentreFeatureProfileTest {
             listOf(
                 Destination.Gaming,
                 Destination.Pos,
+                Destination.Refunds,
                 Destination.Shift,
                 Destination.Inventory,
                 Destination.Help,
@@ -38,6 +39,7 @@ class GamingCentreFeatureProfileTest {
             listOf(
                 Destination.Gaming,
                 Destination.Pos,
+                Destination.Refunds,
                 Destination.Shift,
                 Destination.Inventory,
                 Destination.Menu,
@@ -62,6 +64,7 @@ class GamingCentreFeatureProfileTest {
                 Destination.Dashboard,
                 Destination.Gaming,
                 Destination.Pos,
+                Destination.Refunds,
                 Destination.Shift,
                 Destination.Inventory,
                 Destination.Menu,
@@ -94,13 +97,25 @@ class GamingCentreFeatureProfileTest {
             Destination.Customers,
             Destination.Events,
             Destination.Memberships,
-            Destination.Refunds,
         ).forEach { assertFalse(it in focused) }
 
         val full = allowedDestinations(owner, WorkspaceFeatureProfiles.FullHospitality)
         assertTrue(Destination.Tables in full)
         assertTrue(Destination.Kitchen in full)
         assertTrue(Destination.Memberships in full)
+    }
+
+    @Test
+    fun `gaming centre refund entry point still requires server refund permission`() {
+        val withoutRefund = profile(
+            roles = listOf("owner"),
+            protectedAccess = true,
+            auditAccess = true,
+            permissions = everyModulePermission - ErpPermission.PosRefund,
+        )
+        assertFalse(Destination.Refunds in allowedDestinations(withoutRefund))
+        val withRefund = withoutRefund.copy(effectivePermissions = everyModulePermission)
+        assertTrue(Destination.Refunds in allowedDestinations(withRefund))
     }
 
     @Test
@@ -129,6 +144,11 @@ class GamingCentreFeatureProfileTest {
     fun `gaming centre catalog exposes only packaged drinks and crisps categories`() {
         val focused = WorkspaceFeatureProfiles.GamingCentre.operationalCatalogPolicy
 
+        assertTrue(focused.allows("Renamed cabinet", "drink", true, isGamingCentreCatalog = true))
+        assertTrue(focused.allows("Renamed shelf", "food", true, isGamingCentreCatalog = true))
+        assertFalse(focused.allows("Soft Drinks", "drink", true, isGamingCentreCatalog = false))
+
+        // Rolling-upgrade compatibility when a pre-0070 server omitted the flag.
         assertTrue(focused.allows("Soft Drinks", "drink", isAvailable = true))
         assertTrue(focused.allows("Drinks & Snacks", "drink", isAvailable = true))
         assertTrue(focused.allows("drinks & snacks", "food", isAvailable = true))
@@ -141,6 +161,7 @@ class GamingCentreFeatureProfileTest {
         assertFalse(focused.allows("Snacks", "dessert", isAvailable = true))
         assertFalse(focused.allows("Soft Drinks", "drink", isAvailable = false))
         assertFalse(focused.allows(null, "drink", isAvailable = true))
+        assertFalse(focused.allows("Renamed cabinet", "gaming", true, isGamingCentreCatalog = true))
     }
 
     @Test

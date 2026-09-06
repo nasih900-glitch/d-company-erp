@@ -196,6 +196,7 @@ async def test_package_pos_description_identifies_extensions_and_controllers():
     package_id = uuid4()
     package = GamingPackage(
         id=package_id,
+        code=f"test-{uuid4().hex}",
         company_id=uuid4(),
         branch_id=uuid4(),
         station_type="ps5",
@@ -253,6 +254,7 @@ async def test_package_pos_description_uses_immutable_extension_itemisation():
     )
     package = GamingPackage(
         id=package_id,
+        code=f"test-{uuid4().hex}",
         company_id=gs.company_id,
         branch_id=uuid4(),
         station_type="ps5",

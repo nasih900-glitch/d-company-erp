@@ -5,14 +5,28 @@ Loaded from environment variables (12-factor). Never hardcode secrets.
 
 from __future__ import annotations
 
+import base64
+import binascii
 from functools import lru_cache
 from typing import Literal
+from urllib.parse import unquote, urlsplit
 from uuid import UUID
 
-from pydantic import AnyHttpUrl, Field, PostgresDsn, RedisDsn, field_validator, model_validator
+from pydantic import (
+    AnyHttpUrl,
+    Field,
+    PostgresDsn,
+    RedisDsn,
+    SecretStr,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.core.release_identity import ReleaseIdentity, read_backend_build_identity
+
 _ANDROID_COMPATIBILITY_FLOOR_VERSION_CODE = 8
+_DEV_REMOTE_RELAY_SECRET = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="  # noqa: S105
 
 
 class Settings(BaseSettings):
@@ -29,6 +43,10 @@ class Settings(BaseSettings):
     expose_docs: bool = True
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     log_format: Literal["json", "console"] = "json"
+    # Frozen runtime declarations must match the independently baked image
+    # identity in prod/staging. Mutable deployment env is not release proof.
+    app_version: str | None = Field(default=None, frozen=True)
+    app_revision: str | None = Field(default=None, frozen=True)
 
     # ----- database -----
     database_url: PostgresDsn = Field(
@@ -38,6 +56,9 @@ class Settings(BaseSettings):
     database_pool_size: int = 10
     database_max_overflow: int = 20
     database_echo: bool = False
+    # Keep new pause writes off until the owner upgrades active tablets. Older
+    # clients cannot freeze their display precisely; resume/stop remain usable.
+    gaming_pause_enabled: bool = False
 
     # ----- redis / queue -----
     redis_url: RedisDsn = Field(default="redis://localhost:6379/0")  # type: ignore[arg-type]
@@ -63,6 +84,69 @@ class Settings(BaseSettings):
     account_otp_request_limit: int = Field(default=3, ge=1, le=10)
     login_ip_limit_per_minute: int = Field(default=30, ge=5, le=300)
     login_identity_limit_per_15_minutes: int = Field(default=10, ge=5, le=100)
+    # Native clients normally report at startup/reconnect and roughly every
+    # fifteen foreground minutes. This permits realistic bursts while a
+    # compromised staff token cannot bypass the limit by rotating its random
+    # installation UUID.
+    client_heartbeat_user_limit_per_minute: int = Field(default=30, ge=4, le=120)
+    # Diagnostics are uploaded in small offline-safe batches. Limit the number
+    # of events, not merely HTTP requests, so rotating batch sizes cannot evade
+    # the protection while a normal reconnect burst still drains promptly.
+    client_diagnostics_user_event_limit_per_minute: int = Field(
+        default=120,
+        ge=20,
+        le=1_000,
+    )
+    # Remote assistance is a latest-frame support aid, never a video archive.
+    # These ceilings are intentionally small enough for the existing Redis
+    # request path and the 1280x800 tablet target.
+    remote_assistance_frame_max_bytes: int = Field(
+        default=512 * 1024,
+        ge=64 * 1024,
+        le=2 * 1024 * 1024,
+    )
+    remote_assistance_frame_max_width: int = Field(default=1_920, ge=640, le=2_560)
+    remote_assistance_frame_max_height: int = Field(default=1_200, ge=480, le=1_600)
+    remote_assistance_frame_ttl_seconds: int = Field(default=5, ge=2, le=10)
+    remote_assistance_frame_rate_per_second: int = Field(default=1, ge=1, le=3)
+    remote_assistance_frame_decode_min_interval_ms: int = Field(
+        default=2_000,
+        ge=500,
+        le=5_000,
+    )
+    remote_assistance_frame_read_timeout_seconds: int = Field(default=5, ge=2, le=10)
+    # Android heartbeats every 20 seconds while the support coordinator is in
+    # foreground scope. 45 seconds tolerates two normal intervals plus jitter
+    # while still exposing a genuinely stale tablet promptly.
+    remote_assistance_device_online_seconds: int = Field(default=45, ge=15, le=180)
+    remote_assistance_request_ttl_seconds: int = Field(default=300, ge=60, le=900)
+    remote_assistance_session_max_seconds: int = Field(default=900, ge=60, le=900)
+    remote_assistance_anytime_grant_max_seconds: int = Field(
+        default=24 * 60 * 60,
+        ge=3_600,
+        le=24 * 60 * 60,
+    )
+    # This secret protects the human pairing comparison from the public-key
+    # fingerprint exposed after approval. It is deliberately separate from JWT
+    # signing so either credential can rotate without expanding the other's use.
+    remote_assistance_pairing_secret: SecretStr = Field(
+        default="CHANGE_ME_REMOTE_PAIRING_SECRET_AT_LEAST_32_CHARS",
+        min_length=32,
+    )
+    # AES-256-GCM key for the Redis-only frame envelope. It is independent of
+    # JWT and pairing secrets so each authority can rotate separately.
+    remote_assistance_relay_secret: SecretStr = Field(
+        default=_DEV_REMOTE_RELAY_SECRET,
+        min_length=44,
+        max_length=44,
+    )
+    remote_assistance_device_key_pending_seconds: int = Field(default=600, ge=60, le=900)
+    remote_assistance_device_signature_max_skew_seconds: int = Field(
+        default=90,
+        ge=30,
+        le=300,
+    )
+    remote_assistance_device_nonce_ttl_seconds: int = Field(default=240, ge=120, le=900)
     max_request_body_bytes: int = Field(
         default=25 * 1024 * 1024,
         ge=1024,
@@ -80,6 +164,24 @@ class Settings(BaseSettings):
     # advertising JSON that the installed app cannot deserialize.
     android_min_supported_version_code: int = Field(default=8, ge=1, le=2_147_483_647)
     android_latest_version_code: int = Field(default=8, ge=1, le=2_147_483_647)
+    # Monotonic generation for required-version policy. Increment this for
+    # every minimum change, including a rollback, so clients can distinguish a
+    # newer relaxation from a stale cached requirement.
+    client_compatibility_policy_revision: int = Field(
+        default=1,
+        ge=1,
+        le=2_147_483_647,
+    )
+    # Fail-closed SSRF boundary for DB-promoted direct APKs. This is an origin,
+    # not an advertised artifact URL, and therefore remains stable across
+    # releases while ANDROID_UPDATE_URL may be blank for optional DB offers.
+    android_update_allowed_origin: AnyHttpUrl | None = None
+    # Global Android release state is deliberately not tenant-scoped. A local
+    # ``admin.system`` grant therefore cannot be its authority boundary. Only
+    # exact, immutable company/user pairs configured by operations may inspect
+    # or transition that registry. The empty default is intentionally deny-all.
+    # Format: ``<company-uuid>:<user-uuid>[,<company-uuid>:<user-uuid>...]``.
+    android_release_controller_bindings: str = Field(default="", max_length=8_192)
     android_update_url: AnyHttpUrl | None = None
     android_latest_version_name: str | None = Field(default=None, max_length=80)
     android_update_release_notes: str | None = Field(default=None, max_length=2_000)
@@ -125,16 +227,94 @@ class Settings(BaseSettings):
         # In prod, this should be set from a secret manager.
         return v
 
+    @field_validator("remote_assistance_relay_secret")
+    @classmethod
+    def _validate_remote_relay_secret(cls, value: SecretStr) -> SecretStr:
+        encoded = value.get_secret_value()
+        try:
+            decoded = base64.b64decode(encoded, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise ValueError(
+                "REMOTE_ASSISTANCE_RELAY_SECRET must be standard base64"
+            ) from exc
+        if len(decoded) != 32:
+            raise ValueError(
+                "REMOTE_ASSISTANCE_RELAY_SECRET must decode to exactly 32 bytes"
+            )
+        return value
+
     @model_validator(mode="after")
-    def _enforce_prod_secret(self) -> "Settings":
+    def _enforce_prod_secret(self) -> Settings:
         # Fail closed: a prod/staging boot must never fall back to the public
         # default HS256 secret, or tokens become forgeable by anyone.
-        if self.env in {"prod", "staging"} and self.jwt_algorithm == "HS256":
-            if self.jwt_secret.startswith("CHANGE_ME") or len(self.jwt_secret) < 32:
+        if (
+            self.env in {"prod", "staging"}
+            and self.jwt_algorithm == "HS256"
+            and (self.jwt_secret.startswith("CHANGE_ME") or len(self.jwt_secret) < 32)
+        ):
+            raise ValueError(
+                "JWT_SECRET must be set to a strong non-default value "
+                "(>=32 chars) when ENV is prod or staging"
+            )
+        pairing_secret = self.remote_assistance_pairing_secret.get_secret_value()
+        relay_secret = self.remote_assistance_relay_secret.get_secret_value()
+        if self.env in {"prod", "staging"} and (
+            pairing_secret.startswith("CHANGE_ME") or pairing_secret == self.jwt_secret
+        ):
+            raise ValueError(
+                "REMOTE_ASSISTANCE_PAIRING_SECRET must be a dedicated production secret "
+                "and must not reuse JWT_SECRET"
+            )
+        if self.env in {"prod", "staging"} and (
+            relay_secret == _DEV_REMOTE_RELAY_SECRET
+            or relay_secret in {self.jwt_secret, pairing_secret}
+        ):
+            raise ValueError(
+                "REMOTE_ASSISTANCE_RELAY_SECRET must be a dedicated random AES-256 key"
+            )
+        if self.env in {"prod", "staging"}:
+            redis_username = self.redis_url.username
+            redis_password = self.redis_url.password
+            if (
+                redis_username != "erp_backend"
+                or redis_password is None
+                or len(redis_password) < 32
+                or redis_password.startswith("CHANGE_ME")
+                or redis_password in {self.jwt_secret, pairing_secret, relay_secret}
+            ):
                 raise ValueError(
-                    "JWT_SECRET must be set to a strong non-default value "
-                    "(>=32 chars) when ENV is prod or staging"
+                    "REDIS_URL must authenticate as erp_backend with a strong dedicated "
+                    "password in prod or staging"
                 )
+            runtime_secrets = {
+                "JWT_SECRET": self.jwt_secret,
+                "REMOTE_ASSISTANCE_PAIRING_SECRET": pairing_secret,
+                "REMOTE_ASSISTANCE_RELAY_SECRET": relay_secret,
+                "REDIS_URL password": redis_password,
+                "DATABASE_URL password": unquote(
+                    urlsplit(str(self.database_url)).password or ""
+                ),
+                "S3_SECRET_KEY": self.s3_secret_key,
+            }
+            populated = [
+                (name, value)
+                for name, value in runtime_secrets.items()
+                if value is not None and value != ""
+            ]
+            for index, (left_name, left_value) in enumerate(populated):
+                for right_name, right_value in populated[index + 1 :]:
+                    if left_value == right_value:
+                        raise ValueError(
+                            f"{left_name} and {right_name} must use independent secrets"
+                        )
+        if (
+            self.remote_assistance_device_nonce_ttl_seconds
+            <= 2 * self.remote_assistance_device_signature_max_skew_seconds
+        ):
+            raise ValueError(
+                "REMOTE_ASSISTANCE_DEVICE_NONCE_TTL_SECONDS must exceed twice the "
+                "signature clock-skew window"
+            )
         if self.android_latest_version_code < self.android_min_supported_version_code:
             raise ValueError(
                 "ANDROID_LATEST_VERSION_CODE cannot be lower than "
@@ -152,16 +332,26 @@ class Settings(BaseSettings):
                 if update_url and update_url.scheme != "https":
                     raise ValueError(f"{label} must use HTTPS in prod or staging")
             if (
-                max(
-                    self.android_min_supported_version_code,
-                    self.android_latest_version_code,
-                )
-                > _ANDROID_COMPATIBILITY_FLOOR_VERSION_CODE
+                self.android_min_supported_version_code > _ANDROID_COMPATIBILITY_FLOOR_VERSION_CODE
                 and self.android_update_url is None
             ):
                 raise ValueError(
                     "ANDROID_UPDATE_URL is required before production advertises "
-                    "or requires an Android build newer than the code-8 compatibility floor"
+                    "a required Android build newer than the code-8 compatibility floor"
+                )
+        if self.android_update_allowed_origin is not None:
+            allowed_origin = self.android_update_allowed_origin
+            if (
+                allowed_origin.scheme != "https"
+                or allowed_origin.username is not None
+                or allowed_origin.password is not None
+                or allowed_origin.fragment is not None
+                or allowed_origin.query is not None
+                or allowed_origin.path not in {"", "/"}
+            ):
+                raise ValueError(
+                    "ANDROID_UPDATE_ALLOWED_ORIGIN must be a credential-free HTTPS origin "
+                    "without path, query, or fragment"
                 )
         for label, update_url in (
             ("ANDROID_UPDATE_URL", self.android_update_url),
@@ -210,15 +400,74 @@ class Settings(BaseSettings):
                 or not self.android_update_url.path.lower().endswith(".apk")
             ):
                 raise ValueError("Verified Android direct updates require an HTTPS .apk URL")
+        if self.env in {"prod", "staging"}:
+            self.runtime_release_identity()
         return self
+
+    def runtime_release_identity(self) -> ReleaseIdentity:
+        try:
+            declared = ReleaseIdentity.model_validate({
+                "version_name": self.app_version,
+                "source_git_sha": self.app_revision,
+            })
+        except ValueError as exc:
+            raise ValueError(
+                "APP_VERSION and APP_REVISION must declare a valid release version "
+                "and exact 40-character lowercase Git SHA"
+            ) from exc
+        if self.env in {"prod", "staging"}:
+            baked = read_backend_build_identity()
+            if baked != declared:
+                raise ValueError("APP_VERSION/APP_REVISION do not match the backend image identity")
+            return baked
+        return declared
 
     @field_validator("account_security_company_id", mode="before")
     @classmethod
     def _blank_company_id_is_none(cls, v: object) -> object:
         return None if v == "" else v
 
+    @field_validator("android_release_controller_bindings", mode="before")
+    @classmethod
+    def _normalize_android_release_controller_bindings(cls, v: object) -> str:
+        if v is None or (isinstance(v, str) and not v.strip()):
+            return ""
+        if not isinstance(v, str):
+            raise ValueError("must be a comma-separated string of company:user UUID pairs")
+
+        normalized: list[str] = []
+        seen: set[tuple[UUID, UUID]] = set()
+        for raw_binding in v.split(","):
+            binding = raw_binding.strip()
+            parts = binding.split(":")
+            if len(parts) != 2:
+                raise ValueError(
+                    "must contain only <company-uuid>:<user-uuid> bindings"
+                )
+            company_text, user_text = (part.strip() for part in parts)
+            try:
+                company_id = UUID(company_text)
+                user_id = UUID(user_text)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "must contain only valid company:user UUID pairs"
+                ) from exc
+
+            # Accept normal upper/lowercase copy-paste but reject ambiguous UUID
+            # spellings (braces, integer form, missing hyphens) in privileged
+            # production configuration.
+            if company_text.lower() != str(company_id) or user_text.lower() != str(user_id):
+                raise ValueError("UUIDs must use canonical hyphenated form")
+            pair = (company_id, user_id)
+            if pair in seen:
+                raise ValueError("duplicate company:user binding")
+            seen.add(pair)
+            normalized.append(f"{company_id}:{user_id}")
+        return ",".join(normalized)
+
     @field_validator(
         "android_update_url",
+        "android_update_allowed_origin",
         "android_latest_version_name",
         "android_update_release_notes",
         "android_update_apk_sha256",
@@ -257,6 +506,19 @@ class Settings(BaseSettings):
         # verification. Whitespace copied from an environment/secret editor
         # must not turn an otherwise valid signed update into a false reject.
         return v.strip() if v is not None else None
+
+    @property
+    def android_release_controller_binding_set(self) -> frozenset[tuple[UUID, UUID]]:
+        """Return the validated global release-controller identities."""
+        if not self.android_release_controller_bindings:
+            return frozenset()
+        return frozenset(
+            (UUID(company_id), UUID(user_id))
+            for company_id, user_id in (
+                binding.split(":", 1)
+                for binding in self.android_release_controller_bindings.split(",")
+            )
+        )
 
 
 @lru_cache(maxsize=1)

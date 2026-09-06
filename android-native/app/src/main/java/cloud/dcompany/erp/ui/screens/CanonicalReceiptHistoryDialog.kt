@@ -54,9 +54,6 @@ import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.theme.Spacing
 import java.math.BigDecimal
-import java.time.Instant
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 
@@ -611,12 +608,6 @@ private fun ReceiptMoneyRow(label: String, amountMinor: Long, emphasized: Boolea
         )
     }
 }
-
-private val receiptDateTimeFormatter = DateTimeFormatter.ofPattern("dd MMM yyyy · h:mm a")
-
-private fun String.receiptDateTime(): String = runCatching {
-    receiptDateTimeFormatter.format(Instant.parse(this).atZone(ZoneId.systemDefault()))
-}.getOrDefault(this)
 
 private fun String.receiptQuantity(): String = runCatching {
     BigDecimal(this).stripTrailingZeros().toPlainString()

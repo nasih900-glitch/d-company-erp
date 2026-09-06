@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 
-import { hasAdminSystemAccess, hasAuditAccess } from '@/lib/admin-access';
+import { hasAuditAccess, hasSupportAccess } from '@/lib/admin-access';
 import type { BugReportDTO } from '@/lib/erp-api';
 import { ReportDetail } from './BugReportsScreen';
 import {
@@ -68,17 +68,32 @@ const report: BugReportDTO = {
 };
 
 describe('bug report inbox access and filtering', () => {
-  it('uses the exact audit_access signal for admin.system route and navigation access', () => {
+  it('keeps Audit Log separate from the exact tenant support permission', () => {
     expect(hasAuditAccess({ audit_access: true })).toBe(true);
     expect(hasAuditAccess({ audit_access: false })).toBe(false);
     expect(hasAuditAccess({ protected_access: true })).toBe(false);
 
-    expect(hasAdminSystemAccess({ audit_access: true })).toBe(true);
-    expect(hasAdminSystemAccess({ audit_access: false })).toBe(false);
-    expect(hasAdminSystemAccess(null)).toBe(false);
+    expect(hasSupportAccess({
+      audit_access: true,
+      effective_permissions: ['admin.support'],
+    })).toBe(true);
+    expect(hasSupportAccess({
+      audit_access: true,
+      effective_permissions: [],
+    })).toBe(false);
+    expect(hasSupportAccess(null)).toBe(false);
 
-    const coOwnerWithoutSystemAccess = { protected_access: true, audit_access: false };
-    expect(hasAdminSystemAccess(coOwnerWithoutSystemAccess)).toBe(false);
+    const coOwner = {
+      protected_access: true,
+      audit_access: false,
+      effective_permissions: ['admin.support'],
+    };
+    expect(hasSupportAccess(coOwner)).toBe(true);
+    expect(hasAuditAccess(coOwner)).toBe(false);
+
+    // Older servers omitted the exact permission list; their protected owner
+    // signal remains the only safe compatibility fallback.
+    expect(hasSupportAccess({ audit_access: true })).toBe(true);
   });
 
   it('trims search text and omits blank filters from the list request', () => {

@@ -3,6 +3,7 @@ package cloud.dcompany.erp.core.sync
 import cloud.dcompany.erp.core.db.ShiftHistoryMergePolicy
 import cloud.dcompany.erp.core.db.ShiftResolutionPolicy
 import cloud.dcompany.erp.core.net.ApiClient
+import cloud.dcompany.erp.ui.screens.shift.ShiftCloseResult
 import cloud.dcompany.erp.ui.screens.shift.ShiftDetail
 import kotlinx.serialization.decodeFromString
 import org.junit.Assert.assertEquals
@@ -11,6 +12,26 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 class ShiftAccountingContractTest {
+
+    @Test
+    fun `close response identifies a different authorised closer without rewriting opener`() {
+        val result = ApiClient.json.decodeFromString<ShiftCloseResult>(
+            """
+            {
+              "id": "shift-1",
+              "status": "closed",
+              "variance_minor": 0,
+              "opened_by": "user-rafi",
+              "closed_by": "user-sameer",
+              "closed_by_was_opener": false
+            }
+            """.trimIndent(),
+        )
+
+        assertEquals("user-rafi", result.openedByUserId)
+        assertEquals("user-sameer", result.closedByUserId)
+        assertEquals(false, result.closedByWasOpener)
+    }
 
     @Test
     fun `legacy response keeps unavailable accounting totals null through caches and UI model`() {
@@ -27,7 +48,10 @@ class ShiftAccountingContractTest {
               "pos_sales_minor": 83600,
               "total_sales_minor": 83600,
               "opened_by": "user-1",
-              "opened_by_name": "Rafi"
+              "opened_by_name": "Rafi",
+              "closed_by": "user-2",
+              "closed_by_name": "Sameer",
+              "closed_by_email": "sameer@example.test"
             }
             """.trimIndent(),
         )
@@ -57,11 +81,15 @@ class ShiftAccountingContractTest {
             fetchedAtMillis = 2_000,
         )
         assertEquals(83_600L, historyCache.posSalesMinor)
+        assertEquals("user-2", historyCache.closedByUserId)
+        assertEquals("Sameer", historyCache.closedByName)
+        assertEquals("sameer@example.test", historyCache.closedByEmail)
         assertNull(historyCache.grossCollectionsMinor)
         assertNull(historyCache.netCollectionsMinor)
         val historyUiRow = ShiftHistoryMergePolicy.merge(listOf(historyCache), emptyList()).single()
         assertNull(historyUiRow.grossCollectionsMinor)
         assertNull(historyUiRow.netCollectionsMinor)
+        assertEquals("Sameer", historyUiRow.closedByName)
     }
 
     @Test

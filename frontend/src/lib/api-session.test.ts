@@ -1,6 +1,7 @@
+import axios from 'axios';
 import { describe, expect, it } from 'vitest';
 
-import { isSameOriginHttpApi } from './api';
+import { isExpectedRequestCancellation, isSameOriginHttpApi } from './api';
 
 describe('web session transport boundary', () => {
   it('uses cookie mode for relative and absolute same-origin API URLs', () => {
@@ -24,5 +25,11 @@ describe('web session transport boundary', () => {
 
   it('fails closed for malformed locations', () => {
     expect(isSameOriginHttpApi('/api/v1', 'not a URL')).toBe(false);
+  });
+
+  it('distinguishes expected navigation cancellation from a real network failure', () => {
+    expect(isExpectedRequestCancellation(new axios.CanceledError('route changed'))).toBe(true);
+    expect(isExpectedRequestCancellation(new axios.AxiosError('timeout', 'ECONNABORTED'))).toBe(false);
+    expect(isExpectedRequestCancellation(new Error('offline'))).toBe(false);
   });
 });

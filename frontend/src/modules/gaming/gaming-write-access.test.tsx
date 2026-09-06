@@ -115,6 +115,23 @@ describe('gaming write access boundary', () => {
       amount_minor: 10_000,
     }, 'extension-key');
     dispatcher.dispatch('stopSession', 'session-1', 'stop-key');
+    dispatcher.dispatch('resolveLegacyPausedSession', 'session-1', {
+      expected_status: 'paused',
+      expected_paused_at: null,
+      expected_pause_version: 0,
+      expected_end_at: null,
+      expected_order_id: null,
+      expected_billable_minutes: null,
+      expected_paused_duration_ms: 0,
+      expected_amount_minor: null,
+      ended_at: '2026-08-25T11:00:00.000Z',
+      billable_minutes: 30,
+      amount_minor: 10_000,
+      timing_evidence_reviewed: true,
+      reason: 'Owner reviewed the original station log',
+    }, 'legacy-pause-key');
+    dispatcher.dispatch('pauseSession', 'session-1', { reason: 'Controller issue', expected_pause_version: 0 }, 'pause-key');
+    dispatcher.dispatch('resumeSession', 'session-1', { reason: 'Continue session', expected_pause_version: 1 }, 'resume-key');
     dispatcher.dispatch('repairSessionBilling', 'session-1', 10_000, 'Verified bill', 'repair-key');
     dispatcher.dispatch('cancelSession', 'session-1', 'Customer left');
     dispatcher.dispatch('sendToPos', 'session-1');

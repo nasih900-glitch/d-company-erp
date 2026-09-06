@@ -43,7 +43,7 @@ describe('Gaming Centre web product profile', () => {
   });
 
   it('keeps the normal staff workspace focused on the daily gaming flow', () => {
-    expect(labels(staffAccess)).toEqual(['Gaming', 'POS', 'Shift', 'Stock', 'Help']);
+    expect(labels(staffAccess)).toEqual(['Gaming', 'POS', 'Shift', 'Refunds', 'Stock', 'Help']);
   });
 
   it('lands each web account on the most useful permitted control surface', () => {
@@ -74,14 +74,14 @@ describe('Gaming Centre web product profile', () => {
     });
 
     expect(owner).toEqual([
-      'Gaming', 'POS', 'Shift', 'Stock', 'Help',
+      'Gaming', 'POS', 'Shift', 'Refunds', 'Stock', 'Help',
       'Dashboard', 'Finance', 'Reports', 'Staff', 'Settings', 'Products',
     ]);
     expect(owner).not.toContain('Audit Log');
     expect(owner).not.toContain('Support Inbox');
   });
 
-  it('keeps Audit Log and Support Inbox on the exact protected signals', () => {
+  it('keeps Audit Log protected while tenant support is available to co-owners', () => {
     const protectedOwner = labels({
       ...staffAccess,
       isOwner: true,
@@ -91,29 +91,31 @@ describe('Gaming Centre web product profile', () => {
     });
     expect(protectedOwner).toContain('Audit Log');
     expect(protectedOwner).toContain('Support Inbox');
+    expect(protectedOwner).toContain('Device Centre');
 
     const coOwner = labels({
       ...staffAccess,
       isOwner: true,
       hasAuditAccess: false,
-      hasSystemAccess: false,
+      hasSystemAccess: true,
       hasProductManagementAccess: true,
     });
     expect(coOwner).not.toContain('Audit Log');
-    expect(coOwner).not.toContain('Support Inbox');
+    expect(coOwner).toContain('Support Inbox');
+    expect(coOwner).toContain('Device Centre');
   });
 
   it('still honours module access for non-owner operational tabs', () => {
     expect(labels({ ...staffAccess, accessibleModules: ['gaming', 'pos'] }))
-      .toEqual(['Gaming', 'POS', 'Shift', 'Help']);
+      .toEqual(['Gaming', 'POS', 'Shift', 'Refunds', 'Help']);
     expect(labels({ ...staffAccess, accessibleModules: ['pos'] }))
-      .toEqual(['POS', 'Shift', 'Help']);
+      .toEqual(['POS', 'Shift', 'Refunds', 'Help']);
   });
 
   it('hides cafe, membership, and deferred workspaces without deleting their route registration', () => {
     const hiddenRoutes = [
       '/tables', '/kitchen', '/reservations', '/customers', '/memberships',
-      '/public/menu', '/events', '/ocr', '/refunds', '/insights',
+      '/public/menu', '/events', '/ocr', '/insights',
     ];
     for (const route of hiddenRoutes) {
       expect(featureForProfileRoute(route)).not.toBeNull();
@@ -121,16 +123,25 @@ describe('Gaming Centre web product profile', () => {
     }
 
     expect(isProfileRouteEnabled('/menu')).toBe(true);
+    expect(isProfileRouteEnabled('/refunds')).toBe(true);
     expect(WEB_PRODUCT_PROFILE.defaultRoute).toBe('/gaming');
   });
 
-  it('offers only packaged drinks and crisps for new operational sales', () => {
+  it('keeps the operational refund workspace behind its exact permission', () => {
+    expect(labels({ ...staffAccess, hasRefundAccess: false })).not.toContain('Refunds');
+    const refundGroup = visibleProfileNavigationGroups(staffAccess)
+      .find((group) => group.items.some((item) => item.id === 'refunds'));
+    expect(refundGroup?.title).toBe('Gaming Centre');
+  });
+
+  it('uses server classification so category renames cannot hide packaged products', () => {
     const categories = [
-      { id: 'soft-drinks', name: ' Soft Drinks ' },
-      { id: 'drinks-snacks', name: 'Drinks & Snacks' },
-      { id: 'snacks', name: 'Snacks' },
-      { id: 'coffee', name: 'Coffee' },
-      { id: 'food', name: 'Food' },
+      { id: 'soft-drinks', name: 'Chilled cabinet', is_gaming_centre_catalog: true },
+      { id: 'drinks-snacks', name: 'Packaged counter', is_gaming_centre_catalog: true },
+      { id: 'snacks', name: 'Wall rack', is_gaming_centre_catalog: true },
+      { id: 'coffee', name: 'Coffee', is_gaming_centre_catalog: false },
+      // Explicit false from the server wins even when a legacy name matches.
+      { id: 'food', name: 'Soft Drinks', is_gaming_centre_catalog: false },
     ];
     const items = [
       { id: 'can', category_id: 'soft-drinks', type: 'DRINK', is_available: true },
@@ -140,13 +151,29 @@ describe('Gaming Centre web product profile', () => {
       { id: 'coffee', category_id: 'coffee', type: 'drink', is_available: true },
       { id: 'burger', category_id: 'food', type: 'food', is_available: true },
       { id: 'sold-out', category_id: 'soft-drinks', type: 'drink', is_available: false },
-      { id: 'wrong-type', category_id: 'soft-drinks', type: 'food', is_available: true },
+      { id: 'wrong-type', category_id: 'soft-drinks', type: 'gaming', is_available: true },
       { id: 'uncategorised', category_id: 'missing', type: 'drink', is_available: true },
     ];
 
     expect(profileOperationalCatalogItems(items, categories).map((item) => item.id))
       .toEqual(['can', 'legacy-can', 'legacy-crisps', 'crisps']);
     expect(WEB_PRODUCT_PROFILE.operationalCatalogPolicy).toHaveLength(4);
+  });
+
+  it('keeps the category-name bridge only for pre-0070 server responses', () => {
+    const categories = [
+      { id: 'legacy-drinks', name: ' Soft Drinks ' },
+      { id: 'legacy-food', name: 'Crisps' },
+      { id: 'later', name: 'Coffee' },
+    ];
+    const items = [
+      { id: 'can', category_id: 'legacy-drinks', type: 'drink', is_available: true },
+      { id: 'crisps', category_id: 'legacy-food', type: 'food', is_available: true },
+      { id: 'coffee', category_id: 'later', type: 'drink', is_available: true },
+    ];
+
+    expect(profileOperationalCatalogItems(items, categories).map((item) => item.id))
+      .toEqual(['can', 'crisps']);
   });
 
   it('can re-enable a deferred workflow from one central feature flag', () => {

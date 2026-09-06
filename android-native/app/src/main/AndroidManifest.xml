@@ -32,7 +32,6 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:label="@string/app_name"
             android:launchMode="singleTask"
             android:configChanges="orientation|screenSize|screenLayout|keyboard|keyboardHidden|uiMode"
             android:windowSoftInputMode="adjustResize"
@@ -57,6 +56,10 @@
                 <action android:name="android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED" />
             </intent-filter>
         </receiver>
+
+        <receiver
+            android:name=".core.remote.RemoteAssistanceStopReceiver"
+            android:exported="false" />
 
     </application>
 </manifest>

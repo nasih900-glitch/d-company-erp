@@ -125,10 +125,10 @@ class AndroidReleaseVersionTest(unittest.TestCase):
 
     def write_production_defaults(
         self,
-        env_code: int = 5,
-        compose_code: int = 5,
-        env_minimum: int = 5,
-        compose_minimum: int = 5,
+        env_code: int = 8,
+        compose_code: int = 8,
+        env_minimum: int = 8,
+        compose_minimum: int = 8,
         env_requires_headers: bool = True,
         compose_requires_headers: bool = True,
     ) -> tuple[Path, Path]:
@@ -162,21 +162,21 @@ class AndroidReleaseVersionTest(unittest.TestCase):
         validate_production_defaults(
             env_file,
             compose_file,
-            AndroidVersion(code=7, name="3.1.0"),
+            AndroidVersion(code=10, name="3.1.0"),
         )
 
     def test_production_defaults_fail_when_compose_is_stale(self) -> None:
-        env_file, compose_file = self.write_production_defaults(compose_code=6)
+        env_file, compose_file = self.write_production_defaults(compose_code=9)
 
-        with self.assertRaisesRegex(ReleaseVersionError, "env=5, compose=6"):
+        with self.assertRaisesRegex(ReleaseVersionError, "env=8, compose=9"):
             validate_production_defaults(
                 env_file,
                 compose_file,
-                AndroidVersion(code=7, name="3.1.0"),
+                AndroidVersion(code=10, name="3.1.0"),
             )
 
     def test_production_latest_default_cannot_precede_minimum_or_exceed_build(self) -> None:
-        for latest in (4, 8):
+        for latest in (7, 11):
             with self.subTest(latest=latest):
                 env_file, compose_file = self.write_production_defaults(
                     env_code=latest,
@@ -189,20 +189,20 @@ class AndroidReleaseVersionTest(unittest.TestCase):
                     validate_production_defaults(
                         env_file,
                         compose_file,
-                        AndroidVersion(code=7, name="3.1.0"),
+                        AndroidVersion(code=10, name="3.1.0"),
                     )
 
     def test_production_defaults_fail_below_snapshot_safe_minimum(self) -> None:
         env_file, compose_file = self.write_production_defaults(
-            env_minimum=4,
-            compose_minimum=4,
+            env_minimum=7,
+            compose_minimum=7,
         )
 
-        with self.assertRaisesRegex(ReleaseVersionError, "required>=5"):
+        with self.assertRaisesRegex(ReleaseVersionError, "required>=8"):
             validate_production_defaults(
                 env_file,
                 compose_file,
-                AndroidVersion(code=7, name="3.1.0"),
+                AndroidVersion(code=10, name="3.1.0"),
             )
 
     def test_production_defaults_require_native_version_headers(self) -> None:
@@ -217,7 +217,7 @@ class AndroidReleaseVersionTest(unittest.TestCase):
             validate_production_defaults(
                 env_file,
                 compose_file,
-                AndroidVersion(code=7, name="3.1.0"),
+                AndroidVersion(code=10, name="3.1.0"),
             )
 
     def write_product_versions(

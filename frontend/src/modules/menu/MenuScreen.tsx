@@ -13,6 +13,7 @@ import { LIVE_MODE } from '@/lib/demo';
 import { CATEGORIES, MENU } from '@/lib/demo-data';
 import { inr } from '@/lib/inr';
 import { parseRupeesToMinor } from '@/lib/money-input';
+import { GAMING_CENTRE_CATALOG_GUIDANCE } from '@/lib/product-profile';
 import { APP_STORE_REVIEW, isAppStoreAllowedType } from '@/lib/app-store-compliance';
 import {
   menu, menuAdmin, inventory, recipes, type MenuItemDTO, type MenuCategoryDTO,
@@ -30,6 +31,14 @@ function defaultTaxMeta(type: ItemType) {
     return { hsn_code: '999692', tax_rate_pct: '18' };
   }
   return { hsn_code: '996331', tax_rate_pct: '5' };
+}
+
+export function menuManagementErrorMessage(cause: unknown) {
+  const message = cause instanceof Error ? cause.message.trim() : String(cause ?? '').trim();
+  if (message.toLowerCase().includes('pricing password unlock')) {
+    return 'Pricing is locked. Open Settings, choose Pricing, re-enter your password, then retry this same change.';
+  }
+  return message || 'The menu change could not be saved. Check the connection and try again.';
 }
 
 export default function MenuScreen() {
@@ -55,8 +64,9 @@ export default function MenuScreen() {
       if (LIVE_MODE) {
         const [c, i] = await Promise.all([menu.categories(), menu.items()]);
         const allowedItems = i.filter((item) => isAppStoreAllowedType(item.type));
-        const allowedCategoryIds = new Set(allowedItems.map((item) => item.category_id));
-        setCats(c.filter((cat) => allowedCategoryIds.has(cat.id)));
+        // Management must retain empty categories so their first item can be
+        // created. Operational POS/Gaming filtering is applied separately.
+        setCats(c);
         setItems(allowedItems);
       } else {
         setCats(CATEGORIES.map((c, idx) => ({ id: c, name: c, sort_order: idx })));
@@ -91,7 +101,7 @@ export default function MenuScreen() {
       await load();
       notifications.success(`${itemName} was removed from the menu.`, { title: 'Menu item deleted' });
     } catch (e) {
-      notifications.error((e as Error).message, { title: 'Could not delete menu item' });
+      notifications.error(menuManagementErrorMessage(e), { title: 'Could not delete menu item' });
     } finally {
       setDeleteBusy(false);
     }
@@ -105,7 +115,7 @@ export default function MenuScreen() {
         title: 'Availability updated',
       });
     } catch (e) {
-      notifications.error((e as Error).message, { title: 'Could not update availability' });
+      notifications.error(menuManagementErrorMessage(e), { title: 'Could not update availability' });
     }
   }
 
@@ -119,7 +129,9 @@ export default function MenuScreen() {
           </p>
         </div>
         <div className="flex gap-2 items-center flex-wrap">
-          <button className="btn btn-ghost" onClick={load}><RefreshCw size={14}/></button>
+          <button className="btn btn-ghost" onClick={load} aria-label="Refresh products" title="Refresh products">
+            <RefreshCw size={14}/>
+          </button>
           {canManageMenu && (
             <>
               <button className="btn btn-ghost" onClick={() => setAddCatOpen(true)}>
@@ -190,7 +202,8 @@ export default function MenuScreen() {
                   </td>
                   <td className="p-3 text-center">
                     {canManageMenu ? (
-                      <button onClick={() => onToggleAvail(m)} className="hover:text-accent"
+                      <button onClick={() => onToggleAvail(m)} className="tap-target inline-flex items-center justify-center rounded-lg transition-colors hover:bg-bg-raised hover:text-accent"
+                        aria-label={m.is_available ? `Hide ${m.name} from POS` : `Show ${m.name} on POS`}
                         title={m.is_available ? 'Hide from POS' : 'Show on POS'}>
                         {m.is_available
                           ? <Eye size={14} className="text-accent-good"/>
@@ -204,14 +217,17 @@ export default function MenuScreen() {
                   </td>
                   {canManageMenu && (
                     <td className="p-3 text-right pr-4 flex gap-1 justify-end">
-                      <button className="text-fg-muted hover:text-accent" title="Recipe / ingredients"
+                      <button className="tap-target inline-flex items-center justify-center rounded-lg text-fg-muted transition-colors hover:bg-bg-raised hover:text-accent" title={`Recipe for ${m.name}`}
+                        aria-label={`Recipe for ${m.name}`}
                         onClick={() => setRecipeItem(m)}>
                         <ListTree size={14}/>
                       </button>
-                      <button className="text-fg-muted hover:text-accent" onClick={() => setEditItem(m)}>
+                      <button className="tap-target inline-flex items-center justify-center rounded-lg text-fg-muted transition-colors hover:bg-bg-raised hover:text-accent" aria-label={`Edit ${m.name}`}
+                        title={`Edit ${m.name}`} onClick={() => setEditItem(m)}>
                         <Edit2 size={14}/>
                       </button>
-                      <button className="text-fg-muted hover:text-accent-bad" onClick={() => setDeleteItem(m)}>
+                      <button className="tap-target inline-flex items-center justify-center rounded-lg text-fg-muted transition-colors hover:bg-bg-raised hover:text-accent-bad" aria-label={`Delete ${m.name}`}
+                        title={`Delete ${m.name}`} onClick={() => setDeleteItem(m)}>
                         <Trash2 size={14}/>
                       </button>
                     </td>
@@ -249,28 +265,28 @@ export default function MenuScreen() {
                       <button
                         aria-label={m.is_available ? `Hide ${m.name} from POS` : `Show ${m.name} on POS`}
                         onClick={() => onToggleAvail(m)}
-                        className="btn btn-ghost !min-h-[32px] !min-w-[32px] !px-2 !py-1"
+                        className="btn btn-ghost !min-h-11 !min-w-11 !px-2 !py-1"
                       >
                         {m.is_available ? <Eye size={14}/> : <EyeOff size={14}/>}
                       </button>
                       <button
                         aria-label={`Recipe for ${m.name}`}
                         onClick={() => setRecipeItem(m)}
-                        className="btn btn-ghost !min-h-[32px] !min-w-[32px] !px-2 !py-1"
+                        className="btn btn-ghost !min-h-11 !min-w-11 !px-2 !py-1"
                       >
                         <ListTree size={14}/>
                       </button>
                       <button
                         aria-label={`Edit ${m.name}`}
                         onClick={() => setEditItem(m)}
-                        className="btn btn-ghost !min-h-[32px] !min-w-[32px] !px-2 !py-1"
+                        className="btn btn-ghost !min-h-11 !min-w-11 !px-2 !py-1"
                       >
                         <Edit2 size={14}/>
                       </button>
                       <button
                         aria-label={`Delete ${m.name}`}
                         onClick={() => setDeleteItem(m)}
-                        className="btn btn-ghost !min-h-[32px] !min-w-[32px] !px-2 !py-1 hover:!text-accent-bad"
+                        className="btn btn-ghost !min-h-11 !min-w-11 !px-2 !py-1 hover:!text-accent-bad"
                       >
                         <Trash2 size={14}/>
                       </button>
@@ -380,7 +396,7 @@ function ItemForm({
         });
       }
       onSuccess();
-    } catch (e) { setErr((e as Error).message); }
+    } catch (e) { setErr(menuManagementErrorMessage(e)); }
     finally { setBusy(false); }
   }
 
@@ -477,17 +493,19 @@ function ItemForm({
 }
 
 // ---------------------------------------------------------------- CategoryManagerModal
-function CategoryManagerModal({
+export function CategoryManagerModal({
   cats, onClose, onChanged,
 }: { cats: MenuCategoryDTO[]; onClose: () => void; onChanged: () => void }) {
   const notifications = useNotifications();
   const [name, setName] = useState('');
   const [sortOrder, setSortOrder] = useState('0');
+  const [gamingSales, setGamingSales] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
   const [editSortOrder, setEditSortOrder] = useState('0');
+  const [editGamingSales, setEditGamingSales] = useState<boolean | undefined>(undefined);
   const [rowBusy, setRowBusy] = useState<string | null>(null);
   const [deleteCategory, setDeleteCategory] = useState<MenuCategoryDTO | null>(null);
 
@@ -497,16 +515,20 @@ function CategoryManagerModal({
       await menuAdmin.createCategory({
         name: name.trim(),
         sort_order: parseInt(sortOrder, 10) || 0,
+        is_gaming_centre_catalog: gamingSales,
       });
-      setName(''); setSortOrder('0');
+      setName(''); setSortOrder('0'); setGamingSales(false);
       onChanged();
       notifications.success('The category was created.', { title: 'Category saved' });
-    } catch (e) { setErr((e as Error).message); }
+    } catch (e) { setErr(menuManagementErrorMessage(e)); }
     finally { setBusy(false); }
   }
 
   function startEdit(c: MenuCategoryDTO) {
-    setEditingId(c.id); setEditName(c.name); setEditSortOrder(String(c.sort_order));
+    setEditingId(c.id);
+    setEditName(c.name);
+    setEditSortOrder(String(c.sort_order));
+    setEditGamingSales(c.is_gaming_centre_catalog);
   }
 
   async function saveEdit(id: string) {
@@ -515,11 +537,16 @@ function CategoryManagerModal({
       await menuAdmin.updateCategory(id, {
         name: editName.trim(),
         sort_order: parseInt(editSortOrder, 10) || 0,
+        // During a rolling update an older server omits this field. Preserve
+        // its unknown value unless the owner explicitly changes the toggle.
+        ...(editGamingSales === undefined
+          ? {}
+          : { is_gaming_centre_catalog: editGamingSales }),
       });
       setEditingId(null);
       onChanged();
       notifications.success('The category was updated.', { title: 'Changes saved' });
-    } catch (e) { setErr((e as Error).message); }
+    } catch (e) { setErr(menuManagementErrorMessage(e)); }
     finally { setRowBusy(null); }
   }
 
@@ -533,7 +560,7 @@ function CategoryManagerModal({
       onChanged();
       notifications.success(`${categoryName} was deleted.`, { title: 'Category deleted' });
     } catch (e) {
-      const message = (e as Error).message;
+      const message = menuManagementErrorMessage(e);
       setErr(message);
       notifications.error(message, { title: 'Could not delete category' });
     }
@@ -545,6 +572,9 @@ function CategoryManagerModal({
       <Modal open onClose={onClose} title="Categories">
         <div className="space-y-4">
         {err && <ErrorRow text={err}/>}
+        <p className="rounded-lg border border-bg-border bg-bg-raised p-3 text-xs text-fg-muted">
+          {GAMING_CENTRE_CATALOG_GUIDANCE}
+        </p>
 
         {cats.length > 0 && (
           <div className="space-y-2">
@@ -556,6 +586,11 @@ function CategoryManagerModal({
                       onChange={(e) => setEditName(e.target.value)} autoFocus/>
                     <input type="number" className="input !py-1.5 !w-20 font-mono" value={editSortOrder}
                       onChange={(e) => setEditSortOrder(e.target.value)} title="Sort order (lower shows first)"/>
+                    <label className="flex min-h-10 items-center gap-2 rounded-lg border border-bg-border px-2 text-xs">
+                      <input type="checkbox" checked={editGamingSales === true}
+                        onChange={(e) => setEditGamingSales(e.target.checked)}/>
+                      {editGamingSales === undefined ? 'Gaming visibility awaiting server' : 'Gaming sales'}
+                    </label>
                     <button type="button" className="btn btn-primary !py-1.5 !px-2"
                       disabled={rowBusy === c.id} onClick={() => saveEdit(c.id)}>
                       {rowBusy === c.id ? <Loader2 className="animate-spin" size={14}/> : 'Save'}
@@ -567,11 +602,27 @@ function CategoryManagerModal({
                 ) : (
                   <>
                     <span className="flex-1 text-sm font-medium">{c.name}</span>
+                    <span className={`rounded-full px-2 py-1 text-[11px] font-semibold ${
+                      c.is_gaming_centre_catalog === true
+                        ? 'bg-accent-good/10 text-accent-good'
+                        : c.is_gaming_centre_catalog === false
+                          ? 'bg-bg-raised text-fg-muted'
+                          : 'bg-accent-gold/10 text-accent-gold'
+                    }`}>
+                      {c.is_gaming_centre_catalog === true
+                        ? 'Gaming sales'
+                        : c.is_gaming_centre_catalog === false
+                          ? 'Future catalogue'
+                          : 'Awaiting server'}
+                    </span>
                     <span className="text-xs text-fg-muted font-mono">#{c.sort_order}</span>
-                    <button type="button" className="btn btn-ghost !py-1.5 !px-2" onClick={() => startEdit(c)}>
+                    <button type="button" className="btn btn-ghost !py-1.5 !px-2"
+                      aria-label={`Edit category ${c.name}`} title={`Edit category ${c.name}`}
+                      onClick={() => startEdit(c)}>
                       <Edit2 size={13}/>
                     </button>
                     <button type="button" className="btn btn-ghost !py-1.5 !px-2 text-accent-bad"
+                      aria-label={`Delete category ${c.name}`} title={`Delete category ${c.name}`}
                       disabled={rowBusy !== null} onClick={() => setDeleteCategory(c)}>
                       {rowBusy === c.id ? <Loader2 className="animate-spin" size={13}/> : <Trash2 size={13}/>}
                     </button>
@@ -584,13 +635,23 @@ function CategoryManagerModal({
 
         <form onSubmit={submit} className="space-y-3 pt-2 border-t border-bg-border">
           <p className="text-xs text-fg-muted pt-2">Add a new category</p>
-          <Field label="Name (e.g. Coffee, Mocktails, Desserts)">
+          <Field label="Name (e.g. Drinks & Snacks, Crisps)">
             <input className="input" required value={name} onChange={(e) => setName(e.target.value)}/>
           </Field>
           <Field label="Sort order (lower shows first)">
             <input type="number" className="input font-mono" value={sortOrder}
               onChange={(e) => setSortOrder(e.target.value)}/>
           </Field>
+          <label className="flex min-h-11 items-start gap-3 rounded-lg border border-bg-border bg-bg-raised p-3 text-sm">
+            <input type="checkbox" className="mt-0.5" checked={gamingSales}
+              onChange={(e) => setGamingSales(e.target.checked)}/>
+            <span>
+              <span className="block font-medium text-fg-primary">Show in Gaming and POS</span>
+              <span className="mt-0.5 block text-xs text-fg-muted">
+                Use this only for packaged drinks and crisps sold during gaming operations.
+              </span>
+            </span>
+          </label>
           <div className="flex justify-end gap-2 pt-2">
             <button type="button" className="btn btn-ghost" onClick={onClose}>Done</button>
             <button type="submit" className="btn btn-primary" disabled={busy}>

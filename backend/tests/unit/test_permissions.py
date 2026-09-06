@@ -72,6 +72,7 @@ def test_low_privilege_roles_never_default_to_sensitive_business_actions() -> No
     denied = {
         "admin.system",
         "admin.audit.read",
+        "admin.support",
         "settings.manage",
         "memberships.manage",
         "staff.write",
@@ -129,6 +130,7 @@ def test_auditor_role_is_read_only() -> None:
 
     # No write/refund/void/shift/admin permission of any kind survives.
     mutating = {
+        "pos.refund.reconcile",
         "pos.write",
         "pos.void",
         "pos.refund",
@@ -152,6 +154,7 @@ def test_auditor_role_is_read_only() -> None:
         "staff.attendance.write",
         "staff.payroll.write",
         "admin.audit.read",
+        "admin.support",
         "admin.system",
         "settings.manage",
         "memberships.manage",
@@ -244,6 +247,7 @@ async def test_effective_permissions_keep_admin_access_audit_only() -> None:
     assert "finance.write" in granted
     assert "settings.manage" in granted
     assert "memberships.manage" in granted
+    assert "admin.support" in granted
     assert "admin.audit.read" not in granted
     assert "admin.system" not in granted
 
@@ -299,6 +303,7 @@ def test_co_owner_role_matches_owner_permissions_exactly() -> None:
     assert ROLE_PERMISSIONS["co_owner"] == ROLE_PERMISSIONS["owner"]
     assert "settings.manage" in ROLE_PERMISSIONS["co_owner"]
     assert "memberships.manage" in ROLE_PERMISSIONS["co_owner"]
+    assert "admin.support" in ROLE_PERMISSIONS["co_owner"]
     assert "admin.audit.read" not in ROLE_PERMISSIONS["co_owner"]
     assert "admin.system" not in ROLE_PERMISSIONS["co_owner"]
 
@@ -309,6 +314,7 @@ async def test_owner_management_permissions_do_not_grant_protected_admin_control
 
     assert await _has_permission(None, owner, "settings.manage") is True
     assert await _has_permission(None, owner, "memberships.manage") is True
+    assert await _has_permission(None, owner, "admin.support") is True
     assert await _has_permission(None, owner, "admin.audit.read") is False
     assert await _has_permission(None, owner, "admin.system") is False
 
@@ -329,6 +335,7 @@ async def test_protected_access_never_leaks_admin_audit_read() -> None:
     assert await _has_permission(None, co_owner, "staff.write") is True
     assert await _has_permission(None, co_owner, "settings.manage") is True
     assert await _has_permission(None, co_owner, "memberships.manage") is True
+    assert await _has_permission(None, co_owner, "admin.support") is True
 
 
 async def test_gaming_stop_permission_keeps_partner_and_owner_boundaries() -> None:

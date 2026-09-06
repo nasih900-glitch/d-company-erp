@@ -40,7 +40,9 @@ def _printable_ascii_header(value: str | None, *, max_length: int) -> str | None
     return normalized
 
 
-def _client_version_code(value: str | None) -> int | None:
+def parse_client_version_code(value: str | None) -> int | None:
+    """Parse the bounded positive integer used by every native-version header."""
+
     try:
         parsed = int((value or "").strip())
     except ValueError:
@@ -72,6 +74,7 @@ class ClientCompatibilityMiddleware(BaseHTTPMiddleware):
         *,
         android_minimum: int,
         android_latest: int,
+        policy_revision: int,
         android_update_url: str | None,
         ios_minimum: int,
         ios_latest: int,
@@ -89,6 +92,7 @@ class ClientCompatibilityMiddleware(BaseHTTPMiddleware):
             "android": (android_minimum, android_latest, android_update_url),
             "ios": (ios_minimum, ios_latest, ios_update_url),
         }
+        self.policy_revision = policy_revision
         self.require_native_headers = require_native_headers
         self.message = message
         self.android_release = {
@@ -105,10 +109,17 @@ class ClientCompatibilityMiddleware(BaseHTTPMiddleware):
         call_next: Callable[[Request], Awaitable[Response]],
     ) -> Response:
         if request.url.path.endswith("/public/client-compatibility"):
-            return await call_next(request)
+            response = await call_next(request)
+            response.headers["Cache-Control"] = "no-store"
+            response.headers["X-Client-Compatibility-Policy-Revision"] = str(self.policy_revision)
+            return response
 
         platform = request.headers.get("X-Client-Platform", "").strip().lower()
         version_raw = request.headers.get("X-Client-Version-Code", "").strip()
+        distribution_channel = (
+            request.headers.get("X-Client-Distribution-Channel", "direct").strip().lower()
+            or "direct"
+        )
         if not platform:
             is_legacy_android = "okhttp/" in request.headers.get("user-agent", "").lower()
             if self.require_native_headers and is_legacy_android:
@@ -119,6 +130,7 @@ class ClientCompatibilityMiddleware(BaseHTTPMiddleware):
                         "This app is too old to verify server compatibility. "
                         "Install the current D Company ERP app before continuing."
                     ),
+                    distribution_channel="direct",
                 )
             return await call_next(request)
 
@@ -132,12 +144,13 @@ class ClientCompatibilityMiddleware(BaseHTTPMiddleware):
                     }
                 },
             )
-        version_code = _client_version_code(version_raw)
+        version_code = parse_client_version_code(version_raw)
         if version_code is None:
             return self._reject(
                 platform=platform,
                 code="client_version_invalid",
                 message="This app could not prove its build version. Update before continuing.",
+                distribution_channel=distribution_channel,
             )
 
         minimum, latest, _ = self.versions[platform]
@@ -151,11 +164,13 @@ class ClientCompatibilityMiddleware(BaseHTTPMiddleware):
                     "Update before continuing; saved offline work will remain on this device."
                 ),
                 current=version_code,
+                distribution_channel=distribution_channel,
             )
 
         response = await call_next(request)
         response.headers["X-Minimum-Supported-Version-Code"] = str(minimum)
         response.headers["X-Latest-Version-Code"] = str(latest)
+        response.headers["X-Client-Compatibility-Policy-Revision"] = str(self.policy_revision)
         return response
 
     def _reject(
@@ -165,11 +180,19 @@ class ClientCompatibilityMiddleware(BaseHTTPMiddleware):
         code: str,
         message: str,
         current: int | None = None,
+        distribution_channel: str = "direct",
     ) -> JSONResponse:
         minimum, latest, update_url = self.versions[platform]
-        release_details = self.android_release if platform == "android" else {}
+        direct_android = platform == "android" and distribution_channel == "direct"
+        if platform == "android" and not direct_android:
+            update_url = None
+        release_details = self.android_release if direct_android else {}
         return JSONResponse(
             status_code=426,
+            headers={
+                "Cache-Control": "no-store",
+                "X-Client-Compatibility-Policy-Revision": str(self.policy_revision),
+            },
             content={
                 "error": {
                     "code": code,
@@ -179,6 +202,7 @@ class ClientCompatibilityMiddleware(BaseHTTPMiddleware):
                         "current_version_code": current,
                         "minimum_supported_version_code": minimum,
                         "latest_version_code": latest,
+                        "policy_revision": self.policy_revision,
                         "update_url": update_url,
                         **release_details,
                     },
@@ -264,7 +288,9 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         platform = (request.headers.get("X-Client-Platform") or "web").strip().lower()
         if platform not in {"android", "ios", "web"}:
             platform = "web"
-        client_version_code = _client_version_code(request.headers.get("X-Client-Version-Code"))
+        client_version_code = parse_client_version_code(
+            request.headers.get("X-Client-Version-Code")
+        )
         action_id = _printable_ascii_header(
             request.headers.get("X-Client-Action-Id"), max_length=100
         ) or _printable_ascii_header(request.headers.get("Idempotency-Key"), max_length=100)

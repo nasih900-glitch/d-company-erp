@@ -9,6 +9,7 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import select, text
 
+from app.core.config import get_settings
 from app.core.security import hash_password
 from app.models import GamingSession, Role, Shift, Station, User, UserRole
 
@@ -27,6 +28,7 @@ async def test_co_owner_can_start_and_stop_same_terminal_session_without_audit_a
     client,
     session,
     seed_owner,
+    monkeypatch,
 ) -> None:
     """Exercise the real login/token/permission/terminal boundary.
 
@@ -39,6 +41,7 @@ async def test_co_owner_can_start_and_stop_same_terminal_session_without_audit_a
     company = seed_owner["company"]
     branch = seed_owner["branch"]
     terminal = seed_owner["terminal"]
+    monkeypatch.setattr(get_settings(), "gaming_pause_enabled", True)
 
     co_owner_role = Role(
         id=uuid4(),
@@ -129,6 +132,75 @@ async def test_co_owner_can_start_and_stop_same_terminal_session_without_audit_a
     assert started.status_code == 201, started.text
     assert started.json()["status"] == "active"
     assert started.json()["shift_id"] == str(shift.id)
+
+    # A normal operational owner has gaming.write but no protected bypass.
+    # This proves pause/resume is authorized by permission and exact workspace,
+    # rather than by the unrelated identity of the employee who opened cash.
+    owner_role = (
+        await session.execute(
+            select(Role).where(
+                Role.company_id == company.id,
+                Role.code == "owner",
+            )
+        )
+    ).scalar_one()
+    operator_password = "ordinary-owner-gaming-password"
+    operator = User(
+        id=uuid4(),
+        company_id=company.id,
+        email=f"ordinary-owner-gaming-{uuid4().hex[:8]}@test.local",
+        name="Gaming Operator",
+        password_hash=hash_password(operator_password),
+        status="active",
+    )
+    session.add(operator)
+    await session.flush()
+    session.add(
+        UserRole(
+            id=uuid4(),
+            user_id=operator.id,
+            role_id=owner_role.id,
+            branch_id=branch.id,
+            granted_by=seed_owner["owner"].id,
+        )
+    )
+    await session.commit()
+    operator_login = await client.post(
+        "/api/v1/auth/login",
+        json={"email": operator.email, "password": operator_password},
+    )
+    assert operator_login.status_code == 200, operator_login.text
+    operator_headers = {
+        "Authorization": f"Bearer {operator_login.json()['access_token']}",
+        "X-Terminal-Id": str(terminal.id),
+    }
+    operator_me = await client.get("/api/v1/auth/me", headers=operator_headers)
+    assert operator_me.status_code == 200, operator_me.text
+    assert operator_me.json()["protected_access"] is False
+    assert operator_me.json()["audit_access"] is False
+    assert "gaming.write" in operator_me.json()["effective_permissions"]
+
+    paused = await client.post(
+        f"/api/v1/gaming/sessions/{started.json()['id']}/pause",
+        json={
+            "reason": "Customer requested a short break",
+            "expected_pause_version": 0,
+        },
+        headers={**operator_headers, "Idempotency-Key": f"operator-pause:{uuid4()}"},
+    )
+    assert paused.status_code == 200, paused.text
+    assert paused.json()["status"] == "paused"
+
+    resumed = await client.post(
+        f"/api/v1/gaming/sessions/{started.json()['id']}/resume",
+        json={
+            "reason": "Customer returned to the station",
+            "expected_pause_version": 1,
+        },
+        headers={**operator_headers, "Idempotency-Key": f"operator-resume:{uuid4()}"},
+    )
+    assert resumed.status_code == 200, resumed.text
+    assert resumed.json()["status"] == "active"
 
     stopped = await client.post(
         f"/api/v1/gaming/sessions/{started.json()['id']}/stop",

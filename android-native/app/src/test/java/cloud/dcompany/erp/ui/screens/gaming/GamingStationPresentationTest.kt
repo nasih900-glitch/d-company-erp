@@ -1,6 +1,9 @@
 package cloud.dcompany.erp.ui.screens.gaming
 
 import androidx.compose.ui.unit.dp
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.structuralEqualityPolicy
 import cloud.dcompany.erp.core.db.GamingSessionState
 import cloud.dcompany.erp.core.db.GamingLegacyResolution
 import cloud.dcompany.erp.core.db.LEGACY_PACKAGE_START_REVIEW_ERROR
@@ -23,6 +26,77 @@ class GamingStationPresentationTest {
     private val now = Instant.parse("2026-08-26T18:00:00Z").toEpochMilli()
 
     @Test
+    fun `available canonical stations advertise fixed packages and never the legacy hourly rate`() {
+        val packages = listOf(
+            GamingPackage(
+                id = "standard-single-30",
+                code = "standard-single-session-30m",
+                stationType = "ps5",
+                pricingTier = "standard",
+                variant = "single",
+                kind = "base",
+                name = "Single Mode 30 minutes",
+                durationMinutes = 30,
+                priceMinor = 8_000,
+            ),
+            GamingPackage(
+                id = "premium-single-60",
+                code = "premium-single-session-60m",
+                stationType = "ps5",
+                pricingTier = "premium",
+                variant = "single",
+                kind = "base",
+                name = "Premium Single Mode 1 hour",
+                durationMinutes = 60,
+                priceMinor = 15_000,
+            ),
+        )
+
+        assertEquals("Fixed packages from ₹80.00", availableStationPricingDescription(station, packages))
+        assertEquals("Fixed-price tariff not synced", availableStationPricingDescription(station, emptyList()))
+        assertEquals(
+            "Fixed packages from ₹70.00",
+            availableStationPricingDescription(
+                station.copy(type = "simulator", ratePerHourMinor = 40_000),
+                listOf(
+                    GamingPackage(
+                        id = "standard-simdrive-15",
+                        code = "standard-simdrive-session-15m",
+                        stationType = "simulator",
+                        pricingTier = "standard",
+                        variant = "simdrive",
+                        kind = "base",
+                        name = "Simdrive 15 minutes",
+                        durationMinutes = 15,
+                        priceMinor = 7_000,
+                    ),
+                ),
+            ),
+        )
+        assertEquals(
+            "₹350.00/hour",
+            availableStationPricingDescription(
+                station.copy(type = "vr", ratePerHourMinor = 35_000),
+                packages,
+            ),
+        )
+    }
+
+    @Test
+    fun `canonical tariff classification uses exact station aliases`() {
+        assertTrue(requiresCanonicalGamingTariff("PS5"))
+        assertTrue(requiresCanonicalGamingTariff("PlayStation 5"))
+        assertTrue(requiresCanonicalGamingTariff("gaming-console"))
+        assertTrue(requiresCanonicalGamingTariff("simulator"))
+        assertTrue(requiresCanonicalGamingTariff("Racing Simulator"))
+        assertTrue(requiresCanonicalGamingTariff("simdrive"))
+
+        assertFalse(requiresCanonicalGamingTariff("simulation lab"))
+        assertFalse(requiresCanonicalGamingTariff("simple booth"))
+        assertFalse(requiresCanonicalGamingTariff("console accessories"))
+    }
+
+    @Test
     fun `operational dialogs reserve footer space on compact tablet height`() {
         assertEquals(330.dp, gamingDialogBodyMaxHeight(screenHeightDp = 600))
         assertEquals(440.dp, gamingDialogBodyMaxHeight(screenHeightDp = 800))
@@ -30,14 +104,14 @@ class GamingStationPresentationTest {
     }
 
     @Test
-    fun `compact void custom reason keeps its in-body actions above landscape IME`() {
-        assertTrue(useCompactVoidCustomLayout(600, VOID_REASON_OTHER_ID))
-        assertTrue(useCompactVoidCustomLayout(640, VOID_REASON_OTHER_ID))
-        assertFalse(useCompactVoidCustomLayout(641, VOID_REASON_OTHER_ID))
-        assertFalse(useCompactVoidCustomLayout(600, "guest_changed_mind"))
-        assertFalse(useCompactVoidCustomLayout(600, null))
+    fun `custom void reason always keeps its actions in a bounded IME safe body`() {
+        assertTrue(useCompactVoidCustomLayout(VOID_REASON_OTHER_ID))
+        assertFalse(useCompactVoidCustomLayout("guest_changed_mind"))
+        assertFalse(useCompactVoidCustomLayout(null))
 
         assertEquals(120.dp, voidDialogBodyMaxHeight(600, VOID_REASON_OTHER_ID))
+        assertEquals(120.dp, voidDialogBodyMaxHeight(800, VOID_REASON_OTHER_ID))
+        assertEquals(120.dp, voidDialogBodyMaxHeight(1_200, VOID_REASON_OTHER_ID))
         assertEquals(330.dp, voidDialogBodyMaxHeight(600, "guest_changed_mind"))
         assertEquals(330.dp, voidDialogBodyMaxHeight(600, null))
     }
@@ -78,12 +152,11 @@ class GamingStationPresentationTest {
     @Test
     fun `command attention count retains every independent operational item`() {
         assertEquals(
-            6,
+            5,
             gamingCommandAttentionCount(
                 canManageSessions = false,
                 terminalBlocked = true,
                 focusRequested = false,
-                hasNotice = true,
                 hasRefreshError = false,
                 orphanedExtensionCount = 2,
                 needsCancellation = true,
@@ -97,7 +170,6 @@ class GamingStationPresentationTest {
                 canManageSessions = true,
                 terminalBlocked = false,
                 focusRequested = false,
-                hasNotice = false,
                 hasRefreshError = false,
                 orphanedExtensionCount = 0,
                 needsCancellation = false,
@@ -105,6 +177,33 @@ class GamingStationPresentationTest {
                 busy = false,
             ),
         )
+    }
+
+    @Test
+    fun `busy save progress never changes the global attention count`() {
+        val idleCount = gamingCommandAttentionCount(
+            canManageSessions = true,
+            terminalBlocked = false,
+            focusRequested = false,
+            hasRefreshError = false,
+            orphanedExtensionCount = 0,
+            needsCancellation = false,
+            awaitingPayment = false,
+            busy = false,
+        )
+        val busyCount = gamingCommandAttentionCount(
+            canManageSessions = true,
+            terminalBlocked = false,
+            focusRequested = false,
+            hasRefreshError = false,
+            orphanedExtensionCount = 0,
+            needsCancellation = false,
+            awaitingPayment = false,
+            busy = true,
+        )
+
+        assertEquals(0, idleCount)
+        assertEquals(idleCount, busyCount)
     }
 
     @Test
@@ -245,6 +344,29 @@ class GamingStationPresentationTest {
 
         assertEquals(StationVisualState.Overtime, result.state)
         assertEquals("Overtime", result.statusLabel)
+    }
+
+    @Test
+    fun `structural clock projection keeps active state stable but observes overtime boundary`() {
+        val running = session(status = "active", timerEndsAt = "2026-08-26T18:00:00Z")
+        val clock = mutableLongStateOf(now - 1_000)
+        val presentation = derivedStateOf(structuralEqualityPolicy()) {
+            stationPresentation(station, running, clock.longValue)
+        }
+        val beforeBoundary = presentation.value
+        val elapsedBefore = elapsedMillis(running, clock.longValue)
+
+        clock.longValue = now
+        assertEquals(beforeBoundary, presentation.value)
+        assertEquals(StationVisualState.Active, presentation.value.state)
+        assertEquals(elapsedBefore + 1_000, elapsedMillis(running, clock.longValue))
+
+        clock.longValue = now + 1
+        assertEquals(StationVisualState.Overtime, presentation.value.state)
+        val overtime = presentation.value
+        clock.longValue = now + 60_000
+        assertEquals(overtime, presentation.value)
+        assertEquals(61 * 60_000L, elapsedMillis(running, clock.longValue))
     }
 
     @Test
@@ -462,15 +584,90 @@ class GamingStationPresentationTest {
     fun `controller surcharge matches the fixed started-hour rule`() {
         assertEquals(3_000L, extraControllerSurchargeMinor(extraControllers = 1, durationMinutes = 15))
         assertEquals(3_000L, extraControllerSurchargeMinor(extraControllers = 1, durationMinutes = 60))
+        assertEquals(6_000L, extraControllerSurchargeMinor(extraControllers = 1, durationMinutes = 61))
         assertEquals(6_000L, extraControllerSurchargeMinor(extraControllers = 1, durationMinutes = 90))
+        assertEquals(6_000L, extraControllerSurchargeMinor(extraControllers = 1, durationMinutes = 120))
+        assertEquals(9_000L, extraControllerSurchargeMinor(extraControllers = 1, durationMinutes = 121))
         assertEquals(12_000L, extraControllerSurchargeMinor(extraControllers = 2, durationMinutes = 90))
         assertEquals(0L, extraControllerSurchargeMinor(extraControllers = 0, durationMinutes = 90))
+    }
+
+    @Test
+    fun `package selection label exposes immutable tier mode and player count`() {
+        assertEquals(
+            "Standard · Single",
+            gamingPackageSelectionLabel(
+                session(
+                    status = "active",
+                    billingMode = "package",
+                    packageVariantSnapshot = "single",
+                    packagePricingTierSnapshot = "standard",
+                ),
+            ),
+        )
+        assertEquals(
+            "Premium · 4 players",
+            gamingPackageSelectionLabel(
+                session(
+                    status = "active",
+                    billingMode = "package",
+                    packageVariantSnapshot = "dual",
+                    packagePricingTierSnapshot = "premium",
+                    extraControllers = 2,
+                ),
+            ),
+        )
+        assertTrue(requiresCanonicalGamingTariff("ps5"))
+        assertTrue(requiresCanonicalGamingTariff("racing simulator"))
+        assertFalse(requiresCanonicalGamingTariff("vr"))
+    }
+
+    @Test
+    fun `controller extension charges only the new cumulative hour boundary`() {
+        assertEquals(
+            0L,
+            extraControllerExtensionSurchargeMinor(
+                extraControllers = 1,
+                currentDurationMinutes = 30,
+                extensionMinutes = 30,
+            ),
+        )
+        assertEquals(
+            3_000L,
+            extraControllerExtensionSurchargeMinor(
+                extraControllers = 1,
+                currentDurationMinutes = 60,
+                extensionMinutes = 30,
+            ),
+        )
+        assertEquals(
+            0L,
+            extraControllerExtensionSurchargeMinor(
+                extraControllers = 1,
+                currentDurationMinutes = 90,
+                extensionMinutes = 30,
+            ),
+        )
+        assertEquals(
+            3_000L,
+            extraControllerExtensionSurchargeMinor(
+                extraControllers = 1,
+                currentDurationMinutes = 120,
+                extensionMinutes = 30,
+            ),
+        )
     }
 
     @Test
     fun `paid extensions match both station type and base package variant`() {
         val base = gamingPackage(id = "base-dual", kind = "base", variant = "dual")
         val matching = gamingPackage(id = "extension-dual", kind = "extension", variant = "dual")
+        val wrongTier = gamingPackage(
+            id = "extension-premium-dual",
+            kind = "extension",
+            variant = "dual",
+            pricingTier = "premium",
+        )
         val wrongVariant = gamingPackage(id = "extension-single", kind = "extension", variant = "single")
         val wrongStation = gamingPackage(
             id = "extension-vr",
@@ -492,7 +689,28 @@ class GamingStationPresentationTest {
                     packageStationTypeSnapshot = "ps5",
                 ),
                 station,
-                listOf(base, matching, wrongVariant, wrongStation),
+                listOf(base, matching, wrongTier, wrongVariant, wrongStation),
+            ).map(GamingPackage::id),
+        )
+
+        // Code22 snapshots the tier independently. Even if the mutable base
+        // package is later retired, Standard must never expose Premium's
+        // different extension price (or vice versa).
+        assertEquals(
+            listOf("extension-dual"),
+            matchingPackageExtensions(
+                session(
+                    status = "active",
+                    packageId = null,
+                    billingMode = "package",
+                    packagePriceMinorSnapshot = 15_000,
+                    packageDurationMinutesSnapshot = 60,
+                    packageVariantSnapshot = "dual",
+                    packageStationTypeSnapshot = "ps5",
+                    packagePricingTierSnapshot = "standard",
+                ),
+                station,
+                listOf(matching, wrongTier),
             ).map(GamingPackage::id),
         )
 
@@ -661,6 +879,8 @@ class GamingStationPresentationTest {
         packageDurationMinutesSnapshot: Int? = null,
         packageVariantSnapshot: String? = null,
         packageStationTypeSnapshot: String? = null,
+        packagePricingTierSnapshot: String? = null,
+        extraControllers: Int = 0,
     ) = GameSession(
         id = "session-1",
         stationId = station.id,
@@ -677,6 +897,8 @@ class GamingStationPresentationTest {
         packageDurationMinutesSnapshot = packageDurationMinutesSnapshot,
         packageVariantSnapshot = packageVariantSnapshot,
         packageStationTypeSnapshot = packageStationTypeSnapshot,
+        packagePricingTierSnapshot = packagePricingTierSnapshot,
+        extraControllers = extraControllers,
         timerMinutes = timerMinutes,
         billableMinutes = billableMinutes,
         localState = localState,
@@ -690,9 +912,11 @@ class GamingStationPresentationTest {
         kind: String,
         variant: String,
         stationType: String = station.type,
+        pricingTier: String = "standard",
     ) = GamingPackage(
         id = id,
         stationType = stationType,
+        pricingTier = pricingTier,
         variant = variant,
         kind = kind,
         name = id,

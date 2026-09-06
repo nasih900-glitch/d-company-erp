@@ -80,9 +80,14 @@ def require_shift_opener(
     operation: str,
 ) -> None:
     """Only the person who opened this shift may do certain high-trust
-    money actions on it (direct cashier bills, payment, refund, void, close)
-    — they're the one accountable for its cash and payment closing.
+    money actions on it (direct cashier bills, payment, refund, and void)
+    — they're the one accountable for its cash and payment activity.
     A protected owner can always override this.
+
+    Shift closing is intentionally not guarded here. It has its own
+    ``pos.shift.close`` permission and records the authenticated closer in
+    ``Shift.closed_by`` so an authorised colleague can complete the day
+    without rewriting who opened the shift.
     """
     if protected_access:
         return

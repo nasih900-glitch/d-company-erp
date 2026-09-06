@@ -5,12 +5,17 @@ __pycache__/
 .venv/
 venv/
 .env
+.deployment-rollbacks/
+.env.pre-code17.*
+.env.code17.candidate.*
 .env.*
 !.env.example
 !.env.production.example
 !frontend/.env.example
 .coverage
 .coverage.*
+# Some coverage runners append a space plus a worker index instead of a dot.
+.coverage *
 htmlcov/
 .mypy_cache/
 .pytest_cache/
@@ -60,6 +65,7 @@ miniodata/
 backups/
 secrets/
 ops/venv/
+/ops/.runtime_monitor_state.json
 *.dump
 
 # Private operational/company documents kept locally, not in the public repo
@@ -73,6 +79,9 @@ D_Company_Legal_Documents_Checklist*.docx
 *.log
 *.pid
 *.zip
+# Local release evidence can contain signed, rejected APKs. Never allow a
+# blanket stage to publish those bytes or their obsolete install instructions.
+release-artifacts/
 releases/android/*
 !releases/android/README.md
 preview-app/

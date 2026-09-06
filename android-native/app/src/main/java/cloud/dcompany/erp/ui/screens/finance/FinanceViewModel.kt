@@ -16,20 +16,26 @@ import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.MeResponse
 import cloud.dcompany.erp.core.net.CostingCoverage
 import cloud.dcompany.erp.core.net.asRupees
+import cloud.dcompany.erp.core.sync.ResourceRefreshResult
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.Serializable
 import java.time.LocalDate
@@ -74,6 +80,21 @@ internal data class FinanceCacheScope(
             )
         }
     }
+}
+
+/**
+ * Rebuilds Finance's presentation scope from the authenticated profile while
+ * proving that it still belongs to the active Room-cache lease. The lease
+ * deliberately contains only tenant/location identity; role-derived partner
+ * visibility must come from the current profile instead of silently falling
+ * back to [FinanceCacheScope]'s restricted default.
+ */
+internal fun financeCacheScopeForLease(
+    profile: MeResponse?,
+    leaseCompanyId: String,
+    leaseBranchId: String?,
+): FinanceCacheScope? = FinanceCacheScope.from(profile)?.takeIf { scope ->
+    scope.companyId == leaseCompanyId && scope.branchId == leaseBranchId
 }
 
 /** The row caches predate tenant columns, so they are shown only after their
@@ -152,6 +173,7 @@ internal data class FinanceUiState(
     val pl: ProfitAndLoss? = null,
     val metrics: BusinessMetrics? = null,
     val distributable: DistributableProfit? = null,
+    val allocationUnavailableReason: String? = null,
     val costingCoverage: CostingCoverage? = null,
     val expenses: List<Expense> = emptyList(),
     val assets: List<Asset> = emptyList(),
@@ -207,7 +229,80 @@ internal data class FinanceUiState(
                 costingCoverageUpdatedAtMillis == lastUpdatedAtMillis
         }
 
+    val allocationWarning: String?
+        get() = if (!companyWidePartnerDataAvailable || !loaded) null else {
+            allocationUnavailableReason ?: FINANCE_ALLOCATION_NOT_VERIFIED.takeIf {
+                distributable == null
+            }
+        }
+
     fun categoryName(id: String): String = categoryNames[id] ?: "—"
+}
+
+internal enum class FinancePrimaryContentState { LOADING, ERROR, DATA }
+
+/** A completed request without a decodable P&L is an error, never a spinner. */
+internal val FinanceUiState.primaryContentState: FinancePrimaryContentState
+    get() = when {
+        loaded -> FinancePrimaryContentState.DATA
+        loading -> FinancePrimaryContentState.LOADING
+        else -> FinancePrimaryContentState.ERROR
+    }
+
+private const val FINANCE_LOAD_TIMEOUT_MILLIS = 75_000L
+private const val FINANCE_SNAPSHOT_DELIVERY_TIMEOUT_MILLIS = 2_000L
+private const val FINANCE_LOAD_TIMEOUT_MESSAGE =
+    "Finance took too long to finish refreshing. Some figures may already be updated while others still show saved values. Check the connection and try again."
+
+internal fun financeLoadCompletionError(
+    result: ResourceRefreshResult,
+    hasSavedFigures: Boolean,
+    online: Boolean,
+): String? = when (result) {
+    is ResourceRefreshResult.Refreshed -> if (hasSavedFigures) {
+        null
+    } else {
+        "Finance refreshed, but the financial summary could not be saved on this tablet. Try again; if it continues, ask for support."
+    }
+    is ResourceRefreshResult.Failed -> result.userMessage
+    is ResourceRefreshResult.Skipped -> if (hasSavedFigures) {
+        null
+    } else {
+        financeLoadFailureMessage(hasSavedFigures = false, online = online)
+    }
+}
+
+/** A local manual-load failure and the wall-clock boundary it established. */
+internal data class FinanceLoadFailure(
+    val message: String,
+    val raisedAtMillis: Long,
+)
+
+/**
+ * Reconciles a local manual-load failure with Room's authoritative snapshot
+ * delivery. Room delivery is asynchronous: a snapshot committed by refresh A
+ * can arrive after newer refresh B has already failed. Therefore a merely
+ * different timestamp is insufficient. Only a decoded summary committed
+ * strictly after the current failure may dismiss it; older/equal deliveries,
+ * initial cache emissions and corrupt rows retain the failure.
+ *
+ * Resource-scoped partial failures remain independently visible through
+ * SyncEngine's `resourceRefreshErrors`; this clears only the obsolete local
+ * failure left behind by an earlier manual load.
+ */
+internal fun financeLoadFailureAfterSummaryDelivery(
+    currentFailure: FinanceLoadFailure?,
+    incomingFetchedAtMillis: Long?,
+    hasDecodedSummary: Boolean,
+): FinanceLoadFailure? = if (
+    currentFailure != null &&
+    hasDecodedSummary &&
+    incomingFetchedAtMillis != null &&
+    incomingFetchedAtMillis > currentFailure.raisedAtMillis
+) {
+    null
+} else {
+    currentFailure
 }
 
 /**
@@ -238,7 +333,7 @@ class FinanceViewModel : ViewModel() {
 
     private val pl = MutableStateFlow<ProfitAndLoss?>(null)
     private val metrics = MutableStateFlow<BusinessMetrics?>(null)
-    private val distributable = MutableStateFlow<DistributableProfit?>(null)
+    private val allocation = MutableStateFlow<Pair<FinanceAllocationSnapshot?, Long?>>(null to null)
     private val costingCoverage = MutableStateFlow<CostingCoverage?>(null)
     private val lastUpdatedAtMillis = MutableStateFlow<Long?>(null)
     private val costingCoverageUpdatedAtMillis = MutableStateFlow<Long?>(null)
@@ -250,7 +345,7 @@ class FinanceViewModel : ViewModel() {
     private val trialBalance = MutableStateFlow<TrialBalance?>(null)
     private val pendingOnlineWrite = MutableStateFlow<PendingFinanceOnlineWrite?>(null)
     private val loading = MutableStateFlow(true)
-    private val loadError = MutableStateFlow<String?>(null)
+    private val loadFailure = MutableStateFlow<FinanceLoadFailure?>(null)
     private val activeScope = MutableStateFlow<FinanceCacheScope?>(null)
     private val rowCacheScopeVerified = MutableStateFlow(false)
     private val financeRefreshError = appCtx.sync.resourceRefreshErrors
@@ -281,7 +376,7 @@ class FinanceViewModel : ViewModel() {
     private data class FinanceTotalsState(
         val pl: ProfitAndLoss?,
         val metrics: BusinessMetrics?,
-        val distributable: DistributableProfit?,
+        val allocation: Pair<FinanceAllocationSnapshot?, Long?>,
         val costingCoverage: CostingCoverage?,
         val lastUpdatedAtMillis: Long?,
         val costingCoverageUpdatedAtMillis: Long?,
@@ -305,7 +400,7 @@ class FinanceViewModel : ViewModel() {
         combine(
             pl,
             metrics,
-            distributable,
+            allocation,
             costingCoverage,
             combine(lastUpdatedAtMillis, costingCoverageUpdatedAtMillis) { figuresAt, costingAt ->
                 figuresAt to costingAt
@@ -332,11 +427,11 @@ class FinanceViewModel : ViewModel() {
             db.financeDao().observeLocalCapitalEntries(),
             combine(
                 loading,
-                loadError,
+                loadFailure,
                 financeRefreshError,
                 appCtx.connectivity.online,
-            ) { l, localError, refreshError, online ->
-                Triple(l, localError ?: refreshError, online)
+            ) { l, localFailure, refreshError, online ->
+                Triple(l, localFailure?.message ?: refreshError, online)
             },
             combine(dialog, busy, formError, notice) { d, bs, fe, n -> FormState(d, bs, fe, n) },
             combine(
@@ -353,7 +448,7 @@ class FinanceViewModel : ViewModel() {
     ) { plMetricsDistributable, expenseData, assetData, refData, rest ->
         val p = plMetricsDistributable.pl
         val m = plMetricsDistributable.metrics
-        val d = plMetricsDistributable.distributable
+        val (allocationSnapshot, allocationFetchedAt) = plMetricsDistributable.allocation
         val (expenseCache, localExpenses) = expenseData
         val (assetCache, localAssets) = assetData
         val partnerList = refData.partners
@@ -376,7 +471,11 @@ class FinanceViewModel : ViewModel() {
             error = err,
             pl = p,
             metrics = m,
-            distributable = d,
+            distributable = allocationSnapshot.reportForSummary(
+                allocationFetchedAt,
+                plMetricsDistributable.lastUpdatedAtMillis,
+            ),
+            allocationUnavailableReason = allocationSnapshot?.unavailableReason,
             costingCoverage = plMetricsDistributable.costingCoverage,
             expenses = visibleFinanceRows(
                 expenseCache,
@@ -434,12 +533,17 @@ class FinanceViewModel : ViewModel() {
         observeSnapshot<ProfitAndLoss>(FinanceSnapshotKeys.PNL) { value, fetchedAt ->
             pl.value = value
             lastUpdatedAtMillis.value = fetchedAt
+            loadFailure.value = financeLoadFailureAfterSummaryDelivery(
+                currentFailure = loadFailure.value,
+                incomingFetchedAtMillis = fetchedAt,
+                hasDecodedSummary = value != null,
+            )
         }
         observeSnapshot<BusinessMetrics>(FinanceSnapshotKeys.METRICS) { value, _ ->
             metrics.value = value
         }
-        observeSnapshot<DistributableProfit>(FinanceSnapshotKeys.DISTRIBUTABLE) { value, _ ->
-            distributable.value = value
+        observeSnapshot<FinanceAllocationSnapshot>(FinanceSnapshotKeys.DISTRIBUTABLE) { value, fetchedAt ->
+            allocation.value = value to fetchedAt
         }
         observeSnapshot<CostingCoverage>(FinanceSnapshotKeys.COSTING) { value, fetchedAt ->
             costingCoverage.value = value
@@ -466,12 +570,18 @@ class FinanceViewModel : ViewModel() {
         viewModelScope.launch {
             appCtx.shiftCache.profile.collect { profile ->
                 val scope = FinanceCacheScope.from(profile)
-                if (scope != activeScope.value) {
+                val scopeChanged = scope != activeScope.value
+                if (scopeChanged) {
                     activeScope.value = scope
                     rowCacheScopeVerified.value = false
                     clearSensitiveReadState()
                 }
                 pendingOnlineWrite.value = profile?.financeWriteScope()?.let(writeRecoveryStore::load)
+                // Auth refresh can change branch or protected-owner scope while
+                // this ViewModel remains alive. Cancel the obsolete load and
+                // start one for the new exact scope instead of leaving the new
+                // screen on the old job's loading state forever.
+                if (scopeChanged) load()
             }
         }
         load()
@@ -487,7 +597,9 @@ class FinanceViewModel : ViewModel() {
             rowCacheScopeVerified.value = false
             clearSensitiveReadState()
             loading.value = false
-            loadError.value = "Your signed-in company could not be verified. Sign in again before viewing Finance."
+            recordLoadFailure(
+                "Your signed-in company could not be verified. Sign in again before viewing Finance.",
+            )
             return
         }
         if (activeScope.value != requestedScope) {
@@ -499,51 +611,74 @@ class FinanceViewModel : ViewModel() {
                 ?.let(writeRecoveryStore::load)
         }
         loading.value = true
-        loadError.value = null
+        loadFailure.value = null
         loadJob?.cancel()
         loadJob = viewModelScope.launch {
-            if (appCtx.cacheIsolation.currentLease() == null) {
-                failLoadIfCurrent(
-                    requestedScope,
-                    "Finance is waiting for this account to finish opening. Try again in a moment.",
-                )
-                return@launch
-            }
-            val storedRowScope = db.reportSnapshotDao()
-                .cached<FinanceCacheScope>(FinanceSnapshotKeys.ROW_SCOPE)
-                ?.first
-            if (!isCurrentScope(requestedScope)) return@launch
-            if (storedRowScope != requestedScope) {
-                if (!appCtx.sync.clearFinanceReadCachesForScopeChange(requestedScope)) {
-                    failLoadIfCurrent(
-                        requestedScope,
-                        "Finance could not safely prepare this account's saved figures. Sign in again before continuing.",
-                    )
-                    return@launch
-                }
-            }
-            if (!isCurrentScope(requestedScope)) return@launch
-            rowCacheScopeVerified.value = true
-
-            if (!isCurrentScope(requestedScope)) return@launch
-            appCtx.sync.requestSync()
-
             try {
-                appCtx.sync.refresh("finance")
+                withTimeout(FINANCE_LOAD_TIMEOUT_MILLIS) {
+                    if (appCtx.cacheIsolation.currentLease() == null) {
+                        failLoadIfCurrent(
+                            requestedScope,
+                            "Finance is waiting for this account to finish opening. Try again in a moment.",
+                        )
+                        return@withTimeout
+                    }
+                    val storedRowScope = db.reportSnapshotDao()
+                        .cached<FinanceCacheScope>(FinanceSnapshotKeys.ROW_SCOPE)
+                        ?.first
+                    if (!isCurrentScope(requestedScope)) return@withTimeout
+                    if (storedRowScope != requestedScope &&
+                        !appCtx.sync.clearFinanceReadCachesForScopeChange(requestedScope)
+                    ) {
+                        failLoadIfCurrent(
+                            requestedScope,
+                            "Finance could not safely prepare this account's saved figures. Sign in again before continuing.",
+                        )
+                        return@withTimeout
+                    }
+                    if (!isCurrentScope(requestedScope)) return@withTimeout
+                    rowCacheScopeVerified.value = true
+
+                    appCtx.sync.requestSync()
+                    val result = appCtx.sync.refresh("finance")
+                    if (!isCurrentScope(requestedScope)) return@withTimeout
+
+                    // Validate the exact scoped/decodable snapshot rather than
+                    // assuming HTTP success implies that Room can present it.
+                    val cachedSummary = db.reportSnapshotDao()
+                        .cached<ProfitAndLoss>(requestedScope.key(FinanceSnapshotKeys.PNL))
+                    if (cachedSummary != null && pl.value == null) {
+                        // Do not briefly render a failure between Room's
+                        // transaction commit and its observer delivery.
+                        withTimeoutOrNull(FINANCE_SNAPSHOT_DELIVERY_TIMEOUT_MILLIS) {
+                            pl.filterNotNull().first()
+                        }
+                    }
+                    val hasSavedFigures = pl.value != null
+                    loading.value = false
+                    recordLoadFailure(
+                        financeLoadCompletionError(
+                            result = result,
+                            hasSavedFigures = hasSavedFigures,
+                            online = appCtx.connectivity.online.value,
+                        ),
+                    )
+                }
+            } catch (_: TimeoutCancellationException) {
                 if (isCurrentScope(requestedScope)) {
                     loading.value = false
-                    loadError.value = null
+                    recordLoadFailure(FINANCE_LOAD_TIMEOUT_MESSAGE)
                 }
             } catch (e: CancellationException) {
                 throw e
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 if (isCurrentScope(requestedScope)) {
                     loading.value = false
-                    // refresh() contains the diagnostic logging and publishes
-                    // its sanitized, resource-scoped error separately.
-                    loadError.value = financeLoadFailureMessage(
-                        hasSavedFigures = pl.value != null,
-                        online = appCtx.connectivity.online.value,
+                    recordLoadFailure(
+                        financeLoadFailureMessage(
+                            hasSavedFigures = pl.value != null,
+                            online = appCtx.connectivity.online.value,
+                        ),
                     )
                 }
             }
@@ -577,13 +712,19 @@ class FinanceViewModel : ViewModel() {
     private fun failLoadIfCurrent(scope: FinanceCacheScope, message: String) {
         if (!isCurrentScope(scope)) return
         loading.value = false
-        loadError.value = message
+        recordLoadFailure(message)
+    }
+
+    private fun recordLoadFailure(message: String?) {
+        loadFailure.value = message?.let {
+            FinanceLoadFailure(message = it, raisedAtMillis = System.currentTimeMillis())
+        }
     }
 
     private fun clearSensitiveReadState() {
         pl.value = null
         metrics.value = null
-        distributable.value = null
+        allocation.value = null to null
         costingCoverage.value = null
         lastUpdatedAtMillis.value = null
         costingCoverageUpdatedAtMillis.value = null
@@ -594,7 +735,7 @@ class FinanceViewModel : ViewModel() {
         tipPayouts.value = emptyList()
         trialBalance.value = null
         pendingOnlineWrite.value = null
-        loadError.value = null
+        loadFailure.value = null
         dialog.value = null
         formError.value = null
         notice.value = null

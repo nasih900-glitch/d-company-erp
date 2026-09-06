@@ -3,6 +3,7 @@ package cloud.dcompany.erp.ui.screens.finance
 import cloud.dcompany.erp.core.net.ApiClient
 import kotlinx.serialization.decodeFromString
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 class FinanceWireContractTest {
@@ -37,7 +38,25 @@ class FinanceWireContractTest {
               "profit_based_capacity_minor":4956000,
               "cash_based_capacity_minor":700000,
               "safe_to_distribute_minor":700000,
-              "partners":[]
+              "authoritative_safe_to_distribute_minor":700000,
+              "allocation_status":"authoritative",
+              "allocation_unavailable_reason":null,
+              "costing_confidence":{
+                "status":"authoritative",
+                "inventory_orders_checked":2,
+                "inventory_lines_checked":3,
+                "unresolved_order_count":0,
+                "reason":null
+              },
+              "partners":[{
+                "partner_id":"partner-1",
+                "name":"Owner",
+                "share_pct":100,
+                "capital_balance_minor":0,
+                "lifetime_withdrawn_minor":0,
+                "distributable_share_minor":700000,
+                "authoritative_distributable_share_minor":700000
+              }]
             }
             """.trimIndent(),
         )
@@ -49,6 +68,11 @@ class FinanceWireContractTest {
         assertEquals(4_956_000L, report.profitBasedCapacityMinor)
         assertEquals(700_000L, report.cashBasedCapacityMinor)
         assertEquals(700_000L, report.safeToDistributeMinor)
+        assertEquals(700_000L, report.authoritativeDistributionCapMinor())
+        assertEquals(
+            700_000L,
+            report.authoritativePartnerDistributionMinor(report.partners.single()),
+        )
     }
 
     @Test
@@ -74,6 +98,69 @@ class FinanceWireContractTest {
 
         assertEquals(3_200_000L, report.liquidCashMinor)
         assertEquals(null, report.authoritativeSpendableCashMinor())
+        assertNull(report.authoritativeDistributionCapMinor())
+    }
+
+    @Test
+    fun incompleteHistoricalCostingHidesLegacyDistributionAndPartnerAmounts() {
+        val report = ApiClient.json.decodeFromString<DistributableProfit>(
+            """
+            {
+              "as_of":"2026-09-05",
+              "lifetime_net_profit_minor":10000,
+              "lifetime_depreciation_minor":0,
+              "lifetime_withdrawn_minor":0,
+              "reserve_months":6,
+              "avg_monthly_cost_minor":0,
+              "reserve_minor":0,
+              "liquid_cash_minor":10000,
+              "spendable_cash_bank_minor":10000,
+              "cash_position":{
+                "cash_on_hand_minor":10000,
+                "bank_balance_minor":0,
+                "spendable_cash_bank_minor":10000,
+                "card_clearing_minor":0,
+                "upi_qr_clearing_minor":0,
+                "wallet_clearing_minor":0,
+                "pos_settlement_clearing_minor":0,
+                "settlement_receivables_minor":0,
+                "historical_funds_pending_reconciliation_minor":0,
+                "unreconciled_settlement_minor":0,
+                "reconciliation_only_minor":0
+              },
+              "profit_based_capacity_minor":10000,
+              "cash_based_capacity_minor":10000,
+              "safe_to_distribute_minor":10000,
+              "authoritative_safe_to_distribute_minor":null,
+              "allocation_status":"costing_incomplete",
+              "allocation_unavailable_reason":"One historical drink order needs costing.",
+              "costing_confidence":{
+                "status":"costing_incomplete",
+                "inventory_orders_checked":1,
+                "inventory_lines_checked":1,
+                "unresolved_order_count":1,
+                "reason":"One historical drink order needs costing."
+              },
+              "partners":[{
+                "partner_id":"partner-1",
+                "name":"Owner",
+                "share_pct":100,
+                "capital_balance_minor":0,
+                "lifetime_withdrawn_minor":0,
+                "distributable_share_minor":10000,
+                "authoritative_distributable_share_minor":null
+              }]
+            }
+            """.trimIndent(),
+        )
+
+        assertEquals(10_000L, report.lifetimeNetProfitMinor)
+        assertNull(report.authoritativeDistributionCapMinor())
+        assertNull(report.authoritativePartnerDistributionMinor(report.partners.single()))
+        assertEquals(
+            "One historical drink order needs costing.",
+            report.authoritativeAllocationUnavailableReason(),
+        )
     }
 
     @Test

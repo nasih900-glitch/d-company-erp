@@ -2390,7 +2390,10 @@ async def test_refund_recovery_resolve_and_same_shift_close_share_lock_order(
             asyncio.gather(close_task, resolve_task), timeout=5
         )
         assert close_response.status_code == 422, close_response.text
-        assert "unresolved saved membership refund recovery" in close_response.text
+        assert (
+            close_response.json()["error"]["details"]["issue"]
+            == "unresolved_membership_refund_recovery"
+        )
         assert resolve_response.status_code == 201, resolve_response.text
         assert (
             resolve_response.json()["financial_status"]

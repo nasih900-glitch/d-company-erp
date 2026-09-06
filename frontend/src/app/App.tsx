@@ -5,10 +5,11 @@ import { Loader2 } from 'lucide-react';
 import AppShell from '@/components/layout/AppShell';
 import RequireAuth from '@/modules/auth/RequireAuth';
 import { useAuth } from '@/modules/auth/AuthContext';
-import { hasAdminSystemAccess, hasAuditAccess } from '@/lib/admin-access';
+import { hasAuditAccess, hasSupportAccess } from '@/lib/admin-access';
 import { LIVE_MODE } from '@/lib/demo';
 import { canAccessRefunds } from '@/modules/refunds/refund-policy';
 import { canViewMemberships } from '@/modules/memberships/membership-policy';
+import { internalAppRouteOr } from '@/lib/internal-navigation';
 import {
   canManageGamingCentreProducts,
   GAMING_CENTRE_FEATURES,
@@ -41,6 +42,7 @@ const ReportsScreen = lazy(() => import('@/modules/reports/ReportsScreen'));
 const SettingsScreen = lazy(() => import('@/modules/settings/SettingsScreen'));
 const RefundsScreen = lazy(() => import('@/modules/refunds/RefundsScreen'));
 const MembershipsScreen = lazy(() => import('@/modules/memberships/MembershipsScreen'));
+const DeviceCentreScreen = lazy(() => import('@/modules/remote-assistance/DeviceCentreScreen'));
 
 function RouteFallback() {
   return (
@@ -61,9 +63,9 @@ function AuditAccessOnly({ children }: { children: ReactNode }) {
   return <Navigate to="/pos" replace />;
 }
 
-function AdminSystemOnly({ children }: { children: ReactNode }) {
+export function SupportAccessOnly({ children }: { children: ReactNode }) {
   const { me } = useAuth();
-  if (hasAdminSystemAccess(me)) return <>{children}</>;
+  if (hasSupportAccess(me)) return <>{children}</>;
   return <Navigate to="/pos" replace />;
 }
 
@@ -89,13 +91,13 @@ function FeatureOnly({
   fallback?: string;
 }) {
   if (GAMING_CENTRE_FEATURES[feature]) return <>{children}</>;
-  return <Navigate to={fallback} replace />;
+  return <Navigate to={internalAppRouteOr(fallback)} replace />;
 }
 
 function ProfileOwnerOnly({ children }: { children: ReactNode }) {
   const { me, demo } = useAuth();
   if (demo || me?.protected_access) return <>{children}</>;
-  return <Navigate to={WEB_PRODUCT_PROFILE.defaultRoute} replace />;
+  return <Navigate to={internalAppRouteOr(WEB_PRODUCT_PROFILE.defaultRoute)} replace />;
 }
 
 function ModuleAccessOnly({ module, children }: { module: string; children: ReactNode }) {
@@ -106,20 +108,20 @@ function ModuleAccessOnly({ module, children }: { module: string; children: Reac
   const fallback = me?.accessible_modules?.includes('gaming')
     ? '/gaming'
     : me?.accessible_modules?.includes('pos') ? '/pos' : '/workspace-unavailable';
-  return <Navigate to={fallback} replace />;
+  return <Navigate to={internalAppRouteOr(fallback)} replace />;
 }
 
 function ProductManagementOnly({ children }: { children: ReactNode }) {
   const { me, demo } = useAuth();
   if (canManageGamingCentreProducts(me, demo)) return <>{children}</>;
-  return <Navigate to={WEB_PRODUCT_PROFILE.defaultRoute} replace />;
+  return <Navigate to={internalAppRouteOr(WEB_PRODUCT_PROFILE.defaultRoute)} replace />;
 }
 
 function ProfileLanding() {
   const { me, demo } = useAuth();
   if (demo) return <Navigate to="/analytics" replace />;
   if (!me) return <Navigate to="/login" replace />;
-  return <Navigate to={webLandingRouteFor(me)} replace />;
+  return <Navigate to={internalAppRouteOr(webLandingRouteFor(me))} replace />;
 }
 
 function WorkspaceUnavailable() {
@@ -145,7 +147,7 @@ function MenuRoute() {
       : <Navigate to="/login" replace />;
   }
   if (!GAMING_CENTRE_FEATURES.menuManagement) {
-    return <Navigate to={WEB_PRODUCT_PROFILE.defaultRoute} replace />;
+    return <Navigate to={internalAppRouteOr(WEB_PRODUCT_PROFILE.defaultRoute)} replace />;
   }
   return (
     <AppShell>
@@ -242,7 +244,15 @@ export default function App() {
           path="/bug-reports"
           element={
             <FeatureOnly feature="supportInbox">
-              <Screen><AdminSystemOnly><BugReportsScreen /></AdminSystemOnly></Screen>
+              <Screen><SupportAccessOnly><BugReportsScreen /></SupportAccessOnly></Screen>
+            </FeatureOnly>
+          }
+        />
+        <Route
+          path="/device-centre"
+          element={
+            <FeatureOnly feature="settings">
+              <Screen><SupportAccessOnly><DeviceCentreScreen /></SupportAccessOnly></Screen>
             </FeatureOnly>
           }
         />

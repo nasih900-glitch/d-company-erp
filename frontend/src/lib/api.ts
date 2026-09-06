@@ -1,6 +1,7 @@
 import axios, { AxiosError, type AxiosRequestConfig } from 'axios';
 import { readStoredTerminalId } from './operational-context';
 import { recordFailedSupportAction } from './support-context';
+import { apiFailureMessage } from './api-error-message';
 
 /**
  * Base URL resolution order (most specific wins):
@@ -43,6 +44,16 @@ export function isSameOriginHttpApi(apiUrl: string, pageUrl: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * AbortController cancellation is normal during navigation, sign-out, and
+ * request replacement. It must not become a fake network incident in the
+ * contextual support report or alarm the operator.
+ */
+export function isExpectedRequestCancellation(error: unknown): boolean {
+  return axios.isCancel(error)
+    || (axios.isAxiosError(error) && error.code === 'ERR_CANCELED');
 }
 
 export const COOKIE_SESSION_MODE =
@@ -334,6 +345,8 @@ export async function clearBrowserRefreshCookie(): Promise<void> {
 api.interceptors.response.use(
   (r) => r,
   async (err: AxiosError<{ error?: { code: string; message: string } }>) => {
+    if (isExpectedRequestCancellation(err)) return Promise.reject(err);
+
     const cfg = err.config as AxiosRequestConfig & { _retried?: boolean };
 
     // 401 → try to refresh the token once, then retry the original request.
@@ -394,7 +407,7 @@ api.interceptors.response.use(
       }
     }
 
-    const message = serverMessage ?? err.message ?? 'Unknown error talking to the API';
+    const message = apiFailureMessage(serverMessage, err.response?.status);
     const enriched: ApiError = new Error(message);
     enriched.code = serverCode ?? 'network_error';
     // Callers need to tell "the server rejected this session" (401/403) apart

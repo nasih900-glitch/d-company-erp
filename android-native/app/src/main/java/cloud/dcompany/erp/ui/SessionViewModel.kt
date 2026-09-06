@@ -1,11 +1,10 @@
 package cloud.dcompany.erp.ui
 
 import android.app.Application
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import cloud.dcompany.erp.DCompanyApp
-import cloud.dcompany.erp.core.alarm.GamingAlarmReconciler
-import cloud.dcompany.erp.core.alarm.HeldOrderAlarmReconciler
 import cloud.dcompany.erp.core.alarm.OperationalAlarmRegistry
 import cloud.dcompany.erp.core.auth.AccessTokenIdentityParser
 import cloud.dcompany.erp.core.auth.CacheScope
@@ -22,7 +21,10 @@ import cloud.dcompany.erp.core.auth.TerminalResolution
 import cloud.dcompany.erp.core.auth.TerminalPurpose
 import cloud.dcompany.erp.core.auth.ValidatedTerminalDisplay
 import cloud.dcompany.erp.core.auth.activateAndRememberTerminal
+import cloud.dcompany.erp.core.auth.bestEffortAuthenticatedLogout
 import cloud.dcompany.erp.core.auth.resolveTerminalAssignment
+import cloud.dcompany.erp.core.errors.RecoveryRisk
+import cloud.dcompany.erp.core.errors.recoveryGuidance
 import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.ApiException
 import cloud.dcompany.erp.core.net.LoginRequest
@@ -91,10 +93,11 @@ internal fun loginErrorMessage(error: ApiException): String {
                 "Wait, then try again or ask an owner."
         error.status == 401 ->
             "Email or password is incorrect. Check both fields and try again."
-        error.status == null ->
-            "The server could not be reached. Check the connection and try again."
-        else -> serverMessage.takeIf { it.isNotBlank() }
-            ?: "Sign-in failed. Check the details and try again."
+        else -> recoveryGuidance(
+            risk = RecoveryRisk.AUTH,
+            failure = error,
+            subject = "sign-in",
+        ).message
     }
 }
 
@@ -927,7 +930,10 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         return TerminalReassignmentFacts(
             protectedOwner = identityExact && current?.protectedAccess == true,
             tokenLineageCurrent = identityExact && tokens.currentAccessFor(lease) != null,
-            online = connectivity.networkValidated.value,
+            // Android-validated Wi-Fi is not proof that the ERP backend can
+            // authorize a workspace change. The coordinator publishes online
+            // only after a successful readiness proof.
+            online = connectivity.online.value,
             activeTerminalExact = activeExact,
             currentTerminalStillAvailable = currentTerminalStillAvailable,
             unresolvedOutboxCount = outbox.count,
@@ -1160,9 +1166,10 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 "Your sign-in or protected-owner access changed. Cancel the till change and sign in again.",
             )
         }
-        if (!connectivity.networkValidated.value) {
+        if (!connectivity.online.value) {
             throw TerminalScopeException(
-                "Changing tills requires a live server check. Reconnect, then choose the till again.",
+                "Changing tills requires a verified ERP server connection. " +
+                    "Check the connection status, then choose the till again.",
             )
         }
 
@@ -1206,7 +1213,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             TerminalReassignmentFacts(
                 protectedOwner = pending.me.protectedAccess,
                 tokenLineageCurrent = pending.isTokenCurrent(),
-                online = connectivity.networkValidated.value,
+                online = connectivity.online.value,
                 activeTerminalExact =
                     terminals.terminalId() == previous.terminalId &&
                         previous.branchId == branchId,
@@ -1324,21 +1331,35 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             // notification. Never redirect a different employee after purge.
             (getApplication() as DCompanyApp).notificationRoutes.clearAllForScopeChange()
             // AlarmManager is outside Room. Reconciliation against the now-empty
-            // caches removes A's tags; an alarm-service failure must not
-            // roll back an already committed cache scope transition.
-            reconcileOperationalAlarms()
-        } else {
-            reconcileOperationalAlarms()
+            // caches eventually removes A's tags, but a process observer may
+            // be in backoff. Withdraw A's scheduled and already-visible alerts
+            // before B can render, then let the process owner arm B below.
+            try {
+                withContext(Dispatchers.IO) {
+                    check(OperationalAlarmRegistry.cancelAll(getApplication())) {
+                        "The previous workspace alarm ledger could not be cleared"
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                // The scope transition is already durable and cannot be rolled
+                // back. The generation trigger below immediately enters the
+                // process-owned retry path instead of silently abandoning it.
+                Log.e("DCompanyAlarms", "Immediate scope-change alarm cleanup failed", failure)
+            }
         }
+        reconcileOperationalAlarms()
     }
 
-    private suspend fun reconcileOperationalAlarms() {
-        runCatching { GamingAlarmReconciler.reconcile(getApplication()) }
-        runCatching { HeldOrderAlarmReconciler.reconcile(getApplication()) }
+    private fun reconcileOperationalAlarms() {
+        (getApplication() as DCompanyApp).requestOperationalAlarmReconciliation()
     }
 
     /** Header authority and its human-readable label always change together. */
     private fun deactivateTerminalRuntime() {
+        cloud.dcompany.erp.core.diagnostics.DiagnosticsRuntime.onScopeUnavailable()
+        (getApplication() as DCompanyApp).remoteAssistance.onScopeUnavailable()
         ApiClient.deactivateTerminalScope()
         terminals.deactivateValidatedDisplay()
     }
@@ -1399,7 +1420,13 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             cancelOperationalAlarms()
             (getApplication() as DCompanyApp).notificationRoutes.clearPending()
             try {
-                withContext(Dispatchers.IO) { tokens.clear() }
+                bestEffortAuthenticatedLogout(
+                    timeoutMillis = REMOTE_LOGOUT_TIMEOUT_MILLIS,
+                    revokeRemoteSession = { ApiClient.api.logout() },
+                    clearLocalSession = {
+                        withContext(Dispatchers.IO) { tokens.clear() }
+                    },
+                )
             } catch (_: Exception) {
                 _state.value = AuthState.SignOutFailed(
                     "This tablet could not durably remove the secure session. Keep this screen open, " +
@@ -1508,6 +1535,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                     )
                 }
             ) return false
+            (getApplication() as DCompanyApp).onVerifiedScopeAvailable()
             return true
         }
 
@@ -1618,6 +1646,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private companion object {
+        const val REMOTE_LOGOUT_TIMEOUT_MILLIS = 1_000L
         const val RESTORE_SERVER_TIMEOUT_MILLIS = 8_000L
     }
 

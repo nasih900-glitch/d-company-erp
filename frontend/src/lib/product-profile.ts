@@ -65,7 +65,7 @@ export const GAMING_CENTRE_FEATURES: Readonly<WebFeatureFlags> = Object.freeze({
   publicMenu: false,
   events: false,
   ocr: false,
-  refundsWorkspace: false,
+  refundsWorkspace: true,
   advancedInsights: false,
 });
 
@@ -86,6 +86,12 @@ export const GAMING_CENTRE_TERMINAL_POLICY = Object.freeze({
 export interface ProfileCatalogCategory {
   id: string;
   name: string;
+  /**
+   * Server-owned classification added in schema 0070. Undefined means this
+   * client is temporarily talking to an older server and may use the legacy
+   * category-name bridge below.
+   */
+  is_gaming_centre_catalog?: boolean;
 }
 
 export interface ProfileCatalogItem {
@@ -100,9 +106,9 @@ export interface ProfileOperationalCatalogRule {
 }
 
 /**
- * Temporary release-profile taxonomy until the menu API exposes an explicit
- * sales-channel field. It avoids fragile individual item-name checks and fails
- * closed when an owner renames or mis-types a category.
+ * Compatibility taxonomy for a rolling upgrade from servers older than 0070.
+ * Current servers return `is_gaming_centre_catalog` on every category, so
+ * editable presentation names no longer decide operational visibility.
  *
  * This policy governs only products offered for a *new* operational sale.
  * Product management, saved payment retries, receipts and reports keep the
@@ -116,6 +122,9 @@ ReadonlyArray<ProfileOperationalCatalogRule> = Object.freeze([
   Object.freeze({ categoryName: 'Crisps', itemTypes: Object.freeze(['food']) }),
 ]);
 
+export const GAMING_CENTRE_CATALOG_GUIDANCE =
+  'Turn on Gaming sales for packaged drinks or crisps. The setting stays with the category when you rename it; other categories remain available for future café use.';
+
 function normalizeCatalogValue(value: string): string {
   return value.trim().toLowerCase();
 }
@@ -126,19 +135,30 @@ export function profileOperationalCatalogItems<T extends ProfileCatalogItem>(
   policy: ReadonlyArray<ProfileOperationalCatalogRule> =
     GAMING_CENTRE_OPERATIONAL_CATALOG_POLICY,
 ): T[] {
-  const categoryNames = new Map(categories.map((category) => [category.id, category.name]));
+  const categoriesById = new Map(categories.map((category) => [category.id, category]));
   const typesByCategoryName = new Map(policy.map((rule) => [
     normalizeCatalogValue(rule.categoryName),
     new Set(rule.itemTypes.map(normalizeCatalogValue)),
   ]));
+  const supportedItemTypes = new Set(
+    policy.flatMap((rule) => rule.itemTypes.map(normalizeCatalogValue)),
+  );
 
   return items.filter((item) => {
     if (!item.is_available) return false;
-    const categoryName = categoryNames.get(item.category_id);
-    if (!categoryName) return false;
+    const category = categoriesById.get(item.category_id);
+    if (!category) return false;
+    const itemType = normalizeCatalogValue(item.type);
+    if (!supportedItemTypes.has(itemType)) return false;
+
+    // A current server is authoritative, including an explicit false. Only a
+    // missing field can use the legacy bridge during a rolling deployment.
+    if (typeof category.is_gaming_centre_catalog === 'boolean') {
+      return category.is_gaming_centre_catalog;
+    }
     return typesByCategoryName
-      .get(normalizeCatalogValue(categoryName))
-      ?.has(normalizeCatalogValue(item.type)) === true;
+      .get(normalizeCatalogValue(category.name))
+      ?.has(itemType) === true;
   });
 }
 
@@ -290,6 +310,7 @@ export type ProfileNavIcon =
   | 'settings'
   | 'audit'
   | 'supportInbox'
+  | 'deviceCentre'
   | 'tables'
   | 'kitchen'
   | 'reservations'
@@ -370,6 +391,7 @@ export const PROFILE_NAVIGATION_GROUPS: readonly ProfileNavigationGroup[] = [
       { id: 'gaming', label: 'Gaming', icon: 'gaming', feature: 'gaming', to: '/gaming', module: 'gaming' },
       { id: 'pos', label: 'POS', icon: 'pos', feature: 'pos', to: '/pos', module: 'pos' },
       { id: 'shift', label: 'Shift', icon: 'shift', feature: 'shifts', to: '/operations', module: 'pos' },
+      { id: 'refunds', label: 'Refunds', icon: 'refunds', feature: 'refundsWorkspace', to: '/refunds', audience: 'refund' },
       { id: 'stock', label: 'Stock', icon: 'stock', feature: 'stock', to: '/inventory', module: 'inventory' },
       { id: 'help', label: 'Help', icon: 'help', feature: 'help', action: 'help' },
     ],
@@ -386,10 +408,11 @@ export const PROFILE_NAVIGATION_GROUPS: readonly ProfileNavigationGroup[] = [
     ],
   },
   {
-    title: 'Protected Control',
+    title: 'Support & Control',
     items: [
       { id: 'audit', label: 'Audit Log', icon: 'audit', feature: 'audit', to: '/audit', audience: 'audit' },
       { id: 'support-inbox', label: 'Support Inbox', icon: 'supportInbox', feature: 'supportInbox', to: '/bug-reports', audience: 'system' },
+      { id: 'device-centre', label: 'Device Centre', icon: 'deviceCentre', feature: 'settings', to: '/device-centre', audience: 'system' },
     ],
   },
   {
@@ -402,7 +425,6 @@ export const PROFILE_NAVIGATION_GROUPS: readonly ProfileNavigationGroup[] = [
       { id: 'memberships', label: 'Memberships', icon: 'memberships', feature: 'memberships', to: '/memberships', audience: 'membership' },
       { id: 'events', label: 'Events', icon: 'events', feature: 'events', to: '/events' },
       { id: 'ocr', label: 'OCR', icon: 'ocr', feature: 'ocr', to: '/ocr', module: 'ocr' },
-      { id: 'refunds', label: 'Refunds', icon: 'refunds', feature: 'refundsWorkspace', to: '/refunds', audience: 'refund' },
       { id: 'insights', label: 'Insights', icon: 'insights', feature: 'advancedInsights', to: '/insights', module: 'insights_reports', audience: 'owner' },
     ],
   },
@@ -420,6 +442,7 @@ const ROUTE_FEATURE: Readonly<Record<string, WebFeature>> = Object.freeze({
   '/settings': 'settings',
   '/audit': 'audit',
   '/bug-reports': 'supportInbox',
+  '/device-centre': 'settings',
   '/tables': 'tables',
   '/kitchen': 'kitchen',
   '/reservations': 'reservations',

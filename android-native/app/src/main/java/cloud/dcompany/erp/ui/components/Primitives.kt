@@ -2,7 +2,6 @@ package cloud.dcompany.erp.ui.components
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
@@ -58,8 +57,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -88,10 +85,9 @@ import cloud.dcompany.erp.ui.theme.Spacing
 // SURFACES
 // ============================================================================
 
-/** A card that lifts very slightly on press (scale + border brighten) so
- * tapping anything on this app's dark surfaces gives real tactile feedback,
- * not just a flat color swap. Non-interactive by default — pass [onClick]
- * to opt in. */
+/** A card with restrained press feedback. Non-interactive by default — pass
+ * [onClick] to opt in. The neutral border response keeps routine interactions
+ * from competing with the brass primary-action accent. */
 @Composable
 fun Panel(
     modifier: Modifier = Modifier,
@@ -102,12 +98,12 @@ fun Panel(
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val scale by animateFloatAsState(
-        if (pressed && onClick != null) 0.985f else 1f,
+        if (pressed && onClick != null) 0.99f else 1f,
         tween(Motion.fast, easing = Motion.emphasized),
         label = "panelScale",
     )
     val borderColor by animateColorAsState(
-        if (pressed && onClick != null) Brand.GoldMuted else Brand.BorderSubtle,
+        if (pressed && onClick != null) Brand.ControlBorder else Brand.BorderSubtle,
         tween(Motion.fast),
         label = "panelBorder",
     )
@@ -149,37 +145,36 @@ fun SectionTitle(text: String, modifier: Modifier = Modifier) {
 // LOADING / EMPTY STATES
 // ============================================================================
 
-/** A shimmering placeholder instead of a bare spinner — reads as "content is
- * arriving here" rather than "the app froze," and matches the shape of what's
- * about to load so the layout doesn't jump when it arrives. */
+/** A softly pulsing placeholder instead of a bare spinner. It preserves the
+ * incoming layout without introducing the moving gradient associated with a
+ * more decorative visual style. */
 @Composable
 fun ShimmerBlock(modifier: Modifier = Modifier, shape: RoundedCornerShape = Radius.shapeMd) {
-    ShimmerBlock(modifier, shape, rememberShimmerBrush())
+    SkeletonBlock(modifier, shape, rememberSkeletonAlpha())
 }
 
 @Composable
-private fun rememberShimmerBrush(): Brush {
-    val transition = rememberInfiniteTransition(label = "shimmer")
-    val translate by transition.animateFloat(
-        initialValue = -400f,
-        targetValue = 400f,
-        animationSpec = infiniteRepeatable(tween(1100, easing = LinearEasing), RepeatMode.Restart),
-        label = "shimmerTranslate",
+private fun rememberSkeletonAlpha(): Float {
+    val transition = rememberInfiniteTransition(label = "skeletonPulse")
+    val alpha by transition.animateFloat(
+        initialValue = 0.52f,
+        targetValue = 0.86f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(Motion.slow, easing = Motion.emphasized),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "skeletonAlpha",
     )
-    return Brush.linearGradient(
-        colors = listOf(Brand.SurfaceRaised, Brand.SurfaceOverlay, Brand.SurfaceRaised),
-        start = Offset(translate - 200f, 0f),
-        end = Offset(translate + 200f, 200f),
-    )
+    return alpha
 }
 
 @Composable
-private fun ShimmerBlock(
+private fun SkeletonBlock(
     modifier: Modifier,
     shape: RoundedCornerShape,
-    brush: Brush,
+    alpha: Float,
 ) {
-    Box(modifier.clip(shape).background(brush))
+    Box(modifier.clip(shape).background(Brand.SurfaceOverlay.copy(alpha = alpha)))
 }
 
 @Composable
@@ -187,7 +182,7 @@ fun LoadingSkeleton(modifier: Modifier = Modifier, lines: Int = 4) {
     // One animation clock drives the whole placeholder. Starting a separate
     // infinite transition for every row needlessly multiplies frame work on
     // the tablet while a slow network response is already under pressure.
-    val brush = rememberShimmerBrush()
+    val alpha = rememberSkeletonAlpha()
     Column(
         modifier
             .fillMaxWidth()
@@ -200,10 +195,10 @@ fun LoadingSkeleton(modifier: Modifier = Modifier, lines: Int = 4) {
         verticalArrangement = Arrangement.spacedBy(Spacing.md),
     ) {
         repeat(lines) { i ->
-            ShimmerBlock(
+            SkeletonBlock(
                 Modifier.fillMaxWidth().height(if (i == 0) 28.dp else 18.dp),
                 Radius.shapeMd,
-                brush,
+                alpha,
             )
         }
     }
@@ -331,10 +326,10 @@ fun fieldColors() = TextFieldDefaults.colors(
     unfocusedContainerColor = Brand.SurfaceRaised,
     disabledContainerColor = Brand.Surface,
     focusedIndicatorColor = Brand.Gold,
-    unfocusedIndicatorColor = Brand.Border,
-    focusedLabelColor = Brand.Gold,
+    unfocusedIndicatorColor = Brand.ControlBorder,
+    focusedLabelColor = Brand.FocusRing,
     unfocusedLabelColor = Brand.ForegroundMuted,
-    cursorColor = Brand.Gold,
+    cursorColor = Brand.FocusRing,
     focusedTextColor = Brand.Foreground,
     unfocusedTextColor = Brand.Foreground,
 )
@@ -357,6 +352,11 @@ fun PickerField(
             Row(
                 Modifier.fillMaxWidth().clip(Radius.shapeMd)
                     .background(Brand.SurfaceRaised)
+                    .border(
+                        1.dp,
+                        if (open) Brand.FocusRing else Brand.ControlBorder,
+                        Radius.shapeMd,
+                    )
                     .semantics {
                         role = Role.DropdownList
                         contentDescription = "$label, $selectedLabel"

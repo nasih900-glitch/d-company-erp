@@ -1,6 +1,7 @@
 export function roleLabel(role: string): string {
   const labels: Record<string, string> = {
     super_owner: 'Owner',
+    co_owner: 'Owner',
     owner: 'Owner',
     partner: 'Partner',
     manager: 'Manager',

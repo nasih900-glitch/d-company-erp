@@ -32,6 +32,7 @@ from app.models import (
     Role,
     Shift,
     Station,
+    Terminal,
     User,
     UserRole,
 )
@@ -406,10 +407,12 @@ async def test_package_start_rejects_stale_catalog_snapshot(
     shift = _shift(seed_owner)
     package = GamingPackage(
         id=uuid4(),
+        code=f"test-{uuid4().hex}",
         company_id=seed_owner["company"].id,
         branch_id=seed_owner["branch"].id,
         station_type=station.type,
         variant="single",
+        pricing_tier="standard",
         kind="base",
         name="Single 60 min",
         duration_minutes=60,
@@ -456,6 +459,7 @@ async def test_package_start_ignores_unrelated_hourly_rate_snapshot(
     shift = _shift(seed_owner)
     package = GamingPackage(
         id=uuid4(),
+        code=f"test-{uuid4().hex}",
         company_id=seed_owner["company"].id,
         branch_id=seed_owner["branch"].id,
         station_type=station.type,
@@ -488,6 +492,7 @@ async def test_package_start_ignores_unrelated_hourly_rate_snapshot(
     assert response.status_code == 201, response.text
     assert response.json()["billing_mode"] == "package"
     assert response.json()["amount_minor"] == package.price_minor
+    assert response.json()["package_pricing_tier_snapshot"] == "standard"
 
 
 @pytest.mark.asyncio
@@ -752,6 +757,113 @@ async def test_offline_stop_uses_exact_tap_time_and_replays_once(
     assert gaming_session.end_at == captured_end
     assert gaming_session.billable_minutes == 13
     assert gaming_session.amount_minor == 2_600
+
+
+@pytest.mark.asyncio
+async def test_code21_unbilled_pull_includes_cancelled_resolution_after_live_work(
+    client,
+    session,
+    seed_owner,
+) -> None:
+    """The shipped Code 21 can observe a web cancellation without hiding work."""
+    started_at = datetime.now(UTC) - timedelta(minutes=30)
+    station = _station(seed_owner)
+    active_station = _station(seed_owner)
+    ended_station = _station(seed_owner)
+    shift = _shift(seed_owner, opened_at=started_at - timedelta(minutes=1))
+    cancelled_session = _running_session(
+        seed_owner,
+        station=station,
+        shift=shift,
+        start_at=started_at,
+        status="cancelled",
+        amount_minor=0,
+    )
+    cancelled_at = started_at + timedelta(minutes=1)
+    cancelled_session.end_at = cancelled_at
+    cancelled_session.cancelled_at = cancelled_at
+    cancelled_session.cancelled_by = seed_owner["owner"].id
+    cancelled_session.cancel_reason = "Owner cancelled mistaken test session from web"
+    active_session = _running_session(
+        seed_owner,
+        station=active_station,
+        shift=shift,
+        start_at=started_at - timedelta(minutes=2),
+    )
+    ended_session = _running_session(
+        seed_owner,
+        station=ended_station,
+        shift=shift,
+        start_at=started_at - timedelta(minutes=3),
+        status="ended",
+        amount_minor=2_000,
+    )
+    ended_session.end_at = ended_session.start_at + timedelta(minutes=10)
+    ended_session.billable_minutes = 10
+    session.add_all([station, active_station, ended_station, shift])
+    await session.flush()
+    session.add_all([cancelled_session, active_session, ended_session])
+    await session.commit()
+    token = await _login(client, seed_owner)
+    read_headers = {
+        "Authorization": f"Bearer {token}",
+        "X-Terminal-Id": str(seed_owner["terminal"].id),
+    }
+
+    web = await client.get(
+        "/api/v1/gaming/sessions?unbilled_only=true&limit=500",
+        headers=read_headers,
+    )
+    code22 = await client.get(
+        "/api/v1/gaming/sessions?unbilled_only=true&limit=500",
+        headers={
+            **read_headers,
+            "X-Client-Platform": "android",
+            "X-Client-Version-Code": "22",
+        },
+    )
+    code21 = await client.get(
+        "/api/v1/gaming/sessions?unbilled_only=true&limit=500",
+        headers={
+            **read_headers,
+            "X-Client-Platform": "android",
+            "X-Client-Version-Code": "21",
+        },
+    )
+    code21_limited = await client.get(
+        "/api/v1/gaming/sessions?unbilled_only=true&limit=2",
+        headers={
+            **read_headers,
+            "X-Client-Platform": "android",
+            "X-Client-Version-Code": "21",
+        },
+    )
+
+    assert web.status_code == 200, web.text
+    assert code22.status_code == 200, code22.text
+    assert code21.status_code == 200, code21.text
+    assert code21_limited.status_code == 200, code21_limited.text
+    assert str(cancelled_session.id) not in {row["id"] for row in web.json()}
+    assert str(cancelled_session.id) not in {row["id"] for row in code22.json()}
+    assert str(cancelled_session.id) in {row["id"] for row in code21.json()}
+    assert {row["id"] for row in code21_limited.json()} == {
+        str(active_session.id),
+        str(ended_session.id),
+    }
+
+    cancelled_stop = await client.post(
+        f"/api/v1/gaming/sessions/{cancelled_session.id}/stop",
+        headers=_headers(seed_owner, token, f"cancelled-stop:{uuid4()}"),
+    )
+    assert cancelled_stop.status_code == 422, cancelled_stop.text
+    assert cancelled_stop.json()["error"]["code"] == "business_rule"
+    assert cancelled_stop.json()["error"]["message"] == "session was cancelled"
+
+    await session.refresh(cancelled_session)
+    assert cancelled_session.status == "cancelled"
+    assert cancelled_session.end_at == cancelled_at
+    assert cancelled_session.amount_minor == 0
+    assert cancelled_session.order_id is None
 
 
 @pytest.mark.asyncio
@@ -1036,6 +1148,7 @@ async def test_delayed_offline_stop_cannot_post_after_source_shift_closed(
     shift = _shift(seed_owner, opened_at=started_at - timedelta(hours=1))
     shift.status = "closed"
     shift.closed_at = datetime.now(UTC) - timedelta(days=29)
+    shift.closed_by = seed_owner["owner"].id
     gaming_session = _running_session(
         seed_owner,
         station=station,
@@ -1081,6 +1194,7 @@ async def test_package_timer_cannot_be_edited_or_extended_for_free(
     shift = _shift(seed_owner)
     package = GamingPackage(
         id=uuid4(),
+        code=f"test-{uuid4().hex}",
         company_id=seed_owner["company"].id,
         branch_id=seed_owner["branch"].id,
         station_type="ps5",
@@ -1138,6 +1252,7 @@ async def test_deleted_base_package_keeps_locked_mode_amount_and_extension_snaps
     shift = _shift(seed_owner)
     package = GamingPackage(
         id=uuid4(),
+        code=f"test-{uuid4().hex}",
         company_id=seed_owner["company"].id,
         branch_id=seed_owner["branch"].id,
         station_type=station.type,
@@ -1305,6 +1420,7 @@ async def _seed_transfer_world(session, seed_owner, *, package: bool = True):
     if package:
         package_row = GamingPackage(
             id=uuid4(),
+            code=f"test-{uuid4().hex}",
             company_id=seed_owner["company"].id,
             branch_id=seed_owner["branch"].id,
             station_type="ps5",
@@ -2091,6 +2207,7 @@ async def test_legacy_outbox_recovers_authoritative_v27_package_start_for_every_
     shift = _shift(seed_owner, opened_at=captured_start - timedelta(hours=1))
     package = GamingPackage(
         id=uuid4(),
+        code=f"test-{uuid4().hex}",
         company_id=seed_owner["company"].id,
         branch_id=seed_owner["branch"].id,
         station_type=station.type,
@@ -2334,6 +2451,7 @@ async def test_legacy_outbox_recovers_from_exact_start_audit_after_idempotency_e
     shift = _shift(seed_owner, opened_at=captured_start - timedelta(hours=1))
     package = GamingPackage(
         id=uuid4(),
+        code=f"test-{uuid4().hex}",
         company_id=seed_owner["company"].id,
         branch_id=seed_owner["branch"].id,
         station_type=station.type,
@@ -2430,6 +2548,7 @@ async def test_staff_start_is_recovered_only_by_protected_owner_with_actor_prove
     shift = _shift(seed_owner, opened_at=captured_start - timedelta(hours=1))
     package = GamingPackage(
         id=uuid4(),
+        code=f"test-{uuid4().hex}",
         company_id=seed_owner["company"].id,
         branch_id=seed_owner["branch"].id,
         station_type=station.type,
@@ -2536,10 +2655,23 @@ async def test_accepted_start_recovery_blocks_wrong_shift_and_partial_receipt_co
         name="Wrong recovery branch",
         invoice_series_code="WR",
     )
-    wrong_shift = _shift(seed_owner, opened_at=captured_start - timedelta(hours=1))
+    wrong_terminal = Terminal(
+        id=uuid4(),
+        branch_id=wrong_branch.id,
+        name="Wrong recovery workspace",
+        purpose="hybrid",
+        is_active=True,
+        device_id=f"wrong-recovery-{uuid4()}",
+    )
+    wrong_shift = _shift(
+        seed_owner,
+        opened_at=captured_start - timedelta(hours=1),
+        terminal_id=wrong_terminal.id,
+    )
     wrong_shift.branch_id = wrong_branch.id
     package = GamingPackage(
         id=uuid4(),
+        code=f"test-{uuid4().hex}",
         company_id=seed_owner["company"].id,
         branch_id=seed_owner["branch"].id,
         station_type=station.type,
@@ -2551,7 +2683,7 @@ async def test_accepted_start_recovery_blocks_wrong_shift_and_partial_receipt_co
         sort_order=0,
         is_active=True,
     )
-    session.add_all([station, shift, wrong_branch, package])
+    session.add_all([station, shift, wrong_branch, wrong_terminal, package])
     await session.flush()
     session.add(wrong_shift)
     await session.commit()
@@ -2667,6 +2799,7 @@ async def test_accepted_start_links_exact_manual_paid_order_without_second_charg
     shift = _shift(seed_owner, opened_at=captured_start - timedelta(hours=1))
     package = GamingPackage(
         id=uuid4(),
+        code=f"test-{uuid4().hex}",
         company_id=seed_owner["company"].id,
         branch_id=seed_owner["branch"].id,
         station_type=station.type,
@@ -2680,6 +2813,7 @@ async def test_accepted_start_links_exact_manual_paid_order_without_second_charg
     )
     extension_package = GamingPackage(
         id=uuid4(),
+        code=f"test-{uuid4().hex}",
         company_id=seed_owner["company"].id,
         branch_id=seed_owner["branch"].id,
         station_type=station.type,

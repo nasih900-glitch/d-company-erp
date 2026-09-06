@@ -1,10 +1,5 @@
 package cloud.dcompany.erp.core.sync
 
-import android.content.Context
-import android.net.ConnectivityManager
-import android.net.Network
-import android.net.NetworkCapabilities
-import android.net.NetworkRequest
 import android.util.Log
 import androidx.room.withTransaction
 import cloud.dcompany.erp.DCompanyApp
@@ -17,16 +12,16 @@ import cloud.dcompany.erp.core.auth.OutboxSafetyGate
 import cloud.dcompany.erp.core.auth.EffectivePermissions
 import cloud.dcompany.erp.core.auth.ErpPermission
 import cloud.dcompany.erp.core.auth.verifyBranchScopedPayload
+import cloud.dcompany.erp.core.checkout.CheckoutClientInstancePolicy
+import cloud.dcompany.erp.core.checkout.CheckoutClientInstanceUnavailableException
+import cloud.dcompany.erp.core.checkout.DirectOrderPublishPolicy
 import cloud.dcompany.erp.core.checkout.HeldOrderClaimPolicy
 import cloud.dcompany.erp.core.db.ErpDatabase
-import cloud.dcompany.erp.core.db.AssetCacheEntity
 import cloud.dcompany.erp.core.db.CafeTableEntity
-import cloud.dcompany.erp.core.db.CapitalEntryCacheEntity
 import cloud.dcompany.erp.core.db.CanonicalReceiptSyncStateEntity
 import cloud.dcompany.erp.core.db.CustomerCacheEntity
 import cloud.dcompany.erp.core.db.EventCacheEntity
 import cloud.dcompany.erp.core.db.EventTicketCacheEntity
-import cloud.dcompany.erp.core.db.ExpenseCacheEntity
 import cloud.dcompany.erp.core.db.FloorEntity
 import cloud.dcompany.erp.core.db.LocalAssetEntity
 import cloud.dcompany.erp.core.db.LocalCapitalEntryEntity
@@ -117,11 +112,10 @@ import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.ApiException
 import cloud.dcompany.erp.core.net.CanonicalReceipt
 import cloud.dcompany.erp.core.net.ModifierSelectionRequest
-import cloud.dcompany.erp.core.net.BackendReachability
-import cloud.dcompany.erp.core.net.backendIsOnline
 import cloud.dcompany.erp.core.net.CreateOrderRequest
 import cloud.dcompany.erp.core.net.OrderLineRequest
 import cloud.dcompany.erp.core.net.PaymentRequest
+import cloud.dcompany.erp.core.net.PublishDirectCheckoutClaimRequest
 import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.core.net.outboxProvenanceHeaders
 import cloud.dcompany.erp.ui.screens.customers.CustomerUpdateBody
@@ -135,6 +129,10 @@ import cloud.dcompany.erp.ui.screens.finance.ExpenseCreate
 import cloud.dcompany.erp.ui.screens.finance.FinanceApi
 import cloud.dcompany.erp.ui.screens.finance.FinanceCacheScope
 import cloud.dcompany.erp.ui.screens.finance.FinanceSnapshotKeys
+import cloud.dcompany.erp.ui.screens.finance.fetchFinanceAllocation
+import cloud.dcompany.erp.ui.screens.finance.financeCacheScopeForLease
+import cloud.dcompany.erp.ui.screens.finance.toFinanceCache
+import cloud.dcompany.erp.ui.screens.gaming.GameSession
 import cloud.dcompany.erp.ui.screens.gaming.GamingApi
 import cloud.dcompany.erp.ui.screens.gaming.SessionAddonVoidBody
 import cloud.dcompany.erp.ui.screens.gaming.SessionStartBody
@@ -228,118 +226,6 @@ private const val REFRESH_LOG_TAG = "DCompanySync"
 private class FinanceReferenceRefreshException(labels: List<String>) : Exception(
     "Finance totals refreshed, but ${labels.joinToString(" and ")} could not be refreshed",
 )
-
-/**
- * Watches effective ERP connectivity, not merely "Wi-Fi associated".
- *
- * Android validation proves a general internet route; the backend tracker
- * proves whether the ERP API itself answered. Both are required after a
- * transport failure, which is what lets the UI distinguish cafe Wi-Fi loss
- * from a reachable network whose ERP endpoint is unavailable.
- */
-internal class ConnectivityObserver(
-    context: Context,
-    scope: CoroutineScope,
-    backendReachability: StateFlow<BackendReachability>,
-) {
-
-    private val manager = context.getSystemService(ConnectivityManager::class.java)
-    private val _networkValidated = MutableStateFlow(false)
-    val networkValidated: StateFlow<Boolean> = _networkValidated.asStateFlow()
-    private val _online = MutableStateFlow(false)
-    val online: StateFlow<Boolean> = _online.asStateFlow()
-
-    private var onRegained: (() -> Unit)? = null
-    @Volatile private var latestBackendReachability = BackendReachability.UNKNOWN
-
-    init {
-        scope.launch {
-            backendReachability.collect { backend ->
-                latestBackendReachability = backend
-                updateEffectiveOnline(
-                    backendIsOnline(
-                        networkValidated = _networkValidated.value,
-                        backendReachability = backend,
-                    ),
-                )
-            }
-        }
-    }
-
-    fun start(onBackOnline: () -> Unit) {
-        onRegained = onBackOnline
-        updateNetworkValidation(currentlyValidated())
-        // registerDefaultNetworkCallback, NOT a capability-filtered request.
-        // The filtered form only reports networks that already match, so in the
-        // trial run toggling airplane mode never produced a callback: the
-        // banner stayed hidden and the queue never drained. The default
-        // callback reports every transition, and onCapabilitiesChanged is what
-        // actually fires when a link becomes validated.
-        manager?.registerDefaultNetworkCallback(
-            object : ConnectivityManager.NetworkCallback() {
-                override fun onAvailable(network: Network) = refresh()
-                // This is the *default* network callback. A loss is therefore
-                // authoritative even if activeNetwork still returns the old
-                // handle for a short system race; waiting on another lookup
-                // used to miss the false -> true edge and strand the outbox.
-                override fun onLost(network: Network) = updateNetworkValidation(false)
-                override fun onCapabilitiesChanged(
-                    network: Network,
-                    caps: NetworkCapabilities,
-                ) = updateNetworkValidation(caps.isValidatedInternet())
-            },
-        )
-    }
-
-    private fun refresh() {
-        updateNetworkValidation(currentlyValidated())
-    }
-
-    private fun updateNetworkValidation(nowValidated: Boolean) {
-        val networkWasUnavailable = !_networkValidated.value
-        _networkValidated.value = nowValidated
-        updateEffectiveOnline(
-            backendIsOnline(
-                networkValidated = nowValidated,
-                backendReachability = latestBackendReachability,
-            ),
-        )
-        // If internet returned while the last API probe was unreachable, the
-        // effective state intentionally remains offline. Trigger one probe so
-        // a successful HTTP response can prove recovery and clear the banner.
-        if (shouldProbeBackendOnValidatedReconnect(
-                wasValidated = !networkWasUnavailable,
-                nowValidated = nowValidated,
-                backendReachability = latestBackendReachability,
-            )
-        ) {
-            onRegained?.invoke()
-        }
-    }
-
-    private fun updateEffectiveOnline(nowOnline: Boolean) {
-        val wasOffline = !_online.value
-        _online.value = nowOnline
-        if (nowOnline && wasOffline) onRegained?.invoke()
-    }
-
-    private fun currentlyValidated(): Boolean {
-        val active = manager?.activeNetwork ?: return false
-        val caps = manager.getNetworkCapabilities(active) ?: return false
-        return caps.isValidatedInternet()
-    }
-}
-
-private fun NetworkCapabilities.isValidatedInternet(): Boolean =
-    hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
-        hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
-
-internal fun shouldProbeBackendOnValidatedReconnect(
-    wasValidated: Boolean,
-    nowValidated: Boolean,
-    backendReachability: BackendReachability,
-): Boolean =
-    !wasValidated && nowValidated && backendReachability == BackendReachability.UNREACHABLE
 
 /**
  * Thread-safe state machine for conflating fire-and-forget sync requests.
@@ -809,6 +695,26 @@ internal fun gamingStopReplayMode(endAtMillis: Long?): GamingStopReplayMode =
 
 internal enum class GamingSessionPushPhase { STARTS, STOPS, SENDS }
 
+/**
+ * A normal return from a Gaming push is not always a completed write: Stop
+ * and Send deliberately defer while earlier add-on actions are unresolved.
+ * Progress telemetry must therefore inspect the durable row after the push
+ * instead of treating every return as proof of delivery.
+ */
+internal fun gamingSessionPushResolved(
+    phase: GamingSessionPushPhase,
+    rowStillExists: Boolean,
+    currentState: String?,
+    hasServerId: Boolean,
+): Boolean {
+    if (!rowStillExists) return true
+    return when (phase) {
+        GamingSessionPushPhase.STARTS -> hasServerId
+        GamingSessionPushPhase.STOPS -> currentState != GamingSessionState.STOP_PENDING
+        GamingSessionPushPhase.SENDS -> currentState != GamingSessionState.SEND_PENDING
+    }
+}
+
 internal fun gamingAddonFailureMessage(failure: Exception): String = when (failure) {
     is ApiException -> if (failure.mustPreserveOutbox) {
         "Gaming item confirmation is pending. The exact saved request will retry without duplicating the item."
@@ -825,7 +731,7 @@ internal fun gamingAddonFailureMessage(failure: Exception): String = when (failu
  * or already-billed rows despite `unbilled_only=true`.
  */
 internal fun gamingAddonSessionIdsForPull(
-    sessions: List<cloud.dcompany.erp.ui.screens.gaming.GameSession>,
+    sessions: List<GameSession>,
 ): List<String> {
     val byStation = linkedMapOf<String, String>()
     sessions.forEach { session ->
@@ -836,6 +742,57 @@ internal fun gamingAddonSessionIdsForPull(
         }
     }
     return byStation.values.toList()
+}
+
+/**
+ * Select the tablet-owned lifecycle rows that disappeared from the ordinary
+ * unbilled Gaming board and therefore require an exact authoritative lookup.
+ */
+internal fun missingGamingSessionResolutionIds(
+    boardSessionIds: Iterable<String>,
+    localServerIds: Iterable<String?>,
+): List<String> {
+    val visibleIds = boardSessionIds.filter(String::isNotBlank).toHashSet()
+    return localServerIds.asSequence()
+        .mapNotNull { it?.trim()?.takeIf(String::isNotEmpty) }
+        .filterNot { it in visibleIds }
+        .distinct()
+        .toList()
+}
+
+/**
+ * Resolve tablet-owned lifecycle rows omitted from the bounded unbilled board.
+ *
+ * A 404 is definitive absence within the authenticated branch, so the caller
+ * may refresh shared board data while retaining the local recovery row. Every
+ * other failure leaves the previous cache intact. Exact identity validation
+ * prevents a malformed response from resolving the wrong durable action.
+ */
+internal suspend fun resolveMissingGamingSessions(
+    boardSessions: List<GameSession>,
+    localServerIds: Iterable<String?>,
+    fetchExact: suspend (String) -> GameSession,
+    onNotFound: (String) -> Unit = {},
+): List<GameSession> {
+    val missingIds = missingGamingSessionResolutionIds(
+        boardSessionIds = boardSessions.map(GameSession::id),
+        localServerIds = localServerIds,
+    )
+    val resolved = buildList {
+        for (serverId in missingIds) {
+            try {
+                val session = fetchExact(serverId)
+                check(session.id == serverId) {
+                    "Exact Gaming session response did not match the requested session."
+                }
+                add(session)
+            } catch (failure: ApiException) {
+                if (failure.status != 404) throw failure
+                onNotFound(serverId)
+            }
+        }
+    }
+    return (boardSessions + resolved).distinctBy(GameSession::id)
 }
 
 enum class RejectedShiftOpenVerificationStatus {
@@ -870,6 +827,38 @@ private fun RejectedOpenRecoveryResult.toVerificationResult(): RejectedShiftOpen
     )
 
 /**
+ * Recovery runs after staff may already have confirmed that money moved. A
+ * missing installation identity must therefore retain the durable payment
+ * for reconciliation and must never fall back to an anonymous checkout lease.
+ */
+internal fun requireCheckoutClientInstanceForReconciliation(
+    provider: () -> String?,
+): String = try {
+    CheckoutClientInstancePolicy.requireStable(provider())
+} catch (_: CheckoutClientInstanceUnavailableException) {
+    throw ApiException(
+        "This tablet could not verify its checkout identity. Do not collect again; restart the app and retry reconciliation.",
+        status = 409,
+        code = "checkout_client_instance_unavailable",
+    )
+}
+
+/**
+ * Every Code24 shift leg carries one app-installation UUID. Unlike a user
+ * scoped Room row, this identity survives logout and a clean account switch,
+ * so another authorised employee on the same tablet can close the shared
+ * shift. A missing identity keeps the original outbox row replayable.
+ */
+internal fun requireShiftInstallationId(provider: () -> String?): String = try {
+    CheckoutClientInstancePolicy.requireStable(provider())
+} catch (_: CheckoutClientInstanceUnavailableException) {
+    throw ApiException(
+        "This tablet could not verify its shift identity. Restart the app; the saved shift action was kept for retry.",
+        code = "shift_installation_identity_unavailable",
+    )
+}
+
+/**
  * Pulls reference data down and drains captured sales up.
  *
  * Ordering matters: sales are pushed *before* the menu is refreshed, so a
@@ -881,6 +870,7 @@ class SyncEngine(
     private val scope: CoroutineScope,
     private val outboxSafety: OutboxSafetyGate,
     private val cacheIsolation: CacheIsolationCoordinator,
+    private val checkoutClientInstance: () -> String?,
     private val scheduleDurableSync: () -> Unit,
 ) {
 
@@ -947,6 +937,15 @@ class SyncEngine(
 
     private val _syncing = MutableStateFlow(false)
     val syncing: StateFlow<Boolean> = _syncing.asStateFlow()
+
+    /**
+     * Process-local proof that at least one durable outbox row completed its
+     * server-authoritative push. Queue size alone is insufficient: during a
+     * busy shift one row can drain while another is captured, leaving the
+     * count unchanged even though Sync is healthy.
+     */
+    private val _deliveryProgressMarker = MutableStateFlow(0L)
+    val deliveryProgressMarker: StateFlow<Long> = _deliveryProgressMarker.asStateFlow()
 
     private var sessionAwareSyncing: Boolean
         get() = _syncing.value
@@ -1547,7 +1546,9 @@ class SyncEngine(
      * localId/idempotency key. Clearing the attempt is intentionally stricter:
      * this method owns a fresh authenticated GET, validates branch/terminal
      * scope, and mutates Room only in the same cache lease. A matching live
-     * opening is linked only after immutable opening facts agree. An unrelated
+     * opening is linked only on a freshly verified legacy server after
+     * immutable opening facts agree. Captured-open servers instead require
+     * replay of the original POST receipt. An unrelated
      * live opening, or no live opening, may clear only an empty attempt; the
      * DAO refuses any discard while captured records use the stable identity.
      */
@@ -1636,6 +1637,11 @@ class SyncEngine(
                     "The live server shift did not match this branch and terminal. Nothing was cleared.",
                 )
             }
+            // Recovery follows the exact open shift's receipt provenance, not
+            // the terminal's current server capability. A legacy shift may
+            // remain open across the 0069 deployment.
+            val allowLegacyOpeningMatch =
+                allowsLegacyShiftOpeningMatch(detail, terminalId, branchId)
             val verifiedAt = System.currentTimeMillis()
             if (detail != null) {
                 val openedAt = runCatching { Instant.parse(detail.openedAt).toEpochMilli() }.getOrNull()
@@ -1662,6 +1668,7 @@ class SyncEngine(
                             serverOpeningFloatMinor = cached.openingFloatMinor,
                             serverOpenedAtMillis = cached.openedAtMillis,
                             verifiedAtMillis = verifiedAt,
+                            allowLegacyOpeningMatch = allowLegacyOpeningMatch,
                         )
                     }
                 }) {
@@ -1898,8 +1905,12 @@ class SyncEngine(
         reason: String,
     ): PosRefundRequestResult = mutex.withLock {
         withResourceSerialisation("orders") {
-            require(DCompanyApp.instance.shiftCache.profile.value?.protectedAccess == true) {
-                "Only a protected owner may resolve a started provider payout."
+            val profile = DCompanyApp.instance.shiftCache.profile.value
+            require(
+                profile != null && EffectivePermissions.from(profile)
+                    .has(ErpPermission.PosRefundReconcile)
+            ) {
+                "This account needs Refund reconciliation access to resolve a started provider payout."
             }
             require(providerStatus in setOf(
                 "no_matching_transaction", "provider_declined", "provider_reversed",
@@ -1919,7 +1930,11 @@ class SyncEngine(
             val serverRequestId = requireNotNull(row.serverRequestId) {
                 "This provider payout is missing its server reference. Refresh before recovery."
             }
-            val serverShiftId = requireExactRefundShift(row, includeClosingIntent = true)
+            val serverShiftId = requireExactRefundShift(
+                row,
+                includeClosingIntent = true,
+                requireShiftActor = false,
+            )
             val checkedAt = System.currentTimeMillis()
             val actionId = "pos-refund-provider-resolve:${row.localId}"
             val result = refundsApi.resolveProviderPayout(
@@ -2323,12 +2338,10 @@ class SyncEngine(
 
     /**
      * One unit of outbox work per row: `push` either fully succeeds or throws.
-     * A non-`ApiException` is a bug on our side (e.g. a DTO mismatch) — reject
-     * visibly rather than let it crash the app mid-sync, same reasoning as the
-     * order push below. An ambiguous `ApiException` (no answer, or the server
-     * is mid-flight) stops the whole drain so a bad link isn't hammered
-     * further; a definitive refusal is parked for a human, since retrying
-     * cannot change the answer.
+     * Critical writes supply [retainUnconfirmedWrite]: a DTO or Room failure
+     * can follow a committed request and must retain its original identity.
+     * An ambiguous response stops this drain; a definitive server refusal is
+     * parked for staff review rather than automatically replayed.
      *
      * Returns false if the drain stopped early on an ambiguous failure.
      */
@@ -2336,14 +2349,44 @@ class SyncEngine(
         rows: List<T>,
         markRejected: suspend (T, String) -> Unit,
         push: suspend (T) -> Unit,
+        madeProgress: suspend (T) -> Boolean = { true },
+        retainUnconfirmedWrite: (suspend (T, String) -> Unit)? = null,
     ): Boolean {
         for (row in rows) {
             try {
                 push(row)
+                val resolved = try {
+                    madeProgress(row)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (verificationFailure: Exception) {
+                    // The business write already returned successfully. A
+                    // telemetry-only verification failure must not reclassify
+                    // or replay it as a rejected money action.
+                    Log.w(
+                        "SyncEngine",
+                        "Could not verify outbox progress marker",
+                        verificationFailure,
+                    )
+                    false
+                }
+                if (resolved) {
+                    _deliveryProgressMarker.update { marker ->
+                        if (marker == Long.MAX_VALUE) 1L else marker + 1L
+                    }
+                }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (e: Exception) {
                 sessionAwareLastError = e.message
+                if (retainUnconfirmedWrite != null && mustReplayUnconfirmedWrite(e)) {
+                    val message = unconfirmedWriteMessage("this saved action")
+                    sessionAwareLastError = message
+                    passHadAmbiguousFailure = true
+                    retainUnconfirmedWrite(row, message)
+                    if (e is ApiException && e.status == 426) throw e
+                    return false
+                }
                 if (e !is ApiException) {
                     markRejected(row, "Could not sync this (app error): ${e.message}")
                     continue
@@ -2385,6 +2428,7 @@ class SyncEngine(
             rows = eligible,
             markRejected = { row, msg -> dao.markOpenRejected(row.localId, msg) },
             push = ::pushShiftOpen,
+            retainUnconfirmedWrite = { row, msg -> dao.notePendingError(row.localId, msg) },
         )
     }
 
@@ -2535,10 +2579,13 @@ class SyncEngine(
      */
     private suspend fun pushShiftOpen(row: LocalShiftEntity) {
         val dao = db.shiftDao()
+        val actionIds = shiftLifecycleActionIds(row.localId)
+        val installationId = requireShiftInstallationId(checkoutClientInstance)
         val opened = shiftApi.open(
             ShiftOpenBody(row.openingFloatMinor),
-            "shift-open:${row.localId}",
-            outboxProvenanceHeaders(row.openedAtMillis, "shift-open:${row.localId}"),
+            actionIds.open,
+            installationId,
+            outboxProvenanceHeaders(row.openedAtMillis, actionIds.open),
         )
         dao.setServerShiftId(row.localId, opened.id)
         // Guarded transition: if staff requested close while this call was in
@@ -2646,21 +2693,27 @@ class SyncEngine(
                 val serverShiftId = requireNotNull(row.serverShiftId) {
                     "A close cannot sync before its shift open is confirmed."
                 }
+                val actionIds = shiftLifecycleActionIds(row.localId)
+                val installationId = requireShiftInstallationId(checkoutClientInstance)
                 attemptedServerClose = true
                 val result = shiftApi.close(
                     serverShiftId,
                     ShiftCloseBody(countedMinor),
-                    "shift-close:${row.localId}",
-                    outboxProvenanceHeaders(row.closedAtMillis, "shift-close:${row.localId}"),
+                    actionIds.close,
+                    installationId,
+                    outboxProvenanceHeaders(row.closedAtMillis, actionIds.close),
                 )
                 dao.markClosed(row.localId, result.varianceMinor)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (e: Exception) {
                 sessionAwareLastError = e.message
-                if (e is ApiException && e.mustPreserveOutbox) {
+                if (mustReplayUnconfirmedWrite(e)) {
+                    val message = unconfirmedWriteMessage("this shift close")
+                    sessionAwareLastError = message
                     passHadAmbiguousFailure = true
-                    if (e.status == 426) throw e
+                    dao.notePendingError(row.localId, message)
+                    if (e is ApiException && e.status == 426) throw e
                     return attemptedServerClose
                 }
                 dao.markCloseRejected(
@@ -2735,6 +2788,16 @@ class SyncEngine(
             push = { row ->
                 if (pushGamingSessionOne(row, phase)) changedHeldQueue = true
             },
+            madeProgress = { row ->
+                val current = dao.localSessionById(row.localId)
+                gamingSessionPushResolved(
+                    phase = phase,
+                    rowStillExists = current != null,
+                    currentState = current?.state,
+                    hasServerId = current?.serverId != null,
+                )
+            },
+            retainUnconfirmedWrite = { row, msg -> dao.notePendingSessionError(row.localId, msg) },
         )
         return changedHeldQueue
     }
@@ -2770,6 +2833,13 @@ class SyncEngine(
                     timerMinutes = row.timerMinutes,
                     packageId = row.packageId,
                     extraControllers = row.extraControllers,
+                    playerCount = row.packageId?.let {
+                        when (row.packageVariant) {
+                            "single" -> 1
+                            "dual" -> 2 + row.extraControllers
+                            else -> null
+                        }
+                    },
                     expectedRatePerHourMinor = requireNotNull(row.ratePerHourMinor) {
                         "This saved gaming start has no locked hourly-rate snapshot. Refresh Gaming and capture a new start."
                     },
@@ -2815,6 +2885,7 @@ class SyncEngine(
                 packageDurationMinutes = started.packageDurationMinutesSnapshot,
                 packageVariant = started.packageVariantSnapshot,
                 packageStationTypeSnapshot = started.packageStationTypeSnapshot,
+                packagePricingTierSnapshot = started.packagePricingTierSnapshot,
                 extraControllers = started.extraControllers,
             )
             dao.transitionSessionState(
@@ -3107,6 +3178,26 @@ class SyncEngine(
         val stations = gamingApi.stations()
         val packages = gamingApi.packages()
         val sessions = gamingApi.sessions()
+        // An owner can cancel a session from web, or another client can finish
+        // its POS handoff, while this tablet retains a pending/rejected local
+        // lifecycle. Those terminal rows are deliberately absent from the
+        // unbilled board query. Resolve only the exact server IDs referenced by
+        // this tablet's durable overlays. A definitive 404 retains that local
+        // evidence without preventing the shared board from refreshing; every
+        // other failure keeps the previous cache intact for a later retry.
+        val authoritativeSessions = resolveMissingGamingSessions(
+            boardSessions = sessions,
+            localServerIds = db.gamingDao()
+                .localSessionsForServerReconciliation()
+                .map { it.serverId },
+            fetchExact = gamingApi::session,
+            onNotFound = { serverId ->
+                Log.w(
+                    "SyncEngine",
+                    "Exact Gaming session was not found; retaining local recovery evidence for $serverId",
+                )
+            },
+        )
         // Fetch the complete staged-item ledger for the bounded Gaming board
         // projection before replacing anything. Billed/history sessions are
         // deliberately absent so each refresh cannot become an N+1 history
@@ -3138,8 +3229,12 @@ class SyncEngine(
                     packages.map {
                         GamingPackageCacheEntity(
                             id = it.id,
+                            code = it.code,
                             stationType = it.stationType,
+                            pricingTier = it.pricingTier,
                             variant = it.variant,
+                            includedPlayers = it.includedPlayers,
+                            maxPlayers = it.maxPlayers,
                             kind = it.kind,
                             name = it.name,
                             durationMinutes = it.durationMinutes,
@@ -3148,36 +3243,10 @@ class SyncEngine(
                     },
                 )
                 db.gamingDao().replaceSessionCache(
-                    sessions.map {
-                        GamingSessionCacheEntity(
-                            id = it.id,
-                            stationId = it.stationId,
-                            shiftId = it.shiftId,
-                            status = it.status,
-                            startAtMillis = runCatching { Instant.parse(it.startAt).toEpochMilli() }
-                                .getOrDefault(System.currentTimeMillis()),
-                            endAtMillis = it.endAt?.let { s ->
-                                runCatching { Instant.parse(s).toEpochMilli() }.getOrNull()
-                            },
-                            timerMinutes = it.timerMinutes,
-                            timerEndsAtMillis = it.timerEndsAt?.let { s ->
-                                runCatching { Instant.parse(s).toEpochMilli() }.getOrNull()
-                            },
-                            billableMinutes = it.billableMinutes,
-                            amountMinor = it.amountMinor,
-                            ratePerHourMinor = it.ratePerHourMinor,
-                            packageId = it.packageId,
-                            billingMode = it.billingMode,
-                            packagePriceMinorSnapshot = it.packagePriceMinorSnapshot,
-                            packageDurationMinutesSnapshot = it.packageDurationMinutesSnapshot,
-                            packageVariantSnapshot = it.packageVariantSnapshot,
-                            packageStationTypeSnapshot = it.packageStationTypeSnapshot,
-                            extraControllers = it.extraControllers,
-                            customerName = it.customerName,
-                            customerPhone = it.customerPhone,
-                            orderId = it.orderId,
-                        )
-                    },
+                    // A malformed server timestamp must fail the transaction;
+                    // manufacturing a new start time corrupts timers and local
+                    // billing evidence during cross-device reconciliation.
+                    authoritativeSessions.map(GameSession::toCacheEntity),
                 )
                 db.gamingDao().replaceSessionAddonCache(
                     sessionAddons.map { it.toCacheEntity() },
@@ -3267,7 +3336,8 @@ class SyncEngine(
 
     private suspend fun pushKitchenCancellationAcks() {
         val dao = db.kitchenDao()
-        for (row in dao.pendingCancellationAcks()) {
+        val pendingAcks = dao.pendingCancellationAcks()
+        for (row in pendingAcks) {
             try {
                 val cached = dao.orderCache(row.orderId)
                 if (cached != null && cached.pendingCancellations.none { it.lineId == row.lineId }) {
@@ -3384,67 +3454,79 @@ class SyncEngine(
         for (row in dao.pushableRefundRequests()) {
             if (refundShiftCanResolve(row)) requests += row
         }
-        if (!drainOutbox(
-                rows = requests,
-                markRejected = { row, msg -> dao.markRequestRejected(row.localId, msg) },
-                push = ::pushRefundRequestOne,
-            )
-        ) return
+        val requestsDrained = drainOutbox(
+            rows = requests,
+            markRejected = { row, msg -> dao.markRequestRejected(row.localId, msg) },
+            push = ::pushRefundRequestOne,
+        )
+        if (!requestsDrained) {
+            return
+        }
 
         val settlements = mutableListOf<LocalRefundEntity>()
         for (row in dao.pushableCashSettlements()) {
             if (refundShiftCanResolve(row)) settlements += row
         }
-        if (!drainOutbox(
-                rows = settlements,
-                markRejected = { row, msg -> dao.markCashSettlementRejected(row.localId, msg) },
-                push = ::pushRefundCashSettlementOne,
-            )
-        ) return
+        val settlementsDrained = drainOutbox(
+            rows = settlements,
+            markRejected = { row, msg -> dao.markCashSettlementRejected(row.localId, msg) },
+            push = ::pushRefundCashSettlementOne,
+        )
+        if (!settlementsDrained) {
+            return
+        }
 
         val cashFinalizations = mutableListOf<LocalRefundEntity>()
         for (row in dao.pushableCashFinalizations()) {
             if (refundShiftCanResolve(row)) cashFinalizations += row
         }
-        if (!drainOutbox(
-                rows = cashFinalizations,
-                markRejected = { row, msg -> dao.markCashFinalizationRejected(row.localId, msg) },
-                push = ::pushRefundCashFinalizationOne,
-            )
-        ) return
+        val cashFinalizationsDrained = drainOutbox(
+            rows = cashFinalizations,
+            markRejected = { row, msg -> dao.markCashFinalizationRejected(row.localId, msg) },
+            push = ::pushRefundCashFinalizationOne,
+        )
+        if (!cashFinalizationsDrained) {
+            return
+        }
 
         val providerCompletions = mutableListOf<LocalRefundEntity>()
         for (row in dao.pushableProviderCompletions()) {
             if (refundShiftCanResolve(row)) providerCompletions += row
         }
-        if (!drainOutbox(
-                rows = providerCompletions,
-                markRejected = { row, msg -> dao.markProviderCompletionRejected(row.localId, msg) },
-                push = ::pushRefundProviderCompletionOne,
-            )
-        ) return
+        val providerCompletionsDrained = drainOutbox(
+            rows = providerCompletions,
+            markRejected = { row, msg -> dao.markProviderCompletionRejected(row.localId, msg) },
+            push = ::pushRefundProviderCompletionOne,
+        )
+        if (!providerCompletionsDrained) {
+            return
+        }
 
         val providerFinalizations = mutableListOf<LocalRefundEntity>()
         for (row in dao.pushableProviderFinalizations()) {
             if (refundShiftCanResolve(row)) providerFinalizations += row
         }
-        if (!drainOutbox(
-                rows = providerFinalizations,
-                markRejected = { row, msg -> dao.markProviderFinalizationRejected(row.localId, msg) },
-                push = ::pushRefundProviderFinalizationOne,
-            )
-        ) return
+        val providerFinalizationsDrained = drainOutbox(
+            rows = providerFinalizations,
+            markRejected = { row, msg -> dao.markProviderFinalizationRejected(row.localId, msg) },
+            push = ::pushRefundProviderFinalizationOne,
+        )
+        if (!providerFinalizationsDrained) {
+            return
+        }
 
         val withdrawals = mutableListOf<LocalRefundEntity>()
         for (row in dao.pushableWithdrawals()) {
             if (refundShiftCanResolve(row)) withdrawals += row
         }
-        if (!drainOutbox(
-                rows = withdrawals,
-                markRejected = { row, msg -> dao.markWithdrawalRejected(row.localId, msg) },
-                push = ::pushRefundWithdrawalOne,
-            )
-        ) return
+        val withdrawalsDrained = drainOutbox(
+            rows = withdrawals,
+            markRejected = { row, msg -> dao.markWithdrawalRejected(row.localId, msg) },
+            push = ::pushRefundWithdrawalOne,
+        )
+        if (!withdrawalsDrained) {
+            return
+        }
 
         // Recover response-loss and same-terminal tasks after reinstall before
         // considering a queued shift close. A failed pull leaves every local
@@ -3580,6 +3662,7 @@ class SyncEngine(
         val serverShiftId = requireExactRefundShift(row, includeClosingIntent = true)
         val actionId = "pos-refund-provider-finalize:${row.localId}"
         val occurredAt = row.providerSettledAtMillis ?: row.createdAtMillis
+        val provenance = outboxProvenanceHeaders(occurredAt, actionId)
         val result = refundsApi.finalizeProvider(
             id = requestId,
             body = PosRefundAccountingFinalizationBody(
@@ -3587,7 +3670,7 @@ class SyncEngine(
                 expectedAmountMinor = row.amountMinor,
             ),
             key = actionId,
-            provenance = outboxProvenanceHeaders(occurredAt, actionId),
+            provenance = provenance,
         )
         applyPosRefundServerResult(result, row, scopeLease)
     }
@@ -3624,6 +3707,7 @@ class SyncEngine(
     private suspend fun requireExactRefundShift(
         row: LocalRefundEntity,
         includeClosingIntent: Boolean,
+        requireShiftActor: Boolean = true,
     ): String {
         val app = DCompanyApp.instance
         val terminalId = app.terminalStore.terminalId()
@@ -3643,10 +3727,12 @@ class SyncEngine(
             db.shiftDao().serverOpen(terminalId),
             includeClosingIntent = includeClosingIntent,
         ) ?: error("The captured POS shift is not open on this terminal. Do not touch cash.")
-        val actor = ShiftActor(profile.userId, profile.protectedAccess)
-        require(resolved.canManageMoney(actor)) {
-            resolved.moneyAccessMessage(actor)
-                ?: "Only the shift opener or a protected owner may refund money from this drawer."
+        if (requireShiftActor) {
+            val actor = ShiftActor(profile.userId, profile.protectedAccess)
+            require(resolved.canManageMoney(actor)) {
+                resolved.moneyAccessMessage(actor)
+                    ?: "Only the shift opener or a protected owner may refund money from this drawer."
+            }
         }
         val resolvedBranch = resolved.server?.branchId ?: resolved.local?.branchId
         require(resolvedBranch == branchId) {
@@ -4222,9 +4308,10 @@ class SyncEngine(
     private suspend fun pushHeldOrderPaymentOne(row: LocalHeldOrderPaymentEntity) {
         var token = row.claimToken
         var reacquisitions = 0
+        val paymentNeedsClaim = DirectOrderPublishPolicy.paymentNeedsClaim(row)
         val sourceLabel = db.heldOrderDao().orderForAlarm(row.targetOrderId)?.sourceLabel
         while (true) {
-            if (row.requiresCheckoutClaim && token == null) {
+            if (paymentNeedsClaim && token == null) {
                 token = acquireMatchingClaimForConfirmedPayment(row)
             }
             try {
@@ -4267,7 +4354,7 @@ class SyncEngine(
                 return
             } catch (e: ApiException) {
                 if (
-                    !row.requiresCheckoutClaim ||
+                    !paymentNeedsClaim ||
                     !HeldOrderClaimPolicy.shouldReacquireAfterPaymentError(e.code) ||
                     reacquisitions >= 2
                 ) {
@@ -4288,6 +4375,9 @@ class SyncEngine(
     ): String {
         val claim = ApiClient.api.acquireCheckoutClaim(
             row.targetOrderId,
+            checkoutClientInstance = requireCheckoutClientInstanceForReconciliation(
+                checkoutClientInstance,
+            ),
             outboxProvenanceHeaders(row.createdAtMillis, "held-payment-claim:${row.localId}"),
         )
         val expiresAtMillis = HeldOrderClaimPolicy.claimExpiryMillis(claim)
@@ -4997,6 +5087,7 @@ class SyncEngine(
             rows = dao.pushableExpenses(),
             markRejected = { row, msg -> dao.markExpenseRejected(row.localId, msg) },
             push = ::pushExpenseOne,
+            retainUnconfirmedWrite = { row, msg -> dao.notePendingExpenseError(row.localId, msg) },
         )
     }
 
@@ -5004,7 +5095,8 @@ class SyncEngine(
      * version-CAS needed: expense edit/delete stay web-only, so nothing can
      * amend this row out from under an in-flight push. */
     private suspend fun pushExpenseOne(row: LocalExpenseEntity) {
-        financeApi.createExpense(
+        val lease = cacheIsolation.currentLease() ?: return
+        val created = financeApi.createExpense(
             ExpenseCreate(
                 branchId = row.branchId, categoryId = row.categoryId, supplierId = row.supplierId,
                 amountMinor = row.amountMinor, paidVia = row.paidVia, paidAt = row.paidAt,
@@ -5013,8 +5105,11 @@ class SyncEngine(
             key = "expense:${row.localId}",
             provenance = outboxProvenanceHeaders(row.createdAtMillis, "expense:${row.localId}"),
         )
-        pullExpenses()
-        db.financeDao().markExpenseSynced(row.localId)
+        if (!commitToCurrentScope(lease) {
+                db.financeDao().confirmExpense(row.localId, created.toFinanceCache())
+            }
+        ) return
+        runAndRecordRefreshAlreadyLocked("finance", ::pullExpenses, lease)
     }
 
     private suspend fun pullExpenses() {
@@ -5023,14 +5118,7 @@ class SyncEngine(
             store = { rows ->
                 db.withTransaction {
                     db.financeDao().replaceExpenseCache(
-                        rows.map {
-                            ExpenseCacheEntity(
-                                id = it.id, branchId = it.branchId, categoryId = it.categoryId,
-                                supplierId = it.supplierId, amountMinor = it.amountMinor,
-                                paidVia = it.paidVia, paidAt = it.paidAt,
-                                vendorName = it.vendorName, invoiceNo = it.invoiceNo, note = it.note,
-                            )
-                        },
+                        rows.map { it.toFinanceCache() },
                     )
                     db.syncMetaDao().put(SyncMetaEntity("expenses", System.currentTimeMillis()))
                 }
@@ -5046,13 +5134,15 @@ class SyncEngine(
             rows = dao.pushableAssets(),
             markRejected = { row, msg -> dao.markAssetRejected(row.localId, msg) },
             push = ::pushAssetOne,
+            retainUnconfirmedWrite = { row, msg -> dao.notePendingAssetError(row.localId, msg) },
         )
     }
 
     /** Same insert-only reasoning as pushExpenseOne — assets have no backend
      * edit/delete endpoint at all, so there is nothing to guard against. */
     private suspend fun pushAssetOne(row: LocalAssetEntity) {
-        financeApi.createAsset(
+        val lease = cacheIsolation.currentLease() ?: return
+        val created = financeApi.createAsset(
             AssetCreate(
                 branchId = row.branchId, name = row.name, type = row.type,
                 purchaseMinor = row.purchaseMinor, purchaseDate = row.purchaseDate,
@@ -5062,8 +5152,11 @@ class SyncEngine(
             key = "asset:${row.localId}",
             provenance = outboxProvenanceHeaders(row.createdAtMillis, "asset:${row.localId}"),
         )
-        pullAssets()
-        db.financeDao().markAssetSynced(row.localId)
+        if (!commitToCurrentScope(lease) {
+                db.financeDao().confirmAsset(row.localId, created.toFinanceCache())
+            }
+        ) return
+        runAndRecordRefreshAlreadyLocked("finance", ::pullAssets, lease)
     }
 
     private suspend fun pullAssets() {
@@ -5072,16 +5165,7 @@ class SyncEngine(
             store = { rows ->
                 db.withTransaction {
                     db.financeDao().replaceAssetCache(
-                        rows.map {
-                            AssetCacheEntity(
-                                id = it.id, branchId = it.branchId, name = it.name, type = it.type,
-                                purchaseMinor = it.purchaseMinor, purchaseDate = it.purchaseDate,
-                                usefulLifeMonths = it.usefulLifeMonths, salvageMinor = it.salvageMinor,
-                                depreciationMethod = it.depreciationMethod, notes = it.notes,
-                                accumulatedDepreciationMinor = it.accumulatedDepreciationMinor,
-                                bookValueMinor = it.bookValueMinor,
-                            )
-                        },
+                        rows.map { it.toFinanceCache() },
                     )
                     db.syncMetaDao().put(SyncMetaEntity("assets", System.currentTimeMillis()))
                 }
@@ -5097,13 +5181,15 @@ class SyncEngine(
             rows = dao.pushableCapitalEntries(),
             markRejected = { row, msg -> dao.markCapitalEntryRejected(row.localId, msg) },
             push = ::pushCapitalEntryOne,
+            retainUnconfirmedWrite = { row, msg -> dao.notePendingCapitalEntryError(row.localId, msg) },
         )
     }
 
     /** Same insert-only reasoning — a capital entry is void-only after
      * creation, and void stays online-only (direct write, not queued). */
     private suspend fun pushCapitalEntryOne(row: LocalCapitalEntryEntity) {
-        financeApi.createCapitalEntry(
+        val lease = cacheIsolation.currentLease() ?: return
+        val created = financeApi.createCapitalEntry(
             CapitalEntryCreate(
                 partnerId = row.partnerId, type = row.type, amountMinor = row.amountMinor,
                 effectiveAt = row.effectiveAt, settlementAccount = row.settlementAccount,
@@ -5112,8 +5198,15 @@ class SyncEngine(
             key = "capital-entry:${row.localId}",
             provenance = outboxProvenanceHeaders(row.createdAtMillis, "capital-entry:${row.localId}"),
         )
-        pullCapitalEntriesForAlreadyLocked(row.partnerId)
-        db.financeDao().markCapitalEntrySynced(row.localId)
+        if (!commitToCurrentScope(lease) {
+                db.financeDao().confirmCapitalEntry(row.localId, created.toFinanceCache())
+            }
+        ) return
+        runAndRecordRefreshAlreadyLocked(
+            "finance",
+            { pullCapitalEntriesForAlreadyLocked(row.partnerId) },
+            lease,
+        )
     }
 
     /**
@@ -5135,15 +5228,7 @@ class SyncEngine(
             store = { rows ->
                 db.financeDao().replaceCapitalEntriesFor(
                     partnerId,
-                    rows.map {
-                        CapitalEntryCacheEntity(
-                            id = it.id, partnerId = it.partnerId, type = it.type,
-                            amountMinor = it.amountMinor, effectiveAt = it.effectiveAt,
-                            settlementAccount = it.settlementAccount, sourceRef = it.sourceRef,
-                            note = it.note, createdByName = it.createdByName, createdAt = it.createdAt,
-                            voidedAt = it.voidedAt, voidReason = it.voidReason, isVoided = it.isVoided,
-                        )
-                    },
+                    rows.map { it.toFinanceCache() },
                 )
             },
         )
@@ -5170,10 +5255,11 @@ class SyncEngine(
      */
     private suspend fun pullFinanceSnapshots(): List<String> {
         val lease = cacheIsolation.currentLease() ?: return emptyList()
-        val cacheScope = FinanceCacheScope(
-            companyId = lease.scope.companyId,
-            branchId = lease.scope.branchId,
-        )
+        val cacheScope = financeCacheScopeForLease(
+            profile = DCompanyApp.instance.shiftCache.profile.value,
+            leaseCompanyId = lease.scope.companyId,
+            leaseBranchId = lease.scope.branchId,
+        ) ?: throw IllegalStateException("Authenticated Finance scope changed during refresh")
         return coroutineScope {
             val plDeferred = async { financeApi.profitAndLoss() }
             val metricsDeferred = async { financeApi.metrics() }
@@ -5182,7 +5268,7 @@ class SyncEngine(
             // branch-bound manager still receives branch P&L/metrics but must
             // never fetch or cache another branch's partner information.
             val distributableDeferred = if (cacheScope.companyWidePartnerFinance) {
-                async { financeApi.distributable() }
+                async { fetchFinanceAllocation { financeApi.distributable() } }
             } else {
                 null
             }
@@ -6063,7 +6149,9 @@ class SyncEngine(
             passHadAmbiguousFailure = true
             return false
         }
-        if (!ordinaryTasksCommitted) return false
+        if (!ordinaryTasksCommitted) {
+            return false
+        }
 
         // The attempt register/list/resolve and evidence reconciliation API is
         // deliberately admin.system-only. Do not make an ordinary co-owner's
@@ -6258,7 +6346,10 @@ class SyncEngine(
     private suspend fun pushMembershipRefundActionOne(action: LocalMembershipRefundActionEntity) {
         val lease = cacheIsolation.currentLease()
             ?: error("The active account scope changed before membership refund sync.")
-        val shiftId = resolveMembershipShift(action.shiftId) ?: return
+        val shiftId = resolveMembershipShift(action.shiftId)
+        if (shiftId == null) {
+            return
+        }
         val occurredAt = action.occurredAtMillis ?: action.createdAtMillis
         val provenance = outboxProvenanceHeaders(occurredAt, action.actionId)
         when (action.kind) {
@@ -6924,7 +7015,12 @@ class SyncEngine(
                         )
                     },
                     categories = categories.map {
-                        MenuCategoryEntity(id = it.id, name = it.name, sortOrder = it.sortOrder)
+                        MenuCategoryEntity(
+                            id = it.id,
+                            name = it.name,
+                            sortOrder = it.sortOrder,
+                            isGamingCentreCatalog = it.isGamingCentreCatalog,
+                        )
                     },
                     variants = items.flatMap { item ->
                         item.variants.map { variant ->
@@ -6998,14 +7094,22 @@ class SyncEngine(
         val dao = db.menuWriteDao()
         val server = if (row.serverId == null) {
             menuApi.createCategory(
-                CategoryCreateBody(name = row.name!!, sortOrder = row.sortOrder ?: 0),
+                CategoryCreateBody(
+                    name = row.name!!,
+                    sortOrder = row.sortOrder ?: 0,
+                    isGamingCentreCatalog = row.isGamingCentreCatalog ?: false,
+                ),
                 "menu-category:${row.localId}",
                 outboxProvenanceHeaders(row.createdAtMillis, "menu-category-create:${row.localId}"),
             )
         } else {
             menuApi.updateCategory(
                 row.serverId,
-                CategoryUpdateBody(name = row.name, sortOrder = row.sortOrder),
+                CategoryUpdateBody(
+                    name = row.name,
+                    sortOrder = row.sortOrder,
+                    isGamingCentreCatalog = row.isGamingCentreCatalog,
+                ),
                 outboxProvenanceHeaders(row.createdAtMillis, "menu-category-update:${row.localId}"),
             )
         }
@@ -7065,6 +7169,7 @@ class SyncEngine(
             rows = ready,
             markRejected = { row, msg -> dao.markRejected(row.localId, msg) },
             push = ::pushOne,
+            retainUnconfirmedWrite = { row, msg -> dao.notePendingError(row.localId, msg) },
         )
     }
 
@@ -7106,6 +7211,9 @@ class SyncEngine(
             idempotencyKey = "order:${order.localId}",
             provenance = outboxProvenanceHeaders(order.createdAtMillis, "order:${order.localId}"),
         )
+        check(created.id.isNotBlank() && created.status in setOf("open", "held")) {
+            "The server did not return a publishable direct bill for this saved sale."
+        }
 
         // The server has now priced it, and that price may differ from the
         // offline estimate the customer actually paid against — a membership
@@ -7128,31 +7236,137 @@ class SyncEngine(
             return
         }
 
-        val paid = ApiClient.api.recordPayment(
-            created.id,
-            PaymentRequest(
-                method = order.paymentMethod,
-                amountMinor = capturedAmountMinor,
-                tenderedMinor = order.tenderedMinor.takeIf { order.paymentMethod == "cash" },
+        // Persist the canonical bill and pre-publication version before the
+        // private draft becomes shared. A killed process or dropped publish
+        // response can then replay exactly the same request.
+        if (order.checkoutClaimToken == null) {
+            val checkpointed = dao.checkpointPendingServerOrder(
+                localId = order.localId,
+                serverOrderId = created.id,
+                serverShiftId = resolvedShiftId,
+                subtotalMinor = created.subtotalMinor,
+                discountMinor = created.discountMinor,
+                pointsRedeemedMinor = created.pointsRedeemedMinor,
+                pointsRedeemed = created.pointsRedeemed,
+                taxMinor = created.taxMinor,
+                roundOffMinor = created.roundOffMinor,
+                totalMinor = created.totalMinor,
+                dueMinor = created.dueMinor,
+                checkoutVersion = created.checkoutVersion,
+                updatedAtMillis = System.currentTimeMillis(),
+            )
+            check(checkpointed == 1) {
+                "The canonical offline bill could not be saved before checkout publication."
+            }
+        }
+
+        var durable = dao.withLines(order.localId)?.order
+            ?: error("The saved offline sale disappeared before checkout publication.")
+        var claimToken = durable.checkoutClaimToken
+        var reacquisitions = 0
+
+        suspend fun publishAndPersistClaim(): String {
+            val storedVersion = durable.checkoutVersion
+                ?: throw ApiException(
+                    "The saved bill version is unavailable. Do not collect again; manager review is required.",
+                    status = 409,
+                    code = "direct_publish_version_unavailable",
+                )
+            val expectedVersion = DirectOrderPublishPolicy.expectedVersionForReplay(
+                syncState = SyncState.PENDING,
+                storedCheckoutVersion = storedVersion,
+                hasDurableClaim = durable.checkoutClaimToken != null,
+            )
+            val publishKey = DirectOrderPublishPolicy.idempotencyKey(order.localId)
+            val claim = ApiClient.api.publishDirectCheckoutClaim(
+                id = created.id,
+                body = PublishDirectCheckoutClaimRequest(expectedVersion),
+                idempotencyKey = publishKey,
+                checkoutClientInstance = requireCheckoutClientInstanceForReconciliation(
+                    checkoutClientInstance,
+                ),
+                provenance = outboxProvenanceHeaders(order.createdAtMillis, publishKey),
+            )
+            if (!DirectOrderPublishPolicy.matchesPricedOrder(created, expectedVersion, claim)) {
+                throw ApiException(
+                    "The published bill no longer matches the amount collected offline. " +
+                        "Do not collect again; manager review is required.",
+                    status = 409,
+                    code = "direct_publish_settlement_changed",
+                )
+            }
+            val expiresAtMillis = HeldOrderClaimPolicy.claimExpiryMillis(claim)
+                ?: throw ApiException(
+                    "The server returned an invalid checkout expiry. Do not collect again.",
+                    status = 409,
+                    code = "direct_publish_claim_invalid",
+                )
+            val saved = dao.savePendingDirectClaim(
+                localId = order.localId,
+                serverOrderId = created.id,
                 expectedTotalMinor = created.totalMinor,
                 expectedDueMinor = created.dueMinor,
-                tipMinor = order.tipMinor,
-            ),
-            idempotencyKey = "payment:${order.localId}",
-            provenance = outboxProvenanceHeaders(order.createdAtMillis, "payment:${order.localId}"),
-        )
+                claimToken = claim.claimToken,
+                claimExpiresAtMillis = expiresAtMillis,
+                claimOrderVersion = claim.orderVersion,
+                updatedAtMillis = System.currentTimeMillis(),
+            )
+            check(saved == 1) {
+                "The checkout claim could not be saved before payment reconciliation."
+            }
+            durable = dao.withLines(order.localId)?.order
+                ?: error("The saved offline sale disappeared after checkout publication.")
+            return claim.claimToken
+        }
+
+        if (claimToken == null) claimToken = publishAndPersistClaim()
+
+        var paid: cloud.dcompany.erp.core.net.PaymentResult? = null
+        while (paid == null) {
+            try {
+                paid = ApiClient.api.recordPayment(
+                    created.id,
+                    PaymentRequest(
+                        method = order.paymentMethod,
+                        amountMinor = capturedAmountMinor,
+                        tenderedMinor = order.tenderedMinor.takeIf { order.paymentMethod == "cash" },
+                        expectedTotalMinor = created.totalMinor,
+                        expectedDueMinor = created.dueMinor,
+                        tipMinor = order.tipMinor,
+                    ),
+                    idempotencyKey = "payment:${order.localId}",
+                    checkoutClaimToken = claimToken,
+                    provenance = outboxProvenanceHeaders(
+                        order.createdAtMillis,
+                        "payment:${order.localId}",
+                    ),
+                )
+            } catch (failure: ApiException) {
+                if (
+                    !HeldOrderClaimPolicy.shouldReacquireAfterPaymentError(failure.code) ||
+                    reacquisitions >= 2
+                ) {
+                    throw failure
+                }
+                // A committed idempotent payment replay wins before claim
+                // validation. Only a definitive lease rejection reaches here.
+                claimToken = publishAndPersistClaim()
+                reacquisitions += 1
+            }
+        }
+        val confirmedPayment = requireNotNull(paid)
 
         val finalOrder = ApiClient.api.order(created.id)
         db.posReceiptDao().storeAndMarkLocalSaleSynced(
             receipt = paymentReceipt(
                 order = finalOrder,
-                payment = paid,
+                payment = confirmedPayment,
                 sourceKind = PosReceiptSource.OFFLINE_DIRECT,
             ),
             localOrderId = order.localId,
             // The order id, not the payment id — paid.id identifies the Payment.
             serverOrderId = created.id,
-            invoiceNo = paid.invoiceNo,
+            invoiceNo = confirmedPayment.invoiceNo,
             totalMinor = created.totalMinor,
         )
     }

@@ -1,42 +1,33 @@
-"""Create a user with a chosen role from the command line.
+"""Create one non-protected ERP user without exposing a password in argv.
 
-Usage:
-    python -m scripts.create_user --email friend@example.com --name "Mo's Friend" \
-        --role auditor --password "<set-a-strong-password>"
+Examples:
 
-Roles:
-    super_owner       — protected full access (Nasih)
-    co_owner          — full operational access, no Audit Log or Access Control
-    owner             — operational, finance, asset, and payroll access
-    partner           — read-only business and finance visibility
-    manager           — daily operations and staff management
-    cashier           — POS, table orders, and shift operation
-    kitchen           — kitchen display and ticket status
-    gaming_supervisor — gaming sessions, bookings, and tournaments
-    auditor           — read-only finance and operational review (not the Audit Log)
-    staff             — table service, kitchen progress, and attendance
+    python -m scripts.create_user --email friend@example.com \
+        --name "Mo's Friend" --role auditor
 
-Only the protected ``super_owner`` role can open the Audit Log.
-
-Idempotent: re-running with the same email updates name/password/role instead of
-creating duplicates.
+The password is read twice with terminal echo disabled. Controlled automation
+may pass one line on stdin with ``--password-stdin``. Existing accounts are
+never modified; password/role changes belong to authenticated ERP workflows.
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
-from uuid import uuid4
+import getpass
+import sys
+from uuid import UUID, uuid4
 
-from sqlalchemy import delete, select
+from sqlalchemy import select
 
+from app.core.config import get_settings
 from app.core.db import AsyncSessionLocal
+from app.core.errors import BusinessRuleError
 from app.core.security import hash_password
-from app.models import Company, Role, User, UserRole
+from app.models import AuditLog, Company, Role, User, UserRole
+from app.services.auth.otp import normalize_account_email
 
 ROLES = {
-    "super_owner",
-    "co_owner",
     "owner",
     "partner",
     "manager",
@@ -46,79 +37,165 @@ ROLES = {
     "auditor",
     "staff",
 }
+_MAX_PASSWORD_LENGTH = 256
 
 
-async def upsert_user(email: str, name: str, password: str, role: str) -> None:
+def _read_password(*, password_stdin: bool) -> str:
+    if password_stdin:
+        value = sys.stdin.readline()
+        if not value:
+            raise SystemExit("No password was received on stdin.")
+        password = value.rstrip("\r\n")
+    else:
+        if not sys.stdin.isatty():
+            raise SystemExit(
+                "Interactive user creation requires a TTY; "
+                "use --password-stdin for controlled automation."
+            )
+        password = getpass.getpass("Temporary password: ")
+        confirmation = getpass.getpass("Confirm temporary password: ")
+        if password != confirmation:
+            raise SystemExit("Password confirmation did not match.")
+    minimum = get_settings().password_min_length
+    if not minimum <= len(password) <= _MAX_PASSWORD_LENGTH:
+        raise SystemExit(
+            f"Password must contain {minimum} to {_MAX_PASSWORD_LENGTH} characters."
+        )
+    return password
+
+
+async def create_user(
+    *,
+    email: str,
+    name: str,
+    password: str,
+    role: str,
+    company_id: UUID | None = None,
+) -> UUID:
     if role not in ROLES:
         raise SystemExit(f"Invalid role: {role!r}. Choose one of: {sorted(ROLES)}")
+    try:
+        normalized_email = normalize_account_email(email)
+    except BusinessRuleError as exc:
+        raise SystemExit("Email must be a valid normalized login identity.") from exc
+    if normalized_email != email:
+        raise SystemExit("Email must already be lowercase with no surrounding whitespace.")
+    normalized_name = name.strip()
+    if not normalized_name or len(normalized_name) > 120:
+        raise SystemExit("Name must contain 1 to 120 non-whitespace characters.")
 
-    async with AsyncSessionLocal() as s:
-        company = (await s.execute(select(Company).limit(1))).scalar_one_or_none()
-        if not company:
-            raise SystemExit("No company found — run `python -m scripts.seed` first.")
+    async with AsyncSessionLocal() as session:
+        if company_id is not None:
+            company = await session.get(Company, company_id)
+            if company is None:
+                raise SystemExit("The requested company does not exist.")
+        else:
+            companies = (
+                await session.execute(select(Company).order_by(Company.id).limit(2))
+            ).scalars().all()
+            if len(companies) != 1:
+                raise SystemExit(
+                    "Company is ambiguous; pass --company-id with the exact tenant UUID."
+                )
+            company = companies[0]
 
-        # Find or create the role for this company.
         role_row = (
-            await s.execute(
+            await session.execute(
                 select(Role).where(Role.company_id == company.id, Role.code == role)
             )
         ).scalar_one_or_none()
-        if not role_row:
+        if role_row is None:
             raise SystemExit(
-                f"Role {role!r} not found in seed. Re-run `python -m scripts.seed` "
-                f"or check models/seed.py."
+                f"Role {role!r} is not seeded for this company; run ensure_roles first."
             )
 
         existing = (
-            await s.execute(
-                select(User).where(User.company_id == company.id, User.email == email)
+            await session.execute(
+                select(User)
+                .where(
+                    User.company_id == company.id,
+                    User.email == normalized_email,
+                    User.deleted_at.is_(None),
+                )
+                .with_for_update()
             )
         ).scalar_one_or_none()
-
-        if existing:
-            print(f"User {email} exists — updating name + password + role.")
-            existing.name = name
-            existing.password_hash = hash_password(password)
-            existing.status = "active"
-            # Replace role bindings
-            await s.execute(delete(UserRole).where(UserRole.user_id == existing.id))
-            user_id = existing.id
-        else:
-            user_id = uuid4()
-            s.add(
-                User(
-                    id=user_id,
-                    company_id=company.id,
-                    email=email,
-                    name=name,
-                    password_hash=hash_password(password),
-                    status="active",
-                )
+        if existing is not None:
+            existing_roles = set(
+                (
+                    await session.execute(
+                        select(Role.code)
+                        .join(UserRole, UserRole.role_id == Role.id)
+                        .where(UserRole.user_id == existing.id)
+                    )
+                ).scalars()
             )
-            print(f"Created user {email}.")
+            if "super_owner" in existing_roles:
+                raise SystemExit(
+                    "Refusing to modify the protected super owner; use the dedicated "
+                    "role-preserving owner reset command."
+                )
+            raise SystemExit(
+                "A live user with this email already exists. No changes were made; "
+                "use authenticated Staff/OTP workflows for role or password changes."
+            )
 
-        # Ensure exactly one role binding (idempotent)
-        s.add(UserRole(id=uuid4(), user_id=user_id, role_id=role_row.id))
-
-        await s.commit()
-        print(f"  • role={role}")
-        print(f"  • company={company.name}")
-        print("  • login at https://YOUR_DOMAIN with this email + the password you set")
+        user_id = uuid4()
+        session.add(
+            User(
+                id=user_id,
+                company_id=company.id,
+                email=normalized_email,
+                name=normalized_name,
+                password_hash=hash_password(password),
+                status="active",
+            )
+        )
+        session.add(UserRole(id=uuid4(), user_id=user_id, role_id=role_row.id))
+        session.add(
+            AuditLog(
+                actor_user_id=None,
+                company_id=company.id,
+                action="user_created_console",
+                entity_type="User",
+                entity_id=str(user_id),
+                before=None,
+                after={
+                    "email": normalized_email,
+                    "role": role,
+                    "mechanism": "local_console_secret_input",
+                },
+                reason="operator_user_provisioning",
+            )
+        )
+        await session.commit()
+        return user_id
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(description="Create or update a user account.")
-    p.add_argument("--email", required=True)
-    p.add_argument("--name", required=True)
-    p.add_argument("--password", required=True)
-    p.add_argument(
-        "--role",
-        required=True,
-        choices=sorted(ROLES),
-        help="auditor = read-only across finance and operational review modules",
+    parser = argparse.ArgumentParser(description="Create a new non-protected ERP user.")
+    parser.add_argument("--email", required=True)
+    parser.add_argument("--name", required=True)
+    parser.add_argument("--role", required=True, choices=sorted(ROLES))
+    parser.add_argument("--company-id", type=UUID)
+    parser.add_argument(
+        "--password-stdin",
+        action="store_true",
+        help="read one password line from stdin instead of an interactive no-echo prompt",
     )
-    args = p.parse_args()
-    asyncio.run(upsert_user(args.email, args.name, args.password, args.role))
+    args = parser.parse_args()
+    user_id = asyncio.run(
+        create_user(
+            email=args.email,
+            name=args.name,
+            password=_read_password(password_stdin=args.password_stdin),
+            role=args.role,
+            company_id=args.company_id,
+        )
+    )
+    print(f"Created user {args.email} ({user_id}).")
+    print(f"Role: {args.role}")
+    print("The temporary password was not displayed; transfer it through an approved channel.")
 
 
 if __name__ == "__main__":

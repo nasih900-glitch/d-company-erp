@@ -25,6 +25,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 from uuid import UUID, uuid4
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import String, cast, delete, false, or_, select, text
 
@@ -93,6 +94,10 @@ from app.models import (
 
 
 CONFIRMATION = "I_UNDERSTAND_THIS_ERASES_A_DISPOSABLE_LOCAL_DATABASE"
+FULL_RESET_CONFIRMATION = (
+    "I_UNDERSTAND_THIS_TRUNCATES_THE_ENTIRE_DISPOSABLE_LOCAL_DATABASE"
+)
+FULL_RESET_ENV = "LIVE_E2E_FULL_DATABASE_RESET_AFTER_RUN"
 BASE_URL = os.environ.get("LIVE_E2E_BASE_URL", "https://dcompany.duckdns.org/api/v1").rstrip("/")
 DISPOSABLE_CONFIRMATION = os.environ.get("LIVE_E2E_DISPOSABLE_CONFIRMATION")
 EXPECTED_DATABASE = os.environ.get("LIVE_E2E_EXPECTED_DATABASE", "").strip()
@@ -108,7 +113,7 @@ class E2EError(RuntimeError):
 
 
 def _is_loopback_host(hostname: str | None) -> bool:
-    """Accept only localhost or a literal loopback address for the API."""
+    """Accept localhost or a loopback address, including PostgreSQL CIDR text."""
     if not hostname:
         return False
     if hostname.lower() == "localhost":
@@ -116,7 +121,14 @@ def _is_loopback_host(hostname: str | None) -> bool:
     try:
         return ipaddress.ip_address(hostname).is_loopback
     except ValueError:
-        return False
+        # PostgreSQL renders inet_server_addr() as e.g. ``127.0.0.1/32`` or
+        # ``::1/128`` when cast to text. Treat the interface address itself as
+        # authoritative while continuing to fail closed for malformed and
+        # non-loopback values.
+        try:
+            return ipaddress.ip_interface(hostname).ip.is_loopback
+        except ValueError:
+            return False
 
 
 def _validate_destructive_confirmation() -> None:
@@ -136,6 +148,41 @@ def _validate_destructive_confirmation() -> None:
             f"LIVE_E2E_EXPECTED_DATABASE must start with an allowed disposable "
             f"prefix: {allowed}"
         )
+
+
+def _full_database_reset_requested() -> bool:
+    """Return whether the separately confirmed full disposable reset is enabled."""
+    value = os.environ.get(FULL_RESET_ENV)
+    if value is None or not value.strip():
+        return False
+    if value != FULL_RESET_CONFIRMATION:
+        raise E2EError(
+            f"{FULL_RESET_ENV} must be unset or equal the exact full-reset "
+            "confirmation token"
+        )
+    return True
+
+
+def _quote_postgres_identifier(identifier: str) -> str:
+    """Quote one PostgreSQL identifier without accepting a qualified name."""
+    if not identifier or "\x00" in identifier:
+        raise E2EError("refusing to quote an empty or NUL-containing identifier")
+    escaped = identifier.replace('"', '""')
+    return f'"{escaped}"'
+
+
+def _build_full_reset_sql(table_names: list[str]) -> str | None:
+    """Build one safely quoted TRUNCATE statement for catalog-sourced tables."""
+    names = sorted(set(table_names))
+    if "alembic_version" in names:
+        raise E2EError("refusing to include alembic_version in a full reset")
+    if not names:
+        return None
+    public_schema = _quote_postgres_identifier("public")
+    qualified = ", ".join(
+        f"{public_schema}.{_quote_postgres_identifier(name)}" for name in names
+    )
+    return f"TRUNCATE TABLE {qualified} RESTART IDENTITY CASCADE"
 
 
 async def _assert_disposable_database(session: Any, *, operation: str) -> str:
@@ -462,6 +509,47 @@ async def setup_identity() -> dict[str, Any]:
             "password": password,
             "original_webhook_url": original_webhook_url,
         }
+
+
+PUBLIC_ORDINARY_TABLES_SQL = """
+SELECT table_name
+FROM information_schema.tables
+WHERE table_schema = 'public'
+  AND table_type = 'BASE TABLE'
+  AND table_name <> 'alembic_version'
+ORDER BY table_name
+"""
+
+
+async def _truncate_public_ordinary_tables(session: Any) -> list[str]:
+    """Enumerate and truncate public base tables while preserving migrations."""
+    table_names = [
+        str(value)
+        for value in (
+            await session.execute(text(PUBLIC_ORDINARY_TABLES_SQL))
+        ).scalars()
+    ]
+    statement = _build_full_reset_sql(table_names)
+    if statement is not None:
+        await session.execute(text(statement))
+    return table_names
+
+
+async def reset_disposable_database() -> dict[str, int]:
+    """Reset all application data only after both destructive confirmations."""
+    if not _full_database_reset_requested():
+        raise E2EError(
+            f"refusing full reset: set {FULL_RESET_ENV} to the exact full-reset "
+            "confirmation token"
+        )
+    async with AsyncSessionLocal() as session:
+        await _assert_disposable_database(
+            session,
+            operation="full disposable database reset",
+        )
+        table_names = await _truncate_public_ordinary_tables(session)
+        await session.commit()
+    return {"full_database_reset_tables": len(table_names)}
 
 
 async def cleanup(identity: dict[str, Any] | None = None) -> dict[str, int]:
@@ -1067,10 +1155,53 @@ def check(condition: bool, label: str, checks: list[str]) -> None:
     checks.append(label)
 
 
+def _business_report_periods(
+    company: dict[str, Any],
+    *,
+    now_utc: datetime | None = None,
+) -> dict[str, str | int]:
+    """Resolve report parameters in the configured business timezone."""
+    timezone_name = str(company.get("timezone") or "").strip()
+    try:
+        business_timezone = ZoneInfo(timezone_name)
+    except (ValueError, ZoneInfoNotFoundError) as exc:
+        raise E2EError(
+            "settings company returned an invalid business timezone"
+        ) from exc
+    fiscal_year_start_month = int(company.get("fiscal_year_start_month") or 4)
+    if not 1 <= fiscal_year_start_month <= 12:
+        raise E2EError("settings company returned an invalid fiscal year start month")
+    instant = now_utc or datetime.now(timezone.utc)
+    if instant.tzinfo is None:
+        raise E2EError("report clock must be timezone-aware")
+    local_now = instant.astimezone(business_timezone)
+    fiscal_year_start = (
+        local_now.year
+        if local_now.month >= fiscal_year_start_month
+        else local_now.year - 1
+    )
+    fiscal_quarter = (
+        (local_now.month - fiscal_year_start_month) % 12
+    ) // 3 + 1
+    return {
+        "today": local_now.date().isoformat(),
+        "yyyy_mm": local_now.strftime("%Y-%m"),
+        "fiscal_year": (
+            f"{fiscal_year_start}-{str(fiscal_year_start + 1)[-2:]}"
+        ),
+        "fiscal_quarter": fiscal_quarter,
+    }
+
+
 async def main() -> int:
     verified_database: str | None = None
+    full_reset_after_run = False
     try:
         _validate_destructive_confirmation()
+        # Validate the optional second confirmation before creating test data.
+        # A typo must block the run instead of silently falling back to cleanup
+        # that cannot delete rows protected by the append-only schema.
+        full_reset_after_run = _full_database_reset_requested()
         async with AsyncSessionLocal() as session:
             verified_database = await _assert_disposable_database(
                 session,
@@ -1088,6 +1219,12 @@ async def main() -> int:
     checks: list[str] = []
     cleanup_counts: dict[str, int] = {}
     residual_counts: dict[str, int] = {}
+    cleanup_mode = (
+        "full_disposable_database_reset"
+        if full_reset_after_run
+        else "targeted_marker_cleanup"
+    )
+    residual_scan_status = "not_run"
     failures: list[str] = []
     status = "FAIL"
 
@@ -1609,7 +1746,10 @@ async def main() -> int:
             token=token,
             payload={
                 "name": f"{MARKER} Partner",
-                "share_pct": 1.0,
+                # This is the disposable company's only partner. Distribution
+                # calculations deliberately fail closed unless configured
+                # ownership totals exactly 100%.
+                "share_pct": 100.0,
                 "joined_at": datetime.now(timezone.utc).isoformat(),
                 "notes": MARKER,
             },
@@ -2384,9 +2524,14 @@ async def main() -> int:
             },
             expected=(422,),
         )
+        missing_terminal_message = missing_terminal_raw.decode(
+            "utf-8",
+            errors="replace",
+        ).lower()
         check(
-            "x-terminal-id" in missing_terminal_raw.decode("utf-8", errors="replace").lower(),
-            "gaming start rejects a missing terminal before creating a session",
+            "select a terminal in this shop" in missing_terminal_message
+            and "gaming sessions" in missing_terminal_message,
+            "gaming start rejects a missing terminal with actionable selection guidance",
             checks,
         )
 
@@ -2607,12 +2752,11 @@ async def main() -> int:
             checks,
         )
 
-        now = datetime.now(timezone.utc)
-        today = now.date().isoformat()
-        yyyy_mm = now.strftime("%Y-%m")
-        fy_start = now.year if now.month >= 4 else now.year - 1
-        fy = f"{fy_start}-{str(fy_start + 1)[-2:]}"
-        fiscal_quarter = ((now.month - 4) % 12) // 3 + 1
+        report_periods = _business_report_periods(company)
+        today = str(report_periods["today"])
+        yyyy_mm = str(report_periods["yyyy_mm"])
+        fy = str(report_periods["fiscal_year"])
+        fiscal_quarter = int(report_periods["fiscal_quarter"])
         report_daily = http_json("GET", f"/reports/daily?on_date={today}", token=token)
         report_monthly = http_json("GET", f"/reports/monthly?yyyy_mm={yyyy_mm}", token=token)
         report_quarterly = http_json(
@@ -2946,9 +3090,16 @@ async def main() -> int:
             payload={"counted_minor": expected_cash_at_close},
             expected=(422,),
         )
+        blocked_close_body = json.loads(blocked_close_raw.decode("utf-8"))
+        blocked_close_error = blocked_close_body.get("error", {})
+        blocked_close_details = blocked_close_error.get("details", {})
         check(
             stopped_unsent.get("status") == "ended"
-            and b"not yet sent to pos" in blocked_close_raw.lower(),
+            and blocked_close_details.get("issue") == "unbilled_gaming_sessions"
+            and blocked_close_details.get("blocker_count") == 1
+            and blocked_close_details.get("opened_by_name") == f"{MARKER} User"
+            and "send every payment-due session to pos"
+            in str(blocked_close_details.get("next_action", "")).lower(),
             "shift close is blocked while a stopped session remains unbilled",
             checks,
         )
@@ -3030,19 +3181,32 @@ async def main() -> int:
     except Exception as exc:
         failures.append(str(exc))
     finally:
+        cleanup_succeeded = False
         try:
-            cleanup_counts = await cleanup(identity)
+            cleanup_counts = (
+                await reset_disposable_database()
+                if full_reset_after_run
+                else await cleanup(identity)
+            )
+            cleanup_succeeded = True
         except Exception as exc:
             failures.append(f"cleanup failed: {exc}")
             status = "FAIL"
-        try:
-            residual_counts = await residual_scan()
-            if any(residual_counts.values()):
-                failures.append(f"residual marker rows remain: {residual_counts}")
+        if full_reset_after_run and cleanup_succeeded:
+            # The single TRUNCATE covers every public base table other than
+            # alembic_version. A marker scan after that adds no evidence and
+            # would only re-open a connection after the atomic reset committed.
+            residual_scan_status = "skipped_after_full_database_reset"
+        else:
+            try:
+                residual_counts = await residual_scan()
+                residual_scan_status = "completed"
+                if any(residual_counts.values()):
+                    failures.append(f"residual marker rows remain: {residual_counts}")
+                    status = "FAIL"
+            except Exception as exc:
+                failures.append(f"residual scan failed: {exc}")
                 status = "FAIL"
-        except Exception as exc:
-            failures.append(f"residual scan failed: {exc}")
-            status = "FAIL"
 
     result = {
         "status": status if not failures else "FAIL",
@@ -3051,8 +3215,10 @@ async def main() -> int:
         "base_url": BASE_URL,
         "database": verified_database,
         "checks": checks,
+        "cleanup_mode": cleanup_mode,
         "cleanup_counts": cleanup_counts,
         "residual_counts": residual_counts,
+        "residual_scan_status": residual_scan_status,
         "failures": failures,
     }
     rendered = json.dumps(result, indent=2, sort_keys=True)

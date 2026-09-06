@@ -629,7 +629,7 @@ export default function MembershipsScreen() {
                   <span className="sr-only">Customer name or phone</span>
                   <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-fg-muted" size={16}/>
                   <input
-                    className="input pl-10"
+                    className="input !pl-10"
                     value={query}
                     onChange={(event) => { setQuery(event.target.value); setSearchResults([]); }}
                     placeholder="Name or phone"

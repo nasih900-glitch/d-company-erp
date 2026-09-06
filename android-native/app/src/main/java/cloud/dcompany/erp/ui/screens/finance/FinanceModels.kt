@@ -1,5 +1,7 @@
 package cloud.dcompany.erp.ui.screens.finance
 
+import cloud.dcompany.erp.core.errors.RecoveryRisk
+import cloud.dcompany.erp.core.errors.recoveryGuidance
 import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.ui.WorkspacePresentationPolicy
 import cloud.dcompany.erp.core.net.MeResponse
@@ -246,7 +248,19 @@ data class DistributablePartnerShare(
     @SerialName("share_pct") val sharePct: Double,
     @SerialName("capital_balance_minor") val capitalBalanceMinor: Long,
     @SerialName("lifetime_withdrawn_minor") val lifetimeWithdrawnMinor: Long,
+    /** Compatibility value; zero while the server has unresolved historical COGS. */
     @SerialName("distributable_share_minor") val distributableShareMinor: Long,
+    @SerialName("authoritative_distributable_share_minor")
+    val authoritativeDistributableShareMinor: Long? = null,
+)
+
+@Serializable
+data class AllocationCostingConfidence(
+    val status: String,
+    @SerialName("inventory_orders_checked") val inventoryOrdersChecked: Int,
+    @SerialName("inventory_lines_checked") val inventoryLinesChecked: Int,
+    @SerialName("unresolved_order_count") val unresolvedOrderCount: Int,
+    val reason: String? = null,
 )
 
 @Serializable
@@ -281,13 +295,52 @@ data class DistributableProfit(
     @SerialName("cash_position") val cashPosition: FinanceCashPosition? = null,
     @SerialName("profit_based_capacity_minor") val profitBasedCapacityMinor: Long,
     @SerialName("cash_based_capacity_minor") val cashBasedCapacityMinor: Long,
+    /** Compatibility value; zero while the new nullable contract is unavailable. */
     @SerialName("safe_to_distribute_minor") val safeToDistributeMinor: Long,
+    @SerialName("authoritative_safe_to_distribute_minor")
+    val authoritativeSafeToDistributeMinor: Long? = null,
+    @SerialName("allocation_status") val allocationStatus: String? = null,
+    @SerialName("allocation_unavailable_reason") val allocationUnavailableReason: String? = null,
+    @SerialName("costing_confidence") val costingConfidence: AllocationCostingConfidence? = null,
     val partners: List<DistributablePartnerShare> = emptyList(),
 )
 
 /** Return value only when both new 0050 fields agree; never trust the legacy aggregate. */
 internal fun DistributableProfit.authoritativeSpendableCashMinor(): Long? =
     spendableCashBankMinor?.takeIf { cashPosition?.spendableCashBankMinor == it }
+
+/** A missing rolling-update field or any disagreement fails closed. */
+internal fun DistributableProfit.hasAuthoritativeAllocationCosting(): Boolean {
+    val confidence = costingConfidence ?: return false
+    return allocationStatus == "authoritative" &&
+        allocationUnavailableReason.isNullOrBlank() &&
+        confidence.status == "authoritative" &&
+        confidence.unresolvedOrderCount == 0 &&
+        confidence.inventoryOrdersChecked >= 0 &&
+        confidence.inventoryLinesChecked >= confidence.inventoryOrdersChecked
+}
+
+internal fun DistributableProfit.authoritativeDistributionCapMinor(): Long? =
+    authoritativeSafeToDistributeMinor?.takeIf {
+        hasAuthoritativeAllocationCosting() &&
+            authoritativeSpendableCashMinor() != null &&
+            it == safeToDistributeMinor
+    }
+
+internal fun DistributableProfit.authoritativePartnerDistributionMinor(
+    share: DistributablePartnerShare,
+): Long? = share.authoritativeDistributableShareMinor?.takeIf {
+    authoritativeDistributionCapMinor() != null && it == share.distributableShareMinor
+}
+
+internal fun DistributableProfit.authoritativeAllocationUnavailableReason(): String =
+    allocationUnavailableReason?.takeIf { it.isNotBlank() }
+        ?: if (hasAuthoritativeAllocationCosting()) {
+            CASH_CONTRACT_UNAVAILABLE
+        } else {
+            "Partner allocations are unavailable because the server could not verify complete " +
+                "historical product costing. Reconcile product recipes and stock costs, then refresh Finance."
+        }
 
 internal const val SPENDABLE_FUNDS_LABEL = "Spendable cash · till + bank"
 internal const val SPENDABLE_FUNDS_DETAIL =
@@ -315,7 +368,12 @@ internal fun financeLoadFailureMessage(hasSavedFigures: Boolean, online: Boolean
         "Finance is offline. Saved figures remain visible and will refresh automatically after reconnection."
     !online ->
         "Finance has not loaded for this account yet. Reconnect, then refresh once to make saved figures available offline."
-    hasSavedFigures -> "Could not refresh Finance. Saved figures remain visible; try again."
+    hasSavedFigures -> recoveryGuidance(
+        risk = RecoveryRisk.READ,
+        failure = null,
+        subject = "Finance",
+        localStatePreserved = true,
+    ).message
     else -> "Could not load Finance. Check access and the connection, then try again."
 }
 
@@ -413,7 +471,7 @@ private val DAY_SHORT: DateTimeFormatter = DateTimeFormatter.ofPattern("d MMM", 
 private fun localDateOrNull(iso: String?): LocalDate? {
     if (iso.isNullOrBlank()) return null
     return runCatching {
-        OffsetDateTime.parse(iso).atZoneSameInstant(ZoneId.systemDefault()).toLocalDate()
+        OffsetDateTime.parse(iso).atZoneSameInstant(FINANCE_BUSINESS_ZONE).toLocalDate()
     }.recoverCatching {
         LocalDateTime.parse(iso).toLocalDate()
     }.recoverCatching {

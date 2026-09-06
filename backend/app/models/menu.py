@@ -32,6 +32,15 @@ class MenuCategory(Base, TimestampMixin, SoftDeleteMixin, TenantMixin):
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
     icon: Mapped[str | None] = mapped_column(String(64))
+    # Stable release-profile classification.  Category names are editable
+    # presentation text and must never decide whether packaged products remain
+    # available in the Gaming Centre POS/add-on catalogue.
+    is_gaming_centre_catalog: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default=text("false"),
+        nullable=False,
+    )
 
 
 class MenuItem(Base, TimestampMixin, SoftDeleteMixin, TenantMixin):

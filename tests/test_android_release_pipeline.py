@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import re
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -15,9 +17,19 @@ DIRECT_MANIFEST = (
 INSTALL_PERMISSION = "android.permission.REQUEST_INSTALL_PACKAGES"
 CADDYFILE = ROOT / "infra" / "caddy" / "Caddyfile"
 PROD_COMPOSE = ROOT / "docker-compose.prod.yml"
+PRODUCTION_INSTALLER = ROOT / "infra" / "scripts" / "install-on-vm.sh"
 GRADLE_WRAPPER = (
     ROOT / "android-native" / "gradle" / "wrapper" / "gradle-wrapper.properties"
 )
+GRADLE_BUILD = ROOT / "android-native" / "build.gradle.kts"
+GRADLE_VERIFICATION_METADATA = (
+    ROOT / "android-native" / "gradle" / "verification-metadata.xml"
+)
+APP_DEPENDENCY_LOCK = ROOT / "android-native" / "app" / "gradle.lockfile"
+AUDIT_DRIVER_DEPENDENCY_LOCK = (
+    ROOT / "android-native" / "audit-driver" / "gradle.lockfile"
+)
+APP_GRADLE_BUILD = ROOT / "android-native" / "app" / "build.gradle.kts"
 ANDROID_APPLICATION = (
     ROOT
     / "android-native"
@@ -30,9 +42,131 @@ ANDROID_APPLICATION = (
     / "erp"
     / "DCompanyApp.kt"
 )
+ANDROID_COMPATIBILITY = (
+    ROOT
+    / "android-native"
+    / "app"
+    / "src"
+    / "main"
+    / "java"
+    / "cloud"
+    / "dcompany"
+    / "erp"
+    / "core"
+    / "net"
+    / "ClientCompatibility.kt"
+)
+RUNTIME_PARITY = ROOT / "backend" / "app" / "services" / "client_updates" / "runtime_parity.py"
+RUNTIME_PARITY_SUPERVISOR = (
+    ROOT
+    / "backend"
+    / "app"
+    / "services"
+    / "client_updates"
+    / "runtime_parity_supervisor.py"
+)
+PUBLIC_ROUTER = ROOT / "backend" / "app" / "api" / "v1" / "public" / "router.py"
+WORKFLOW_USES_RE = re.compile(r"^\s*(?:-\s*)?uses:\s+([^\s#]+)", re.MULTILINE)
+
+
+def external_actions(source: str) -> list[str]:
+    """Return every remote action reference, including named-step `uses:` keys."""
+
+    return [
+        action
+        for action in WORKFLOW_USES_RE.findall(source)
+        if not action.startswith("./")
+    ]
 
 
 class AndroidReleasePipelineTest(unittest.TestCase):
+    def test_android_compatibility_deadlines_cover_current_and_legacy_clients(self) -> None:
+        client = ANDROID_COMPATIBILITY.read_text(encoding="utf-8")
+        server = RUNTIME_PARITY.read_text(encoding="utf-8")
+        supervisor = RUNTIME_PARITY_SUPERVISOR.read_text(encoding="utf-8")
+        public_router = PUBLIC_ROUTER.read_text(encoding="utf-8")
+        client_match = re.search(
+            r"DEFAULT_COMPATIBILITY_CHECK_TIMEOUT_MILLIS\s*=\s*([0-9_]+)L",
+            client,
+        )
+        server_match = re.search(
+            r"RUNTIME_PARITY_TOTAL_TIMEOUT_SECONDS\s*=\s*([0-9.]+)",
+            server,
+        )
+        legacy_match = re.search(
+            r"LEGACY_CODE21_COMPATIBILITY_TIMEOUT_SECONDS\s*=\s*([0-9.]+)",
+            server,
+        )
+        caller_match = re.search(
+            r"PUBLIC_RUNTIME_PARITY_CALLER_WAIT_SECONDS\s*=\s*([0-9.]+)",
+            server,
+        )
+        offer_match = re.search(
+            r"PUBLIC_COMPATIBILITY_OFFER_BUDGET_SECONDS\s*=\s*([0-9.]+)",
+            public_router,
+        )
+        ttl_match = re.search(
+            r"PUBLIC_RUNTIME_PARITY_ATTESTATION_TTL_SECONDS\s*=\s*([0-9.]+)",
+            server,
+        )
+        refresh_match = re.search(
+            r"PUBLIC_RUNTIME_PARITY_REFRESH_INTERVAL_SECONDS\s*=\s*([0-9.]+)",
+            supervisor,
+        )
+        refresh_deadline_match = re.search(
+            r"PUBLIC_RUNTIME_PARITY_REFRESH_DEADLINE_SECONDS\s*=\s*([0-9.]+)",
+            supervisor,
+        )
+
+        self.assertIsNotNone(client_match)
+        self.assertIsNotNone(server_match)
+        self.assertIsNotNone(legacy_match)
+        self.assertIsNotNone(caller_match)
+        self.assertIsNotNone(offer_match)
+        self.assertIsNotNone(ttl_match)
+        self.assertIsNotNone(refresh_match)
+        self.assertIsNotNone(refresh_deadline_match)
+        client_millis = int(client_match.group(1).replace("_", ""))
+        server_millis = round(float(server_match.group(1)) * 1_000)
+        legacy_millis = round(float(legacy_match.group(1)) * 1_000)
+        caller_millis = round(float(caller_match.group(1)) * 1_000)
+        offer_millis = round(float(offer_match.group(1)) * 1_000)
+        ttl_millis = round(float(ttl_match.group(1)) * 1_000)
+        refresh_millis = round(float(refresh_match.group(1)) * 1_000)
+        refresh_deadline_millis = round(float(refresh_deadline_match.group(1)) * 1_000)
+        self.assertGreaterEqual(client_millis, server_millis + 1_000)
+        self.assertEqual(3_000, legacy_millis)
+        self.assertLessEqual(offer_millis, legacy_millis - 1_000)
+        self.assertLessEqual(caller_millis, offer_millis - 500)
+        self.assertLessEqual(
+            refresh_millis + refresh_deadline_millis + 1_000,
+            ttl_millis,
+        )
+
+    def test_code14_legacy_bridge_is_exactly_pinned_and_fail_closed(self) -> None:
+        installer = PRODUCTION_INSTALLER.read_text(encoding="utf-8")
+
+        self.assertIn(
+            'KNOWN_CODE14_REVISION="e5e90df5781e93681b8e9dcdd1ae9a6a5fb6a0b9"',
+            installer,
+        )
+        self.assertIn('KNOWN_CODE14_SHORT_REVISION="e5e90df"', installer)
+        self.assertIn('[ "$PRIOR_DB_HEAD" != 0058 ]', installer)
+        self.assertIn('[ "$image_version" != 3.1.3 ]', installer)
+        self.assertIn(
+            '[ "$IMAGE_REVISION" != "$KNOWN_CODE14_SHORT_REVISION" ]', installer
+        )
+        self.assertIn(
+            'PRIOR_REVISION=$LEGACY_CODE14_REVISION', installer
+        )
+        self.assertIn(
+            'git cat-file -e "$PRIOR_REVISION^{commit}"', installer
+        )
+        self.assertIn(
+            'Immutable backend image contents do not match the selected prior commit.',
+            installer,
+        )
+
     def test_ci_and_release_prove_the_target_tablet_viewport(self) -> None:
         ci_workflow = CI_WORKFLOW.read_text(encoding="utf-8")
         release_workflow = WORKFLOW.read_text(encoding="utf-8")
@@ -75,6 +209,24 @@ class AndroidReleasePipelineTest(unittest.TestCase):
         self.assertEqual(1, len(checksum_lines))
         self.assertRegex(checksum_lines[0].split("=", 1)[1], r"^[0-9a-f]{64}$")
 
+    def test_gradle_dependencies_are_locked_and_checksum_verified(self) -> None:
+        root_build = GRADLE_BUILD.read_text(encoding="utf-8")
+        verification = GRADLE_VERIFICATION_METADATA.read_text(encoding="utf-8")
+        app_lock = APP_DEPENDENCY_LOCK.read_text(encoding="utf-8")
+        audit_lock = AUDIT_DRIVER_DEPENDENCY_LOCK.read_text(encoding="utf-8")
+        app_build = APP_GRADLE_BUILD.read_text(encoding="utf-8")
+
+        self.assertIn("lockAllConfigurations()", root_build)
+        self.assertIn("LockMode.STRICT", root_build)
+        self.assertIn("<verify-metadata>true</verify-metadata>", verification)
+        self.assertRegex(verification, r'<sha256 value="[0-9a-f]{64}"')
+        self.assertIn("androidx.compose.ui:ui-android:1.7.5=", app_lock)
+        self.assertIn(
+            "androidx.test.uiautomator:uiautomator:2.3.0=", audit_lock
+        )
+        self.assertIn("includeInBundle = false", app_build)
+        self.assertGreater(len(verification.splitlines()), 100)
+
     def test_play_and_direct_variants_are_built_linted_and_unit_tested(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
 
@@ -89,6 +241,60 @@ class AndroidReleasePipelineTest(unittest.TestCase):
         ):
             with self.subTest(task=task):
                 self.assertIn(task, workflow)
+
+    def test_release_variants_compile_sequentially_with_bounded_memory(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        build_start = workflow.index("  build-android:")
+        verifier_start = workflow.index("  verify-android-reproducibility:")
+        build_job = workflow[build_start:verifier_start]
+
+        self.assertIn("--max-workers=1", build_job)
+        self.assertIn("-Xmx4096m", build_job)
+        self.assertIn("kotlin.compiler.execution.strategy=in-process", build_job)
+        self.assertIn(
+            "gradle_release :app:lintRelease\n"
+            "          gradle_release :app:lintDirectRelease",
+            build_job,
+        )
+        self.assertIn(
+            "gradle_release :app:testReleaseUnitTest\n"
+            "          gradle_release :app:testDirectReleaseUnitTest",
+            build_job,
+        )
+        self.assertIn(
+            "gradle_release :app:assembleRelease :app:bundleRelease\n"
+            "          gradle_release :app:assembleDirectRelease",
+            build_job,
+        )
+        self.assertNotIn("lintRelease lintDirectRelease", build_job)
+        self.assertNotIn(
+            "testReleaseUnitTest testDirectReleaseUnitTest", build_job
+        )
+
+    def test_reproducibility_verifier_matches_the_bounded_producer_build(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        verifier_start = workflow.index("  verify-android-reproducibility:")
+        sign_start = workflow.index("  sign-android:", verifier_start)
+        verifier_job = workflow[verifier_start:sign_start]
+
+        play = "gradle_release :app:assembleRelease :app:bundleRelease"
+        direct = "gradle_release :app:assembleDirectRelease"
+        self.assertLess(verifier_job.index(play), verifier_job.index(direct))
+        self.assertNotIn(
+            ":app:assembleRelease :app:bundleRelease :app:assembleDirectRelease",
+            verifier_job,
+        )
+        self.assertIn("--dependency-verification=strict", verifier_job)
+        self.assertIn("--max-workers=1", verifier_job)
+        self.assertIn("-Xmx4096m", verifier_job)
+
+    def test_signing_job_requires_the_protected_release_environment(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        sign_start = workflow.index("  sign-android:")
+        release_start = workflow.index("  release:", sign_start)
+        sign_job = workflow[sign_start:release_start]
+
+        self.assertIn("environment: android-release-signing", sign_job)
 
     def test_only_the_direct_source_set_requests_installer_permission(self) -> None:
         self.assertNotIn(INSTALL_PERMISSION, MAIN_MANIFEST.read_text(encoding="utf-8"))
@@ -122,11 +328,17 @@ class AndroidReleasePipelineTest(unittest.TestCase):
         workflow = WORKFLOW.read_text(encoding="utf-8")
 
         self.assertIn(
-            "apkanalyzer manifest permissions unsigned/play-unsigned.apk", workflow
+            '"$apkanalyzer" manifest permissions unsigned/play-unsigned.apk',
+            workflow,
         )
         self.assertIn(
-            "apkanalyzer manifest permissions unsigned/direct-unsigned.apk", workflow
+            '"$apkanalyzer" manifest permissions unsigned/direct-unsigned.apk',
+            workflow,
         )
+        self.assertIn('play_permissions="$("$apkanalyzer" manifest permissions', workflow)
+        self.assertIn('direct_permissions="$("$apkanalyzer" manifest permissions', workflow)
+        self.assertIn('grep -Fxq "$install_permission" <<< "$play_permissions"', workflow)
+        self.assertIn('grep -Fxq "$install_permission" <<< "$direct_permissions"', workflow)
         self.assertIn(
             'grep -Fq \'android:name="android.permission.REQUEST_INSTALL_PACKAGES"\' '
             "unsigned/play-AndroidManifest.xml",
@@ -151,11 +363,11 @@ class AndroidReleasePipelineTest(unittest.TestCase):
 
         self.assertIn('signed_dir="$RUNNER_TEMP/signed-android"', sign_job)
         self.assertIn(
-            'play_version_code="$(apkanalyzer manifest version-code "$play_apk")"',
+            'play_version_code="$("$apkanalyzer" manifest version-code "$play_apk")"',
             sign_job,
         )
         self.assertIn(
-            'direct_version_code="$(apkanalyzer manifest version-code "$direct_apk")"',
+            'direct_version_code="$("$apkanalyzer" manifest version-code "$direct_apk")"',
             sign_job,
         )
         self.assertIn('readarray -t expected_version', workflow)
@@ -177,10 +389,12 @@ class AndroidReleasePipelineTest(unittest.TestCase):
 
         instrumentation_start = workflow.index("  android-instrumentation:")
         build_start = workflow.index("  build-android:")
+        verifier_start = workflow.index("  verify-android-reproducibility:")
         sign_start = workflow.index("  sign-android:")
         release_start = workflow.index("  release:")
         instrumentation_job = workflow[instrumentation_start:build_start]
-        build_job = workflow[build_start:sign_start]
+        build_job = workflow[build_start:verifier_start]
+        verifier_job = workflow[verifier_start:sign_start]
         sign_job = workflow[sign_start:release_start]
         release_job = workflow[release_start:]
 
@@ -196,7 +410,16 @@ class AndroidReleasePipelineTest(unittest.TestCase):
         self.assertNotIn("cache: gradle", build_job)
         self.assertNotIn("ANDROID_KEYSTORE_BASE64", build_job)
         self.assertNotIn("ANDROID_KEYSTORE_PASSWORD", build_job)
-        self.assertIn("needs: build-android", sign_job)
+        self.assertIn(
+            "needs: [build-android, verify-android-reproducibility]", sign_job
+        )
+        self.assertIn("needs: build-android", verifier_job)
+        self.assertIn("--dependency-verification=strict", build_job)
+        self.assertIn("--dependency-verification=strict", verifier_job)
+        self.assertIn("cmp --silent", verifier_job)
+        self.assertIn("artifact-ids:", verifier_job)
+        self.assertNotIn("ANDROID_KEYSTORE_BASE64", verifier_job)
+        self.assertNotIn("cache: gradle", verifier_job)
         self.assertNotIn("./gradlew", sign_job)
         self.assertNotIn("reactivecircus/android-emulator-runner@", sign_job)
         self.assertNotIn("android-actions/setup-android@", sign_job)
@@ -226,11 +449,20 @@ class AndroidReleasePipelineTest(unittest.TestCase):
         }
         build_actions = {
             action.split("@", 1)[0]
-            for action in re.findall(
-                r"^\s*- uses:\s+([^\s#]+)", build_job, re.MULTILINE
-            )
+            for action in external_actions(build_job)
         }
         self.assertEqual(allowed_build_actions, build_actions)
+        self.assertEqual(
+            {
+                "actions/checkout",
+                "actions/setup-java",
+                "actions/download-artifact",
+            },
+            {
+                action.split("@", 1)[0]
+                for action in external_actions(verifier_job)
+            },
+        )
         allowed_sign_actions = {
             "actions/checkout",
             "actions/setup-java",
@@ -239,18 +471,14 @@ class AndroidReleasePipelineTest(unittest.TestCase):
         }
         sign_actions = {
             action.split("@", 1)[0]
-            for action in re.findall(
-                r"^\s*- uses:\s+([^\s#]+)", sign_job, re.MULTILINE
-            )
+            for action in external_actions(sign_job)
         }
         self.assertEqual(allowed_sign_actions, sign_actions)
         self.assertEqual(
             {"actions/download-artifact"},
             {
                 action.split("@", 1)[0]
-                for action in re.findall(
-                    r"^\s*- uses:\s+([^\s#]+)", release_job, re.MULTILINE
-                )
+                for action in external_actions(release_job)
             },
         )
         for floating_action in (
@@ -265,16 +493,18 @@ class AndroidReleasePipelineTest(unittest.TestCase):
             with self.subTest(floating_action=floating_action):
                 self.assertNotIn(floating_action, workflow)
 
-        for action in re.findall(r"^\s*- uses:\s+([^\s#]+)", workflow, re.MULTILINE):
+        for action in external_actions(workflow):
             with self.subTest(action=action):
                 self.assertRegex(action, r"@[0-9a-f]{40}$")
 
     def test_gradle_and_signing_material_are_isolated_between_jobs(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
         build_start = workflow.index("  build-android:")
+        verifier_start = workflow.index("  verify-android-reproducibility:")
         sign_start = workflow.index("  sign-android:")
         release_start = workflow.index("  release:")
-        build_job = workflow[build_start:sign_start]
+        build_job = workflow[build_start:verifier_start]
+        verifier_job = workflow[verifier_start:sign_start]
         sign_job = workflow[sign_start:release_start]
 
         unsigned_build = build_job.index("Build unsigned Play and direct Android releases")
@@ -302,10 +532,23 @@ class AndroidReleasePipelineTest(unittest.TestCase):
         self.assertNotIn("ANDROID_KEYSTORE_PASSWORD", build_job)
         self.assertNotIn("ANDROID_KEY_ALIAS", build_job)
         self.assertNotIn("ANDROID_KEY_PASSWORD", build_job)
+        self.assertNotIn("ANDROID_KEYSTORE_BASE64", verifier_job)
+        self.assertNotIn("ANDROID_KEYSTORE_PASSWORD", verifier_job)
+        self.assertIn("cmp --silent", verifier_job)
+        self.assertIn("play-unsigned.aab", verifier_job)
         self.assertNotIn("./gradlew", sign_job)
         self.assertIn("test ! -e android-native/dcompany-release.keystore", build_job)
         self.assertIn("sha256sum --check --strict UNSIGNED_SHA256SUMS", sign_job)
         self.assertIn("ANDROID_BUILD_TOOLS_VERSION: '35.0.0'", sign_job)
+        self.assertEqual(
+            2,
+            sign_job.count(
+                'apkanalyzer="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/apkanalyzer"'
+            ),
+        )
+        self.assertEqual(2, sign_job.count('test -x "$apkanalyzer"'))
+        self.assertNotIn("command -v apkanalyzer", sign_job)
+        self.assertIsNone(re.search(r"(?m)^\s*apkanalyzer\s", sign_job))
         self.assertIn(
             'build_tools="$ANDROID_SDK_ROOT/build-tools/'
             '$ANDROID_BUILD_TOOLS_VERSION"',
@@ -318,6 +561,46 @@ class AndroidReleasePipelineTest(unittest.TestCase):
         self.assertIn("-keypass:env ANDROID_KEY_PASSWORD", sign_job)
         self.assertNotIn("storePassword=", sign_job)
         self.assertNotIn("keyPassword=", sign_job)
+
+    def test_signer_uses_sdk_root_when_cmdline_tools_are_not_on_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            sdk_root = Path(temporary) / "sdk"
+            apkanalyzer = (
+                sdk_root / "cmdline-tools" / "latest" / "bin" / "apkanalyzer"
+            )
+            apkanalyzer.parent.mkdir(parents=True)
+            apkanalyzer.write_text(
+                "#!/bin/sh\nprintf '%s\\n' cloud.dcompany.erp\n",
+                encoding="utf-8",
+            )
+            apkanalyzer.chmod(0o755)
+            script = """
+                set -euo pipefail
+                apkanalyzer="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/apkanalyzer"
+                test -x "$apkanalyzer"
+                test "$("$apkanalyzer" manifest application-id ignored.apk)" = cloud.dcompany.erp
+            """
+            environment = {
+                "ANDROID_SDK_ROOT": str(sdk_root),
+                "PATH": "/usr/bin:/bin",
+            }
+
+            subprocess.run(
+                ["/bin/bash", "-c", script],
+                check=True,
+                env=environment,
+                capture_output=True,
+                text=True,
+            )
+            apkanalyzer.chmod(0o644)
+            with self.assertRaises(subprocess.CalledProcessError):
+                subprocess.run(
+                    ["/bin/bash", "-c", script],
+                    check=True,
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                )
 
     def test_release_signer_is_pinned_to_out_of_band_fingerprint(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
@@ -351,31 +634,106 @@ class AndroidReleasePipelineTest(unittest.TestCase):
             'test "$(find "$package_dir" -mindepth 1 -maxdepth 1 -type f', workflow
         )
 
+        authority_start = workflow.index("  release-authority:")
+        coordinated_start = workflow.index("  coordinated-release-gates:")
+        signing_start = workflow.index("  sign-android:")
+        pre_secret_check = workflow.index(
+            "Recheck immutable release identity before secret use", signing_start
+        )
+        secret_requirement = workflow.index(
+            "Require Android signing secrets", signing_start
+        )
+        self.assertLess(authority_start, coordinated_start)
+        self.assertIn("needs: release-authority", workflow[coordinated_start:])
+        self.assertLess(pre_secret_check, secret_requirement)
+        self.assertIn('404) echo "Release identity $RELEASE_REF is unused."', workflow)
+        self.assertIn('200)', workflow[authority_start:coordinated_start])
+        self.assertIn(
+            "GitHub release authority returned HTTP $http_status; refusing release.",
+            workflow[authority_start:coordinated_start],
+        )
+
+    def test_release_publication_rechecks_live_tag_commit_before_and_after_draft(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        release_start = workflow.index("  release:")
+        release_job = workflow[release_start:]
+
+        resolver = "resolve_live_tag_commit()"
+        create = 'gh release create "$GITHUB_REF_NAME"'
+        delete = 'gh release delete "$GITHUB_REF_NAME"'
+        first_resolution = release_job.index("live_tag_sha=$(resolve_live_tag_commit)")
+        create_index = release_job.index(create)
+        second_resolution = release_job.index(
+            "live_tag_sha=$(resolve_live_tag_commit)", first_resolution + 1
+        )
+        self.assertLess(release_job.index(resolver), first_resolution)
+        self.assertLess(first_resolution, create_index)
+        self.assertLess(create_index, second_resolution)
+        self.assertLess(second_resolution, release_job.index(delete))
+        self.assertGreaterEqual(release_job.count('!= "$RELEASE_SHA"'), 2)
+        self.assertIn("if ! live_tag_sha=$(resolve_live_tag_commit); then", release_job)
+        self.assertIn("Could not re-prove tag authority after staging", release_job)
+        self.assertGreaterEqual(release_job.count(delete), 2)
+        self.assertIn("/commits/$encoded_tag", release_job)
+        self.assertIn("the draft was removed", release_job)
+
+    def test_signing_documentation_requires_environment_scoped_secrets(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+
+        self.assertIn("Required GitHub environment secrets", workflow)
+        self.assertIn("never at repository scope", workflow)
+
     def test_tag_release_rechecks_exact_backend_and_web_contracts(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
         coordinated_start = workflow.index("  coordinated-release-gates:")
         instrumentation_start = workflow.index("  android-instrumentation:")
         coordinated_job = workflow[coordinated_start:instrumentation_start]
 
-        self.assertIn("python -m pip install -r backend/requirements.lock", coordinated_job)
+        self.assertIn(
+            "python -m pip install --only-binary=:all: --require-hashes "
+            "-r backend/requirements-ci.lock",
+            coordinated_job,
+        )
         self.assertNotIn("pip install -r backend/requirements.txt", coordinated_job)
+        self.assertNotIn("pip install pytest", coordinated_job)
         self.assertIn("python -m pip_audit -r backend/requirements.lock", coordinated_job)
         self.assertIn("run: alembic upgrade head", coordinated_job)
         self.assertIn("run: pytest", coordinated_job)
-        self.assertIn("npm audit --omit=dev --audit-level=high", coordinated_job)
+        self.assertIn("run: python -m pytest tests", coordinated_job)
+        self.assertIn("npm audit --audit-level=high", coordinated_job)
+        self.assertNotIn("npm audit --omit=dev", coordinated_job)
         for gate in ("npm run lint", "npm run typecheck", "npm run test", "npm run build"):
             with self.subTest(gate=gate):
                 self.assertIn(gate, coordinated_job)
+        self.assertIn(
+            "docker compose -f docker-compose.prod.yml", coordinated_job
+        )
+        self.assertIn("--env-file .env.production.example config --quiet", coordinated_job)
+        self.assertIn(
+            "caddy validate --config /etc/caddy/Caddyfile", coordinated_job
+        )
 
     def test_ci_token_is_read_only_and_actions_are_commit_pinned(self) -> None:
         workflow = CI_WORKFLOW.read_text(encoding="utf-8")
 
         self.assertIn("permissions:\n  contents: read", workflow)
-        actions = re.findall(r"^\s*- uses:\s+([^\s#]+)", workflow, re.MULTILINE)
+        actions = external_actions(workflow)
         self.assertTrue(actions)
         for action in actions:
             with self.subTest(action=action):
                 self.assertRegex(action, r"@[0-9a-f]{40}$")
+
+    def test_every_external_workflow_and_composite_action_is_commit_pinned(self) -> None:
+        workflow_files = sorted((ROOT / ".github" / "workflows").glob("*.y*ml"))
+        composite_files = sorted((ROOT / ".github" / "actions").rglob("action.y*ml"))
+        self.assertTrue(workflow_files)
+        self.assertTrue(composite_files)
+
+        for path in [*workflow_files, *composite_files]:
+            actions = external_actions(path.read_text(encoding="utf-8"))
+            for action in actions:
+                with self.subTest(path=path.relative_to(ROOT), action=action):
+                    self.assertRegex(action, r"^[^@\s]+@[0-9a-f]{40}$")
 
     def test_server_serves_only_versioned_apks_from_a_read_only_mount(self) -> None:
         caddy = CADDYFILE.read_text(encoding="utf-8")
@@ -390,7 +748,10 @@ class AndroidReleasePipelineTest(unittest.TestCase):
             'Cache-Control "public, max-age=31536000, immutable, no-transform"', caddy
         )
         self.assertIn('respond "Not found" 404', caddy)
-        self.assertIn("./releases/android:/srv/releases/android:ro", compose)
+        self.assertIn(
+            "${ANDROID_RELEASE_ROOT:-./releases/android}:/srv/releases/android:ro",
+            compose,
+        )
         self.assertIn("caddy validate --config /etc/caddy/Caddyfile", ci_workflow)
 
     def test_proxy_preserves_stricter_endpoint_content_security_policy(self) -> None:

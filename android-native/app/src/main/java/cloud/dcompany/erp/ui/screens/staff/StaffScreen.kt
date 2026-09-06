@@ -973,11 +973,12 @@ private fun NoticeBanner(message: String, onDismiss: () -> Unit) {
  * across that varying precision. Parse properly instead, same `Instant`
  * precedent GamingScreen/SyncEngine already use for backend timestamps.
  */
-private val ON_SHIFT_TIME_FORMAT: DateTimeFormatter =
-    DateTimeFormatter.ofPattern("HH:mm", Locale.getDefault()).withZone(ZoneId.systemDefault())
-
 private fun formatClockInTime(iso: String): String =
-    runCatching { ON_SHIFT_TIME_FORMAT.format(Instant.parse(iso)) }.getOrDefault("—")
+    runCatching {
+        DateTimeFormatter.ofPattern("HH:mm", Locale.getDefault())
+            .withZone(ZoneId.systemDefault())
+            .format(Instant.parse(iso))
+    }.getOrDefault("—")
 
 @Composable
 private fun CentredBlock(content: @Composable () -> Unit) {

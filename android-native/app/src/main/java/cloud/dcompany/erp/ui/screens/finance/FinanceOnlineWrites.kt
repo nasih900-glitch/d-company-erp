@@ -1,6 +1,8 @@
 package cloud.dcompany.erp.ui.screens.finance
 
 import android.content.Context
+import cloud.dcompany.erp.core.errors.RecoveryRisk
+import cloud.dcompany.erp.core.errors.recoveryGuidance
 import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.ApiException
 import cloud.dcompany.erp.core.net.MeResponse
@@ -148,7 +150,7 @@ internal class SharedPreferencesFinanceWriteRecoveryStore(context: Context) :
             ApiClient.json.decodeFromString<PendingFinanceOnlineWrite>(raw)
         }.getOrNull()
         if (restored?.scope == scope) return restored
-        preferences.edit().remove(key).commit()
+        preferences.edit().remove(key).apply()
         return null
     }
 
@@ -234,6 +236,9 @@ internal fun financeWriteFailureMessage(error: Throwable, preserved: Boolean): S
         return "The server result could not be confirmed. Do not enter or pay this again. " +
             "Reconnect, then retry the exact saved request below."
     }
-    return (error as? ApiException)?.message?.takeIf(String::isNotBlank)
-        ?: "The server rejected this entry. Nothing was queued offline; check the details and try again."
+    return recoveryGuidance(
+        risk = RecoveryRisk.FINANCIAL_WRITE,
+        failure = error,
+        subject = "this Finance entry",
+    ).message
 }

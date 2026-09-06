@@ -1,6 +1,8 @@
 # Agent guide — D Company ERP
 
-This file is the entrypoint for any AI coding assistant (Codex, Claude Code, Cursor, etc.) working in this repo. Read this first, then `PROJECT_STATE.md` for the running snapshot.
+This file is the entrypoint for any AI coding assistant (Codex, Claude Code,
+Cursor, etc.) working in this repo. Read this first, then inspect the current
+candidate document, Git status, and live CI/deployment evidence.
 
 ---
 
@@ -35,7 +37,7 @@ Live at: <https://dcompany.duckdns.org>
 | **Frontend** | React 18, TypeScript strict, Vite, TailwindCSS, React Router (Hash router), axios, React Query, Recharts |
 | **Deploy** | Docker Compose · Caddy reverse proxy (auto-HTTPS via Let's Encrypt) · DigitalOcean or any VM |
 | **Domain** | `dcompany.duckdns.org` (DuckDNS, free) |
-| **DB migrations** | Alembic — 10 revisions so far (`0001` → `0010`) |
+| **DB migrations** | Alembic — current production-candidate head `0071` |
 | **Tax engine** | India GST · Kerala intra-state CGST+SGST · Section 9(5) for delivery aggregators · FY April→March |
 
 ---
@@ -63,32 +65,24 @@ cd backend
 python -m compileall -q app                                # compile-check
 python -m pytest tests/ -q --no-header --no-cov            # all tests
 python -m scripts.seed                                     # seed (idempotent)
-python -m scripts.create_user --email x --name X --role owner --password Y
+python -m scripts.create_user --email x@example.com --name X --role owner  # no-echo prompt
 
 # === Frontend ===
 cd frontend
 npx tsc --noEmit                                           # strict type check
 npx vite build                                             # production bundle
 
-# === Deploy to droplet ===
-DROPLET_IP="YOUR_DROPLET_IP"
-KEY="${SSH_KEY:-~/.ssh/dcompany_erp}"
-PROJECT_DIR="${PROJECT_DIR:-$PWD}"
-
-rsync -avz --quiet \
-  --exclude 'node_modules' --exclude '.venv' --exclude '__pycache__' \
-  --exclude 'dist' --exclude 'package-lock.json' \
-  -e "ssh -i $KEY" \
-  "$PROJECT_DIR/" \
-  root@$DROPLET_IP:/tmp/d-company-erp/
-
-ssh -i $KEY root@$DROPLET_IP << 'EOF'
-rsync -a /tmp/d-company-erp/ /opt/d-company-erp/
+# === Production upgrade on the VM (never rsync/direct Compose) ===
 cd /opt/d-company-erp
-docker compose -f docker-compose.prod.yml --env-file .env build backend frontend
-docker compose -f docker-compose.prod.yml --env-file .env up -d --force-recreate backend frontend
-EOF
+git fetch --tags --prune
+git checkout --detach REVIEWED_40_HEX_RELEASE_COMMIT
+test -z "$(git status --porcelain --untracked-files=normal)"
+sudo bash infra/scripts/install-on-vm.sh EXISTING_DOMAIN --maintenance-confirmed
 ```
+
+Fresh installs omit `--maintenance-confirmed`. Existing installations preserve
+`/opt`, `.env`, volumes, and rollback evidence and use only the hardened
+installer/verified Code16 bridge documented in `backend/docs/REMOTE_ASSISTANCE_API.md`.
 
 ---
 
@@ -115,9 +109,9 @@ backend/
       email/mailer.py                SMTP mailer (env-driven)
     workers/
       daily_pnl.py                   Cron-target for 8am IST P&L email
-  alembic/versions/                  10 migrations, chained 0001 → 0010
+  alembic/versions/                  migrations chained through current head 0071
   scripts/seed.py                    Idempotent seed (company, accounts, ingredients, tiers)
-  tests/                             pytest — 26 tests (unit + integration)
+  tests/                             full pytest unit + integration suite
   entrypoint.sh                      Runs alembic + seed + uvicorn
 
 frontend/
@@ -165,19 +159,17 @@ cd backend && python -m pytest tests/ -q && \
 cd ../frontend && npx tsc --noEmit && npx vite build
 ```
 
-If all three pass: you're green.
+These are baseline source checks, not a production-release verdict. Android,
+guarded workflow, migration/restore, signing, upgrade, sync, device and live
+acceptance gates still apply according to the affected scope.
 
 ---
 
-## What's pending (read `PROJECT_STATE.md` for current state)
+## What's pending
 
-- WhatsApp alerts (need Twilio or Meta Business creds)
-- Daily P&L SMTP (infra ready, need creds — see `docs/DEFERRED_FEATURES.md`)
-- Razorpay subscription billing (need test keys)
-- No POS UI for ad-hoc order discount (column exists; UI doesn't)
-- Subscription expiry worker doesn't exist (subs expire by date but nothing cancels them)
-- Free PS5/hookah weekly counters never auto-reset
-- No rate limiting on `/auth/login` (acceptable at current scale)
+Do not treat a static list in this guide as current release truth. Read the
+current candidate document, `git status`, and live CI or deployment evidence
+before describing any feature or gate as complete.
 
 ---
 
@@ -201,3 +193,67 @@ The user manages:
 - A separate Apps Script that matches OCR'd receipts to their Transactions tab (the **`Operations` tab** is where ERP push goes — don't touch other tabs)
 
 Treat this as **production**. Real money flows through it once they open.
+
+---
+
+## Codex task routing and verification phases
+
+These instructions apply to Codex subagent workflows in this repository. They
+do not change the primary agent's model, sandbox, or approval policy. Those
+remain selected by the user, Codex client, or managed platform policy.
+
+### Route each work item
+
+Before delegating, split the request into bounded work items and choose the
+narrowest matching project agent. Do not delegate a trivial task when the main
+agent can complete it directly. For non-trivial work, select roles by the work
+item's risk and purpose:
+
+| Work item | Project agent | Required use |
+|---|---|---|
+| Read-only discovery, call-path tracing, repository mapping, or log triage | `erp_explorer` | Use before editing when ownership or failure location is unclear. |
+| A scoped implementation or defect fix after the path is understood | `erp_implementer` | Use as the only code-writing agent for that scope. |
+| Focused tests, contract checks, build checks, or evidence assessment | `erp_verifier` | Use after implementation; keep verification independent from the writer. |
+| Authentication, authorization, tenant isolation, money, secrets, injection, audit integrity, or remote-assistance boundaries | `erp_security_reviewer` | Use for a read-only security pass before completion. |
+| Schema migrations, offline/sync behavior, signed artifacts, deployment, rollback, cross-device behavior, or production-readiness claims | `erp_release_auditor` | Use for a read-only release-gate assessment; it never deploys. |
+| An unresolved cross-system incident that still spans at least three trust boundaries after focused high/max investigation | `erp_incident_architect` | Escalation-only read-only synthesis; use Astra ultra only when the ordinary roles cannot reach a defensible conclusion. |
+
+Use parallel subagents only for independent, read-only scopes. Keep dependent
+phases sequential, and never let multiple agents edit overlapping files. The
+main agent owns task decomposition, conflict resolution, and the final claim.
+Custom role files select each subagent's model and reasoning effort; the main
+agent must not claim that its own model switched dynamically.
+
+Use the lowest-cost role that can answer the bounded question. Escalate to
+`erp_incident_architect` only after recording the conflicting evidence and the
+specific uncertainty left by the focused implementer, verifier, security, or
+release-auditor pass. Do not use ultra for routine implementation, broad
+"check everything" requests, or as a substitute for running tests. Return to
+the normal role matrix once the uncertainty is resolved.
+
+### Work in evidence-gated phases
+
+1. **Scope:** read the applicable instructions and current project state,
+   inspect `git status`, identify existing user changes, and establish a
+   reproducible baseline without modifying files.
+2. **Plan:** classify risk, trace affected contracts and consumers, choose the
+   required agent route, and define focused acceptance checks. For large
+   features, briefly explain the architecture before implementation.
+3. **Implement:** assign one writer, make the smallest coherent change, preserve
+   unrelated work, and include migrations or compatibility handling when the
+   contract requires them.
+4. **Verify:** run the narrowest meaningful checks first. Record the command,
+   exit status, and relevant result. Diagnose failures before changing code or
+   broadening the test surface.
+5. **Review:** run the security or release auditor when the routing table
+   requires it, then run broader regression checks proportional to risk.
+6. **Conclude:** distinguish source review, tests, builds, emulator evidence,
+   physical-device evidence, signed artifacts, deployment, and production
+   observation. A green lower phase is not proof of a higher phase.
+
+Never bypass approvals or sandboxing automatically. Do not use unsafe bypass
+flags, do not add `approval_policy = "never"`, and do not select
+`danger-full-access` in project configuration. Writer and verifier agents
+inherit the active permission mode. If that mode blocks required work, report
+the exact blocked action and let the user or managed platform decide whether to
+change permissions.

@@ -36,6 +36,7 @@ data class CategoryRow(
     val id: String,
     val name: String,
     val sortOrder: Int,
+    val isGamingCentreCatalog: Boolean?,
     val pendingLocalId: String? = null,
     val rejectedError: String? = null,
     val localWriteId: String? = null,
@@ -60,8 +61,18 @@ data class ItemRow(
 
 // ------------------------------------------------------------------ editors
 
-/** `id == null` -> new category. `isUnsyncedDraft` also covers a still-local create being re-edited — same reasoning as CustomerEditor in Phase 6. */
-data class CategoryEditor(val id: String? = null, val name: String = "", val sortOrder: Int = 0) {
+/**
+ * `id == null` -> new category. New categories fail closed for Gaming sales.
+ * A nullable value is retained only while editing a category read from a
+ * pre-0070 server, so saving another field cannot silently overwrite a value
+ * the old server never supplied.
+ */
+data class CategoryEditor(
+    val id: String? = null,
+    val name: String = "",
+    val sortOrder: Int = 0,
+    val isGamingCentreCatalog: Boolean? = false,
+) {
     val isNew: Boolean get() = id == null
     val isUnsyncedDraft: Boolean get() = id == null || id.startsWith(LOCAL_PREFIX)
     val valid: Boolean get() = name.isNotBlank()
@@ -282,7 +293,12 @@ class MenuViewModel : ViewModel() {
         if (!requireWrite()) return
         editing.update {
             it.copy(
-                categoryEditor = CategoryEditor(id = row.id, name = row.name, sortOrder = row.sortOrder),
+                categoryEditor = CategoryEditor(
+                    id = row.id,
+                    name = row.name,
+                    sortOrder = row.sortOrder,
+                    isGamingCentreCatalog = row.isGamingCentreCatalog,
+                ),
                 categorySaveError = null,
             )
         }
@@ -316,6 +332,7 @@ class MenuViewModel : ViewModel() {
                                     serverId = null,
                                     name = ed.name.trim(),
                                     sortOrder = ed.sortOrder,
+                                    isGamingCentreCatalog = ed.isGamingCentreCatalog ?: false,
                                     createdAtMillis = now,
                                 )
                                 dao.upsertLocalCategory(local)
@@ -331,6 +348,7 @@ class MenuViewModel : ViewModel() {
                                     val amended = existing.copy(
                                         name = ed.name.trim(),
                                         sortOrder = ed.sortOrder,
+                                        isGamingCentreCatalog = ed.isGamingCentreCatalog,
                                         state = MenuWriteState.PENDING,
                                         lastError = null,
                                         version = existing.version + 1,
@@ -349,6 +367,7 @@ class MenuViewModel : ViewModel() {
                                 )).copy(
                                     name = ed.name.trim(),
                                     sortOrder = ed.sortOrder,
+                                    isGamingCentreCatalog = ed.isGamingCentreCatalog,
                                     state = MenuWriteState.PENDING,
                                     lastError = null,
                                     version = (existingPending?.version ?: -1) + 1,
@@ -684,7 +703,7 @@ private fun formatFractionAsPercent(fraction: Double): String {
  * than hiding a real category based on a guess about what the collision
  * means.
  */
-private fun mergeCategories(
+internal fun mergeCategories(
     cache: List<MenuCategoryEntity>,
     local: List<LocalMenuCategoryEntity>,
 ): List<CategoryRow> {
@@ -697,6 +716,8 @@ private fun mergeCategories(
             id = row.serverId ?: "$LOCAL_PREFIX${row.localId}",
             name = row.name ?: matchedCache?.name ?: "",
             sortOrder = row.sortOrder ?: matchedCache?.sortOrder ?: 0,
+            isGamingCentreCatalog = row.isGamingCentreCatalog
+                ?: matchedCache?.isGamingCentreCatalog,
             pendingLocalId = if (row.state != MenuWriteState.REJECTED) row.localId else null,
             rejectedError = if (row.state == MenuWriteState.REJECTED) row.lastError else null,
             localWriteId = row.localId,
@@ -704,7 +725,12 @@ private fun mergeCategories(
     }
     for (c in cache) {
         if (c.id in overriddenServerIds) continue
-        result += CategoryRow(id = c.id, name = c.name, sortOrder = c.sortOrder)
+        result += CategoryRow(
+            id = c.id,
+            name = c.name,
+            sortOrder = c.sortOrder,
+            isGamingCentreCatalog = c.isGamingCentreCatalog,
+        )
     }
     return result.sortedWith(compareBy({ it.sortOrder }, { it.name }))
 }

@@ -36,7 +36,6 @@ from app.models import (
     MembershipRefundCompletion,
     MembershipRefundProviderAction,
     MembershipTier,
-    Shift,
     User,
 )
 
@@ -201,18 +200,28 @@ def _seed_base(session: Session) -> _Seed:
             "device_id": f"membership-guard-{uuid4()}",
         },
     )
-    shift = Shift(
-        id=uuid4(),
-        company_id=company.id,
-        branch_id=branch.id,
-        terminal_id=terminal_id,
-        opened_by=owner.id,
-        opened_at=now - timedelta(minutes=5),
-        opening_float_minor=500_000,
-        expected_minor=500_000,
-        status="open",
+    # Shift gained ``closed_by`` in 0066. These rollback proofs deliberately
+    # hold PostgreSQL at older revisions, so current ORM metadata cannot seed
+    # the historical table. Keep this insert pinned to columns present at the
+    # test boundary, just like the Terminal insert above.
+    shift_id = uuid4()
+    session.execute(
+        text(
+            "INSERT INTO shifts "
+            "(id, company_id, branch_id, terminal_id, opened_by, opened_at, "
+            " opening_float_minor, expected_minor, status) "
+            "VALUES (:id, :company_id, :branch_id, :terminal_id, :opened_by, "
+            " :opened_at, 500000, 500000, 'open')"
+        ),
+        {
+            "id": shift_id,
+            "company_id": company.id,
+            "branch_id": branch.id,
+            "terminal_id": terminal_id,
+            "opened_by": owner.id,
+            "opened_at": now - timedelta(minutes=5),
+        },
     )
-    session.add(shift)
     session.flush()
     return _Seed(
         company_id=company.id,
@@ -221,7 +230,7 @@ def _seed_base(session: Session) -> _Seed:
         owner_id=owner.id,
         customer_id=customer.id,
         tier_id=tier.id,
-        shift_id=shift.id,
+        shift_id=shift_id,
         now=now,
     )
 

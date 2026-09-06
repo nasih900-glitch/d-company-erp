@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildStaffAccessPatch, canChangeStaffAccess } from './staff-edit-policy';
+import {
+  buildStaffAccessPatch,
+  canChangeStaffAccess,
+  editableStaffRoleOptions,
+} from './staff-edit-policy';
 
 const BASE = {
   originalRoleCode: 'owner',
@@ -74,6 +78,15 @@ describe('canChangeStaffAccess', () => {
     })).toBe(true);
   });
 
+  it('never offers access changes against any protected audit-owner account', () => {
+    expect(canChangeStaffAccess({
+      callerUserId: 'protected-owner-1',
+      targetUserId: 'protected-owner-2',
+      targetRoles: ['owner', 'super_owner'],
+      callerHasAuditAccess: true,
+    })).toBe(false);
+  });
+
   it('lets an operational co-owner manage non-owner staff access', () => {
     expect(canChangeStaffAccess({
       callerUserId: 'co-owner',
@@ -81,5 +94,25 @@ describe('canChangeStaffAccess', () => {
       targetRoles: ['cashier'],
       callerHasAuditAccess: false,
     })).toBe(true);
+  });
+});
+
+describe('editableStaffRoleOptions', () => {
+  const fallback = [
+    { code: 'super_owner', name: 'Protected owner' },
+    { code: 'co_owner', name: 'Co-owner' },
+    { code: 'owner', name: 'Owner' },
+    { code: 'manager', name: 'Manager' },
+    { code: 'cashier', name: 'Cashier' },
+  ];
+
+  it('never shows owner grants to a caller without protected authority', () => {
+    expect(editableStaffRoleOptions(fallback, false).map((role) => role.code))
+      .toEqual(['manager', 'cashier']);
+  });
+
+  it('allows owner tiers to the protected owner but never offers super_owner', () => {
+    expect(editableStaffRoleOptions(fallback, true).map((role) => role.code))
+      .toEqual(['co_owner', 'owner', 'manager', 'cashier']);
   });
 });

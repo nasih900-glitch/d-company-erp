@@ -24,10 +24,16 @@ expose a public object URL.
 Screenshot bytes currently live in PostgreSQL so the initial low-volume
 implementation is transactional and needs no separate public storage service.
 Metadata is retained as immutable support evidence; private bytes expire after
-90 days. Install `infra/cron/dcompany-erp-alerts` so the nightly job runs:
+90 days. Sanitized client diagnostics use the same retention target and have a
+separate 50,000-row company ceiling. Install `infra/cron/dcompany-erp-alerts` so
+the nightly job can purge the entire bounded diagnostic capacity independently
+of the lower screenshot work cap:
 
 ```bash
-python -m app.workers.support_attachments --batch-size 100 --max-rows 1000
+python -m app.workers.support_attachments \
+  --batch-size 1000 \
+  --max-rows 1000 \
+  --diagnostic-max-rows 50000
 ```
 
 For materially higher support volume, move encrypted payloads to a private

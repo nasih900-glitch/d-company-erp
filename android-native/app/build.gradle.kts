@@ -31,6 +31,32 @@ val debugApiBaseUrl = providers.gradleProperty("dcompany.debugApiBaseUrl")
     ?.takeIf(String::isNotEmpty)
     ?: productionApiBaseUrl
 val debugApiUri = runCatching { URI(debugApiBaseUrl) }.getOrNull()
+// Test-only authenticated cloud-device workflows use a short-lived tunnel to
+// a synthetic database. This value never reaches debug/release/directRelease.
+val physicalAuditApiBaseUrl = providers.gradleProperty("dcompany.physicalAuditApiBaseUrl")
+    .orNull?.trim()?.takeIf(String::isNotEmpty)
+    ?: "https://invalid.dcompany.test/api/v1/"
+val physicalAuditApiUri = runCatching { URI(physicalAuditApiBaseUrl) }.getOrNull()
+require(
+    physicalAuditApiUri?.scheme == "https" &&
+        (physicalAuditApiUri.host == "invalid.dcompany.test" ||
+            physicalAuditApiUri.host?.endsWith(".trycloudflare.com") == true) &&
+        physicalAuditApiUri.rawPath == "/api/v1/" &&
+        physicalAuditApiUri.rawUserInfo == null &&
+        physicalAuditApiUri.rawQuery == null &&
+        physicalAuditApiUri.rawFragment == null &&
+        physicalAuditApiUri.port == -1,
+) {
+    "physicalAudit requires the isolated invalid host or a temporary HTTPS trycloudflare test tunnel at /api/v1/."
+}
+val androidTestBuildType = providers.gradleProperty("dcompany.androidTestBuildType")
+    .orNull
+    ?.trim()
+    ?.takeIf(String::isNotEmpty)
+    ?: "debug"
+require(androidTestBuildType in setOf("debug", "physicalAudit")) {
+    "dcompany.androidTestBuildType must be 'debug' or 'physicalAudit'."
+}
 require(debugApiBaseUrl.endsWith("/")) {
     "dcompany.debugApiBaseUrl must end with '/'."
 }
@@ -55,9 +81,10 @@ android {
         // Every Room schema change must ship under a strictly newer Android
         // version code so an installed tablet upgrades in place instead of
         // requiring an uninstall that would destroy its offline outbox.
-        versionCode = 13
-        versionName = "3.1.2"
+        versionCode = 25
+        versionName = "3.1.14"
         buildConfigField("boolean", "DIRECT_UPDATES_ENABLED", "false")
+        buildConfigField("String", "DISTRIBUTION_CHANNEL", buildConfigString("play"))
 
         // Single source of truth for the API base, mirroring how the
         // Capacitor build takes it from VITE_API_URL at build time.
@@ -82,6 +109,7 @@ android {
             // Debug-only escape hatch for isolated emulator acceptance tests.
             // Release builds remain pinned to the production HTTPS endpoint.
             buildConfigField("String", "API_BASE_URL", buildConfigString(debugApiBaseUrl))
+            buildConfigField("String", "DISTRIBUTION_CHANNEL", buildConfigString("managed"))
         }
         release {
             isMinifyEnabled = false
@@ -93,11 +121,38 @@ android {
             initWith(getByName("release"))
             matchingFallbacks += "release"
             buildConfigField("boolean", "DIRECT_UPDATES_ENABLED", "true")
+            buildConfigField("String", "DISTRIBUTION_CHANNEL", buildConfigString("direct"))
             if (hasReleaseKeystore) {
                 signingConfig = signingConfigs.getByName("release")
             }
         }
+        // Never shipped. This gives physical-device QA release-like runtime
+        // behaviour without pointing a test APK at live business data. It is
+        // selected only with -Pdcompany.androidTestBuildType=physicalAudit.
+        create("physicalAudit") {
+            initWith(getByName("release"))
+            matchingFallbacks += "release"
+            // A disposable audit APK must never consume the production signer.
+            signingConfig = signingConfigs.getByName("debug")
+            applicationIdSuffix = ".physicalaudit"
+            versionNameSuffix = "-physical-audit"
+            buildConfigField(
+                "String",
+                "API_BASE_URL",
+                buildConfigString(physicalAuditApiBaseUrl),
+            )
+            buildConfigField("boolean", "DIRECT_UPDATES_ENABLED", "false")
+            // Reuse the already-supported managed-client wire value. The
+            // isolated application id and synthetic HTTPS endpoint distinguish
+            // this QA build without weakening the production API contract.
+            buildConfigField("String", "DISTRIBUTION_CHANNEL", buildConfigString("managed"))
+        }
     }
+
+    // Debug remains the normal developer/CI target. Physical QA opts into the
+    // isolated release-like target explicitly, so ordinary builds do not
+    // silently change test behaviour.
+    testBuildType = androidTestBuildType
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -112,6 +167,15 @@ android {
 
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
+    }
+
+    // AGP's bundle-only dependency protobuf is emitted in resolution order,
+    // which is not stable across clean Gradle homes even when the resolved
+    // dependency set is locked. Google Play does not require this advisory
+    // metadata, and omitting it makes the unsigned AAB byte-reproducible so an
+    // independent secretless builder can authenticate exactly what is signed.
+    dependenciesInfo {
+        includeInBundle = false
     }
 
     // MigrationTestHelper reads the same Room-generated history that ships in
@@ -168,6 +232,12 @@ dependencies {
     androidTestImplementation("androidx.room:room-testing:2.6.1")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test:runner:1.6.2")
+    // Compose UI Test 1.7.5 still brings Espresso 3.5.0 transitively. That
+    // release reflectively calls InputManager.getInstance(), which was removed
+    // on Android 16/API 36, so every physical Pixel Tablet test fails before
+    // its body runs. Espresso 3.7.0 uses Context.getSystemService instead.
+    // Keep this test-only: it changes neither the partner APK nor production.
+    androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")
     // Critical cashier forms must be exercised as rendered Compose UI.  The
     // database/sync instrumentation suite cannot prove that a staff member can
     // focus a field, enter text, or complete a no-keyboard fallback flow.
@@ -176,4 +246,5 @@ dependencies {
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
+    add("physicalAuditImplementation", "androidx.compose.ui:ui-test-manifest")
 }

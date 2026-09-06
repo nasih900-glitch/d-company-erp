@@ -26,6 +26,7 @@ import cloud.dcompany.erp.DCompanyApp
 import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.ApiException
 import cloud.dcompany.erp.ui.theme.Brand
+import cloud.dcompany.erp.ui.remote.RemoteSensitiveContent
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
@@ -46,6 +47,7 @@ fun PricingUnlockDialog(onDismiss: () -> Unit, onUnlocked: () -> Unit) {
     val api = remember { ApiClient.create<PricingApi>() }
     val tokens = DCompanyApp.instance.tokens
 
+    RemoteSensitiveContent {
     AlertDialog(
         onDismissRequest = { if (!loading) onDismiss() },
         title = { Text("Unlock pricing") },
@@ -117,4 +119,5 @@ fun PricingUnlockDialog(onDismiss: () -> Unit, onUnlocked: () -> Unit) {
         titleContentColor = Brand.Foreground,
         textContentColor = Brand.Foreground,
     )
+    }
 }

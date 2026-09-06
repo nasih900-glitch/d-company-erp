@@ -207,7 +207,7 @@ export ANDROID_SERIAL="${device_serial}"
 configure_tablet_viewport
 
 status=0
-./gradlew --no-daemon --max-workers=2 --stacktrace connectedDebugAndroidTest || status=$?
+./gradlew --no-daemon --max-workers=2 --stacktrace :app:connectedDebugAndroidTest || status=$?
 
 # The ordinary suite deliberately exercises the denied-permission path on a
 # fresh API-35 emulator. Its two positive alarm tests use assumptions, so a

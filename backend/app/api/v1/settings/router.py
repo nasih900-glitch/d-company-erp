@@ -229,6 +229,7 @@ class TerminalRead(BaseModel):
     is_active: bool = True
     device_id: str | None
     last_seen_at: datetime | None
+    offline_shift_capture_supported: bool = True
 
 
 class TerminalCreate(BaseModel):

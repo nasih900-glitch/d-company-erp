@@ -11,6 +11,7 @@ object ErpPermission {
     const val PosShiftOpen = "pos.shift.open"
     const val PosShiftClose = "pos.shift.close"
     const val PosRefund = "pos.refund"
+    const val PosRefundReconcile = "pos.refund.reconcile"
     const val TablesRead = "tables.read"
     const val TablesWrite = "tables.write"
     const val TablesReservationsWrite = "tables.reservations.write"

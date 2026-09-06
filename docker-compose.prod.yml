@@ -3,13 +3,15 @@
 # Differences from dev docker-compose.yml:
 #   - Caddy in front with auto-HTTPS (ports 80 + 443)
 #   - Backend + frontend not exposed to the internet directly
-#   - Postgres / Redis / MinIO bound to the internal Docker network
+#   - Postgres / Redis bound to the internal Docker network
 #   - Strong env values from .env
 #   - Restart policies set to "unless-stopped" so the stack survives reboots
 #   - Bounded Docker logs so a noisy service cannot fill the VPS disk
 #
-# Bring up with:
-#   docker compose -f docker-compose.prod.yml --env-file .env up -d --build
+# Production deployment and upgrades must use the hardened installer:
+#   sudo bash infra/scripts/install-on-vm.sh <domain> --maintenance-confirmed
+# Direct `docker compose up`/`--build` is unsupported in production because it
+# bypasses release provenance, preflight, quiesced backup, and rollback gates.
 
 x-default-logging: &default-logging
   driver: json-file
@@ -19,7 +21,13 @@ x-default-logging: &default-logging
 
 services:
   caddy:
-    image: caddy:2-alpine
+    image: d-company-erp-caddy:${APP_REVISION:-unknown}
+    build:
+      context: .
+      dockerfile: infra/docker/caddy.Dockerfile
+      args:
+        APP_VERSION: ${APP_VERSION:-3.1.14}
+        APP_REVISION: ${APP_REVISION:-unknown}
     restart: unless-stopped
     logging: *default-logging
     ports:
@@ -34,15 +42,27 @@ services:
       # Signed Android releases are copied here by the release operator after
       # local/CI signature and checksum verification. Caddy serves the files
       # directly; the backend never receives signing material or rewrites APKs.
-      - ./releases/android:/srv/releases/android:ro
+      # Release APKs are durable operational data, not executable deployment
+      # input. The hardened installer points this at the root-owned live
+      # release directory while every service/config file comes from its
+      # immutable commit snapshot.
+      - ${ANDROID_RELEASE_ROOT:-./releases/android}:/srv/releases/android:ro
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
       - frontend
       - backend
+    networks:
+      - edge
 
   postgres:
-    image: postgres:16-alpine
+    image: d-company-erp-postgres:${APP_REVISION:-unknown}
+    build:
+      context: .
+      dockerfile: infra/docker/postgres.Dockerfile
+      args:
+        APP_VERSION: ${APP_VERSION:-3.1.14}
+        APP_REVISION: ${APP_REVISION:-unknown}
     restart: unless-stopped
     logging: *default-logging
     environment:
@@ -52,51 +72,78 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U erp -d erp"]
+      # pg_isready also succeeds against the temporary postmaster used while
+      # the official entrypoint initializes a fresh volume. Require the
+      # postmaster PID file to name container PID 1, which is only true after
+      # the entrypoint has exec'd the final long-running server.
+      test:
+        [
+          "CMD-SHELL",
+          'test -s "$$PGDATA/postmaster.pid" && test "$$(sed -n 1p "$$PGDATA/postmaster.pid")" = 1 && pg_isready -U erp -d erp',
+        ]
       interval: 5s
       timeout: 5s
       retries: 20
+    networks:
+      - backend_data
 
   redis:
-    image: redis:7-alpine
+    image: redis:7-alpine@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf
     restart: unless-stopped
     logging: *default-logging
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        umask 077
+        printf '%s\n' \
+          'user default off' \
+          "user erp_backend on >$${REDIS_PASSWORD} ~dcompany:* -@all +ping +eval +get +set +pttl +time +zremrangebyscore +zcard +zadd +pexpire +hset +expire +incr +incrby +ttl +del +hgetall +multi +exec +discard +select +client|setinfo" \
+          > /run/redis-users.acl
+        exec redis-server --aclfile /run/redis-users.acl
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test:
+        [
+          "CMD-SHELL",
+          "REDISCLI_AUTH=$$REDIS_PASSWORD redis-cli --user erp_backend ping | grep -qx PONG",
+        ]
       interval: 5s
       timeout: 3s
       retries: 10
-
-  minio:
-    image: minio/minio:latest
-    restart: unless-stopped
-    logging: *default-logging
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: erp
-      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY}
-    volumes:
-      - miniodata:/data
-    # MinIO console intentionally not exposed publicly. SSH-tunnel if needed.
+    networks:
+      - backend_data
 
   backend:
+    image: d-company-erp-backend:${APP_REVISION:-unknown}
     build:
       context: .
       dockerfile: infra/docker/backend.Dockerfile
       args:
-        APP_VERSION: ${APP_VERSION:-3.1.2}
+        APP_VERSION: ${APP_VERSION:-3.1.14}
         APP_REVISION: ${APP_REVISION:-unknown}
     restart: unless-stopped
     logging: *default-logging
     environment:
       ENV: prod
+      # Runtime declarations are checked against the independently baked file.
+      APP_VERSION: ${APP_VERSION:-3.1.14}
+      APP_REVISION: ${APP_REVISION:-unknown}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: json
       # Safe only while backend has no published port and Caddy overwrites
       # forwarding headers. Do not expose backend:8000 with this trust policy.
       FORWARDED_ALLOW_IPS: "*"
       DATABASE_URL: ${DATABASE_URL}
-      REDIS_URL: ${REDIS_URL}
+      # Compose builds this URL from the dedicated hex-safe ACL password; do
+      # not put an unauthenticated/shared Redis URL in production.
+      REDIS_URL: redis://erp_backend:${REDIS_PASSWORD}@redis:6379/0
+      CLIENT_HEARTBEAT_USER_LIMIT_PER_MINUTE: ${CLIENT_HEARTBEAT_USER_LIMIT_PER_MINUTE:-30}
+      # Required, dedicated secret for physical-tablet pairing codes. The app
+      # rejects a missing/default value in production; never reuse JWT_SECRET.
+      REMOTE_ASSISTANCE_PAIRING_SECRET: ${REMOTE_ASSISTANCE_PAIRING_SECRET}
+      REMOTE_ASSISTANCE_RELAY_SECRET: ${REMOTE_ASSISTANCE_RELAY_SECRET}
       JWT_SECRET: ${JWT_SECRET}
       JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
       ACCESS_TOKEN_MINUTES: ${ACCESS_TOKEN_MINUTES:-15}
@@ -107,6 +154,11 @@ services:
       # Fail safe when rollout policy is omitted: do not advertise a release
       # whose APK and integrity metadata may not have been published yet.
       ANDROID_LATEST_VERSION_CODE: ${ANDROID_LATEST_VERSION_CODE:-8}
+      CLIENT_COMPATIBILITY_POLICY_REVISION: ${CLIENT_COMPATIBILITY_POLICY_REVISION:-1}
+      ANDROID_UPDATE_ALLOWED_ORIGIN: ${ANDROID_UPDATE_ALLOWED_ORIGIN:-}
+      # Global release registry authority is an explicit immutable identity
+      # binding, not a tenant-local role. Empty is intentionally deny-all.
+      ANDROID_RELEASE_CONTROLLER_BINDINGS: ${ANDROID_RELEASE_CONTROLLER_BINDINGS:-}
       ANDROID_UPDATE_URL: ${ANDROID_UPDATE_URL:-}
       ANDROID_LATEST_VERSION_NAME: ${ANDROID_LATEST_VERSION_NAME:-}
       ANDROID_UPDATE_RELEASE_NOTES: ${ANDROID_UPDATE_RELEASE_NOTES:-}
@@ -120,6 +172,7 @@ services:
       REQUIRE_NATIVE_VERSION_HEADERS: ${REQUIRE_NATIVE_VERSION_HEADERS:-true}
       ACCOUNT_SECURITY_EMAIL: ${ACCOUNT_SECURITY_EMAIL:-business@retrocafe.online}
       ACCOUNT_SECURITY_COMPANY_ID: ${ACCOUNT_SECURITY_COMPANY_ID:-}
+      GAMING_PAUSE_ENABLED: ${GAMING_PAUSE_ENABLED:-false}
       ACCOUNT_OTP_TTL_MINUTES: ${ACCOUNT_OTP_TTL_MINUTES:-10}
       ACCOUNT_OTP_MAX_ATTEMPTS: ${ACCOUNT_OTP_MAX_ATTEMPTS:-5}
       ACCOUNT_OTP_REQUEST_LIMIT: ${ACCOUNT_OTP_REQUEST_LIMIT:-3}
@@ -142,6 +195,7 @@ services:
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       FROM_EMAIL: ${FROM_EMAIL:-}
       FROM_NAME: ${FROM_NAME:-D Company ERP}
+      SEED_OWNER_EMAIL: ${SEED_OWNER_EMAIL}
       SEED_OWNER_PASSWORD: ${SEED_OWNER_PASSWORD:-}
     depends_on:
       postgres:
@@ -149,24 +203,37 @@ services:
       redis:
         condition: service_healthy
     # Backend NOT bound to host — only Caddy can reach it.
+    networks:
+      - edge
+      - backend_data
 
   frontend:
+    image: d-company-erp-frontend:${APP_REVISION:-unknown}
     build:
       context: .
       dockerfile: infra/docker/frontend.Dockerfile
       args:
         VITE_API_URL: https://${DOMAIN}/api/v1
-        VITE_APP_VERSION: ${APP_VERSION:-3.1.2}
-        APP_VERSION: ${APP_VERSION:-3.1.2}
+        VITE_APP_VERSION: ${APP_VERSION:-3.1.14}
+        APP_VERSION: ${APP_VERSION:-3.1.14}
         APP_REVISION: ${APP_REVISION:-unknown}
     restart: unless-stopped
     logging: *default-logging
     depends_on:
       - backend
     # Frontend NOT bound to host either.
+    networks:
+      - edge
 
 volumes:
   pgdata:
+  # Retained intentionally after retiring the unused MinIO runtime. Never
+  # delete this volume until an owner has audited or migrated its contents.
   miniodata:
   caddy_data:
   caddy_config:
+
+networks:
+  edge:
+  backend_data:
+    internal: true

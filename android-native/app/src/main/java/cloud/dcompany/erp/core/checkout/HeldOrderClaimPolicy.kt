@@ -2,9 +2,37 @@ package cloud.dcompany.erp.core.checkout
 
 import cloud.dcompany.erp.core.db.HeldOrderCacheEntity
 import cloud.dcompany.erp.core.db.LocalHeldOrderPaymentEntity
+import cloud.dcompany.erp.core.db.SyncState
 import cloud.dcompany.erp.core.net.CheckoutClaimResult
+import cloud.dcompany.erp.core.net.Order
 import java.time.Instant
+import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
+
+/**
+ * A held-bill lease must be bound to one installed ERP client, not merely to
+ * a user who may be signed in on several tablets.  The installation store is
+ * the authority for this value; this policy only validates and canonicalises
+ * it before any claim request can leave the process.
+ */
+object CheckoutClientInstancePolicy {
+    const val UNAVAILABLE_MESSAGE =
+        "This tablet could not verify its checkout identity. Restart the app before collecting payment."
+
+    fun requireStable(value: String?): String {
+        val candidate = value?.trim()?.takeIf(String::isNotEmpty)
+            ?: throw CheckoutClientInstanceUnavailableException()
+        val parsed = runCatching { UUID.fromString(candidate) }.getOrNull()
+            ?: throw CheckoutClientInstanceUnavailableException()
+        if (parsed.version() != 4 || parsed.toString() != candidate.lowercase()) {
+            throw CheckoutClientInstanceUnavailableException()
+        }
+        return parsed.toString()
+    }
+}
+
+class CheckoutClientInstanceUnavailableException :
+    IllegalStateException(CheckoutClientInstancePolicy.UNAVAILABLE_MESSAGE)
 
 /** Pure checkout invariants shared by the UI confirmation and sync recovery paths. */
 object HeldOrderClaimPolicy {
@@ -84,6 +112,69 @@ object HeldOrderClaimPolicy {
     /** Stable across response-loss retries, while a changed bill gets a new key. */
     fun zeroFinalizationIdempotencyKey(orderId: String, orderVersion: Long): String =
         "held-zero:$orderId:v$orderVersion"
+}
+
+/**
+ * Invariants for turning a private direct cart into an immutable payable bill.
+ * Publication is the only allowed boundary between editable pricing and money.
+ */
+object DirectOrderPublishPolicy {
+    fun idempotencyKey(localId: String): String {
+        require(localId.isNotBlank()) { "A local order identity is required." }
+        return "direct-publish:$localId"
+    }
+
+    /**
+     * PREPARING stores the version immediately before publication. Once the
+     * claim is durable, AWAITING_PAYMENT stores the server's single post-
+     * publication bump. This lets process-death recovery reconstruct the exact
+     * request without a new Room column or a guessed current version.
+     */
+    fun expectedVersionForReplay(
+        syncState: String,
+        storedCheckoutVersion: Long,
+        hasDurableClaim: Boolean = syncState == SyncState.AWAITING_PAYMENT,
+    ): Long {
+        require(storedCheckoutVersion >= 1L) { "The saved bill version is invalid." }
+        return when (syncState) {
+            SyncState.PREPARING -> storedCheckoutVersion
+            SyncState.PENDING, SyncState.AWAITING_PAYMENT -> if (hasDurableClaim) {
+                require(storedCheckoutVersion > 1L) {
+                    "The saved published bill version cannot be replayed safely."
+                }
+                storedCheckoutVersion - 1L
+            } else {
+                storedCheckoutVersion
+            }
+            else -> error("This local order is not at a checkout publication boundary.")
+        }
+    }
+
+    fun matchesPricedOrder(
+        order: Order,
+        expectedPrePublishVersion: Long,
+        claim: CheckoutClaimResult,
+    ): Boolean {
+        val orderVersionMatches = when (order.status) {
+            "open" -> order.checkoutVersion == expectedPrePublishVersion
+            "held" -> order.checkoutVersion == expectedPrePublishVersion + 1L
+            else -> false
+        }
+        return order.id.isNotBlank() &&
+            order.status in setOf("open", "held") &&
+            orderVersionMatches &&
+            claim.orderId == order.id &&
+            claim.claimToken.isNotBlank() &&
+            claim.orderVersion == expectedPrePublishVersion + 1L &&
+            claim.orderTotalMinor == order.totalMinor &&
+            claim.paidMinor == order.paidMinor &&
+            claim.dueMinor == order.dueMinor &&
+            order.paidMinor == 0L
+    }
+
+    /** Legacy direct outbox rows had no claim; new published direct rows do. */
+    fun paymentNeedsClaim(payment: LocalHeldOrderPaymentEntity): Boolean =
+        payment.requiresCheckoutClaim || payment.claimToken != null
 }
 
 enum class PreparedHeldCheckoutAction {

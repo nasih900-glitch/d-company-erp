@@ -3,6 +3,9 @@ package cloud.dcompany.erp.ui.screens.refunds
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import cloud.dcompany.erp.DCompanyApp
+import cloud.dcompany.erp.core.auth.EffectivePermissions
+import cloud.dcompany.erp.core.auth.ErpPermission
+import cloud.dcompany.erp.core.net.MeResponse
 import cloud.dcompany.erp.core.db.LocalRefundEntity
 import cloud.dcompany.erp.core.db.RefundOrderCacheEntity
 import cloud.dcompany.erp.core.db.RefundState
@@ -12,13 +15,18 @@ import cloud.dcompany.erp.core.db.ShiftResolutionPolicy
 import cloud.dcompany.erp.core.db.observeResolvedOpenShift
 import cloud.dcompany.erp.core.net.Order
 import cloud.dcompany.erp.core.net.asRupees
+import cloud.dcompany.erp.core.sync.ResourceRefreshResult
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 import java.util.Locale
 import java.util.UUID
 
@@ -113,6 +121,9 @@ data class RefundTask(
     val providerEvidenceReconciled: Boolean?,
     val payoutConflict: Boolean,
     val error: String?,
+    /** Both captured identities are retained so recovery never guesses a shift. */
+    val shiftId: String? = null,
+    val serverShiftId: String? = null,
 )
 
 private data class RefundOperationalContext(
@@ -121,6 +132,7 @@ private data class RefundOperationalContext(
     val shift: ResolvedOpenShift?,
     val actor: ShiftActor?,
     val protectedAccess: Boolean,
+    val canReconcileRefunds: Boolean,
 )
 
 data class RefundsUiState(
@@ -128,6 +140,8 @@ data class RefundsUiState(
     val query: String = "",
     val selected: Order? = null,
     val busy: Boolean = false,
+    val refreshing: Boolean = false,
+    val refreshError: String? = null,
     val notice: String? = null,
     val everSynced: Boolean = false,
     val online: Boolean = false,
@@ -135,6 +149,8 @@ data class RefundsUiState(
     val recentTasks: List<RefundTask> = emptyList(),
     val canManageMoney: Boolean = false,
     val protectedAccess: Boolean = false,
+    val canReconcileRefunds: Boolean = false,
+    val currentShiftIds: Set<String> = emptySet(),
     val moneyAccessMessage: String? = null,
 ) {
     val visible: List<Order>
@@ -144,6 +160,44 @@ data class RefundsUiState(
             else orders.filter { (it.invoiceNo ?: "").lowercase().contains(q) }
         }
 }
+
+internal fun refundRefreshError(result: ResourceRefreshResult, online: Boolean): String? = when (result) {
+    is ResourceRefreshResult.Refreshed -> null
+    is ResourceRefreshResult.Failed -> result.userMessage
+    is ResourceRefreshResult.Skipped -> if (online) {
+        "Refund records could not be verified for this account. Check access and refresh again."
+    } else {
+        "Reconnect and refresh to verify current refundable balances. Saved tasks remain on this tablet."
+    }
+}
+
+internal data class RefundRefreshFailure(val message: String, val raisedAtMillis: Long)
+
+internal fun canReconcilePosRefund(profile: MeResponse?): Boolean = profile?.let {
+    EffectivePermissions.from(it).has(ErpPermission.PosRefundReconcile)
+} == true
+
+/**
+ * Reconciliation records verified proof that a provider payout did not move
+ * money. It may cross staff ownership, but never terminal/shift identity,
+ * connectivity, state, or the dedicated server permission.
+ */
+internal fun canResolveFailedProviderPayout(
+    task: RefundTask,
+    online: Boolean,
+    canReconcileRefunds: Boolean,
+    currentShiftIds: Set<String>,
+): Boolean = online &&
+    canReconcileRefunds &&
+    task.state == RefundState.PROVIDER_PAYOUT_IN_PROGRESS &&
+    setOfNotNull(task.shiftId, task.serverShiftId).any(currentShiftIds::contains)
+
+internal fun refundRefreshFailureAfterCache(
+    failure: RefundRefreshFailure?,
+    lastSuccessfulSyncMillis: Long?,
+): String? = failure?.takeUnless {
+    lastSuccessfulSyncMillis != null && lastSuccessfulSyncMillis >= it.raisedAtMillis
+}?.message
 
 /**
  * POS refunds are four distinct facts, never one optimistic button:
@@ -163,6 +217,22 @@ class RefundsViewModel : ViewModel() {
     private val selectedId = MutableStateFlow<String?>(null)
     private val busy = MutableStateFlow(false)
     private val notice = MutableStateFlow<String?>(null)
+    private val refreshing = MutableStateFlow(false)
+    private val localRefreshError = MutableStateFlow<RefundRefreshFailure?>(null)
+    private val refreshError = combine(
+        localRefreshError,
+        appCtx.sync.resourceRefreshErrors.map { it["orders"] }.distinctUntilChanged(),
+        db.syncMetaDao().observe("orders"),
+    ) { local, resource, meta ->
+        refundRefreshFailureAfterCache(local, meta?.lastSyncMillis) ?: resource
+    }
+
+    private data class InteractionState(
+        val busy: Boolean,
+        val notice: String?,
+        val refreshing: Boolean,
+        val refreshError: String?,
+    )
     private val resolvedShift = db.shiftDao().observeResolvedOpenShift(
         appCtx.terminalStore.terminalIdFlow,
     )
@@ -175,7 +245,7 @@ class RefundsViewModel : ViewModel() {
             ::Pair,
         ),
         combine(query, selectedId, ::Pair),
-        combine(busy, notice, ::Pair),
+        combine(busy, notice, refreshing, refreshError, ::InteractionState),
         combine(
             db.syncMetaDao().observe("orders"),
             appCtx.connectivity.online,
@@ -189,12 +259,12 @@ class RefundsViewModel : ViewModel() {
                 shift = shift,
                 actor = actor,
                 protectedAccess = profile?.protectedAccess == true,
+                canReconcileRefunds = canReconcilePosRefund(profile),
             )
         },
     ) { cache, refundRows, qs, ui, context ->
         val (unresolved, recent) = refundRows
         val (q, selId) = qs
-        val (isBusy, noticeMsg) = ui
         val unresolvedOrderIds = unresolved.mapTo(mutableSetOf()) { it.orderId }
         val orders = cache
             .asSequence()
@@ -202,35 +272,82 @@ class RefundsViewModel : ViewModel() {
             .map(RefundOrderCacheEntity::toOrder)
             .toList()
         val canManageMoney = context.shift?.canManageMoney(context.actor) == true
+        val currentShiftIds = context.shift?.takeIf { shift ->
+            shift.server?.serverShiftId != null || shift.local?.serverShiftId != null
+        }?.let { shift ->
+            setOfNotNull(
+                shift.shiftId,
+                shift.local?.localId,
+                shift.local?.serverShiftId,
+                shift.server?.serverShiftId,
+            )
+        }.orEmpty()
         RefundsUiState(
             orders = orders,
             query = q,
             selected = orders.firstOrNull { it.id == selId },
-            busy = isBusy,
-            notice = noticeMsg,
+            busy = ui.busy,
+            notice = ui.notice,
+            refreshing = ui.refreshing,
+            refreshError = ui.refreshError,
             everSynced = context.everSynced,
             online = context.online,
             tasks = unresolved.map(LocalRefundEntity::toTask),
             recentTasks = recent.map(LocalRefundEntity::toTask),
             canManageMoney = canManageMoney,
             protectedAccess = context.protectedAccess,
+            canReconcileRefunds = context.canReconcileRefunds,
+            currentShiftIds = currentShiftIds,
             moneyAccessMessage = when {
                 context.shift == null ->
                     "Open this tablet's POS shift before requesting or paying a refund."
-                !canManageMoney -> context.shift.moneyAccessMessage(context.actor)
+                !canManageMoney -> context.shift.moneyAccessMessage(context.actor)?.let { message ->
+                    if (context.canReconcileRefunds) {
+                        "$message Refund reconciliation access can still resolve a verified failed " +
+                            "provider payout on this exact open shift."
+                    } else message
+                }
                 else -> null
             },
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), RefundsUiState())
 
     init {
-        appCtx.sync.requestSync()
-        viewModelScope.launch { appCtx.sync.refresh("orders") }
+        refreshRecords(showConfirmation = false)
     }
 
-    fun load() {
+    fun load() = refreshRecords(showConfirmation = true)
+
+    private fun refreshRecords(showConfirmation: Boolean) {
+        if (refreshing.value) return
+        refreshing.value = true
+        localRefreshError.value = null
         appCtx.sync.requestSync()
-        viewModelScope.launch { appCtx.sync.refresh("orders") }
+        viewModelScope.launch {
+            try {
+                val result = withTimeout(45_000L) { appCtx.sync.refresh("orders") }
+                localRefreshError.value = refundRefreshError(result, appCtx.connectivity.online.value)?.let {
+                    RefundRefreshFailure(it, System.currentTimeMillis())
+                }
+                if (showConfirmation && result is ResourceRefreshResult.Refreshed) {
+                    notice.value = "Refund records refreshed. Review the current balance before requesting a payout."
+                }
+            } catch (_: TimeoutCancellationException) {
+                localRefreshError.value = RefundRefreshFailure(
+                    "Refreshing refund records took too long. Saved tasks remain safe; check the connection and try again.",
+                    System.currentTimeMillis(),
+                )
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                localRefreshError.value = RefundRefreshFailure(
+                    "Refund records could not be refreshed. Saved tasks remain safe; check the connection and try again.",
+                    System.currentTimeMillis(),
+                )
+            } finally {
+                refreshing.value = false
+            }
+        }
     }
 
     fun search(q: String) { query.value = q }
@@ -563,7 +680,7 @@ class RefundsViewModel : ViewModel() {
 
     fun resolveStartedCashHandoff(localId: String, reason: String) {
         val cleanReason = reason.trim()
-        runOnlineProtectedRecovery(
+        runOnlineAuthorisedRecovery(
             invalidMessage = if (cleanReason.length < 3) {
                 "Enter why the started cash handover did not pay the customer."
             } else null,
@@ -579,7 +696,7 @@ class RefundsViewModel : ViewModel() {
 
     fun withdrawProviderRefund(localId: String, reason: String) {
         val cleanReason = reason.trim()
-        runOnlineProtectedRecovery(
+        runOnlineAuthorisedRecovery(
             invalidMessage = if (cleanReason.length < 3) {
                 "Enter why the accepted provider payout will not be started."
             } else null,
@@ -610,7 +727,7 @@ class RefundsViewModel : ViewModel() {
             cleanReason.length < 3 -> "Enter why no provider payout completed."
             else -> null
         }
-        runOnlineProtectedRecovery(invalidMessage = invalid) {
+        runOnlineAuthorisedRecovery(invalidMessage = invalid, requiresFinancialReconciliation = true) {
             val result = appCtx.sync.resolvePosRefundProviderPayout(
                 localId = localId,
                 providerStatus = providerStatus,
@@ -625,8 +742,9 @@ class RefundsViewModel : ViewModel() {
         }
     }
 
-    private fun runOnlineProtectedRecovery(
+    private fun runOnlineAuthorisedRecovery(
         invalidMessage: String?,
+        requiresFinancialReconciliation: Boolean = false,
         action: suspend () -> String,
     ) {
         if (busy.value) return
@@ -634,8 +752,13 @@ class RefundsViewModel : ViewModel() {
             notice.value = invalidMessage
             return
         }
-        if (appCtx.shiftCache.profile.value?.protectedAccess != true) {
-            notice.value = "Only a protected owner may resolve a payout that did not complete."
+        val permitted = if (requiresFinancialReconciliation) {
+            canReconcilePosRefund(appCtx.shiftCache.profile.value)
+        } else appCtx.shiftCache.profile.value?.protectedAccess == true
+        if (!permitted) {
+            notice.value = if (requiresFinancialReconciliation) {
+                "This account needs Refund reconciliation access to verify a failed provider payout."
+            } else "Only a protected owner may resolve this payout state."
             return
         }
         if (!appCtx.connectivity.online.value) {
@@ -646,7 +769,7 @@ class RefundsViewModel : ViewModel() {
         viewModelScope.launch {
             try {
                 notice.value = action()
-                // Direct protected-owner recovery can end the refund without
+                // Direct authorised recovery can end the refund without
                 // entering the queued outbox. Let the sync engine refresh the
                 // invalidated order/drawer/customer/finance projections.
                 appCtx.sync.requestSync()
@@ -748,4 +871,6 @@ private fun LocalRefundEntity.toTask() = RefundTask(
     providerEvidenceReconciled = providerEvidenceReconciled,
     payoutConflict = payoutConflict,
     error = lastError,
+    shiftId = shiftId,
+    serverShiftId = serverShiftId,
 )

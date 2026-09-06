@@ -29,6 +29,11 @@ export function canAccessRefunds(identity: RefundIdentity | null | undefined): b
   return identity.roles?.some((role) => LEGACY_REFUND_ROLES.has(role)) ?? false;
 }
 
+/** Money reconciliation is independent of audit/system administration. */
+export function canReconcileRefunds(identity: RefundIdentity | null | undefined): boolean {
+  return identity?.effective_permissions?.includes('pos.refund.reconcile') === true;
+}
+
 /** Never guess a provider rail from an amount, label, or prior selection. */
 export function refundRailPolicy(rawMethods: readonly string[]): RefundRailPolicy {
   const methods = rawMethods
@@ -82,7 +87,7 @@ export type RefundTaskAction =
 export interface RefundActionContext {
   userId: string | null;
   protectedAccess: boolean;
-  adminSystemAccess: boolean;
+  refundReconcileAccess: boolean;
   currentShiftId: string | null;
   canManageCurrentShift: boolean;
   online: boolean;
@@ -100,9 +105,17 @@ export function allowedRefundActions(
   if (
     !context.online
     || context.outcomeUncertain
-    || !context.canManageCurrentShift
     || context.currentShiftId !== task.shift_id
   ) return [];
+
+  // Resolving a verified failed provider attempt records that no money moved.
+  // It is deliberately authorised by the narrow reconciliation permission,
+  // not by shift ownership. Every action that can start, complete, withdraw,
+  // or finalise money still requires the normal shift actor below.
+  const canResolveFailedProviderPayout =
+    task.status === 'provider_payout_in_progress'
+    && context.refundReconcileAccess;
+  if (!context.canManageCurrentShift && !canResolveFailedProviderPayout) return [];
 
   const handoffActor = task.handoff_started_by;
   const providerActor = task.provider_payout_started_by;
@@ -130,11 +143,11 @@ export function allowedRefundActions(
         ...(context.protectedAccess ? ['withdraw_provider' as const] : []),
       ];
     case 'provider_payout_in_progress':
-      if (!mayTakeOver && providerActor !== context.userId) return [];
       return [
-        'settle_provider',
-        // This is intentionally admin.system, not general protected_access.
-        ...(context.adminSystemAccess ? ['resolve_provider' as const] : []),
+        ...(context.canManageCurrentShift && (mayTakeOver || providerActor === context.userId)
+          ? ['settle_provider' as const]
+          : []),
+        ...(context.refundReconcileAccess ? ['resolve_provider' as const] : []),
       ];
     case 'provider_completed_pending_accounting':
       return mayTakeOver || providerRecorder === context.userId ? ['finalize_provider'] : [];

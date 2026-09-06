@@ -13,11 +13,19 @@ import retrofit2.http.Path
 
 /** Mirrors CategoryCreate in backend/app/api/v1/menu/router.py. */
 @Serializable
-data class CategoryCreateBody(val name: String, @SerialName("sort_order") val sortOrder: Int = 0)
+data class CategoryCreateBody(
+    val name: String,
+    @SerialName("sort_order") val sortOrder: Int = 0,
+    @SerialName("is_gaming_centre_catalog") val isGamingCentreCatalog: Boolean = false,
+)
 
 /** Mirrors CategoryUpdate. No Idempotency-Key sent — an absolute-PATCH is replay-safe by construction (same reasoning as Customers). */
 @Serializable
-data class CategoryUpdateBody(val name: String? = null, @SerialName("sort_order") val sortOrder: Int? = null)
+data class CategoryUpdateBody(
+    val name: String? = null,
+    @SerialName("sort_order") val sortOrder: Int? = null,
+    @SerialName("is_gaming_centre_catalog") val isGamingCentreCatalog: Boolean? = null,
+)
 
 /**
  * Mirrors the non-price subset of ItemUpdate — deliberately excludes

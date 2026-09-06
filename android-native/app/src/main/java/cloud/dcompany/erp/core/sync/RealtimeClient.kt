@@ -201,6 +201,53 @@ internal class RealtimeSocketLifecycle<T : Any> {
     }
 }
 
+internal data class RealtimeAuthenticationDecision(
+    val accepted: Boolean,
+    val publishReconnect: Boolean = false,
+)
+
+/**
+ * Keeps a socket untrusted until the backend acknowledges its bearer frame.
+ * The exact token is retained only inside the listener and compared with the
+ * current TokenStore value before any resource invalidation is accepted.
+ * Therefore logout, a different employee login, or access-token rotation
+ * makes the old socket stale even if OkHttp has not delivered onClosed yet.
+ */
+internal class RealtimeAuthenticationGate {
+    private var presentedToken: String? = null
+    private var reconnectAfterAck = false
+    private var authenticated = false
+
+    @Synchronized
+    fun opened(token: String, wasReconnect: Boolean) {
+        require(token.isNotBlank()) { "Realtime authentication token cannot be blank" }
+        presentedToken = token
+        reconnectAfterAck = wasReconnect
+        authenticated = false
+    }
+
+    @Synchronized
+    fun acknowledge(currentToken: String?): RealtimeAuthenticationDecision {
+        val accepted = currentToken != null && currentToken == presentedToken
+        if (!accepted) return RealtimeAuthenticationDecision(accepted = false)
+        val publishReconnect = !authenticated && reconnectAfterAck
+        authenticated = true
+        reconnectAfterAck = false
+        return RealtimeAuthenticationDecision(
+            accepted = true,
+            publishReconnect = publishReconnect,
+        )
+    }
+
+    @Synchronized
+    fun canProcessAuthenticatedFrame(currentToken: String?): Boolean =
+        authenticated && currentToken != null && currentToken == presentedToken
+
+    @Synchronized
+    fun presentedTokenIsCurrent(currentToken: String?): Boolean =
+        currentToken != null && currentToken == presentedToken
+}
+
 /**
  * Live push over WebSocket — a 1:1 port of frontend/src/lib/realtime.ts onto
  * OkHttp, against the same endpoint (see backend app/api/v1/ws/router.py):
@@ -287,16 +334,22 @@ class RealtimeClient(
         private val generation: Long,
     ) : WebSocketListener() {
 
+        private val authentication = RealtimeAuthenticationGate()
+
         override fun onOpen(webSocket: WebSocket, response: Response) {
             socketLifecycle.ifCurrent(generation, webSocket) {
                 val wasReconnect = reconnectAttempt > 0
-                reconnectAttempt = 0
                 lastMessageAtMillis = System.currentTimeMillis()
                 // Read fresh rather than whatever connect() saw — a token
                 // rotated by the normal HTTP refresh flow while this socket
                 // was reconnecting must never leave it retrying with a stale
                 // one.
-                val token = tokens.accessToken() ?: return@ifCurrent
+                val token = tokens.accessToken()
+                if (token == null) {
+                    scope.launch { dropAndReconnect(generation, webSocket) }
+                    return@ifCurrent
+                }
+                authentication.opened(token, wasReconnect)
                 val authenticated = runCatching {
                     webSocket.send(json.encodeToString(AuthFrame.serializer(), AuthFrame(token)))
                 }.getOrDefault(false)
@@ -304,12 +357,7 @@ class RealtimeClient(
                     scope.launch { dropAndReconnect(generation, webSocket) }
                     return@ifCurrent
                 }
-                startWatchdogLocked(generation, webSocket)
-                // Anything that changed while disconnected produced a
-                // "changed" frame nobody was listening to — without this,
-                // every screen keeps showing stale data until the next
-                // unrelated change.
-                if (wasReconnect) eventBus.publish(RealtimeEvent.ReconnectedAfterGap)
+                startWatchdogLocked(generation, webSocket, authentication)
             }
         }
 
@@ -323,25 +371,53 @@ class RealtimeClient(
                 .getOrNull() ?: return
 
             var sendFailed = false
+            var authenticationInvalid = false
             socketLifecycle.ifCurrent(generation, webSocket) {
                 when (msg.type) {
-                    "changed" -> msg.resource
-                        ?.trim()
-                        ?.takeIf(String::isNotEmpty)
-                        ?.let { eventBus.publish(RealtimeEvent.Changed(it)) }
+                    "connected" -> {
+                        val decision = authentication.acknowledge(tokens.accessToken())
+                        if (!decision.accepted) {
+                            authenticationInvalid = true
+                        } else {
+                            // Authentication, not the TCP/WebSocket handshake,
+                            // is the recovery boundary. A rejected token must
+                            // retain exponential backoff and must never trigger
+                            // a false full-cache refresh.
+                            reconnectAttempt = 0
+                            if (decision.publishReconnect) {
+                                eventBus.publish(RealtimeEvent.ReconnectedAfterGap)
+                            }
+                        }
+                    }
+                    "changed" -> if (
+                        authentication.canProcessAuthenticatedFrame(tokens.accessToken())
+                    ) {
+                        msg.resource
+                            ?.trim()
+                            ?.takeIf(String::isNotEmpty)
+                            ?.let { eventBus.publish(RealtimeEvent.Changed(it)) }
+                    } else {
+                        authenticationInvalid = true
+                    }
                     "ping" -> {
-                        // Replying isn't required by the server, but a send
-                        // that throws is a second, earlier signal this socket
-                        // is dead.
-                        sendFailed = !runCatching {
-                            webSocket.send(
-                                json.encodeToString(PongFrame.serializer(), PongFrame()),
-                            )
-                        }.getOrDefault(false)
+                        if (!authentication.canProcessAuthenticatedFrame(tokens.accessToken())) {
+                            authenticationInvalid = true
+                        } else {
+                            // Replying isn't required by the server, but a send
+                            // that throws is a second, earlier signal this socket
+                            // is dead.
+                            sendFailed = !runCatching {
+                                webSocket.send(
+                                    json.encodeToString(PongFrame.serializer(), PongFrame()),
+                                )
+                            }.getOrDefault(false)
+                        }
                     }
                 }
             }
-            if (sendFailed) dropAndReconnect(generation, webSocket)
+            if (sendFailed || authenticationInvalid) {
+                dropAndReconnect(generation, webSocket)
+            }
         }
 
         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
@@ -380,22 +456,31 @@ class RealtimeClient(
         if (shouldReconnect) scheduleReconnect()
     }
 
-    private fun checkLiveness(generation: Long, webSocket: WebSocket) {
+    private fun checkLiveness(
+        generation: Long,
+        webSocket: WebSocket,
+        authentication: RealtimeAuthenticationGate,
+    ) {
         var stale = false
         socketLifecycle.ifCurrent(generation, webSocket) {
             stale = !intentionallyClosed &&
-                System.currentTimeMillis() - lastMessageAtMillis > silenceLimitMs
+                (!authentication.presentedTokenIsCurrent(tokens.accessToken()) ||
+                    System.currentTimeMillis() - lastMessageAtMillis > silenceLimitMs)
         }
         if (stale) dropAndReconnect(generation, webSocket)
     }
 
     /** Caller holds [socketLifecycle]'s monitor through ifCurrent/open. */
-    private fun startWatchdogLocked(generation: Long, webSocket: WebSocket) {
+    private fun startWatchdogLocked(
+        generation: Long,
+        webSocket: WebSocket,
+        authentication: RealtimeAuthenticationGate,
+    ) {
         stopWatchdogLocked()
         watchdogJob = scope.launch {
             while (isActive) {
                 delay(serverPingIntervalMs / 2)
-                checkLiveness(generation, webSocket)
+                checkLiveness(generation, webSocket, authentication)
             }
         }
     }

@@ -7,6 +7,14 @@
  * All methods raise a normalized Error with .code (see /lib/api.ts).
  */
 import { api } from './api';
+import { checkoutClientInstance } from './checkout-client-instance';
+import {
+  buildRemoteAssistanceCommand,
+  type RemoteAssistanceCommandRequest,
+  type RemoteAssistanceCommandType,
+  type RemoteAssistanceModule,
+  type SafeRemoteAssistanceCommand,
+} from './remote-assistance-policy';
 
 // =============================================================================
 // CSV / file export — shared by reports.gstr1Csv / gstr3bCsv / analytics.exportCsv
@@ -46,6 +54,8 @@ export interface MeResponse {
   roles: string[];
   protected_access: boolean;
   audit_access: boolean;
+  /** Dedicated server-authoritative grant for Android release controls. */
+  release_control_access: boolean;
   company_id: string;
   branch_id: string | null;
   accessible_modules: string[];
@@ -117,6 +127,8 @@ export interface MenuCategoryDTO {
   id: string;
   name: string;
   sort_order: number;
+  /** Missing only while a new client is talking to a pre-0070 server. */
+  is_gaming_centre_catalog?: boolean;
 }
 
 export interface OrderLineDTO {
@@ -357,11 +369,30 @@ export const pos = {
         headers: { 'Idempotency-Key': idempotencyKey },
       })
       .then((r) => r.data),
-  voidOrder: (orderId: string, reason: string) =>
-    api.delete(`/pos/orders/${orderId}`, { data: { reason } }).then(() => undefined),
-  claimCheckout: (orderId: string) =>
-    api.post<CheckoutClaimDTO>(`/pos/orders/${orderId}/checkout-claim`)
+  voidOrder: (orderId: string, reason: string, checkoutClaimToken?: string) =>
+    api.delete(`/pos/orders/${orderId}`, {
+      data: { reason },
+      headers: checkoutClaimToken ? { 'X-Checkout-Claim': checkoutClaimToken } : undefined,
+    }).then(() => undefined),
+  claimCheckout: (orderId: string, clientInstance = checkoutClientInstance()) =>
+    api.post<CheckoutClaimDTO>(`/pos/orders/${orderId}/checkout-claim`, undefined, {
+      headers: { 'X-Checkout-Client-Instance': clientInstance },
+    })
       .then((r) => r.data),
+  publishCheckout: (
+    orderId: string,
+    expectedCheckoutVersion: number,
+    idempotencyKey: string,
+    clientInstance = checkoutClientInstance(),
+  ) =>
+    api.post<CheckoutClaimDTO>(`/pos/orders/${orderId}/publish-checkout-claim`, {
+      expected_checkout_version: expectedCheckoutVersion,
+    }, {
+      headers: {
+        'Idempotency-Key': idempotencyKey,
+        'X-Checkout-Client-Instance': clientInstance,
+      },
+    }).then((r) => r.data),
   releaseCheckout: (orderId: string, claimToken: string) =>
     api.delete(`/pos/orders/${orderId}/checkout-claim`, {
       headers: { 'X-Checkout-Claim': claimToken },
@@ -424,6 +455,8 @@ export interface UserDTO {
   phone: string | null;
   status: 'active' | 'suspended';
   roles: string[];
+  /** Exact internal role assignment, returned only to the protected audit owner. */
+  managed_roles?: string[] | null;
   last_login_at: string | null;
 }
 
@@ -472,9 +505,17 @@ export const attendance = {
 // MENU — categories + items (CRUD)
 // =============================================================================
 export const menuAdmin = {
-  createCategory: (body: { name: string; sort_order?: number }) =>
+  createCategory: (body: {
+    name: string;
+    sort_order?: number;
+    is_gaming_centre_catalog?: boolean;
+  }) =>
     api.post<MenuCategoryDTO>('/menu/categories', body).then((r) => r.data),
-  updateCategory: (id: string, body: { name?: string; sort_order?: number }) =>
+  updateCategory: (id: string, body: {
+    name?: string;
+    sort_order?: number;
+    is_gaming_centre_catalog?: boolean;
+  }) =>
     api.patch<MenuCategoryDTO>(`/menu/categories/${id}`, body).then((r) => r.data),
   deleteCategory: (id: string) => api.delete(`/menu/categories/${id}`),
   createItem: (body: {
@@ -622,13 +663,16 @@ export const recipes = {
 // =============================================================================
 // FINANCE — expenses + partners + capital + assets
 // =============================================================================
+export type ExpensePaymentRail = 'cash' | 'card' | 'bank' | 'upi';
+export type ExpenseCreatePaymentRail = Exclude<ExpensePaymentRail, 'cash'>;
+
 export interface ExpenseDTO {
   id: string;
   branch_id: string;
   category_id: string;
   supplier_id: string | null;
   amount_minor: number;
-  paid_via: 'cash' | 'card' | 'bank' | 'upi';
+  paid_via: ExpensePaymentRail;
   paid_at: string;
   vendor_name: string | null;
   invoice_no: string | null;
@@ -713,13 +757,27 @@ export interface PartnerProfitShareDTO {
   name: string;
   share_pct: number;
   capital_balance_minor: number;
+  /** Compatibility value. Zero when the server cannot verify allocation costing. */
   profit_share_minor: number;
+  authoritative_profit_share_minor?: number | null;
+}
+
+export interface AllocationConfidenceDTO {
+  status: 'authoritative' | 'costing_incomplete' | 'costing_unavailable';
+  inventory_orders_checked: number;
+  inventory_lines_checked: number;
+  unresolved_order_count: number;
+  reason: string | null;
 }
 
 export interface PartnerPLReportDTO {
   period_start: string;
   period_end: string;
   net_profit_minor: number;
+  /** Optional only during a rolling backend update; absence is not authoritative. */
+  allocation_status?: 'authoritative' | 'costing_incomplete' | 'costing_unavailable';
+  allocation_unavailable_reason?: string | null;
+  costing_confidence?: AllocationConfidenceDTO;
   partners: PartnerProfitShareDTO[];
 }
 
@@ -729,7 +787,9 @@ export interface DistributablePartnerShareDTO {
   share_pct: number;
   capital_balance_minor: number;
   lifetime_withdrawn_minor: number;
+  /** Compatibility value. Zero when the server cannot verify allocation costing. */
   distributable_share_minor: number;
+  authoritative_distributable_share_minor?: number | null;
 }
 
 export interface DistributableProfitReportDTO {
@@ -741,9 +801,23 @@ export interface DistributableProfitReportDTO {
   avg_monthly_cost_minor: number;
   reserve_minor: number;
   liquid_cash_minor: number;
+  /** Optional only for rolling updates; never infer spendability from the legacy total. */
+  spendable_cash_bank_minor?: number;
+  cash_position?: {
+    cash_on_hand_minor: number;
+    bank_balance_minor: number;
+    spendable_cash_bank_minor: number;
+    settlement_receivables_minor: number;
+  };
   profit_based_capacity_minor: number;
   cash_based_capacity_minor: number;
+  /** Compatibility value. Zero when the server cannot verify allocation costing. */
   safe_to_distribute_minor: number;
+  authoritative_safe_to_distribute_minor?: number | null;
+  /** Optional only during a rolling backend update; absence is not authoritative. */
+  allocation_status?: 'authoritative' | 'costing_incomplete' | 'costing_unavailable';
+  allocation_unavailable_reason?: string | null;
+  costing_confidence?: AllocationConfidenceDTO;
   partners: DistributablePartnerShareDTO[];
 }
 
@@ -790,7 +864,7 @@ export const finance = {
   // after a flaky connection needs the header to avoid a silent duplicate.
   createExpense: (body: {
     branch_id: string; category_id: string; supplier_id?: string;
-    amount_minor: number; paid_via: 'cash' | 'card' | 'bank' | 'upi';
+    amount_minor: number; paid_via: ExpenseCreatePaymentRail;
     paid_at: string; vendor_name?: string; invoice_no?: string; note?: string;
   }, idempotencyKey: string) =>
     api.post<ExpenseDTO>('/finance/expenses', body, {
@@ -946,6 +1020,159 @@ export interface ExpenseCategoryDTO {
   id: string;
   name: string;
   code: string | null;
+}
+
+// =============================================================================
+// NATIVE CLIENT HEALTH & ANDROID RELEASES — explicit release-controller plane
+// =============================================================================
+export type ClientDistributionChannel = 'direct' | 'play' | 'managed';
+
+export type ClientUpdateState =
+  | 'idle'
+  | 'update_available'
+  | 'downloading'
+  | 'verifying'
+  | 'verified'
+  | 'installer_opened'
+  | 'failed';
+
+export type ClientUpdateErrorCode =
+  | 'network_error'
+  | 'http_error'
+  | 'insufficient_storage'
+  | 'invalid_metadata'
+  | 'size_mismatch'
+  | 'checksum_mismatch'
+  | 'archive_unreadable'
+  | 'package_mismatch'
+  | 'version_mismatch'
+  | 'signer_mismatch'
+  | 'installer_permission_denied'
+  | 'installer_unavailable'
+  | 'installer_not_completed'
+  | 'unknown';
+
+export interface ClientInstallationDTO {
+  installation_id: string;
+  platform: 'android';
+  distribution_channel: ClientDistributionChannel;
+  version_name: string;
+  version_code: number;
+  pending_outbox_count: number;
+  last_successful_sync_at: string | null;
+  update_state: ClientUpdateState;
+  update_error_code: ClientUpdateErrorCode | null;
+  last_seen_at: string;
+  is_stale: boolean;
+  last_user_id: string | null;
+  last_user_name: string | null;
+  terminal_id: string | null;
+  terminal_name: string | null;
+}
+
+export interface ClientInstallationListDTO {
+  server_time: string;
+  stale_after_hours: number;
+  total: number;
+  items: ClientInstallationDTO[];
+}
+
+export type AndroidReleaseStatus = 'staged' | 'active' | 'withdrawn';
+
+export interface AndroidReleaseDTO {
+  id: string;
+  channel: 'direct';
+  version_code: number;
+  version_name: string;
+  update_url: string;
+  release_notes: string;
+  apk_sha256: string;
+  apk_size_bytes: number;
+  apk_signing_cert_sha256: string;
+  manifest_sha256: string;
+  /** Lowercase 40-character Git commit SHA recorded by the release workflow. */
+  source_git_sha: string;
+  /** Immutable release tag/ref; the backend requires v{version_name}. */
+  source_release_ref: string;
+  /** Canonical decimal string so 64-bit workflow IDs remain exact in JavaScript. */
+  source_workflow_run_id: string;
+  source_workflow_run_attempt: number;
+  status: AndroidReleaseStatus;
+  registered_at: string;
+  activated_at: string | null;
+  activated_by: string | null;
+  withdrawn_at: string | null;
+  withdrawn_by: string | null;
+  updated_at: string;
+}
+
+export interface AndroidReleaseListDTO {
+  total: number;
+  items: AndroidReleaseDTO[];
+}
+
+// =============================================================================
+// SYSTEM HEALTH — protected, sanitized operational aggregates
+// =============================================================================
+export type SystemHealthStatus = 'healthy' | 'degraded' | 'action_required';
+export type SystemHealthDependencyStatus = 'operational' | 'unavailable';
+export type ClientDiagnosticEventType = 'crash' | 'anr' | 'api_failure' | 'sync_stall';
+export type ClientDiagnosticSeverity = 'warning' | 'error' | 'critical';
+export type ClientDiagnosticComponent =
+  | 'app'
+  | 'auth'
+  | 'gaming'
+  | 'pos'
+  | 'finance'
+  | 'sync'
+  | 'network'
+  | 'updates'
+  | 'storage';
+
+export interface ClientDiagnosticSummaryDTO {
+  server_time: string;
+  window_hours: number;
+  total: number;
+  critical_count: number;
+  affected_installations: number;
+  offline_event_count: number;
+  latest_event_at: string | null;
+  counts_by_type: Record<ClientDiagnosticEventType, number>;
+  counts_by_severity: Record<ClientDiagnosticSeverity, number>;
+  counts_by_component: Record<ClientDiagnosticComponent, number>;
+}
+
+export interface SystemHealthDTO {
+  status: SystemHealthStatus;
+  server_time: string;
+  retention_days: number;
+  dependencies: {
+    api: SystemHealthDependencyStatus;
+    database: SystemHealthDependencyStatus;
+    redis: SystemHealthDependencyStatus;
+  };
+  /**
+   * Backup evidence is deliberately explicit. Code 15 does not infer host
+   * backup success from an API process that cannot read the host monitor.
+   */
+  backups: {
+    status: 'operational' | 'unavailable' | 'unknown';
+    last_success_at: string | null;
+    restore_tested_at: string | null;
+    evidence_code: 'host_monitor_not_connected';
+  };
+  devices: {
+    total: number;
+    seen_last_24h: number;
+    stale: number;
+    with_pending_sync: number;
+    sync_stalled: number;
+    max_pending_outbox_count: number;
+    latest_supported_version_code: number;
+    outdated_installations: number;
+  };
+  diagnostics: ClientDiagnosticSummaryDTO;
+  recommendations: string[];
 }
 
 // =============================================================================
@@ -2064,8 +2291,8 @@ export interface DashboardKPIsDTO {
 }
 
 export const analytics = {
-  dashboard: (on_date: string) =>
-    api.get<DashboardKPIsDTO>('/analytics/dashboard', { params: { on_date } }).then((r) => r.data),
+  dashboard: (on_date?: string) =>
+    api.get<DashboardKPIsDTO>('/analytics/dashboard', { params: on_date ? { on_date } : {} }).then((r) => r.data),
   // Full period P&L CSV export (analytics.export permission).
   exportCsv: (period_start: string, period_end: string) =>
     downloadCsv(
@@ -2295,6 +2522,29 @@ export interface ShiftDTO {
   opened_by: string;
   opened_by_name: string | null;
   opened_by_email: string | null;
+  /** Null is a pre-0069 row; revision 1 is the durable shift lifecycle protocol. */
+  opening_protocol_revision?: number | null;
+  /** Client class only. The server never exposes the causal tablet identity. */
+  opening_client_platform?: 'web' | 'android' | 'ios' | null;
+  /** Present on servers that retain the staff identity responsible for closure. */
+  closed_by?: string | null;
+  closed_by_name?: string | null;
+  closed_by_email?: string | null;
+}
+
+export interface ShiftCloseResultDTO {
+  id: string;
+  status: string;
+  variance_minor: number;
+  closed_by?: string | null;
+  closed_by_name?: string | null;
+  recovery_close?: boolean;
+}
+
+export interface ShiftRecoveryCloseDTO {
+  counted_minor: number;
+  reason: string;
+  acknowledge_origin_tablet_quarantined: true;
 }
 
 export const orders = {
@@ -2304,6 +2554,13 @@ export const orders = {
   }) =>
     api.get<OrderListItemDTO[]>('/pos/orders', { params }).then((r) => r.data),
   get: (id: string) => api.get<OrderDTO>(`/pos/orders/${id}`).then((r) => r.data),
+  holdForCheckout: (
+    id: string,
+    body: { expected_checkout_version: number; reason: string },
+    idempotencyKey: string,
+  ) => api.patch<OrderDTO>(`/pos/orders/${id}/hold-for-checkout`, body, {
+    headers: { 'Idempotency-Key': idempotencyKey },
+  }).then((r) => r.data),
 };
 
 export const receipts = {
@@ -2320,7 +2577,16 @@ export const shifts = {
     api.post<{ id: string; status: string }>('/pos/shifts/open', { opening_float_minor })
       .then((r) => r.data),
   close: (id: string, counted_minor: number) =>
-    api.post<{ id: string; status: string; variance_minor: number }>(`/pos/shifts/${id}/close`, { counted_minor })
+    api.post<ShiftCloseResultDTO>(`/pos/shifts/${id}/close`, { counted_minor })
+      .then((r) => r.data),
+  recoverAndroidClose: (
+    id: string,
+    body: ShiftRecoveryCloseDTO,
+    idempotencyKey: string,
+  ) =>
+    api.post<ShiftCloseResultDTO>(`/pos/shifts/${id}/recover-close`, body, {
+      headers: { 'Idempotency-Key': idempotencyKey },
+    })
       .then((r) => r.data),
 };
 
@@ -2647,6 +2913,14 @@ export interface GameSessionDTO {
   timer_minutes: number | null;
   timer_ends_at: string | null;
   paused_minutes: number;
+  paused_at?: string | null;
+  /** Includes any migrated legacy paused_minutes; do not add/subtract both. */
+  paused_duration_ms?: number;
+  /** Rollout gate: only new pauses are blocked on incompatible tablet fleets. */
+  pause_available?: boolean;
+  pause_version?: number;
+  last_pause_transition_at?: string | null;
+  timer_alarm_version?: number;
   billable_minutes: number | null;
   amount_minor: number | null;
   rate_per_hour_minor: number | null;
@@ -2658,13 +2932,40 @@ export interface GameSessionDTO {
   package_duration_minutes_snapshot: number | null;
   package_variant_snapshot: string | null;
   package_station_type_snapshot: string | null;
+  /** Absent only when talking to a pre-Code22 backend during a coordinated rollout. */
+  package_pricing_tier_snapshot?: 'standard' | 'premium' | null;
   extra_controllers: number;
+}
+
+/**
+ * Protected-owner compare-and-swap evidence for a pre-authoritative-pause row.
+ * The explicit nulls are material preconditions, not optional fields.
+ */
+export interface LegacyPausedSessionResolutionDTO {
+  expected_status: 'paused';
+  expected_paused_at: null;
+  expected_pause_version: 0;
+  expected_end_at: null;
+  expected_order_id: null;
+  expected_billable_minutes: null;
+  expected_paused_duration_ms: number;
+  expected_amount_minor: number | null;
+  ended_at: string;
+  billable_minutes: number;
+  amount_minor: number;
+  timing_evidence_reviewed: true;
+  reason: string;
 }
 
 export interface GamingPackageDTO {
   id: string;
+  /** Missing only on a pre-Code22 server; unsafe rows are not offered for new tariff starts. */
+  code?: string;
   station_type: string;
+  pricing_tier: 'standard' | 'premium' | string;
   variant: string;
+  included_players: number;
+  max_players: number;
   kind: 'base' | 'extension';
   name: string;
   duration_minutes: number;
@@ -2770,6 +3071,11 @@ export const gaming = {
   }>) => api.patch<StationDTO>(`/gaming/stations/${id}`, body).then((r) => r.data),
   deleteStation: (id: string) => api.delete(`/gaming/stations/${id}`),
 
+  /** One database snapshot: status transitions cannot straddle separate list reads. */
+  listOperationalSessions: () => api.get<GameSessionDTO[]>('/gaming/sessions', {
+    params: { unbilled_only: true, limit: 500 },
+  }).then((r) => r.data),
+
   listSessions: (
     status?: 'active' | 'paused' | 'ended',
     options?: { unbilledOnly?: boolean; limit?: number },
@@ -2806,7 +3112,7 @@ export const gaming = {
   ).then((r) => r.data),
   startSession: (body: {
     station_id: string; shift_id: string; customer_name?: string; customer_phone?: string;
-    timer_minutes?: number; package_id?: string; extra_controllers?: number;
+    timer_minutes?: number; package_id?: string; extra_controllers?: number; player_count?: number;
     expected_rate_per_hour_minor: number;
     expected_package_price_minor?: number;
     expected_package_duration_minutes?: number;
@@ -2816,6 +3122,14 @@ export const gaming = {
   }).then((r) => r.data),
   setSessionTimer: (id: string, timer_minutes: number | null) =>
     api.patch<GameSessionDTO>(`/gaming/sessions/${id}/timer`, { timer_minutes }).then((r) => r.data),
+  pauseSession: (id: string, body: { reason: string; expected_pause_version: number }, idempotencyKey: string) =>
+    api.post<GameSessionDTO>(`/gaming/sessions/${id}/pause`, body, {
+      headers: { 'Idempotency-Key': idempotencyKey },
+    }).then((r) => r.data),
+  resumeSession: (id: string, body: { reason: string; expected_pause_version: number }, idempotencyKey: string) =>
+    api.post<GameSessionDTO>(`/gaming/sessions/${id}/resume`, body, {
+      headers: { 'Idempotency-Key': idempotencyKey },
+    }).then((r) => r.data),
   extendSessionTimer: (
     id: string,
     expectedTimerMinutes: number | null,
@@ -2852,6 +3166,13 @@ export const gaming = {
     api.post<GameSessionDTO>(`/gaming/sessions/${id}/stop`, undefined, {
       headers: { 'Idempotency-Key': idempotencyKey },
     }).then((r) => r.data),
+  resolveLegacyPausedSession: (
+    id: string,
+    body: LegacyPausedSessionResolutionDTO,
+    idempotencyKey: string,
+  ) => api.post<GameSessionDTO>(`/gaming/sessions/${id}/resolve-legacy-pause`, body, {
+    headers: { 'Idempotency-Key': idempotencyKey },
+  }).then((r) => r.data),
   repairSessionBilling: (
     id: string,
     amountMinor: number,
@@ -2967,6 +3288,300 @@ export const events = {
   checkIn: (event_id: string, ticket_id: string) =>
     api.post<EventTicketDTO>(`/events/${event_id}/tickets/${ticket_id}/check-in`)
       .then((r) => r.data),
+};
+
+export const clientInstallations = {
+  list: (params: {
+    stale_after_hours?: number;
+    limit?: number;
+    offset?: number;
+  } = {}) => api.get<ClientInstallationListDTO>('/client-installations', { params })
+    .then((r) => r.data),
+};
+
+export const androidReleases = {
+  list: (limit = 100) =>
+    api.get<AndroidReleaseListDTO>('/client-updates/android/releases', {
+      params: { limit },
+    }).then((r) => r.data),
+  activate: (releaseId: string) =>
+    api.post<AndroidReleaseDTO>(`/client-updates/android/releases/${releaseId}/activate`)
+      .then((r) => r.data),
+  withdraw: (releaseId: string) =>
+    api.post<AndroidReleaseDTO>(`/client-updates/android/releases/${releaseId}/withdraw`)
+      .then((r) => r.data),
+};
+
+export const systemHealth = {
+  get: (signal?: AbortSignal) =>
+    api.get<SystemHealthDTO>('/client-diagnostics/system-health', { signal })
+      .then((r) => r.data),
+};
+
+// =============================================================================
+// REMOTE ASSISTANCE — owner-only, consented ERP-window support
+// =============================================================================
+export type RemoteAssistanceSharingCapability =
+  | 'available'
+  | 'permission_required'
+  | 'unsupported';
+
+export type RemoteAssistanceGrantKind = 'one_time' | 'anytime';
+export type RemoteAssistanceGrantStatus =
+  | 'requested'
+  | 'active'
+  | 'declined'
+  | 'revoked'
+  | 'expired'
+  | 'consumed';
+export type RemoteAssistanceSessionStatus = 'requested' | 'active' | 'ended' | 'expired';
+export type RemoteAssistanceCommandStatus = 'pending' | 'acknowledged' | 'rejected';
+export type RemoteAssistanceDeviceKeyStatus = 'pending' | 'active' | 'revoked' | 'expired';
+export type RemoteAssistanceEndReason =
+  | 'owner_ended'
+  | 'user_ended'
+  | 'permission_revoked'
+  | 'capture_stopped'
+  | 'app_backgrounded'
+  | 'grant_revoked'
+  | 'grant_declined'
+  | null;
+
+export interface RemoteAssistanceDeviceDTO {
+  installation_id: string;
+  terminal_id: string | null;
+  terminal_name: string | null;
+  version_name: string;
+  version_code: number;
+  last_user_id: string | null;
+  last_user_name: string | null;
+  last_seen_at: string;
+  remote_support_last_seen_at: string | null;
+  is_remote_online: boolean;
+  protocol_version: number | null;
+  sharing_capability: RemoteAssistanceSharingCapability | null;
+  device_key_id: string | null;
+  device_key_status: RemoteAssistanceDeviceKeyStatus | null;
+  device_key_fingerprint_sha256: string | null;
+  device_key_approved_at: string | null;
+  pending_device_key_id: string | null;
+  pending_device_key_enrolled_by_user_id: string | null;
+  pending_device_key_enrolled_by_name: string | null;
+  pending_device_key_enrolled_at: string | null;
+  pending_device_key_expires_at: string | null;
+  pairing_required: boolean;
+  grant_status: RemoteAssistanceGrantStatus | null;
+  current_grant_id: string | null;
+  current_grant_kind: RemoteAssistanceGrantKind | null;
+  current_grant_expires_at: string | null;
+  current_grant_responded_by_user_id: string | null;
+  current_grant_responded_by_name: string | null;
+  current_grant_responded_at: string | null;
+  session_status: RemoteAssistanceSessionStatus | null;
+  current_session_id: string | null;
+  current_session_expires_at: string | null;
+  current_session_next_sequence: number | null;
+}
+
+export interface RemoteAssistanceDeviceListDTO {
+  server_time: string;
+  online_within_seconds: number;
+  total: number;
+  items: RemoteAssistanceDeviceDTO[];
+}
+
+export interface RemoteAssistanceDeviceKeyAdminDTO {
+  key_id: string;
+  installation_id: string;
+  status: RemoteAssistanceDeviceKeyStatus;
+  fingerprint_sha256: string | null;
+  enrolled_by_user_id: string;
+  enrolled_by_name: string | null;
+  enrolled_at: string;
+  pending_expires_at: string;
+  approved_by_user_id: string | null;
+  approved_by_name: string | null;
+  approved_at: string | null;
+  revoked_by_user_id: string | null;
+  revoked_by_name: string | null;
+  revoked_at: string | null;
+}
+
+export interface RemoteAssistanceGrantDTO {
+  id: string;
+  installation_id: string;
+  kind: RemoteAssistanceGrantKind;
+  status: RemoteAssistanceGrantStatus;
+  requested_by_user_id: string;
+  requested_by_name: string | null;
+  responded_by_user_id: string | null;
+  responded_by_name: string | null;
+  requested_at: string;
+  expires_at: string;
+  responded_at: string | null;
+  revoked_at: string | null;
+  consumed_at: string | null;
+}
+
+export interface RemoteAssistanceSessionDTO {
+  id: string;
+  installation_id: string;
+  grant_id: string;
+  status: RemoteAssistanceSessionStatus;
+  duration_seconds: number;
+  requested_by_user_id: string;
+  requested_by_name: string | null;
+  started_by_user_id: string | null;
+  started_by_name: string | null;
+  ended_by_user_id: string | null;
+  ended_by_name: string | null;
+  requested_at: string;
+  request_expires_at: string;
+  started_at: string | null;
+  expires_at: string | null;
+  ended_at: string | null;
+  end_reason: RemoteAssistanceEndReason;
+  next_sequence: number;
+}
+
+export interface RemoteAssistanceSessionListDTO {
+  total: number;
+  limit: number;
+  offset: number;
+  items: RemoteAssistanceSessionDTO[];
+}
+
+export interface RemoteAssistanceCommandDTO {
+  command_id: string;
+  session_id: string;
+  sequence: number;
+  type: RemoteAssistanceCommandType;
+  module: RemoteAssistanceModule | null;
+  status: RemoteAssistanceCommandStatus;
+  issued_by_user_id: string;
+  issued_at: string;
+  resolved_by_user_id: string | null;
+  resolved_at: string | null;
+  rejection_reason_code: string | null;
+}
+
+export interface RemoteAssistanceRequestResultDTO {
+  grant: RemoteAssistanceGrantDTO;
+  session: RemoteAssistanceSessionDTO;
+}
+
+export interface RemoteAssistanceFrameDTO {
+  blob: Blob;
+  frame_id: string | null;
+  sequence: number | null;
+  width: number | null;
+  height: number | null;
+  received_at: string | null;
+}
+
+function finiteHeaderNumber(value: unknown): number | null {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? number : null;
+}
+
+/**
+ * The complete endpoint surface intentionally lives in one object. Callers
+ * cannot construct an arbitrary command body; every command passes through
+ * the shared ERP-only allowlist first.
+ */
+export const remoteAssistance = {
+  listDevices: (signal?: AbortSignal) =>
+    api.get<RemoteAssistanceDeviceListDTO>('/remote-assistance/devices', { signal })
+      .then((r) => r.data),
+  listSessions: (
+    params: {
+      installation_id?: string;
+      status?: RemoteAssistanceSessionStatus;
+      limit?: number;
+      offset?: number;
+    } = {},
+    signal?: AbortSignal,
+  ) => api.get<RemoteAssistanceSessionListDTO>('/remote-assistance/sessions', {
+    params,
+    signal,
+  }).then((r) => r.data),
+  approveDeviceKey: (
+    keyId: string,
+    body: { approval_id: string; pairing_code: string },
+  ) => api.post<RemoteAssistanceDeviceKeyAdminDTO>(
+    `/remote-assistance/device-keys/${keyId}/approve`,
+    body,
+  ).then((r) => r.data),
+  revokeDeviceKey: (keyId: string, revocationId: string) =>
+    api.post<RemoteAssistanceDeviceKeyAdminDTO>(
+      `/remote-assistance/device-keys/${keyId}/revoke`,
+      { revocation_id: revocationId },
+    ).then((r) => r.data),
+  requestGrant: (body: {
+    request_id: string;
+    installation_id: string;
+    grant_kind: RemoteAssistanceGrantKind;
+    grant_ttl_seconds: number;
+    session_ttl_seconds: number;
+  }) => api.post<RemoteAssistanceRequestResultDTO>('/remote-assistance/requests', body)
+    .then((r) => r.data),
+  createSession: (body: {
+    session_id: string;
+    installation_id: string;
+    grant_id: string;
+    session_ttl_seconds: number;
+  }) => api.post<RemoteAssistanceSessionDTO>('/remote-assistance/sessions', body)
+    .then((r) => r.data),
+  startSession: (sessionId: string, startId: string) =>
+    api.post<RemoteAssistanceSessionDTO>(
+      `/remote-assistance/sessions/${sessionId}/start`,
+      { start_id: startId },
+    ).then((r) => r.data),
+  sendCommand: (
+    sessionId: string,
+    command: SafeRemoteAssistanceCommand,
+    sequence: number,
+    commandId: string,
+    signal?: AbortSignal,
+  ) => {
+    const body: RemoteAssistanceCommandRequest = buildRemoteAssistanceCommand(
+      command,
+      sequence,
+      commandId,
+    );
+    return api.post<RemoteAssistanceCommandDTO>(
+      `/remote-assistance/sessions/${sessionId}/commands`,
+      body,
+      { signal },
+    ).then((r) => r.data);
+  },
+  getCommand: (sessionId: string, commandId: string, signal?: AbortSignal) =>
+    api.get<RemoteAssistanceCommandDTO>(
+      `/remote-assistance/sessions/${sessionId}/commands/${commandId}`,
+      { signal },
+    ).then((r) => r.data),
+  endSession: (sessionId: string, endId: string) =>
+    api.post<RemoteAssistanceSessionDTO>(
+      `/remote-assistance/sessions/${sessionId}/end`,
+      { end_id: endId },
+    ).then((r) => r.data),
+  revokeGrant: (grantId: string, revokeId: string) =>
+    api.post<RemoteAssistanceGrantDTO>(
+      `/remote-assistance/grants/${grantId}/revoke`,
+      { revoke_id: revokeId },
+    ).then((r) => r.data),
+  frame: (sessionId: string, signal?: AbortSignal) =>
+    api.get<Blob>(`/remote-assistance/sessions/${sessionId}/frame`, {
+      responseType: 'blob',
+      signal,
+    }).then((r): RemoteAssistanceFrameDTO => ({
+      blob: r.data,
+      frame_id: (r.headers?.['x-frame-id'] as string | undefined) ?? null,
+      sequence: finiteHeaderNumber(r.headers?.['x-frame-sequence']),
+      width: finiteHeaderNumber(r.headers?.['x-frame-width']),
+      height: finiteHeaderNumber(r.headers?.['x-frame-height']),
+      received_at: (r.headers?.['x-frame-received-at'] as string | undefined) ?? null,
+    })),
 };
 
 export const settings = {

@@ -2697,6 +2697,96 @@ val MIGRATION_39_40 = object : Migration(39, 40) {
     }
 }
 
+/**
+ * Code22 keeps the server-owned tariff axes in the offline package cache.
+ * Existing rows receive conservative defaults and are replaced by the next
+ * successful Gaming reference-data pull before a new package can be chosen.
+ */
+val MIGRATION_40_41 = object : Migration(40, 41) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `gaming_package_cache` ADD COLUMN `code` TEXT NOT NULL DEFAULT ''")
+        db.execSQL(
+            "ALTER TABLE `gaming_package_cache` ADD COLUMN `pricingTier` TEXT NOT NULL DEFAULT 'standard'",
+        )
+        db.execSQL(
+            "ALTER TABLE `gaming_package_cache` ADD COLUMN `includedPlayers` INTEGER NOT NULL DEFAULT 1",
+        )
+        db.execSQL(
+            "ALTER TABLE `gaming_package_cache` ADD COLUMN `maxPlayers` INTEGER NOT NULL DEFAULT 1",
+        )
+        db.execSQL(
+            "ALTER TABLE `gaming_session_cache` ADD COLUMN `packagePricingTierSnapshot` TEXT",
+        )
+        db.execSQL(
+            "ALTER TABLE `local_gaming_sessions` ADD COLUMN `packagePricingTierSnapshot` TEXT",
+        )
+        // Code21 reference rows have no stable tariff identity or player/tier
+        // semantics. Keeping them would let an offline upgrade offer obsolete
+        // prices. The next successful pull replaces this cache atomically.
+        db.execSQL("DELETE FROM `gaming_package_cache`")
+    }
+}
+
+/** Preserve server-attributed shift closer identity in offline history. */
+val MIGRATION_41_42 = object : Migration(41, 42) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `shift_history_cache` ADD COLUMN `closedByUserId` TEXT")
+        db.execSQL("ALTER TABLE `shift_history_cache` ADD COLUMN `closedByName` TEXT")
+        db.execSQL("ALTER TABLE `shift_history_cache` ADD COLUMN `closedByEmail` TEXT")
+    }
+}
+
+/** Cache-only pause evidence; all offline commands and financial rows survive unchanged. */
+val MIGRATION_42_43 = object : Migration(42, 43) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `gaming_session_cache` ADD COLUMN `pausedAtMillis` INTEGER")
+        db.execSQL("ALTER TABLE `gaming_session_cache` ADD COLUMN `pausedDurationMs` INTEGER")
+        db.execSQL("ALTER TABLE `gaming_session_cache` ADD COLUMN `pauseVersion` INTEGER")
+        db.execSQL("ALTER TABLE `gaming_session_cache` ADD COLUMN `pauseAvailable` INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE `gaming_session_cache` ADD COLUMN `lastPauseTransitionAtMillis` INTEGER")
+    }
+}
+
+/**
+ * Preserve the Gaming Centre catalogue decision independently of an editable
+ * category name. Null remains meaningful: it allows an upgraded tablet to use
+ * the legacy bridge until it has received a 0070+ server response.
+ */
+val MIGRATION_43_44 = object : Migration(43, 44) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `menu_categories` ADD COLUMN `isGamingCentreCatalog` INTEGER")
+        db.execSQL(
+            "UPDATE `menu_categories` SET `isGamingCentreCatalog` = 1 " +
+                "WHERE lower(trim(`name`)) IN " +
+                "('soft drinks', 'drinks & snacks', 'snacks', 'crisps')",
+        )
+    }
+}
+
+/**
+ * Carry category classification through the durable menu-write outbox. The
+ * nullable value preserves existing pending creates/edits exactly; new writes
+ * record an explicit value and creates fail closed in SyncEngine.
+ */
+val MIGRATION_44_45 = object : Migration(44, 45) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "ALTER TABLE `local_menu_categories` " +
+                "ADD COLUMN `isGamingCentreCatalog` INTEGER",
+        )
+        // A category create captured by Code 24 has no stable flag yet. Keep
+        // the same narrow legacy bridge used by the read cache so upgrading
+        // does not turn a queued packaged-products category into a hidden one.
+        // Existing-server edits remain null: PATCH must omit the unknown field
+        // and preserve the server's authoritative value.
+        db.execSQL(
+            "UPDATE `local_menu_categories` SET `isGamingCentreCatalog` = 1 " +
+                "WHERE `serverId` IS NULL AND lower(trim(`name`)) IN " +
+                "('soft drinks', 'drinks & snacks', 'snacks', 'crisps')",
+        )
+    }
+}
+
 val ALL_MIGRATIONS = arrayOf(
     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8,
     MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14,
@@ -2705,5 +2795,6 @@ val ALL_MIGRATIONS = arrayOf(
     MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28, MIGRATION_28_29,
     MIGRATION_29_30, MIGRATION_30_31, MIGRATION_31_32, MIGRATION_32_33, MIGRATION_33_34,
     MIGRATION_34_35, MIGRATION_35_36, MIGRATION_36_37, MIGRATION_37_38, MIGRATION_38_39,
-    MIGRATION_39_40,
+    MIGRATION_39_40, MIGRATION_40_41, MIGRATION_41_42, MIGRATION_42_43, MIGRATION_43_44,
+    MIGRATION_44_45,
 )

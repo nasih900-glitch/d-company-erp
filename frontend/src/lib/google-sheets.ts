@@ -14,7 +14,8 @@ const KEY_URL = 'gsheets.webhook_url';
 const KEY_LAST_SYNC = 'gsheets.last_sync_at';
 const KEY_LAST_ERROR = 'gsheets.last_error';
 
-export type SinkKind = 'order' | 'ticket' | 'event' | 'ping';
+export type ReportSinkKind = `${'daily' | 'weekly' | 'monthly' | 'quarterly' | 'half_yearly' | 'yearly'}_report`;
+export type SinkKind = 'order' | 'ticket' | 'event' | 'manual_collection' | 'ping' | ReportSinkKind;
 
 export interface GsheetsSettings {
   url: string | null;

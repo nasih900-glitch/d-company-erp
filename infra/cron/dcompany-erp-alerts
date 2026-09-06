@@ -10,5 +10,5 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 50 2 1 4,10 * root cd /opt/d-company-erp && docker compose -f docker-compose.prod.yml --env-file .env exec -T backend python -m app.workers.pnl_alerts --period half_yearly >> /var/log/dcompany-erp-alerts.log 2>&1
 55 2 1 4 * root cd /opt/d-company-erp && docker compose -f docker-compose.prod.yml --env-file .env exec -T backend python -m app.workers.pnl_alerts --period yearly >> /var/log/dcompany-erp-alerts.log 2>&1
 
-# Remove expired private screenshot bytes while retaining their audit metadata.
-10 3 * * * root cd /opt/d-company-erp && docker compose -f docker-compose.prod.yml --env-file .env exec -T backend python -m app.workers.support_attachments --batch-size 100 --max-rows 1000 >> /var/log/dcompany-erp-alerts.log 2>&1
+# Remove expired screenshot bytes and sanitized client diagnostics.
+10 3 * * * root cd /opt/d-company-erp && docker compose -f docker-compose.prod.yml --env-file .env exec -T backend python -m app.workers.support_attachments --batch-size 1000 --max-rows 1000 --diagnostic-max-rows 50000 >> /var/log/dcompany-erp-alerts.log 2>&1

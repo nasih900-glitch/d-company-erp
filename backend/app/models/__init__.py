@@ -3,6 +3,7 @@
 from app.models.access_control import RolePermissionOverride
 from app.models.audit import AuditLog
 from app.models.auth_challenge import AuthOtpChallenge
+from app.models.auth_refresh_session import AuthRefreshSession
 from app.models.base import Base, SoftDeleteMixin, TenantMixin, TimestampMixin
 from app.models.bug_report import (
     BugReport,
@@ -10,6 +11,8 @@ from app.models.bug_report import (
     BugReportInboxRead,
     BugReportPublicReply,
 )
+from app.models.client_diagnostic import ClientDiagnosticEvent
+from app.models.client_update import AndroidRelease, ClientInstallation, ClientUpdateEvent
 from app.models.customer import (
     Customer,
     OrderLoyaltySettlement,
@@ -106,16 +109,24 @@ from app.models.pos import (
     Refund,
     Shift,
 )
+from app.models.remote_assistance import (
+    RemoteAssistanceCommand,
+    RemoteAssistanceDeviceKey,
+    RemoteAssistanceGrant,
+    RemoteAssistanceSession,
+)
 from app.models.tables import Floor, Reservation, Table
 from app.models.tenant import Branch, Company, Terminal
 from app.models.user import Attendance, PayrollEntry, Role, User, UserRole
 
 __all__ = [
     "Account",
+    "AndroidRelease",
     "Asset",
     "Attendance",
     "AuditLog",
     "AuthOtpChallenge",
+    "AuthRefreshSession",
     "Base",
     "Batch",
     "Branch",
@@ -127,6 +138,9 @@ __all__ = [
     "Company",
     "Customer",
     "CustomerSpendReconciliation",
+    "ClientInstallation",
+    "ClientDiagnosticEvent",
+    "ClientUpdateEvent",
     "CustomerMembership",
     "Event",
     "EventTicket",
@@ -196,6 +210,10 @@ __all__ = [
     "Recipe",
     "RecipeLine",
     "Refund",
+    "RemoteAssistanceCommand",
+    "RemoteAssistanceDeviceKey",
+    "RemoteAssistanceGrant",
+    "RemoteAssistanceSession",
     "RefundLoyaltyAdjustment",
     "Reservation",
     "Role",

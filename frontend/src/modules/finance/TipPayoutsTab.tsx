@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { AlertCircle, Ban, HandCoins, Loader2, Plus, RefreshCw } from 'lucide-react';
 
 import Modal from '@/components/ui/Modal';
+import { useNotifications } from '@/components/ui/Notifications';
+import { FINANCE_ACTION_FEEDBACK } from '@/lib/action-feedback';
 import {
   accounting,
   finance,
@@ -13,6 +15,7 @@ import { inr, inrShort } from '@/lib/inr';
 import { manualCollectionMethodLabel, MANUAL_COLLECTION_METHODS, rupeesToMinor } from '@/lib/manual-collections';
 import { useAuth } from '@/modules/auth/AuthContext';
 import { useRealtimeRefresh } from '@/hooks/useRealtimeRefresh';
+import { useLatestRequest } from '@/hooks/useLatestRequest';
 
 // Ledger account code for Tips Payable — see backend/app/services/accounting/accounts.py.
 const TIPS_PAYABLE_ACCOUNT_CODE = '2400';
@@ -21,7 +24,9 @@ const TIPS_PAYABLE_ACCOUNT_CODE = '2400';
 // TIP PAYOUTS — the only write path that pays TIPS_PAYABLE back out to staff
 // ============================================================================
 export default function TipPayoutsTab() {
+  const requests = useLatestRequest();
   const { me } = useAuth();
+  const notifications = useNotifications();
   const [rows, setRows] = useState<TipPayoutDTO[]>([]);
   const [branches, setBranches] = useState<BranchReferenceDTO[]>([]);
   const [tipsPayableBalance, setTipsPayableBalance] = useState<number | null>(null);
@@ -31,24 +36,26 @@ export default function TipPayoutsTab() {
   const [voiding, setVoiding] = useState<TipPayoutDTO | null>(null);
 
   const load = useCallback(async (silent = false) => {
+    const isCurrent = requests.begin();
     if (!silent) setLoading(true);
-    setErr(null);
     try {
       const [payouts, branchRows, trialBalance] = await Promise.all([
         finance.listTipPayouts({ include_voided: true, limit: 500 }),
         finance.listBranches(),
         accounting.trialBalance(),
       ]);
+      if (!isCurrent()) return;
+      setErr(null);
       setRows(payouts);
       setBranches(branchRows);
       const tipsLine = trialBalance.lines.find((line) => line.account_code === TIPS_PAYABLE_ACCOUNT_CODE);
       setTipsPayableBalance(tipsLine?.balance_minor ?? 0);
     } catch (error) {
-      setErr((error as Error).message);
+      if (isCurrent()) setErr((error as Error).message);
     } finally {
-      if (!silent) setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
-  }, []);
+  }, [requests]);
 
   useEffect(() => { void load(); }, [load]);
   useRealtimeRefresh({ resources: ['finance'], refresh: () => load(true) });
@@ -219,14 +226,24 @@ export default function TipPayoutsTab() {
           defaultBranchId={me?.branch_id ?? branches[0]?.id ?? ''}
           tipsPayableBalance={tipsPayableBalance}
           onClose={() => setAddOpen(false)}
-          onSuccess={() => { setAddOpen(false); void load(); }}
+          onSuccess={() => {
+            setAddOpen(false);
+            void load();
+            const feedback = FINANCE_ACTION_FEEDBACK.tipPayoutRecorded;
+            notifications.success(feedback.message, { title: feedback.title });
+          }}
         />
       )}
       {voiding && (
         <VoidTipPayoutForm
           row={voiding}
           onClose={() => setVoiding(null)}
-          onSuccess={() => { setVoiding(null); void load(); }}
+          onSuccess={() => {
+            setVoiding(null);
+            void load();
+            const feedback = FINANCE_ACTION_FEEDBACK.tipPayoutVoided;
+            notifications.success(feedback.message, { title: feedback.title });
+          }}
         />
       )}
     </div>

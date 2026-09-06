@@ -15,6 +15,8 @@ data class MenuCategory(
     val id: String,
     val name: String,
     @SerialName("sort_order") val sortOrder: Int = 0,
+    /** Null only when a rolling-upgrade client talks to a pre-0070 server. */
+    @SerialName("is_gaming_centre_catalog") val isGamingCentreCatalog: Boolean? = null,
 )
 
 @Serializable
@@ -72,6 +74,8 @@ data class Terminal(
     @SerialName("branch_id") val branchId: String,
     /** Absent only on a pre-purpose server; migration-compatible local behavior is hybrid. */
     val purpose: String = TerminalPurpose.HYBRID,
+    /** Positive protocol support, never inferred from the app or terminal name. */
+    @SerialName("offline_shift_capture_supported") val offlineShiftCaptureSupported: Boolean = false,
 )
 
 @Serializable
@@ -149,6 +153,11 @@ data class OrderDiscountUpdateRequest(
 data class OrderPointsRedemptionUpdateRequest(
     /** Absolute spend, never a delta. The backend owns the conversion and balance check. */
     val points: Int,
+    @SerialName("expected_checkout_version") val expectedCheckoutVersion: Long,
+)
+
+@Serializable
+data class PublishDirectCheckoutClaimRequest(
     @SerialName("expected_checkout_version") val expectedCheckoutVersion: Long,
 )
 

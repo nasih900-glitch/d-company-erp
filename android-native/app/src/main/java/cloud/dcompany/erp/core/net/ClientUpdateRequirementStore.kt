@@ -8,6 +8,7 @@ import kotlinx.serialization.json.Json
 
 private const val STORE_NAME = "client_update_requirement"
 private const val KEY_INSTALLED_VERSION_CODE = "installed_version_code"
+private const val KEY_POLICY_REVISION = "policy_revision"
 private const val KEY_NOTICE_JSON = "notice_json"
 private const val PERSISTENCE_SCHEMA_VERSION = 1
 
@@ -25,6 +26,7 @@ private data class PersistedClientUpdateRequirement(
     @SerialName("current_version_code") val currentVersionCode: Int? = null,
     @SerialName("minimum_supported_version_code") val minimumSupportedVersionCode: Int? = null,
     @SerialName("latest_version_code") val latestVersionCode: Int? = null,
+    @SerialName("policy_revision") val policyRevision: Int = 0,
     @SerialName("latest_version_name") val latestVersionName: String? = null,
     @SerialName("release_notes") val releaseNotes: String? = null,
     @SerialName("apk_sha256") val apkSha256: String? = null,
@@ -50,6 +52,7 @@ internal fun encodePersistedUpdateRequirement(
         currentVersionCode = notice.currentVersionCode,
         minimumSupportedVersionCode = notice.minimumSupportedVersionCode,
         latestVersionCode = notice.latestVersionCode,
+        policyRevision = notice.policyRevision.coerceAtLeast(0),
         latestVersionName = notice.latestVersionName,
         releaseNotes = notice.releaseNotes,
         apkSha256 = notice.apkSha256,
@@ -67,6 +70,7 @@ internal fun encodePersistedUpdateRequirement(
  */
 internal fun restorePersistedUpdateRequirement(
     storedInstalledVersionCode: Int?,
+    storedPolicyRevision: Int? = null,
     encodedNotice: String?,
     currentInstalledVersionCode: Int,
 ): PersistedRequirementRestore {
@@ -97,10 +101,15 @@ internal fun restorePersistedUpdateRequirement(
                 currentVersionCode = currentInstalledVersionCode,
                 minimumSupportedVersionCode = null,
                 latestVersionCode = null,
+                policyRevision = storedPolicyRevision?.coerceAtLeast(0) ?: 0,
             ),
         )
     }
 
+    val restoredPolicyRevision = maxOf(
+        persisted.policyRevision.coerceAtLeast(0),
+        storedPolicyRevision?.coerceAtLeast(0) ?: 0,
+    )
     return PersistedRequirementRestore.Required(
         ClientUpdateNotice(
             message = persisted.message,
@@ -108,6 +117,7 @@ internal fun restorePersistedUpdateRequirement(
             currentVersionCode = persisted.currentVersionCode,
             minimumSupportedVersionCode = persisted.minimumSupportedVersionCode,
             latestVersionCode = persisted.latestVersionCode,
+            policyRevision = restoredPolicyRevision,
             latestVersionName = persisted.latestVersionName,
             releaseNotes = persisted.releaseNotes,
             apkSha256 = persisted.apkSha256,
@@ -123,38 +133,63 @@ class ClientUpdateRequirementStore(
     private val installedVersionCode: Int,
 ) {
     private val preferences = context.getSharedPreferences(STORE_NAME, Context.MODE_PRIVATE)
+    private val lock = Any()
 
-    fun restore(): ClientUpdateNotice? = when (
-        val restored = restorePersistedUpdateRequirement(
-            storedInstalledVersionCode = if (preferences.contains(KEY_INSTALLED_VERSION_CODE)) {
-                preferences.getInt(KEY_INSTALLED_VERSION_CODE, -1)
-            } else {
+    fun restore(): ClientUpdateNotice? = synchronized(lock) {
+        when (
+            val restored = restorePersistedUpdateRequirement(
+                storedInstalledVersionCode = if (preferences.contains(KEY_INSTALLED_VERSION_CODE)) {
+                    preferences.getInt(KEY_INSTALLED_VERSION_CODE, -1)
+                } else {
+                    null
+                },
+                storedPolicyRevision = if (preferences.contains(KEY_POLICY_REVISION)) {
+                    preferences.getInt(KEY_POLICY_REVISION, 0)
+                } else {
+                    null
+                },
+                encodedNotice = preferences.getString(KEY_NOTICE_JSON, null),
+                currentInstalledVersionCode = installedVersionCode,
+            )
+        ) {
+            PersistedRequirementRestore.None -> null
+            PersistedRequirementRestore.ClearStaleVersion -> {
+                // This build already ignores the stale record, so cleanup does
+                // not need to block Application.onCreate().
+                preferences.edit().clear().apply()
                 null
-            },
-            encodedNotice = preferences.getString(KEY_NOTICE_JSON, null),
-            currentInstalledVersionCode = installedVersionCode,
-        )
-    ) {
-        PersistedRequirementRestore.None -> null
-        PersistedRequirementRestore.ClearStaleVersion -> {
-            // This build already ignores the stale record, so cleanup does
-            // not need to block Application.onCreate().
-            preferences.edit().clear().apply()
-            null
+            }
+            is PersistedRequirementRestore.Required -> restored.notice
         }
-        is PersistedRequirementRestore.Required -> restored.notice
     }
 
     @SuppressLint("ApplySharedPref")
-    fun persist(notice: ClientUpdateNotice): Boolean {
+    fun persist(notice: ClientUpdateNotice): Boolean = synchronized(lock) {
         // commit() is deliberately synchronous. apply() could lose the block
         // if Android kills the process immediately after the server's 426.
-        return preferences.edit()
+        preferences.edit()
             .putInt(KEY_INSTALLED_VERSION_CODE, installedVersionCode)
+            .putInt(KEY_POLICY_REVISION, notice.policyRevision.coerceAtLeast(0))
             .putString(
                 KEY_NOTICE_JSON,
                 encodePersistedUpdateRequirement(installedVersionCode, notice),
             )
             .commit()
+    }
+
+    /** Clear only the exact required policy that the caller reviewed. */
+    @SuppressLint("ApplySharedPref")
+    fun clearIfPolicyRevision(expectedPolicyRevision: Int): Boolean = synchronized(lock) {
+        if (!preferences.contains(KEY_INSTALLED_VERSION_CODE)) return@synchronized false
+        if (preferences.getInt(KEY_INSTALLED_VERSION_CODE, -1) != installedVersionCode) {
+            return@synchronized false
+        }
+        val storedRevision = if (preferences.contains(KEY_POLICY_REVISION)) {
+            preferences.getInt(KEY_POLICY_REVISION, 0)
+        } else {
+            0
+        }
+        if (storedRevision != expectedPolicyRevision.coerceAtLeast(0)) return@synchronized false
+        preferences.edit().clear().commit()
     }
 }

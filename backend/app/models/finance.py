@@ -380,14 +380,31 @@ def _guard_expense_category_delete(
 class Expense(Base, TimestampMixin, SoftDeleteMixin, TenantMixin):
     __tablename__ = "expenses"
     __table_args__ = (
+        UniqueConstraint(
+            "company_id",
+            "idempotency_key",
+            name="uq_expense_company_idempotency",
+        ),
         CheckConstraint("amount_minor > 0", name="ck_expense_positive_amount"),
         CheckConstraint(
             "paid_via IN ('cash', 'card', 'bank', 'upi')",
             name="ck_expense_payment_method",
         ),
         CheckConstraint(
-            "source_integrity_revision IS NULL OR source_integrity_revision = 50",
+            "source_integrity_revision IS NULL "
+            "OR source_integrity_revision IN (50, 51)",
             name="ck_expense_source_integrity_revision",
+        ),
+        CheckConstraint(
+            "(source_integrity_revision IS DISTINCT FROM 51 "
+            "AND shift_id IS NULL AND idempotency_key IS NULL "
+            "AND request_hash IS NULL AND created_by IS NULL) OR "
+            "(source_integrity_revision = 51 AND paid_via = 'cash' "
+            "AND shift_id IS NOT NULL AND idempotency_key IS NOT NULL "
+            "AND idempotency_key LIKE 'expense:%' "
+            "AND request_hash ~ '^[0-9a-f]{64}$' "
+            "AND created_by IS NOT NULL)",
+            name="ck_expense_shift_receipt_provenance",
         ),
         CheckConstraint(
             "(voided_at IS NULL AND voided_by IS NULL AND void_reason IS NULL) "
@@ -400,6 +417,25 @@ class Expense(Base, TimestampMixin, SoftDeleteMixin, TenantMixin):
     id: Mapped[UUID] = _uuid_pk()
     branch_id: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("branches.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    # Revision-51 rows are the narrow compatibility receipt for cash expenses
+    # captured by the signed Code 21 Android outbox.  Older/non-cash expenses
+    # keep every field below NULL.  The linked shift makes the drawer movement
+    # accountable; action/hash/actor keep the receipt durable after the generic
+    # idempotency cache expires.
+    shift_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("shifts.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
+    idempotency_key: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    request_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_by: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
     )
     category_id: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("expense_categories.id", ondelete="RESTRICT"), nullable=False
@@ -438,6 +474,10 @@ def _guard_expense_update(_mapper, _connection, row: Expense) -> None:
     immutable_fields = {
         "company_id",
         "branch_id",
+        "shift_id",
+        "idempotency_key",
+        "request_hash",
+        "created_by",
         "category_id",
         "supplier_id",
         "ocr_extraction_id",

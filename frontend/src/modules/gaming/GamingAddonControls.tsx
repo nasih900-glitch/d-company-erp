@@ -3,6 +3,7 @@ import { AlertCircle, Loader2, Minus, Plus, ShoppingBag, Trash2 } from 'lucide-r
 
 import Modal from '@/components/ui/Modal';
 import { inr } from '@/lib/inr';
+import { GAMING_CENTRE_CATALOG_GUIDANCE } from '@/lib/product-profile';
 import type {
   GamingSessionAddonDTO,
   MenuItemDTO,
@@ -128,12 +129,15 @@ export function SessionAddonsPanel({
           type="button"
           className="btn btn-ghost mt-2 min-h-11 w-full"
           disabled={!ready || Boolean(error) || !catalogReady || busy}
-          title={catalogReady ? undefined : 'Add an available drink or snack in Products first'}
+          title={catalogReady ? undefined : GAMING_CENTRE_CATALOG_GUIDANCE}
           onClick={onAdd}
         >
           {pendingCreate ? <Loader2 size={14} className={busy ? 'animate-spin' : ''}/> : <Plus size={14}/>}
           {pendingCreate ? 'Review pending item' : 'Add drink or snack'}
         </button>
+      )}
+      {canAdd && ready && !catalogReady && !error && (
+        <p className="mt-2 text-xs text-fg-muted">No eligible drinks or snacks are available. {GAMING_CENTRE_CATALOG_GUIDANCE}</p>
       )}
     </section>
   );

@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import hashlib
+from typing import TYPE_CHECKING
 
-from fastapi import Request
-from redis.asyncio import Redis
 from redis.exceptions import RedisError
 
 from app.core.client_ip import trusted_client_ip
 from app.core.config import get_settings
 from app.core.errors import RateLimitError, ServiceUnavailableError
 from app.core.logging import get_logger
+from app.core.redis_clients import close_request_path_redis_client, request_path_redis_client
+
+if TYPE_CHECKING:
+    from fastapi import Request
 
 log = get_logger(__name__)
 
@@ -35,7 +38,7 @@ def _key(kind: str, value: str) -> str:
 
 async def enforce_login_rate_limit(request: Request, email: str) -> None:
     settings = get_settings()
-    client = Redis.from_url(str(settings.redis_url), decode_responses=True)
+    client = request_path_redis_client(settings.redis_url)
     try:
         ip_count = int(
             await client.eval(
@@ -53,13 +56,13 @@ async def enforce_login_rate_limit(request: Request, email: str) -> None:
                 15 * 60,
             )
         )
-    except RedisError as exc:
-        log.error("auth.rate_limit_unavailable", error=str(exc))
+    except (RedisError, TypeError, ValueError, IndexError) as exc:
+        log.error("auth.rate_limit_unavailable", error=type(exc).__name__)
         raise ServiceUnavailableError(
             "login protection is temporarily unavailable; try again shortly"
         ) from exc
     finally:
-        await client.aclose()
+        await close_request_path_redis_client(client)
     if (
         ip_count > settings.login_ip_limit_per_minute
         or identity_count > settings.login_identity_limit_per_15_minutes

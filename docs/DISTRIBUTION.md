@@ -9,43 +9,62 @@ The web ERP at `https://dcompany.duckdns.org` is deployed through the existing
 VPS/Docker Compose procedure in `docs/DEPLOY_LIVE.md`. An Android GitHub Release
 does not deploy the web application.
 
-The `3.1.2` (`13`) partner rollout is deliberately manual:
+The historical `3.1.3` (`14`) partner rollout was deliberately manual. This is
+retained as provenance, not as the current Code 25 delivery procedure:
 
 ```
-verified signed 3.1.2/code-13 directRelease APK
+verified signed 3.1.3/code-14 directRelease APK
         │
-        ▼ after migrations 0056–0057 + production smoke
+        ▼ after release-head migrations + production smoke
 owner sends that exact APK directly to the partner
         │
         ▼
 partner approves the normal Android installer prompt
 ```
 
-Do not tag, publish, host, or server-advertise code `13` as part of this
-rollout. In particular, do not copy its APK into `releases/android`, publish a
-GitHub/Play release, or change the production update API from its existing
-code-`8` latest-version defaults.
+Do not tag, publish, host, register, or server-advertise code `14`. In
+particular, do not copy its APK into `releases/android`, publish a
+GitHub/Play release, or create an Android release-registry row for it.
 
-The first future server-driven update starts with a new immutable artifact:
+Code `15` (`3.1.4`) is the first identity allowed by the server-release registry,
+but it is a held audit build. Preserve any signed artifact and manifest exactly;
+do not rebuild, overwrite, or activate it. Codes `16` (`3.1.5`) and `17`
+(`3.1.6`) are immutable predecessors. Tags `v3.1.7` / code `18`, `v3.1.8` /
+code `19`, and `v3.1.9` / code `20` failed before signing and must not be reused.
+Code `21` (`3.1.10`) is immutable signed predecessor history. Code `22`
+(`3.1.11`) was superseded before signing and must not be approved or activated.
+Code `23` (`3.1.12`) was also superseded without an authorised signed artifact.
+Code `24` (`3.1.13`) failed before signing; its tag remains immutable history.
+Code `25` (`3.1.14`) is the current, separately gated **unsigned**
+server-delivery candidate:
 
 ```
-bump to 3.1.3/code 14, then tag v3.1.3
+coordinate source at 3.1.14/code 25 through migration 0071
         │
         ▼
-GitHub Actions: backend + web + Android gates
+local/CI backend + web + Android candidate gates
         │
         ▼
-newly signed native Android APK + verified release manifest
+same-lineage Code 21 to Code 25 upgrade proof
         │
-        ▼
-immutable controlled HTTPS release URL
-        │
-        ▼ after same-lineage upgrade and production checks
-server advertises exact URL/hash/size/signer; employee approves install
+        ▼ stage exact CI artifact, then owner review and activation
 ```
+
+No signed Code 25 artifact exists merely because local or CI candidate checks
+pass. Until the protected signing workflow, exact-artifact verification,
+production deployment, staging, owner activation and target-device acceptance
+all succeed, Code 25 is not deployed, approved, advertised or
+partner-installable.
 
 The Tauri desktop and iOS projects are not built or published by the supported
 release workflow.
+
+The current scope and release gates are recorded in
+[`CODE25_RELEASE_CANDIDATE.md`](CODE25_RELEASE_CANDIDATE.md). The inherited
+Code 24 scope and audit evidence remain historical in
+[`CODE24_RELEASE_CANDIDATE.md`](CODE24_RELEASE_CANDIDATE.md) and
+[`CODE24_PRODUCTION_AUDIT.md`](CODE24_PRODUCTION_AUDIT.md); they are not proof
+that a Code 25 artifact has been signed or accepted.
 
 ## Android signing and Play Store setup
 
@@ -72,14 +91,16 @@ stored independently from the keystore secrets. Do not populate it from an
 artifact produced by the same workflow run: the check exists to reject a wrong
 or substituted keystore and a first-install APK signed by an unexpected key.
 
-The release workflow runs both third-party emulator automation and the Gradle
-build without signing secrets. The build emits an exact checksummed unsigned
-handoff, then a separate fresh runner verifies that handoff before it receives
-the keystore. No Gradle process or third-party action runs in that signing job.
-It uses the pinned Android 35.0.0 signing tools, verifies every APK/AAB against
-the expected fingerprint, and removes the keystore before inspecting or
-uploading signed artifacts. GitHub Releases are created with the runner's `gh`
-CLI so a third-party publishing action cannot rewrite verified artifacts.
+The release workflow runs emulator automation and the Gradle build without
+signing secrets. The build emits an exact checksummed unsigned handoff, then a
+separate fresh runner verifies that handoff before it receives the keystore.
+Only pinned GitHub-owned checkout, Java-setup and artifact-download actions run
+before the key is decoded; no Gradle process or unsigned-build dependency runs
+with signing material. The shell signer uses the pinned Android 35.0.0 tools,
+verifies every APK/AAB against the expected fingerprint, and removes the
+keystore before inspecting or uploading signed artifacts. GitHub Releases are
+created with the runner's `gh` CLI so a publishing action cannot rewrite the
+verified artifacts.
 
 The workflow fails closed before producing signed artifacts when any signing
 secret is absent.
@@ -97,10 +118,10 @@ minimum supported version until that proof passes. See
 
 ## Versioning each release
 
-Choose one version and apply it consistently:
+Choose one version and apply it consistently. For the current candidate:
 
 ```bash
-CURRENT_MANUAL_VERSION=3.1.2
+CURRENT_RELEASE_VERSION=3.1.14
 
 # Update the coordinated product version in:
 # - android-native/app/build.gradle.kts (versionName and a new versionCode)
@@ -111,20 +132,26 @@ CURRENT_MANUAL_VERSION=3.1.2
 # - .env.production.example (APP_VERSION only)
 # - docker-compose.prod.yml (APP_VERSION fallbacks only)
 
-# Keep the Android update-channel values separate. Do not raise
-# ANDROID_LATEST_VERSION_CODE until the signed artifact is privately staged and
-# its in-place upgrade has passed; do not raise the minimum merely for release.
+# Keep mandatory compatibility policy separate. Staging or activating an
+# optional release never authorises raising ANDROID_MIN_SUPPORTED_VERSION_CODE.
+# Increment CLIENT_COMPATIBILITY_POLICY_REVISION for every reviewed minimum
+# change, including rollback; never decrement or reuse it.
 
-python3 scripts/verify_android_release_version.py --tag "v$CURRENT_MANUAL_VERSION"
+python3 scripts/verify_android_release_version.py --tag "v$CURRENT_RELEASE_VERSION"
 ```
 
-That command validates the coordinated code-`13` identity; it does not
-authorise creating or publishing a `v3.1.2` tag. Keep this manual rollout
-untagged and unadvertised. For a future tagged release, first bump every product
-version field and Android `versionCode`, then commit and tag only after the full
-coordinated release gates and signed same-channel upgrade test pass. Never use
-a blanket version replacement: many dependency versions and the Android
-rollout policy intentionally differ from the product version.
+That command validates the coordinated code-`25` identity; it does not authorise
+tagging, publishing, advertising, registering, staging, or activating the
+artifact. Tag `v3.1.7` is immutable rejected history and must never be moved or
+reused. Tags `v3.1.8` and `v3.1.9` are also immutable rejected history. Tag
+`v3.1.10` is immutable signed predecessor history. Tag `v3.1.11` is immutable
+superseded history and its waiting signing job must not be approved. Tag
+`v3.1.12` is immutable superseded unsigned history. Tag `v3.1.13` is immutable
+failed-before-signing history. Tag `v3.1.14` may be created only after every
+product-version field is coordinated and the local release gates pass. Keep
+codes `14` through `24` immutable. Never use a blanket
+version replacement: dependency versions and
+Android rollout policy intentionally differ from the product version.
 
 The workflow rejects a release unless all of these are true:
 
@@ -138,7 +165,7 @@ than the last published one; the repository cannot verify Play's remote history,
 so increment it for every release. A manual workflow dispatch must target an
 existing tag. Dispatches from branches are rejected.
 
-## Version-code-8 floor, code-13 manual baseline, and the first future update
+## Version-code-8 floor, immutable predecessors, and Code 25 candidate
 
 Version `3.0.7` with version code `8` introduced authoritative terminal
 purposes (`cafe_pos`, `gaming`, and `hybrid`) and the explicit Gaming-to-POS
@@ -146,68 +173,100 @@ handoff. Older Android clients do not understand that contract and can select
 the wrong local shift or attempt an invalid local handoff, so code `8` remains
 the minimum-supported compatibility floor.
 
-The signed `3.1.1` APK with version code `12` is the preserved predecessor used
-to prove the supported in-place upgrade. Keep its exact bytes and signing
-lineage; do not rebuild it under the same identity or advertise it through the
-server update API.
+The signed `3.1.2` APK with version code `13` remains immutable historical
+signing-lineage evidence. It must not be rebuilt under the same identity or
+advertised through the server update API. Signed Code `21` (`3.1.10`) is the
+actual installed predecessor that Code 25 must upgrade in place.
 
-The signed `3.1.2` direct-release APK with version code `13` is the manual
-partner baseline for this rollout. It keeps the internal tenant/branch/terminal
-safety model while adding the refined Gaming command workspace, canonical
-receipt history, reliable real-time refresh, and Room schema 40. It may be sent
-directly to the partner only after the production backend reaches Alembic
-revision `0057` and the production smoke test passes. It is not a hosted or
+The signed `3.1.3` direct-release APK with version code `14` is historical manual
+partner-baseline evidence. Its rollout policy required a coordinated backend
+and physical-tablet smoke before manual delivery. It is not a current hosted or
 server-delivered release: do not publish it to GitHub or Play, copy it into the
-server release directory, or advertise it through the update API. Physical
-Redmi Pad 2 acceptance remains a separate post-install gate.
+server release directory, or register it through the update channel.
 
-Code `11` first introduced the verified in-app direct updater. The manually
-installed code-`13` app is now the update-capable baseline. The first release
-that may exercise server-driven delivery from it is a newly versioned and newly
-signed `3.1.3` APK with version code `14`. Production must retain the code-`8`
-latest-version defaults and blank direct-update metadata throughout the code-13
-manual rollout.
+Code `11` first introduced the verified in-app direct updater. Code `14` remains
+historical update-capable baseline evidence, while signed Code `21` is the
+current predecessor for Code 25. Code `15` is the
+first version accepted by the immutable server-release registry, but `3.1.4`
+code `15` is a held audit build and is not the current activation target. The
+signed `3.1.5` code-`16` and `3.1.6` code-`17` artifacts are immutable
+predecessors. Codes `18`, `19`, and `20` have no authorised artifact because
+their tagged releases failed before signing. Code `21` (`3.1.10`) is immutable
+signed predecessor history and is the required same-lineage upgrade baseline.
+Codes `22` and `23` were superseded without authorised signed artifacts. Code
+`24` failed before signing and its tag must not be moved or reused. The
+current candidate is the unsigned `3.1.14` with version code `25`; its database
+migration head is `0071`. It may be staged only after the exact green tagged
+workflow produces a signed artifact and becomes an optional server offer only
+after authenticated owner activation. It is not currently signed, deployed,
+staged, active, approved or partner-installable.
 
-Treat the app and backend as one coordinated release:
+### Current Code 25 rollout sequence
 
-1. Preserve the exact signed version-code-12 predecessor and version-code-13
+1. Bring the signed Code 21 installation online and reconcile its exact pending
+   outbox without clearing app data.
+2. Rehearse the production-shaped migration through `0071`, then deploy the
+   coordinated backend and web source with a fresh quiesced backup, restoration
+   proof, rollback readiness and authenticated smoke tests.
+3. Build and sign `3.1.14` / code `25` only through the protected tagged
+   workflow. Verify its package, version, exact bytes, SHA-256, manifest and
+   independent expected signer.
+4. Prove a same-key in-place Code 21 to Code 25 upgrade with Room data and
+   offline work preserved. Do not uninstall or clear storage.
+5. Stage the exact verified CI artifact, review it in the owner ERP and activate
+   only after the prior gates pass. Android still requires employee approval to
+   install it.
+6. Complete authenticated physical-target smoke, offline/restart, alarm,
+   performance and financial reconciliation before wider rollout.
+
+### Historical Code 14 rollout record (do not execute for Code 25)
+
+The following sequence is retained to explain prior provenance. It is not the
+current Code 25 rollout procedure; use the current sequence above.
+
+1. Preserve the exact signed version-code-13 predecessor and version-code-14
    partner APKs, verify their signer, and never replace either immutable
    identity with changed bytes.
 2. While the old backend is still active, bring any previously installed app
    online and confirm its offline queue is empty. Do not uninstall an app with
    pending work.
-3. Keep the verified version-code-13 APK private and unadvertised. Do not host
+3. Keep the verified version-code-14 APK private and unadvertised. Do not host
    it on the VPS, GitHub, or Play while preparing the production migration.
-4. Back up the database and follow the `0056` maintenance sequence below:
-   stop writers, upgrade only through `0055`, review and apply the explicit
-   terminal consolidation, and only then upgrade to `0056`/head. Verify the
-   database crosses revision `0056` safely and reaches head revision `0057`
-   before starting the backend. Deploy with
+4. Rehearse the current database upgrade and downgrade path against a restored
+   production dump. During the scheduled write outage, use the hardened
+   installer—not the historical `0056` sequence below—and select the exact
+   one-time Code14 provenance bridge observed in production:
+
+   ```bash
+   sudo bash infra/scripts/install-on-vm.sh dcompany.duckdns.org \
+     --maintenance-confirmed \
+     --legacy-code14-revision e5e90df5781e93681b8e9dcdd1ae9a6a5fb6a0b9
+   ```
+
+   The installer must prove the prior Code14 image/source/database identity,
+   stop writers, verify the offline outbox is empty, create and restore-check a
+   backup, preserve rollback images and configuration, apply migrations, and
+   pass readiness before reopening ingress. Deploy with
    `ANDROID_MIN_SUPPORTED_VERSION_CODE=8`,
-   `REQUIRE_NATIVE_VERSION_HEADERS=true`, and the last already-published
-   Android version/update metadata. Do not advertise code `13`.
-5. After the production smoke passes, install the exact private version-code-13
+   `REQUIRE_NATIVE_VERSION_HEADERS=true`,
+   `ANDROID_UPDATE_ALLOWED_ORIGIN=https://dcompany.duckdns.org`, and the last
+   already-published Android compatibility policy. Do not advertise code `14`.
+5. After the production smoke passes, install the exact private version-code-14
    package through Android's normal installer and run shift open/close, Gaming
    start/add item/stop/Send-to-POS, cash and UPI settlement, offline retry,
    finance reconciliation, and Support submission. Verify version `7` and
    older receive HTTP 426 before a write handler and version `8` remains
    compatible. The owner may then send that same APK manually to the partner;
-   production update metadata still remains at its code-`8` defaults.
-6. For the first later server-driven update, create `3.1.3` with version code
-   `14`, sign it with the trusted lineage, verify an in-place upgrade from code
-   `13`, publish it once at an immutable HTTPS URL, and verify its exact hash,
-   size, package, version and signer. Only then may the server advertise code
-   `14`; Android still requires the employee to approve installation.
-
-### Required production order for migration 0056
+   no optional release is active.
+### Historical migration 0056 record (not a current deployment path)
 
 Migration `0056` intentionally refuses legacy split-terminal data; it never
 chooses a keeper or rewrites production history. Do not run the generic
 `alembic upgrade head` sequence against split data. Use this maintenance-window
-order instead:
+order instead. This records the already-completed Code14 maintenance decision;
+do not replay it as a Code17 deployment procedure:
 
-> **Do not use `docker compose -f docker-compose.prod.yml up -d --build` as
-> the first release command.** The backend image's normal entrypoint
+> **Do not start a production release with a direct Compose rebuild.** The backend image's normal entrypoint
 > automatically runs `alembic upgrade head`, so it would reach `0056` before
 > the reviewed terminal consolidation. The maintenance commands below override
 > that entrypoint deliberately.
@@ -369,39 +428,52 @@ order instead:
      --entrypoint alembic backend current
    ```
 
-9. Only now may the normal auto-migrating startup run:
-
-    ```bash
-    docker compose -f docker-compose.prod.yml up -d --build
-    ```
-
-    Verify health, then smoke-test login, shift open, Gaming start/stop, add-on,
+9. The historical Code14 release then used the old direct startup flow. Do not
+    reuse that flow: all current production upgrades must run the hardened
+    `infra/scripts/install-on-vm.sh DOMAIN --maintenance-confirmed` procedure
+    from an exact reviewed commit, as documented in
+    [`FREE_DEPLOY.md`](FREE_DEPLOY.md). Verify health, then smoke-test login,
+    shift open, Gaming start/stop, add-on,
     Send to POS, cash and UPI settlement, receipt, Finance, sync recovery, and
     shift close on the retained Hybrid workspace. Install the exact private
-    code-`13` APK through Android's normal installer for its authenticated app
-    smoke; if code `12` is present, update it in place rather than uninstalling.
+    code-`14` APK through Android's normal installer for its authenticated app
+    smoke; if code `13` is present, update it in place rather than uninstalling.
     Only after the production smoke succeeds may the owner send that same APK
     manually to the partner.
 
-    Do not publish or host code `13`, and do not change the production update
-    configuration. Confirm `/api/v1/app/android/update` still reports the
-    existing code-`8` latest-version policy with no direct APK URL or integrity
-    metadata. If the production smoke fails, do not send the APK.
+    Do not publish, host, or register code `14`. Confirm
+    `/api/v1/public/client-compatibility?platform=android&version_code=14`
+    reports no optional APK release. If the production smoke fails, do not send
+    the APK.
 
 Do not lower the compatibility minimum to keep an older APK operating against
-this backend. Do not raise the minimum to `13` as part of this manual rollout.
-The first future server-advertised release is `3.1.3` (`14`), and its metadata
-may be configured only after the distinct immutable signed artifact and its
-same-lineage upgrade proof exist.
+this backend. Do not raise the minimum merely because an optional update exists.
+Code `15` remains the server-registry admission floor and immutable held audit
+history; codes `16` and `17` are immutable predecessors. Codes `18`, `19`, and
+`20` have no authorised artifact or activation target. Code `21` is immutable
+signed predecessor history. Codes `22` and `23` are unsigned, superseded
+candidates and must never be activated. Code `24` failed before signing and
+its tag remains immutable. Code `25` is the unsigned candidate and may be
+activated only after its tagged signing workflow, production deployment,
+staging, review and target-device gates pass. Protected-owner status alone
+grants no global release authority: only the exact company/user identity
+configured in `ANDROID_RELEASE_CONTROLLER_BINDINGS`, with `admin.system` and
+audit access, may activate a separately approved future release.
+
+If an erroneous minimum must be rolled back, deploy the lower minimum together
+with a strictly higher `CLIENT_COMPATIBILITY_POLICY_REVISION`. A code-`14`
+tablet clears its persisted required-update block only after the public endpoint
+returns a newer, non-cacheable `supported` policy that explicitly includes code
+`14`; an equal/stale revision or an unreachable endpoint remains blocked.
 
 ## Android artifacts
 
-For future tagged releases, starting no earlier than the newly versioned
-`3.1.3` (`14`) update, the Android job first reruns the complete backend
-migration/test and web
-lint/typecheck/test/build gates. It then runs Android release lint, JVM tests,
-emulator instrumentation, and signature verification. It stages a draft
-release containing:
+Server-release registration begins at code `15`. Codes `18`, `19`, and `20`
+failed before signing and are never registered; Code `24` also failed before
+signing and is immutable history. Code `25` must first pass the complete backend
+migration/test and web lint/typecheck/test/build gates. It then runs Android release lint, JVM
+tests, emulator instrumentation, and signature verification. The resulting
+draft release contains:
 
 - a signed `.apk` for controlled direct installation;
 - a signed `.aab` for Play Console;

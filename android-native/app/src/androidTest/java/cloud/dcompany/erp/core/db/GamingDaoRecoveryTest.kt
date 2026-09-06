@@ -36,6 +36,33 @@ class GamingDaoRecoveryTest {
     }
 
     @Test
+    fun uncertainStopRetainsCapturedTimeAndClearsOnlyOnAuthoritativeResult() = runBlocking {
+        dao.insertLocalSession(
+            LocalGamingSessionEntity(
+                localId = "uncertain-stop",
+                serverId = "server-session",
+                stationId = "station-1",
+                shiftId = "shift-1",
+                state = GamingSessionState.STOP_PENDING,
+                status = "stopping",
+                startedAtMillis = 1_000,
+                endAtMillis = 61_000,
+            ),
+        )
+
+        dao.notePendingSessionError("uncertain-stop", "Waiting to confirm the original stop")
+
+        val retained = dao.localSessionById("uncertain-stop")!!
+        assertEquals(GamingSessionState.STOP_PENDING, retained.state)
+        assertEquals(61_000L, retained.endAtMillis)
+        assertEquals("server-session", retained.serverId)
+        assertEquals("Waiting to confirm the original stop", retained.lastError)
+        dao.markSessionSent("uncertain-stop", "order-1", 100)
+        dao.notePendingSessionError("uncertain-stop", "stale failure")
+        assertNull(dao.localSessionById("uncertain-stop")?.lastError)
+    }
+
+    @Test
     fun legacyRejectedRowsRecoverIntoTheCorrectHumanResolutionQueues() = runBlocking {
         dao.insertLocalSession(legacyRow("start", serverId = null, status = "starting"))
         dao.insertLocalSession(legacyRow("stop", serverId = "session-2", status = "stopping"))
@@ -133,6 +160,70 @@ class GamingDaoRecoveryTest {
 
         val visibleOverlays = dao.observeActiveLocalSessions().first()
         assertEquals(listOf("stopped"), visibleOverlays.map { it.localId })
+    }
+
+    @Test
+    fun webCancellationClearsCode21StopFailureAndReleasesStation() = runBlocking {
+        val failedStop = localRow(
+            localId = "code21-stop-failed",
+            serverId = "session-cancelled-on-web",
+            state = GamingSessionState.STOP_REJECTED,
+            stationId = "station-ps5-2",
+        ).copy(
+            status = "active",
+            endAtMillis = 42_123,
+            shiftId = "server-shift-code21",
+        )
+        dao.insertLocalSession(failedStop)
+
+        assertEquals(1, db.outboxSafetyDao().unresolvedGroups().single().count)
+        assertEquals(
+            1,
+            db.shiftCloseSafetyDao().blockersForExactShift(
+                localShiftId = "local-shift-code21",
+                serverShiftId = failedStop.shiftId,
+                terminalId = "hybrid-terminal",
+            ).attentionLocalCount,
+        )
+
+        dao.replaceSessionCache(
+            listOf(
+                serverRow(
+                    id = "session-cancelled-on-web",
+                    status = "cancelled",
+                    amountMinor = 0,
+                ).copy(stationId = failedStop.stationId),
+            ),
+        )
+
+        val reconciled = dao.localSessionById(failedStop.localId)!!
+        assertEquals(GamingSessionState.CANCELLED, reconciled.state)
+        assertEquals("cancelled", reconciled.status)
+        assertEquals(2_000L, reconciled.endAtMillis)
+        assertNull(reconciled.lastError)
+        assertTrue(db.outboxSafetyDao().unresolvedGroups().isEmpty())
+        assertEquals(
+            0,
+            db.shiftCloseSafetyDao().blockersForExactShift(
+                localShiftId = "local-shift-code21",
+                serverShiftId = failedStop.shiftId,
+                terminalId = "hybrid-terminal",
+            ).attentionLocalCount,
+        )
+        assertTrue(dao.observeActiveLocalSessions().first().isEmpty())
+        assertFalse(
+            dao.localSessionsForServerReconciliation().any { it.localId == failedStop.localId },
+        )
+        assertTrue(
+            dao.insertStartIfStationAvailable(
+                localRow(
+                    "replacement",
+                    serverId = null,
+                    state = GamingSessionState.START_PENDING,
+                    stationId = failedStop.stationId,
+                ),
+            ),
+        )
     }
 
     @Test
@@ -244,6 +335,7 @@ class GamingDaoRecoveryTest {
             packageDurationMinutes = 60,
             packageVariant = "solo",
             packageStationTypeSnapshot = "ps5",
+            packagePricingTierSnapshot = "standard",
             extraControllers = 0,
         )
 
@@ -324,6 +416,7 @@ class GamingDaoRecoveryTest {
             packageDurationMinutes = null,
             packageVariant = null,
             packageStationTypeSnapshot = null,
+            packagePricingTierSnapshot = null,
             extraControllers = 0,
         )
         val startConfirmed = dao.localSessionById(row.localId)!!

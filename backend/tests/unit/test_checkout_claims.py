@@ -22,6 +22,7 @@ from app.core.tenant import TenantContext
 from app.models import Payment
 from app.services.pos.checkout_claims import (
     acquire_checkout_claim,
+    authorize_checkout_claim_for_void,
     release_checkout_claim,
     requires_checkout_claim,
     validate_checkout_claim,
@@ -314,6 +315,102 @@ async def test_same_claimant_retry_renews_and_rotates_token() -> None:
 
 
 @pytest.mark.asyncio
+async def test_same_user_and_terminal_cannot_rotate_another_client_instance() -> None:
+    now = datetime(2026, 8, 25, 10, tzinfo=UTC)
+    order = _order()
+    cashier = uuid4()
+    client_a = uuid4()
+    client_b = uuid4()
+    session = _ClaimSession()
+    first = await acquire_checkout_claim(
+        session,
+        order=order,
+        claimant_user_id=cashier,
+        terminal_id=order.terminal_id,
+        paid_minor=0,
+        client_instance_id=client_a,
+        now=now,
+        ttl_seconds=120,
+    )
+    original_token_hash = first.claim.token_hash
+
+    with pytest.raises(CheckoutClaimConflictError) as error:
+        await acquire_checkout_claim(
+            session,
+            order=order,
+            claimant_user_id=cashier,
+            terminal_id=order.terminal_id,
+            paid_minor=0,
+            client_instance_id=client_b,
+            now=now + timedelta(seconds=1),
+            ttl_seconds=120,
+        )
+
+    assert error.value.code == "checkout_claim_conflict"
+    assert first.claim.token_hash == original_token_hash
+    assert first.claim.client_instance_hash != str(client_a)
+    assert len(first.claim.client_instance_hash) == 64
+
+    renewed = await acquire_checkout_claim(
+        session,
+        order=order,
+        claimant_user_id=cashier,
+        terminal_id=order.terminal_id,
+        paid_minor=0,
+        client_instance_id=client_a,
+        now=now + timedelta(seconds=2),
+        ttl_seconds=120,
+    )
+    assert renewed.reused is True
+    assert renewed.token != first.token
+
+
+@pytest.mark.asyncio
+async def test_active_legacy_claim_cannot_be_upgraded_by_nonce_until_expiry() -> None:
+    now = datetime(2026, 8, 25, 10, tzinfo=UTC)
+    order = _order()
+    cashier = uuid4()
+    client_instance = uuid4()
+    session = _ClaimSession()
+    legacy = await acquire_checkout_claim(
+        session,
+        order=order,
+        claimant_user_id=cashier,
+        terminal_id=order.terminal_id,
+        paid_minor=0,
+        now=now,
+        ttl_seconds=30,
+    )
+    assert legacy.claim.client_instance_hash is None
+
+    with pytest.raises(CheckoutClaimConflictError):
+        await acquire_checkout_claim(
+            session,
+            order=order,
+            claimant_user_id=cashier,
+            terminal_id=order.terminal_id,
+            paid_minor=0,
+            client_instance_id=client_instance,
+            now=now + timedelta(seconds=1),
+            ttl_seconds=30,
+        )
+
+    takeover = await acquire_checkout_claim(
+        session,
+        order=order,
+        claimant_user_id=cashier,
+        terminal_id=order.terminal_id,
+        paid_minor=0,
+        client_instance_id=client_instance,
+        now=now + timedelta(seconds=31),
+        ttl_seconds=30,
+    )
+    assert takeover.reused is False
+    assert takeover.claim.client_instance_hash is not None
+    assert len(takeover.claim.client_instance_hash) == 64
+
+
+@pytest.mark.asyncio
 async def test_stale_total_due_or_version_requires_a_fresh_claim() -> None:
     now = datetime(2026, 8, 25, 10, tzinfo=UTC)
     order = _order(total_minor=12_500, version=7)
@@ -425,6 +522,119 @@ async def test_release_requires_the_owner_token_and_is_idempotent_after_delete()
         terminal_id=order.terminal_id,
         token=grant.token,
     )
+
+
+@pytest.mark.asyncio
+async def test_live_claim_authorizes_void_only_for_its_cashier_and_bearer() -> None:
+    now = datetime(2026, 8, 25, 10, tzinfo=UTC)
+    order = _order()
+    cashier = uuid4()
+    session = _ClaimSession()
+    grant = await acquire_checkout_claim(
+        session,
+        order=order,
+        claimant_user_id=cashier,
+        terminal_id=order.terminal_id,
+        paid_minor=0,
+        now=now,
+        ttl_seconds=120,
+    )
+
+    with pytest.raises(CheckoutClaimRequiredError):
+        await authorize_checkout_claim_for_void(
+            session,
+            order=order,
+            claimant_user_id=cashier,
+            terminal_id=order.terminal_id,
+            paid_minor=0,
+            token=None,
+            now=now + timedelta(seconds=1),
+        )
+    with pytest.raises(CheckoutClaimInvalidError):
+        await authorize_checkout_claim_for_void(
+            session,
+            order=order,
+            claimant_user_id=uuid4(),
+            terminal_id=order.terminal_id,
+            paid_minor=0,
+            token=grant.token,
+            now=now + timedelta(seconds=1),
+        )
+
+    assert await authorize_checkout_claim_for_void(
+        session,
+        order=order,
+        claimant_user_id=cashier,
+        terminal_id=order.terminal_id,
+        paid_minor=0,
+        token=grant.token,
+        now=now + timedelta(seconds=1),
+    ) is grant.claim
+
+
+@pytest.mark.asyncio
+async def test_stale_claim_cannot_authorize_whole_order_void() -> None:
+    now = datetime(2026, 8, 25, 10, tzinfo=UTC)
+    order = _order(version=7)
+    cashier = uuid4()
+    session = _ClaimSession()
+    grant = await acquire_checkout_claim(
+        session,
+        order=order,
+        claimant_user_id=cashier,
+        terminal_id=order.terminal_id,
+        paid_minor=0,
+        now=now,
+    )
+    order.checkout_version = 8
+
+    with pytest.raises(CheckoutClaimStaleError):
+        await authorize_checkout_claim_for_void(
+            session,
+            order=order,
+            claimant_user_id=cashier,
+            terminal_id=order.terminal_id,
+            paid_minor=0,
+            token=grant.token,
+            now=now + timedelta(seconds=1),
+        )
+
+
+@pytest.mark.asyncio
+async def test_headerless_void_keeps_legacy_behavior_only_without_live_claim() -> None:
+    now = datetime(2026, 8, 25, 10, tzinfo=UTC)
+    order = _order()
+    unclaimed = _ClaimSession()
+    assert await authorize_checkout_claim_for_void(
+        unclaimed,
+        order=order,
+        claimant_user_id=uuid4(),
+        terminal_id=order.terminal_id,
+        paid_minor=0,
+        token=None,
+        now=now,
+    ) is None
+
+    expired = _ClaimSession()
+    await acquire_checkout_claim(
+        expired,
+        order=order,
+        claimant_user_id=uuid4(),
+        terminal_id=order.terminal_id,
+        paid_minor=0,
+        now=now,
+        ttl_seconds=30,
+    )
+    assert await authorize_checkout_claim_for_void(
+        expired,
+        order=order,
+        claimant_user_id=uuid4(),
+        terminal_id=order.terminal_id,
+        paid_minor=0,
+        token=None,
+        now=now + timedelta(seconds=31),
+    ) is None
+    assert expired.claim is None
 
 
 @pytest.mark.asyncio
@@ -682,3 +892,15 @@ def test_checkout_version_is_database_enforced_for_every_bill_mutation() -> None
     assert "BEFORE UPDATE OF" in migration
     for field in ("status", "total_minor", "discount_minor", "customer_phone"):
         assert field in migration
+
+
+def test_client_instance_migration_is_nullable_bounded_and_reversible() -> None:
+    migration = (
+        __import__("pathlib").Path(__file__).parents[2]
+        / "alembic/versions/0065_order_checkout_claim_client_instance.py"
+    ).read_text()
+    assert 'revision = "0065"' in migration
+    assert 'down_revision = "0064"' in migration
+    assert 'sa.Column("client_instance_hash", sa.String(length=64), nullable=True)' in migration
+    assert "ck_order_checkout_claim_client_instance_hash_length" in migration
+    assert 'op.drop_column("order_checkout_claims", "client_instance_hash")' in migration

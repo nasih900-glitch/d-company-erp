@@ -1,10 +1,17 @@
 package cloud.dcompany.erp.core.net
 
+import android.annotation.SuppressLint
 import cloud.dcompany.erp.BuildConfig
+import cloud.dcompany.erp.core.diagnostics.ApiFailureObservation
+import cloud.dcompany.erp.core.diagnostics.DiagnosticConnectivity
+import cloud.dcompany.erp.core.diagnostics.DiagnosticsRuntime
 import cloud.dcompany.erp.core.auth.PricingLock
 import cloud.dcompany.erp.core.auth.TerminalStore
 import cloud.dcompany.erp.core.auth.TokenStore
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -16,6 +23,22 @@ import java.io.IOException
 import java.util.concurrent.TimeUnit
 
 internal const val TERMINAL_ID_HEADER = "X-Terminal-Id"
+internal const val CLIENT_COMPATIBILITY_POLICY_REVISION_HEADER =
+    "X-Client-Compatibility-Policy-Revision"
+
+/** A 426 body may be unavailable; preserve the monotonic header authority. */
+internal fun resolvedCompatibilityPolicyRevision(
+    bodyPolicyRevision: Int?,
+    headerPolicyRevision: String?,
+): Int {
+    val body = bodyPolicyRevision?.coerceAtLeast(0) ?: 0
+    val header = headerPolicyRevision
+        ?.trim()
+        ?.takeIf { it.matches(Regex("[1-9][0-9]{0,9}")) }
+        ?.toIntOrNull()
+        ?: 0
+    return maxOf(body, header)
+}
 
 /**
  * Process-local terminal authority. Persisted TerminalStore is only a
@@ -93,11 +116,12 @@ class ApiException(
     message: String,
     val status: Int? = null,
     val code: String? = null,
+    val diagnosticConflictEventId: String? = null,
 ) : IOException(message) {
 
     /** No answer from the server: the request may or may not have committed. */
     val isAmbiguous: Boolean
-        get() = status == null || status >= 500 || code == "idempotency_in_progress"
+        get() = status == null || status == 408 || status >= 500 || code == "idempotency_in_progress"
 
     /** The server decided, and said no. Nothing was written. */
     val isBusinessRule: Boolean get() = code == "business_rule"
@@ -111,9 +135,34 @@ class ApiException(
     val mustPreserveOutbox: Boolean get() = isAmbiguous || status == 426
 }
 
+/**
+ * Build the deliberately minimal client used only by `/readyz` recovery
+ * probes. Native-version enforcement applies to every Android request,
+ * including unauthenticated readiness, so identity is the one application
+ * interceptor this client must carry. Authentication, terminal authority and
+ * ordinary error observation remain intentionally excluded.
+ */
+internal fun buildReadinessClient(
+    versionCode: Int = BuildConfig.VERSION_CODE,
+    distributionChannel: String = BuildConfig.DISTRIBUTION_CHANNEL,
+): OkHttpClient = OkHttpClient.Builder()
+    .connectTimeout(5, TimeUnit.SECONDS)
+    .readTimeout(5, TimeUnit.SECONDS)
+    .writeTimeout(5, TimeUnit.SECONDS)
+    .callTimeout(8, TimeUnit.SECONDS)
+    .retryOnConnectionFailure(true)
+    .addInterceptor(ClientIdentityInterceptor(versionCode, distributionChannel))
+    .build()
+
 object ApiClient {
 
     internal val backendReachability = BackendReachabilityTracker()
+    private val readinessClient by lazy {
+        // Deliberately isolated from ErrorInterceptor: the connectivity
+        // coordinator owns this proof and must not feed its own probe back
+        // into the ordinary request-hint stream.
+        buildReadinessClient()
+    }
 
     // Not private: report-snapshot caching (core/db/ReportSnapshots.kt) reuses
     // this exact instance to encode/decode cached bodies, so a cached row
@@ -141,6 +190,26 @@ object ApiClient {
     inline fun <reified T> create(): T = createApi(T::class.java)
 
     fun <T> createApi(service: Class<T>): T = retrofit.create(service)
+
+    /** A bounded, unauthenticated DB/Redis readiness proof for recovery only. */
+    internal suspend fun probeBackendReadiness(): Boolean = withContext(Dispatchers.IO) {
+        val url = BuildConfig.API_BASE_URL.toHttpUrl().resolve("/readyz")
+            ?: return@withContext false
+        val request = Request.Builder()
+            .url(url)
+            .get()
+            .header("Cache-Control", "no-cache")
+            .build()
+        try {
+            readinessClient.newCall(request).execute().use { response ->
+                response.isSuccessful.also { ready ->
+                    if (ready) backendReachability.recordReadinessProof()
+                }
+            }
+        } catch (_: IOException) {
+            false
+        }
+    }
 
     /**
      * Creates an isolated, non-refreshing client for one transient authority
@@ -175,6 +244,8 @@ object ApiClient {
             .create(service)
     }
 
+    // TokenStore canonicalizes its constructor argument to applicationContext.
+    @SuppressLint("StaticFieldLeak")
     private lateinit var tokens: TokenStore
     private val activeTerminalHeaders = ActiveTerminalHeaderContext()
 
@@ -208,7 +279,7 @@ object ApiClient {
             .build()
             .create(ErpApi::class.java)
 
-        val client = baseClientBuilder()
+        val client = authenticatedClientBuilder()
             // Order matters here more than it looks: OkHttp interceptors
             // nest in add-order, so the LAST one added sits closest to the
             // real network call and is the FIRST to see the raw Response on
@@ -223,11 +294,6 @@ object ApiClient {
             // confirmed broken with a real reproduction — it predates this
             // phase but lives in a file this phase touches, so it's fixed
             // here rather than left in place.
-            .addInterceptor(ClientIdentityInterceptor())
-            .addInterceptor(TerminalInterceptor())
-            .addInterceptor(PricingTokenInterceptor())
-            .addInterceptor(ErrorInterceptor(json))
-            .addInterceptor(AuthInterceptor())
             .build()
 
         retrofit = Retrofit.Builder()
@@ -245,6 +311,57 @@ object ApiClient {
     internal fun deactivateTerminalScope() {
         activeTerminalHeaders.deactivate()
     }
+
+    /**
+     * Feature-isolated authenticated client whose proof interceptor must run
+     * once per physical network attempt. Remote device nonces cannot be
+     * safely attached as an ordinary application interceptor because OkHttp
+     * may transparently retry an exchange without re-running it.
+     */
+    internal fun <T> createApiWithNetworkProof(
+        service: Class<T>,
+        proofInterceptor: Interceptor,
+    ): T {
+        val client = remoteAuthenticatedClientBuilder()
+            // Enrollment proof lives in the JSON body, so an opaque transport
+            // retry would reuse its nonce. The coordinator owns retries and
+            // rebuilds every proof; exact device endpoints never follow a
+            // redirect to a different request target.
+            .retryOnConnectionFailure(false)
+            .followRedirects(false)
+            .followSslRedirects(false)
+            .addNetworkInterceptor(proofInterceptor)
+            .build()
+        return Retrofit.Builder()
+            .baseUrl(BuildConfig.API_BASE_URL)
+            .client(client)
+            .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
+            .build()
+            .create(service)
+    }
+
+    private fun authenticatedClientBuilder(): OkHttpClient.Builder = baseClientBuilder()
+        .addInterceptor(ClientIdentityInterceptor())
+        .addInterceptor(TerminalInterceptor())
+        .addInterceptor(
+            PricingTokenInterceptor(allowPricingAuthority = true) {
+                PricingLock.currentToken(tokens.currentPricingSession())
+            },
+        )
+        .addInterceptor(ErrorInterceptor(json))
+        .addInterceptor(AuthInterceptor())
+
+    /** Remote support never receives the short-lived authority to mutate prices. */
+    private fun remoteAuthenticatedClientBuilder(): OkHttpClient.Builder = baseClientBuilder()
+        .addInterceptor(ClientIdentityInterceptor())
+        .addInterceptor(TerminalInterceptor())
+        .addInterceptor(
+            PricingTokenInterceptor(allowPricingAuthority = false) {
+                PricingLock.currentToken(tokens.currentPricingSession())
+            },
+        )
+        .addInterceptor(ErrorInterceptor(json))
+        .addInterceptor(AuthInterceptor())
 
     private fun baseClientBuilder(): OkHttpClient.Builder = OkHttpClient.Builder()
         // Cafe wifi is congested, not dead. These are deliberately generous:
@@ -294,6 +411,14 @@ object ApiClient {
                 response.close()
                 throw failure
             } ?: return response
+            // Remote device enrollment carries its ECDSA nonce/signature in
+            // the immutable JSON body. Replaying this same request here would
+            // reuse that nonce. The refreshed bearer is retained, but the
+            // coordinator must rebuild a fresh enrollment proof on its next
+            // bounded attempt.
+            if (!canReplayAfterBearerRefresh(original.url.encodedPath)) {
+                return response
+            }
             response.close()
             return chain.proceed(signed(original, newAccess))
         }
@@ -311,12 +436,21 @@ object ApiClient {
      * set the header itself). A request for an endpoint that doesn't care
      * about pricing just carries an extra, ignored header.
      */
-    private class PricingTokenInterceptor : Interceptor {
+    internal class PricingTokenInterceptor(
+        private val allowPricingAuthority: Boolean,
+        private val currentToken: () -> String?,
+    ) : Interceptor {
         override fun intercept(chain: Interceptor.Chain): Response {
-            val token = PricingLock.currentToken(tokens.currentPricingSession())
-                ?: return chain.proceed(chain.request())
+            // Strip any caller-supplied value first. Only the normal ERP client
+            // may reattach the current in-memory capability; remote support is
+            // incapable of carrying it even if a future caller adds a header.
+            val clean = chain.request().newBuilder()
+                .removeHeader(PRICING_TOKEN_HEADER)
+                .build()
+            if (!allowPricingAuthority) return chain.proceed(clean)
+            val token = currentToken() ?: return chain.proceed(clean)
             return chain.proceed(
-                chain.request().newBuilder().header("X-Pricing-Token", token).build(),
+                clean.newBuilder().header(PRICING_TOKEN_HEADER, token).build(),
             )
         }
     }
@@ -335,9 +469,38 @@ object ApiClient {
                 // Inner interceptors may already have classified a dedicated
                 // refresh response. Preserve its status/code so a transient
                 // 5xx or network error can never be mistaken for auth loss.
-                backendReachability.recordApiFailure(e)
+                val explicitlyCancelled = chain.call().isCanceled()
+                if (shouldPublishApiReachability(e, explicitlyCancelled)) {
+                    backendReachability.recordApiFailure(e)
+                }
+                DiagnosticsRuntime.recordApiFailure(
+                    ApiFailureObservation(
+                        status = e.status,
+                        serverCode = e.code,
+                        encodedPath = diagnosticEncodedPath(chain.request().url.encodedPath),
+                        connectivity = DiagnosticConnectivity.UNKNOWN,
+                        explicitlyCancelled = explicitlyCancelled,
+                    ),
+                )
                 throw e
             } catch (e: IOException) {
+                // Retrofit cancels the OkHttp call when a bounded coroutine
+                // check times out. Publishing that expected cancellation as a
+                // server outage made the global status oscillate even on a
+                // healthy connection.
+                val explicitlyCancelled = chain.call().isCanceled()
+                DiagnosticsRuntime.recordApiFailure(
+                    ApiFailureObservation(
+                        status = null,
+                        serverCode = "network_error",
+                        encodedPath = diagnosticEncodedPath(chain.request().url.encodedPath),
+                        connectivity = DiagnosticConnectivity.UNKNOWN,
+                        explicitlyCancelled = explicitlyCancelled,
+                    ),
+                )
+                if (!shouldPublishTransportFailure(explicitlyCancelled)) {
+                    throw e
+                }
                 backendReachability.recordTransportFailure()
                 throw ApiException(
                     "Could not reach the server. Check the connection and try again.",
@@ -348,6 +511,8 @@ object ApiClient {
             backendReachability.recordHttpResponse()
             if (response.isSuccessful) return response
 
+            val compatibilityPolicyRevisionHeader =
+                response.header(CLIENT_COMPATIBILITY_POLICY_REVISION_HEADER)
             val body = response.body?.string().orEmpty()
             response.close()
             val envelope = runCatching {
@@ -355,7 +520,7 @@ object ApiClient {
             }.getOrNull()
 
             if (
-                response.request.header("X-Pricing-Token") != null &&
+                response.request.header(PRICING_TOKEN_HEADER) != null &&
                 response.code in setOf(401, 403) &&
                 envelope?.error?.message?.contains("pricing", ignoreCase = true) == true
             ) {
@@ -372,6 +537,10 @@ object ApiClient {
                         currentVersionCode = details?.currentVersionCode ?: BuildConfig.VERSION_CODE,
                         minimumSupportedVersionCode = details?.minimumSupportedVersionCode,
                         latestVersionCode = details?.latestVersionCode,
+                        policyRevision = resolvedCompatibilityPolicyRevision(
+                            bodyPolicyRevision = details?.policyRevision,
+                            headerPolicyRevision = compatibilityPolicyRevisionHeader,
+                        ),
                         latestVersionName = details?.latestVersionName,
                         releaseNotes = details?.releaseNotes,
                         apkSha256 = details?.apkSha256,
@@ -381,13 +550,40 @@ object ApiClient {
                 )
             }
 
-            throw ApiException(
+            val classified = ApiException(
                 message = envelope?.error?.message
                     ?: fastApiValidationMessage(json, body)
                     ?: "Request failed (HTTP ${response.code}).",
                 status = response.code,
                 code = envelope?.error?.code,
+                diagnosticConflictEventId = envelope?.error?.details?.clientEventId,
             )
+            DiagnosticsRuntime.recordApiFailure(
+                ApiFailureObservation(
+                    status = classified.status,
+                    serverCode = classified.code,
+                    encodedPath = diagnosticEncodedPath(response.request.url.encodedPath),
+                    connectivity = DiagnosticConnectivity.ONLINE,
+                ),
+            )
+            throw classified
         }
     }
 }
+
+internal fun canReplayAfterBearerRefresh(encodedPath: String): Boolean =
+    !encodedPath.endsWith("/remote-assistance/device/keys/enroll")
+
+/** Never retain remote key/grant/session/command UUIDs in diagnostic observations. */
+internal fun diagnosticEncodedPath(encodedPath: String): String =
+    if (encodedPath.startsWith("/api/v1/remote-assistance/device/")) {
+        REMOTE_DIAGNOSTIC_UUID.replace(encodedPath, "{id}")
+    } else {
+        encodedPath
+    }
+
+private val REMOTE_DIAGNOSTIC_UUID = Regex(
+    "[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}",
+)
+
+internal const val PRICING_TOKEN_HEADER = "X-Pricing-Token"

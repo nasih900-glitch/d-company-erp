@@ -4,6 +4,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -39,6 +40,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -46,6 +48,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.Color
@@ -66,10 +69,17 @@ import cloud.dcompany.erp.ui.components.ErpButton
 import cloud.dcompany.erp.ui.components.OperationalBanner
 import cloud.dcompany.erp.ui.components.UiTone
 import cloud.dcompany.erp.ui.components.fieldColors
+import cloud.dcompany.erp.ui.remote.RemoteSensitiveContent
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.theme.Spacing
 import kotlinx.coroutines.launch
+
+private sealed interface BugReportPreviewState {
+    data object Loading : BugReportPreviewState
+    data class Ready(val bitmap: ImageBitmap) : BugReportPreviewState
+    data object Unavailable : BugReportPreviewState
+}
 
 @Composable
 internal fun BugReportDialog(
@@ -80,6 +90,7 @@ internal fun BugReportDialog(
     onDescriptionChange: (String) -> Unit,
     onAttachmentChange: (BugReportAttachmentDraft?) -> Unit,
     onAttachmentRejected: (String) -> Unit,
+    onAttachmentPreviewReadyChange: (Boolean) -> Unit,
     onAttachmentConsentChange: (Boolean) -> Unit,
     onSubmit: () -> Unit,
     onRetry: () -> Unit,
@@ -91,11 +102,12 @@ internal fun BugReportDialog(
     onDismiss: () -> Unit,
 ) {
     if (!state.isOpen) return
-    var pendingDiscardIdentity by remember { mutableStateOf<String?>(null) }
-    val submitted = state.submittedLocalId != null
-    val actionRequired = state.submittedState == BugReportOutboxState.ACTION_REQUIRED ||
-        state.submittedAttachmentState == BugReportOutboxState.ACTION_REQUIRED
-    AlertDialog(
+    RemoteSensitiveContent {
+        var pendingDiscardIdentity by remember { mutableStateOf<String?>(null) }
+        val submitted = state.submittedLocalId != null
+        val actionRequired = state.submittedState == BugReportOutboxState.ACTION_REQUIRED ||
+            state.submittedAttachmentState == BugReportOutboxState.ACTION_REQUIRED
+        AlertDialog(
         onDismissRequest = { if (!state.saving) onDismiss() },
         modifier = Modifier.widthIn(max = 760.dp).fillMaxWidth(0.96f).imePadding(),
         properties = DialogProperties(usePlatformDefaultWidth = false),
@@ -141,6 +153,7 @@ internal fun BugReportDialog(
                     onDescriptionChange = onDescriptionChange,
                     onAttachmentChange = onAttachmentChange,
                     onAttachmentRejected = onAttachmentRejected,
+                    onAttachmentPreviewReadyChange = onAttachmentPreviewReadyChange,
                     onAttachmentConsentChange = onAttachmentConsentChange,
                     onOpenHistory = onOpenHistory,
                 )
@@ -176,9 +189,9 @@ internal fun BugReportDialog(
                 }
             }
         },
-    )
-    pendingDiscardIdentity?.let { identity ->
-        AlertDialog(
+        )
+        pendingDiscardIdentity?.let { identity ->
+            AlertDialog(
             onDismissRequest = { pendingDiscardIdentity = null },
             containerColor = Brand.SurfaceOverlay,
             shape = Radius.shapeLg,
@@ -204,7 +217,8 @@ internal fun BugReportDialog(
             dismissButton = {
                 TextButton(onClick = { pendingDiscardIdentity = null }) { Text("Keep it") }
             },
-        )
+            )
+        }
     }
 }
 
@@ -274,6 +288,7 @@ private fun BugReportForm(
     onDescriptionChange: (String) -> Unit,
     onAttachmentChange: (BugReportAttachmentDraft?) -> Unit,
     onAttachmentRejected: (String) -> Unit,
+    onAttachmentPreviewReadyChange: (Boolean) -> Unit,
     onAttachmentConsentChange: (Boolean) -> Unit,
     onOpenHistory: () -> Unit,
 ) {
@@ -489,8 +504,19 @@ private fun BugReportForm(
                 }
             }
         } else {
-            val preview = remember(state.attachment.content) {
-                decodeBugReportPreview(state.attachment.content)
+            var preview by remember(state.attachment.content) {
+                mutableStateOf<BugReportPreviewState>(BugReportPreviewState.Loading)
+            }
+            LaunchedEffect(state.attachment.content) {
+                onAttachmentPreviewReadyChange(false)
+                val decoded = decodeBugReportPreview(state.attachment.content)
+                preview = if (decoded != null) {
+                    onAttachmentPreviewReadyChange(true)
+                    BugReportPreviewState.Ready(decoded)
+                } else {
+                    onAttachmentPreviewReadyChange(false)
+                    BugReportPreviewState.Unavailable
+                }
             }
             Surface(
                 color = Brand.Surface,
@@ -502,13 +528,40 @@ private fun BugReportForm(
                     Modifier.padding(Spacing.md),
                     verticalArrangement = Arrangement.spacedBy(Spacing.sm),
                 ) {
-                    if (preview != null) {
-                        Image(
-                            bitmap = preview,
-                            contentDescription = "Selected support screenshot preview",
-                            contentScale = ContentScale.Fit,
-                            modifier = Modifier.fillMaxWidth().height(180.dp),
-                        )
+                    when (val currentPreview = preview) {
+                        BugReportPreviewState.Loading -> {
+                            Row(
+                                Modifier.fillMaxWidth().height(180.dp),
+                                horizontalArrangement = Arrangement.Center,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                CircularProgressIndicator(
+                                    color = Brand.Gold,
+                                    strokeWidth = 2.dp,
+                                    modifier = Modifier.size(24.dp),
+                                )
+                            }
+                        }
+                        is BugReportPreviewState.Ready -> {
+                            Image(
+                                bitmap = currentPreview.bitmap,
+                                contentDescription = "Selected support screenshot preview",
+                                contentScale = ContentScale.Fit,
+                                modifier = Modifier.fillMaxWidth().height(180.dp),
+                            )
+                        }
+                        BugReportPreviewState.Unavailable -> {
+                            Box(
+                                Modifier.fillMaxWidth().height(180.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    "Preview unavailable. Remove this image and choose it again; it cannot be sent until you can review it.",
+                                    color = Brand.Warning,
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
+                        }
                     }
                     Row(
                         Modifier.fillMaxWidth(),
@@ -527,7 +580,7 @@ private fun BugReportForm(
                     Row(
                         Modifier.fillMaxWidth().toggleable(
                             value = state.attachmentConsent,
-                            enabled = !state.saving,
+                            enabled = !state.saving && state.attachmentPreviewReady,
                             role = Role.Checkbox,
                             onValueChange = onAttachmentConsentChange,
                         ).padding(vertical = Spacing.xs),
@@ -537,10 +590,14 @@ private fun BugReportForm(
                         Checkbox(
                             checked = state.attachmentConsent,
                             onCheckedChange = null,
-                            enabled = !state.saving,
+                            enabled = !state.saving && state.attachmentPreviewReady,
                         )
                         Text(
-                            "I reviewed this image. It contains no password, payment or customer information.",
+                            if (state.attachmentPreviewReady) {
+                                "I reviewed this image. It contains no password, payment or customer information."
+                            } else {
+                                "Wait for the preview before confirming this image is safe."
+                            },
                             color = Brand.ForegroundMuted,
                             style = MaterialTheme.typography.bodySmall,
                         )

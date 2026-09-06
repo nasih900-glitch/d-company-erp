@@ -6,8 +6,10 @@ import cloud.dcompany.erp.core.db.GamingSessionCacheEntity
 import cloud.dcompany.erp.core.db.GamingSessionState
 import cloud.dcompany.erp.core.db.GamingStationEntity
 import cloud.dcompany.erp.core.db.LocalGamingSessionEntity
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 internal data class GamingAlarmCandidate(
     val sessionId: String,
@@ -47,7 +49,11 @@ internal fun gamingAlarmCandidates(
         .filter { it.status == "active" }
         .mapNotNull { row ->
             val overlay = localByServerId[row.id]
-            val endsAt = when (overlay?.state) {
+            val endsAt = if (row.pauseVersion != null) {
+                // A resumed server deadline includes precise completed pause
+                // time. Never replace it with a pre-pause local snapshot.
+                row.timerEndsAtMillis
+            } else when (overlay?.state) {
                 null -> row.timerEndsAtMillis
                 GamingSessionState.START_SYNCED,
                 GamingSessionState.STOP_PENDING,
@@ -66,7 +72,7 @@ internal fun gamingAlarmCandidates(
         }
     val fromLocal = local.asSequence()
         .filter {
-            it.timerEndsAtMillis != null &&
+            it.timerEndsAtMillis != null && it.status != "paused" &&
                 (
                     it.state == GamingSessionState.START_PENDING ||
                         it.state == GamingSessionState.START_SYNCED ||
@@ -109,12 +115,17 @@ object GamingAlarmReconciler {
             ?: emptyList()
     }
 
-    suspend fun reconcile(context: Context) = mutex.withLock {
-        val appContext = context.applicationContext
-        OperationalAlarmRegistry.reconcile(
-            context = appContext,
-            kind = OperationalAlarmKind.GAMING,
-            desired = currentAlarms(appContext),
-        )
+    suspend fun reconcile(context: Context): Boolean = mutex.withLock {
+        // AlarmManager calls and the durable registry commit are blocking
+        // platform operations. Feature ViewModels may request a one-shot
+        // reconcile after an action, so never run the adapter on Main.
+        withContext(Dispatchers.IO) {
+            val appContext = context.applicationContext
+            OperationalAlarmRegistry.reconcile(
+                context = appContext,
+                kind = OperationalAlarmKind.GAMING,
+                desired = currentAlarms(appContext),
+            )
+        }
     }
 }

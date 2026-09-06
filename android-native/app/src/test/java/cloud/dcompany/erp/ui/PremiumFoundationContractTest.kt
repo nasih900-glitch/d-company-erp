@@ -27,14 +27,37 @@ class PremiumFoundationContractTest {
     }
 
     @Test
-    fun `login uses the real brand mark and focused gaming centre language`() {
+    fun `login uses the real brand mark and neutral business language`() {
         val login = read("src/main/java/cloud/dcompany/erp/ui/screens/LoginScreen.kt")
+        val navigation = read("src/main/java/cloud/dcompany/erp/ui/Nav.kt")
+        val brandMark = read("src/main/java/cloud/dcompany/erp/ui/components/DCompanyBrandMark.kt")
 
-        assertTrue("painterResource(R.mipmap.ic_launcher_foreground)" in login)
-        assertTrue("GAMING CENTRE" in login)
+        assertTrue("DCompanyBrandMark(" in login)
+        assertTrue("size = 92.dp" in login)
+        assertTrue("painterResource(R.mipmap.ic_launcher_foreground)" in brandMark)
+        assertTrue("clip(CircleShape)" in brandMark)
+        assertTrue("contentScale = ContentScale.Crop" in brandMark)
+        assertTrue("scaleX = 1.5f" in brandMark)
+        assertTrue("BUSINESS OPERATIONS" in login)
+        assertTrue("OPERATIONS" in navigation)
+        assertFalse("GAMING CENTRE" in login)
+        assertFalse("GAMING CENTRE" in navigation)
         assertFalse("Cafe + Gaming Lounge" in login)
         assertTrue("shape = Radius.shapeXl" in login)
-        assertTrue("modifier = Modifier.size(48.dp)" in login)
+    }
+
+    @Test
+    fun `shared presentation avoids decorative gradients and glow tokens`() {
+        val theme = read("src/main/java/cloud/dcompany/erp/ui/theme/Theme.kt")
+        val primitives = read("src/main/java/cloud/dcompany/erp/ui/components/Primitives.kt")
+        val nativeColors = read("src/main/res/values/colors.xml")
+
+        assertTrue("Launch background must match the Compose background", "#08131B" in nativeColors)
+        assertFalse("linearGradient" in theme)
+        assertFalse("verticalGradient" in theme)
+        assertFalse("GoldSheen" in theme)
+        assertFalse("surfaceFade" in theme)
+        assertFalse("linearGradient" in primitives)
     }
 
     @Test

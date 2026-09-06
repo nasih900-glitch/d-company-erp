@@ -1,31 +1,14 @@
 package cloud.dcompany.erp.ui.components
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CloudOff
-import androidx.compose.material.icons.filled.Error
-import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.semantics.LiveRegionMode
-import androidx.compose.ui.semantics.liveRegion
-import androidx.compose.ui.semantics.semantics
 import cloud.dcompany.erp.core.net.BackendReachability
-import cloud.dcompany.erp.ui.theme.Brand
-import cloud.dcompany.erp.ui.theme.Spacing
+import cloud.dcompany.erp.core.net.ConnectivityPhase
 
 enum class SyncAvailabilityProblem {
     NONE,
+    VERIFYING,
     NO_NETWORK,
     SERVER_UNREACHABLE,
+    RECOVERING,
 }
 
 internal data class SyncAvailabilityCopy(
@@ -40,11 +23,25 @@ internal fun syncAvailabilityProblem(
     !networkValidated -> SyncAvailabilityProblem.NO_NETWORK
     backendReachability == BackendReachability.UNREACHABLE ->
         SyncAvailabilityProblem.SERVER_UNREACHABLE
+    backendReachability == BackendReachability.UNKNOWN -> SyncAvailabilityProblem.VERIFYING
     else -> SyncAvailabilityProblem.NONE
+}
+
+internal fun syncAvailabilityProblem(phase: ConnectivityPhase): SyncAvailabilityProblem = when (phase) {
+    ConnectivityPhase.NO_NETWORK -> SyncAvailabilityProblem.NO_NETWORK
+    ConnectivityPhase.VERIFYING -> SyncAvailabilityProblem.VERIFYING
+    ConnectivityPhase.SERVER_UNREACHABLE -> SyncAvailabilityProblem.SERVER_UNREACHABLE
+    ConnectivityPhase.RECOVERING -> SyncAvailabilityProblem.RECOVERING
+    ConnectivityPhase.ONLINE -> SyncAvailabilityProblem.NONE
 }
 
 internal fun syncAvailabilityCopy(problem: SyncAvailabilityProblem): SyncAvailabilityCopy? = when (problem) {
     SyncAvailabilityProblem.NONE -> null
+    SyncAvailabilityProblem.VERIFYING -> SyncAvailabilityCopy(
+        title = "Checking the ERP connection",
+        detail = "The tablet is verifying the server before it sends saved work. You can keep " +
+            "viewing saved data; online actions resume automatically after verification.",
+    )
     SyncAvailabilityProblem.NO_NETWORK -> SyncAvailabilityCopy(
         title = "Offline — no internet connection",
         detail = "You are viewing saved data. Any offline-capable change is saved locally, " +
@@ -56,50 +53,12 @@ internal fun syncAvailabilityCopy(problem: SyncAvailabilityProblem): SyncAvailab
             "saved data. Any offline-capable change is saved locally, shown as waiting to sync, " +
             "and sent automatically after the server reconnects.",
     )
+    SyncAvailabilityProblem.RECOVERING -> SyncAvailabilityCopy(
+        title = "Connection restored — checking saved work",
+        detail = "The ERP server is responding again. The tablet is completing a short safety " +
+            "check, then saved work will synchronise automatically. Do not repeat a payment.",
+    )
 }
 
-/** App-wide, non-dismissible operational state; it clears only after a proven HTTP response. */
-@Composable
-internal fun SyncAvailabilityBanner(problem: SyncAvailabilityProblem) {
-    val copy = syncAvailabilityCopy(problem) ?: return
-    val (background, foreground, icon) = when (problem) {
-        SyncAvailabilityProblem.NO_NETWORK -> Triple(
-            Brand.WarningMuted,
-            Brand.Warning,
-            Icons.Filled.CloudOff,
-        )
-        SyncAvailabilityProblem.SERVER_UNREACHABLE -> Triple(
-            Brand.DangerMuted,
-            Brand.Danger,
-            Icons.Filled.Error,
-        )
-        SyncAvailabilityProblem.NONE -> return
-    }
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(background)
-            .semantics { liveRegion = LiveRegionMode.Polite }
-            .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
-        horizontalArrangement = Arrangement.spacedBy(Spacing.md),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            tint = foreground,
-        )
-        Column(verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
-            Text(
-                copy.title,
-                color = foreground,
-                style = MaterialTheme.typography.labelLarge,
-            )
-            Text(
-                copy.detail,
-                color = foreground,
-                style = MaterialTheme.typography.labelSmall,
-            )
-        }
-    }
-}
+internal fun syncAvailabilityDialogTitle(problem: SyncAvailabilityProblem): String =
+    syncAvailabilityCopy(problem)?.title ?: "Connected to the ERP server"

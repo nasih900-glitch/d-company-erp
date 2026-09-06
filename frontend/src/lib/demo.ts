@@ -17,6 +17,8 @@ export const DEMO_USER = {
   roles: ['owner'],
   protected_access: true,
   audit_access: true,
+  // Demo identity must never inherit production release authority.
+  release_control_access: false,
   company_id: '00000000-0000-0000-0000-000000000000',
   branch_id: null as string | null,
   accessible_modules: [

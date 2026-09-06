@@ -6,11 +6,12 @@ import {
   ClipboardList, UserCircle, Sparkles, ShieldCheck, ChefHat, CalendarClock,
   MessageSquareWarning, RotateCcw,
   CreditCard, HelpCircle, LayoutDashboard,
+  TabletSmartphone,
   type LucideIcon,
 } from 'lucide-react';
 
 import { useAuth } from '@/modules/auth/AuthContext';
-import { hasAdminSystemAccess } from '@/lib/admin-access';
+import { hasSupportAccess } from '@/lib/admin-access';
 import { rolesLabel } from '@/lib/roles';
 import { canAccessRefunds } from '@/modules/refunds/refund-policy';
 import { canViewMemberships } from '@/modules/memberships/membership-policy';
@@ -25,6 +26,7 @@ import ConnectivityBanner from './ConnectivityBanner';
 import SupportLauncher, { openSupportLauncher } from '@/components/support/SupportLauncher';
 import { bugReports } from '@/lib/erp-api';
 import { subscribeRealtime } from '@/lib/realtime';
+import { internalAppRouteOr } from '@/lib/internal-navigation';
 
 const NAV_ICONS: Record<ProfileNavIcon, LucideIcon> = {
   gaming: Gamepad2,
@@ -39,6 +41,7 @@ const NAV_ICONS: Record<ProfileNavIcon, LucideIcon> = {
   settings: Settings,
   audit: ShieldCheck,
   supportInbox: MessageSquareWarning,
+  deviceCentre: TabletSmartphone,
   tables: LayoutGrid,
   kitchen: ChefHat,
   reservations: CalendarClock,
@@ -63,7 +66,7 @@ export default function AppShell({ children }: { children?: ReactNode }) {
   // backend will 403 on (see core/permissions.py's admin.audit.read carve-out).
   const isProtectedOwner = Boolean(demo || me?.protected_access);
   const hasAuditAccess = Boolean(demo || me?.audit_access);
-  const hasSystemAccess = hasAdminSystemAccess(me);
+  const hasSystemAccess = hasSupportAccess(me);
   const hasRefundAccess = Boolean(demo || canAccessRefunds(me));
   const hasMembershipAccess = Boolean(demo || canViewMemberships(me));
   const hasProductManagementAccess = canManageGamingCentreProducts(me, demo);
@@ -263,7 +266,7 @@ export default function AppShell({ children }: { children?: ReactNode }) {
                 return (
                   <NavLink
                     key={item.id}
-                    to={item.to}
+                    to={internalAppRouteOr(item.to)}
                     onClick={onNavigate}
                     className={({ isActive }) =>
                       `flex items-center gap-3 px-3 py-3 rounded-xl text-sm font-medium ` +

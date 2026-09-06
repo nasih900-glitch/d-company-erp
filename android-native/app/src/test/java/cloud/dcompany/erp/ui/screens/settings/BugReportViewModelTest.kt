@@ -68,6 +68,7 @@ class BugReportViewModelTest {
         vm.attachmentChanged(
             BugReportAttachmentDraft("support-image.jpg", "image/jpeg", byteArrayOf(1, 2, 3)),
         )
+        vm.attachmentPreviewReadyChanged(true)
 
         vm.submit(validContext.copy(currentScreen = "Tables"))
 
@@ -77,6 +78,25 @@ class BugReportViewModelTest {
         vm.attachmentConsentChanged(true)
         vm.submit(validContext.copy(currentScreen = "Tables"))
         assertEquals(3, outbox.captures.single().attachment?.byteSize)
+    }
+
+    @Test
+    fun `image cannot be approved or submitted when safe preview is unavailable`() {
+        val outbox = FakeOutbox()
+        val vm = viewModel(outbox)
+        vm.open(BugReportLaunchContext("Gaming"))
+        vm.descriptionChanged("The station action failed and I need help.")
+        vm.attachmentChanged(
+            BugReportAttachmentDraft("support-image.jpg", "image/jpeg", byteArrayOf(1, 2, 3)),
+        )
+
+        vm.attachmentConsentChanged(true)
+        assertFalse(vm.state.value.attachmentConsent)
+
+        vm.submit(validContext)
+
+        assertTrue(outbox.captures.isEmpty())
+        assertTrue(vm.state.value.attachmentError.orEmpty().contains("could not be reviewed"))
     }
 
     @Test

@@ -23,6 +23,7 @@ data class BugReportUiState(
     val launchContext: BugReportLaunchContext = BugReportLaunchContext("ERP"),
     val draft: BugReportDraft = BugReportDraft(),
     val attachment: BugReportAttachmentDraft? = null,
+    val attachmentPreviewReady: Boolean = false,
     val attachmentConsent: Boolean = false,
     val attachmentError: String? = null,
     val validation: BugReportValidation = BugReportValidation(),
@@ -87,6 +88,7 @@ internal class BugReportViewModel(
                 launchContext = context,
                 draft = BugReportDraft(),
                 attachment = null,
+                attachmentPreviewReady = false,
                 attachmentConsent = false,
                 attachmentError = null,
                 validation = BugReportValidation(),
@@ -140,6 +142,7 @@ internal class BugReportViewModel(
         if (current.saving || current.submittedLocalId != null) return
         _state.value = current.copy(
             attachment = value,
+            attachmentPreviewReady = false,
             attachmentConsent = false,
             attachmentError = null,
         )
@@ -154,7 +157,29 @@ internal class BugReportViewModel(
     fun attachmentConsentChanged(value: Boolean) {
         val current = _state.value
         if (current.saving || current.submittedLocalId != null || current.attachment == null) return
+        if (value && !current.attachmentPreviewReady) {
+            _state.value = current.copy(
+                attachmentConsent = false,
+                attachmentError = "Wait until the selected image is visible before confirming it is safe.",
+            )
+            return
+        }
         _state.value = current.copy(attachmentConsent = value, attachmentError = null)
+    }
+
+    /**
+     * Privacy consent is meaningful only after the operator has actually seen
+     * the decoded, sanitised image. A corrupt or unsupported preview must not
+     * be approvable merely because its bytes were accepted by the picker.
+     */
+    fun attachmentPreviewReadyChanged(value: Boolean) {
+        val current = _state.value
+        if (current.saving || current.submittedLocalId != null || current.attachment == null) return
+        _state.value = current.copy(
+            attachmentPreviewReady = value,
+            attachmentConsent = if (value) current.attachmentConsent else false,
+            attachmentError = if (value) null else current.attachmentError,
+        )
     }
 
     private fun edit(change: BugReportDraft.() -> BugReportDraft) {
@@ -175,6 +200,14 @@ internal class BugReportViewModel(
             _state.value = current.copy(
                 validation = validation,
                 error = "Add a short description, then send the request again.",
+            )
+            return
+        }
+        if (current.attachment != null && !current.attachmentPreviewReady) {
+            _state.value = current.copy(
+                attachmentConsent = false,
+                attachmentError = "The selected image could not be reviewed. Remove it and choose it again, or send the report without an image.",
+                error = "The image cannot be sent until its safe preview is visible.",
             )
             return
         }

@@ -2,19 +2,68 @@ package cloud.dcompany.erp.ui.theme
 
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ThemeContrastTest {
     @Test
+    fun `executive navy palette remains the approved neutral foundation`() {
+        assertEquals(Color(0xFF08131B), Brand.Background)
+        assertEquals(Color(0xFF0F1D26), Brand.Surface)
+        assertEquals(Color(0xFF162832), Brand.SurfaceRaised)
+        assertEquals(Color(0xFFC6A15B), Brand.Gold)
+        assertEquals(Color(0xFFF4F6F7), Brand.Foreground)
+        assertEquals(Color(0xFF9BA8B0), Brand.ForegroundMuted)
+    }
+
+    @Test
+    fun `surface ladder increases luminance without decorative effects`() {
+        val surfaces = listOf(
+            Brand.Background,
+            Brand.BackgroundSecondary,
+            Brand.Surface,
+            Brand.SurfaceRaised,
+            Brand.SurfaceHover,
+            Brand.SurfaceOverlay,
+        )
+        surfaces.zipWithNext().forEach { (lower, higher) ->
+            assertTrue("Surface ladder must remain ordered", lower.luminance() < higher.luminance())
+        }
+    }
+
+    @Test
+    fun `interactive boundaries are distinct while decorative borders stay restrained`() {
+        assertTrue(contrastRatio(Brand.ControlBorder, Brand.SurfaceRaised) >= 3f)
+        assertTrue(contrastRatio(Brand.FocusRing, Brand.SurfaceOverlay) >= 3f)
+        assertTrue(contrastRatio(Brand.BorderSubtle, Brand.Surface) < 3f)
+    }
+
+    @Test
     fun `small and status text tokens remain readable on overlay surfaces`() {
         listOf(
+            "ForegroundMuted" to Brand.ForegroundMuted,
             "ForegroundFaint" to Brand.ForegroundFaint,
             "GoldMuted" to Brand.GoldMuted,
             "Danger" to Brand.Danger,
         ).forEach { (name, color) ->
             val ratio = contrastRatio(color, Brand.SurfaceOverlay)
             assertTrue("$name contrast was $ratio", ratio >= 4.5f)
+        }
+    }
+
+    @Test
+    fun `body text remains readable across every business surface`() {
+        listOf(
+            Brand.Background,
+            Brand.BackgroundSecondary,
+            Brand.Surface,
+            Brand.SurfaceRaised,
+            Brand.SurfaceHover,
+            Brand.SurfaceOverlay,
+        ).forEach { surface ->
+            assertTrue(contrastRatio(Brand.Foreground, surface) >= 7f)
+            assertTrue(contrastRatio(Brand.ForegroundMuted, surface) >= 4.5f)
         }
     }
 

@@ -42,9 +42,11 @@ LOCAL_BACKUP_DIR = Path("/var/lib/dcompany-erp/backups/auto")
 B2_BUCKET = "dcompany-erp-backups"
 B2_ENDPOINT = "https://s3.us-east-005.backblazeb2.com"
 RETENTION_DAYS = 30
+PARTIAL_RETENTION_HOURS = 24
 # Safety cap so a wedged docker/postgres can't hang the oneshot unit forever
 # and silently block every future nightly run behind it.
 PG_DUMP_TIMEOUT_SECONDS = 3600
+PG_RESTORE_LIST_TIMEOUT_SECONDS = 300
 SMTP_TIMEOUT_SECONDS = 30
 
 
@@ -60,35 +62,72 @@ def load_env() -> dict[str, str]:
 
 
 def run_pg_dump(dest: Path) -> None:
+    """Create and validate a custom-format dump before publishing it atomically."""
+
     dest.parent.mkdir(parents=True, exist_ok=True)
-    with open(dest, "wb") as f:
-        subprocess.run(
-            [
-                "docker",
-                "compose",
-                "-f",
-                str(COMPOSE_FILE),
-                "--env-file",
-                str(ENV_FILE),
-                "exec",
-                "-T",
-                "postgres",
-                "pg_dump",
-                "-U",
-                "erp",
-                "-d",
-                "erp",
-                "-F",
-                "c",
-            ],
-            cwd=ROOT,
-            stdout=f,
-            stderr=subprocess.PIPE,
-            check=True,
-            timeout=PG_DUMP_TIMEOUT_SECONDS,
-        )
-    if dest.stat().st_size == 0:
-        raise RuntimeError("pg_dump produced an empty file")
+    partial = dest.with_name(f"{dest.name}.part")
+    partial.unlink(missing_ok=True)
+    try:
+        with partial.open("xb") as output:
+            subprocess.run(
+                [
+                    "docker",
+                    "compose",
+                    "-f",
+                    str(COMPOSE_FILE),
+                    "--env-file",
+                    str(ENV_FILE),
+                    "exec",
+                    "-T",
+                    "postgres",
+                    "pg_dump",
+                    "-U",
+                    "erp",
+                    "-d",
+                    "erp",
+                    "-F",
+                    "c",
+                ],
+                cwd=ROOT,
+                stdout=output,
+                stderr=subprocess.PIPE,
+                check=True,
+                timeout=PG_DUMP_TIMEOUT_SECONDS,
+            )
+        if partial.stat().st_size == 0:
+            raise RuntimeError("pg_dump produced an empty file")
+
+        # A non-empty custom archive can still be truncated or corrupt.  Make
+        # pg_restore parse its catalogue before the file becomes a candidate
+        # for local retention or off-site upload.
+        with partial.open("rb") as dump_input:
+            subprocess.run(
+                [
+                    "docker",
+                    "compose",
+                    "-f",
+                    str(COMPOSE_FILE),
+                    "--env-file",
+                    str(ENV_FILE),
+                    "exec",
+                    "-T",
+                    "postgres",
+                    "pg_restore",
+                    "--list",
+                ],
+                cwd=ROOT,
+                stdin=dump_input,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                check=True,
+                timeout=PG_RESTORE_LIST_TIMEOUT_SECONDS,
+            )
+        partial.replace(dest)
+    except BaseException:
+        # Never let a failed/truncated archive look like a usable .dump.  This
+        # also handles timeouts and operator interruption.
+        partial.unlink(missing_ok=True)
+        raise
 
 
 def b2_client(env: dict[str, str]):
@@ -114,6 +153,13 @@ def b2_client(env: dict[str, str]):
 
 def upload(client, local_path: Path) -> None:
     client.upload_file(str(local_path), B2_BUCKET, local_path.name)
+    remote = client.head_object(Bucket=B2_BUCKET, Key=local_path.name)
+    remote_size = int(remote.get("ContentLength", -1))
+    if remote_size != local_path.stat().st_size:
+        raise RuntimeError(
+            f"uploaded backup size mismatch: local={local_path.stat().st_size} "
+            f"remote={remote_size}"
+        )
 
 
 def cleanup_remote(client) -> None:
@@ -143,13 +189,41 @@ def cleanup_remote(client) -> None:
             )
 
 
-def cleanup_local() -> None:
+def cleanup_local(*, preserve_verified: Path | None = None) -> None:
+    """Prune expired dumps while retaining at least one local recovery point.
+
+    Remote upload failure must not make nightly validated dumps accumulate
+    without bound: eventually that fills the same disk needed by Postgres and
+    pg_dump.  Prefer the current validated dump when one exists; otherwise
+    retain the newest prior dump while removing only retention-expired files.
+    """
+
     if not LOCAL_BACKUP_DIR.exists():
         return
-    cutoff = datetime.now(timezone.utc) - timedelta(days=RETENTION_DAYS)
-    for f in LOCAL_BACKUP_DIR.iterdir():
+    now = datetime.now(timezone.utc)
+    partial_cutoff = now - timedelta(hours=PARTIAL_RETENTION_HOURS)
+    # SIGKILL or a host reboot cannot execute run_pg_dump's exception cleanup.
+    # Remove abandoned partial archives independently so repeated interrupted
+    # dumps cannot fill the database disk. A potentially active partial is
+    # protected by the 24-hour grace period.
+    for partial in LOCAL_BACKUP_DIR.glob("*.part"):
         if (
-            f.is_file()
+            partial.is_file()
+            and datetime.fromtimestamp(partial.stat().st_mtime, tz=timezone.utc)
+            < partial_cutoff
+        ):
+            partial.unlink()
+    dumps = [path for path in LOCAL_BACKUP_DIR.glob("*.dump") if path.is_file()]
+    if not dumps:
+        return
+    cutoff = now - timedelta(days=RETENTION_DAYS)
+    if preserve_verified is not None and preserve_verified.is_file():
+        preserved = preserve_verified.resolve()
+    else:
+        preserved = max(dumps, key=lambda path: path.stat().st_mtime).resolve()
+    for f in dumps:
+        if (
+            f.resolve() != preserved
             and datetime.fromtimestamp(f.stat().st_mtime, tz=timezone.utc) < cutoff
         ):
             f.unlink()
@@ -197,18 +271,22 @@ def main() -> int:
         run_pg_dump(local_path)
         client = b2_client(env)
         upload(client, local_path)
+        # Remote retention is allowed only after a restorable local dump and a
+        # size-verified remote object exist.
         cleanup_remote(client)
     except Exception as exc:  # noqa: BLE001 - any failure here must reach send_alert()
         error = exc
 
-    # Always prune old local backups, independent of whether the run above
-    # succeeded — otherwise a chronic remote failure (bad key, network) means
-    # local disk fills up unbounded and can eventually take pg_dump itself
-    # down with ENOSPC.
+    # Local retention is independent of the network.  The function always
+    # retains the current validated dump (or newest prior dump when creation
+    # failed), preventing chronic B2 failure from filling the database disk.
     try:
-        cleanup_local()
+        cleanup_local(preserve_verified=local_path if local_path.is_file() else None)
     except OSError as exc:
-        print(f"Local cleanup also failed: {exc}", file=sys.stderr)
+        if error is None:
+            error = exc
+        else:
+            print(f"Local cleanup also failed: {exc}", file=sys.stderr)
 
     if error is None:
         print(f"Backup OK: {local_path.name} ({local_path.stat().st_size} bytes)")

@@ -42,6 +42,10 @@ export interface PosCheckoutRetry {
   paymentMethod: CheckoutPaymentMethod;
   resumingOrderId?: string;
   pendingOrderId?: string;
+  /** Frozen optimistic-lock version for exact idempotent cart-discount replay. */
+  cartDiscountExpectedVersion?: number;
+  /** Frozen optimistic-lock version for exact idempotent cart-points replay. */
+  cartPointsExpectedVersion?: number;
   orderTotalMinor?: number;
   paymentAmountMinor?: number;
   // Voluntary tip, entered on the confirm-payment screen once the exact
@@ -108,6 +112,8 @@ export interface PosRetryDraft {
   // draft version stays 2 rather than orphaning in-flight version-2 recoveries.
   pendingCartDiscountMinor?: number;
   pendingCartPointsMinor?: number;
+  /** Exact customer identity whose balance authorised pending cart-stage points. */
+  pendingCartPointsCustomerPhone?: string;
   retry?: PosCheckoutRetry;
 }
 
@@ -141,6 +147,18 @@ function nonEmptyString(value: unknown): string | undefined {
 // anything non-numeric is corrupt and restores as "nothing pending".
 function positiveMinor(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : undefined;
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0;
+}
+
+function hasInvalidOptionalNonEmptyString(value: unknown): boolean {
+  return value !== undefined && !nonEmptyString(value);
+}
+
+function hasInvalidOptionalNonNegativeInteger(value: unknown): boolean {
+  return value !== undefined && !isNonNegativeInteger(value);
 }
 
 export function createOperationKey(): string {
@@ -262,8 +280,20 @@ function normalizeDeliveryVia(value: unknown): CheckoutDeliveryVia {
 function normalizeSnapshot(value: unknown): PosCheckoutSnapshot | undefined {
   if (!isRecord(value)) return undefined;
   const shiftId = nonEmptyString(value.shiftId);
+  if (!Array.isArray(value.cart)) return undefined;
   const cart = normalizeDraftLines(value.cart);
-  if (!shiftId) return undefined;
+  if (!shiftId || cart.length !== value.cart.length) return undefined;
+  if (value.orderType !== undefined && !ORDER_TYPES.has(value.orderType as CheckoutOrderType)) {
+    return undefined;
+  }
+  if (value.deliveryVia !== undefined && !DELIVERY_VIAS.has(value.deliveryVia as CheckoutDeliveryVia)) {
+    return undefined;
+  }
+  if (value.deliveryStateCode !== undefined && typeof value.deliveryStateCode !== 'string') {
+    return undefined;
+  }
+  if (value.customerName !== undefined && typeof value.customerName !== 'string') return undefined;
+  if (value.customerPhone !== undefined && typeof value.customerPhone !== 'string') return undefined;
   return {
     shiftId,
     cart,
@@ -282,84 +312,189 @@ function normalizeCheckoutRetry(value: unknown): PosCheckoutRetry | undefined {
   if (!key || !snapshot || !PAYMENT_METHODS.has(value.paymentMethod as CheckoutPaymentMethod)) {
     return undefined;
   }
-  const amount = value.paymentAmountMinor;
-  const orderTotal = value.orderTotalMinor;
-  const tip = value.tipMinor;
-  const cashTendered = value.cashTenderedMinor;
-  const orderDiscount = value.orderDiscountMinor;
-  const orderManualDiscount = value.orderManualDiscountMinor;
-  const orderPointsRedeemed = value.orderPointsRedeemedMinor;
-  const freeGamingMinutes = value.freeGamingMinutesApplied;
-  const freeHookahCount = value.freeHookahCountApplied;
-  const pendingOrderId = nonEmptyString(value.pendingOrderId);
-  const checkoutClaimOrderVersion = value.checkoutClaimOrderVersion;
-  const phase = CHECKOUT_PHASES.has(value.phase as CheckoutPhase)
-    ? value.phase as CheckoutPhase
+  const integerFields = [
+    value.paymentAmountMinor,
+    value.orderTotalMinor,
+    value.tipMinor,
+    value.cashTenderedMinor,
+    value.orderDiscountMinor,
+    value.orderManualDiscountMinor,
+    value.orderPointsRedeemedMinor,
+    value.freeGamingMinutesApplied,
+    value.freeHookahCountApplied,
+    value.cartDiscountExpectedVersion,
+    value.cartPointsExpectedVersion,
+  ];
+  if (integerFields.some(hasInvalidOptionalNonNegativeInteger)) return undefined;
+  if (
+    hasInvalidOptionalNonEmptyString(value.resumingOrderId)
+    || hasInvalidOptionalNonEmptyString(value.pendingOrderId)
+    || hasInvalidOptionalNonEmptyString(value.checkoutClaimToken)
+    || hasInvalidOptionalNonEmptyString(value.checkoutClaimExpiresAt)
+  ) return undefined;
+  if (
+    value.checkoutClaimOrderVersion !== undefined
+    && (!Number.isInteger(value.checkoutClaimOrderVersion) || (value.checkoutClaimOrderVersion as number) <= 0)
+  ) return undefined;
+  if (
+    value.checkoutClaimRequired !== undefined
+    && typeof value.checkoutClaimRequired !== 'boolean'
+  ) return undefined;
+  const phase = value.phase === undefined
     // Version-2 drafts created by the earlier one-step checkout were saved
     // only after the cashier confirmed receipt of money.
-    : 'recording_payment';
-  return {
+    ? 'recording_payment'
+    : CHECKOUT_PHASES.has(value.phase as CheckoutPhase)
+      ? value.phase as CheckoutPhase
+      : undefined;
+  if (!phase) return undefined;
+
+  const amount = value.paymentAmountMinor as number | undefined;
+  const orderTotal = value.orderTotalMinor as number | undefined;
+  const tip = value.tipMinor as number | undefined;
+  const cashTendered = value.cashTenderedMinor as number | undefined;
+  const orderDiscount = value.orderDiscountMinor as number | undefined;
+  const orderManualDiscount = value.orderManualDiscountMinor as number | undefined;
+  const orderPointsRedeemed = value.orderPointsRedeemedMinor as number | undefined;
+  const freeGamingMinutes = value.freeGamingMinutesApplied as number | undefined;
+  const freeHookahCount = value.freeHookahCountApplied as number | undefined;
+  const pendingOrderId = nonEmptyString(value.pendingOrderId);
+  const cartDiscountExpectedVersion = value.cartDiscountExpectedVersion as number | undefined;
+  const cartPointsExpectedVersion = value.cartPointsExpectedVersion as number | undefined;
+  const checkoutClaimToken = nonEmptyString(value.checkoutClaimToken);
+  const checkoutClaimExpiresAt = nonEmptyString(value.checkoutClaimExpiresAt);
+  const checkoutClaimOrderVersion = value.checkoutClaimOrderVersion as number | undefined;
+  const hasAnyClaimCredential = Boolean(
+    checkoutClaimToken || checkoutClaimExpiresAt || checkoutClaimOrderVersion,
+  );
+  const hasCompleteClaimCredential = Boolean(
+    checkoutClaimToken && checkoutClaimExpiresAt && checkoutClaimOrderVersion,
+  );
+  if (checkoutClaimExpiresAt && !Number.isFinite(Date.parse(checkoutClaimExpiresAt))) return undefined;
+  if (hasAnyClaimCredential && (!hasCompleteClaimCredential || value.checkoutClaimRequired !== true)) {
+    return undefined;
+  }
+  if (
+    value.checkoutClaimRequired === true
+    && phase !== 'preparing_order'
+    && !hasCompleteClaimCredential
+  ) return undefined;
+
+  const normalized: PosCheckoutRetry = {
     key,
     phase,
     paymentMethod: value.paymentMethod as CheckoutPaymentMethod,
     resumingOrderId: nonEmptyString(value.resumingOrderId),
     pendingOrderId,
-    orderTotalMinor: typeof orderTotal === 'number'
-      && Number.isInteger(orderTotal)
-      && orderTotal >= 0
-      ? orderTotal
-      : undefined,
-    paymentAmountMinor: typeof amount === 'number' && Number.isInteger(amount) && amount >= 0
-      ? amount
-      : undefined,
-    ...(typeof tip === 'number' && Number.isInteger(tip) && tip >= 0
-      ? { tipMinor: tip }
-      : {}),
-    ...(typeof cashTendered === 'number' && Number.isInteger(cashTendered) && cashTendered >= 0
-      ? { cashTenderedMinor: cashTendered }
-      : {}),
-    ...(typeof orderDiscount === 'number'
-      && Number.isInteger(orderDiscount)
-      && orderDiscount >= 0
-      ? { orderDiscountMinor: orderDiscount }
-      : {}),
-    ...(typeof orderManualDiscount === 'number'
-      && Number.isInteger(orderManualDiscount)
-      && orderManualDiscount >= 0
-      ? { orderManualDiscountMinor: orderManualDiscount }
-      : {}),
-    ...(typeof orderPointsRedeemed === 'number'
-      && Number.isInteger(orderPointsRedeemed)
-      && orderPointsRedeemed >= 0
-      ? { orderPointsRedeemedMinor: orderPointsRedeemed }
-      : {}),
-    ...(typeof freeGamingMinutes === 'number'
-      && Number.isInteger(freeGamingMinutes)
-      && freeGamingMinutes >= 0
-      ? { freeGamingMinutesApplied: freeGamingMinutes }
-      : {}),
-    ...(typeof freeHookahCount === 'number'
-      && Number.isInteger(freeHookahCount)
-      && freeHookahCount >= 0
-      ? { freeHookahCountApplied: freeHookahCount }
-      : {}),
-    checkoutClaimToken: nonEmptyString(value.checkoutClaimToken),
-    checkoutClaimExpiresAt: nonEmptyString(value.checkoutClaimExpiresAt),
-    ...(typeof checkoutClaimOrderVersion === 'number'
-      && Number.isInteger(checkoutClaimOrderVersion)
-      && checkoutClaimOrderVersion > 0
-      ? { checkoutClaimOrderVersion }
-      : {}),
+    ...(cartDiscountExpectedVersion !== undefined ? { cartDiscountExpectedVersion } : {}),
+    ...(cartPointsExpectedVersion !== undefined ? { cartPointsExpectedVersion } : {}),
+    ...(orderTotal !== undefined ? { orderTotalMinor: orderTotal } : {}),
+    ...(amount !== undefined ? { paymentAmountMinor: amount } : {}),
+    ...(tip !== undefined ? { tipMinor: tip } : {}),
+    ...(cashTendered !== undefined ? { cashTenderedMinor: cashTendered } : {}),
+    ...(orderDiscount !== undefined ? { orderDiscountMinor: orderDiscount } : {}),
+    ...(orderManualDiscount !== undefined ? { orderManualDiscountMinor: orderManualDiscount } : {}),
+    ...(orderPointsRedeemed !== undefined ? { orderPointsRedeemedMinor: orderPointsRedeemed } : {}),
+    ...(freeGamingMinutes !== undefined ? { freeGamingMinutesApplied: freeGamingMinutes } : {}),
+    ...(freeHookahCount !== undefined ? { freeHookahCountApplied: freeHookahCount } : {}),
+    ...(checkoutClaimToken ? { checkoutClaimToken } : {}),
+    ...(checkoutClaimExpiresAt ? { checkoutClaimExpiresAt } : {}),
+    ...(checkoutClaimOrderVersion ? { checkoutClaimOrderVersion } : {}),
     checkoutClaimRequired: value.checkoutClaimRequired === true,
     snapshot,
   };
+
+  const hasCanonicalBalance = pendingOrderId !== undefined
+    && orderTotal !== undefined
+    && amount !== undefined
+    && amount <= orderTotal;
+  if (phase !== 'preparing_order' && !hasCanonicalBalance) return undefined;
+  if (
+    phase !== 'preparing_order'
+    && (cartDiscountExpectedVersion !== undefined || cartPointsExpectedVersion !== undefined)
+  ) return undefined;
+  if (phase === 'recording_payment') {
+    if (!amount || amount <= 0) return undefined;
+    if (normalized.paymentMethod === 'cash' && cashTendered !== undefined) {
+      if (cashTendered < amount + (tip ?? 0)) return undefined;
+    } else if (normalized.paymentMethod !== 'cash' && cashTendered !== undefined) {
+      return undefined;
+    }
+  }
+  if (phase === 'finalizing_zero') {
+    if (
+      orderTotal !== 0
+      || amount !== 0
+      || !(
+        (freeGamingMinutes ?? 0) > 0
+        || (freeHookahCount ?? 0) > 0
+        || (orderDiscount ?? 0) > 0
+      )
+    ) return undefined;
+  }
+  if (phase === 'awaiting_payment' && amount === 0) {
+    if (
+      orderTotal !== 0
+      || !(
+        (freeGamingMinutes ?? 0) > 0
+        || (freeHookahCount ?? 0) > 0
+        || (orderDiscount ?? 0) > 0
+      )
+    ) return undefined;
+  }
+  return normalized;
 }
 
 export function normalizePosRetryDraft(value: unknown): PosRetryDraft | null {
   if (!isRecord(value)) return null;
+  // Versionless ordinary carts are the one supported legacy shape. A version
+  // we do not understand, or a versionless financial retry, must stay locked
+  // byte-for-byte instead of being rewritten without its settlement journal.
+  if (value.version !== undefined && value.version !== 2) return null;
+  if (
+    value.version === undefined
+    && (
+      value.retry !== undefined
+      || value.pendingCartDiscountMinor !== undefined
+      || value.pendingCartPointsMinor !== undefined
+      || value.pendingCartPointsCustomerPhone !== undefined
+    )
+  ) return null;
+  if (!Array.isArray(value.cart)) return null;
   const cart = normalizeDraftLines(value.cart);
+  // A filtered line may be the only evidence that an item was served. Never
+  // normalize a damaged financial draft into an apparently empty safe cart.
+  if (cart.length !== value.cart.length) return null;
   const pendingCartDiscountMinor = positiveMinor(value.pendingCartDiscountMinor);
   const pendingCartPointsMinor = positiveMinor(value.pendingCartPointsMinor);
+  if (
+    value.pendingCartDiscountMinor !== undefined
+    && value.pendingCartDiscountMinor !== 0
+    && pendingCartDiscountMinor === undefined
+  ) return null;
+  if (
+    value.pendingCartPointsMinor !== undefined
+    && value.pendingCartPointsMinor !== 0
+    && pendingCartPointsMinor === undefined
+  ) return null;
+  const customerPhone = typeof value.customerPhone === 'string' ? value.customerPhone : '';
+  if (value.customerPhone !== undefined && typeof value.customerPhone !== 'string') return null;
+  if (value.customerName !== undefined && typeof value.customerName !== 'string') return null;
+  if (value.deliveryStateCode !== undefined && typeof value.deliveryStateCode !== 'string') return null;
+  if (value.orderType !== undefined && !ORDER_TYPES.has(value.orderType as CheckoutOrderType)) return null;
+  if (value.deliveryVia !== undefined && !DELIVERY_VIAS.has(value.deliveryVia as CheckoutDeliveryVia)) return null;
+  if (
+    hasInvalidOptionalNonEmptyString(value.shiftId)
+    || hasInvalidOptionalNonEmptyString(value.resumingOrderId)
+  ) return null;
+  const pendingCartPointsCustomerPhone = nonEmptyString(value.pendingCartPointsCustomerPhone);
+  if (
+    pendingCartPointsMinor
+    && (
+      !pendingCartPointsCustomerPhone
+      || pendingCartPointsCustomerPhone.trim() !== customerPhone.trim()
+    )
+  ) return null;
   const normalized: PosRetryDraft = {
     version: 2,
     shiftId: nonEmptyString(value.shiftId),
@@ -369,14 +504,29 @@ export function normalizePosRetryDraft(value: unknown): PosRetryDraft | null {
     deliveryVia: normalizeDeliveryVia(value.deliveryVia),
     deliveryStateCode: typeof value.deliveryStateCode === 'string' ? value.deliveryStateCode : '32',
     customerName: typeof value.customerName === 'string' ? value.customerName : '',
-    customerPhone: typeof value.customerPhone === 'string' ? value.customerPhone : '',
+    customerPhone,
     // Absent on every draft written before this field existed, which restores
     // as "nothing pending" — the same result those drafts produced before the
     // upgrade, so no version bump is needed to read them safely.
     ...(pendingCartDiscountMinor ? { pendingCartDiscountMinor } : {}),
     ...(pendingCartPointsMinor ? { pendingCartPointsMinor } : {}),
+    ...(pendingCartPointsMinor && pendingCartPointsCustomerPhone
+      ? { pendingCartPointsCustomerPhone }
+      : {}),
   };
-  if (value.version === 2) normalized.retry = normalizeCheckoutRetry(value.retry);
+  if (value.version === 2 && value.retry !== undefined) {
+    const retry = normalizeCheckoutRetry(value.retry);
+    if (!retry) return null;
+    if (
+      retry.phase !== 'preparing_order'
+      && (pendingCartDiscountMinor || pendingCartPointsMinor)
+    ) return null;
+    if (
+      (retry.cartDiscountExpectedVersion !== undefined && !pendingCartDiscountMinor)
+      || (retry.cartPointsExpectedVersion !== undefined && !pendingCartPointsMinor)
+    ) return null;
+    normalized.retry = retry;
+  }
   return normalized;
 }
 
@@ -408,6 +558,141 @@ export function applyCanonicalCheckoutBalance(
     orderPointsRedeemedMinor: order.points_redeemed_minor ?? 0,
     freeGamingMinutesApplied: order.free_gaming_minutes_applied ?? 0,
     freeHookahCountApplied: order.free_hookah_count_applied ?? 0,
+  };
+}
+
+/**
+ * Detect the committed result after a cart-stage adjustment response was lost.
+ * The direct order starts with no manual adjustment, so an exact server value
+ * proves the stable operation already committed and must not be replayed with
+ * a newer optimistic-lock version.
+ */
+export function isCartStageDiscountAlreadyApplied(
+  manualDiscountMinor: number | undefined,
+  pendingDiscountMinor: number,
+): boolean {
+  return pendingDiscountMinor > 0 && manualDiscountMinor === pendingDiscountMinor;
+}
+
+export function isCartStagePointsAlreadyApplied(
+  pointsRedeemedMinor: number | undefined,
+  pendingPointsMinor: number,
+): boolean {
+  return pendingPointsMinor > 0 && pointsRedeemedMinor === pendingPointsMinor;
+}
+
+export function hasUnappliedCartStageBenefit(
+  order: { manual_discount_minor?: number; points_redeemed_minor?: number },
+  pendingDiscountMinor: number,
+  pendingPointsMinor: number,
+): boolean {
+  return (
+    pendingDiscountMinor > 0
+    && !isCartStageDiscountAlreadyApplied(order.manual_discount_minor, pendingDiscountMinor)
+  ) || (
+    pendingPointsMinor > 0
+    && !isCartStagePointsAlreadyApplied(order.points_redeemed_minor, pendingPointsMinor)
+  );
+}
+
+export interface ReconciledCartStageBenefits {
+  retry: PosCheckoutRetry;
+  pendingDiscountMinor: number;
+  pendingPointsMinor: number;
+  pendingPointsCustomerPhone?: string;
+  hasUnappliedBenefit: boolean;
+  changed: boolean;
+}
+
+export type CartStageBenefitKind = 'discount' | 'points';
+
+/**
+ * Retire one cart-stage instruction immediately after its server response is
+ * known to have committed. Callers persist this result before their next
+ * network await so a later failure cannot resurrect the completed mutation.
+ */
+export function retireAppliedCartStageBenefit(
+  retry: PosCheckoutRetry,
+  kind: CartStageBenefitKind,
+  pendingDiscountMinor: number,
+  pendingPointsMinor: number,
+  pendingPointsCustomerPhone?: string,
+): ReconciledCartStageBenefits {
+  const remainingDiscountMinor = kind === 'discount' ? 0 : pendingDiscountMinor;
+  const remainingPointsMinor = kind === 'points' ? 0 : pendingPointsMinor;
+  const reconciledRetry: PosCheckoutRetry = kind === 'discount'
+    ? { ...retry, cartDiscountExpectedVersion: undefined }
+    : { ...retry, cartPointsExpectedVersion: undefined };
+  return {
+    retry: reconciledRetry,
+    pendingDiscountMinor: remainingDiscountMinor,
+    pendingPointsMinor: remainingPointsMinor,
+    ...(remainingPointsMinor > 0 && pendingPointsCustomerPhone
+      ? { pendingPointsCustomerPhone }
+      : {}),
+    hasUnappliedBenefit: remainingDiscountMinor > 0 || remainingPointsMinor > 0,
+    changed: true,
+  };
+}
+
+/**
+ * Reconcile a preparing journal after a discount/points response was lost.
+ *
+ * A matching value on the canonical order is proof that the stable mutation
+ * committed.  Remove both its frozen optimistic version and its cart-stage
+ * instruction before the order is claimed for payment.  Keeping either field
+ * would make the resulting awaiting-payment draft invalid on the next reload,
+ * which is exactly when recovery is most important.
+ */
+export function reconcileCartStageBenefitsAfterReload(
+  retry: PosCheckoutRetry,
+  order: { manual_discount_minor?: number; points_redeemed_minor?: number },
+  pendingDiscountMinor: number,
+  pendingPointsMinor: number,
+  pendingPointsCustomerPhone?: string,
+): ReconciledCartStageBenefits {
+  if (retry.phase !== 'preparing_order') {
+    return {
+      retry,
+      pendingDiscountMinor,
+      pendingPointsMinor,
+      ...(pendingPointsMinor > 0 && pendingPointsCustomerPhone
+        ? { pendingPointsCustomerPhone }
+        : {}),
+      hasUnappliedBenefit: false,
+      changed: false,
+    };
+  }
+
+  const discountSettled = isCartStageDiscountAlreadyApplied(
+    order.manual_discount_minor,
+    pendingDiscountMinor,
+  );
+  const pointsSettled = isCartStagePointsAlreadyApplied(
+    order.points_redeemed_minor,
+    pendingPointsMinor,
+  );
+  const remainingDiscountMinor = discountSettled ? 0 : pendingDiscountMinor;
+  const remainingPointsMinor = pointsSettled ? 0 : pendingPointsMinor;
+  const reconciledRetry: PosCheckoutRetry = {
+    ...retry,
+    ...(discountSettled ? { cartDiscountExpectedVersion: undefined } : {}),
+    ...(pointsSettled ? { cartPointsExpectedVersion: undefined } : {}),
+  };
+
+  return {
+    retry: reconciledRetry,
+    pendingDiscountMinor: remainingDiscountMinor,
+    pendingPointsMinor: remainingPointsMinor,
+    ...(remainingPointsMinor > 0 && pendingPointsCustomerPhone
+      ? { pendingPointsCustomerPhone }
+      : {}),
+    hasUnappliedBenefit: hasUnappliedCartStageBenefit(
+      order,
+      remainingDiscountMinor,
+      remainingPointsMinor,
+    ),
+    changed: discountSettled || pointsSettled,
   };
 }
 

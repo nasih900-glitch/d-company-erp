@@ -32,6 +32,8 @@ export interface Me {
   roles: string[];
   protected_access: boolean;
   audit_access: boolean;
+  /** Dedicated server-authoritative grant for Android release controls. */
+  release_control_access: boolean;
   company_id: string;
   branch_id: string | null;
   accessible_modules: string[];

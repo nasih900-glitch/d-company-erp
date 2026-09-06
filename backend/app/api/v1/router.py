@@ -9,6 +9,9 @@ from app.api.v1.admin.router import router as admin_router
 from app.api.v1.analytics.router import router as analytics_router
 from app.api.v1.auth.router import router as auth_router
 from app.api.v1.bug_reports.router import router as bug_reports_router
+from app.api.v1.client_diagnostics.router import router as client_diagnostics_router
+from app.api.v1.client_installations.router import router as client_installations_router
+from app.api.v1.client_updates.router import router as client_updates_router
 from app.api.v1.customers.router import router as customers_router
 from app.api.v1.events.router import router as events_router
 from app.api.v1.finance.router import router as finance_router
@@ -21,6 +24,7 @@ from app.api.v1.menu.router import router as menu_router
 from app.api.v1.ocr.router import router as ocr_router
 from app.api.v1.pos.router import router as pos_router
 from app.api.v1.public.router import router as public_router
+from app.api.v1.remote_assistance.router import router as remote_assistance_router
 from app.api.v1.reports.router import router as reports_router
 from app.api.v1.settings.router import router as settings_router
 from app.api.v1.staff.router import router as staff_router
@@ -29,7 +33,22 @@ from app.api.v1.ws.router import router as ws_router
 
 api_router = APIRouter()
 api_router.include_router(auth_router, prefix="/auth", tags=["auth"])
+api_router.include_router(
+    client_installations_router,
+    prefix="/client-installations",
+    tags=["client-installations"],
+)
+api_router.include_router(
+    client_updates_router,
+    prefix="/client-updates",
+    tags=["client-updates"],
+)
 api_router.include_router(bug_reports_router, prefix="/bug-reports", tags=["bug-reports"])
+api_router.include_router(
+    client_diagnostics_router,
+    prefix="/client-diagnostics",
+    tags=["client-diagnostics"],
+)
 api_router.include_router(pos_router, prefix="/pos", tags=["pos"])
 api_router.include_router(tables_router, prefix="/tables", tags=["tables"])
 api_router.include_router(menu_router, prefix="/menu", tags=["menu"])
@@ -41,6 +60,11 @@ api_router.include_router(ocr_router, prefix="/ocr", tags=["ocr"])
 api_router.include_router(staff_router, prefix="/staff", tags=["staff"])
 api_router.include_router(analytics_router, prefix="/analytics", tags=["analytics"])
 api_router.include_router(reports_router, prefix="/reports", tags=["reports"])
+api_router.include_router(
+    remote_assistance_router,
+    prefix="/remote-assistance",
+    tags=["remote-assistance"],
+)
 api_router.include_router(admin_router, prefix="/admin", tags=["admin"])
 api_router.include_router(settings_router, prefix="/settings", tags=["settings"])
 api_router.include_router(customers_router, prefix="/customers", tags=["customers"])

@@ -1,0 +1,12 @@
+# Exact top-level tools used by CI and the protected release workflow.
+# Regenerate the hash lock with Python 3.13 and pip-tools 7.5.1.
+-r requirements.lock
+mypy==1.18.2
+# pip-audit -> pip-api imports pip at runtime. Pinning pip explicitly keeps a
+# clean hash-verified CI environment from depending on the runner's bootstrap.
+pip==26.2.1
+pip-audit==2.10.1
+pytest==9.1.1
+pytest-asyncio==1.4.0
+pytest-cov==7.1.0
+ruff==0.13.3

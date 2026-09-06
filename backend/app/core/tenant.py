@@ -7,15 +7,16 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import Depends, Header, Request
-from sqlalchemy import select
+from sqlalchemy import exists, select
 
 from app.core.client_ip import audit_user_agent, trusted_client_ip
 from app.core.db import SessionDep
 from app.core.errors import AuthError, TenantViolation
 from app.core.roles import has_full_access, has_protected_owner_access, public_roles
 from app.core.security import decode_token
-from app.models import Branch, Terminal, User
+from app.models import AuthRefreshSession, Branch, Terminal, User
 from app.services.audit.recorder import set_actor
+from app.services.auth.refresh_sessions import access_family_id
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,14 +80,24 @@ async def get_tenant_context(
     audit_access = bool(payload.get("audit_access")) or has_protected_owner_access(raw_roles)
     roles = tuple(public_roles(raw_roles))
 
-    user = (
-        await session.execute(
-            select(User).where(
-                User.id == user_id,
-                User.company_id == company_id,
+    family_id = access_family_id(payload)
+    user_query = select(User).where(
+        User.id == user_id,
+        User.company_id == company_id,
+    )
+    if family_id is not None:
+        # Fold family revocation into the existing user lookup so immediate
+        # logout/replay enforcement does not add a second query to every
+        # authenticated request.
+        user_query = user_query.where(
+            exists().where(
+                AuthRefreshSession.company_id == company_id,
+                AuthRefreshSession.user_id == user_id,
+                AuthRefreshSession.family_id == family_id,
+                AuthRefreshSession.revoked_at.is_(None),
             )
         )
-    ).scalar_one_or_none()
+    user = (await session.execute(user_query)).scalar_one_or_none()
     if not user or user.deleted_at or user.status != "active":
         raise AuthError("user not found")
     if auth_version != user.auth_version:

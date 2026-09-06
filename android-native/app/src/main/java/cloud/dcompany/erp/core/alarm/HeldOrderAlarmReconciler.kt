@@ -5,8 +5,10 @@ import cloud.dcompany.erp.DCompanyApp
 import cloud.dcompany.erp.core.db.HeldOrderCacheEntity
 import java.time.Instant
 import java.time.OffsetDateTime
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 internal const val HELD_ORDER_ALARM_AGE_MILLIS = 15L * 60L * 1_000L
 
@@ -93,12 +95,14 @@ object HeldOrderAlarmReconciler {
             ?: emptyList()
     }
 
-    suspend fun reconcile(context: Context) = mutex.withLock {
-        val appContext = context.applicationContext
-        OperationalAlarmRegistry.reconcile(
-            context = appContext,
-            kind = OperationalAlarmKind.HELD_ORDER,
-            desired = currentAlarms(appContext),
-        )
+    suspend fun reconcile(context: Context): Boolean = mutex.withLock {
+        withContext(Dispatchers.IO) {
+            val appContext = context.applicationContext
+            OperationalAlarmRegistry.reconcile(
+                context = appContext,
+                kind = OperationalAlarmKind.HELD_ORDER,
+                desired = currentAlarms(appContext),
+            )
+        }
     }
 }

@@ -70,7 +70,13 @@ def issue_access_token(
     return jwt.encode(payload, _signing_key(), algorithm=s.jwt_algorithm)
 
 
-def issue_refresh_token(*, user_id: UUID, jti: str, auth_version: int = 0) -> str:
+def issue_refresh_token(
+    *,
+    user_id: UUID,
+    jti: str,
+    auth_version: int = 0,
+    family_id: UUID | str | None = None,
+) -> str:
     s = get_settings()
     now = datetime.now(timezone.utc)
     payload = {
@@ -81,6 +87,8 @@ def issue_refresh_token(*, user_id: UUID, jti: str, auth_version: int = 0) -> st
         "iat": now,
         "exp": now + timedelta(days=s.refresh_token_days),
     }
+    if family_id is not None:
+        payload["family_id"] = str(family_id)
     return jwt.encode(payload, _signing_key(), algorithm=s.jwt_algorithm)
 
 

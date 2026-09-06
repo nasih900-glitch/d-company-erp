@@ -9,8 +9,8 @@ WebView.
 | Field | Value |
 | --- | --- |
 | Package / application ID | `cloud.dcompany.erp` |
-| Version name | `3.1.2` |
-| Version code | `13` |
+| Version name | `3.1.14` |
+| Version code | `25` |
 | Minimum compatible client code | `8` |
 | Minimum Android version | Android 8 (`minSdk 26`) |
 | Target Android version | Android 15 (`targetSdk 35`) |
@@ -23,29 +23,46 @@ build.
 
 ## Release status
 
-Version `3.1.2` (`13`) is the signed manual partner baseline for this rollout.
-It advances Room from 36 through 40 to protect the employee-owned Support
-outbox, immutable offline Gaming item actions, and the canonical receipt-history
-cache. It still requires exactly one server-confirmed Hybrid Gaming + POS
-workspace for the active shop. The signed code-`12` to code-`13` in-place
-upgrade and API-35 evidence preserve the supported upgrade path, but they do
-not replace the full authenticated workflow or physical Redmi Pad 2 acceptance.
-Nothing from Android release preparation deploys the backend or web ERP. Before
-the APK is manually handed to the partner, the coordinated production
-deployment must migrate the server database through Alembic revision `0057`
-and pass the production smoke test.
+Version `3.1.14` (`25`) is the current unsigned recovery, finance, and
+server-delivery candidate following the signed `3.1.10` (`21`) predecessor.
+It includes Code 22's owner-approved Standard, Premium, Simdrive and multiplayer
+tariff, exact extension billing, held-bill discounts, session recovery and all
+earlier connectivity, privacy-preserving diagnostics, offline outbox,
+authentication and remote-assistance contracts. It removes opener identity as
+an extra shift-close restriction: any authenticated employee with
+`pos.shift.close` on the originating Android installation may close the shared
+shift, while immutable history retains both opener and closer and all unpaid or
+unsynchronised-work blockers remain enforced. A reinstall, different device, or
+browser must not silently assume ownership of an Android-origin shift; the
+protected audit owner instead has an explicit reasoned and audited web recovery
+flow after the original installation is quarantined. It still requires exactly
+one server-confirmed Hybrid Gaming + POS workspace for the active shop. A green
+local build does not prove authenticated workflows on a physical Redmi Pad 2
+or production deployment: those remain explicit release gates.
 
 Android client code `8` remains the minimum-compatible floor. Preserve the
-signed `3.1.1` (`12`) predecessor and the signed `3.1.2` (`13`) baseline as
-immutable artifacts. Code `13` must not be hosted, published, or advertised as
-a server update in this release; production retains the code-`8` latest-version
-defaults and blank direct-update metadata. The first server-driven update will
-instead be a newly signed `3.1.3` (`14`) immutable APK with a verified HTTPS
-URL, SHA-256, byte size, package, version, and expected signer. The server may
-advertise that future artifact only after its same-lineage upgrade and release
-gates pass. Android will still require the employee to approve installation.
-Do not raise the minimum to `14` until every active tablet has installed and
-accepted that future build.
+signed `3.1.1` (`12`) and `3.1.2` (`13`) predecessors as immutable artifacts.
+Code `14` is installed manually and must never be registered or advertised as a
+server update. Codes `16` and `17` remain immutable upgrade history. Code `18`
+has no authorised APK and its failed tag must not be reused. Code `19` also has
+no authorised APK after a hosted-runner memory failure. Code `20` also has no
+authorised APK after its isolated signer rejected an unrooted SDK-tool lookup.
+Code `21` remains immutable signed predecessor history. Code `22` was superseded
+before signing and must not be approved or activated. Code `23` was also
+superseded before signing after the deeper production audit; its immutable
+tag and evidence remain historical. Code `24` failed before signing and
+remains immutable history. Code `25` is the separately gated server-delivery
+candidate; source preparation alone does not authorise hosting, registering,
+staging, advertising, or activating it. Rollout requires a separately reviewed
+immutable APK,
+verified URL, SHA-256, byte size, package, version, expected signer, and
+same-lineage upgrade proof. Android will still require the employee to approve
+installation. Do not raise the compatibility minimum merely because a newer
+candidate exists.
+
+See [`CODE25_RELEASE_CANDIDATE.md`](../docs/CODE25_RELEASE_CANDIDATE.md) for the
+current evidence boundary. The Code 24 and Code 23 briefs remain historical
+records of inherited audit, tariff, and shared-shift work.
 
 Do not give a build to café staff until all automated gates are green, a signed
 artifact has been verified, and the staff workflow in
@@ -64,8 +81,9 @@ The native app now supports the operational day rather than POS browsing only:
   protected-owner step-up, and automatic one-shop workspace selection (the
   backend still enforces its branch/terminal scope without exposing unnecessary
   terminal controls when only one workspace is active);
-- shift open and close, opening float, staff opener identity, cash-denomination
-  counting, collection/refund breakdown, variance, and shift history;
+- shift open and permission-based cross-staff close, opening float, durable
+  opener/closer identity, cash-denomination counting, collection/refund
+  breakdown, variance, and shift history;
 - direct POS sales, quantities, authoritative checkout totals, cash/UPI/card,
   cash tendered/change, receipts, held-order settlement, and retry protection;
 - table rounds with quantities and special requests, release to KDS, required
@@ -137,14 +155,14 @@ Use JDK 17 and the checked-in Gradle wrapper:
 cd android-native
 
 ./gradlew \
-  testDebugUnitTest \
-  compileDebugKotlin \
-  compileDebugAndroidTestKotlin \
-  lintDebug \
-  assembleDebug
+  :app:testDebugUnitTest \
+  :app:compileDebugKotlin \
+  :app:compileDebugAndroidTestKotlin \
+  :app:lintDebug \
+  :app:assembleDebug
 
 # Requires a running Android emulator or connected test device.
-./gradlew connectedDebugAndroidTest
+./gradlew :app:connectedDebugAndroidTest
 ```
 
 For an isolated backend on the host machine, build the emulator APK with:
@@ -152,7 +170,7 @@ For an isolated backend on the host machine, build the emulator APK with:
 ```bash
 ./gradlew \
   -Pdcompany.debugApiBaseUrl=http://10.0.2.2:8788/api/v1/ \
-  assembleDebug
+  :app:assembleDebug
 ```
 
 That property is for test builds only. Never distribute a debug APK or use a
@@ -167,7 +185,7 @@ updated with that same signing lineage. The archived Capacitor wrapper uses a
 different application ID and is not an upgrade source or release target.
 
 `keystore.properties` and the keystore are gitignored. Keep them outside source
-control and back them up securely. A local `assembleRelease` without the
+control and back them up securely. A local `:app:assembleRelease` without the
 properties can produce an unsigned artifact; it is not distributable. The
 repository release workflow is the supported path because it runs release
 tests, lint, emulator instrumentation and signature verification before

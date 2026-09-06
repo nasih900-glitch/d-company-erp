@@ -507,7 +507,7 @@ export default function BugReportsScreen() {
             />
             <input
               id="bug-report-search"
-              className="input pl-10"
+              className="input !pl-10"
               value={draftFilters.q}
               onChange={(event) => setDraftFilters((current) => ({
                 ...current,

@@ -1,7 +1,6 @@
 package cloud.dcompany.erp.ui
 
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -36,6 +35,9 @@ import androidx.compose.material.icons.filled.AttachMoney
 import androidx.compose.material.icons.filled.CardMembership
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Celebration
+import androidx.compose.material.icons.filled.CloudDone
+import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Inventory2
@@ -50,6 +52,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material.icons.filled.Storefront
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.TableRestaurant
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
@@ -75,27 +78,33 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.DialogProperties
 import cloud.dcompany.erp.BuildConfig
-import cloud.dcompany.erp.R
 import cloud.dcompany.erp.core.sync.OutboxWorkStatus
 import cloud.dcompany.erp.core.sync.outboxWorkVisibleLabel
-import cloud.dcompany.erp.ui.components.SyncAvailabilityBanner
 import cloud.dcompany.erp.ui.components.SyncAvailabilityProblem
+import cloud.dcompany.erp.ui.components.DCompanyBrandMark
 import cloud.dcompany.erp.ui.components.fieldColors
+import cloud.dcompany.erp.ui.components.syncAvailabilityCopy
+import cloud.dcompany.erp.ui.components.syncAvailabilityDialogTitle
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.theme.Spacing
+import cloud.dcompany.erp.ui.remote.RemoteAssistanceActiveBanner
+import cloud.dcompany.erp.ui.remote.RemoteAssistanceRequestWaitingBanner
 
 /** Permission-filtered destinations. The shell never manufactures routes that
  * the authenticated profile cannot access. */
@@ -104,7 +113,7 @@ enum class Destination(
     val description: String,
     val icon: ImageVector,
 ) {
-    Dashboard("Dashboard", "See today's Gaming Centre overview", Icons.Filled.Analytics),
+    Dashboard("Dashboard", "See today's operating overview", Icons.Filled.Analytics),
     Pos("POS", "Take orders and payments", Icons.Filled.PointOfSale),
     Gaming("Gaming", "Manage stations and sessions", Icons.Filled.SportsEsports),
     Tables("Tables", "Open and manage table orders", Icons.Filled.TableRestaurant),
@@ -143,10 +152,17 @@ fun WorkspaceScaffold(
     outboxWorkStatus: OutboxWorkStatus,
     syncing: Boolean,
     pendingSupportCount: Int = 0,
+    remoteSupportRequestWaiting: Boolean = false,
+    remoteSupportActive: Boolean = false,
+    remoteSupportOnline: Boolean = true,
+    remoteSupportPrivacyProtected: Boolean = true,
+    remoteSupportLastCommandLabel: String? = null,
     canChangeTill: Boolean,
     onOpenSupport: () -> Unit,
     onChangeTill: () -> Unit,
     onSignOut: () -> Unit,
+    onReviewRemoteSupportRequest: () -> Unit = {},
+    onStopRemoteSupport: () -> Unit = {},
     onDestinationChanged: (Destination) -> Unit = {},
     content: @Composable (Destination, navigateTo: (Destination) -> Unit) -> Unit,
 ) {
@@ -198,7 +214,17 @@ fun WorkspaceScaffold(
                     onChangeTill = onChangeTill,
                     onSignOut = onSignOut,
                 )
-                SyncAvailabilityBanner(connectivityProblem)
+                RemoteAssistanceRequestWaitingBanner(
+                    visible = remoteSupportRequestWaiting && current != Destination.Help,
+                    onReview = onReviewRemoteSupportRequest,
+                )
+                RemoteAssistanceActiveBanner(
+                    active = remoteSupportActive,
+                    online = remoteSupportOnline,
+                    privacyProtected = remoteSupportPrivacyProtected,
+                    lastCommandLabel = remoteSupportLastCommandLabel,
+                    onStop = onStopRemoteSupport,
+                )
                 Box(Modifier.fillMaxSize()) {
                     // A full-screen crossfade renders both destination trees into
                     // overlapping layers. On the target 2560 x 1600 tablet that
@@ -254,13 +280,11 @@ private fun WorkspaceSidebar(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = if (expanded) Arrangement.Start else Arrangement.Center,
         ) {
-            Image(
-                // Adaptive launcher XML is not a supported Compose painter
-                // resource and crashes on API 26+. The foreground asset is
-                // the same real brand artwork, supplied as density-aware PNG.
-                painter = painterResource(R.mipmap.ic_launcher_foreground),
+            DCompanyBrandMark(
+                // The shared mark keeps the adaptive PNG path safe on API 26+
+                // while cropping its square source plate into a crisp circle.
+                size = if (expanded) 48.dp else 44.dp,
                 contentDescription = "D Company",
-                modifier = Modifier.size(if (expanded) 48.dp else 44.dp).clip(CircleShape),
             )
             if (expanded) {
                 Spacer(Modifier.width(Spacing.sm))
@@ -273,7 +297,7 @@ private fun WorkspaceSidebar(
                         maxLines = 1,
                     )
                     Text(
-                        "GAMING CENTRE",
+                        "OPERATIONS",
                         color = Brand.GoldMuted,
                         style = MaterialTheme.typography.labelSmall.copy(
                             fontSize = 10.sp,
@@ -496,7 +520,7 @@ private fun WorkspaceHeader(
             Row(
                 Modifier.widthIn(min = 280.dp, max = 380.dp).heightIn(min = 48.dp)
                     .clip(Radius.shapeMd).background(Brand.Surface)
-                    .border(1.dp, Brand.BorderSubtle, Radius.shapeMd)
+                    .border(1.dp, Brand.ControlBorder, Radius.shapeMd)
                     .clickable(onClick = onOpenCommand)
                     .semantics { role = Role.Button; contentDescription = "Find a module" }
                     .padding(horizontal = Spacing.md),
@@ -519,7 +543,11 @@ private fun WorkspaceHeader(
             )
         }
 
-        ConnectivityStatus(connectivityProblem, showDetail = !compact)
+        ConnectivityStatus(
+            problem = connectivityProblem,
+            expanded = !compact,
+            onOpenSupport = onOpenSupport,
+        )
         OutboxWorkStatusPill(
             status = outboxWorkStatus,
             syncing = syncing,
@@ -542,7 +570,7 @@ private fun WorkspaceHeader(
             Surface(
                 color = Brand.Surface,
                 shape = Radius.shapePill,
-                border = BorderStroke(1.dp, Brand.BorderSubtle),
+                border = BorderStroke(1.dp, Brand.ControlBorder),
                 modifier = Modifier.heightIn(min = 48.dp)
                     .clickable(onClick = onOpenSupport)
                     .semantics {
@@ -590,7 +618,7 @@ private fun WorkspaceHeader(
                 Surface(
                     color = Brand.Surface,
                     shape = Radius.shapeMd,
-                    border = BorderStroke(1.dp, Brand.BorderSubtle),
+                    border = BorderStroke(1.dp, Brand.ControlBorder),
                     modifier = Modifier.height(48.dp)
                         .clickable { accountMenuOpen = true }
                         .semantics {
@@ -662,7 +690,7 @@ private fun HeaderIconAction(
     Surface(
         color = Brand.Surface,
         shape = Radius.shapeMd,
-        border = BorderStroke(1.dp, Brand.BorderSubtle),
+        border = BorderStroke(1.dp, Brand.ControlBorder),
         modifier = Modifier.size(48.dp)
             .clickable(onClick = onClick)
             .semantics {
@@ -695,23 +723,111 @@ private fun HeaderIconAction(
 }
 
 @Composable
-private fun ConnectivityStatus(problem: SyncAvailabilityProblem, showDetail: Boolean) {
-    val (label, color) = when (problem) {
-        SyncAvailabilityProblem.NONE -> "Online" to Brand.Good
-        SyncAvailabilityProblem.NO_NETWORK -> "Offline" to Brand.Warning
-        SyncAvailabilityProblem.SERVER_UNREACHABLE -> "Server issue" to Brand.Danger
+private fun ConnectivityStatus(
+    problem: SyncAvailabilityProblem,
+    expanded: Boolean,
+    onOpenSupport: () -> Unit,
+) {
+    var detailsOpen by remember { mutableStateOf(false) }
+    val (label, color, icon) = when (problem) {
+        SyncAvailabilityProblem.NONE -> Triple("Online", Brand.Good, Icons.Filled.CloudDone)
+        SyncAvailabilityProblem.VERIFYING -> Triple("Checking", Brand.Information, Icons.Filled.Sync)
+        SyncAvailabilityProblem.NO_NETWORK -> Triple("No internet", Brand.Warning, Icons.Filled.CloudOff)
+        SyncAvailabilityProblem.SERVER_UNREACHABLE -> Triple("Server issue", Brand.Danger, Icons.Filled.Error)
+        SyncAvailabilityProblem.RECOVERING -> Triple("Restoring", Brand.Information, Icons.Filled.Sync)
     }
-    Row(
-        Modifier.height(40.dp).clip(Radius.shapePill).background(Brand.Surface)
-            .semantics { contentDescription = "Connection status: $label" }
-            .padding(horizontal = if (showDetail) Spacing.md else Spacing.sm),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+    val background = if (problem == SyncAvailabilityProblem.NONE) {
+        Brand.Surface
+    } else {
+        color.copy(alpha = 0.12f)
+    }
+    val border = if (problem == SyncAvailabilityProblem.NONE) {
+        Brand.BorderSubtle
+    } else {
+        color.copy(alpha = 0.42f)
+    }
+
+    Surface(
+        color = background,
+        shape = Radius.shapePill,
+        border = BorderStroke(1.dp, border),
+        modifier = Modifier
+            // Width is fixed for each breakpoint. A status transition changes
+            // neither the header geometry nor the active workflow below it.
+            .width(if (expanded) 136.dp else 124.dp)
+            .height(48.dp)
+            .clickable { detailsOpen = true }
+            .semantics {
+                role = Role.Button
+                liveRegion = LiveRegionMode.Polite
+                stateDescription = label
+                contentDescription = "Connection status: $label. Open connection details"
+            },
     ) {
-        Box(Modifier.size(8.dp).clip(CircleShape).background(color))
-        if (showDetail) {
-            Text(label, color = Brand.Foreground, style = MaterialTheme.typography.labelMedium)
+        Row(
+            Modifier.fillMaxSize().padding(horizontal = Spacing.md),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = color,
+                modifier = Modifier.size(19.dp),
+            )
+            Text(
+                label,
+                color = if (problem == SyncAvailabilityProblem.NONE) Brand.ForegroundMuted else color,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = if (problem == SyncAvailabilityProblem.NONE) FontWeight.Normal else FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
+    }
+
+    if (detailsOpen) {
+        val copy = syncAvailabilityCopy(problem)
+        val title = syncAvailabilityDialogTitle(problem)
+        val detail = copy?.detail
+            ?: "This tablet is connected to D Company ERP. Saved work can synchronise normally."
+        AlertDialog(
+            onDismissRequest = { detailsOpen = false },
+            containerColor = Brand.SurfaceOverlay,
+            shape = Radius.shapeLg,
+            icon = {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = color,
+                )
+            },
+            title = { Text(title, color = Brand.Foreground) },
+            text = {
+                Text(
+                    detail,
+                    color = Brand.ForegroundMuted,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            },
+            confirmButton = {
+                if (problem != SyncAvailabilityProblem.NONE) {
+                    TextButton(
+                        onClick = {
+                            detailsOpen = false
+                            onOpenSupport()
+                        },
+                    ) {
+                        Text("Report issue", color = Brand.Gold)
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { detailsOpen = false }) {
+                    Text("Close", color = Brand.ForegroundMuted)
+                }
+            },
+        )
     }
 }
 
@@ -721,38 +837,51 @@ private fun OutboxWorkStatusPill(
     syncing: Boolean,
     showDetail: Boolean,
 ) {
-    if (status.isClear && !syncing) return
-
-    val color = when {
-        status.actionRequiredCount > 0 -> Brand.Danger
-        syncing -> Brand.Information
-        status.retryableCount > 0 -> Brand.Warning
-        else -> Brand.Information
-    }
-    val visibleLabel = outboxWorkVisibleLabel(status, syncing, showDetail) ?: return
-    val accessibilityDetail = buildList {
-        if (status.actionRequiredCount > 0) add("${status.actionRequiredCount} need review")
-        if (status.retryableCount > 0) add("${status.retryableCount} waiting to sync")
-        if (status.savedDraftCount > 0) add("${status.savedDraftCount} saved drafts")
-        if (syncing) add("sync in progress")
-    }.joinToString(", ")
-
-    Row(
-        Modifier.height(40.dp).clip(Radius.shapePill)
-            .background(color.copy(alpha = 0.12f))
-            .border(1.dp, color.copy(alpha = 0.34f), Radius.shapePill)
-            .semantics { contentDescription = "Saved work status: $accessibilityDetail" }
-            .padding(horizontal = if (showDetail) Spacing.md else Spacing.sm),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+    val visibleLabel = outboxWorkVisibleLabel(status, syncing, showDetail)
+    Box(
+        modifier = Modifier
+            // Keep this slot present even when there is no saved work. A queue
+            // transition must update content, not move Help/account controls
+            // across the tablet header.
+            .width(if (showDetail) 192.dp else 64.dp)
+            .height(48.dp)
+            .testTag("outbox-work-status-slot"),
+        contentAlignment = Alignment.Center,
     ) {
-        Box(Modifier.size(8.dp).clip(CircleShape).background(color))
-        Text(
-            visibleLabel,
-            color = color,
-            style = MaterialTheme.typography.labelMedium,
-            maxLines = 1,
-        )
+        if (visibleLabel != null) {
+            val color = when {
+                status.actionRequiredCount > 0 -> Brand.Danger
+                syncing -> Brand.Information
+                status.retryableCount > 0 -> Brand.Warning
+                else -> Brand.Information
+            }
+            val accessibilityDetail = buildList {
+                if (status.actionRequiredCount > 0) add("${status.actionRequiredCount} need review")
+                if (status.retryableCount > 0) add("${status.retryableCount} waiting to sync")
+                if (status.savedDraftCount > 0) add("${status.savedDraftCount} saved drafts")
+                if (syncing) add("sync in progress")
+            }.joinToString(", ")
+
+            Row(
+                Modifier.fillMaxWidth().height(40.dp).clip(Radius.shapePill)
+                    .background(color.copy(alpha = 0.12f))
+                    .border(1.dp, color.copy(alpha = 0.34f), Radius.shapePill)
+                    .semantics { contentDescription = "Saved work status: $accessibilityDetail" }
+                    .padding(horizontal = if (showDetail) Spacing.md else Spacing.sm),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+            ) {
+                Box(Modifier.size(8.dp).clip(CircleShape).background(color))
+                Text(
+                    visibleLabel,
+                    color = color,
+                    style = MaterialTheme.typography.labelMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
     }
 }
 

@@ -21,6 +21,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from app.core.db import SessionDep
+from app.core.config import get_settings
 from app.core.errors import (
     BusinessRuleError,
     ConflictError,
@@ -33,6 +34,7 @@ from app.core.errors import (
     NotFoundError,
 )
 from app.core.idempotency import check_or_reserve, store_response
+from app.core.middleware import parse_client_version_code
 from app.core.permissions import requires
 from app.core.pricing_lock import require_pricing_unlock
 from app.core.tenant import TenantContext
@@ -66,6 +68,14 @@ from app.services.gaming.billing_mode import (
     has_partial_package_snapshot,
     is_package_billed,
     resolved_billing_mode,
+)
+from app.models.gaming import GamingPauseEvent
+from app.services.gaming.pause_clock import (
+    billable_whole_minutes,
+    completed_pause_ms,
+    duration_ms,
+    finish_pause,
+    timer_deadline,
 )
 from app.services.pos.order_validation import require_operational_order
 from app.services.pos.pricing import (
@@ -154,6 +164,10 @@ class SessionStart(BaseModel):
     # Extra controllers/players beyond the package's base mode — only
     # meaningful together with package_id.
     extra_controllers: int = Field(default=0, ge=0, le=8)
+    # Code 22+ clients can state the customer-facing player count directly.
+    # Older clients continue to send only extra_controllers; the route derives
+    # and cross-checks both representations against the selected package.
+    player_count: int | None = Field(default=None, ge=1, le=10)
 
     @field_validator("customer_name", "customer_phone")
     @classmethod
@@ -213,6 +227,20 @@ class SessionStop(BaseModel):
     ended_at: datetime | None = None
 
 
+class SessionPauseChange(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    reason: str = Field(min_length=3, max_length=500)
+    expected_pause_version: int = Field(ge=0)
+
+    @field_validator("reason")
+    @classmethod
+    def meaningful_reason(cls, value: str) -> str:
+        value = value.strip()
+        if len(value) < 3:
+            raise ValueError("Explain the pause in at least 3 characters")
+        return value
+
+
 class SessionRead(BaseModel):
     id: UUID
     station_id: UUID
@@ -223,6 +251,12 @@ class SessionRead(BaseModel):
     timer_minutes: int | None = None
     timer_ends_at: datetime | None = None
     paused_minutes: int = 0
+    paused_at: datetime | None = None
+    paused_duration_ms: int = 0
+    pause_version: int = 0
+    last_pause_transition_at: datetime | None = None
+    timer_alarm_version: int = 0
+    pause_available: bool = False
     billable_minutes: int | None
     amount_minor: int | None
     customer_name: str | None = None
@@ -239,6 +273,7 @@ class SessionRead(BaseModel):
     package_duration_minutes_snapshot: int | None = None
     package_variant_snapshot: str | None = None
     package_station_type_snapshot: str | None = None
+    package_pricing_tier_snapshot: Literal["standard", "premium"] | None = None
     extra_controllers: int = 0
 
     @model_validator(mode="before")
@@ -267,17 +302,28 @@ class SessionRead(BaseModel):
         # model's initial zero value when recovering after key expiry.
         if normalized.get("paused_minutes") is None:
             normalized = {**normalized, "paused_minutes": 0}
+        if normalized.get("paused_duration_ms") is None:
+            normalized = {
+                **normalized,
+                "paused_duration_ms": int(normalized.get("paused_minutes") or 0) * 60_000,
+            }
+        if normalized.get("pause_version") is None:
+            normalized = {**normalized, "pause_version": 0}
         return normalized
 
 
 class GamingPackageRead(BaseModel):
     id: UUID
+    code: str
     station_type: str
     variant: str
+    pricing_tier: Literal["standard", "premium"]
     kind: str
     name: str
     duration_minutes: int
     price_minor: int
+    included_players: int
+    max_players: int
 
 
 class SessionExtend(BaseModel):
@@ -397,6 +443,47 @@ class SessionBillingRepair(BaseModel):
         normalized = value.strip()
         if len(normalized) < 3:
             raise ValueError("repair reason must be at least 3 characters")
+        return normalized
+
+
+class LegacyPausedSessionResolution(BaseModel):
+    """Protected compare-and-swap evidence for an unknowable legacy pause.
+
+    Migration 0068 intentionally does not invent when an already-paused legacy
+    session entered its current pause.  These explicit snapshots make the owner
+    prove which unresolved row was reviewed before choosing the final financial
+    facts that can actually be supported by operational evidence.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    expected_status: Literal["paused"]
+    expected_paused_at: None = Field(...)
+    expected_pause_version: Literal[0]
+    expected_end_at: None = Field(...)
+    expected_order_id: None = Field(...)
+    expected_billable_minutes: None = Field(...)
+    expected_paused_duration_ms: int = Field(ge=0)
+    expected_amount_minor: int | None = Field(ge=0)
+    ended_at: datetime
+    billable_minutes: int = Field(ge=0, le=10_000_000)
+    amount_minor: int = Field(ge=0, le=9_999_999_999)
+    timing_evidence_reviewed: Literal[True]
+    reason: str = Field(min_length=3, max_length=500)
+
+    @field_validator("ended_at")
+    @classmethod
+    def require_ended_at_timezone(cls, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            raise ValueError("final session time must include a timezone")
+        return value.astimezone(timezone.utc)
+
+    @field_validator("reason")
+    @classmethod
+    def require_meaningful_reason(cls, value: str) -> str:
+        normalized = value.strip()
+        if len(normalized) < 3:
+            raise ValueError("resolution reason must be at least 3 characters")
         return normalized
 
 
@@ -574,9 +661,7 @@ def _require_complete_package_billing_snapshot(
 
 
 def session_read(gs: GamingSession) -> SessionRead:
-    timer_ends_at = (
-        gs.start_at + timedelta(minutes=gs.timer_minutes) if gs.timer_minutes else None
-    )
+    timer_ends_at = timer_deadline(gs)
     return SessionRead(
         id=gs.id,
         station_id=gs.station_id,
@@ -587,6 +672,12 @@ def session_read(gs: GamingSession) -> SessionRead:
         timer_minutes=gs.timer_minutes,
         timer_ends_at=timer_ends_at,
         paused_minutes=int(getattr(gs, "paused_minutes", 0) or 0),
+        paused_at=getattr(gs, "paused_at", None),
+        paused_duration_ms=completed_pause_ms(gs),
+        pause_version=int(getattr(gs, "pause_version", 0) or 0),
+        last_pause_transition_at=getattr(gs, "last_pause_transition_at", None),
+        timer_alarm_version=int(getattr(gs, "pause_version", 0) or 0),
+        pause_available=get_settings().gaming_pause_enabled,
         billable_minutes=gs.billable_minutes,
         amount_minor=gs.amount_minor,
         customer_name=gs.customer_name,
@@ -597,13 +688,10 @@ def session_read(gs: GamingSession) -> SessionRead:
         billing_mode=resolved_billing_mode(gs),
         package_id=gs.package_id,
         package_price_minor_snapshot=getattr(gs, "package_price_minor_snapshot", None),
-        package_duration_minutes_snapshot=getattr(
-            gs, "package_duration_minutes_snapshot", None
-        ),
+        package_duration_minutes_snapshot=getattr(gs, "package_duration_minutes_snapshot", None),
         package_variant_snapshot=getattr(gs, "package_variant_snapshot", None),
-        package_station_type_snapshot=getattr(
-            gs, "package_station_type_snapshot", None
-        ),
+        package_station_type_snapshot=getattr(gs, "package_station_type_snapshot", None),
+        package_pricing_tier_snapshot=getattr(gs, "package_pricing_tier_snapshot", None),
         extra_controllers=int(gs.extra_controllers or 0),
     )
 
@@ -690,6 +778,79 @@ def extra_controller_surcharge_minor(*, extra_controllers: int, duration_minutes
         EXTRA_CONTROLLER_MIN_CHARGE_MINOR, hours * EXTRA_CONTROLLER_PRICE_PER_HOUR_MINOR
     )
     return extra_controllers * per_controller
+
+
+def extra_controller_surcharge_delta_minor(
+    *,
+    extra_controllers: int,
+    duration_before_minutes: int,
+    duration_after_minutes: int,
+) -> int:
+    """Return only the incremental controller charge at a timer boundary.
+
+    The printed rule is ₹30 per controller per started hour with a ₹30 minimum
+    across the purchased session. Charging each extension independently would
+    apply that minimum repeatedly (30m + 30m incorrectly becoming ₹60).
+    """
+    if duration_before_minutes < 0 or duration_after_minutes < duration_before_minutes:
+        raise ValueError("controller surcharge duration must be monotonic and non-negative")
+    before = extra_controller_surcharge_minor(
+        extra_controllers=extra_controllers,
+        duration_minutes=duration_before_minutes,
+    )
+    after = extra_controller_surcharge_minor(
+        extra_controllers=extra_controllers,
+        duration_minutes=duration_after_minutes,
+    )
+    return after - before
+
+
+def resolve_package_extra_controllers(
+    *,
+    station_type: str,
+    variant: str,
+    included_players: int,
+    max_players: int,
+    extra_controllers: int,
+    player_count: int | None,
+) -> int:
+    """Validate player capacity and normalize Code 21/22 request shapes."""
+    if not 1 <= included_players <= max_players <= 10:
+        raise BusinessRuleError(
+            "The selected package has invalid player limits. Ask an owner to review it."
+        )
+
+    resolved_extra = extra_controllers
+    if player_count is not None:
+        if player_count < included_players:
+            raise BusinessRuleError(
+                f"This package includes {included_players} player(s); "
+                "the selected player count is too low."
+            )
+        derived_extra = player_count - included_players
+        if extra_controllers not in {0, derived_extra}:
+            raise BusinessRuleError(
+                "player_count and extra_controllers describe different party sizes"
+            )
+        resolved_extra = derived_extra
+
+    total_players = included_players + resolved_extra
+    if total_players > max_players:
+        raise BusinessRuleError(
+            f"This package supports at most {max_players} player(s)."
+        )
+
+    supports_extra_controllers = (
+        station_type == "ps5"
+        and variant == "dual"
+        and included_players == 2
+        and max_players > included_players
+    )
+    if resolved_extra > 0 and not supports_extra_controllers:
+        raise BusinessRuleError(
+            "Additional controllers are only available with an eligible Dual Mode PS5 package."
+        )
+    return resolved_extra
 
 
 def _current_gaming_branch_id(tenant: TenantContext) -> UUID:
@@ -1780,6 +1941,8 @@ async def _cancel_untouched_recovered_no_play(
         or current.customer_phone != original_snapshot.customer_phone
         or current.timer_minutes != original_snapshot.timer_minutes
         or current.paused_minutes != original_snapshot.paused_minutes
+        or current.paused_duration_ms != original_snapshot.paused_duration_ms
+        or current.pause_version != original_snapshot.pause_version
         or current.billable_minutes != original_snapshot.billable_minutes
         or current.amount_minor != original_snapshot.amount_minor
         or current.rate_per_hour_minor != original_snapshot.rate_per_hour_minor
@@ -1793,6 +1956,8 @@ async def _cancel_untouched_recovered_no_play(
         != original_snapshot.package_variant_snapshot
         or current.package_station_type_snapshot
         != original_snapshot.package_station_type_snapshot
+        or current.package_pricing_tier_snapshot
+        != original_snapshot.package_pricing_tier_snapshot
         or current.extra_controllers != original_snapshot.extra_controllers
     ):
         raise ConflictError(
@@ -2070,12 +2235,16 @@ async def list_packages(
     return [
         GamingPackageRead(
             id=p.id,
+            code=p.code,
             station_type=p.station_type,
             variant=p.variant,
+            pricing_tier=p.pricing_tier,
             kind=p.kind,
             name=p.name,
             duration_minutes=p.duration_minutes,
             price_minor=p.price_minor,
+            included_players=p.included_players,
+            max_players=p.max_players,
         )
         for p in rows
     ]
@@ -2083,6 +2252,7 @@ async def list_packages(
 
 @router.get("/sessions", response_model=list[SessionRead])
 async def list_sessions(
+    request: Request,
     session: SessionDep,
     status_filter: str | None = Query(default=None, alias="status"),
     unbilled_only: bool = Query(default=False),
@@ -2096,17 +2266,49 @@ async def list_sessions(
         )
     if status_filter:
         stmt = stmt.where(GamingSession.status == status_filter)
+    include_cancelled_for_code21 = False
     if unbilled_only:
-        stmt = stmt.where(
-            or_(
-                GamingSession.status.in_(("active", "paused")),
-                (
-                    (GamingSession.status == "ended")
-                    & GamingSession.order_id.is_(None)
-                ),
-            )
+        unbilled_filter = or_(
+            GamingSession.status.in_(("active", "paused")),
+            (
+                (GamingSession.status == "ended")
+                & GamingSession.order_id.is_(None)
+            ),
         )
-    stmt = stmt.order_by(GamingSession.start_at.desc()).limit(limit)
+        # Android Code 21 reconciles a local Stop overlay only
+        # when the authoritative terminal row appears in this board pull. If
+        # an owner cancelled that session from web, the ordinary unbilled
+        # filter hid the cancellation forever and the tablet kept retrying the
+        # already-resolved Stop. Narrow this compatibility projection to the
+        # known shipped Code 21 client; Code 22+ performs an exact lookup for
+        # missing local lifecycle IDs and web keeps the strict contract.
+        client_platform = request.headers.get("X-Client-Platform", "").strip().lower()
+        client_version_code = parse_client_version_code(
+            request.headers.get("X-Client-Version-Code")
+        )
+        include_cancelled_for_code21 = (
+            client_platform == "android" and client_version_code == 21
+        )
+        if include_cancelled_for_code21:
+            unbilled_filter = or_(
+                unbilled_filter,
+                GamingSession.status == "cancelled",
+            )
+        stmt = stmt.where(unbilled_filter)
+    if unbilled_only and include_cancelled_for_code21:
+        # Never let compatibility history consume the limit before active or
+        # ended-unbilled obligations. PostgreSQL orders False before True.
+        stmt = stmt.order_by(
+            (GamingSession.status == "cancelled").asc(),
+            func.coalesce(
+                GamingSession.cancelled_at,
+                GamingSession.end_at,
+                GamingSession.start_at,
+            ).desc(),
+        )
+    else:
+        stmt = stmt.order_by(GamingSession.start_at.desc())
+    stmt = stmt.limit(limit)
     rows = (await session.execute(stmt)).scalars().all()
     return [session_read(row) for row in rows]
 
@@ -2172,14 +2374,19 @@ async def start_session(
     # Serialise starts on the station before locking either terminal's shift so
     # distinct terminals cannot both pass the availability check and create
     # overlapping/unbilled sessions for one physical resource.
+    branch_id = _current_gaming_branch_id(tenant)
     station = (
         await session.execute(
             select(Station)
-            .where(Station.id == payload.station_id)
+            .where(
+                Station.id == payload.station_id,
+                Station.company_id == tenant.company_id,
+                Station.branch_id == branch_id,
+            )
             .with_for_update()
         )
     ).scalar_one_or_none()
-    if not station or station.company_id != tenant.company_id:
+    if not station:
         raise NotFoundError("station not found")
     if not station.is_active:
         raise BusinessRuleError("station is not active")
@@ -2192,6 +2399,26 @@ async def start_session(
             "sessions. Select the Gaming Area terminal."
         ),
     )
+    if payload.package_id is None and station.type in {"ps5", "simulator"}:
+        fixed_tariff_available = (
+            await session.execute(
+                select(GamingPackage.id)
+                .where(
+                    GamingPackage.company_id == tenant.company_id,
+                    GamingPackage.branch_id == station.branch_id,
+                    GamingPackage.station_type == station.type,
+                    GamingPackage.kind == "base",
+                    GamingPackage.is_active.is_(True),
+                    GamingPackage.deleted_at.is_(None),
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if fixed_tariff_available is not None:
+            raise BusinessRuleError(
+                "This station requires a fixed-price tariff package. Refresh Gaming and "
+                "choose Standard or Premium, player count, and duration; no session was started."
+            )
     if (
         payload.package_id is None
         and payload.expected_rate_per_hour_minor is None
@@ -2258,6 +2485,7 @@ async def start_session(
     package: GamingPackage | None = None
     timer_minutes = payload.timer_minutes
     locked_in_amount_minor: int | None = None
+    resolved_extra_controllers = 0
     if payload.package_id is not None:
         package = (
             await session.execute(
@@ -2289,12 +2517,20 @@ async def start_session(
             expected_variant=payload.expected_package_variant,
         )
         timer_minutes = package.duration_minutes
-        locked_in_amount_minor = package.price_minor + extra_controller_surcharge_minor(
+        resolved_extra_controllers = resolve_package_extra_controllers(
+            station_type=package.station_type,
+            variant=package.variant,
+            included_players=int(package.included_players),
+            max_players=int(package.max_players),
             extra_controllers=payload.extra_controllers,
+            player_count=payload.player_count,
+        )
+        locked_in_amount_minor = package.price_minor + extra_controller_surcharge_minor(
+            extra_controllers=resolved_extra_controllers,
             duration_minutes=package.duration_minutes,
         )
-    elif payload.extra_controllers:
-        raise BusinessRuleError("extra_controllers requires a package_id")
+    elif payload.extra_controllers or payload.player_count is not None:
+        raise BusinessRuleError("player_count and extra_controllers require a package_id")
 
     gs = GamingSession(
         id=uuid4(),
@@ -2312,7 +2548,8 @@ async def start_session(
         ),
         package_variant_snapshot=(package.variant if package else None),
         package_station_type_snapshot=(package.station_type if package else None),
-        extra_controllers=payload.extra_controllers,
+        package_pricing_tier_snapshot=(package.pricing_tier if package else None),
+        extra_controllers=resolved_extra_controllers,
         amount_minor=locked_in_amount_minor,
         status="active",
         customer_name=payload.customer_name,
@@ -2333,6 +2570,181 @@ async def start_session(
             body=response.model_dump(mode="json"),
         )
     return response
+
+
+async def _change_session_pause(
+    session_id: UUID,
+    payload: SessionPauseChange,
+    session,
+    request: Request,
+    tenant: TenantContext,
+    *,
+    action: Literal["pause", "resume"],
+) -> SessionRead:
+    if request.headers.get("X-Offline-Captured", "").strip().lower() in {"true", "1", "yes"}:
+        raise BusinessRuleError(
+            "Pause and resume need a live connection so every screen agrees on play time. "
+            "Reconnect, refresh Gaming, and try again. Nothing was changed."
+        )
+    key, request_hash = _require_idempotency(request)
+    cached = await check_or_reserve(
+        session,
+        key=key,
+        request_hash=request_hash,
+        user_id=tenant.user_id,
+        terminal_id=tenant.terminal_id,
+    )
+    if cached:
+        return SessionRead.model_validate(cached["body"])
+    receipt = (
+        await session.execute(
+            select(GamingPauseEvent).where(
+                GamingPauseEvent.company_id == tenant.company_id,
+                GamingPauseEvent.idempotency_key == key,
+            )
+        )
+    ).scalar_one_or_none()
+    if receipt is not None:
+        if (
+            receipt.request_hash != request_hash
+            or receipt.actor_user_id != tenant.user_id
+            or receipt.terminal_id != tenant.terminal_id
+            or receipt.gaming_session_id != session_id
+            or receipt.action != action
+        ):
+            raise ConflictError(
+                "This request identity already belongs to another pause action. Refresh Gaming."
+            )
+        result = SessionRead.model_validate(receipt.response)
+        await store_response(session, key=key, status_code=200, body=result.model_dump(mode="json"))
+        return result
+    if action == "pause" and not get_settings().gaming_pause_enabled:
+        raise BusinessRuleError(
+            "Pause is not enabled yet. Update the active tablets first, then ask "
+            "the owner to enable shared pause. Sessions can still be stopped and billed."
+        )
+    gs = (
+        await session.execute(
+            select(GamingSession)
+            .where(GamingSession.id == session_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
+    if gs is None or gs.company_id != tenant.company_id:
+        raise NotFoundError("session not found")
+    station = await session.get(Station, gs.station_id)
+    if station is None or station.company_id != tenant.company_id:
+        raise NotFoundError("station not found")
+    shift = (
+        await session.execute(select(Shift).where(Shift.id == gs.shift_id).with_for_update())
+    ).scalar_one_or_none()
+    require_open_operational_shift(
+        shift,
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        terminal_id=tenant.terminal_id,
+        resource_branch_id=station.branch_id,
+        resource_name="gaming station",
+        operation=f"{action} a gaming session",
+    )
+    # ``gaming.write`` plus the exact open branch/terminal shift is the
+    # authority for pause/resume.  The employee who opened the drawer is not
+    # necessarily the employee supervising Gaming, and no money changes hands
+    # at either transition.  The authenticated actor is still recorded in the
+    # immutable pause event and audit log below.
+    if payload.expected_pause_version != gs.pause_version:
+        raise ConflictError(
+            "This session's pause state changed on another screen. Refresh Gaming before trying again.",
+            details={
+                "issue": "pause_state_changed",
+                "pause_version": gs.pause_version,
+                "next_action": "Refresh Gaming and review the current session state.",
+            },
+        )
+    expected_status = "active" if action == "pause" else "paused"
+    if gs.status != expected_status:
+        raise ConflictError(f"Cannot {action} a session that is {gs.status}. Refresh Gaming.")
+    now = datetime.now(timezone.utc)
+    if now < gs.start_at or (gs.last_pause_transition_at and now < gs.last_pause_transition_at):
+        raise ConflictError(
+            "The server clock is earlier than this session's recorded action. Ask the owner to check System Health."
+        )
+    before = session_read(gs).model_dump(mode="json")
+    if action == "pause":
+        gs.paused_at = now
+        gs.status = "paused"
+        gs.pause_version += 1
+        gs.last_pause_transition_at = now
+    else:
+        if gs.paused_at is None:
+            raise BusinessRuleError(
+                "This older paused session has no recorded pause start time. "
+                "Its duration cannot be guessed. Ask the owner to review and stop it."
+            )
+        finish_pause(gs, now)
+        gs.status = "active"
+    await session.flush()
+    result = session_read(gs)
+    body = result.model_dump(mode="json")
+    session.add(
+        GamingPauseEvent(
+            id=uuid4(),
+            company_id=tenant.company_id,
+            gaming_session_id=gs.id,
+            actor_user_id=tenant.user_id,
+            terminal_id=tenant.terminal_id,
+            action=action,
+            reason=payload.reason,
+            occurred_at=now,
+            pause_version=gs.pause_version,
+            idempotency_key=key,
+            request_hash=request_hash,
+            response=body,
+        )
+    )
+    session.add(
+        AuditLog(
+            company_id=tenant.company_id,
+            actor_user_id=tenant.user_id,
+            terminal_id=tenant.terminal_id,
+            action=f"gaming.session.{action}",
+            entity_type="gaming_sessions",
+            entity_id=str(gs.id),
+            reason=payload.reason,
+            before=before,
+            after=body,
+        )
+    )
+    await session.flush()
+    await store_response(session, key=key, status_code=200, body=body)
+    return result
+
+
+@router.post("/sessions/{session_id}/pause", response_model=SessionRead)
+async def pause_session(
+    session_id: UUID,
+    payload: SessionPauseChange,
+    session: SessionDep,
+    request: Request,
+    tenant: TenantContext = Depends(requires("gaming.write")),
+) -> SessionRead:
+    return await _change_session_pause(
+        session_id, payload, session, request, tenant, action="pause"
+    )
+
+
+@router.post("/sessions/{session_id}/resume", response_model=SessionRead)
+async def resume_session(
+    session_id: UUID,
+    payload: SessionPauseChange,
+    session: SessionDep,
+    request: Request,
+    tenant: TenantContext = Depends(requires("gaming.write")),
+) -> SessionRead:
+    return await _change_session_pause(
+        session_id, payload, session, request, tenant, action="resume"
+    )
 
 
 @router.patch("/sessions/{session_id}/timer", response_model=SessionRead)
@@ -2433,11 +2845,7 @@ async def extend_session_timer(
             "Session timer changed on another device. Refresh Gaming before adding time."
         )
 
-    elapsed_minutes = _elapsed_billable_whole_minutes(
-        started_at=gs.start_at,
-        server_now=datetime.now(timezone.utc),
-        paused_minutes=gs.paused_minutes,
-    )
+    elapsed_minutes = billable_whole_minutes(gs, datetime.now(timezone.utc))
     timer_base = max(int(stored_timer or 0), elapsed_minutes)
     target_timer = timer_base + payload.additional_minutes
     if target_timer > 1440:
@@ -2822,6 +3230,15 @@ async def extend_session_with_package(
             message="The extension does not match the session's original package variant.",
         )
     if (
+        gs.package_pricing_tier_snapshot is not None
+        and extension.pricing_tier != gs.package_pricing_tier_snapshot
+    ):
+        raise _extension_not_applied(
+            gs,
+            reason_code="package_pricing_tier_incompatible",
+            message="The extension does not match the session's original pricing tier.",
+        )
+    if (
         int(extension.price_minor) != payload.expected_package_price_minor
         or int(extension.duration_minutes)
         != payload.expected_package_duration_minutes
@@ -2833,10 +3250,6 @@ async def extend_session_with_package(
             message="The selected extension package changed after it was reviewed.",
         )
 
-    extra_surcharge = extra_controller_surcharge_minor(
-        extra_controllers=gs.extra_controllers,
-        duration_minutes=extension.duration_minutes,
-    )
     timer_before = int(gs.timer_minutes or 0)
     timer_after = timer_before + int(extension.duration_minutes)
     if timer_after > 1440:
@@ -2845,6 +3258,11 @@ async def extend_session_with_package(
             reason_code="session_timer_limit",
             message="The session timer cannot exceed 1440 minutes.",
         )
+    extra_surcharge = extra_controller_surcharge_delta_minor(
+        extra_controllers=gs.extra_controllers,
+        duration_before_minutes=timer_before,
+        duration_after_minutes=timer_after,
+    )
     amount_before = int(gs.amount_minor)
     extension_total = int(extension.price_minor) + extra_surcharge
     amount_after = amount_before + extension_total
@@ -2914,9 +3332,7 @@ async def stop_session(
     if not station or station.company_id != tenant.company_id:
         raise NotFoundError("station not found")
     shift = (
-        await session.execute(
-            select(Shift).where(Shift.id == gs.shift_id).with_for_update()
-        )
+        await session.execute(select(Shift).where(Shift.id == gs.shift_id).with_for_update())
     ).scalar_one_or_none()
     shift = require_operational_shift_scope(
         shift,
@@ -2944,12 +3360,9 @@ async def stop_session(
         # then return the already-computed result.
         # The original shift may have been closed after the successful stop.
         if has_captured_end and (
-            gs.end_at is None
-            or abs((gs.end_at - captured_end).total_seconds()) > 1
+            gs.end_at is None or abs((gs.end_at - captured_end).total_seconds()) > 1
         ):
-            raise ConflictError(
-                "Session was already stopped at a different time. Refresh Gaming."
-            )
+            raise ConflictError("Session was already stopped at a different time. Refresh Gaming.")
         response = session_read(gs)
         if idempotency_key is not None:
             await store_response(
@@ -2968,6 +3381,20 @@ async def stop_session(
             "Shift is "
             f"{shift.status}. Open a shift for this terminal before stopping a gaming session."
         )
+    if gs.status == "paused" and getattr(gs, "paused_at", None) is None:
+        raise GamingBillingRepairRequiredError(
+            "This legacy paused session has no recorded pause start, so its play "
+            "duration and charge cannot be calculated safely. Nothing was stopped "
+            "or billed. If play never began, void it with a reason; otherwise ask "
+            "the protected owner to reconcile the session before billing.",
+            details={
+                "issue": "legacy_pause_time_unknown",
+                "next_action": (
+                    "If play never began, void the session with a reason. Otherwise "
+                    "ask the protected owner to reconcile its timing before billing."
+                ),
+            },
+        )
     package_billing = is_package_billed(gs)
     if package_billing:
         # A discriminator-only legacy package row can still stop safely because
@@ -2980,10 +3407,19 @@ async def stop_session(
                 "This package session is missing its locked billed amount. Nothing was "
                 "stopped. A protected owner must review and repair billing first."
             )
+    last_transition = getattr(gs, "last_pause_transition_at", None)
+    if last_transition is not None and captured_end < last_transition:
+        raise ConflictError(
+            "This stop was captured before a later pause or resume on another screen. "
+            "Your session is still saved. Refresh Gaming and review its current timing before stopping.",
+            details={
+                "issue": "stop_predates_pause_transition",
+                "next_action": "Refresh Gaming and review the current session before retrying Stop.",
+            },
+        )
     gs.end_at = captured_end
-    elapsed_seconds = max(0.0, (gs.end_at - gs.start_at).total_seconds())
-    elapsed_minutes = ceil(elapsed_seconds / 60) if elapsed_seconds > 0 else 0
-    gs.billable_minutes = max(0, elapsed_minutes - gs.paused_minutes)
+    finish_pause(gs, captured_end)
+    gs.billable_minutes = billable_whole_minutes(gs, captured_end)
     if not package_billing:
         # Open-ended session — bill by actual elapsed time, as before.
         gs.amount_minor = session_amount_minor(gs.billable_minutes, gs.rate_per_hour_minor)
@@ -3533,9 +3969,7 @@ async def cancel_session(
     if not station or station.company_id != tenant.company_id:
         raise NotFoundError("station not found")
     shift = (
-        await session.execute(
-            select(Shift).where(Shift.id == gs.shift_id).with_for_update()
-        )
+        await session.execute(select(Shift).where(Shift.id == gs.shift_id).with_for_update())
     ).scalar_one_or_none()
     shift = require_operational_shift_scope(
         shift,
@@ -3588,6 +4022,7 @@ async def cancel_session(
     )
 
     now = datetime.now(timezone.utc)
+    finish_pause(gs, now)
     gs.status = "cancelled"
     gs.end_at = gs.end_at or now
     gs.billable_minutes = 0
@@ -3597,6 +4032,350 @@ async def cancel_session(
     gs.cancel_reason = payload.reason
     await session.flush()
     return session_read(gs)
+
+
+@router.post("/sessions/{session_id}/resolve-legacy-pause", response_model=SessionRead)
+async def resolve_legacy_paused_session(
+    session_id: UUID,
+    payload: LegacyPausedSessionResolution,
+    session: SessionDep,
+    request: Request,
+    tenant: TenantContext = Depends(requires("admin.audit.read")),
+) -> SessionRead:
+    """End one pre-0068 paused row without fabricating its unknown pause start.
+
+    This is intentionally not a normal Stop operation.  The protected owner
+    supplies the reviewed final time, billable minutes, and amount; the server
+    only accepts a still-unresolved legacy shape and preserves the known legacy
+    pause duration unchanged.  The chosen facts and confirmation are retained
+    in an explicit append-only audit record.
+    """
+    if not tenant.audit_access:
+        raise ForbiddenError(
+            "Only the protected owner can resolve a legacy paused session."
+        )
+    if tenant.branch_id is None:
+        raise BusinessRuleError(
+            "Select the session's branch before resolving its legacy pause."
+        )
+
+    # Authenticate branch scope before consulting the generic replay cache.
+    # Otherwise the same owner and headerless idempotency key could replay a
+    # response after switching to another branch.
+    scoped_session_id = (
+        await session.execute(
+            select(GamingSession.id)
+            .join(Station, Station.id == GamingSession.station_id)
+            .where(
+                GamingSession.id == session_id,
+                GamingSession.company_id == tenant.company_id,
+                Station.company_id == tenant.company_id,
+                Station.branch_id == tenant.branch_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if scoped_session_id is None:
+        raise NotFoundError("session not found")
+
+    idempotency_key, request_hash = _require_idempotency(request)
+    existing_response = await check_or_reserve(
+        session,
+        key=idempotency_key,
+        request_hash=request_hash,
+        user_id=tenant.user_id,
+        terminal_id=tenant.terminal_id,
+    )
+    if existing_response:
+        return SessionRead.model_validate(existing_response["body"])
+
+    gs = (
+        await session.execute(
+            select(GamingSession)
+            .where(
+                GamingSession.id == session_id,
+                GamingSession.company_id == tenant.company_id,
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
+    if gs is None:
+        raise NotFoundError("session not found")
+    station = await session.get(Station, gs.station_id)
+    if (
+        station is None
+        or station.company_id != tenant.company_id
+        or station.branch_id != tenant.branch_id
+    ):
+        raise NotFoundError("session not found")
+
+    if gs.order_id is not None:
+        raise ConflictError(
+            "This session already has a POS order and cannot use legacy pause "
+            "resolution. Review the existing bill instead."
+        )
+    if gs.status != "paused":
+        raise ConflictError(
+            "This session is no longer an unresolved legacy pause. Refresh Gaming "
+            "and review its current state."
+        )
+    if gs.paused_at is not None:
+        raise ConflictError(
+            "This session has an authoritative pause start. Resume or stop it through "
+            "the normal Gaming controls."
+        )
+    if (
+        int(gs.pause_version or 0) != 0
+        or gs.last_pause_transition_at is not None
+        or gs.end_at is not None
+        or gs.billable_minutes is not None
+        or gs.cancelled_at is not None
+        or gs.cancelled_by is not None
+        or gs.cancel_reason is not None
+        or gs.stopped_by is not None
+    ):
+        raise GamingBillingRepairRequiredError(
+            "This paused session contains newer or inconsistent lifecycle evidence. "
+            "Nothing was changed; review its audit history before billing.",
+            details={
+                "issue": "legacy_pause_state_inconsistent",
+                "next_action": "Review this session's immutable audit history before recovery.",
+            },
+        )
+
+    paused_duration_ms = completed_pause_ms(gs)
+    if (
+        payload.expected_status != gs.status
+        or payload.expected_paused_at is not gs.paused_at
+        or payload.expected_pause_version != int(gs.pause_version or 0)
+        or payload.expected_end_at is not gs.end_at
+        or payload.expected_order_id is not gs.order_id
+        or payload.expected_billable_minutes is not gs.billable_minutes
+        or payload.expected_paused_duration_ms != paused_duration_ms
+        or payload.expected_amount_minor != gs.amount_minor
+    ):
+        raise ConflictError(
+            "This legacy session changed after it was reviewed. Refresh Gaming and "
+            "verify the timing and amount again."
+        )
+    if int(gs.paused_minutes or 0) != paused_duration_ms // 60_000:
+        raise GamingBillingRepairRequiredError(
+            "This session's legacy pause totals disagree. Nothing was changed; review "
+            "its audit history before billing.",
+            details={
+                "issue": "legacy_pause_duration_inconsistent",
+                "next_action": "Review the stored pause totals and source evidence before recovery.",
+            },
+        )
+    pause_event_exists = (
+        await session.execute(
+            select(GamingPauseEvent.id)
+            .where(
+                GamingPauseEvent.company_id == tenant.company_id,
+                GamingPauseEvent.gaming_session_id == gs.id,
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if pause_event_exists is not None:
+        raise GamingBillingRepairRequiredError(
+            "This session has authoritative pause events and is not eligible for legacy "
+            "pause resolution. Nothing was changed.",
+            details={
+                "issue": "authoritative_pause_history_present",
+                "next_action": "Review the pause event history before any financial recovery.",
+            },
+        )
+
+    ended_at = payload.ended_at.astimezone(timezone.utc)
+    started_at = gs.start_at.astimezone(timezone.utc)
+    server_now = datetime.now(timezone.utc)
+    if ended_at < started_at:
+        raise BusinessRuleError(
+            "Final session time cannot be before the session started. Nothing was changed."
+        )
+    if ended_at > server_now + timedelta(minutes=5):
+        raise BusinessRuleError(
+            "Final session time is ahead of the server. Correct the time and review "
+            "the evidence again; nothing was changed."
+        )
+    wall_duration_ms = duration_ms(ended_at - started_at)
+    if paused_duration_ms > wall_duration_ms:
+        raise GamingBillingRepairRequiredError(
+            "The known legacy pause duration exceeds the reviewed session window. "
+            "Nothing was changed; choose an end time supported by the audit evidence.",
+            details={
+                "issue": "legacy_pause_exceeds_session_window",
+                "next_action": "Review the start, end, and known pause durations before recovery.",
+            },
+        )
+    maximum_billable_minutes = (
+        wall_duration_ms - paused_duration_ms + 59_999
+    ) // 60_000
+    if payload.billable_minutes > maximum_billable_minutes:
+        raise BusinessRuleError(
+            "Billable minutes exceed the maximum possible play time in the reviewed "
+            "session window. Nothing was changed."
+        )
+
+    package_billing = is_package_billed(gs)
+    amount_basis: dict[str, object]
+    if package_billing and has_partial_package_snapshot(gs):
+        _require_complete_package_billing_snapshot(
+            gs, operation="resolved from a legacy pause"
+        )
+    if not package_billing:
+        calculated_amount = session_amount_minor(
+            payload.billable_minutes, int(gs.rate_per_hour_minor)
+        )
+        if payload.amount_minor != calculated_amount:
+            raise BusinessRuleError(
+                "Final amount does not match the server calculation for the reviewed "
+                "billable minutes and locked hourly rate. Nothing was changed."
+            )
+        amount_basis = {
+            "kind": "locked_hourly_rate",
+            "rate_per_hour_minor": int(gs.rate_per_hour_minor),
+        }
+    elif gs.amount_minor is not None:
+        if payload.amount_minor != int(gs.amount_minor):
+            raise ConflictError(
+                "This package session already has a locked amount. Use that amount; do not "
+                "replace its original tariff."
+            )
+        amount_basis = {
+            "kind": "existing_locked_package_total",
+            "locked_amount_minor": int(gs.amount_minor),
+        }
+    else:
+        # Missing package totals are not an invitation for free-entry repair.
+        # When all immutable package snapshots exist, reconstruct the one exact
+        # total from the base package, controller surcharge, and append-only
+        # paid-extension chain.  If any part of that chain is absent or
+        # contradictory, fail closed rather than turning an owner estimate into
+        # financial fact.
+        _require_complete_package_billing_snapshot(
+            gs, operation="resolved from a legacy pause"
+        )
+        base_duration_minutes = int(gs.package_duration_minutes_snapshot)
+        expected_timer_minutes = base_duration_minutes
+        expected_package_amount_minor = int(gs.package_price_minor_snapshot)
+        expected_package_amount_minor += extra_controller_surcharge_minor(
+            extra_controllers=int(gs.extra_controllers or 0),
+            duration_minutes=base_duration_minutes,
+        )
+        extension_rows = (
+            (
+                await session.execute(
+                    select(GamingSessionExtension)
+                    .where(
+                        GamingSessionExtension.company_id == tenant.company_id,
+                        GamingSessionExtension.gaming_session_id == gs.id,
+                    )
+                    .order_by(
+                        GamingSessionExtension.created_at,
+                        GamingSessionExtension.id,
+                    )
+                    .with_for_update()
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for extension_row in extension_rows:
+            if (
+                int(extension_row.timer_before_minutes) != expected_timer_minutes
+                or int(extension_row.amount_before_minor)
+                != expected_package_amount_minor
+            ):
+                raise GamingBillingRepairRequiredError(
+                    "This package session's immutable extension receipts do not form one "
+                    "continuous tariff chain. Nothing was changed; review its billing "
+                    "history before recovery.",
+                    details={
+                        "issue": "legacy_pause_package_extension_chain_inconsistent",
+                        "next_action": (
+                            "Review the base package and immutable extension receipts before "
+                            "recovering this session."
+                        ),
+                    },
+                )
+            expected_timer_minutes = int(extension_row.timer_after_minutes)
+            expected_package_amount_minor = int(extension_row.amount_after_minor)
+        if (
+            gs.timer_minutes is None
+            or int(gs.timer_minutes) != expected_timer_minutes
+        ):
+            raise GamingBillingRepairRequiredError(
+                "This package session's planned duration does not match its locked package "
+                "and extension receipts. Nothing was changed; review its billing history "
+                "before recovery.",
+                details={
+                    "issue": "legacy_pause_package_duration_inconsistent",
+                    "next_action": (
+                        "Review the planned duration and immutable extension receipts before "
+                        "recovering this session."
+                    ),
+                },
+            )
+        if payload.amount_minor != expected_package_amount_minor:
+            raise BusinessRuleError(
+                "Final amount does not match the locked base package, controller surcharge, "
+                "and paid-extension receipts. Use the server-calculated package total; "
+                "nothing was changed."
+            )
+        amount_basis = {
+            "kind": "derived_locked_package_ledger",
+            "base_package_price_minor": int(gs.package_price_minor_snapshot),
+            "base_duration_minutes": base_duration_minutes,
+            "extra_controllers": int(gs.extra_controllers or 0),
+            "extension_receipt_count": len(extension_rows),
+            "derived_amount_minor": expected_package_amount_minor,
+        }
+
+    before = session_read(gs).model_dump(mode="json")
+    gs.end_at = ended_at
+    gs.billable_minutes = payload.billable_minutes
+    gs.amount_minor = payload.amount_minor
+    gs.status = "ended"
+    gs.stopped_by = tenant.user_id
+    await session.flush()
+
+    response = session_read(gs)
+    body = response.model_dump(mode="json")
+    session.add(
+        AuditLog(
+            company_id=tenant.company_id,
+            actor_user_id=tenant.user_id,
+            terminal_id=tenant.terminal_id,
+            action="gaming_session_legacy_pause_resolution",
+            entity_type="GamingSession",
+            entity_id=str(gs.id),
+            reason=payload.reason,
+            before=before,
+            after={
+                **body,
+                "legacy_pause_resolution": {
+                    "timing_evidence_reviewed": payload.timing_evidence_reviewed,
+                    "known_paused_duration_ms": paused_duration_ms,
+                    "maximum_billable_minutes": maximum_billable_minutes,
+                    "selected_billable_minutes": payload.billable_minutes,
+                    "selected_amount_minor": payload.amount_minor,
+                    "selected_end_at": ended_at.isoformat(),
+                    "amount_basis": amount_basis,
+                    "reason": payload.reason,
+                },
+            },
+        )
+    )
+    await session.flush()
+    await store_response(
+        session,
+        key=idempotency_key,
+        status_code=status.HTTP_200_OK,
+        body=body,
+    )
+    return response
 
 
 @router.post("/sessions/{session_id}/repair-billing", response_model=SessionRead)

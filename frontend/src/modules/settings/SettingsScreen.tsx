@@ -7,11 +7,23 @@
  *   - Shop        one operational location and its internal workspace
  *   - Pricing     menu, gaming, events, memberships
  *   - Sheets      (existing Google Sheets integration wizard)
+ *   - Devices     explicitly authorised tablet health and recorded update offers
  */
-import { useEffect, useState } from 'react';
-import { User, Building2, Sheet, Store, Crown, IndianRupee, ShieldCheck } from 'lucide-react';
+import { lazy, Suspense, useEffect, useState } from 'react';
+import {
+  Building2,
+  Crown,
+  HeartPulse,
+  IndianRupee,
+  Sheet,
+  ShieldCheck,
+  Store,
+  TabletSmartphone,
+  User,
+} from 'lucide-react';
 
 import { useAuth } from '@/modules/auth/AuthContext';
+import { SkeletonCard } from '@/components/ui/Skeleton';
 import AccountTab from './tabs/AccountTab';
 import CompanyTab from './tabs/CompanyTab';
 import BranchesTab from './tabs/BranchesTab';
@@ -20,8 +32,21 @@ import MembershipsTab from './tabs/MembershipsTab';
 import PricingTab from './tabs/PricingTab';
 import AccessControlTab from './tabs/AccessControlTab';
 import { GAMING_CENTRE_FEATURES } from '@/lib/product-profile';
+import { hasSupportAccess } from '@/lib/admin-access';
 
-type Tab = 'account' | 'company' | 'branches' | 'pricing' | 'sheets' | 'memberships' | 'access';
+const DevicesUpdatesTab = lazy(() => import('./tabs/DevicesUpdatesTab'));
+const SystemHealthTab = lazy(() => import('./tabs/SystemHealthTab'));
+
+type Tab =
+  | 'account'
+  | 'company'
+  | 'branches'
+  | 'pricing'
+  | 'sheets'
+  | 'memberships'
+  | 'access'
+  | 'health'
+  | 'devices';
 
 export default function SettingsScreen() {
   const { me, demo } = useAuth();
@@ -29,6 +54,14 @@ export default function SettingsScreen() {
   // co_owner (protected_access=true, audit_access=false) must not see this
   // tab, so it keys off audit_access specifically, not protected_access.
   const hasAuditAccess = Boolean(demo || me?.audit_access);
+  // System Health follows the exact tenant support permission. It is separate
+  // from Audit Log, Access Control, and global Android release authority.
+  const canViewSystemHealth = hasSupportAccess(me);
+  // Release control is a separate server-issued capability bound to the exact
+  // configured company and user. Never infer it from audit, protected-owner,
+  // demo, role, or settings permissions; an older response missing the field
+  // therefore safely denies access as well.
+  const canManageDeviceUpdates = me?.release_control_access === true;
   const effectivePermissions = new Set(me?.effective_permissions ?? []);
   const canManageSettings = Boolean(
     demo || me?.protected_access || effectivePermissions.has('settings.manage'),
@@ -44,13 +77,22 @@ export default function SettingsScreen() {
       tab === 'account'
       || (tab === 'memberships' && canManageMemberships)
       || (tab === 'access' && hasAuditAccess)
+      || (tab === 'health' && canViewSystemHealth)
+      || (tab === 'devices' && canManageDeviceUpdates)
       || (
         (['company', 'branches', 'pricing', 'sheets'] as Tab[]).includes(tab)
         && canManageSettings
       )
     );
     if (!tabAllowed) setTab('account');
-  }, [tab, canManageMemberships, canManageSettings, hasAuditAccess]);
+  }, [
+    tab,
+    canManageDeviceUpdates,
+    canManageMemberships,
+    canManageSettings,
+    canViewSystemHealth,
+    hasAuditAccess,
+  ]);
 
   return (
     <div>
@@ -65,6 +107,11 @@ export default function SettingsScreen() {
         <TabBtn active={tab === 'account'}  onClick={() => setTab('account')}>
           <User size={14}/> Account
         </TabBtn>
+        {canViewSystemHealth && (
+          <TabBtn active={tab === 'health'} onClick={() => setTab('health')}>
+            <HeartPulse size={14}/> System Health
+          </TabBtn>
+        )}
         {canManageSettings && (
           <>
             <TabBtn active={tab === 'company'} onClick={() => setTab('company')}>
@@ -91,6 +138,11 @@ export default function SettingsScreen() {
             <ShieldCheck size={14}/> Access Control
           </TabBtn>
         )}
+        {canManageDeviceUpdates && (
+          <TabBtn active={tab === 'devices'} onClick={() => setTab('devices')}>
+            <TabletSmartphone size={14}/> Devices &amp; Updates
+          </TabBtn>
+        )}
       </div>
 
       {tab === 'account'     && <AccountTab/>}
@@ -100,6 +152,16 @@ export default function SettingsScreen() {
       {tab === 'memberships' && canManageMemberships && <MembershipsTab/>}
       {tab === 'sheets' && canManageSettings && <SheetsTab/>}
       {tab === 'access' && hasAuditAccess && <AccessControlTab/>}
+      {tab === 'health' && canViewSystemHealth && (
+        <Suspense fallback={<SkeletonCard lines={8} />}>
+          <SystemHealthTab />
+        </Suspense>
+      )}
+      {tab === 'devices' && canManageDeviceUpdates && (
+        <Suspense fallback={<SkeletonCard lines={6} />}>
+          <DevicesUpdatesTab />
+        </Suspense>
+      )}
     </div>
   );
 }
@@ -108,7 +170,7 @@ function TabBtn({
   active, onClick, children,
 }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
-    <button onClick={onClick}
+    <button type="button" onClick={onClick}
       className={`shrink-0 px-4 py-2 text-sm font-medium border-b-2 -mb-px whitespace-nowrap flex items-center gap-1.5
         ${active ? 'border-accent text-accent' : 'border-transparent text-fg-muted hover:text-fg'}`}>
       {children}
