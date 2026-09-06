@@ -64,11 +64,12 @@ RUN set -eux; \
       'libcurl=8.22.0-r0' \
       'libcrypto3=3.5.8-r0' \
       'libssl3=3.5.8-r0'; \
-    test "$(apk info -v c-ares)" = 'c-ares-1.34.8-r0'; \
-    test "$(apk info -v curl)" = 'curl-8.22.0-r0'; \
-    test "$(apk info -v libcurl)" = 'libcurl-8.22.0-r0'; \
-    test "$(apk info -v libcrypto3)" = 'libcrypto3-3.5.8-r0'; \
-    test "$(apk info -v libssl3)" = 'libssl3-3.5.8-r0'
+    installed_packages="$(apk info -v)"; \
+    printf '%s\n' "$installed_packages" | grep -Fx 'c-ares-1.34.8-r0'; \
+    printf '%s\n' "$installed_packages" | grep -Fx 'curl-8.22.0-r0'; \
+    printf '%s\n' "$installed_packages" | grep -Fx 'libcurl-8.22.0-r0'; \
+    printf '%s\n' "$installed_packages" | grep -Fx 'libcrypto3-3.5.8-r0'; \
+    printf '%s\n' "$installed_packages" | grep -Fx 'libssl3-3.5.8-r0'
 
 COPY --from=caddy-builder /out/caddy /usr/bin/caddy
 

@@ -52,9 +52,10 @@ RUN set -eux; \
       'libcrypto3=3.5.8-r0' \
       'libssl3=3.5.8-r0' \
       'libuuid=2.42.3-r1'; \
-    test "$(apk info -v libcrypto3)" = 'libcrypto3-3.5.8-r0'; \
-    test "$(apk info -v libssl3)" = 'libssl3-3.5.8-r0'; \
-    test "$(apk info -v libuuid)" = 'libuuid-2.42.3-r1'; \
+    installed_packages="$(apk info -v)"; \
+    printf '%s\n' "$installed_packages" | grep -Fx 'libcrypto3-3.5.8-r0'; \
+    printf '%s\n' "$installed_packages" | grep -Fx 'libssl3-3.5.8-r0'; \
+    printf '%s\n' "$installed_packages" | grep -Fx 'libuuid-2.42.3-r1'; \
     test "$(postgres --version)" = 'postgres (PostgreSQL) 16.15'
 
 COPY --from=gosu-builder /out/gosu /usr/local/bin/gosu

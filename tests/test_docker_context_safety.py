@@ -130,6 +130,31 @@ class DockerContextSafetyTest(unittest.TestCase):
                 with self.subTest(workflow=workflow_name, image=image):
                     self.assertRegex(image, r"@sha256:[0-9a-f]{64}$")
 
+    def test_alpine_runtime_package_pins_are_checked_against_installed_index(self) -> None:
+        for dockerfile_name in ("caddy.Dockerfile", "postgres.Dockerfile"):
+            dockerfile = (ROOT / "infra" / "docker" / dockerfile_name).read_text(
+                encoding="utf-8"
+            )
+            with self.subTest(dockerfile=dockerfile_name):
+                self.assertIn('installed_packages="$(apk info -v)"', dockerfile)
+                self.assertNotRegex(dockerfile, r"apk info -v [A-Za-z0-9]")
+                pins = re.findall(
+                    r"^\s+'([A-Za-z0-9_.+-]+)=([^']+)'",
+                    dockerfile,
+                    re.MULTILINE,
+                )
+                self.assertTrue(pins)
+                for package, version in pins:
+                    with self.subTest(
+                        dockerfile=dockerfile_name,
+                        package=package,
+                        version=version,
+                    ):
+                        self.assertIn(
+                            f"grep -Fx '{package}-{version}'",
+                            dockerfile,
+                        )
+
     def test_exact_built_images_have_blocking_pinned_sbom_and_cve_scans(self) -> None:
         action = CONTAINER_SCAN_ACTION.read_text(encoding="utf-8")
         self.assertIn(
