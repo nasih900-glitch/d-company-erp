@@ -201,6 +201,30 @@ class RuntimeParityTest(unittest.TestCase):
         self.assertIn("read_backend_build_identity()", settings)
         self.assertIn("if baked != declared:", settings)
 
+    def test_runtime_gate_preserves_redacted_diagnostics_before_cleanup(self):
+        source = (
+            ROOT / "infra" / "scripts" / "verify-production-runtime-images.sh"
+        ).read_text()
+        diagnostics = source.split("emit_failure_diagnostics() {", 1)[1].split(
+            "\ncleanup() {", 1
+        )[0]
+        cleanup = source.split("cleanup() {", 1)[1].split("\n}\ntrap cleanup EXIT", 1)[0]
+
+        self.assertIn('"${compose[@]}" ps --all', diagnostics)
+        self.assertIn(
+            '"${compose[@]}" logs --no-color --timestamps --tail 500',
+            diagnostics,
+        )
+        self.assertIn('logs.replace(value, "[REDACTED]")', diagnostics)
+        self.assertIn("dsn_credentials.sub", diagnostics)
+        self.assertNotIn("docker inspect", diagnostics)
+        self.assertNotIn("compose[@]} config", diagnostics)
+        self.assertIn('if [ "$failure_code" -ne 0 ]', cleanup)
+        self.assertLess(
+            cleanup.index('emit_failure_diagnostics "$failure_code"'),
+            cleanup.index('down --volumes --remove-orphans'),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
