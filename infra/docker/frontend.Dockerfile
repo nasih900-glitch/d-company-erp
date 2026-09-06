@@ -12,7 +12,7 @@ COPY frontend/ .
 RUN npm run build
 
 # --- runtime ---
-FROM nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
+FROM nginx:alpine-slim@sha256:3b171d7224b669faa3cc2137fea0a65301791df1ec1f271ebd2a2b7461f7fade
 ARG APP_VERSION=dev
 ARG APP_REVISION=unknown
 LABEL org.opencontainers.image.title="D Company ERP Web" \

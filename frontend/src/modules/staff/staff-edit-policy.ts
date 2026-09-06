@@ -5,6 +5,27 @@ export interface StaffAccessPatch {
   status?: StaffStatus;
 }
 
+interface StaffRoleOption {
+  code: string;
+}
+
+const OWNER_ROLE_CODES = new Set(['super_owner', 'co_owner', 'owner']);
+
+/**
+ * Keep the role picker aligned with backend authority even when role-catalog
+ * loading falls back to a local list. The backend still enforces this rule;
+ * filtering here prevents a guaranteed-to-fail option from misleading staff.
+ */
+export function editableStaffRoleOptions<T extends StaffRoleOption>(
+  roles: readonly T[],
+  canManageOwnerAccess: boolean,
+): T[] {
+  return roles.filter((role) => (
+    role.code !== 'super_owner'
+    && (canManageOwnerAccess || !OWNER_ROLE_CODES.has(role.code))
+  ));
+}
+
 interface StaffAccessPatchInput {
   originalRoleCode: string;
   selectedRoleCode: string;
@@ -56,8 +77,7 @@ export function canChangeStaffAccess({
   callerHasAuditAccess: boolean;
 }): boolean {
   if (callerUserId === targetUserId) return false;
-  const targetIsOwner = targetRoles.some((role) => (
-    role === 'owner' || role === 'co_owner' || role === 'super_owner'
-  ));
+  if (targetRoles.includes('super_owner')) return false;
+  const targetIsOwner = targetRoles.some((role) => OWNER_ROLE_CODES.has(role));
   return !targetIsOwner || callerHasAuditAccess;
 }

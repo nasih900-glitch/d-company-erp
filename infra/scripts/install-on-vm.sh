@@ -27,6 +27,8 @@
 
 set -euo pipefail
 
+INSTALLER_ARGS=("$@")
+
 if [ "$EUID" -ne 0 ]; then
   echo "Run with sudo: sudo bash $0 yourdomain.com"
   exit 1
@@ -85,45 +87,37 @@ if [ "${#DOMAIN}" -gt 253 ] || \
 fi
 DOMAIN=$(printf '%s' "$DOMAIN" | tr '[:upper:]' '[:lower:]')
 
-cd "$(dirname "$0")/../.."
-REPO_DIR="$(pwd)"
-LOCK_DIR=/var/lock/d-company-erp
-LOCK_FILE="$LOCK_DIR/production-install.lock"
+SCRIPT_SOURCE_ROOT=$(cd "$(dirname "$0")/../.." && pwd -P)
+if [ -n "${DCOMPANY_PRODUCTION_REPO_DIR:-}" ]; then
+  REPO_DIR=$(cd "$DCOMPANY_PRODUCTION_REPO_DIR" && pwd -P)
+else
+  REPO_DIR=$SCRIPT_SOURCE_ROOT
+fi
+cd "$REPO_DIR"
 ROLLBACK_ROOT=/var/lib/dcompany-erp/deployment-rollbacks
 BUILD_SNAPSHOT_ROOT=/var/lib/dcompany-erp/build-snapshots
 SECURITY_EVIDENCE_ROOT=/var/lib/dcompany-erp/container-security
 SYFT_IMAGE='anchore/syft:v1.42.3@sha256:5999d209a342e55e9edf70bf8930fb5b86d8f2a783fa401178372c50e21b1d36'
 GRYPE_IMAGE='anchore/grype:v0.118.0@sha256:8a93fc48da96bd6ec5981279d099b69de11541dc68fdf222fb9161f8ff284af7'
 umask 077
-# The installer runs as root, so a public /var/lock pathname must never be
-# opened before its type and ownership are known. A root-only parent removes
-# the pathname-swap window; descriptor metadata is checked again after open.
-if [ -L "$LOCK_DIR" ]; then
-  echo "Production lock directory must not be a symlink." >&2
-  exit 1
-fi
-install -d -o root -g root -m 0700 "$LOCK_DIR"
-lock_dir_metadata=$(stat -Lc '%u:%g:%a:%F' "$LOCK_DIR")
-if [ "$lock_dir_metadata" != "0:0:700:directory" ]; then
-  echo "Production lock directory must be a root-owned mode-0700 directory." >&2
-  exit 1
-fi
-if [ -e "$LOCK_FILE" ] || [ -L "$LOCK_FILE" ]; then
-  if [ -L "$LOCK_FILE" ] || [ ! -f "$LOCK_FILE" ]; then
-    echo "Production lock must be a regular file, never a link or device." >&2
+# Bash redirections cannot request O_NOFOLLOW. A small reviewed bootstrap opens
+# /run and the lock dir relative to verified descriptors, opens the file with
+# O_NOFOLLOW and no truncation, locks it, then re-execs this installer with fd 9.
+if [ "${DCOMPANY_PRODUCTION_INSTALL_LOCK_FD:-}" != 9 ]; then
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "python3 is required for secure production installer locking." >&2
     exit 1
   fi
-  lock_metadata=$(stat -Lc '%u:%g:%a:%h:%F' "$LOCK_FILE")
-  if [ "$lock_metadata" != "0:0:600:1:regular file" ]; then
-    echo "Production lock must be root-owned, mode 0600, with one link." >&2
-    exit 1
-  fi
-else
-  install -o root -g root -m 0600 /dev/null "$LOCK_FILE"
+  exec python3 "$SCRIPT_SOURCE_ROOT/infra/scripts/production_install_lock.py" \
+    "$SCRIPT_SOURCE_ROOT/infra/scripts/install-on-vm.sh" "${INSTALLER_ARGS[@]}"
 fi
-exec 9<>"$LOCK_FILE"
-lock_fd_metadata=$(stat -Lc '%u:%g:%a:%h:%F' "/proc/$$/fd/9")
-if [ "$lock_fd_metadata" != "0:0:600:1:regular file" ]; then
+if ! [[ "${DCOMPANY_PRODUCTION_INSTALL_LOCK_ID:-}" =~ ^[0-9]+:[0-9]+$ ]]; then
+  echo "Production lock descriptor identity is missing." >&2
+  exit 1
+fi
+lock_fd_metadata=$(stat -Lc '%u:%g:%a:%h:%F:%d:%i' "/proc/$$/fd/9")
+expected_lock_fd_metadata="0:0:600:1:regular file:${DCOMPANY_PRODUCTION_INSTALL_LOCK_ID}"
+if [ "$lock_fd_metadata" != "$expected_lock_fd_metadata" ]; then
   echo "Production lock descriptor failed ownership/type validation." >&2
   exit 1
 fi
@@ -137,6 +131,58 @@ if ! [[ "$CURRENT_REVISION" =~ ^[0-9a-f]{40}$ ]] || \
   echo "Production install requires a clean Git checkout at an exact release commit." >&2
   exit 1
 fi
+
+# Freeze every privileged release input before Docker, Compose, environment
+# preparation, cutover, or parity verification runs. Bash can read a script
+# lazily, so merely pointing selected commands at a git archive is not enough:
+# re-exec the installer itself from the root-private snapshot as well.
+CANDIDATE_BUILD_ROOT=${DCOMPANY_PRODUCTION_RELEASE_SNAPSHOT:-}
+CANDIDATE_SOURCE_ARCHIVE_SHA256=${DCOMPANY_PRODUCTION_SOURCE_ARCHIVE_SHA256:-}
+if [ -z "$CANDIDATE_BUILD_ROOT" ]; then
+  CANDIDATE_BUILD_ROOT=$(mktemp -d \
+    "$BUILD_SNAPSHOT_ROOT/${CURRENT_REVISION}.XXXXXX")
+  chmod 700 "$CANDIDATE_BUILD_ROOT"
+  CANDIDATE_SOURCE_ARCHIVE="$CANDIDATE_BUILD_ROOT/source.tar"
+  git archive --format=tar "$CURRENT_REVISION" > "$CANDIDATE_SOURCE_ARCHIVE"
+  if [ ! -s "$CANDIDATE_SOURCE_ARCHIVE" ]; then
+    rm -rf "$CANDIDATE_BUILD_ROOT"
+    echo "Immutable candidate source archive is empty." >&2
+    exit 1
+  fi
+  CANDIDATE_SOURCE_ARCHIVE_SHA256=$(sha256sum "$CANDIDATE_SOURCE_ARCHIVE" \
+    | awk '{print $1}')
+  tar -tf "$CANDIDATE_SOURCE_ARCHIVE" >/dev/null
+  tar -xf "$CANDIDATE_SOURCE_ARCHIVE" -C "$CANDIDATE_BUILD_ROOT"
+  rm -f "$CANDIDATE_SOURCE_ARCHIVE"
+  test ! -e "$CANDIDATE_BUILD_ROOT/.git"
+  test -f "$CANDIDATE_BUILD_ROOT/infra/scripts/install-on-vm.sh"
+  export DCOMPANY_PRODUCTION_REPO_DIR="$REPO_DIR"
+  export DCOMPANY_PRODUCTION_RELEASE_SNAPSHOT="$CANDIDATE_BUILD_ROOT"
+  export DCOMPANY_PRODUCTION_RELEASE_REVISION="$CURRENT_REVISION"
+  export DCOMPANY_PRODUCTION_SOURCE_ARCHIVE_SHA256="$CANDIDATE_SOURCE_ARCHIVE_SHA256"
+  exec /bin/bash "$CANDIDATE_BUILD_ROOT/infra/scripts/install-on-vm.sh" \
+    "${INSTALLER_ARGS[@]}"
+fi
+if [ "$SCRIPT_SOURCE_ROOT" != "$CANDIDATE_BUILD_ROOT" ] || \
+   [ "${DCOMPANY_PRODUCTION_RELEASE_REVISION:-}" != "$CURRENT_REVISION" ] || \
+   ! [[ "$CANDIDATE_SOURCE_ARCHIVE_SHA256" =~ ^[0-9a-f]{64}$ ]] || \
+   [ "$(stat -Lc '%u:%g:%a:%F' "$CANDIDATE_BUILD_ROOT")" \
+     != "0:0:700:directory" ]; then
+  echo "Frozen production release snapshot failed identity validation." >&2
+  exit 1
+fi
+RELEASE_COMPOSE_FILE="$CANDIDATE_BUILD_ROOT/docker-compose.prod.yml"
+CANDIDATE_PARITY_TOOL="$CANDIDATE_BUILD_ROOT/ops/runtime_release_parity.py"
+PREPARE_ENV_TOOL="$CANDIDATE_BUILD_ROOT/infra/scripts/prepare-production-env.sh"
+CAPACITY_CHECK_TOOL="$CANDIDATE_BUILD_ROOT/infra/scripts/check-upgrade-capacity.sh"
+for release_input in \
+  "$RELEASE_COMPOSE_FILE" "$CANDIDATE_PARITY_TOOL" \
+  "$PREPARE_ENV_TOOL" "$CAPACITY_CHECK_TOOL"; do
+  if [ ! -f "$release_input" ] || [ -L "$release_input" ]; then
+    echo "Frozen production release snapshot is incomplete or linked." >&2
+    exit 1
+  fi
+done
 if [ -f .env ] && [ "$MAINTENANCE_CONFIRMED" != true ]; then
   echo "Upgrade requires a scheduled write outage." >&2
   echo "Stop staff activity, sync every tablet outbox, then rerun with --maintenance-confirmed." >&2
@@ -173,22 +219,40 @@ if ! command -v docker >/dev/null 2>&1; then
 fi
 echo "==> Docker version: $(docker --version)"
 
+# Read-only discovery uses the frozen Compose contract while retaining the
+# historical checkout-derived project identity. No service is created by this
+# array. Candidate runtime commands below use an explicit attested project name
+# and the immutable snapshot as their project directory.
+inspection_compose=(
+  docker compose --project-directory "$REPO_DIR"
+  -f "$RELEASE_COMPOSE_FILE"
+)
+
 # Prove and protect the currently deployed release before any environment or
 # running-service change. A real upgrade must have one running Postgres and
 # backend, an exact database head, a source-verified immutable backend image,
 # the prior Compose file, and durable rollback tags for every service image.
 UPGRADE_SNAPSHOT=""
+PRIOR_SOURCE_ROOT=""
 EXISTING_POSTGRES_CONTAINER=""
 EXISTING_BACKEND_CONTAINER=""
 PRIOR_PROJECT_NAME=""
 PRIOR_DB_HEAD=""
+ROLLBACK_STATE_MANIFEST_DIGEST=""
+DATABASE_BACKUP_SHA256=""
 CONTAINER_IDS=()
 RUNNING_CONTAINER_IDS=()
 EXPECTED_SERVICES=()
+PRIOR_INTERNAL_SERVICES=()
+LEGACY_MINIO_CONTAINER=""
 declare -A EXISTING_CONTAINER_BY_SERVICE=()
 declare -A PRIOR_SERVICE_IMAGE_IDS=()
+declare -A PRIOR_SERVICE_ORIGINAL_REFS=()
+declare -A PRIOR_SERVICE_ROLLBACK_REFS=()
+declare -A PRIOR_IMAGE_BY_ORIGINAL_REF=()
 if [ -f .env ]; then
-  if ! services_output=$(docker compose -f docker-compose.prod.yml --env-file .env config --services 2>/dev/null); then
+  if ! services_output=$("${inspection_compose[@]}" --env-file .env \
+    config --services 2>/dev/null); then
     echo "Cannot enumerate existing Compose services; refusing upgrade." >&2
     exit 1
   fi
@@ -199,7 +263,7 @@ if [ -f .env ]; then
       echo "Compose returned an unsafe or duplicate service identity." >&2
       exit 1
     fi
-    if ! service_ids_output=$(docker compose -f docker-compose.prod.yml \
+    if ! service_ids_output=$("${inspection_compose[@]}" \
       --env-file .env ps -aq "$service" 2>/dev/null); then
       echo "Cannot enumerate existing $service containers; refusing upgrade." >&2
       exit 1
@@ -250,6 +314,40 @@ if [ -f .env ]; then
     echo "Running backend has no safe Compose project identity; refusing upgrade." >&2
     exit 1
   fi
+
+  # Code25 retires the unused MinIO runtime, but an upgrade from an older
+  # release may still have exactly one MinIO container in the same Compose
+  # project. Capture it explicitly for rollback before removing it later; the
+  # Code25 Compose file intentionally no longer enumerates this service.
+  legacy_minio_output=$(docker ps -aq \
+    --filter "label=com.docker.compose.project=$PRIOR_PROJECT_NAME" \
+    --filter "label=com.docker.compose.service=minio")
+  LEGACY_MINIO_IDS=()
+  while IFS= read -r container_id; do
+    [ -n "$container_id" ] && LEGACY_MINIO_IDS+=("$container_id")
+  done <<< "$legacy_minio_output"
+  if [ "${#LEGACY_MINIO_IDS[@]}" -gt 1 ]; then
+    echo "Expected at most one legacy MinIO container; found ${#LEGACY_MINIO_IDS[@]}. Refusing upgrade." >&2
+    exit 1
+  fi
+  if [ "${#LEGACY_MINIO_IDS[@]}" -eq 1 ]; then
+    LEGACY_MINIO_CONTAINER=${LEGACY_MINIO_IDS[0]}
+    if [ -n "${EXISTING_CONTAINER_BY_SERVICE[minio]+present}" ]; then
+      echo "Legacy MinIO was already enumerated by the Code25 Compose contract." >&2
+      exit 1
+    fi
+    EXPECTED_SERVICES+=(minio)
+    CONTAINER_IDS+=("$LEGACY_MINIO_CONTAINER")
+    EXISTING_CONTAINER_BY_SERVICE[minio]=$LEGACY_MINIO_CONTAINER
+    if [ "$(docker inspect --format '{{.State.Running}}' "$LEGACY_MINIO_CONTAINER")" = true ]; then
+      RUNNING_CONTAINER_IDS+=("$LEGACY_MINIO_CONTAINER")
+    fi
+  fi
+  for service in postgres redis minio backend frontend; do
+    if [ -n "${EXISTING_CONTAINER_BY_SERVICE[$service]+present}" ]; then
+      PRIOR_INTERNAL_SERVICES+=("$service")
+    fi
+  done
 
   PRIOR_DB_HEAD=$(docker exec "$EXISTING_POSTGRES_CONTAINER" \
     psql -U erp -d erp -Atc "SELECT version_num FROM alembic_version")
@@ -315,18 +413,47 @@ if [ -f .env ]; then
   fi
 
   SNAPSHOT_STAMP=$(date -u +%Y%m%dt%H%M%Sz)
-  install -o root -g root -m 0700 -d "$ROLLBACK_ROOT"
   UPGRADE_SNAPSHOT=$(mktemp -d \
     "$ROLLBACK_ROOT/pre-code25-${SNAPSHOT_STAMP}.XXXXXX")
   chmod 700 "$UPGRADE_SNAPSHOT"
   SNAPSHOT_ID=$(basename "$UPGRADE_SNAPSHOT")
   install -m 0600 .env "$UPGRADE_SNAPSHOT/.env"
-  if ! git show "$PRIOR_REVISION:docker-compose.prod.yml" \
-    > "$UPGRADE_SNAPSHOT/docker-compose.prior.yml"; then
-    echo "Cannot recover docker-compose.prod.yml from the proven prior revision." >&2
+  PRIOR_SOURCE_ROOT="$UPGRADE_SNAPSHOT/prior-source"
+  mkdir -m 0700 "$PRIOR_SOURCE_ROOT"
+  PRIOR_SOURCE_ARCHIVE="$UPGRADE_SNAPSHOT/prior-source.tar"
+  if ! git archive --format=tar "$PRIOR_REVISION" > "$PRIOR_SOURCE_ARCHIVE" || \
+     [ ! -s "$PRIOR_SOURCE_ARCHIVE" ]; then
+    echo "Cannot freeze the proven prior release source." >&2
     exit 1
   fi
+  PRIOR_SOURCE_ARCHIVE_SHA256=$(sha256sum "$PRIOR_SOURCE_ARCHIVE" | awk '{print $1}')
+  tar -tf "$PRIOR_SOURCE_ARCHIVE" >/dev/null
+  tar -xf "$PRIOR_SOURCE_ARCHIVE" -C "$PRIOR_SOURCE_ROOT"
+  chmod 400 "$PRIOR_SOURCE_ARCHIVE"
+  if [ ! -f "$PRIOR_SOURCE_ROOT/docker-compose.prod.yml" ] || \
+     [ -L "$PRIOR_SOURCE_ROOT/docker-compose.prod.yml" ]; then
+    echo "Frozen prior release has no safe production Compose contract." >&2
+    exit 1
+  fi
+  install -m 0600 "$PRIOR_SOURCE_ROOT/docker-compose.prod.yml" \
+    "$UPGRADE_SNAPSHOT/docker-compose.prior.yml"
   chmod 600 "$UPGRADE_SNAPSHOT/docker-compose.prior.yml"
+  # Code14/Code16 used a relative ./releases/android Caddy bind. Rollback now
+  # executes their Compose file from a protected source snapshot, so that old
+  # relative bind would otherwise serve the archive's README directory rather
+  # than the live immutable APK store. This checksummed override replaces the
+  # volume by its unique container target while leaving every executable prior
+  # release input frozen.
+  cat > "$UPGRADE_SNAPSHOT/docker-compose.rollback-live-data.yml" <<'YAML'
+services:
+  caddy:
+    volumes:
+      - type: bind
+        source: "${ANDROID_RELEASE_ROOT:?ANDROID_RELEASE_ROOT is required}"
+        target: /srv/releases/android
+        read_only: true
+YAML
+  chmod 600 "$UPGRADE_SNAPSHOT/docker-compose.rollback-live-data.yml"
 
   # The normal Code16 installer wrote a placeholder revision label. For both
   # that bridge and correctly labelled releases, attest a stopped container
@@ -388,13 +515,10 @@ if [ -f .env ]; then
     printf 'prior_compose_project=%s\n' "$PRIOR_PROJECT_NAME"
     printf 'prior_backend_image_id=%s\n' "$PRIOR_BACKEND_IMAGE"
     printf 'backend_source_manifest_sha256=%s\n' "$SOURCE_MANIFEST_DIGEST"
+    printf 'prior_source_archive_sha256=%s\n' "$PRIOR_SOURCE_ARCHIVE_SHA256"
     printf 'installer_checkout=%s\n' "$CURRENT_REVISION"
   } > "$UPGRADE_SNAPSHOT/revision.txt"
   : > "$UPGRADE_SNAPSHOT/container-images.txt"
-  {
-    echo '#!/bin/bash'
-    echo 'set -euo pipefail'
-  } > "$UPGRADE_SNAPSHOT/restore-images.sh"
   for container_id in "${CONTAINER_IDS[@]}"; do
     service=$(docker inspect --format '{{index .Config.Labels "com.docker.compose.service"}}' "$container_id")
     original_ref=$(docker inspect --format '{{.Config.Image}}' "$container_id")
@@ -410,39 +534,52 @@ if [ -f .env ]; then
       echo "Rollback container identity does not match the unique Compose service." >&2
       exit 1
     fi
+    if [ -n "${PRIOR_IMAGE_BY_ORIGINAL_REF[$original_ref]+present}" ] && \
+       [ "${PRIOR_IMAGE_BY_ORIGINAL_REF[$original_ref]}" != "$image_id" ]; then
+      echo "Rollback image reference $original_ref resolves to multiple prior images." >&2
+      exit 1
+    fi
+    PRIOR_IMAGE_BY_ORIGINAL_REF[$original_ref]=$image_id
     PRIOR_SERVICE_IMAGE_IDS[$service]=$image_id
+    PRIOR_SERVICE_ORIGINAL_REFS[$service]=$original_ref
     image_short=${image_id#sha256:}
     image_short=${image_short:0:12}
     rollback_ref="dcompany-rollback:${SNAPSHOT_ID}-${service}-${image_short}"
+    if docker image inspect "$rollback_ref" >/dev/null 2>&1; then
+      echo "Unique rollback snapshot tag already exists: $rollback_ref" >&2
+      exit 1
+    fi
     docker image tag "$image_id" "$rollback_ref"
     tagged_image_id=$(docker image inspect --format '{{.Id}}' "$rollback_ref")
     if [ "$tagged_image_id" != "$image_id" ]; then
       echo "Rollback tag does not resolve to its recorded immutable image." >&2
       exit 1
     fi
+    PRIOR_SERVICE_ROLLBACK_REFS[$service]=$rollback_ref
     printf '%s|%s|%s|%s|%s\n' \
       "$service" "$original_ref" "$image_id" "$image_revision" "$rollback_ref" \
       >> "$UPGRADE_SNAPSHOT/container-images.txt"
-    # The dollar expressions are intentionally emitted for the protected
-    # rollback script to evaluate later, after it re-attests each tag.
-    # shellcheck disable=SC2016
-    {
-      printf 'rollback_id=$(docker image inspect --format "{{.Id}}" %q)\n' \
-        "$rollback_ref"
-      printf 'test "$rollback_id" = %q\n' "$image_id"
-      printf 'docker image tag %q %q\n' "$image_id" "$original_ref"
-      printf 'restored_id=$(docker image inspect --format "{{.Id}}" %q)\n' \
-        "$original_ref"
-      printf 'test "$restored_id" = %q\n' "$image_id"
-    } >> "$UPGRADE_SNAPSHOT/restore-images.sh"
   done
   chmod 600 "$UPGRADE_SNAPSHOT/revision.txt" "$UPGRADE_SNAPSHOT/container-images.txt"
-  chmod 700 "$UPGRADE_SNAPSHOT/restore-images.sh"
+  ROLLBACK_STATE_MANIFEST="$UPGRADE_SNAPSHOT/rollback-state.sha256"
+  (
+    cd "$UPGRADE_SNAPSHOT"
+    sha256sum .env docker-compose.prior.yml \
+      docker-compose.rollback-live-data.yml revision.txt container-images.txt \
+      backend-source.sha256 backend-source.paths prior-source.tar
+  ) > "$ROLLBACK_STATE_MANIFEST"
+  chmod 400 "$ROLLBACK_STATE_MANIFEST"
+  ROLLBACK_STATE_MANIFEST_DIGEST=$(sha256sum "$ROLLBACK_STATE_MANIFEST" \
+    | awk '{print $1}')
   echo "==> Protected and source-verified prior deployment: $UPGRADE_SNAPSHOT"
 else
   inferred_project_name=$(basename "$REPO_DIR" \
     | tr '[:upper:]' '[:lower:]' \
     | sed -E 's/[^a-z0-9_.-]//g; s/^[^a-z0-9]+//')
+  if ! [[ "$inferred_project_name" =~ ^[a-z0-9][a-z0-9_.-]*$ ]]; then
+    echo "Cannot derive a safe Compose project identity from the repository path." >&2
+    exit 1
+  fi
   existing_project_containers=$(docker ps -aq \
     --filter "label=com.docker.compose.project=$inferred_project_name")
   retained_volumes=$(docker volume ls -q \
@@ -460,6 +597,27 @@ else
     exit 1
   fi
 fi
+
+if [ -n "$PRIOR_PROJECT_NAME" ]; then
+  DEPLOY_PROJECT_NAME=$PRIOR_PROJECT_NAME
+else
+  DEPLOY_PROJECT_NAME=$inferred_project_name
+fi
+# This is the one intentionally mutable bind: signed APKs are operational
+# release data staged by the independently locked publisher. Code, Compose,
+# Caddy configuration, Dockerfiles, and verification tools stay in the frozen
+# snapshot for the entire lifetime of the deployed containers.
+ANDROID_RELEASE_ROOT="$REPO_DIR/releases/android"
+export ANDROID_RELEASE_ROOT
+candidate_compose=(
+  docker compose -p "$DEPLOY_PROJECT_NAME"
+  --project-directory "$CANDIDATE_BUILD_ROOT"
+  -f "$RELEASE_COMPOSE_FILE"
+)
+printf -v OPERATIONS_COMPOSE_COMMAND \
+  'docker compose -p %q --project-directory %q -f %q --env-file %q' \
+  "$DEPLOY_PROJECT_NAME" "$CANDIDATE_BUILD_ROOT" \
+  "$RELEASE_COMPOSE_FILE" "$REPO_DIR/.env"
 
 # ----- 2. Firewall (Oracle Cloud's gotcha) -----
 # Oracle Linux/Ubuntu images ship with an iptables INPUT REJECT rule that
@@ -492,7 +650,6 @@ fi
 # security/Compose preflight and required database backup succeeds.
 ENV_CANDIDATE="$REPO_DIR/.env.code17.candidate.$$"
 VERIFY_DATABASE=""
-CANDIDATE_BUILD_ROOT=""
 if [ -e "$ENV_CANDIDATE" ]; then
   echo "Refusing to overwrite unexpected candidate file: $ENV_CANDIDATE" >&2
   exit 1
@@ -505,35 +662,139 @@ handle_install_failure() {
   if [ -n "$ENV_CANDIDATE" ]; then
     rm -f "$ENV_CANDIDATE"
   fi
-  if [ -n "$CANDIDATE_BUILD_ROOT" ]; then
-    rm -rf "$CANDIDATE_BUILD_ROOT"
-  fi
   if [ -n "$VERIFY_DATABASE" ] && [ -n "$EXISTING_POSTGRES_CONTAINER" ]; then
     docker exec "$EXISTING_POSTGRES_CONTAINER" \
       dropdb -U erp --if-exists "$VERIFY_DATABASE" >/dev/null 2>&1 || true
   fi
   if [ "$PROMOTION_COMPLETE" = true ] && [ -n "$UPGRADE_SNAPSHOT" ]; then
     echo "==> Release acceptance failed; restoring the quiesced prior release." >&2
-    docker compose -f docker-compose.prod.yml --env-file .env \
-      stop -t 30 caddy backend frontend redis minio >/dev/null 2>&1 || true
+    # Stop every candidate writer/runtime, including a partially started
+    # PostgreSQL container. Rollback below recreates PostgreSQL from the
+    # attested prior image before it touches the logical backup.
+    "${candidate_compose[@]}" --env-file .env \
+      stop -t 30 caddy backend frontend redis postgres >/dev/null 2>&1 || true
     if [ -f .env ]; then
       install -m 0600 .env "$UPGRADE_SNAPSHOT/.env.failed-code17"
     fi
-    if ! current_postgres_output=$(docker compose -f docker-compose.prod.yml \
-      --env-file .env ps -q postgres 2>/dev/null); then
-      current_postgres_output=""
-    fi
-    CURRENT_POSTGRES_IDS=()
-    while IFS= read -r container_id; do
-      [ -n "$container_id" ] && CURRENT_POSTGRES_IDS+=("$container_id")
-    done <<< "$current_postgres_output"
     rollback_succeeded=true
-    if [ "${#CURRENT_POSTGRES_IDS[@]}" -ne 1 ] || \
-       [ ! -s "$UPGRADE_SNAPSHOT/database.dump" ] || \
-       ! sha256sum -c "$UPGRADE_SNAPSHOT/database.dump.sha256" >/dev/null 2>&1; then
+    if ! [[ "$ROLLBACK_STATE_MANIFEST_DIGEST" =~ ^[0-9a-f]{64}$ ]] || \
+       [ "$(sha256sum "$UPGRADE_SNAPSHOT/rollback-state.sha256" 2>/dev/null \
+          | awk '{print $1}')" != "$ROLLBACK_STATE_MANIFEST_DIGEST" ] || \
+       ! (cd "$UPGRADE_SNAPSHOT" && \
+          sha256sum -c rollback-state.sha256 >/dev/null 2>&1); then
       rollback_succeeded=false
-    else
-      rollback_postgres=${CURRENT_POSTGRES_IDS[0]}
+    fi
+    if [ "$rollback_succeeded" = true ] && \
+       { ! [[ "$DATABASE_BACKUP_SHA256" =~ ^[0-9a-f]{64}$ ]] || \
+         [ ! -s "$UPGRADE_SNAPSHOT/database.dump" ] || \
+         [ "$(sha256sum "$UPGRADE_SNAPSHOT/database.dump" 2>/dev/null \
+            | awk '{print $1}')" != "$DATABASE_BACKUP_SHA256" ] || \
+         ! sha256sum -c "$UPGRADE_SNAPSHOT/database.dump.sha256" \
+           >/dev/null 2>&1; }; then
+      rollback_succeeded=false
+    fi
+
+    # Reconstruct rollback code/config from the checksummed prior commit tar,
+    # rather than trusting either the current checkout or a long-lived
+    # extracted tree at the time of the incident.
+    if [ "$rollback_succeeded" = true ]; then
+      PRIOR_RUNTIME_SOURCE_ROOT="$UPGRADE_SNAPSHOT/prior-runtime-source.$$"
+      if [ -e "$PRIOR_RUNTIME_SOURCE_ROOT" ] || \
+         ! mkdir -m 0700 "$PRIOR_RUNTIME_SOURCE_ROOT" || \
+         ! tar -tf "$UPGRADE_SNAPSHOT/prior-source.tar" >/dev/null || \
+         ! tar -xf "$UPGRADE_SNAPSHOT/prior-source.tar" \
+           -C "$PRIOR_RUNTIME_SOURCE_ROOT" || \
+         [ ! -f "$PRIOR_RUNTIME_SOURCE_ROOT/docker-compose.prod.yml" ] || \
+         [ -L "$PRIOR_RUNTIME_SOURCE_ROOT/docker-compose.prod.yml" ]; then
+        rollback_succeeded=false
+      else
+        PRIOR_SOURCE_ROOT=$PRIOR_RUNTIME_SOURCE_ROOT
+      fi
+    fi
+
+    # Restore the prior environment only from in-memory-attested rollback
+    # state. Image restoration is performed from validated arrays captured by
+    # this process; no script from the filesystem is executed during failure
+    # handling. A candidate PostgreSQL failure therefore cannot substitute the
+    # known-good rollback runtime or its Compose contract.
+    if [ "$rollback_succeeded" = true ]; then
+      install -m 0600 "$UPGRADE_SNAPSHOT/.env" "$REPO_DIR/.env.rollback.$$"
+      mv "$REPO_DIR/.env.rollback.$$" .env
+      for service in "${EXPECTED_SERVICES[@]}"; do
+        prior_image_id=${PRIOR_SERVICE_IMAGE_IDS[$service]:-}
+        prior_original_ref=${PRIOR_SERVICE_ORIGINAL_REFS[$service]:-}
+        prior_rollback_ref=${PRIOR_SERVICE_ROLLBACK_REFS[$service]:-}
+        if ! [[ "$prior_image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || \
+           ! [[ "$prior_original_ref" =~ ^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,254}$ ]] || \
+           ! [[ "$prior_rollback_ref" =~ ^dcompany-rollback:[A-Za-z0-9_.-]+$ ]]; then
+          rollback_succeeded=false
+          break
+        fi
+        if ! rollback_image_id=$(docker image inspect --format '{{.Id}}' \
+          "$prior_rollback_ref" 2>/dev/null) || \
+           [ "$rollback_image_id" != "$prior_image_id" ]; then
+          rollback_succeeded=false
+          break
+        fi
+        # Docker cannot create a mutable tag whose target itself contains an
+        # @sha256 digest. Digest references are already immutable; mutable
+        # application names are restored directly from the exact image ID.
+        if [[ "$prior_original_ref" != *@sha256:* ]] && \
+           ! docker image tag "$prior_image_id" "$prior_original_ref"; then
+          rollback_succeeded=false
+          break
+        fi
+        if ! restored_original_id=$(docker image inspect --format '{{.Id}}' \
+          "$prior_original_ref" 2>/dev/null) || \
+           [ "$restored_original_id" != "$prior_image_id" ]; then
+          rollback_succeeded=false
+          break
+        fi
+      done
+    fi
+    if [ "$rollback_succeeded" = true ]; then
+      prior_compose=(
+        docker compose -p "$PRIOR_PROJECT_NAME" --project-directory "$PRIOR_SOURCE_ROOT"
+        -f "$UPGRADE_SNAPSHOT/docker-compose.prior.yml"
+        -f "$UPGRADE_SNAPSHOT/docker-compose.rollback-live-data.yml"
+        --env-file .env
+      )
+      "${prior_compose[@]}" up -d --no-build --pull never \
+        --force-recreate postgres \
+        || rollback_succeeded=false
+    fi
+    if [ "$rollback_succeeded" = true ]; then
+      if ! rollback_postgres_output=$("${prior_compose[@]}" ps -q postgres 2>/dev/null); then
+        rollback_postgres_output=""
+      fi
+      ROLLBACK_POSTGRES_IDS=()
+      while IFS= read -r container_id; do
+        [ -n "$container_id" ] && ROLLBACK_POSTGRES_IDS+=("$container_id")
+      done <<< "$rollback_postgres_output"
+      if [ "${#ROLLBACK_POSTGRES_IDS[@]}" -ne 1 ]; then
+        rollback_succeeded=false
+      else
+        rollback_postgres=${ROLLBACK_POSTGRES_IDS[0]}
+        restored_postgres_image_id=$(docker inspect --format '{{.Image}}' \
+          "$rollback_postgres")
+        if [ "$restored_postgres_image_id" != "${PRIOR_SERVICE_IMAGE_IDS[postgres]}" ]; then
+          rollback_succeeded=false
+        fi
+      fi
+    fi
+    if [ "$rollback_succeeded" = true ]; then
+      rollback_postgres_attempts=0
+      until docker exec "$rollback_postgres" pg_isready -U erp -d postgres \
+        >/dev/null 2>&1; do
+        rollback_postgres_attempts=$((rollback_postgres_attempts + 1))
+        if [ "$rollback_postgres_attempts" -gt 120 ]; then
+          rollback_succeeded=false
+          break
+        fi
+        sleep 1
+      done
+    fi
+    if [ "$rollback_succeeded" = true ]; then
       docker exec "$rollback_postgres" psql -U erp -d postgres \
         -v ON_ERROR_STOP=1 -c \
         "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'erp' AND pid <> pg_backend_pid()" \
@@ -555,17 +816,17 @@ handle_install_failure() {
       fi
     fi
     if [ "$rollback_succeeded" = true ]; then
-      install -m 0600 "$UPGRADE_SNAPSHOT/.env" "$REPO_DIR/.env.rollback.$$"
-      mv "$REPO_DIR/.env.rollback.$$" .env
-      "$UPGRADE_SNAPSHOT/restore-images.sh" || rollback_succeeded=false
-    fi
-    if [ "$rollback_succeeded" = true ]; then
-      prior_compose=(
-        docker compose -p "$PRIOR_PROJECT_NAME" --project-directory "$REPO_DIR"
-        -f "$UPGRADE_SNAPSHOT/docker-compose.prior.yml" --env-file .env
-      )
-      "${prior_compose[@]}" up -d --no-build --force-recreate \
-        postgres redis minio backend frontend || rollback_succeeded=false
+      PRIOR_NON_POSTGRES_SERVICES=()
+      for service in "${PRIOR_INTERNAL_SERVICES[@]}"; do
+        case "$service" in
+          postgres|caddy) continue ;;
+          *) PRIOR_NON_POSTGRES_SERVICES+=("$service") ;;
+        esac
+      done
+      if [ "${#PRIOR_NON_POSTGRES_SERVICES[@]}" -gt 0 ]; then
+        "${prior_compose[@]}" up -d --no-build --pull never --force-recreate \
+          "${PRIOR_NON_POSTGRES_SERVICES[@]}" || rollback_succeeded=false
+      fi
     fi
     if [ "$rollback_succeeded" = true ]; then
       for service in "${EXPECTED_SERVICES[@]}"; do
@@ -605,7 +866,8 @@ handle_install_failure() {
       done
     fi
     if [ "$rollback_succeeded" = true ]; then
-      "${prior_compose[@]}" up -d --no-build --force-recreate caddy \
+      "${prior_compose[@]}" up -d --no-build --pull never \
+        --force-recreate caddy \
         || rollback_succeeded=false
     fi
     if [ "$rollback_succeeded" = true ]; then
@@ -631,13 +893,13 @@ handle_install_failure() {
       echo "==> Prior release and final quiesced database backup restored." >&2
       echo "    Investigate the failed release before another scheduled upgrade." >&2
     else
-      docker compose -f docker-compose.prod.yml --env-file .env stop caddy \
+      "${candidate_compose[@]}" --env-file .env stop caddy \
         >/dev/null 2>&1 || true
       echo "AUTOMATIC ROLLBACK FAILED; public ingress remains closed." >&2
       echo "Use the protected evidence at $UPGRADE_SNAPSHOT and the incident runbook." >&2
     fi
   elif [ "$PROMOTION_COMPLETE" = true ]; then
-    docker compose -f docker-compose.prod.yml --env-file .env stop caddy \
+    "${candidate_compose[@]}" --env-file .env stop caddy \
       >/dev/null 2>&1 || true
     echo "Fresh-install acceptance failed; public ingress remains closed." >&2
   elif [ "${MAINTENANCE_ACTIVE:-false}" = true ]; then
@@ -652,7 +914,7 @@ handle_post_ingress_failure() {
   failure_code=$?
   trap - EXIT
   set +e
-  docker compose -f docker-compose.prod.yml --env-file .env stop -t 30 caddy \
+  "${candidate_compose[@]}" --env-file .env stop -t 30 caddy \
     >/dev/null 2>&1 || true
   echo "Release public-ingress acceptance failed; Caddy is stopped." >&2
   echo "The current database is preserved and the quiesced dump was NOT restored." >&2
@@ -666,7 +928,7 @@ if [ -f .env ]; then
 else
   SOURCE_ENV=-
 fi
-bash infra/scripts/prepare-production-env.sh \
+bash "$PREPARE_ENV_TOOL" \
   "$SOURCE_ENV" "$ENV_CANDIDATE" "$DOMAIN" "$CURRENT_REVISION"
 
 echo
@@ -675,8 +937,32 @@ grep -E "^(DOMAIN|SEED_OWNER_EMAIL|ENV)=" "$ENV_CANDIDATE"
 
 echo
 echo "==> Running fail-closed environment and Compose preflight…"
-docker compose -f docker-compose.prod.yml --env-file "$ENV_CANDIDATE" config --quiet
+"${candidate_compose[@]}" --env-file "$ENV_CANDIDATE" config --quiet
 echo "==> Production config preflight passed; no Compose service has been recreated."
+
+# Redis is the only production service supplied directly by an upstream image
+# rather than built from this release snapshot. Resolve its exact reference
+# from the frozen Compose contract, require a digest pin, and fetch/record the
+# platform-specific immutable image ID before the maintenance window. `--pull
+# never` at cutover then cannot depend on an incidental image left by the prior
+# deployment (which is especially important for first installs).
+CANDIDATE_REDIS_IMAGE_REF=$(
+  "${candidate_compose[@]}" --env-file "$ENV_CANDIDATE" config --format json \
+    | python3 -c \
+      'import json,sys; print(json.load(sys.stdin)["services"]["redis"]["image"])'
+)
+if ! [[ "$CANDIDATE_REDIS_IMAGE_REF" =~ ^redis:7-alpine@sha256:[0-9a-f]{64}$ ]]; then
+  echo "Candidate Redis image must be the reviewed digest-pinned Redis 7 Alpine image." >&2
+  exit 1
+fi
+docker pull "$CANDIDATE_REDIS_IMAGE_REF" >/dev/null
+CANDIDATE_REDIS_IMAGE_ID=$(docker image inspect --format '{{.Id}}' \
+  "$CANDIDATE_REDIS_IMAGE_REF")
+if ! [[ "$CANDIDATE_REDIS_IMAGE_ID" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+  echo "Candidate Redis pull returned no immutable image ID." >&2
+  exit 1
+fi
+echo "==> Exact digest-pinned Redis image is present before maintenance."
 if [ -n "$UPGRADE_SNAPSHOT" ]; then
   echo "    Rollback evidence remains at: $UPGRADE_SNAPSHOT"
   echo "==> Proving existing DNS/TLS/readiness before the maintenance window…"
@@ -685,53 +971,44 @@ fi
 
 echo
 echo "==> Building candidate images while the existing release remains live…"
-# Docker never receives the mutable checkout as its context. The private
-# snapshot contains exactly the selected commit, excluding ignored files and
-# closing the status-check-to-build race.
-install -o root -g root -m 0700 -d "$BUILD_SNAPSHOT_ROOT"
-CANDIDATE_BUILD_ROOT=$(mktemp -d \
-  "$BUILD_SNAPSHOT_ROOT/${CURRENT_REVISION}.XXXXXX")
-chmod 700 "$CANDIDATE_BUILD_ROOT"
-CANDIDATE_SOURCE_ARCHIVE="$CANDIDATE_BUILD_ROOT/source.tar"
-git archive --format=tar "$CURRENT_REVISION" > "$CANDIDATE_SOURCE_ARCHIVE"
-if [ ! -s "$CANDIDATE_SOURCE_ARCHIVE" ]; then
-  echo "Immutable candidate source archive is empty." >&2
-  exit 1
-fi
-CANDIDATE_SOURCE_ARCHIVE_SHA256=$(sha256sum "$CANDIDATE_SOURCE_ARCHIVE" | awk '{print $1}')
-tar -tf "$CANDIDATE_SOURCE_ARCHIVE" >/dev/null
-tar -xf "$CANDIDATE_SOURCE_ARCHIVE" -C "$CANDIDATE_BUILD_ROOT"
-rm -f "$CANDIDATE_SOURCE_ARCHIVE"
-test ! -e "$CANDIDATE_BUILD_ROOT/.git"
-docker compose --project-directory "$CANDIDATE_BUILD_ROOT" \
-  -f "$CANDIDATE_BUILD_ROOT/docker-compose.prod.yml" \
-  --env-file "$ENV_CANDIDATE" build backend frontend
+# The process, Compose contract, Docker contexts, Caddy configuration, and
+# verification tools all come from the same snapshot created before step 1.
+# This production host has limited memory. Build one image at a time; the Go
+# Dockerfiles also constrain compiler workers and memory internally.
+for candidate_service in caddy postgres backend frontend; do
+  COMPOSE_PARALLEL_LIMIT=1 "${candidate_compose[@]}" \
+    --env-file "$ENV_CANDIDATE" build "$candidate_service"
+done
 
 # Compose build arguments are release identity, not decoration. Prove the
 # resulting images carry the exact candidate version and checkout revision
 # before stopping writers or promoting the environment.
 CANDIDATE_APP_VERSION=$(grep '^APP_VERSION=' "$ENV_CANDIDATE" | cut -d= -f2-)
-CANDIDATE_IMAGE_ATTESTATION=$(python3 ops/runtime_release_parity.py candidate \
-  --root "$REPO_DIR" --env-file "$ENV_CANDIDATE" \
-  --version-name "$CANDIDATE_APP_VERSION" --source-git-sha "$CURRENT_REVISION")
-echo "==> Candidate backend/frontend image version and revision labels verified."
+CANDIDATE_IMAGE_ATTESTATION=$(python3 "$CANDIDATE_PARITY_TOOL" candidate \
+  --root "$CANDIDATE_BUILD_ROOT" --env-file "$ENV_CANDIDATE" \
+  --version-name "$CANDIDATE_APP_VERSION" --source-git-sha "$CURRENT_REVISION" \
+  --project-name "$DEPLOY_PROJECT_NAME")
+echo "==> Candidate Caddy/PostgreSQL/backend/frontend identities verified."
 echo "==> Immutable candidate source archive: $CANDIDATE_SOURCE_ARCHIVE_SHA256"
 
 # Scan the exact locally built image IDs before maintenance begins. CI scans
 # the same reviewed source and every digest-pinned infrastructure image, while
-# this gate closes the remaining build-host parity boundary for the two images
+# this gate closes the remaining build-host parity boundary for the four images
 # that the production VM itself will run.
-install -o root -g root -m 0700 -d "$SECURITY_EVIDENCE_ROOT"
 SECURITY_EVIDENCE_DIR=$(mktemp -d \
   "$SECURITY_EVIDENCE_ROOT/${CURRENT_REVISION}.XXXXXX")
 chmod 700 "$SECURITY_EVIDENCE_DIR"
 printf '%s\n' "$CANDIDATE_IMAGE_ATTESTATION" \
   > "$SECURITY_EVIDENCE_DIR/candidate-images.json"
-printf 'source_git_sha=%s\napp_version=%s\nsyft_image=%s\ngrype_image=%s\nscanned_at_utc=%s\n' \
-  "$CURRENT_REVISION" "$CANDIDATE_APP_VERSION" "$SYFT_IMAGE" "$GRYPE_IMAGE" \
+printf 'source_git_sha=%s\ncandidate_source_archive_sha256=%s\napp_version=%s\nsyft_image=%s\ngrype_image=%s\nscanned_at_utc=%s\n' \
+  "$CURRENT_REVISION" "$CANDIDATE_SOURCE_ARCHIVE_SHA256" \
+  "$CANDIDATE_APP_VERSION" "$SYFT_IMAGE" "$GRYPE_IMAGE" \
   "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   > "$SECURITY_EVIDENCE_DIR/scan-metadata.txt"
-for candidate_service in backend frontend; do
+printf 'redis_image_ref=%s\nredis_image_id=%s\n' \
+  "$CANDIDATE_REDIS_IMAGE_REF" "$CANDIDATE_REDIS_IMAGE_ID" \
+  >> "$SECURITY_EVIDENCE_DIR/scan-metadata.txt"
+for candidate_service in caddy postgres backend frontend; do
   candidate_image_ref=$(python3 -c \
     'import json,sys; print(json.loads(sys.argv[1])["services"][sys.argv[2]]["image_ref"])' \
     "$CANDIDATE_IMAGE_ATTESTATION" "$candidate_service")
@@ -764,7 +1041,6 @@ for candidate_service in backend frontend; do
     > "$SECURITY_EVIDENCE_DIR/$candidate_service.syft.json"
   test -s "$SECURITY_EVIDENCE_DIR/$candidate_service.syft.json"
   chmod 0444 "$SECURITY_EVIDENCE_DIR/$candidate_service.syft.json"
-  rm -f "$image_archive"
   docker run --rm \
     --read-only --cap-drop ALL \
     --security-opt no-new-privileges \
@@ -772,10 +1048,11 @@ for candidate_service in backend frontend; do
     --user 65532:65532 \
     -e GRYPE_CHECK_FOR_APP_UPDATE=false \
     -e GRYPE_DB_CACHE_DIR=/tmp/grype-db \
-    -v "$SECURITY_EVIDENCE_DIR/$candidate_service.syft.json:/scan/image.syft.json:ro" \
-    "$GRYPE_IMAGE" "sbom:/scan/image.syft.json" \
+    -v "$image_archive:/scan/image.tar:ro" \
+    "$GRYPE_IMAGE" "docker-archive:/scan/image.tar" \
     --fail-on high --output json \
     > "$SECURITY_EVIDENCE_DIR/$candidate_service-grype.json"
+  rm -f "$image_archive"
   test -s "$SECURITY_EVIDENCE_DIR/$candidate_service-grype.json"
   # A successful process without an identified, valid vulnerability database
   # is not acceptable release evidence. Preserve the exact scanner and DB
@@ -815,17 +1092,23 @@ PY
 done
 chmod 600 "$SECURITY_EVIDENCE_DIR"/*
 echo "==> Exact candidate image SBOM/CVE gate passed: $SECURITY_EVIDENCE_DIR"
-rm -rf "$CANDIDATE_BUILD_ROOT"
-CANDIDATE_BUILD_ROOT=""
-
 if [ -n "$EXISTING_POSTGRES_CONTAINER" ]; then
   database_size_bytes=$(docker exec "$EXISTING_POSTGRES_CONTAINER" \
     psql -U erp -d erp -Atc "SELECT pg_database_size('erp')")
   snapshot_free_kib=$(df -Pk "$UPGRADE_SNAPSHOT" | awk 'END {print $4}')
   postgres_free_kib=$(docker exec "$EXISTING_POSTGRES_CONTAINER" \
     sh -c "df -Pk /var/lib/postgresql/data | awk 'END {print \$4}'")
-  bash infra/scripts/check-upgrade-capacity.sh \
+  bash "$CAPACITY_CHECK_TOOL" \
     "$database_size_bytes" "$snapshot_free_kib" "$postgres_free_kib"
+fi
+
+# Fail before stopping any writer if the exact Redis image resolved above is
+# no longer available under the frozen digest reference. CI scans this same
+# digest-pinned upstream image; locally built release images are scanned above.
+if [ "$(docker image inspect --format '{{.Id}}' \
+  "$CANDIDATE_REDIS_IMAGE_REF")" != "$CANDIDATE_REDIS_IMAGE_ID" ]; then
+  echo "Candidate Redis image changed or disappeared before maintenance." >&2
+  exit 1
 fi
 
 # A deployed database gets one final verified snapshot only after ingress and
@@ -838,9 +1121,9 @@ if [ -n "$EXISTING_POSTGRES_CONTAINER" ]; then
   fi
   echo "==> Entering scheduled maintenance and draining application writers…"
   MAINTENANCE_ACTIVE=true
-  docker compose -f docker-compose.prod.yml --env-file .env stop -t 30 caddy
-  docker compose -f docker-compose.prod.yml --env-file .env stop -t 60 backend
-  docker compose -f docker-compose.prod.yml --env-file .env stop -t 30 frontend
+  "${candidate_compose[@]}" --env-file .env stop -t 30 caddy
+  "${candidate_compose[@]}" --env-file .env stop -t 60 backend
+  "${candidate_compose[@]}" --env-file .env stop -t 30 frontend
   pending_outbox_count=$(docker exec "$EXISTING_POSTGRES_CONTAINER" \
     psql -U erp -d erp -Atc \
     "SELECT COALESCE(SUM(pending_outbox_count), 0) FROM client_installations")
@@ -859,6 +1142,7 @@ if [ -n "$EXISTING_POSTGRES_CONTAINER" ]; then
   fi
   docker exec -i "$EXISTING_POSTGRES_CONTAINER" \
     pg_restore --list < "$DATABASE_BACKUP" >/dev/null
+  DATABASE_BACKUP_SHA256=$(sha256sum "$DATABASE_BACKUP" | awk '{print $1}')
   sha256sum "$DATABASE_BACKUP" > "$UPGRADE_SNAPSHOT/database.dump.sha256"
   chmod 600 "$UPGRADE_SNAPSHOT/database.dump.sha256"
   VERIFY_DATABASE="code17_restore_verify_${SNAPSHOT_STAMP//[^a-zA-Z0-9_]/_}"
@@ -893,23 +1177,45 @@ MAINTENANCE_ACTIVE=false
 PROMOTION_COMPLETE=true
 echo "==> Candidate environment promoted atomically."
 
+# The old release may have run MinIO even though no application code uses S3.
+# Retire that one proven legacy container only after candidate promotion; its
+# image, Compose file, environment and volume remain available to rollback.
+if [ -n "$LEGACY_MINIO_CONTAINER" ]; then
+  docker stop -t 30 "$LEGACY_MINIO_CONTAINER" >/dev/null
+  docker rm "$LEGACY_MINIO_CONTAINER" >/dev/null
+  echo "==> Retired unused legacy MinIO runtime; preserved its named volume."
+fi
+
 # ----- 4. Bring up the stack -----
 echo
 echo "==> Starting internal services while public ingress remains closed…"
-docker compose -f docker-compose.prod.yml --env-file .env \
-  up -d postgres redis minio backend frontend
+"${candidate_compose[@]}" --env-file .env \
+  up -d --no-build --pull never postgres redis backend frontend
+
+CANDIDATE_REDIS_CONTAINER_IDS=()
+while IFS= read -r container_id; do
+  [ -n "$container_id" ] && CANDIDATE_REDIS_CONTAINER_IDS+=("$container_id")
+done < <("${candidate_compose[@]}" --env-file .env ps -q redis)
+if [ "${#CANDIDATE_REDIS_CONTAINER_IDS[@]}" -ne 1 ] || \
+   [ "$(docker inspect --format '{{.Image}}' \
+     "${CANDIDATE_REDIS_CONTAINER_IDS[0]:-missing}")" \
+     != "$CANDIDATE_REDIS_IMAGE_ID" ]; then
+  echo "Running Redis does not use the verified digest-pinned candidate image." >&2
+  exit 1
+fi
+echo "==> Running Redis image identity verified."
 
 # ----- 5. Wait for backend healthy -----
 echo
 echo "==> Waiting for backend readiness (migrations, seeds, DB, and Redis)…"
 ATTEMPTS=0
-until docker compose -f docker-compose.prod.yml exec -T backend python -c \
+until "${candidate_compose[@]}" --env-file .env exec -T backend python -c \
   "import urllib.request; urllib.request.urlopen('http://localhost:8000/readyz', timeout=2).read()" \
   >/dev/null 2>&1; do
   ATTEMPTS=$((ATTEMPTS+1))
   if [ $ATTEMPTS -gt 120 ]; then
     echo "Backend did not come up in 2 minutes. Check logs:"
-    echo "  docker compose -f docker-compose.prod.yml logs backend"
+    echo "  $OPERATIONS_COMPOSE_COMMAND logs backend"
     exit 1
   fi
   printf "."
@@ -918,14 +1224,16 @@ done
 echo
 echo "==> Backend is ready."
 
-# Docker health checks can lag readiness. Keep ingress closed until both actual
-# running image IDs equal the pre-cutover candidate, with exact release labels.
-echo "==> Verifying the healthy running backend/frontend release pair…"
+# Docker health checks can lag readiness. Keep ingress closed until every
+# internal release-built image equals the pre-cutover candidate.
+echo "==> Verifying healthy PostgreSQL/backend/frontend release identities…"
 ATTEMPTS=0
-until python3 ops/runtime_release_parity.py running \
-  --root "$REPO_DIR" --env-file "$REPO_DIR/.env" \
+until python3 "$CANDIDATE_PARITY_TOOL" running \
+  --root "$CANDIDATE_BUILD_ROOT" --env-file "$REPO_DIR/.env" \
   --version-name "$CANDIDATE_APP_VERSION" --source-git-sha "$CURRENT_REVISION" \
-  --expected-images-json "$CANDIDATE_IMAGE_ATTESTATION"; do
+  --project-name "$DEPLOY_PROJECT_NAME" \
+  --expected-images-json "$CANDIDATE_IMAGE_ATTESTATION" \
+  --services postgres backend frontend; do
   ATTEMPTS=$((ATTEMPTS+1))
   if [ "$ATTEMPTS" -ge 30 ]; then
     echo "Running release parity was not proven; public ingress remains closed." >&2
@@ -940,10 +1248,10 @@ done
 # unexpected active legacy package aborts the installer and follows the same
 # verified rollback path as a migration or readiness failure.
 echo "==> Auditing the owner-approved Gaming Centre tariff…"
-docker compose -f docker-compose.prod.yml --env-file .env exec -T backend \
+"${candidate_compose[@]}" --env-file .env exec -T backend \
   python -m scripts.ensure_gaming_tariff --dry-run
 echo "==> Applying the owner-approved Gaming Centre tariff…"
-docker compose -f docker-compose.prod.yml --env-file .env exec -T backend \
+"${candidate_compose[@]}" --env-file .env exec -T backend \
   python -m scripts.ensure_gaming_tariff
 echo "==> Gaming Centre tariff accepted."
 
@@ -954,7 +1262,7 @@ if [ "$FRESH_INSTALL" = true ]; then
   {
     printf '%s\n' "$OWNER_EMAIL"
     printf '%s\n' "$OWNER_PASSWORD"
-  } | docker compose -f docker-compose.prod.yml --env-file .env exec -T backend \
+  } | "${candidate_compose[@]}" --env-file .env exec -T backend \
     python -c '
 import json
 import sys
@@ -990,7 +1298,7 @@ protected_request = urllib.request.Request(
 )
 with urllib.request.urlopen(protected_request, timeout=10) as response:
     if response.status != 200:
-        raise SystemExit("seeded owner cannot access an admin.system endpoint")
+        raise SystemExit("seeded owner cannot access the owner support endpoint")
 '
   unset OWNER_PASSWORD
   echo "==> Fresh owner authentication and protected access accepted."
@@ -1003,7 +1311,8 @@ if [ -n "$UPGRADE_SNAPSHOT" ]; then
   # DNS/TLS was already proven against the unchanged domain before maintenance.
   trap handle_post_ingress_failure EXIT
 fi
-docker compose -f docker-compose.prod.yml --env-file .env up -d caddy
+"${candidate_compose[@]}" --env-file .env \
+  up -d --no-build --pull never caddy
 
 # ----- 6. Wait for Caddy to issue the certificate -----
 echo
@@ -1018,7 +1327,7 @@ until curl -fsS "https://$DOMAIN/readyz" >/dev/null 2>&1; do
     echo "  • DNS hasn't propagated yet — try again in 5–10 minutes."
     echo "  • Domain A record points to the wrong IP."
     echo "  • Port 80/443 isn't reachable from the internet (check Oracle Security List)."
-    echo "Check Caddy logs:  docker compose -f docker-compose.prod.yml logs caddy"
+    echo "Check Caddy logs:  $OPERATIONS_COMPOSE_COMMAND logs caddy"
     exit 1
   fi
   printf "."
@@ -1026,6 +1335,12 @@ until curl -fsS "https://$DOMAIN/readyz" >/dev/null 2>&1; do
 done
 echo
 echo "==> HTTPS is live."
+echo "==> Verifying complete running release identity, including Caddy…"
+python3 "$CANDIDATE_PARITY_TOOL" running \
+  --root "$CANDIDATE_BUILD_ROOT" --env-file "$REPO_DIR/.env" \
+  --version-name "$CANDIDATE_APP_VERSION" --source-git-sha "$CURRENT_REVISION" \
+  --project-name "$DEPLOY_PROJECT_NAME" \
+  --expected-images-json "$CANDIDATE_IMAGE_ATTESTATION"
 trap - EXIT
 
 # ----- 7. Done -----
@@ -1046,7 +1361,7 @@ cat <<EOF
 $(printf '%b' "$LOGIN_HANDOFF")
 
   To create your friend's view-only login, run:
-    docker compose -f docker-compose.prod.yml exec backend \\
+    $OPERATIONS_COMPOSE_COMMAND exec backend \\
       python -m scripts.create_user \\
         --email friend@example.com --name "Friend Name" \\
         --role auditor
@@ -1054,13 +1369,13 @@ $(printf '%b' "$LOGIN_HANDOFF")
   password through an approved secret channel; ERP never prints it.
 
   Useful commands:
-    docker compose -f docker-compose.prod.yml ps                 # status
-    docker compose -f docker-compose.prod.yml logs -f backend    # live logs
-    docker compose -f docker-compose.prod.yml restart backend    # restart
-    docker compose -f docker-compose.prod.yml stop               # stop existing containers
+    $OPERATIONS_COMPOSE_COMMAND ps                 # status
+    $OPERATIONS_COMPOSE_COMMAND logs -f backend    # live logs
+    $OPERATIONS_COMPOSE_COMMAND restart backend    # restart
+    $OPERATIONS_COMPOSE_COMMAND stop               # stop existing containers
 
   Backups (run weekly via cron):
-    docker compose -f docker-compose.prod.yml exec postgres \\
+    $OPERATIONS_COMPOSE_COMMAND exec postgres \\
       pg_dump -U erp erp | gzip > /root/backups/erp-\$(date +%F).sql.gz
 
 ============================================================

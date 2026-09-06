@@ -166,7 +166,7 @@ describe('System Health recovery copy', () => {
     const offline = Object.assign(new Error('socket closed'), { code: 'network_error' }) as ApiError;
     const server = Object.assign(new Error('internal trace'), { status: 500 }) as ApiError;
 
-    expect(systemHealthErrorMessage(forbidden)).toContain('does not have protected');
+    expect(systemHealthErrorMessage(forbidden)).toContain('does not have owner support access');
     expect(systemHealthErrorMessage(offline)).toContain('could not be reached');
     expect(systemHealthErrorMessage(server)).toContain('did not complete');
     expect(systemHealthErrorMessage(server)).not.toContain('trace');

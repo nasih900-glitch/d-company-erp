@@ -279,7 +279,7 @@ async def test_summary_and_system_health_are_protected_and_sanitized(
     )
     installation_id = uuid4()
     staff_headers = _headers(seed_owner, roles=["staff"])
-    ordinary_owner_headers = _headers(seed_owner, roles=["owner"])
+    tenant_owner_headers = _headers(seed_owner, roles=["owner"])
     protected_headers = _headers(
         seed_owner,
         roles=["super_owner"],
@@ -350,8 +350,8 @@ async def test_summary_and_system_health_are_protected_and_sanitized(
         "/api/v1/client-diagnostics/summary",
         "/api/v1/client-diagnostics/system-health",
     ):
-        forbidden = await client.get(path, headers=ordinary_owner_headers)
-        assert forbidden.status_code == 403, (path, forbidden.text)
+        allowed = await client.get(path, headers=tenant_owner_headers)
+        assert allowed.status_code == 200, (path, allowed.text)
 
     summary = await client.get(
         "/api/v1/client-diagnostics/summary",

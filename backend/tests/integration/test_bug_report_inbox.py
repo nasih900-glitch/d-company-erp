@@ -221,8 +221,8 @@ async def test_staff_can_submit_idempotently_but_cannot_open_admin_inbox(
     assert denied_detail.status_code == 403
     assert denied_update.status_code == 403
 
-    # A co-owner's broad operational bypass must not become admin.system.
-    # Only the protected system owner (audit_access) receives the inbox.
+    # A co-owner receives the dedicated tenant support permission without
+    # gaining Audit Log, Access Control, or global release authority.
     co_owner_headers = _co_owner_headers(seed_owner)
     co_owner_list = await client.get("/api/v1/bug-reports", headers=co_owner_headers)
     co_owner_detail = await client.get(
@@ -233,9 +233,9 @@ async def test_staff_can_submit_idempotently_but_cannot_open_admin_inbox(
         headers=co_owner_headers,
         json={"status": "acknowledged"},
     )
-    assert co_owner_list.status_code == 403
-    assert co_owner_detail.status_code == 403
-    assert co_owner_update.status_code == 403
+    assert co_owner_list.status_code == 200, co_owner_list.text
+    assert co_owner_detail.status_code == 200, co_owner_detail.text
+    assert co_owner_update.status_code == 200, co_owner_update.text
 
     rows = (
         (
@@ -687,11 +687,13 @@ async def test_reporter_can_follow_public_replies_without_private_inbox_data(
         "critical_active": 0,
         "last_activity_at": initial_summary.json()["last_activity_at"],
     }
-    denied_summary = await client.get(
+    co_owner_summary = await client.get(
         "/api/v1/bug-reports/inbox-summary",
         headers=_co_owner_headers(seed_owner),
     )
-    assert denied_summary.status_code == 403
+    assert co_owner_summary.status_code == 200, co_owner_summary.text
+    assert co_owner_summary.json()["active"] == 1
+    assert co_owner_summary.json()["unread"] == 1
 
     marked = await client.post(f"/api/v1/bug-reports/{report_id}/read", headers=admin_headers)
     assert marked.status_code == 204, marked.text
@@ -847,11 +849,12 @@ async def test_private_screenshot_is_bounded_idempotent_tenant_scoped_and_purgea
         headers=other_staff_headers,
     )
     assert denied_other_reporter.status_code == 404
-    denied_unprotected_owner = await client.get(
+    co_owner_download = await client.get(
         f"/api/v1/bug-reports/{report_id}/attachments/{attachment['id']}",
         headers=_co_owner_headers(seed_owner),
     )
-    assert denied_unprotected_owner.status_code == 403
+    assert co_owner_download.status_code == 200, co_owner_download.text
+    assert hashlib.sha256(co_owner_download.content).hexdigest() == attachment["sha256"]
 
     report = await session.get(BugReport, UUID(report_id))
     assert report is not None

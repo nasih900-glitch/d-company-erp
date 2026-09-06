@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 
 import { useAuth } from '@/modules/auth/AuthContext';
-import { hasAdminSystemAccess } from '@/lib/admin-access';
+import { hasSupportAccess } from '@/lib/admin-access';
 import { rolesLabel } from '@/lib/roles';
 import { canAccessRefunds } from '@/modules/refunds/refund-policy';
 import { canViewMemberships } from '@/modules/memberships/membership-policy';
@@ -66,7 +66,7 @@ export default function AppShell({ children }: { children?: ReactNode }) {
   // backend will 403 on (see core/permissions.py's admin.audit.read carve-out).
   const isProtectedOwner = Boolean(demo || me?.protected_access);
   const hasAuditAccess = Boolean(demo || me?.audit_access);
-  const hasSystemAccess = hasAdminSystemAccess(me);
+  const hasSystemAccess = hasSupportAccess(me);
   const hasRefundAccess = Boolean(demo || canAccessRefunds(me));
   const hasMembershipAccess = Boolean(demo || canViewMemberships(me));
   const hasProductManagementAccess = canManageGamingCentreProducts(me, demo);

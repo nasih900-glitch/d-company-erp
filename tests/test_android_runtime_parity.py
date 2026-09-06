@@ -21,7 +21,7 @@ class RuntimeParityTest(unittest.TestCase):
         def reply(command):
             if "config" in command:
                 return json.dumps({"services": {name: {"image": f"erp-{name}:{REVISION}"}
-                                               for name in ("backend", "frontend")}})
+                                               for name in parity.RELEASE_IMAGE_SERVICES}})
             if "ps" in command:
                 return "\n".join([CONTAINER] * count)
             if command[:2] == ["docker", "inspect"]:
@@ -35,11 +35,12 @@ class RuntimeParityTest(unittest.TestCase):
             raise AssertionError(f"Unexpected command: {command}")
         return reply
 
-    def test_running_pair_uses_actual_immutable_images_and_health(self):
+    def test_running_release_uses_actual_immutable_images_and_health(self):
         with patch.object(parity, "_run", side_effect=self.replies()) as run:
             result = parity.inspect_release_pair("/erp", "/erp/.env", VERSION, REVISION, running=True)
         self.assertEqual(IMAGE, result["services"]["backend"]["image_id"])
         self.assertEqual(CONTAINER, result["services"]["frontend"]["container_id"])
+        self.assertEqual(set(parity.RELEASE_IMAGE_SERVICES), set(result["services"]))
         self.assertTrue(any(call.args[0] == ["docker", "image", "inspect", IMAGE]
                             for call in run.call_args_list))
 
@@ -50,6 +51,24 @@ class RuntimeParityTest(unittest.TestCase):
         for call in run.call_args_list:
             self.assertNotIn("ps", call.args[0])
             self.assertNotIn("images", call.args[0])
+
+    def test_isolated_runtime_project_is_passed_as_an_argv_value(self):
+        project = "code25-runtime-123-1"
+        with patch.object(parity, "_run", side_effect=self.replies()) as run:
+            parity.inspect_release_pair(
+                "/erp", "/candidate.env", VERSION, REVISION,
+                running=False, project_name=project,
+            )
+        self.assertIn(["docker", "compose", "-p", project], [call.args[0][:4] for call in run.call_args_list])
+
+        for invalid in ("Bad Project", "-option", "a" * 64):
+            with self.subTest(invalid=invalid), patch.object(parity, "_run") as run:
+                with self.assertRaises(parity.RuntimeParityError):
+                    parity.inspect_release_pair(
+                        "/erp", "/candidate.env", VERSION, REVISION,
+                        running=False, project_name=invalid,
+                    )
+                run.assert_not_called()
 
     def test_wrong_revision_is_rejected_without_mutating_commands(self):
         with patch.object(parity, "_run", side_effect=self.replies(revision="d" * 40)) as run:
@@ -69,6 +88,24 @@ class RuntimeParityTest(unittest.TestCase):
             with self.assertRaisesRegex(parity.RuntimeParityError, "differs from the verified candidate"):
                 parity.inspect_release_pair("/erp", "/erp/.env", VERSION, REVISION,
                     running=True, expected_images={"services": {"backend": {"image_id": "sha256:" + "d" * 64}}})
+
+    def test_internal_pre_ingress_subset_is_explicit_and_validated(self):
+        services = ("postgres", "backend", "frontend")
+        with patch.object(parity, "_run", side_effect=self.replies()):
+            result = parity.inspect_release_pair(
+                "/erp", "/erp/.env", VERSION, REVISION, running=True,
+                services=services,
+            )
+        self.assertEqual(set(services), set(result["services"]))
+
+        for invalid in ((), ("backend", "backend"), ("redis",)):
+            with self.subTest(invalid=invalid), patch.object(parity, "_run") as run:
+                with self.assertRaises(parity.RuntimeParityError):
+                    parity.inspect_release_pair(
+                        "/erp", "/erp/.env", VERSION, REVISION, running=True,
+                        services=invalid,
+                    )
+                run.assert_not_called()
 
     def test_invalid_identity_fails_before_any_docker_command(self):
         for version, revision in (("dev", REVISION), ("03.1.14", REVISION), (VERSION, "unknown"), (VERSION, "A" * 40), ("0.0.0", "0" * 40), (VERSION, "0" * 40)):
@@ -102,9 +139,14 @@ class RuntimeParityTest(unittest.TestCase):
         self.assertIn('add_header Cache-Control "no-store" always;', nginx)
         self.assertIn('add_header X-Content-Type-Options "nosniff" always;', nginx)
         self.assertNotIn('images -q "$candidate_service"', installer)
-        candidate_gate = installer.index("ops/runtime_release_parity.py candidate")
+        candidate_gate = installer.index(
+            'python3 "$CANDIDATE_PARITY_TOOL" candidate'
+        )
         self.assertLess(candidate_gate, installer.index("stop -t 30 caddy", candidate_gate))
-        self.assertLess(installer.index("ops/runtime_release_parity.py running"), installer.index("up -d caddy"))
+        self.assertLess(
+            installer.index('python3 "$CANDIDATE_PARITY_TOOL" running'),
+            installer.index("up -d --no-build --pull never caddy"),
+        )
         self.assertIn('--expected-images-json "$CANDIDATE_IMAGE_ATTESTATION"', installer)
 
     def test_ci_and_release_builds_supply_coordinated_version_and_sha(self):

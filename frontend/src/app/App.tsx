@@ -5,7 +5,7 @@ import { Loader2 } from 'lucide-react';
 import AppShell from '@/components/layout/AppShell';
 import RequireAuth from '@/modules/auth/RequireAuth';
 import { useAuth } from '@/modules/auth/AuthContext';
-import { hasAdminSystemAccess, hasAuditAccess } from '@/lib/admin-access';
+import { hasAuditAccess, hasSupportAccess } from '@/lib/admin-access';
 import { LIVE_MODE } from '@/lib/demo';
 import { canAccessRefunds } from '@/modules/refunds/refund-policy';
 import { canViewMemberships } from '@/modules/memberships/membership-policy';
@@ -63,9 +63,9 @@ function AuditAccessOnly({ children }: { children: ReactNode }) {
   return <Navigate to="/pos" replace />;
 }
 
-export function AdminSystemOnly({ children }: { children: ReactNode }) {
+export function SupportAccessOnly({ children }: { children: ReactNode }) {
   const { me } = useAuth();
-  if (hasAdminSystemAccess(me)) return <>{children}</>;
+  if (hasSupportAccess(me)) return <>{children}</>;
   return <Navigate to="/pos" replace />;
 }
 
@@ -244,7 +244,7 @@ export default function App() {
           path="/bug-reports"
           element={
             <FeatureOnly feature="supportInbox">
-              <Screen><AdminSystemOnly><BugReportsScreen /></AdminSystemOnly></Screen>
+              <Screen><SupportAccessOnly><BugReportsScreen /></SupportAccessOnly></Screen>
             </FeatureOnly>
           }
         />
@@ -252,7 +252,7 @@ export default function App() {
           path="/device-centre"
           element={
             <FeatureOnly feature="settings">
-              <Screen><AdminSystemOnly><DeviceCentreScreen /></AdminSystemOnly></Screen>
+              <Screen><SupportAccessOnly><DeviceCentreScreen /></SupportAccessOnly></Screen>
             </FeatureOnly>
           }
         />

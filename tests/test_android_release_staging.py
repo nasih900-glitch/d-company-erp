@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import os
+import sys
 import tempfile
 import unittest
 from argparse import Namespace
@@ -18,6 +19,26 @@ SIGNER = "55" * 32
 
 
 class AndroidReleaseStagingTest(unittest.TestCase):
+    def setUp(self) -> None:
+        """Keep security-sensitive fixtures below a private trusted ancestor.
+
+        Linux normally places ``TemporaryDirectory`` below mode-1777 ``/tmp``.
+        Production correctly rejects a release path reached through such an
+        ancestor, so tests that exercise the trusted-path code need their own
+        mode-0700 root inside the checkout instead of weakening that check.
+        """
+        self._previous_tempdir = tempfile.tempdir
+        self._private_temp_root = tempfile.TemporaryDirectory(
+            prefix=".android-release-staging-",
+            dir=Path(__file__).resolve().parent,
+        )
+        Path(self._private_temp_root.name).chmod(0o700)
+        tempfile.tempdir = self._private_temp_root.name
+
+    def tearDown(self) -> None:
+        tempfile.tempdir = self._previous_tempdir
+        self._private_temp_root.cleanup()
+
     def make_package(self, root: Path) -> tuple[Path, Path, dict]:
         apk = root / "d-company-erp-v3.1.4-direct.apk"
         apk.write_bytes(b"immutable-signed-apk")
@@ -122,7 +143,7 @@ class AndroidReleaseStagingTest(unittest.TestCase):
         self, _runtime
     ) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            parent = Path(temporary)
+            parent = Path(temporary).resolve()
             root = parent / "erp"
             release_dir = root / "releases/android"
             release_dir.mkdir(parents=True)
@@ -167,15 +188,68 @@ class AndroidReleaseStagingTest(unittest.TestCase):
                 ):
                     staging._remote_action("prepare", payload)
 
+    @unittest.skipUnless(
+        sys.platform == "linux",
+        "requires the Linux renameat2(RENAME_NOREPLACE) syscall",
+    )
+    def test_real_renameat2_noreplace_moves_once_and_never_overwrites(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source_directory = root / "private-upload"
+            destination_directory = root / "public-release"
+            source_directory.mkdir()
+            destination_directory.mkdir()
+            source_fd = os.open(
+                source_directory,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC,
+            )
+            destination_fd = os.open(
+                destination_directory,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC,
+            )
+            try:
+                (source_directory / "candidate.apk").write_bytes(b"first")
+                staging._atomic_rename_noreplace_at(
+                    source_fd,
+                    "candidate.apk",
+                    destination_fd,
+                    "release.apk",
+                )
+                self.assertFalse((source_directory / "candidate.apk").exists())
+                self.assertEqual(
+                    b"first",
+                    (destination_directory / "release.apk").read_bytes(),
+                )
+
+                (source_directory / "second.apk").write_bytes(b"second")
+                with self.assertRaises(staging._ImmutableDestinationExists):
+                    staging._atomic_rename_noreplace_at(
+                        source_fd,
+                        "second.apk",
+                        destination_fd,
+                        "release.apk",
+                    )
+                self.assertEqual(
+                    b"second",
+                    (source_directory / "second.apk").read_bytes(),
+                )
+                self.assertEqual(
+                    b"first",
+                    (destination_directory / "release.apk").read_bytes(),
+                )
+            finally:
+                os.close(destination_fd)
+                os.close(source_fd)
+
     @patch.object(staging, "inspect_release_pair", return_value={})
     def test_remote_upload_reservation_cannot_overwrite_symlink_victim(
         self, _runtime
     ) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            parent = Path(temporary)
+            parent = Path(temporary).resolve()
             root = parent / "erp"
             (root / "releases/android").mkdir(parents=True)
-            private = parent / staging.PRIVATE_UPLOAD_DIRECTORY_NAME
+            private = root / staging.PRIVATE_UPLOAD_DIRECTORY_NAME
             private.mkdir(mode=0o700)
             filename = "d-company-erp-v3.1.4-direct.apk"
             body = b"verified"
@@ -214,7 +288,7 @@ class AndroidReleaseStagingTest(unittest.TestCase):
         self, _runtime
     ) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            parent = Path(temporary)
+            parent = Path(temporary).resolve()
             root = parent / "erp"
             release_dir = root / "releases/android"
             release_dir.mkdir(parents=True)
@@ -266,11 +340,80 @@ class AndroidReleaseStagingTest(unittest.TestCase):
             self.assertEqual(body, (moved / filename).read_bytes())
 
     @patch.object(staging, "inspect_release_pair", return_value={})
+    def test_private_upload_directory_swap_cannot_redirect_the_held_file(
+        self, _runtime
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary).resolve()
+            root = parent / "erp"
+            release_dir = root / "releases/android"
+            release_dir.mkdir(parents=True)
+            private = root / staging.PRIVATE_UPLOAD_DIRECTORY_NAME
+            private.mkdir(mode=0o700)
+            moved_private = root / "private-before-swap"
+            filename = "d-company-erp-v3.1.4-direct.apk"
+            token = "b" * 32
+            temporary_name = f".{filename}.{token}.part"
+            body = b"verified"
+            victim = parent / "victim"
+            victim.write_bytes(b"must-survive")
+            original_copy = staging._copy_exact_upload
+
+            def swap_then_copy(source, destination_fd, **kwargs) -> None:
+                private.rename(moved_private)
+                private.mkdir(mode=0o700)
+                (private / temporary_name).symlink_to(victim)
+                original_copy(source, destination_fd, **kwargs)
+
+            payload = {
+                "remote_root": str(root),
+                "apk_filename": filename,
+                "apk_sha256": hashlib.sha256(body).hexdigest(),
+                "apk_size_bytes": len(body),
+            }
+            with (
+                patch.object(staging, "TRUSTED_REMOTE_OWNER_UID", os.geteuid()),
+                patch.object(staging, "TRUSTED_REMOTE_OWNER_GID", os.getegid()),
+                patch.object(
+                    staging.uuid,
+                    "uuid4",
+                    return_value=SimpleNamespace(hex=token),
+                ),
+                patch.object(
+                    staging,
+                    "_copy_exact_upload",
+                    side_effect=swap_then_copy,
+                ),
+                patch.object(
+                    staging,
+                    "_atomic_rename_noreplace_at",
+                    side_effect=lambda source_fd, source, destination_fd, destination: (
+                        os.rename(
+                            source,
+                            destination,
+                            src_dir_fd=source_fd,
+                            dst_dir_fd=destination_fd,
+                        )
+                    ),
+                ),
+            ):
+                result = staging._remote_action(
+                    "upload",
+                    payload,
+                    upload_stream=io.BytesIO(body),
+                )
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(body, (release_dir / filename).read_bytes())
+            self.assertEqual(b"must-survive", victim.read_bytes())
+            self.assertTrue((private / temporary_name).is_symlink())
+
+    @patch.object(staging, "inspect_release_pair", return_value={})
     def test_remote_prepare_rejects_symlink_and_hardlink_destinations(
         self, _runtime
     ) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            parent = Path(temporary)
+            parent = Path(temporary).resolve()
             root = parent / "erp"
             release_dir = root / "releases/android"
             release_dir.mkdir(parents=True)
@@ -303,6 +446,60 @@ class AndroidReleaseStagingTest(unittest.TestCase):
                     staging._remote_action("prepare", payload)
 
             self.assertEqual(b"must-survive", victim.read_bytes())
+
+    @patch.object(staging, "inspect_release_pair", return_value={})
+    def test_remote_prepare_rejects_symlinked_root_components(self, _runtime) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary).resolve()
+            real_root = parent / "real-erp"
+            (real_root / "releases/android").mkdir(parents=True)
+            linked_root = parent / "linked-erp"
+            linked_root.symlink_to(real_root, target_is_directory=True)
+            payload = {
+                "remote_root": str(linked_root),
+                "apk_filename": "d-company-erp-v3.1.4-direct.apk",
+                "apk_sha256": "ab" * 32,
+                "apk_size_bytes": 8,
+            }
+            with (
+                patch.object(staging, "TRUSTED_REMOTE_OWNER_UID", os.geteuid()),
+                patch.object(staging, "TRUSTED_REMOTE_OWNER_GID", os.getegid()),
+                self.assertRaisesRegex(
+                    staging.AndroidReleaseStagingError,
+                    "safely traverse",
+                ),
+            ):
+                staging._remote_action("prepare", payload)
+
+    @patch.object(staging, "inspect_release_pair", return_value={})
+    def test_remote_upload_rejects_non_private_staging_directory(
+        self, _runtime
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary).resolve()
+            root = parent / "erp"
+            (root / "releases/android").mkdir(parents=True)
+            private = root / staging.PRIVATE_UPLOAD_DIRECTORY_NAME
+            private.mkdir(mode=0o755)
+            payload = {
+                "remote_root": str(root),
+                "apk_filename": "d-company-erp-v3.1.4-direct.apk",
+                "apk_sha256": hashlib.sha256(b"verified").hexdigest(),
+                "apk_size_bytes": len(b"verified"),
+            }
+            with (
+                patch.object(staging, "TRUSTED_REMOTE_OWNER_UID", os.geteuid()),
+                patch.object(staging, "TRUSTED_REMOTE_OWNER_GID", os.getegid()),
+                self.assertRaisesRegex(
+                    staging.AndroidReleaseStagingError,
+                    "Private Android upload directory",
+                ),
+            ):
+                staging._remote_action(
+                    "upload",
+                    payload,
+                    upload_stream=io.BytesIO(b"verified"),
+                )
 
     def test_ci_manifest_schema_does_not_accept_operator_added_fields(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -425,6 +622,36 @@ class AndroidReleaseStagingTest(unittest.TestCase):
                         root="/opt/d-company-erp",
                     )
                 )
+
+    def test_ssh_helpers_revalidate_option_looking_destinations(self) -> None:
+        for host in ("-V", "-Jattacker.example", "root@-Jattacker.example"):
+            target = staging.RemoteTarget(
+                host=host,
+                key=Path("/safe/key"),
+                port=22,
+                root="/opt/d-company-erp",
+            )
+            with (
+                self.subTest(host=host, helper="json"),
+                patch.object(staging.subprocess, "run") as run,
+                self.assertRaisesRegex(staging.AndroidReleaseStagingError, "SSH host"),
+            ):
+                staging._ssh_json(target, "runtime", {})
+            run.assert_not_called()
+
+            with tempfile.TemporaryDirectory() as temporary:
+                apk = Path(temporary) / "candidate.apk"
+                apk.write_bytes(b"candidate")
+                with (
+                    self.subTest(host=host, helper="upload"),
+                    patch.object(staging.subprocess, "run") as run,
+                    self.assertRaisesRegex(
+                        staging.AndroidReleaseStagingError,
+                        "SSH host",
+                    ),
+                ):
+                    staging._ssh_upload_apk(target, apk, {})
+                run.assert_not_called()
 
     def test_ssh_option_terminator_precedes_destination_for_json_and_upload(
         self,
@@ -855,18 +1082,17 @@ class AndroidReleaseStagingTest(unittest.TestCase):
         upload.assert_not_called()
 
     def test_staging_and_installer_share_the_exact_lock_file(self) -> None:
-        installer = (
-            Path(__file__).resolve().parents[1] / "infra/scripts/install-on-vm.sh"
+        lock_helper = (
+            Path(__file__).resolve().parents[1]
+            / "infra/scripts/production_install_lock.py"
         ).read_text(encoding="utf-8")
         self.assertEqual(
-            "/var/lock/d-company-erp/production-install.lock",
+            "/run/d-company-erp/production-install.lock",
             staging.PRODUCTION_INSTALL_LOCK,
         )
-        self.assertIn("LOCK_DIR=/var/lock/d-company-erp", installer)
-        self.assertIn(
-            'LOCK_FILE="$LOCK_DIR/production-install.lock"',
-            installer,
-        )
+        self.assertIn('RUNTIME_PARENT = Path("/run")', lock_helper)
+        self.assertIn('RUNTIME_DIRECTORY_NAME = "d-company-erp"', lock_helper)
+        self.assertIn('LOCK_FILE_NAME = "production-install.lock"', lock_helper)
 
     def test_external_monitor_checks_headers_frequently_and_bytes_periodically(
         self,

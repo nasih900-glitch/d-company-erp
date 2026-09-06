@@ -54,7 +54,7 @@ LOCAL_BACKUP_DIR = Path("/var/lib/dcompany-erp/backups/auto")
 ANDROID_RELEASE_DIR = ROOT / "releases/android"
 DEFAULT_BASE_URL = "https://dcompany.duckdns.org"
 EXPECTED_SERVICES = frozenset(
-    {"caddy", "postgres", "redis", "minio", "backend", "frontend"}
+    {"caddy", "postgres", "redis", "backend", "frontend"}
 )
 ERROR_LINE_RE = re.compile(
     r'"level"\s*:\s*"(?:error|critical|fatal)"|Traceback \(most recent call last\)|'

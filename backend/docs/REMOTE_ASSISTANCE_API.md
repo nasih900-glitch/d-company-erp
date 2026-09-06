@@ -13,12 +13,13 @@ general remote-desktop feature.
   `RemoteAssistanceDeviceKey` proves possession of a P-256 private key held in
   Android Keystore; the server stores only canonical public SPKI bytes and a
   SHA-256 fingerprint, never a private key.
-- Owner operations require `admin.system`, which is restricted by the existing
-  protected-owner permission boundary.
+- Owner operations require the dedicated `admin.support` permission. Tenant
+  owners and co-owners can help staff without receiving Audit Log, Access
+  Control, or Android release authority.
 - Enrollment requires the normal bearer-authenticated Android user currently
   attributed to the installation plus P-256 proof of possession. Enrollment
   creates a short-lived `pending` key only; it cannot activate or replace a key.
-- The protected owner must enter the 12-character code displayed on the
+- An authorised tenant owner must enter the 12-character code displayed on the
   physical tablet to approve a pending key. The server derives this code with a
   dedicated secret-keyed HMAC. Owner list/admin APIs never return the code,
   pending public key, or pending full fingerprint.
@@ -77,7 +78,7 @@ an already-created request still returns its immutable result.
 
 ## Owner endpoints
 
-All endpoints in this table require `admin.system`.
+All endpoints in this table require `admin.support`.
 
 | Method and path | Request | Response |
 |---|---|---|
@@ -202,7 +203,7 @@ POST /device-keys/{key_id}/revoke
 
 Pairing input is canonicalized by uppercasing and removing spaces/hyphens, then
 validated against the 12-character alphabet. A wrong well-formed code returns
-`403 remote_pairing_code_mismatch`; missing `admin.system` returns
+`403 remote_pairing_code_mismatch`; missing `admin.support` returns
 `403 forbidden`; malformed input returns 422; an expired/non-pending key
 returns `409 conflict`; cross-company keys are hidden with 404. Approval and
 revocation return `DeviceKeyAdminRead` directly:
@@ -590,7 +591,7 @@ The API uses the normal error envelope. Relevant HTTP statuses are:
 - 401 `unauthorized`: invalid/missing device proof, forged signature, stale
   timestamp, replayed nonce, altered target/body, or inactive key on an
   operational device endpoint.
-- 403 `forbidden`: missing protected-owner permission, non-Android device
+- 403 `forbidden`: missing owner support permission, non-Android device
   endpoint, or authenticated device user mismatch.
 - 403 `remote_pairing_code_mismatch`: a well-formed physical pairing code did
   not match; this is distinct from owner authorization denial.
@@ -614,7 +615,7 @@ attribution when present, lifecycle state, semantic command type and sequence,
 and one-way hashed device/key references. They do not contain bearer tokens,
 private/public key bytes, pairing codes, raw installation UUIDs, JPEG bytes,
 request headers, or screenshots. The full fingerprint is audit metadata only
-after protected-owner approval.
+after authorised owner approval.
 
 PostgreSQL constraints and triggers enforce tenant/device/actor scope,
 idempotency uniqueness, immutable evidence, allowed state transitions, one
@@ -675,7 +676,7 @@ Before maintenance the installer:
 1. requires a clean exact current Git commit and records the prior running
    Compose project, database head, immutable image IDs, protected rollback tags,
    source-manifest digest, prior Compose file, and mode-0600 prior `.env` in a
-   mode-0700 `.deployment-rollbacks/` directory;
+   root-owned mode-0700 `/var/lib/dcompany-erp/deployment-rollbacks/` directory;
 2. creates and validates a mode-0600 candidate without overwriting real JWT,
    Postgres, MinIO, owner, pairing, relay, or Redis credentials; all seven
    managed credentials must be pairwise independent, and no secret is printed;
@@ -691,8 +692,10 @@ custom-format dump. It records a SHA-256 checksum, verifies the archive list,
 fully restores the dump into a disposable database, verifies its exact Alembic
 head, and drops the test database. Writes stay closed from that final snapshot
 through migration and internal acceptance. The candidate `.env` is then
-atomically promoted; Postgres/Redis/MinIO/backend/frontend start without Caddy;
-the installer requires `/readyz`. A fresh install additionally signs in with
+atomically promoted; the one proven legacy MinIO container is retired while its
+named volume and rollback image remain protected, then
+Postgres/Redis/backend/frontend start without Caddy. The installer requires
+`/readyz`. A fresh install additionally signs in with
 the generated `SEED_OWNER_EMAIL`/password over the internal interface and
 requires protected audit authority plus `admin.system`, without displaying the
 password. Seed and role failures are fatal, not reported as “already applied.”
@@ -710,9 +713,13 @@ stop Caddy and all application writers, and take a new verified final backup.
 With the Code17 migration image still available, downgrade to the exact Code16
 head `0060` (not `0061`; Code16 does not know revision 0061), for example with
 the Code17 backend image's entrypoint overridden to run `alembic downgrade
-0060`. Verify the head, run `restore-images.sh`, atomically restore the prior
-mode-0600 `.env`, and start `docker-compose.prior.yml` with the recorded Compose
-project and `--project-directory`/`--no-build`. If downgrade fails, keep ingress
+0060`. Verify `rollback-state.sha256`, then verify every protected rollback tag
+and original image reference against the immutable image IDs recorded in
+`container-images.txt`; retag mutable original references directly from those
+verified image IDs. The snapshot deliberately contains no executable restore
+script. Atomically restore the prior mode-0600 `.env`, and start
+`docker-compose.prior.yml` with the recorded Compose project and
+`--project-directory`/`--no-build`/`--pull never`. If downgrade fails, keep ingress
 closed and restore the latest quiesced verified dump; never boot Code16 against
 a database at 0061/0062. Verify `/readyz`, owner login, a POS read/write, and
 remote-assistance absence before reopening staff traffic. The disposable

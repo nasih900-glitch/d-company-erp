@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
-"""Read-only, fail-closed proof of the exact deployed ERP image pair."""
+"""Read-only, fail-closed proof of exact coordinated ERP release images."""
 from __future__ import annotations
 
 import argparse
+from collections.abc import Sequence
 import json
 import re
 import subprocess
 from pathlib import Path
 from typing import Any
+
+
+RELEASE_IMAGE_SERVICES = ("caddy", "postgres", "backend", "frontend")
+HEALTH_REQUIRED_SERVICES = frozenset({"postgres", "backend", "frontend"})
 
 
 class RuntimeParityError(RuntimeError):
@@ -50,14 +55,27 @@ def _one(command: list[str], label: str) -> dict[str, Any]:
 def inspect_release_pair(
     root: str, env_file: str, version_name: str, source_git_sha: str,
     *, running: bool, expected_images: dict[str, Any] | None = None,
+    services: Sequence[str] | None = None,
+    project_name: str | None = None,
 ) -> dict[str, Any]:
     identity = validate_identity(version_name, source_git_sha)
-    compose = ["docker", "compose", "-f", str(Path(root) / "docker-compose.prod.yml"),
-               "--env-file", env_file]
+    selected_services = tuple(RELEASE_IMAGE_SERVICES if services is None else services)
+    if (
+        not selected_services
+        or len(set(selected_services)) != len(selected_services)
+        or any(service not in RELEASE_IMAGE_SERVICES for service in selected_services)
+    ):
+        raise RuntimeParityError("Runtime parity services are empty, duplicated, or unsupported")
+    if project_name is not None and re.fullmatch(r"[a-z0-9][a-z0-9_.-]{0,62}", project_name) is None:
+        raise RuntimeParityError("Runtime parity Compose project name is invalid")
+    compose = ["docker", "compose"]
+    if project_name is not None:
+        compose.extend(("-p", project_name))
+    compose.extend(("-f", str(Path(root) / "docker-compose.prod.yml"), "--env-file", env_file))
     # Render only for candidate image refs. `compose images` reflects OLD containers.
     config = None if running else _json([*compose, "config", "--format", "json"])
     evidence: dict[str, Any] = {**identity, "services": {}}
-    for service in ("backend", "frontend"):
+    for service in selected_services:
         container_id = None
         if running:
             ids = _run([*compose, "ps", "-q", service]).split()
@@ -65,8 +83,15 @@ def inspect_release_pair(
                 raise RuntimeParityError(f"Expected exactly one running {service} container")
             container = _one(["docker", "inspect", ids[0]], f"{service} container")
             state = container.get("State", {})
-            if (not state.get("Running") or state.get("Paused") or state.get("Restarting")
-                    or state.get("Health", {}).get("Status") != "healthy"):
+            if (
+                not state.get("Running")
+                or state.get("Paused")
+                or state.get("Restarting")
+                or (
+                    service in HEALTH_REQUIRED_SERVICES
+                    and state.get("Health", {}).get("Status") != "healthy"
+                )
+            ):
                 raise RuntimeParityError(f"Running {service} container is not healthy")
             container_id = container.get("Id")
             image_ref = container.get("Image")
@@ -106,13 +131,21 @@ def main() -> None:
     parser.add_argument("--version-name", required=True)
     parser.add_argument("--source-git-sha", required=True)
     parser.add_argument("--expected-images-json")
+    parser.add_argument("--project-name")
+    parser.add_argument(
+        "--services",
+        nargs="+",
+        choices=RELEASE_IMAGE_SERVICES,
+        help="Optional coordinated image subset (defaults to all release-built services)",
+    )
     args = parser.parse_args()
     try:
         expected = json.loads(args.expected_images_json) if args.expected_images_json else None
         if expected is not None and not isinstance(expected, dict):
             raise RuntimeParityError("Expected image evidence must be an object")
         print(json.dumps(inspect_release_pair(args.root, args.env_file, args.version_name,
-              args.source_git_sha, running=args.mode == "running", expected_images=expected), sort_keys=True))
+              args.source_git_sha, running=args.mode == "running", expected_images=expected,
+              services=args.services, project_name=args.project_name), sort_keys=True))
     except (RuntimeParityError, ValueError) as exc:
         parser.exit(1, f"Release parity refused: {exc}\n")
 

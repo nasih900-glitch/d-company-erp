@@ -144,6 +144,31 @@ async def test_protected_owner_can_assign_public_owner() -> None:
 
 
 @pytest.mark.asyncio
+async def test_staff_response_reveals_exact_owner_tier_only_to_audit_owner() -> None:
+    protected_tenant = _tenant(audit_access=True)
+    target = _user(protected_tenant.company_id)
+    protected_result = await staff_router._user_read(
+        _Session(_Result(rows=["co_owner"])),
+        protected_tenant,
+        target,
+    )
+
+    assert protected_result.roles == ["owner"]
+    assert protected_result.managed_roles == ["co_owner"]
+
+    ordinary_tenant = _tenant()
+    ordinary_target = _user(ordinary_tenant.company_id)
+    ordinary_result = await staff_router._user_read(
+        _Session(_Result(rows=["co_owner"])),
+        ordinary_tenant,
+        ordinary_target,
+    )
+
+    assert ordinary_result.roles == ["owner"]
+    assert ordinary_result.managed_roles is None
+
+
+@pytest.mark.asyncio
 async def test_role_replacement_preserves_single_existing_branch() -> None:
     tenant = _tenant(audit_access=True)
     branch_id = uuid4()
@@ -193,6 +218,28 @@ async def test_ordinary_manager_cannot_change_or_suspend_existing_co_owner() -> 
             session,
             tenant,
         )
+
+    assert target.status == "active"
+    assert target.auth_version == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload",
+    [
+        staff_router.UserUpdate(role_code="co_owner"),
+        staff_router.UserUpdate(status="suspended"),
+    ],
+)
+async def test_protected_owner_cannot_change_another_protected_owner_access(
+    payload: staff_router.UserUpdate,
+) -> None:
+    tenant = _tenant(audit_access=True)
+    target = _user(tenant.company_id)
+    session = _Session(_Result(rows=["super_owner"]), user=target)
+
+    with pytest.raises(BusinessRuleError, match="cannot be changed from Staff"):
+        await staff_router.update_user(target.id, payload, session, tenant)
 
     assert target.status == "active"
     assert target.auth_version == 0

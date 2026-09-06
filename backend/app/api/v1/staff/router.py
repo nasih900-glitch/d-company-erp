@@ -68,6 +68,11 @@ class UserRead(BaseModel):
     phone: str | None
     status: str
     roles: list[str]
+    # Internal owner tiers are security controls rather than job titles. They
+    # remain hidden from ordinary staff, but the designated audit owner needs
+    # to see the exact assignment so a plain ``owner`` is not mistaken for a
+    # ``co_owner`` with cross-shift operational authority.
+    managed_roles: list[str] | None = None
     last_login_at: datetime | None
 
 
@@ -88,10 +93,6 @@ class OnShiftRead(BaseModel):
 
 
 # ---------------------------------------------------------------- helpers
-async def _roles_for_user(session, user_id: UUID, company_id: UUID) -> list[str]:
-    return public_roles(await _raw_roles_for_user(session, user_id, company_id))
-
-
 async def _raw_roles_for_user(
     session,
     user_id: UUID,
@@ -108,6 +109,24 @@ async def _raw_roles_for_user(
         )
     ).scalars().all()
     return list(rows)
+
+
+async def _user_read(
+    session,
+    tenant: TenantContext,
+    user: User,
+) -> UserRead:
+    raw_roles = await _raw_roles_for_user(session, user.id, tenant.company_id)
+    return UserRead(
+        id=user.id,
+        email=user.email,
+        name=user.name,
+        phone=user.phone,
+        status=user.status,
+        roles=public_roles(raw_roles),
+        managed_roles=raw_roles if tenant.audit_access else None,
+        last_login_at=user.last_login_at,
+    )
 
 
 async def _set_role(session, tenant: TenantContext, user_id: UUID, role_code: str) -> None:
@@ -175,20 +194,7 @@ async def list_users(
             )
         )
     ).scalars().all()
-    out: list[UserRead] = []
-    for u in rows:
-        out.append(
-            UserRead(
-                id=u.id,
-                email=u.email,
-                name=u.name,
-                phone=u.phone,
-                status=u.status,
-                roles=await _roles_for_user(session, u.id, tenant.company_id),
-                last_login_at=u.last_login_at,
-            )
-        )
-    return out
+    return [await _user_read(session, tenant, user) for user in rows]
 
 
 @router.get("/users/{user_id}", response_model=UserRead)
@@ -200,11 +206,7 @@ async def get_user(
     u = await session.get(User, user_id)
     if not u or u.company_id != tenant.company_id or u.deleted_at:
         raise NotFoundError("user not found")
-    return UserRead(
-        id=u.id, email=u.email, name=u.name, phone=u.phone, status=u.status,
-        roles=await _roles_for_user(session, u.id, tenant.company_id),
-        last_login_at=u.last_login_at,
-    )
+    return await _user_read(session, tenant, u)
 
 
 @router.post("/users", response_model=UserRead, status_code=status.HTTP_201_CREATED)
@@ -249,8 +251,12 @@ async def update_user(
     is_owner = bool(OWNER_ROLE_CODES.intersection(current_roles))
     if is_self and (payload.role_code is not None or payload.status == "suspended"):
         raise BusinessRuleError("you cannot remove or suspend your own access")
-    if is_protected_owner and payload.status == "suspended":
-        raise BusinessRuleError("protected owner cannot be suspended from Staff")
+    if is_protected_owner and (
+        payload.role_code is not None or payload.status == "suspended"
+    ):
+        raise BusinessRuleError(
+            "protected owner role and active status cannot be changed from Staff"
+        )
     if (
         is_owner
         and not tenant.audit_access
@@ -276,11 +282,7 @@ async def update_user(
         # 0047's user_roles trigger invalidates any already-issued tokens for
         # every writer, including direct SQL. Do not increment here as well.
     await session.flush()
-    return UserRead(
-        id=u.id, email=u.email, name=u.name, phone=u.phone, status=u.status,
-        roles=await _roles_for_user(session, u.id, tenant.company_id),
-        last_login_at=u.last_login_at,
-    )
+    return await _user_read(session, tenant, u)
 
 
 @router.post("/users/{user_id}/password", status_code=status.HTTP_204_NO_CONTENT)

@@ -32,7 +32,7 @@ import MembershipsTab from './tabs/MembershipsTab';
 import PricingTab from './tabs/PricingTab';
 import AccessControlTab from './tabs/AccessControlTab';
 import { GAMING_CENTRE_FEATURES } from '@/lib/product-profile';
-import { hasAdminSystemAccess } from '@/lib/admin-access';
+import { hasSupportAccess } from '@/lib/admin-access';
 
 const DevicesUpdatesTab = lazy(() => import('./tabs/DevicesUpdatesTab'));
 const SystemHealthTab = lazy(() => import('./tabs/SystemHealthTab'));
@@ -54,10 +54,9 @@ export default function SettingsScreen() {
   // co_owner (protected_access=true, audit_access=false) must not see this
   // tab, so it keys off audit_access specifically, not protected_access.
   const hasAuditAccess = Boolean(demo || me?.audit_access);
-  // System Health is a protected operational view served by admin.system.
-  // Use the shared audit_access predicate exactly: general owner, settings,
-  // protected-owner and release-control grants must never imply this access.
-  const canViewSystemHealth = hasAdminSystemAccess(me);
+  // System Health follows the exact tenant support permission. It is separate
+  // from Audit Log, Access Control, and global Android release authority.
+  const canViewSystemHealth = hasSupportAccess(me);
   // Release control is a separate server-issued capability bound to the exact
   // configured company and user. Never infer it from audit, protected-owner,
   // demo, role, or settings permissions; an older response missing the field

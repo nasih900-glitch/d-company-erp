@@ -17,7 +17,7 @@ class DockerContextSafetyTest(unittest.TestCase):
     def test_production_python_dependencies_are_hash_locked(self) -> None:
         requirement_start = r"[A-Za-z0-9_.-]+(?:\[[A-Za-z0-9_,.-]+\])?=="
         for lock_name, minimum_count in (
-            ("requirements.lock", 50),
+            ("requirements.lock", 40),
             ("requirements-ci.lock", 75),
         ):
             lock_text = (ROOT / "backend" / lock_name).read_text(encoding="utf-8")
@@ -58,6 +58,14 @@ class DockerContextSafetyTest(unittest.TestCase):
             "-r backend/requirements-ci.lock",
             release,
         )
+        production_lock = (ROOT / "backend" / "requirements.lock").read_text()
+        backup_lock = (ROOT / "ops" / "backup-requirements.lock").read_text()
+        self.assertNotRegex(production_lock, r"(?m)^(?:boto3|botocore)==")
+        self.assertRegex(backup_lock, r"(?m)^boto3==")
+        self.assertRegex(backup_lock, r"(?m)^botocore==")
+        for workflow in (ci, release):
+            self.assertIn("-r ops/backup-requirements.lock", workflow)
+            self.assertIn("pip_audit -r ops/backup-requirements.lock", workflow.replace("pip-audit", "pip_audit"))
 
     def test_git_ignored_secret_and_local_data_classes_are_also_docker_ignored(self) -> None:
         rules = {
@@ -88,7 +96,9 @@ class DockerContextSafetyTest(unittest.TestCase):
     def test_production_base_and_service_images_are_digest_pinned(self) -> None:
         dockerfiles = [
             ROOT / "infra" / "docker" / "backend.Dockerfile",
+            ROOT / "infra" / "docker" / "caddy.Dockerfile",
             ROOT / "infra" / "docker" / "frontend.Dockerfile",
+            ROOT / "infra" / "docker" / "postgres.Dockerfile",
         ]
         for dockerfile in dockerfiles:
             for line in dockerfile.read_text(encoding="utf-8").splitlines():
@@ -103,7 +113,7 @@ class DockerContextSafetyTest(unittest.TestCase):
             for match in re.finditer(r"^\s+image:\s+([^$\s][^\s]*)\s*$", compose, re.MULTILINE)
             if not match.group(1).startswith("d-company-erp-")
         ]
-        self.assertGreaterEqual(len(external_images), 4)
+        self.assertEqual(1, len(external_images))
         for image in external_images:
             with self.subTest(image=image):
                 self.assertRegex(image, r"@sha256:[0-9a-f]{64}$")
@@ -130,39 +140,56 @@ class DockerContextSafetyTest(unittest.TestCase):
             "anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439",
             action,
         )
-        self.assertEqual(6, action.count("syft-version: v1.42.3"))
-        self.assertEqual(6, action.count("grype-version: v0.118.0"))
-        self.assertEqual(6, action.count("severity-cutoff: high"))
-        self.assertEqual(6, action.count("fail-build: true"))
-        self.assertEqual(6, action.count("only-fixed: false"))
-        for component in ("backend", "frontend", "caddy", "postgres", "redis", "minio"):
+        self.assertEqual(5, action.count("syft-version: v1.42.3"))
+        self.assertEqual(5, action.count("grype-version: v0.118.0"))
+        self.assertEqual(5, action.count("severity-cutoff: high"))
+        self.assertEqual(5, action.count("fail-build: true"))
+        self.assertEqual(5, action.count("only-fixed: false"))
+        for component in ("backend", "frontend", "caddy", "postgres", "redis"):
             with self.subTest(component=component):
                 self.assertIn(f"{component}_image_id={{{{.Id}}}}", action)
                 self.assertIn(f"{component}.spdx.json", action)
+                self.assertIn(f"image: ${{{{ inputs.{component}-image }}}}", action)
                 self.assertIn(f"{component}-grype.json", action)
+        self.assertNotIn("sbom: ${{ runner.temp }}/container-security", action)
         self.assertNotIn("continue-on-error", action)
 
-        for workflow_name, backend_tag, frontend_tag in (
-            ("ci.yml", "erp-backend:ci", "erp-frontend:ci"),
-            ("release.yml", "erp-backend:release-gate", "erp-frontend:release-gate"),
+        for workflow_name, suffix in (
+            ("ci.yml", "ci"),
+            ("release.yml", "release-gate"),
         ):
             workflow = (ROOT / ".github" / "workflows" / workflow_name).read_text(
                 encoding="utf-8"
             )
             scan = workflow.index("uses: ./.github/actions/scan-production-images")
-            self.assertLess(workflow.index(f"-t {backend_tag}"), scan)
-            self.assertLess(workflow.index(f"-t {frontend_tag}"), scan)
-            self.assertIn(f"backend-image: {backend_tag}", workflow[scan:])
-            self.assertIn(f"frontend-image: {frontend_tag}", workflow[scan:])
-            for component in ("caddy", "postgres", "redis", "minio"):
-                self.assertRegex(
-                    workflow[scan:],
-                    rf"{component}-image: [^\n]+@sha256:[0-9a-f]{{64}}",
-                )
+            for component in ("backend", "frontend", "caddy", "postgres"):
+                tag = f"erp-{component}:{suffix}"
+                self.assertLess(workflow.index(f"-t {tag}"), scan)
+                self.assertIn(f"{component}-image: {tag}", workflow[scan:])
+            self.assertRegex(
+                workflow[scan:],
+                r"redis-image: [^\n]+@sha256:[0-9a-f]{64}",
+            )
+            self.assertNotIn("minio-image:", workflow[scan:])
             self.assertIn(
                 "--build-arg VITE_API_URL=https://dcompany.duckdns.org/api/v1",
                 workflow[:scan],
             )
+            self.assertIn("verify-postgres16-image-compatibility.sh", workflow[:scan])
+            self.assertIn("verify-production-runtime-images.sh", workflow[:scan])
+
+    def test_unused_minio_runtime_is_retired_without_deleting_recovery_data(self) -> None:
+        compose = (ROOT / "docker-compose.prod.yml").read_text(encoding="utf-8")
+        services, volumes = compose.split("\nvolumes:\n", 1)
+        self.assertNotIn("\n  minio:\n", services)
+        self.assertIn("\n  miniodata:\n", "\nvolumes:\n" + volumes)
+        self.assertIn("S3_ENDPOINT_URL:", services)
+        self.assertIn("S3_SECRET_KEY:", services)
+
+        action = CONTAINER_SCAN_ACTION.read_text(encoding="utf-8")
+        monitor = (ROOT / "ops" / "runtime_monitor.py").read_text(encoding="utf-8")
+        for source in (action, monitor):
+            self.assertNotIn('"minio"', source)
 
 
 if __name__ == "__main__":

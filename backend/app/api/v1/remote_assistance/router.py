@@ -1,8 +1,8 @@
 """First-party, consent-gated, ERP-only remote assistance.
 
 The control plane deliberately exposes semantic commands rather than taps,
-keystrokes, shell access, URLs, selectors, or arbitrary JSON.  A protected
-owner can see only the latest short-lived JPEG after an authenticated Android
+keystrokes, shell access, URLs, selectors, or arbitrary JSON. An authorised
+tenant owner can see only the latest short-lived JPEG after an authenticated Android
 user accepted the grant and the session was started.  Redis is the sole frame
 relay and is required before starting or controlling a session.
 """
@@ -91,7 +91,7 @@ if TYPE_CHECKING:
 
 router = APIRouter()
 
-AdminTenantDep = Annotated[TenantContext, Depends(requires("admin.system"))]
+SupportTenantDep = Annotated[TenantContext, Depends(requires("admin.support"))]
 GrantKind = Literal["one_time", "anytime"]
 GrantStatus = Literal["requested", "active", "declined", "revoked", "expired", "consumed"]
 SessionStatus = Literal["requested", "active", "ended", "expired"]
@@ -695,9 +695,18 @@ async def _locked_active_frame_session(
     session_id: UUID,
     installation: ClientInstallation,
     now: datetime,
+    requested_by_user_id: UUID | None = None,
 ) -> tuple[RemoteAssistanceSession, RemoteAssistanceGrant] | None:
     """Lock and authorize the exact active session/consent user for a frame."""
 
+    requester_predicates = (
+        (
+            RemoteAssistanceSession.requested_by_user_id == requested_by_user_id,
+            RemoteAssistanceGrant.requested_by_user_id == requested_by_user_id,
+        )
+        if requested_by_user_id is not None
+        else ()
+    )
     row = (
         await session.execute(
             select(RemoteAssistanceSession, RemoteAssistanceGrant)
@@ -715,6 +724,7 @@ async def _locked_active_frame_session(
                 RemoteAssistanceGrant.status.in_(("active", "consumed")),
                 RemoteAssistanceGrant.requested_for_user_id == installation.last_user_id,
                 RemoteAssistanceGrant.responded_by_user_id == installation.last_user_id,
+                *requester_predicates,
             )
             .with_for_update(of=(RemoteAssistanceGrant, RemoteAssistanceSession))
         )
@@ -1604,7 +1614,7 @@ async def approve_device_key(
     key_id: UUID,
     payload: DeviceKeyApproveWrite,
     session: SessionDep,
-    tenant: AdminTenantDep,
+    tenant: SupportTenantDep,
 ) -> DeviceKeyAdminRead:
     now = datetime.now(UTC)
     initial_installation_id = (
@@ -1752,7 +1762,7 @@ async def revoke_device_key(
     key_id: UUID,
     payload: DeviceKeyRevokeWrite,
     session: SessionDep,
-    tenant: AdminTenantDep,
+    tenant: SupportTenantDep,
 ) -> DeviceKeyAdminRead:
     initial_installation_id = (
         await session.execute(
@@ -1890,7 +1900,7 @@ async def device_heartbeat(
 async def list_devices(
     response: Response,
     session: SessionDep,
-    tenant: AdminTenantDep,
+    tenant: SupportTenantDep,
 ) -> DeviceList:
     response.headers["Cache-Control"] = "private, no-store"
     now = datetime.now(UTC)
@@ -1964,6 +1974,7 @@ async def list_devices(
                 .where(
                     RemoteAssistanceGrant.company_id == tenant.company_id,
                     RemoteAssistanceGrant.client_installation_id.in_(internal_ids),
+                    RemoteAssistanceGrant.requested_by_user_id == tenant.user_id,
                 )
                 .order_by(
                     RemoteAssistanceGrant.client_installation_id,
@@ -1985,6 +1996,7 @@ async def list_devices(
                 .where(
                     RemoteAssistanceSession.company_id == tenant.company_id,
                     RemoteAssistanceSession.client_installation_id.in_(internal_ids),
+                    RemoteAssistanceSession.requested_by_user_id == tenant.user_id,
                 )
                 .order_by(
                     RemoteAssistanceSession.client_installation_id,
@@ -2202,7 +2214,7 @@ async def list_devices(
 async def request_assistance(
     payload: RemoteRequestCreate,
     session: SessionDep,
-    tenant: AdminTenantDep,
+    tenant: SupportTenantDep,
 ) -> RemoteRequestRead:
     settings = get_settings()
     if payload.session_ttl_seconds > settings.remote_assistance_session_max_seconds:
@@ -2238,13 +2250,17 @@ async def request_assistance(
         )
     ).scalar_one_or_none()
     if existing_any_tenant is not None:
-        if existing_any_tenant.company_id != tenant.company_id:
+        if (
+            existing_any_tenant.company_id != tenant.company_id
+            or existing_any_tenant.requested_by_user_id != tenant.user_id
+        ):
             raise ConflictError("The request id is already in use.")
         initial_session = (
             await session.execute(
                 select(RemoteAssistanceSession).where(
                     RemoteAssistanceSession.company_id == tenant.company_id,
                     RemoteAssistanceSession.grant_id == existing_any_tenant.id,
+                    RemoteAssistanceSession.requested_by_user_id == tenant.user_id,
                 )
                 .order_by(
                     RemoteAssistanceSession.requested_at,
@@ -2252,7 +2268,9 @@ async def request_assistance(
                 )
                 .limit(1)
             )
-        ).scalar_one()
+        ).scalar_one_or_none()
+        if initial_session is None:
+            raise ConflictError("The request id is already in use.")
         actual_grant_ttl = int(
             (existing_any_tenant.expires_at - existing_any_tenant.requested_at).total_seconds()
         )
@@ -2385,7 +2403,7 @@ async def request_assistance(
 async def create_session(
     payload: SessionCreate,
     session: SessionDep,
-    tenant: AdminTenantDep,
+    tenant: SupportTenantDep,
 ) -> SessionRead:
     settings = get_settings()
     if payload.session_ttl_seconds > settings.remote_assistance_session_max_seconds:
@@ -2418,7 +2436,11 @@ async def create_session(
     if existing is not None:
         if (
             existing.company_id != tenant.company_id
-            or existing.client_installation_id != installation.id
+            or existing.requested_by_user_id != tenant.user_id
+        ):
+            raise ConflictError("The session id is already in use.")
+        if (
+            existing.client_installation_id != installation.id
             or existing.grant_id != payload.grant_id
             or existing.duration_seconds != payload.session_ttl_seconds
         ):
@@ -2433,6 +2455,7 @@ async def create_session(
                 RemoteAssistanceGrant.company_id == tenant.company_id,
                 RemoteAssistanceGrant.id == payload.grant_id,
                 RemoteAssistanceGrant.client_installation_id == installation.id,
+                RemoteAssistanceGrant.requested_by_user_id == tenant.user_id,
             )
             .with_for_update()
         )
@@ -2486,7 +2509,7 @@ async def start_session(
     session_id: UUID,
     payload: SessionStart,
     session: SessionDep,
-    tenant: AdminTenantDep,
+    tenant: SupportTenantDep,
 ) -> SessionRead:
     now = datetime.now(UTC)
     support_scope = (
@@ -2498,6 +2521,7 @@ async def start_session(
             .where(
                 RemoteAssistanceSession.company_id == tenant.company_id,
                 RemoteAssistanceSession.id == session_id,
+                RemoteAssistanceSession.requested_by_user_id == tenant.user_id,
             )
         )
     ).one_or_none()
@@ -2525,16 +2549,20 @@ async def start_session(
             .where(
                 RemoteAssistanceGrant.company_id == tenant.company_id,
                 RemoteAssistanceGrant.id == grant_id,
+                RemoteAssistanceGrant.requested_by_user_id == tenant.user_id,
             )
             .with_for_update()
         )
-    ).scalar_one()
+    ).scalar_one_or_none()
+    if grant is None:
+        raise NotFoundError("Support session not found.")
     support_session = (
         await session.execute(
             select(RemoteAssistanceSession)
             .where(
                 RemoteAssistanceSession.company_id == tenant.company_id,
                 RemoteAssistanceSession.id == session_id,
+                RemoteAssistanceSession.requested_by_user_id == tenant.user_id,
             )
             .with_for_update()
         )
@@ -2604,7 +2632,7 @@ async def start_session(
 async def list_sessions(
     response: Response,
     session: SessionDep,
-    tenant: AdminTenantDep,
+    tenant: SupportTenantDep,
     installation_id: Annotated[UUID | None, Query()] = None,
     status: Annotated[SessionStatus | None, Query()] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
@@ -2612,7 +2640,10 @@ async def list_sessions(
 ) -> SessionPage:
     response.headers["Cache-Control"] = "private, no-store"
     await _expire_stale(session, company_id=tenant.company_id, now=datetime.now(UTC))
-    predicates = [RemoteAssistanceSession.company_id == tenant.company_id]
+    predicates = [
+        RemoteAssistanceSession.company_id == tenant.company_id,
+        RemoteAssistanceSession.requested_by_user_id == tenant.user_id,
+    ]
     if installation_id is not None:
         installation = await _installation_by_public_id(
             session,
@@ -2704,7 +2735,7 @@ async def owner_revoke_grant(
     grant_id: UUID,
     payload: OwnerGrantRevokeWrite,
     session: SessionDep,
-    tenant: AdminTenantDep,
+    tenant: SupportTenantDep,
 ) -> GrantRead:
     now = datetime.now(UTC)
     client_installation_id = (
@@ -2713,6 +2744,7 @@ async def owner_revoke_grant(
             .where(
                 RemoteAssistanceGrant.company_id == tenant.company_id,
                 RemoteAssistanceGrant.id == grant_id,
+                RemoteAssistanceGrant.requested_by_user_id == tenant.user_id,
             )
         )
     ).scalar_one_or_none()
@@ -2739,6 +2771,7 @@ async def owner_revoke_grant(
             .where(
                 RemoteAssistanceGrant.company_id == tenant.company_id,
                 RemoteAssistanceGrant.id == grant_id,
+                RemoteAssistanceGrant.requested_by_user_id == tenant.user_id,
             )
             .with_for_update()
         )
@@ -2759,7 +2792,7 @@ async def owner_end_session(
     session_id: UUID,
     payload: OwnerEndWrite,
     session: SessionDep,
-    tenant: AdminTenantDep,
+    tenant: SupportTenantDep,
 ) -> SessionRead:
     now = datetime.now(UTC)
     client_installation_id = (
@@ -2768,6 +2801,7 @@ async def owner_end_session(
             .where(
                 RemoteAssistanceSession.company_id == tenant.company_id,
                 RemoteAssistanceSession.id == session_id,
+                RemoteAssistanceSession.requested_by_user_id == tenant.user_id,
             )
         )
     ).scalar_one_or_none()
@@ -2794,6 +2828,7 @@ async def owner_end_session(
             .where(
                 RemoteAssistanceSession.company_id == tenant.company_id,
                 RemoteAssistanceSession.id == session_id,
+                RemoteAssistanceSession.requested_by_user_id == tenant.user_id,
             )
             .with_for_update()
         )
@@ -2818,7 +2853,7 @@ async def issue_command(
     session_id: UUID,
     payload: CommandCreate,
     session: SessionDep,
-    tenant: AdminTenantDep,
+    tenant: SupportTenantDep,
 ) -> CommandRead:
     now = datetime.now(UTC)
     client_installation_id = (
@@ -2827,6 +2862,7 @@ async def issue_command(
             .where(
                 RemoteAssistanceSession.company_id == tenant.company_id,
                 RemoteAssistanceSession.id == session_id,
+                RemoteAssistanceSession.requested_by_user_id == tenant.user_id,
             )
         )
     ).scalar_one_or_none()
@@ -2853,6 +2889,7 @@ async def issue_command(
             .where(
                 RemoteAssistanceSession.company_id == tenant.company_id,
                 RemoteAssistanceSession.id == session_id,
+                RemoteAssistanceSession.requested_by_user_id == tenant.user_id,
             )
             .with_for_update()
         )
@@ -2882,9 +2919,12 @@ async def issue_command(
             select(RemoteAssistanceGrant).where(
                 RemoteAssistanceGrant.company_id == tenant.company_id,
                 RemoteAssistanceGrant.id == support_session.grant_id,
+                RemoteAssistanceGrant.requested_by_user_id == tenant.user_id,
             )
         )
-    ).scalar_one()
+    ).scalar_one_or_none()
+    if command_grant is None:
+        raise NotFoundError("Active support session not found.")
     _require_current_consent_user(command_grant, installation)
     pending_command = (
         await session.execute(
@@ -2992,16 +3032,23 @@ async def get_command(
     command_id: UUID,
     response: Response,
     session: SessionDep,
-    tenant: AdminTenantDep,
+    tenant: SupportTenantDep,
 ) -> CommandRead:
     response.headers["Cache-Control"] = "private, no-store"
     await _expire_stale(session, company_id=tenant.company_id, now=datetime.now(UTC))
     command = (
         await session.execute(
-            select(RemoteAssistanceCommand).where(
+            select(RemoteAssistanceCommand)
+            .join(
+                RemoteAssistanceSession,
+                RemoteAssistanceSession.id == RemoteAssistanceCommand.session_id,
+            )
+            .where(
                 RemoteAssistanceCommand.company_id == tenant.company_id,
                 RemoteAssistanceCommand.session_id == session_id,
                 RemoteAssistanceCommand.id == command_id,
+                RemoteAssistanceSession.company_id == tenant.company_id,
+                RemoteAssistanceSession.requested_by_user_id == tenant.user_id,
             )
         )
     ).scalar_one_or_none()
@@ -3697,7 +3744,7 @@ async def upload_frame(
 async def latest_frame(
     session_id: UUID,
     session: SessionDep,
-    tenant: AdminTenantDep,
+    tenant: SupportTenantDep,
 ) -> BinaryResponse:
     now = datetime.now(UTC)
     client_installation_id = (
@@ -3706,6 +3753,7 @@ async def latest_frame(
             .where(
                 RemoteAssistanceSession.company_id == tenant.company_id,
                 RemoteAssistanceSession.id == session_id,
+                RemoteAssistanceSession.requested_by_user_id == tenant.user_id,
             )
         )
     ).scalar_one_or_none()
@@ -3737,6 +3785,7 @@ async def latest_frame(
             session_id=session_id,
             installation=installation,
             now=now,
+            requested_by_user_id=tenant.user_id,
         )
         is None
     ):

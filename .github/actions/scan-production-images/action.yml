@@ -9,22 +9,19 @@ inputs:
     description: Exact locally built frontend image tag.
     required: true
   caddy-image:
-    description: Exact digest-pinned Caddy image used in production.
+    description: Exact locally built Caddy image tag.
     required: true
   postgres-image:
-    description: Exact digest-pinned PostgreSQL image used in production.
+    description: Exact locally built PostgreSQL image tag.
     required: true
   redis-image:
     description: Exact digest-pinned Redis image used in production.
-    required: true
-  minio-image:
-    description: Exact digest-pinned MinIO image used in production.
     required: true
   artifact-prefix:
     description: Unique prefix for the retained security evidence.
     required: true
   source-git-sha:
-    description: Full source commit used to build both images.
+    description: Full source commit used to build the four local release images.
     required: true
 
 runs:
@@ -38,7 +35,6 @@ runs:
         CADDY_IMAGE: ${{ inputs.caddy-image }}
         POSTGRES_IMAGE: ${{ inputs.postgres-image }}
         REDIS_IMAGE: ${{ inputs.redis-image }}
-        MINIO_IMAGE: ${{ inputs.minio-image }}
         SOURCE_GIT_SHA: ${{ inputs.source-git-sha }}
       run: |
         set -euo pipefail
@@ -57,8 +53,6 @@ runs:
           docker image inspect --format 'postgres_image_id={{.Id}}' "$POSTGRES_IMAGE"
           echo "redis_image=$REDIS_IMAGE"
           docker image inspect --format 'redis_image_id={{.Id}}' "$REDIS_IMAGE"
-          echo "minio_image=$MINIO_IMAGE"
-          docker image inspect --format 'minio_image_id={{.Id}}' "$MINIO_IMAGE"
         } > "$evidence_dir/image-identities.txt"
 
     - name: Generate backend image SBOM
@@ -121,23 +115,14 @@ runs:
         upload-release-assets: false
         dependency-snapshot: false
 
-    - name: Generate MinIO image SBOM
-      if: ${{ !cancelled() }}
-      uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
-      with:
-        image: ${{ inputs.minio-image }}
-        syft-version: v1.42.3
-        format: spdx-json
-        output-file: ${{ runner.temp }}/container-security/minio.spdx.json
-        upload-artifact: false
-        upload-release-assets: false
-        dependency-snapshot: false
-
-    - name: Scan backend image SBOM
+    # Keep SPDX SBOMs as retained audit evidence, but scan the images directly.
+    # SPDX cannot preserve all of Syft's Go-binary metadata, which can make a
+    # later Grype scan less precise than cataloguing the exact image itself.
+    - name: Scan backend image
       if: ${{ !cancelled() }}
       uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
       with:
-        sbom: ${{ runner.temp }}/container-security/backend.spdx.json
+        image: ${{ inputs.backend-image }}
         grype-version: v0.118.0
         fail-build: true
         severity-cutoff: high
@@ -145,11 +130,11 @@ runs:
         output-format: json
         output-file: ${{ runner.temp }}/container-security/backend-grype.json
 
-    - name: Scan frontend image SBOM
+    - name: Scan frontend image
       if: ${{ !cancelled() }}
       uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
       with:
-        sbom: ${{ runner.temp }}/container-security/frontend.spdx.json
+        image: ${{ inputs.frontend-image }}
         grype-version: v0.118.0
         fail-build: true
         severity-cutoff: high
@@ -157,11 +142,11 @@ runs:
         output-format: json
         output-file: ${{ runner.temp }}/container-security/frontend-grype.json
 
-    - name: Scan Caddy image SBOM
+    - name: Scan Caddy image
       if: ${{ !cancelled() }}
       uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
       with:
-        sbom: ${{ runner.temp }}/container-security/caddy.spdx.json
+        image: ${{ inputs.caddy-image }}
         grype-version: v0.118.0
         fail-build: true
         severity-cutoff: high
@@ -169,11 +154,11 @@ runs:
         output-format: json
         output-file: ${{ runner.temp }}/container-security/caddy-grype.json
 
-    - name: Scan PostgreSQL image SBOM
+    - name: Scan PostgreSQL image
       if: ${{ !cancelled() }}
       uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
       with:
-        sbom: ${{ runner.temp }}/container-security/postgres.spdx.json
+        image: ${{ inputs.postgres-image }}
         grype-version: v0.118.0
         fail-build: true
         severity-cutoff: high
@@ -181,29 +166,17 @@ runs:
         output-format: json
         output-file: ${{ runner.temp }}/container-security/postgres-grype.json
 
-    - name: Scan Redis image SBOM
+    - name: Scan Redis image
       if: ${{ !cancelled() }}
       uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
       with:
-        sbom: ${{ runner.temp }}/container-security/redis.spdx.json
+        image: ${{ inputs.redis-image }}
         grype-version: v0.118.0
         fail-build: true
         severity-cutoff: high
         only-fixed: false
         output-format: json
         output-file: ${{ runner.temp }}/container-security/redis-grype.json
-
-    - name: Scan MinIO image SBOM
-      if: ${{ !cancelled() }}
-      uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
-      with:
-        sbom: ${{ runner.temp }}/container-security/minio.spdx.json
-        grype-version: v0.118.0
-        fail-build: true
-        severity-cutoff: high
-        only-fixed: false
-        output-format: json
-        output-file: ${{ runner.temp }}/container-security/minio-grype.json
 
     - name: Retain container security evidence
       if: always()

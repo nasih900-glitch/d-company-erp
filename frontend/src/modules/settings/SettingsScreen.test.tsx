@@ -62,9 +62,12 @@ describe('Settings protected device update navigation', () => {
   });
 });
 
-describe('Settings protected System Health navigation', () => {
-  it('uses audit_access without inheriting release or general owner authority', () => {
-    auth.me = identity({ audit_access: true });
+describe('Settings owner System Health navigation', () => {
+  it('uses admin.support without inheriting audit or release authority', () => {
+    auth.me = identity({
+      audit_access: true,
+      effective_permissions: ['admin.support'],
+    });
     const systemOwner = renderToStaticMarkup(<SettingsScreen />);
     expect(systemOwner).toContain('System Health');
     expect(systemOwner).not.toContain('Devices &amp; Updates');
@@ -76,12 +79,17 @@ describe('Settings protected System Health navigation', () => {
 
     auth.me = identity({
       protected_access: true,
-      effective_permissions: ['settings.manage'],
+      effective_permissions: ['settings.manage', 'admin.support'],
     });
     const generalOwner = renderToStaticMarkup(<SettingsScreen />);
-    expect(generalOwner).not.toContain('System Health');
+    expect(generalOwner).toContain('System Health');
+    expect(generalOwner).not.toContain('Access Control');
 
-    auth.me = identity({ audit_access: true, release_control_access: true });
+    auth.me = identity({
+      audit_access: true,
+      release_control_access: true,
+      effective_permissions: ['admin.support'],
+    });
     const bothGrants = renderToStaticMarkup(<SettingsScreen />);
     expect(bothGrants).toContain('System Health');
     expect(bothGrants).toContain('Devices &amp; Updates');

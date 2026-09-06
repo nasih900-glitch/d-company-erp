@@ -1,15 +1,17 @@
 # D Company ERP 3.1.14 (code 25) release candidate
 
-Code 25 is the current **unsigned** candidate. The coordinated release identity is
-`v3.1.14`, Android `versionName=3.1.14`, Android `versionCode=25`, and
-database migration head `0071`. The minimum-compatible and default-advertised
-Android code remains `8`.
+Code 25 is the current unreleased source candidate. Its planned coordinated
+release identity is tag `v3.1.14`, Android `versionName=3.1.14`, Android
+`versionCode=25`, and database migration head `0071`. The compatibility floor
+and fail-safe latest-code fallback remain `8`; production defaults do not
+advertise Code 25. No authorised CI-signed Code 25 artifact exists yet.
 
-This document is a release ledger, not an approval. Code 25 is not signed,
-deployed, staged, activated, installed on the partner tablet, or accepted on a
-physical Redmi Pad 2 until the corresponding evidence below exists. Signed Code
-21 (`3.1.10`) remains the immutable same-signing-lineage upgrade predecessor.
-The failed-before-signing Code 24 tag remains immutable history and must never be
+This document is a release ledger, not an approval. A local emulator-only signed
+APK is not release authority. Code 25 is not CI-signed, deployed, staged,
+activated, installed on the partner tablet, or accepted on a physical Redmi Pad
+2 until the corresponding evidence below exists. Signed Code 21 (`3.1.10`)
+remains the immutable same-signing-lineage upgrade predecessor. The
+failed-before-signing Code 24 tag remains immutable history and must never be
 retagged or have artifacts replaced.
 
 ## Included scope
@@ -45,38 +47,43 @@ The additional Code 25 work is broader than a dialog-only correction:
 
 ## Current evidence ledger
 
-Evidence must be recorded against the exact frozen commit and artifact. The
-following pre-freeze checks passed on the final reviewed working tree before the
-release commit was created:
+Evidence must be recorded against one exact frozen commit and artifact. The
+source is not frozen yet; the results below are interim working-tree evidence
+and are not release evidence until committed and reproduced by protected CI:
 
-- Backend: all 71 migrations applied to a fresh database; 1,456 tests passed and
+- Backend: all 71 migrations applied to a fresh database; 1,460 tests passed and
   18 explicitly isolated tests were then run against their allowlisted database
   and passed. The guarded disposable end-to-end workflow passed 182 checks with
   no failures and the test database, Redis databases, SMTP sink, and processes
   were cleaned afterwards. `pip-audit` reported no known vulnerabilities in the
   locked production dependency closure.
-- Frontend: dependency install/audit, lint, typecheck, all 459 tests, production
+- Frontend: dependency install/audit, lint, typecheck, all 462 tests, production
   build, dependency-tree validation, and built-artifact reference verification
-  passed. The build contained 105 files and its aggregate content fingerprint
-  was `f3585c138da4160be7e3bffb347e848c3550a79c9fed3c4ad9b369621a89c460`.
-- Android: Play and Direct lint passed with no errors; each release variant's
-  unit suite passed 979 tests. The tablet instrumentation pass completed 281
+  passed. The build contained 105 files.
+- Android: clean sequential Play and Direct lint, unit, and APK assembly passed;
+  each release variant's unit suite passed 979 tests. The tablet instrumentation
+  pass completed 281
   tests with no failures and two intentional alarm-permission skips; the two
   permission-granted/deep-idle alarm cases then passed separately. The formerly
   intermittent Gaming recovery interaction passed 10 consecutive runs at
   2,560 x 1,600 and 320 dpi.
-- Release/security: the complete repository contract suite passed 140 tests and
-  293 subtests; the focused installer/release/staging/runtime review passed 75
-  tests and 274 subtests. ShellCheck, actionlint, `git diff --check`, coordinated
-  version validation, dependency verification, and project-local Codex routing
-  validation passed. The final CodeRabbit uncommitted review reported zero
-  findings, and an independent adversarial review found no remaining source-level
-  release blocker.
+- Release/security: the complete repository contract suite passed 159 tests and
+  285 subtests, with the Bash-4 installer fault-injection and real Linux
+  `renameat2(RENAME_NOREPLACE)` tests skipped on macOS. The settled focused
+  installer/release/staging review passed 76 tests and 105 subtests with the
+  same two platform-only skips. ShellCheck, `git diff
+  --check`, coordinated version validation, dependency verification, and
+  project-local Codex routing validation passed. Independent adversarial review
+  found no remaining P0/P1 source-level vulnerability after the immutable
+  deployment-snapshot and pinned-Redis corrections.
 
 Backend Ruff and mypy currently remain advisory legacy-quality gates rather than
 release gates; their existing backlog is not represented as clean. Docker is not
 available on the development Mac, so the immutable container build, Compose/Caddy
 validation, SBOM and image vulnerability scans still require protected Linux CI.
+The actual Linux `renameat2(RENAME_NOREPLACE)` staging path and the Bash-4
+installer fault-injection harness must also run there; macOS tests use a bounded
+mock for that Linux-only syscall.
 
 These pre-freeze checks are strong defect-finding evidence, but they are not a
 signed upgrade, production deployment, target-Redmi result, or owner activation.

@@ -62,7 +62,7 @@ DEFAULT_BASE_URL = "https://dcompany.duckdns.org"
 DEFAULT_REMOTE_ROOT = "/opt/d-company-erp"
 DEFAULT_ATTESTATION_ROOT = "/var/lib/dcompany-erp/android-releases/attestations"
 DEFAULT_PRODUCTION_INSTALL_LOCK = Path(
-    "/var/lock/d-company-erp/production-install.lock"
+    "/run/d-company-erp/production-install.lock"
 )
 PRODUCTION_INSTALL_LOCK = str(DEFAULT_PRODUCTION_INSTALL_LOCK)
 PRIVATE_UPLOAD_DIRECTORY_NAME = ".d-company-erp-android-release-staging"
@@ -646,6 +646,10 @@ def _production_install_lock(
 def _ssh_json(
     target: RemoteTarget, action: str, payload: dict[str, Any]
 ) -> dict[str, Any]:
+    # Keep the transport boundary self-validating.  ``stage_release`` already
+    # validates its target, but these helpers must not become an option-
+    # injection path if a future operator flow calls them directly.
+    target = _validated_remote_target(target)
     encoded = base64.urlsafe_b64encode(canonical_json(payload)).decode("ascii")
     remote_script = f"{target.root}/ops/stage_android_release.py"
     command = [
@@ -687,6 +691,7 @@ def _ssh_upload_apk(
     payload: dict[str, Any],
 ) -> dict[str, Any]:
     """Stream the APK to a remote fd-safe uploader; never expose an SCP pathname."""
+    target = _validated_remote_target(target)
     encoded = base64.urlsafe_b64encode(canonical_json(payload)).decode("ascii")
     remote_script = f"{target.root}/ops/stage_android_release.py"
     command = [
@@ -981,13 +986,17 @@ def _validate_trusted_directory(
     label: str,
     *,
     exact_mode: int | None = None,
+    allow_system_root: bool = False,
 ) -> None:
     metadata = os.fstat(descriptor)
     mode = stat.S_IMODE(metadata.st_mode)
     if (
         not stat.S_ISDIR(metadata.st_mode)
-        or metadata.st_uid != TRUSTED_REMOTE_OWNER_UID
-        or metadata.st_gid != TRUSTED_REMOTE_OWNER_GID
+        or (
+            (metadata.st_uid, metadata.st_gid)
+            != (TRUSTED_REMOTE_OWNER_UID, TRUSTED_REMOTE_OWNER_GID)
+            and not (allow_system_root and metadata.st_uid == 0)
+        )
         or mode & 0o022
         or (exact_mode is not None and mode != exact_mode)
     ):
@@ -1004,18 +1013,32 @@ def _open_release_directories(remote_root: Any) -> Iterator[tuple[int, int]]:
     descriptors: list[int] = []
     try:
         try:
-            parent_fd = os.open(root.parent, flags)
+            ancestor_fd = os.open("/", flags)
         except OSError as exc:
             raise AndroidReleaseStagingError(
-                "Cannot safely open the ERP parent"
+                "Cannot safely open the filesystem root"
             ) from exc
-        descriptors.append(parent_fd)
-        _validate_trusted_directory(parent_fd, "ERP parent")
-        try:
-            root_fd = os.open(root.name, flags, dir_fd=parent_fd)
-        except OSError as exc:
-            raise AndroidReleaseStagingError("Cannot safely open the ERP root") from exc
-        descriptors.append(root_fd)
+        descriptors.append(ancestor_fd)
+        _validate_trusted_directory(
+            ancestor_fd,
+            "Filesystem root",
+            allow_system_root=True,
+        )
+        for component in root.parts[1:]:
+            try:
+                child_fd = os.open(component, flags, dir_fd=ancestor_fd)
+            except OSError as exc:
+                raise AndroidReleaseStagingError(
+                    "Cannot safely traverse the ERP root"
+                ) from exc
+            descriptors.append(child_fd)
+            _validate_trusted_directory(
+                child_fd,
+                "ERP path component",
+                allow_system_root=True,
+            )
+            ancestor_fd = child_fd
+        root_fd = ancestor_fd
         _validate_trusted_directory(root_fd, "ERP root")
 
         try:
@@ -1031,7 +1054,7 @@ def _open_release_directories(remote_root: Any) -> Iterator[tuple[int, int]]:
             ) from exc
 
         try:
-            os.mkdir(PRIVATE_UPLOAD_DIRECTORY_NAME, 0o700, dir_fd=parent_fd)
+            os.mkdir(PRIVATE_UPLOAD_DIRECTORY_NAME, 0o700, dir_fd=root_fd)
         except FileExistsError:
             pass
         except OSError as exc:
@@ -1039,7 +1062,7 @@ def _open_release_directories(remote_root: Any) -> Iterator[tuple[int, int]]:
                 "Cannot create the private Android upload directory"
             ) from exc
         try:
-            staging_fd = os.open(PRIVATE_UPLOAD_DIRECTORY_NAME, flags, dir_fd=parent_fd)
+            staging_fd = os.open(PRIVATE_UPLOAD_DIRECTORY_NAME, flags, dir_fd=root_fd)
         except OSError as exc:
             raise AndroidReleaseStagingError(
                 "Cannot safely open the private Android upload directory"

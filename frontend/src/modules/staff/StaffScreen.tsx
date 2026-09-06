@@ -27,10 +27,15 @@ import Modal from '@/components/ui/Modal';
 import { ConfirmModal } from '@/components/ui/ConfirmDialog';
 import { useNotifications } from '@/components/ui/Notifications';
 import { SkeletonCard } from '@/components/ui/Skeleton';
-import { buildStaffAccessPatch, canChangeStaffAccess } from './staff-edit-policy';
+import {
+  buildStaffAccessPatch,
+  canChangeStaffAccess,
+  editableStaffRoleOptions,
+} from './staff-edit-policy';
 
 const ROLE_COLOR: Record<string, string> = {
   super_owner: 'border-accent-gold/70 text-accent-gold',
+  co_owner: 'border-accent-gold/60 text-accent-gold',
   owner: 'border-accent-gold/40 text-accent-gold',
   partner: 'border-accent-purple/40 text-accent-purple',
   manager: 'border-accent/40 text-accent',
@@ -154,7 +159,7 @@ export default function StaffScreen() {
               canChangeAccess={canChangeStaffAccess({
                 callerUserId: me?.user_id ?? null,
                 targetUserId: u.id,
-                targetRoles: u.roles,
+                targetRoles: [...u.roles, ...(u.managed_roles ?? [])],
                 callerHasAuditAccess: Boolean(me?.audit_access),
               })}
               onEdit={() => setEditUser(u)}
@@ -353,7 +358,14 @@ function UserCard({
   onToggle: () => void;
   onDelete: () => void;
 }) {
-  const primaryRole = user.roles[0] ?? 'cashier';
+  const primaryRole = user.managed_roles?.[0] ?? user.roles[0] ?? 'cashier';
+  const accessNote = user.managed_roles?.includes('super_owner')
+    ? 'Audit owner · full operational access'
+    : user.managed_roles?.includes('co_owner')
+      ? 'Full operational access · Audit hidden'
+      : user.managed_roles?.includes('owner')
+        ? 'Owner title · standard shift accountability'
+        : null;
   return (
     <div className="card">
       <div className="flex items-start justify-between mb-3">
@@ -364,6 +376,12 @@ function UserCard({
           <div className="min-w-0">
             <div className="font-semibold truncate">{user.name}</div>
             <div className="text-xs text-fg-muted truncate">{roleLabel(primaryRole)}</div>
+            {accessNote && (
+              <div className="mt-1 flex items-center gap-1 text-[11px] text-fg-muted">
+                <ShieldCheck size={11} className="shrink-0" aria-hidden="true"/>
+                <span>{accessNote}</span>
+              </div>
+            )}
           </div>
         </div>
         <div className={`chip ${user.status === 'active' ? ROLE_COLOR[primaryRole] : 'border-accent-bad/40 text-accent-bad'}`}>
@@ -506,12 +524,14 @@ function EditUserModal({
   onSuccess: () => void;
 }) {
   const isSelf = user.id === currentUserId;
-  const originalRoleCode = user.roles[0] ?? 'cashier';
-  const isOwner = user.roles.some((role) => (
+  const originalRoleCode = user.managed_roles?.[0] ?? user.roles[0] ?? 'cashier';
+  const effectiveRoles = [...user.roles, ...(user.managed_roles ?? [])];
+  const isOwner = effectiveRoles.some((role) => (
     role === 'owner' || role === 'co_owner' || role === 'super_owner'
   ));
-  const accessChangesLocked = isSelf || (isOwner && !canManageOwnerAccess);
-  const roleOptions = roles.filter((role) => role.code !== 'super_owner');
+  const isProtectedOwner = effectiveRoles.includes('super_owner');
+  const accessChangesLocked = isSelf || isProtectedOwner || (isOwner && !canManageOwnerAccess);
+  const roleOptions = editableStaffRoleOptions(roles, canManageOwnerAccess);
   const [form, setForm] = useState({
     name: user.name,
     phone: user.phone ?? '',
@@ -594,6 +614,8 @@ function EditUserModal({
           <p className="text-xs text-fg-muted">
             {isSelf
               ? 'Role and status are locked on your own account.'
+              : isProtectedOwner
+                ? 'Protected audit-owner access cannot be changed from Staff.'
               : 'Only the protected owner can change access for an owner account.'}
           </p>
         )}
@@ -707,6 +729,7 @@ function staffToDTO(s: StaffMember): UserDTO {
     phone: s.phone,
     status: 'active',
     roles: [s.role],
+    managed_roles: null,
     last_login_at: null,
   };
 }

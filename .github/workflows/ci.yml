@@ -36,15 +36,18 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          python-version: '3.11'
+          python-version: '3.13'
           cache: pip
-          cache-dependency-path: backend/requirements-ci.lock
+          cache-dependency-path: |
+            backend/requirements-ci.lock
+            ops/backup-requirements.lock
       - name: Validate safe Codex task routing
         run: python3 scripts/validate_codex_routing.py
-      # Exercise the production closure plus CI tools from one reviewed hash lock.
-      - run: >-
-          pip install --only-binary=:all: --require-hashes
-          -r backend/requirements-ci.lock
+      # Exercise the application/CI closure and the isolated host-backup runtime
+      # from their independently reviewed hash locks.
+      - run: |
+          pip install --only-binary=:all: --require-hashes -r backend/requirements-ci.lock
+          pip install --only-binary=:all: --require-hashes -r ops/backup-requirements.lock
       - name: Run complete repository contract suite
         run: python -m pytest tests
       - name: Test operational monitoring contracts
@@ -54,7 +57,10 @@ jobs:
       # actually installs into the production image — it's what's deployed, so it's the gate.
       # No severity flag exists for pip-audit (unlike npm's --audit-level); it fails on any known vuln.
       - name: Dependency vulnerability scan (pip-audit, locked/deployed set)
-        run: pip-audit -r backend/requirements.lock
+        run: |
+          pip-audit -r backend/requirements.lock
+          pip-audit -r backend/requirements-ci.lock
+          pip-audit -r ops/backup-requirements.lock
       # Informational only: requirements.txt is the loose '>=' file pip-compile generates the lock
       # from, not what ships to prod. Kept here to catch drift early, but not blocking on its own.
       - name: Dependency vulnerability scan (pip-audit, loose requirements.txt, informational)
@@ -188,14 +194,6 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
-      - name: Validate production Caddy routing
-        run: >-
-          docker run --rm
-          -e DOMAIN=example.test
-          -e ACME_EMAIL=admin@example.test
-          -v "$PWD/infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro"
-          caddy:2-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648
-          caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
       - name: Build backend image
         env:
           APP_REVISION: ${{ github.sha }}
@@ -212,20 +210,54 @@ jobs:
             --build-arg VITE_API_URL=https://dcompany.duckdns.org/api/v1 \
             --build-arg VITE_APP_VERSION="$APP_VERSION" \
             --build-arg APP_VERSION="$APP_VERSION" --build-arg APP_REVISION="$APP_REVISION" .
-      - name: Pull exact production infrastructure images
+      - name: Build hardened Caddy and PostgreSQL images
+        env:
+          APP_REVISION: ${{ github.sha }}
         run: |
-          docker pull caddy:2-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648
-          docker pull postgres:16-alpine@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685
+          APP_VERSION=$(node -p "require('./frontend/package.json').version")
+          docker build --platform linux/amd64 -f infra/docker/caddy.Dockerfile -t erp-caddy:ci \
+            --build-arg APP_VERSION="$APP_VERSION" --build-arg APP_REVISION="$APP_REVISION" .
+          docker build --platform linux/amd64 -f infra/docker/postgres.Dockerfile -t erp-postgres:ci \
+            --build-arg APP_VERSION="$APP_VERSION" --build-arg APP_REVISION="$APP_REVISION" .
+      - name: Validate hardened production Caddy routing
+        run: >-
+          docker run --rm
+          -e DOMAIN=example.test
+          -e ACME_EMAIL=admin@example.test
+          -v "$PWD/infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro"
+          erp-caddy:ci
+          caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+      - name: Verify hardened Caddy binary and bind capability
+        run: >-
+          docker run --rm --entrypoint sh erp-caddy:ci -ceu
+          'test "$(sha256sum /usr/bin/caddy | cut -d" " -f1)" =
+          73c0169f0b72b465e2ae20bdb67a3e017044b2ab3d267816398b9d6ece243fb0;
+          caddy version | grep -F v2.11.4-dcompany.1;
+          getcap /usr/bin/caddy | grep -F cap_net_bind_service'
+      - name: Prove PostgreSQL 16 volume and rollback compatibility
+        env:
+          APP_REVISION: ${{ github.sha }}
+        run: |
+          APP_VERSION=$(node -p "require('./frontend/package.json').version")
+          bash infra/scripts/verify-postgres16-image-compatibility.sh \
+            erp-postgres:ci "$APP_VERSION" "$APP_REVISION"
+      - name: Prove production image migrations, health and identity
+        env:
+          APP_REVISION: ${{ github.sha }}
+        run: |
+          APP_VERSION=$(node -p "require('./frontend/package.json').version")
+          bash infra/scripts/verify-production-runtime-images.sh \
+            ci "$APP_VERSION" "$APP_REVISION"
+      - name: Pull exact production Redis image
+        run: |
           docker pull redis:7-alpine@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf
-          docker pull minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
       - name: Generate SBOMs and scan exact production images
         uses: ./.github/actions/scan-production-images
         with:
           backend-image: erp-backend:ci
           frontend-image: erp-frontend:ci
-          caddy-image: caddy:2-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648
-          postgres-image: postgres:16-alpine@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685
+          caddy-image: erp-caddy:ci
+          postgres-image: erp-postgres:ci
           redis-image: redis:7-alpine@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf
-          minio-image: minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
           artifact-prefix: ci-${{ github.run_id }}-${{ github.run_attempt }}
           source-git-sha: ${{ github.sha }}

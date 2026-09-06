@@ -408,7 +408,7 @@ export const PROFILE_NAVIGATION_GROUPS: readonly ProfileNavigationGroup[] = [
     ],
   },
   {
-    title: 'Protected Control',
+    title: 'Support & Control',
     items: [
       { id: 'audit', label: 'Audit Log', icon: 'audit', feature: 'audit', to: '/audit', audience: 'audit' },
       { id: 'support-inbox', label: 'Support Inbox', icon: 'supportInbox', feature: 'supportInbox', to: '/bug-reports', audience: 'system' },

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import re
 import subprocess
 import tempfile
@@ -749,7 +748,10 @@ class AndroidReleasePipelineTest(unittest.TestCase):
             'Cache-Control "public, max-age=31536000, immutable, no-transform"', caddy
         )
         self.assertIn('respond "Not found" 404', caddy)
-        self.assertIn("./releases/android:/srv/releases/android:ro", compose)
+        self.assertIn(
+            "${ANDROID_RELEASE_ROOT:-./releases/android}:/srv/releases/android:ro",
+            compose,
+        )
         self.assertIn("caddy validate --config /etc/caddy/Caddyfile", ci_workflow)
 
     def test_proxy_preserves_stricter_endpoint_content_security_policy(self) -> None:

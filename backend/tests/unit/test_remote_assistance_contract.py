@@ -342,13 +342,13 @@ def test_production_installer_preflights_before_stack_mutation_and_hides_credent
 ) -> None:
     root = Path(__file__).resolve().parents[3]
     installer = (root / "infra/scripts/install-on-vm.sh").read_text(encoding="utf-8")
-    preparer_call = "bash infra/scripts/prepare-production-env.sh"
+    preparer_call = 'bash "$PREPARE_ENV_TOOL"'
     compose_preflight = (
-        'docker compose -f docker-compose.prod.yml --env-file "$ENV_CANDIDATE" config --quiet'
+        '"${candidate_compose[@]}" --env-file "$ENV_CANDIDATE" config --quiet'
     )
     database_backup = "pg_dump -U erp --format=custom erp"
     promote_candidate = 'mv "$ENV_CANDIDATE" .env'
-    compose_up = "up -d postgres redis minio backend frontend"
+    compose_up = "up -d --no-build --pull never postgres redis backend frontend"
     assert installer.index(preparer_call) < installer.index(compose_preflight)
     assert installer.index(compose_preflight) < installer.index(database_backup)
     assert installer.index(database_backup) < installer.index(promote_candidate)
@@ -364,9 +364,13 @@ def test_production_installer_preflights_before_stack_mutation_and_hides_credent
     assert "check-upgrade-capacity.sh" in installer
     assert "pg_database_size('erp')" in installer
     assert "code17_restore_verify_" in installer
-    assert 'git show "$PRIOR_REVISION:docker-compose.prod.yml"' in installer
+    assert 'git archive --format=tar "$PRIOR_REVISION"' in installer
+    assert "prior-source.tar" in installer
+    assert '--project-directory "$PRIOR_SOURCE_ROOT"' in installer
     assert 'docker image tag "$image_id" "$rollback_ref"' in installer
-    assert 'docker image tag %q %q\\n\' "$image_id" "$original_ref"' in installer
+    assert 'docker image tag "$prior_image_id" "$prior_original_ref"' in installer
+    assert "restore-images.sh" not in installer
+    assert "rollback-state.sha256" in installer
     assert 'tagged_image_id=$(docker image inspect' in installer
     assert 'docker create "$PRIOR_BACKEND_IMAGE"' in installer
     assert 'docker cp "$IMAGE_VERIFY_CONTAINER:/app/."' in installer
@@ -375,22 +379,30 @@ def test_production_installer_preflights_before_stack_mutation_and_hides_credent
     assert "PRIOR_DB_HEAD\" != 0060" in installer
     assert "org.opencontainers.image.revision" in installer
     assert "CANDIDATE_APP_VERSION=$(grep '^APP_VERSION='" in installer
-    candidate_image_gate = "ops/runtime_release_parity.py candidate"
-    running_image_gate = "ops/runtime_release_parity.py running"
+    candidate_image_gate = '"$CANDIDATE_PARITY_TOOL" candidate'
+    running_image_gate = '"$CANDIDATE_PARITY_TOOL" running'
     assert candidate_image_gate in installer
     assert running_image_gate in installer
     assert '--expected-images-json "$CANDIDATE_IMAGE_ATTESTATION"' in installer
     assert installer.index(candidate_image_gate) < installer.index(database_backup)
     assert installer.index(compose_up) < installer.index(running_image_gate)
-    assert "Candidate backend/frontend image version and revision labels verified." in installer
+    assert "Candidate Caddy/PostgreSQL/backend/frontend identities verified." in installer
     assert "Expected exactly one existing $service container" in installer
     assert "Existing backend is not running" in installer
     assert "Persistent deployment evidence exists but .env is missing" in installer
     assert "docker volume ls" in installer
     assert "docker network ls" in installer
     assert "flock -n 9" in installer
-    assert "LOCK_DIR=/var/lock/d-company-erp" in installer
-    assert "Production lock must be root-owned, mode 0600, with one link." in installer
+    assert "infra/scripts/production_install_lock.py" in installer
+    lock_helper = (
+        root / "infra/scripts/production_install_lock.py"
+    ).read_text(encoding="utf-8")
+    assert 'RUNTIME_PARENT = Path("/run")' in lock_helper
+    assert 'RUNTIME_DIRECTORY_NAME = "d-company-erp"' in lock_helper
+    assert 'STATE_PARENT = Path("/var/lib")' in lock_helper
+    assert "ensure_private_state_directories()" in lock_helper
+    assert 'getattr(os, "O_NOFOLLOW"' in lock_helper
+    assert "Production lock descriptor failed ownership/type validation." in installer
     assert "git archive --format=tar \"$CURRENT_REVISION\"" in installer
     assert '--project-directory "$CANDIDATE_BUILD_ROOT"' in installer
     assert 'restored_image_id=$(docker inspect --format \'{{.Image}}\'' in installer

@@ -605,7 +605,7 @@ describe('Device Centre state recovery', () => {
   it('shows protected-access and retry-safe errors without raw server details', () => {
     const forbidden = Object.assign(new Error('raw permission trace'), { status: 403 });
     const server = Object.assign(new Error('internal SQL trace'), { status: 500 });
-    expect(remoteAssistanceErrorMessage(forbidden)).toContain('protected System Health access');
+    expect(remoteAssistanceErrorMessage(forbidden)).toContain('owner support access');
     expect(remoteAssistanceErrorMessage(server)).toContain('did not complete');
     expect(remoteAssistanceErrorMessage(server)).not.toContain('SQL');
 
@@ -620,7 +620,7 @@ describe('Device Centre state recovery', () => {
     expect(deviceKeyActionErrorMessage(mismatch, 'approve')).toContain('not accepted');
     expect(deviceKeyActionErrorMessage(mismatch, 'approve')).not.toContain('trace');
     expect(deviceKeyActionErrorMessage(pairingForbidden, 'approve'))
-      .toContain('Protected System Health access');
+      .toContain('Owner support access');
 
     const markup = renderToStaticMarkup(
       <DeviceCentreLoadError

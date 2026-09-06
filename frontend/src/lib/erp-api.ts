@@ -455,6 +455,8 @@ export interface UserDTO {
   phone: string | null;
   status: 'active' | 'suspended';
   roles: string[];
+  /** Exact internal role assignment, returned only to the protected audit owner. */
+  managed_roles?: string[] | null;
   last_login_at: string | null;
 }
 

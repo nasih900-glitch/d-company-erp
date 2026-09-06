@@ -1,19 +1,22 @@
 # --- builder ---
-FROM python:3.11-slim@sha256:9534e5a8e315485d4061ed659af0fd78a284c015f9b73661b41d6bab25604534 AS builder
+FROM python:3.13-alpine@sha256:7415fbc3c9e4979cc717d92377ab2bc7b2b4a2af1ac03cc52b5f3f88efedaf3a AS builder
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
+RUN apk add --no-cache --upgrade 'libuuid=2.42.3-r1'
 WORKDIR /app
 COPY backend/requirements.lock .
 RUN pip install --prefix=/install --only-binary=:all: --require-hashes -r requirements.lock
 
 # --- runtime ---
-FROM python:3.11-slim@sha256:9534e5a8e315485d4061ed659af0fd78a284c015f9b73661b41d6bab25604534
+FROM python:3.13-alpine@sha256:7415fbc3c9e4979cc717d92377ab2bc7b2b4a2af1ac03cc52b5f3f88efedaf3a
 ARG APP_VERSION=dev
 ARG APP_REVISION=unknown
 LABEL org.opencontainers.image.title="D Company ERP Backend" \
       org.opencontainers.image.version="${APP_VERSION}" \
       org.opencontainers.image.revision="${APP_REVISION}"
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
-RUN useradd --create-home --uid 1001 erp
+RUN apk add --no-cache --upgrade 'libuuid=2.42.3-r1' \
+    && addgroup -S -g 1001 erp \
+    && adduser -S -D -u 1001 -G erp -h /home/erp erp
 WORKDIR /app
 COPY --from=builder /install /usr/local
 COPY backend/ .

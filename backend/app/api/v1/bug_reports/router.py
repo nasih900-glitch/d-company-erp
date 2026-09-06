@@ -70,7 +70,7 @@ BugStatus = Literal[
     "closed",
     "rejected",
 ]
-AdminTenantDep = Annotated[TenantContext, Depends(requires("admin.system"))]
+SupportTenantDep = Annotated[TenantContext, Depends(requires("admin.support"))]
 ReportStatusFilter = Annotated[BugStatus | None, Query(alias="status")]
 
 _STATUS_VALUES = ("open", "acknowledged", "in_progress", "resolved", "closed", "rejected")
@@ -720,7 +720,7 @@ async def create_bug_report(
 @router.get("", response_model=BugReportPage)
 async def list_bug_reports(
     session: SessionDep,
-    tenant: AdminTenantDep,
+    tenant: SupportTenantDep,
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0, le=1_000_000),
     report_status: ReportStatusFilter = None,
@@ -877,7 +877,7 @@ async def list_my_bug_reports(
 @router.get("/inbox-summary", response_model=BugReportInboxSummary)
 async def bug_report_inbox_summary(
     session: SessionDep,
-    tenant: AdminTenantDep,
+    tenant: SupportTenantDep,
 ) -> BugReportInboxSummary:
     """Fast per-owner badge counts without loading the private inbox."""
     read_join = (
@@ -1260,7 +1260,7 @@ async def download_bug_report_attachment(
     report_id: UUID,
     attachment_id: UUID,
     session: SessionDep,
-    tenant: AdminTenantDep,
+    tenant: SupportTenantDep,
 ) -> Response:
     await _report_or_404(
         session,
@@ -1281,7 +1281,7 @@ async def download_bug_report_attachment(
 async def mark_bug_report_read(
     report_id: UUID,
     session: SessionDep,
-    tenant: AdminTenantDep,
+    tenant: SupportTenantDep,
 ) -> Response:
     await _report_or_404(
         session,
@@ -1309,7 +1309,7 @@ async def add_bug_report_public_reply(
     payload: BugReportPublicReplyCreate,
     request: Request,
     session: SessionDep,
-    tenant: AdminTenantDep,
+    tenant: SupportTenantDep,
 ) -> BugReportPublicReplyRead:
     idempotency_key, request_hash = _require_idempotency(request)
     author = (
@@ -1407,7 +1407,7 @@ async def _report_or_404(
 async def get_bug_report(
     report_id: UUID,
     session: SessionDep,
-    tenant: AdminTenantDep,
+    tenant: SupportTenantDep,
 ) -> BugReportRead:
     report = await _report_or_404(
         session,
@@ -1432,7 +1432,7 @@ async def update_bug_report(
     report_id: UUID,
     payload: BugReportUpdate,
     session: SessionDep,
-    tenant: AdminTenantDep,
+    tenant: SupportTenantDep,
 ) -> BugReportRead:
     report = await _report_or_404(
         session,

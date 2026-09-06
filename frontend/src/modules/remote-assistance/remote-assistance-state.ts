@@ -176,7 +176,7 @@ export function deviceKeyActionErrorMessage(error: unknown, action: 'approve' | 
     return 'This device key is no longer available. Refresh device state before retrying.';
   }
   if (apiError.status === 401 || apiError.status === 403) {
-    return 'Protected System Health access is required for device pairing.';
+    return 'Owner support access is required for device pairing.';
   }
   if (apiError.status && apiError.status >= 500) {
     return 'The protected device-pairing service did not complete the request.';
@@ -210,7 +210,7 @@ export function commandRejectionMessage(reasonCode: string | null): string {
 export function remoteAssistanceErrorMessage(error: unknown): string {
   const apiError = error as ApiError;
   if (apiError.status === 401 || apiError.status === 403) {
-    return 'This account does not have protected System Health access.';
+    return 'This account does not have owner support access.';
   }
   if (apiError.status === 409) {
     return 'Device state changed while this action was being completed.';

@@ -668,7 +668,7 @@ export function systemHealthErrorMessage(error: unknown): string {
     return 'Your sign-in could not be verified. Sign in again, then retry.';
   }
   if (apiError?.status === 403) {
-    return 'This account does not have protected System Health access.';
+    return 'This account does not have owner support access.';
   }
   if (apiError?.code === 'network_error' || apiError?.status === undefined) {
     return 'The ERP server could not be reached. Check the connection and retry.';

@@ -197,6 +197,6 @@ def test_tariff_is_explicit_deploy_step_not_an_ordinary_restart_side_effect() ->
         f"{apply_command}\n"
     )
     assert installer.index(f"{apply_command}\n") < installer.index(
-        "up -d caddy",
+        "up -d --no-build --pull never caddy",
         installer.index("Backend is ready."),
     )

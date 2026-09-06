@@ -263,9 +263,20 @@ async def test_consent_session_command_and_audit_contract(
         audit_access=False,
         android=False,
     )
+    co_owner_headers = _headers(
+        seed_owner,
+        roles=["co_owner"],
+        audit_access=False,
+        android=False,
+    )
 
     denied = await client.get("/api/v1/remote-assistance/devices", headers=ordinary_headers)
     assert denied.status_code == 403
+    support_allowed = await client.get(
+        "/api/v1/remote-assistance/devices",
+        headers=co_owner_headers,
+    )
+    assert support_allowed.status_code == 200, support_allowed.text
 
     invalid_header = await client.put(
         f"/api/v1/remote-assistance/device/sessions/{uuid4()}/frame",
@@ -565,6 +576,299 @@ async def test_consent_session_command_and_audit_contract(
     assert all(row.after and row.after.get("device_ref") for row in audits)
     assert all(str(installation_id) not in str(row.after) for row in audits)
     assert all("screenshot" not in str(row.after).lower() for row in audits)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_human_support_consent_is_bound_to_exact_requester(
+    client,
+    session,
+    seed_owner,
+    monkeypatch,
+) -> None:
+    installation = await _installation(session, seed_owner)
+    support_b = await _same_tenant_user(session, seed_owner, name="Support B")
+    company_id = seed_owner["company"].id
+    support_a_id = seed_owner["owner"].id
+    support_b_id = support_b["owner"].id
+    installation_id = installation.installation_id
+    support_a_headers = _headers(
+        seed_owner,
+        roles=["co_owner"],
+        audit_access=False,
+        android=False,
+    )
+    support_b_headers = _headers(
+        support_b,
+        roles=["super_owner"],
+        audit_access=True,
+        android=False,
+    )
+    device_headers = _headers(
+        seed_owner,
+        roles=["staff"],
+        audit_access=False,
+        android=True,
+    )
+
+    request_id = uuid4()
+    request_payload = _request_payload(installation_id, request_id=request_id)
+    requested = await client.post(
+        "/api/v1/remote-assistance/requests",
+        headers=support_a_headers,
+        json=request_payload,
+    )
+    assert requested.status_code == 200, requested.text
+    session_id = UUID(requested.json()["session"]["id"])
+    assert requested.json()["grant"]["requested_by_user_id"] == str(support_a_id)
+
+    replay_by_a = await client.post(
+        "/api/v1/remote-assistance/requests",
+        headers=support_a_headers,
+        json=request_payload,
+    )
+    assert replay_by_a.status_code == 200, replay_by_a.text
+    assert replay_by_a.json()["session"]["id"] == str(session_id)
+
+    replay_by_b = await client.post(
+        "/api/v1/remote-assistance/requests",
+        headers=support_b_headers,
+        json=request_payload,
+    )
+    assert replay_by_b.status_code == 409, replay_by_b.text
+    assert replay_by_b.json()["error"] == {
+        "code": "conflict",
+        "message": "The request id is already in use.",
+        "details": {},
+    }
+    assert str(support_a_id) not in replay_by_b.text
+
+    accepted = await client.post(
+        f"/api/v1/remote-assistance/device/grants/{request_id}/decision",
+        headers=device_headers,
+        json={
+            "installation_id": str(installation_id),
+            "decision": "accepted",
+            "decision_id": str(uuid4()),
+        },
+    )
+    assert accepted.status_code == 200, accepted.text
+
+    devices_for_a = await client.get(
+        "/api/v1/remote-assistance/devices",
+        headers=support_a_headers,
+    )
+    assert devices_for_a.status_code == 200, devices_for_a.text
+    device_for_a = devices_for_a.json()["items"][0]
+    assert device_for_a["current_grant_id"] == str(request_id)
+    assert device_for_a["current_session_id"] == str(session_id)
+
+    devices_for_b = await client.get(
+        "/api/v1/remote-assistance/devices",
+        headers=support_b_headers,
+    )
+    assert devices_for_b.status_code == 200, devices_for_b.text
+    device_for_b = devices_for_b.json()["items"][0]
+    assert device_for_b["grant_status"] is None
+    assert device_for_b["current_grant_id"] is None
+    assert device_for_b["current_grant_kind"] is None
+    assert device_for_b["current_grant_responded_by_user_id"] is None
+    assert device_for_b["session_status"] is None
+    assert device_for_b["current_session_id"] is None
+    assert device_for_b["current_session_next_sequence"] is None
+
+    sessions_for_a = await client.get(
+        "/api/v1/remote-assistance/sessions",
+        headers=support_a_headers,
+    )
+    assert sessions_for_a.status_code == 200, sessions_for_a.text
+    assert sessions_for_a.json()["total"] == 1
+    assert sessions_for_a.json()["items"][0]["id"] == str(session_id)
+    sessions_for_b = await client.get(
+        "/api/v1/remote-assistance/sessions",
+        headers=support_b_headers,
+    )
+    assert sessions_for_b.status_code == 200, sessions_for_b.text
+    assert sessions_for_b.json()["total"] == 0
+    assert sessions_for_b.json()["items"] == []
+
+    reused_session_by_b = await client.post(
+        "/api/v1/remote-assistance/sessions",
+        headers=support_b_headers,
+        json={
+            "session_id": str(session_id),
+            "installation_id": str(installation_id),
+            "grant_id": str(request_id),
+            "session_ttl_seconds": 900,
+        },
+    )
+    assert reused_session_by_b.status_code == 409, reused_session_by_b.text
+    assert reused_session_by_b.json()["error"]["message"] == "The session id is already in use."
+
+    foreign_grant_session_id = uuid4()
+    create_from_a_grant_by_b = await client.post(
+        "/api/v1/remote-assistance/sessions",
+        headers=support_b_headers,
+        json={
+            "session_id": str(foreign_grant_session_id),
+            "installation_id": str(installation_id),
+            "grant_id": str(request_id),
+            "session_ttl_seconds": 900,
+        },
+    )
+    assert create_from_a_grant_by_b.status_code == 404, create_from_a_grant_by_b.text
+
+    start_id = uuid4()
+    start_by_b = await client.post(
+        f"/api/v1/remote-assistance/sessions/{session_id}/start",
+        headers=support_b_headers,
+        json={"start_id": str(start_id)},
+    )
+    assert start_by_b.status_code == 404, start_by_b.text
+    assert start_by_b.json()["error"]["message"] == "Support session not found."
+
+    started_by_a = await client.post(
+        f"/api/v1/remote-assistance/sessions/{session_id}/start",
+        headers=support_a_headers,
+        json={"start_id": str(start_id)},
+    )
+    assert started_by_a.status_code == 200, started_by_a.text
+    assert started_by_a.json()["status"] == "active"
+
+    command_id = uuid4()
+    command_payload = {
+        "command_id": str(command_id),
+        "sequence": 1,
+        "type": "refresh",
+        "module": None,
+    }
+    command_by_b = await client.post(
+        f"/api/v1/remote-assistance/sessions/{session_id}/commands",
+        headers=support_b_headers,
+        json=command_payload,
+    )
+    assert command_by_b.status_code == 404, command_by_b.text
+    command_by_a = await client.post(
+        f"/api/v1/remote-assistance/sessions/{session_id}/commands",
+        headers=support_a_headers,
+        json=command_payload,
+    )
+    assert command_by_a.status_code == 200, command_by_a.text
+
+    command_read_by_b = await client.get(
+        f"/api/v1/remote-assistance/sessions/{session_id}/commands/{command_id}",
+        headers=support_b_headers,
+    )
+    assert command_read_by_b.status_code == 404, command_read_by_b.text
+    command_read_by_a = await client.get(
+        f"/api/v1/remote-assistance/sessions/{session_id}/commands/{command_id}",
+        headers=support_a_headers,
+    )
+    assert command_read_by_a.status_code == 200, command_read_by_a.text
+    assert command_read_by_a.json()["command_id"] == str(command_id)
+
+    relay_reads: list[UUID] = []
+    frame_now = datetime.now(UTC)
+
+    async def requester_frame(*, session_id: UUID, **_kwargs):
+        relay_reads.append(session_id)
+        return SimpleNamespace(
+            content=b"requester-a-frame",
+            metadata=SimpleNamespace(
+                frame_id=uuid4(),
+                sequence=1,
+                width=256,
+                height=180,
+                received_at=frame_now,
+                expires_at=frame_now + timedelta(seconds=5),
+            ),
+        )
+
+    monkeypatch.setattr(remote_router, "get_latest_frame", requester_frame)
+    frame_by_b = await client.get(
+        f"/api/v1/remote-assistance/sessions/{session_id}/frame",
+        headers=support_b_headers,
+    )
+    assert frame_by_b.status_code == 404, frame_by_b.text
+    assert relay_reads == []
+    frame_by_a = await client.get(
+        f"/api/v1/remote-assistance/sessions/{session_id}/frame",
+        headers=support_a_headers,
+    )
+    assert frame_by_a.status_code == 200, frame_by_a.text
+    assert frame_by_a.content == b"requester-a-frame"
+    assert relay_reads == [session_id]
+
+    end_id = uuid4()
+    end_by_b = await client.post(
+        f"/api/v1/remote-assistance/sessions/{session_id}/end",
+        headers=support_b_headers,
+        json={"end_id": str(end_id)},
+    )
+    assert end_by_b.status_code == 404, end_by_b.text
+    revoke_id = uuid4()
+    revoke_by_b = await client.post(
+        f"/api/v1/remote-assistance/grants/{request_id}/revoke",
+        headers=support_b_headers,
+        json={"revoke_id": str(revoke_id)},
+    )
+    assert revoke_by_b.status_code == 404, revoke_by_b.text
+
+    end_by_a = await client.post(
+        f"/api/v1/remote-assistance/sessions/{session_id}/end",
+        headers=support_a_headers,
+        json={"end_id": str(end_id)},
+    )
+    assert end_by_a.status_code == 200, end_by_a.text
+    assert end_by_a.json()["status"] == "ended"
+
+    next_session_id = foreign_grant_session_id
+    create_by_a = await client.post(
+        "/api/v1/remote-assistance/sessions",
+        headers=support_a_headers,
+        json={
+            "session_id": str(next_session_id),
+            "installation_id": str(installation_id),
+            "grant_id": str(request_id),
+            "session_ttl_seconds": 900,
+        },
+    )
+    assert create_by_a.status_code == 200, create_by_a.text
+    assert create_by_a.json()["id"] == str(next_session_id)
+
+    revoke_by_a = await client.post(
+        f"/api/v1/remote-assistance/grants/{request_id}/revoke",
+        headers=support_a_headers,
+        json={"revoke_id": str(revoke_id)},
+    )
+    assert revoke_by_a.status_code == 200, revoke_by_a.text
+    assert revoke_by_a.json()["status"] == "revoked"
+
+    await session.rollback()
+    grant = await session.get(RemoteAssistanceGrant, request_id)
+    first_session = await session.get(RemoteAssistanceSession, session_id)
+    second_session = await session.get(RemoteAssistanceSession, next_session_id)
+    command = await session.get(RemoteAssistanceCommand, command_id)
+    assert grant is not None
+    assert grant.requested_by_user_id == support_a_id
+    assert first_session is not None
+    assert first_session.requested_by_user_id == support_a_id
+    assert second_session is not None
+    assert second_session.requested_by_user_id == support_a_id
+    assert command is not None
+    assert command.issued_by_user_id == support_a_id
+    support_b_audits = int(
+        (
+            await session.execute(
+                select(func.count(AuditLog.id)).where(
+                    AuditLog.company_id == company_id,
+                    AuditLog.actor_user_id == support_b_id,
+                    AuditLog.action.like("remote_assistance.%"),
+                )
+            )
+        ).scalar_one()
+    )
+    assert support_b_audits == 0
 
 
 @pytest.mark.integration

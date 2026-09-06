@@ -74,7 +74,7 @@ SystemHealthStatus = Literal["healthy", "degraded", "action_required"]
 DependencyStatus = Literal["operational", "unavailable"]
 BackupStatus = Literal["operational", "unavailable", "unknown"]
 
-AdminTenantDep = Annotated[TenantContext, Depends(requires("admin.system"))]
+SupportTenantDep = Annotated[TenantContext, Depends(requires("admin.support"))]
 
 _VERSION_NAME_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._+-]{0,79}$")
 _REASON_CODE_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,63}$")
@@ -509,7 +509,7 @@ def _bounded_filter_time(value: datetime | None, *, field_name: str) -> datetime
 async def list_events(
     response: Response,
     session: SessionDep,
-    tenant: AdminTenantDep,
+    tenant: SupportTenantDep,
     event_type: DiagnosticEventType | None = None,
     severity: DiagnosticSeverity | None = None,
     component: DiagnosticComponent | None = None,
@@ -634,7 +634,7 @@ async def _build_summary(
 async def diagnostic_summary(
     response: Response,
     session: SessionDep,
-    tenant: AdminTenantDep,
+    tenant: SupportTenantDep,
     window_hours: int = Query(default=24, ge=1, le=720),
 ) -> ClientDiagnosticSummary:
     response.headers["Cache-Control"] = "private, no-store"
@@ -671,7 +671,7 @@ async def _redis_dependency_status() -> DependencyStatus:
 async def system_health(
     response: Response,
     session: SessionDep,
-    tenant: AdminTenantDep,
+    tenant: SupportTenantDep,
 ) -> SystemHealthRead:
     """Return owner-safe health signals without infrastructure or log details."""
     response.headers["Cache-Control"] = "private, no-store"

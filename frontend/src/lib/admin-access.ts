@@ -1,15 +1,8 @@
-/**
- * `admin.system` is deliberately narrower than general owner access.
- *
- * The backend exposes that effective permission as `audit_access` on
- * `/auth/me`. Keep route and navigation decisions on this single predicate so
- * a co-owner never sees an inbox the API will correctly reject.
- */
+/** Protected audit and evidence controls remain narrower than owner access. */
 type AdminIdentity = {
   audit_access?: boolean | null;
-  // Accepted only so callers can prove protected_access is deliberately not
-  // treated as audit/system authority.
   protected_access?: boolean | null;
+  effective_permissions?: readonly string[] | null;
 } | null | undefined;
 
 export function hasAuditAccess(identity: AdminIdentity): boolean {
@@ -19,5 +12,17 @@ export function hasAuditAccess(identity: AdminIdentity): boolean {
 export function hasAdminSystemAccess(
   identity: AdminIdentity,
 ): boolean {
+  return hasAuditAccess(identity);
+}
+
+/**
+ * Current servers expose tenant support authority as an exact permission.
+ * Audit access is a safe compatibility fallback for older `/auth/me` payloads
+ * that predate `effective_permissions`.
+ */
+export function hasSupportAccess(identity: AdminIdentity): boolean {
+  if (identity?.effective_permissions !== undefined) {
+    return identity.effective_permissions?.includes('admin.support') === true;
+  }
   return hasAuditAccess(identity);
 }

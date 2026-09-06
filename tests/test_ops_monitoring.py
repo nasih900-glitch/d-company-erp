@@ -112,7 +112,6 @@ class RuntimeMonitorTest(unittest.TestCase):
                 "caddy",
                 "postgres",
                 "redis",
-                "minio",
                 "backend",
                 "frontend",
             )
@@ -126,7 +125,7 @@ class RuntimeMonitorTest(unittest.TestCase):
 
     def test_missing_unhealthy_and_new_restart_are_reported(self) -> None:
         states = self.healthy_states()
-        states = [state for state in states if state.service != "minio"]
+        states = [state for state in states if state.service != "redis"]
         states = [
             ContainerState(
                 service=state.service,

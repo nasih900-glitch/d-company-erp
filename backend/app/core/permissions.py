@@ -66,13 +66,13 @@ PERMISSIONS: dict[str, str] = {
     "analytics.read": "View dashboards",
     "analytics.export": "Export data (Power BI / CSV)",
     # Owner-level business administration. These are deliberately separate
-    # from admin.system so operational co-owners can manage the cafe without
-    # gaining Audit Log, Access Control, or the private bug-report inbox.
+    # from protected audit and evidence-reconciliation controls.
     "settings.manage": "Manage company, branch, terminal, and pricing settings",
     "memberships.manage": "Manage membership plans and protected membership workflows",
     # Admin
     "admin.audit.read": "Read audit logs",
-    "admin.system": "Protected support inbox and evidence-reconciliation controls",
+    "admin.support": "Manage support inbox, diagnostics, and consent-gated remote assistance",
+    "admin.system": "Protected evidence-reconciliation controls",
 }
 
 # The self-registration signup path (no in-app role picker) assigns this role
@@ -167,13 +167,15 @@ OWNER_ACCESS = MANAGER_ACCESS | {
     "staff.payroll.write",
     "settings.manage",
     "memberships.manage",
+    "admin.support",
 }
 
 # External CA / audit-firm title — true read-only access. Only the *.read
 # permissions (plus analytics.export, which reads/exports data rather than
 # mutating it) needed to review finance, ops, and staff records for an audit.
 # Deliberately excludes every *.write, *.void, *.refund, shift-open/close,
-# OCR upload/verify (both create or mutate bill records), and admin.system.
+# OCR upload/verify (both create or mutate bill records), admin.support, and
+# admin.system.
 # admin.audit.read is excluded too — that permission is hardcoded to
 # tenant.audit_access (super_owner only, see _has_permission) and is never
 # granted through ROLE_PERMISSIONS for any role.
@@ -244,9 +246,9 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
 # module per role, rather than one per fine-grained permission string (too
 # granular to be a sane UI). Deliberately excludes the owner-only
 # settings.manage/memberships.manage permissions and the protected-owner-only
-# admin.audit.read/admin.system permissions. None may be widened through a
-# coarse module toggle; in particular, audit/system access must never become
-# self-grantable.
+# admin.audit.read/admin.support/admin.system permissions. None may be widened
+# through a coarse module toggle; in particular, support, audit, and protected
+# evidence access must never become self-grantable.
 MODULE_PERMISSIONS: dict[str, set[str]] = {
     "pos": {
         "pos.read",
@@ -316,14 +318,15 @@ def _role_allows_permission(
 
 
 async def _has_permission(session, tenant: TenantContext, perm: str) -> bool:
-    # Audit and protected system controls are deliberately excluded from the
+    # Audit and protected evidence controls are deliberately excluded from the
     # protected_access blanket bypass. A co-owner may override operational
     # gates and receives dedicated settings/membership management, but only
     # the designated protected owner (audit_access=True) can read Audit Log,
-    # Access Control, the support inbox, or protected system/membership
-    # evidence controls. Operational POS refund evidence reconciliation is a
-    # separate, narrowly scoped permission and intentionally does not use this
-    # bypass.
+    # Access Control, or protected system/membership evidence controls.
+    # Tenant owners receive the separate admin.support permission for the
+    # support inbox, diagnostics, and consent-gated remote assistance without
+    # inheriting Audit Log or release authority. Operational POS refund
+    # evidence reconciliation is separately scoped too.
     if perm in {"admin.audit.read", "admin.system"}:
         return tenant.audit_access
     if tenant.protected_access:
