@@ -155,6 +155,27 @@ class DockerContextSafetyTest(unittest.TestCase):
                             dockerfile,
                         )
 
+    def test_postgres_compatibility_waits_for_final_postmaster(self) -> None:
+        script = (
+            ROOT / "infra" / "scripts" / "verify-postgres16-image-compatibility.sh"
+        ).read_text(encoding="utf-8")
+
+        # pg_isready also succeeds against the temporary initialization server.
+        # Waiting for the postmaster PID file to name container PID 1 prevents a
+        # restore from racing the entrypoint's temporary-server shutdown.
+        wait_start = script.index("wait_ready() {")
+        start_postgres = script.index("start_postgres() {")
+        wait_body = script[wait_start:start_postgres]
+        self.assertIn('test -s "$PGDATA/postmaster.pid"', wait_body)
+        self.assertIn(
+            'test "$(sed -n "1p" "$PGDATA/postmaster.pid")" = 1',
+            wait_body,
+        )
+        self.assertLess(
+            wait_body.index('test -s "$PGDATA/postmaster.pid"'),
+            wait_body.index("    pg_isready"),
+        )
+
     def test_exact_built_images_have_blocking_pinned_sbom_and_cve_scans(self) -> None:
         action = CONTAINER_SCAN_ACTION.read_text(encoding="utf-8")
         self.assertIn(

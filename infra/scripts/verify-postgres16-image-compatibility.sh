@@ -41,7 +41,15 @@ trap cleanup EXIT
 wait_ready() {
   local container=$1
   local attempts=0
-  until docker exec "$container" pg_isready -U erp -d erp >/dev/null 2>&1; do
+  # On a fresh volume the official entrypoint briefly starts a temporary
+  # postmaster while it initializes the cluster. pg_isready can succeed during
+  # that window even though the temporary server is about to stop. Only return
+  # once the entrypoint has exec'd the final postmaster as container PID 1.
+  until docker exec "$container" sh -ceu '
+    test -s "$PGDATA/postmaster.pid"
+    test "$(sed -n "1p" "$PGDATA/postmaster.pid")" = 1
+    pg_isready -U erp -d erp
+  ' >/dev/null 2>&1; do
     attempts=$((attempts + 1))
     if [ "$attempts" -ge 60 ]; then
       docker logs "$container" >&2 || true

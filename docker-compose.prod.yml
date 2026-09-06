@@ -72,7 +72,15 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U erp -d erp"]
+      # pg_isready also succeeds against the temporary postmaster used while
+      # the official entrypoint initializes a fresh volume. Require the
+      # postmaster PID file to name container PID 1, which is only true after
+      # the entrypoint has exec'd the final long-running server.
+      test:
+        [
+          "CMD-SHELL",
+          'test -s "$$PGDATA/postmaster.pid" && test "$$(sed -n 1p "$$PGDATA/postmaster.pid")" = 1 && pg_isready -U erp -d erp',
+        ]
       interval: 5s
       timeout: 5s
       retries: 20

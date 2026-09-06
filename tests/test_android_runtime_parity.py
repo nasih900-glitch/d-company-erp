@@ -7,6 +7,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import yaml
+
 from ops import runtime_release_parity as parity
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -163,6 +165,25 @@ class RuntimeParityTest(unittest.TestCase):
         self.assertEqual(2, dev.count('APP_REVISION: "' + "0" * 40 + '"'))
         self.assertNotIn('"' + "0" * 40 + '"', prod)
         self.assertIn('APP_REVISION: ${APP_REVISION:-unknown}', prod)
+
+    def test_production_postgres_healthcheck_waits_for_final_postmaster(self):
+        compose = yaml.safe_load((ROOT / "docker-compose.prod.yml").read_text())
+        healthcheck = compose["services"]["postgres"]["healthcheck"]["test"]
+
+        # The official image exposes a temporary initialization server on a
+        # fresh volume. Compose must not release dependent migrations until the
+        # entrypoint has replaced PID 1 with the final postmaster.
+        self.assertEqual("CMD-SHELL", healthcheck[0])
+        command = healthcheck[1]
+        self.assertIn('test -s "$$PGDATA/postmaster.pid"', command)
+        self.assertIn(
+            'test "$$(sed -n 1p "$$PGDATA/postmaster.pid")" = 1',
+            command,
+        )
+        self.assertLess(
+            command.index('test -s "$$PGDATA/postmaster.pid"'),
+            command.index("pg_isready -U erp -d erp"),
+        )
 
     def test_backend_runtime_receives_the_same_identity_as_its_image_build(self):
         compose = (ROOT / "docker-compose.prod.yml").read_text()
