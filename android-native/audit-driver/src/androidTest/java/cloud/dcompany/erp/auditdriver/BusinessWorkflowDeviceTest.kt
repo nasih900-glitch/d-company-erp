@@ -152,6 +152,11 @@ class BusinessWorkflowDeviceTest {
                 }
             }
             "click" -> {
+                step.optJSONObject("reveal")?.let { reveal ->
+                    if (!hasMatchingVisibleControl(step)) {
+                        performBoundedScroll(reveal, step, timeout)
+                    }
+                }
                 val target = find(step, timeout)
                 check(target.isEnabled) { "Target is disabled" }
                 target.click()
@@ -169,24 +174,8 @@ class BusinessWorkflowDeviceTest {
             "back" -> device.pressBack()
             "home" -> device.pressHome()
             "scroll" -> {
-                val direction = Direction.valueOf(step.getString("direction").uppercase())
-                val amount = step.optDouble("amount", 0.75).toFloat().coerceIn(0.1f, 2f)
-                val speed = step.optInt("speedPxPerSecond", 1_500)
-                    .coerceIn(200, 5_000)
-                val repeats = step.optInt("repeats", 1).coerceIn(1, 6)
                 val expected = step.optJSONObject("then")
-                for (attempt in 0 until repeats) {
-                    // Re-read the nested Compose LazyColumn before every
-                    // gesture. A UiObject2 retained across a recomposition can
-                    // point at the previous accessibility node and make a real
-                    // swipe appear to do nothing on physical tablets.
-                    val target = find(step, if (attempt == 0) timeout else minOf(timeout, 5_000L))
-                    target.scroll(direction, amount, speed)
-                    if (expected != null) {
-                        SystemClock.sleep(250L)
-                        if (hasMatchingVisibleControl(expected)) break
-                    }
-                }
+                performBoundedScroll(step, expected, timeout)
                 // The plan remains fail-closed: exhausting every bounded,
                 // human-speed gesture must still leave the expected receipt or
                 // control visible for the normal full-timeout assertion.
@@ -683,6 +672,33 @@ class BusinessWorkflowDeviceTest {
 
     private fun waitFor(spec: JSONObject, timeout: Long) {
         find(spec, timeout)
+    }
+
+    private fun performBoundedScroll(
+        scrollSpec: JSONObject,
+        expected: JSONObject?,
+        timeout: Long,
+    ) {
+        if (expected != null && hasMatchingVisibleControl(expected)) return
+        val direction = Direction.valueOf(scrollSpec.getString("direction").uppercase())
+        val amount = scrollSpec.optDouble("amount", 0.75).toFloat().coerceIn(0.1f, 2f)
+        val speed = scrollSpec.optInt("speedPxPerSecond", 1_500)
+            .coerceIn(200, 5_000)
+        val repeats = scrollSpec.optInt("repeats", 1).coerceIn(1, 6)
+        for (attempt in 0 until repeats) {
+            // Re-read the nested Compose LazyColumn before every gesture. A
+            // UiObject2 retained across a recomposition can point at the
+            // previous accessibility node and make a real swipe appear idle.
+            val target = find(
+                scrollSpec,
+                if (attempt == 0) timeout else minOf(timeout, 5_000L),
+            )
+            target.scroll(direction, amount, speed)
+            if (expected != null) {
+                SystemClock.sleep(250L)
+                if (hasMatchingVisibleControl(expected)) break
+            }
+        }
     }
 
     private fun hasMatchingVisibleControl(spec: JSONObject): Boolean {

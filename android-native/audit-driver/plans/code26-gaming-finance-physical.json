@@ -427,6 +427,14 @@
       "text": "Send to POS",
       "index": 1,
       "timeoutMs": 60000,
+      "reveal": {
+        "scrollable": true,
+        "index": 2,
+        "direction": "DOWN",
+        "amount": 0.9,
+        "speedPxPerSecond": 500,
+        "repeats": 3
+      },
       "then": {
         "text": "Send to POS?"
       }

@@ -336,17 +336,28 @@ def test_addon_flow_proves_immediate_feedback_and_durable_detail_rows() -> None:
         }
 
     driver = DRIVER_PATH.read_text(encoding="utf-8")
+    click_branch = driver.split('"click" -> {', maxsplit=1)[1].split(
+        '"fill" -> {', maxsplit=1
+    )[0]
     scroll_branch = driver.split('"scroll" -> {', maxsplit=1)[1].split(
         '"offline" -> {', maxsplit=1
     )[0]
+    scroll_helper = driver.split("private fun performBoundedScroll(", maxsplit=1)[
+        1
+    ].split("private fun hasMatchingVisibleControl", maxsplit=1)[0]
+    assert 'step.optJSONObject("reveal")?.let { reveal ->' in click_branch
+    assert "if (!hasMatchingVisibleControl(step))" in click_branch
+    assert "performBoundedScroll(reveal, step, timeout)" in click_branch
+    assert "performBoundedScroll(step, expected, timeout)" in scroll_branch
+    assert 'expected?.let { waitFor(it, timeout) }' in scroll_branch
     for contract in (
-        'step.optInt("speedPxPerSecond", 1_500)',
-        'step.optInt("repeats", 1).coerceIn(1, 6)',
-        "val target = find(step, if (attempt == 0) timeout else minOf(timeout, 5_000L))",
+        'scrollSpec.optInt("speedPxPerSecond", 1_500)',
+        'scrollSpec.optInt("repeats", 1).coerceIn(1, 6)',
+        "if (expected != null && hasMatchingVisibleControl(expected)) return",
+        "if (attempt == 0) timeout else minOf(timeout, 5_000L)",
         "if (hasMatchingVisibleControl(expected))",
-        'expected?.let { waitFor(it, timeout) }',
     ):
-        assert contract in scroll_branch
+        assert contract in scroll_helper
 
     close_reveal = steps["Reveal close-shift action"]
     assert close_reveal == {
@@ -360,6 +371,20 @@ def test_addon_flow_proves_immediate_feedback_and_durable_detail_rows() -> None:
         "repeats": 3,
         "then": {"text": "Close shift"},
     }
+
+    handoff = steps["Standard Single: request POS handoff"]
+    assert handoff["reveal"] == {
+        "scrollable": True,
+        "index": 2,
+        "direction": "DOWN",
+        "amount": 0.9,
+        "speedPxPerSecond": 500,
+        "repeats": 3,
+    }
+    assert handoff["action"] == "click"
+    assert handoff["text"] == "Send to POS"
+    assert handoff["index"] == 1
+    assert handoff["then"] == {"text": "Send to POS?"}
 
 
 def test_fixture_and_runner_are_fail_closed_and_disposable() -> None:
