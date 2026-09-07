@@ -173,6 +173,68 @@ def test_fixture_and_runner_are_fail_closed_and_disposable() -> None:
     )
 
 
+def test_firebase_matrix_lookup_uses_supported_authenticated_testing_api() -> None:
+    runner = RUNNER_PATH.read_text(encoding="utf-8")
+
+    assert "firebase test android matrices describe" not in runner
+    for contract in (
+        "https://testing.googleapis.com/v1/projects/",
+        "gcloud auth print-access-token",
+        "X-Goog-User-Project",
+        "Authorization: Bearer %s",
+        "--config -",
+        "--fail-with-body",
+        '.projectId == $project and .testMatrixId == $matrix',
+        '.state == "FINISHED" or .state == "ERROR" or .state == "INVALID"',
+        "^[a-z][a-z0-9-]{4,28}[a-z0-9]$",
+        "^matrix-[A-Za-z0-9_-]+$",
+    ):
+        assert contract in runner
+    assert '-H "Authorization: Bearer $' not in runner
+
+
+def test_firebase_result_download_is_scoped_verified_and_fail_closed() -> None:
+    runner = RUNNER_PATH.read_text(encoding="utf-8")
+
+    assert "require_command gsutil" in runner
+    assert 'GCS_OBJECT_PATH="${GCS_WITHOUT_SCHEME#*/}"' in runner
+    assert '"$GCS_OBJECT_PATH" != "$RESULTS_DIR"' in runner
+    assert 'GCS_SOURCE="${GCS_PATH%/}"' in runner
+    assert 'gsutil -m cp -r "$GCS_SOURCE"' in runner
+    assert "firebase-results-files.txt" in runner
+    assert "firebase-result-apk-sha256.txt" in runner
+    assert "Downloaded Firebase APK hash mismatch" in runner
+    assert 'immutable_apk="$ARTIFACT_DIR/$expected_name"' in runner
+    assert "Immutable APK copy no longer matches recorded identity" in runner
+    hash_block = runner.split('immutable_apk="$ARTIFACT_DIR/$expected_name"', 1)[1]
+    hash_block = hash_block.split("downloaded_sha=", 1)[0]
+    assert 'shasum -a 256 "$immutable_apk"' in hash_block
+    assert 'shasum -a 256 "$expected_apk"' not in hash_block
+    assert "gcloud storage cp" not in runner
+    assert 'firebase-download.log" 2>&1 || true' not in runner
+
+
+def test_physical_driver_polls_real_battery_saver_transitions() -> None:
+    driver = (
+        ROOT
+        / "android-native/audit-driver/src/androidTest/java/cloud/dcompany/erp/"
+        "auditdriver/BusinessWorkflowDeviceTest.kt"
+    ).read_text(encoding="utf-8")
+
+    assert driver.count("waitUntil(timeout) { powerSaveModeEnabled() }") == 1
+    assert driver.count("waitUntil(timeout) { !powerSaveModeEnabled() }") == 1
+    assert 'private fun powerSaveModeEnabled(): Boolean' in driver
+    battery_block = driver.split('evidence.put("battery_saver_enabled", false)', 1)[1]
+    battery_block = battery_block.split('val alarmAfter', 1)[0]
+    assert "try {" in battery_block
+    assert "} finally {" in battery_block
+    assert battery_block.index("cmd power set-mode 1") < battery_block.index("} finally {")
+    assert battery_block.index("} finally {") < battery_block.index("cmd power set-mode 0")
+    assert driver.count(
+        'device.executeShellCommand("settings get global low_power").trim() == "1"'
+    ) == 1
+
+
 def _safe_label(label: str) -> str:
     import re
 

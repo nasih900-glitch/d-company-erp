@@ -163,6 +163,7 @@ jq -n '{required_external:[
 
 if [[ "$DEVICE" == "firebase" ]]; then
   require_command gcloud
+  require_command gsutil
 else
   require_command adb
 fi
@@ -182,6 +183,74 @@ run_alembic() {
   else
     "$PYTHON" -m alembic "$@"
   fi
+}
+
+fetch_firebase_matrix_json() {
+  local project="$1"
+  local matrix_id="$2"
+  local output="$3"
+  local token project_uri matrix_uri response http_status request_rc detail
+  [[ "$project" =~ ^[a-z][a-z0-9-]{4,28}[a-z0-9]$ ]] || {
+    printf 'Invalid Google Cloud project id: %s\n' "$project" >&2
+    return 64
+  }
+  [[ "$matrix_id" =~ ^matrix-[A-Za-z0-9_-]+$ ]] || {
+    printf 'Invalid Firebase matrix id: %s\n' "$matrix_id" >&2
+    return 64
+  }
+  response="$RUNTIME_DIR/firebase-matrix-api-response.json"
+  project_uri="$(jq -rn --arg value "$project" '$value | @uri')"
+  matrix_uri="$(jq -rn --arg value "$matrix_id" '$value | @uri')"
+  if ! token="$(
+    gcloud auth print-access-token --project="$project" \
+      2> "$RUNTIME_DIR/firebase-auth.log"
+  )"; then
+    printf '%s\n' 'Could not obtain Google Cloud access token for Test Lab matrix lookup.' >&2
+    return 70
+  fi
+  if [[ -z "$token" || ${#token} -gt 8192 || ! "$token" =~ ^[A-Za-z0-9._~+/-]+$ ]]; then
+    unset token
+    printf '%s\n' 'Google Cloud returned an invalid access token.' >&2
+    return 70
+  fi
+  : > "$response"
+  chmod 600 "$response"
+  set +e
+  http_status="$({
+      printf 'header = "Authorization: Bearer %s"\n' "$token"
+      printf 'header = "X-Goog-User-Project: %s"\n' "$project"
+    } | curl --config - --silent --show-error --fail-with-body \
+      --retry 4 --retry-connrefused --retry-delay 2 --retry-max-time 90 \
+      --connect-timeout 15 --max-time 120 --request GET \
+      --header 'Accept: application/json' --output "$response" \
+      --write-out '%{http_code}' \
+      "https://testing.googleapis.com/v1/projects/$project_uri/testMatrices/$matrix_uri")"
+  request_rc=$?
+  set -e
+  unset token
+  if [[ $request_rc -ne 0 ]]; then
+    detail='no JSON error body'
+    if [[ -s "$response" ]] && jq -e 'type == "object"' "$response" >/dev/null 2>&1; then
+      detail="$(
+        jq -r '(.error.status // "UNKNOWN") + ": " +
+          (.error.message // "Testing API request failed")' "$response"
+      )"
+    fi
+    printf 'Cloud Testing API matrix lookup failed (curl=%s HTTP=%s): %s\n' \
+      "$request_rc" "${http_status:-000}" "$detail" >&2
+    return 70
+  fi
+  if ! jq -e --arg project "$project" --arg matrix "$matrix_id" '
+      type == "object" and .projectId == $project and .testMatrixId == $matrix and
+      (.state == "FINISHED" or .state == "ERROR" or .state == "INVALID") and
+      (.resultStorage.googleCloudStorage.gcsPath |
+        type == "string" and startswith("gs://"))
+    ' "$response" >/dev/null; then
+    printf '%s\n' \
+      'Cloud Testing API returned a mismatched, non-terminal, or incomplete matrix.' >&2
+    return 70
+  fi
+  mv "$response" "$output"
 }
 
 write_source_recheck() {
@@ -505,15 +574,74 @@ else
     exit 70
   fi
   printf '%s\n' "$MATRIX_ID" > "$ARTIFACT_DIR/firebase-matrix-id.txt"
-  gcloud firebase test android matrices describe "$MATRIX_ID" --project "$PROJECT" \
-    --format=json > "$ARTIFACT_DIR/firebase-matrix.json"
-  GCS_PATH="$(jq -r '.resultStorage.googleCloudStorage.gcsPath // empty' \
-    "$ARTIFACT_DIR/firebase-matrix.json")"
-  if [[ "$GCS_PATH" == gs://* ]]; then
-    mkdir -p "$ARTIFACT_DIR/firebase-results"
-    gcloud storage cp --recursive "$GCS_PATH" "$ARTIFACT_DIR/firebase-results/" \
-      > "$RUNTIME_DIR/firebase-download.log" 2>&1 || true
+  fetch_firebase_matrix_json \
+    "$PROJECT" "$MATRIX_ID" "$ARTIFACT_DIR/firebase-matrix.json"
+  GCS_PATH="$(
+    jq -er '.resultStorage.googleCloudStorage.gcsPath' \
+      "$ARTIFACT_DIR/firebase-matrix.json"
+  )"
+  GCS_WITHOUT_SCHEME="${GCS_PATH#gs://}"
+  GCS_OBJECT_PATH="${GCS_WITHOUT_SCHEME#*/}"
+  GCS_OBJECT_PATH="${GCS_OBJECT_PATH%/}"
+  if [[ "$GCS_WITHOUT_SCHEME" == "$GCS_OBJECT_PATH" || \
+        "$GCS_OBJECT_PATH" != "$RESULTS_DIR" ]]; then
+    printf 'Matrix result path does not match this run: %s\n' "$GCS_PATH" >&2
+    exit 65
   fi
+  mkdir -p "$ARTIFACT_DIR/firebase-results"
+  GCS_SOURCE="${GCS_PATH%/}"
+  if ! gsutil -m cp -r "$GCS_SOURCE" "$ARTIFACT_DIR/firebase-results/" \
+      > "$RUNTIME_DIR/firebase-download.log" 2>&1; then
+    printf '%s\n' \
+      'Firebase evidence download failed; physical acceptance cannot continue.' >&2
+    exit 70
+  fi
+  find "$ARTIFACT_DIR/firebase-results" -type f -print | LC_ALL=C sort \
+    > "$ARTIFACT_DIR/firebase-results-files.txt"
+  [[ -s "$ARTIFACT_DIR/firebase-results-files.txt" ]] || {
+    printf '%s\n' 'Firebase returned no downloadable evidence files.' >&2
+    exit 70
+  }
+  : > "$ARTIFACT_DIR/firebase-result-apk-sha256.txt"
+  for expected_apk in "$ERP_APK" "$DRIVER_APK" "$DRIVER_TEST_APK"; do
+    expected_name="$(basename "$expected_apk")"
+    match_count="$(
+      find "$ARTIFACT_DIR/firebase-results" -type f -name "$expected_name" -print |
+        wc -l | tr -d '[:space:]'
+    )"
+    [[ "$match_count" == "1" ]] || {
+      printf 'Expected exactly one downloaded %s, found %s.\n' \
+        "$expected_name" "$match_count" >&2
+      exit 70
+    }
+    downloaded_apk="$(
+      find "$ARTIFACT_DIR/firebase-results" -type f -name "$expected_name" -print |
+        head -1
+    )"
+    immutable_apk="$ARTIFACT_DIR/$expected_name"
+    [[ -s "$immutable_apk" ]] || {
+      printf 'Immutable submitted APK copy is missing: %s\n' "$expected_name" >&2
+      exit 70
+    }
+    expected_sha="$(shasum -a 256 "$immutable_apk" | awk '{print $1}')"
+    recorded_sha="$(
+      jq -er --arg file "$expected_name" \
+        '.apks[] | select(.file == $file) | .sha256' \
+        "$ARTIFACT_DIR/apk-identities.json"
+    )"
+    [[ "$expected_sha" == "$recorded_sha" ]] || {
+      printf 'Immutable APK copy no longer matches recorded identity: %s\n' \
+        "$expected_name" >&2
+      exit 70
+    }
+    downloaded_sha="$(shasum -a 256 "$downloaded_apk" | awk '{print $1}')"
+    [[ "$expected_sha" == "$downloaded_sha" ]] || {
+      printf 'Downloaded Firebase APK hash mismatch: %s\n' "$expected_name" >&2
+      exit 70
+    }
+    printf '%s  %s\n' "$downloaded_sha" "$expected_name" \
+      >> "$ARTIFACT_DIR/firebase-result-apk-sha256.txt"
+  done
 fi
 
 set +e

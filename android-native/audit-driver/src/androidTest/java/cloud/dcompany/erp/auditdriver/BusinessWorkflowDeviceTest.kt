@@ -273,16 +273,27 @@ class BusinessWorkflowDeviceTest {
             "Doze force/restore constraint did not complete"
         }
 
-        checkedShell("battery-saver-enable.txt", "cmd power set-mode 1")
-        evidence.put(
-            "battery_saver_enabled",
-            device.executeShellCommand("settings get global low_power").trim() == "1",
-        )
-        checkedShell("battery-saver-disable.txt", "cmd power set-mode 0")
-        evidence.put(
-            "battery_saver_disabled",
-            device.executeShellCommand("settings get global low_power").trim() == "0",
-        )
+        // PowerManagerService applies this asynchronously on physical Lenovo
+        // hardware. A one-shot settings read can observe the old value even
+        // after the shell command has been accepted, so prove each transition
+        // with the same bounded polling contract used by the other constraints.
+        // Restoration belongs in finally so a polling/interruption failure
+        // cannot leave the disposable tablet in power-save mode.
+        evidence.put("battery_saver_enabled", false)
+        evidence.put("battery_saver_disabled", false)
+        try {
+            checkedShell("battery-saver-enable.txt", "cmd power set-mode 1")
+            evidence.put(
+                "battery_saver_enabled",
+                waitUntil(timeout) { powerSaveModeEnabled() },
+            )
+        } finally {
+            checkedShell("battery-saver-disable.txt", "cmd power set-mode 0")
+            evidence.put(
+                "battery_saver_disabled",
+                waitUntil(timeout) { !powerSaveModeEnabled() },
+            )
+        }
         check(
             evidence.getBoolean("battery_saver_enabled") &&
                 evidence.getBoolean("battery_saver_disabled"),
@@ -306,6 +317,9 @@ class BusinessWorkflowDeviceTest {
             "android\\.permission\\.POST_NOTIFICATIONS: granted=true",
         ).containsMatchIn(packageState)
     }
+
+    private fun powerSaveModeEnabled(): Boolean =
+        device.executeShellCommand("settings get global low_power").trim() == "1"
 
     private fun alarmRegistered(): Boolean =
         operationalAlarmRegistered(device.executeShellCommand("dumpsys alarm"))
