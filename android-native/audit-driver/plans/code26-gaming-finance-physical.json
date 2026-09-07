@@ -235,6 +235,7 @@
       "name": "Standard Single: pause with reason",
       "action": "click",
       "text": "Pause session",
+      "index": 1,
       "timeoutMs": 60000,
       "then": {
         "descriptionContains": "PS5 Station 1. Paused"

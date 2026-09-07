@@ -167,6 +167,7 @@ def test_physical_plan_proves_pause_resume_and_every_extension_option() -> None:
         "then": {"text": "Pause reason"},
     }
     assert by_name[pause_names[1]][1]["value"] == "Physical audit pause stability"
+    assert by_name[pause_names[2]][1]["index"] == 1
     assert by_name[pause_names[2]][1]["then"] == {
         "descriptionContains": "PS5 Station 1. Paused"
     }
