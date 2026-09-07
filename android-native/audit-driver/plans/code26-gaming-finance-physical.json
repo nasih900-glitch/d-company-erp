@@ -218,7 +218,6 @@
       "name": "Standard Single: open pause reason",
       "action": "click",
       "text": "Pause",
-      "clickable": true,
       "timeoutMs": 60000,
       "then": {
         "text": "Pause reason"
@@ -236,7 +235,6 @@
       "name": "Standard Single: pause with reason",
       "action": "click",
       "text": "Pause session",
-      "clickable": true,
       "timeoutMs": 60000,
       "then": {
         "descriptionContains": "PS5 Station 1. Paused"
@@ -263,7 +261,6 @@
       "name": "Standard Single: resume after stable pause",
       "action": "click",
       "text": "Resume",
-      "clickable": true,
       "timeoutMs": 60000,
       "then": {
         "descriptionContains": "PS5 Station 1. Active"

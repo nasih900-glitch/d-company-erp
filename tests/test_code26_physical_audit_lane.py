@@ -163,7 +163,6 @@ def test_physical_plan_proves_pause_resume_and_every_extension_option() -> None:
         "name": pause_names[0],
         "action": "click",
         "text": "Pause",
-        "clickable": True,
         "timeoutMs": 60000,
         "then": {"text": "Pause reason"},
     }
@@ -194,6 +193,11 @@ def test_physical_plan_proves_pause_resume_and_every_extension_option() -> None:
     assert by_name[pause_names[4]][1]["then"] == {
         "descriptionContains": "PS5 Station 1. Active"
     }
+    # Compose exposes the label as a TextView inside the clickable button
+    # ancestor. Requiring the label node itself to be clickable makes a real
+    # device wait forever even though the button is visible and operable.
+    for name in (pause_names[0], pause_names[2], pause_names[4]):
+        assert "clickable" not in by_name[name][1]
 
     expected_base_codes = {
         "standard-single-session-30m",
