@@ -67,7 +67,7 @@ candidate.
    rechecks the exact commit/tree, APK SHA-256, verified signer certificate and
    isolated `cloud.dcompany.erp.physicalaudit` manifest identity
    (`26` / `3.1.15-physical-audit`); it rejects dirty or drifting source. Its
-   410-step plan completes 16 isolated Gaming-to-payment sessions and records
+   411-step plan completes 16 isolated Gaming-to-payment sessions and records
    exact per-step screenshots/hierarchies, start/mid/end idle-window geometry
    across nine stability windows, strict non-zero frame thresholds for the four
    live-timer windows, exact raw paused-timer equality, device constraint

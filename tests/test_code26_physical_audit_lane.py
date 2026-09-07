@@ -64,7 +64,7 @@ def test_physical_plan_is_bounded_and_contains_no_embedded_authority() -> None:
     steps = _steps()
     rendered = json.dumps(steps, sort_keys=True, ensure_ascii=False)
 
-    assert len(steps) == 410
+    assert len(steps) == 411
     assert {step["action"] for step in steps} <= {
         "launch",
         "restart",
@@ -315,7 +315,10 @@ def test_discount_apply_uses_bounded_human_speed_reveal() -> None:
 
     assert apply_discount["text"] == "Apply discount"
     assert apply_discount["then"] == {
-        "text": "CONTINUE TO PAYMENT · ₹210.00"
+        "text": (
+            "Manual discount ₹20.00 applied. "
+            "Review the refreshed total before payment."
+        )
     }
     assert apply_discount["reveal"] == {
         "scrollable": True,
@@ -323,6 +326,15 @@ def test_discount_apply_uses_bounded_human_speed_reveal() -> None:
         "amount": 0.55,
         "speedPxPerSecond": 500,
         "repeats": 3,
+    }
+
+    acknowledge = steps["Standard Single + Cola: acknowledge discount feedback"]
+    assert acknowledge == {
+        "name": "Standard Single + Cola: acknowledge discount feedback",
+        "action": "click",
+        "text": "OK",
+        "timeoutMs": 60_000,
+        "then": {"text": "CONTINUE TO PAYMENT · ₹210.00"},
     }
 
 

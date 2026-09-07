@@ -489,6 +489,15 @@
       },
       "timeoutMs": 60000,
       "then": {
+        "text": "Manual discount ₹20.00 applied. Review the refreshed total before payment."
+      }
+    },
+    {
+      "name": "Standard Single + Cola: acknowledge discount feedback",
+      "action": "click",
+      "text": "OK",
+      "timeoutMs": 60000,
+      "then": {
         "text": "CONTINUE TO PAYMENT · ₹210.00"
       }
     },
