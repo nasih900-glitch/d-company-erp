@@ -203,6 +203,21 @@ class LayoutSnapshot:
     anchors: dict[tuple[str, str, str, str, int], tuple[int, int, int, int]]
 
 
+@dataclass(frozen=True)
+class ExactSemanticAncestorSpec:
+    attribute: str
+    fullmatch: str
+
+
+@dataclass(frozen=True)
+class ExactSemanticSpec:
+    identifier: str
+    attribute: str
+    fullmatch: str
+    expected_count: int
+    ancestor: ExactSemanticAncestorSpec | None = None
+
+
 def _normalise_semantics(value: str) -> str:
     collapsed = " ".join(value.split()).strip().lower()
     return NUMBERISH.sub("#", collapsed)
@@ -263,6 +278,163 @@ def _hierarchy_semantics(path: Path) -> tuple[list[str] | None, str | None]:
                 values.append(value)
     if not values:
         return None, "hierarchy has no visible text or descriptions"
+    return values, None
+
+
+def _exact_semantic_specs(
+    step: dict[str, Any],
+) -> tuple[list[ExactSemanticSpec], list[str]]:
+    raw_specs = step.get("exactStableSemantics")
+    if step.get("action") != "idleSemanticStability":
+        if raw_specs is not None:
+            return [], ["exactStableSemantics requires idleSemanticStability"]
+        return [], []
+    if not isinstance(raw_specs, list) or not raw_specs:
+        return [], ["idleSemanticStability requires non-empty exactStableSemantics"]
+
+    specs: list[ExactSemanticSpec] = []
+    errors: list[str] = []
+    identifiers: set[str] = set()
+    required_keys = {"id", "attribute", "fullmatch", "expectedCount"}
+    allowed_keys = required_keys | {"ancestor"}
+    for position, raw in enumerate(raw_specs, start=1):
+        if (
+            not isinstance(raw, dict)
+            or not required_keys.issubset(raw)
+            or not set(raw).issubset(allowed_keys)
+        ):
+            errors.append(
+                f"exactStableSemantics[{position}] must contain id, attribute, "
+                "fullmatch and expectedCount, with only optional ancestor scope"
+            )
+            continue
+        identifier = raw.get("id")
+        attribute = raw.get("attribute")
+        pattern = raw.get("fullmatch")
+        expected_count = raw.get("expectedCount")
+        if (
+            not isinstance(identifier, str)
+            or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", identifier)
+            or identifier in identifiers
+        ):
+            errors.append(f"exactStableSemantics[{position}] has an invalid/duplicate id")
+            continue
+        if attribute not in {"text", "content-desc"}:
+            errors.append(f"exactStableSemantics[{position}] has an invalid attribute")
+            continue
+        if not isinstance(pattern, str) or not pattern or len(pattern) > 200:
+            errors.append(f"exactStableSemantics[{position}] has an invalid fullmatch")
+            continue
+        try:
+            re.compile(pattern)
+        except re.error:
+            errors.append(f"exactStableSemantics[{position}] has an invalid regex")
+            continue
+        ancestor: ExactSemanticAncestorSpec | None = None
+        raw_ancestor = raw.get("ancestor")
+        if raw_ancestor is not None:
+            if not isinstance(raw_ancestor, dict) or set(raw_ancestor) != {
+                "attribute",
+                "fullmatch",
+            }:
+                errors.append(
+                    f"exactStableSemantics[{position}] ancestor must contain exactly "
+                    "attribute and fullmatch"
+                )
+                continue
+            ancestor_attribute = raw_ancestor.get("attribute")
+            ancestor_pattern = raw_ancestor.get("fullmatch")
+            if ancestor_attribute not in {"text", "content-desc"}:
+                errors.append(
+                    f"exactStableSemantics[{position}] ancestor has an invalid attribute"
+                )
+                continue
+            if (
+                not isinstance(ancestor_pattern, str)
+                or not ancestor_pattern
+                or len(ancestor_pattern) > 200
+            ):
+                errors.append(
+                    f"exactStableSemantics[{position}] ancestor has an invalid fullmatch"
+                )
+                continue
+            try:
+                re.compile(ancestor_pattern)
+            except re.error:
+                errors.append(
+                    f"exactStableSemantics[{position}] ancestor has an invalid regex"
+                )
+                continue
+            ancestor = ExactSemanticAncestorSpec(
+                attribute=ancestor_attribute,
+                fullmatch=ancestor_pattern,
+            )
+        if (
+            isinstance(expected_count, bool)
+            or not isinstance(expected_count, int)
+            or not 1 <= expected_count <= 10
+        ):
+            errors.append(f"exactStableSemantics[{position}] has an invalid expectedCount")
+            continue
+        identifiers.add(identifier)
+        specs.append(
+            ExactSemanticSpec(
+                identifier=identifier,
+                attribute=attribute,
+                fullmatch=pattern,
+                expected_count=expected_count,
+                ancestor=ancestor,
+            )
+        )
+    return specs, errors
+
+
+def _exact_semantic_values(
+    path: Path,
+    spec: ExactSemanticSpec,
+) -> tuple[list[str] | None, str | None]:
+    try:
+        root = ET.parse(path).getroot()
+    except (OSError, ET.ParseError) as exc:
+        return None, f"unreadable hierarchy ({type(exc).__name__})"
+    parents = {
+        child: parent
+        for parent in root.iter()
+        for child in parent
+    }
+    values: list[str] = []
+    for node in root.iter():
+        bounds = BOUNDS.fullmatch(node.attrib.get("bounds", ""))
+        if bounds is None or node.attrib.get("visible-to-user") == "false":
+            continue
+        left, top, right, bottom = (int(part) for part in bounds.groups())
+        if right <= left or bottom <= top:
+            continue
+        value = " ".join(node.attrib.get(spec.attribute, "").split()).strip()
+        if not value or not re.fullmatch(spec.fullmatch, value):
+            continue
+        if spec.ancestor is not None:
+            parent = parents.get(node)
+            while parent is not None:
+                ancestor_value = " ".join(
+                    parent.attrib.get(spec.ancestor.attribute, "").split()
+                ).strip()
+                if (
+                    parent.attrib.get("visible-to-user") != "false"
+                    and ancestor_value
+                    and re.fullmatch(spec.ancestor.fullmatch, ancestor_value)
+                ):
+                    break
+                parent = parents.get(parent)
+            if parent is None:
+                continue
+        values.append(value)
+    values.sort()
+    if len(values) != spec.expected_count:
+        return values, (
+            f"{spec.identifier} matched {len(values)} values; "
+            f"expected {spec.expected_count}"
+        )
     return values, None
 
 
@@ -462,8 +634,8 @@ def _finance_errors(payload: dict[str, Any]) -> list[str]:
             errors.append(f"invalid expected Finance/Reports value: {key}")
     if errors:
         return errors
-    if expected["orders"] != 12:
-        errors.append("physical fixture reconciliation must contain exactly 12 paid orders")
+    if expected["orders"] != 16:
+        errors.append("physical fixture reconciliation must contain exactly 16 paid orders")
 
     finance = observed.get("finance")
     daily = observed.get("daily")
@@ -903,7 +1075,8 @@ def analyze(root: Path, *, expected_steps: int, expected_frames: int, lane: str)
     stability_steps = [
         (index, step)
         for index, step in enumerate(plan_steps, start=1)
-        if step.get("action") in {"idleFrames", "idleStability"}
+        if step.get("action")
+        in {"idleFrames", "idleStability", "idleSemanticStability"}
     ]
     frame_steps = [
         (index, step)
@@ -911,12 +1084,27 @@ def analyze(root: Path, *, expected_steps: int, expected_frames: int, lane: str)
         if step.get("action") == "idleFrames"
     ]
     alarm_steps = [step for step in plan_steps if step.get("action") == "alarmConstraints"]
+    semantic_steps = [
+        (index, step)
+        for index, step in enumerate(plan_steps, start=1)
+        if step.get("action") == "idleSemanticStability"
+    ]
+    exact_specs_by_step: dict[int, list[ExactSemanticSpec]] = {}
+    for index, step in enumerate(plan_steps, start=1):
+        specs, errors = _exact_semantic_specs(step)
+        if specs:
+            exact_specs_by_step[index] = specs
+        plan_errors.extend(f"step {index}: {error}" for error in errors)
     if len(frame_steps) != expected_frames:
         plan_errors.append(
             f"audit plan has {len(frame_steps)} frame windows; expected {expected_frames}"
         )
     if len(alarm_steps) != 1:
         plan_errors.append("audit plan must contain exactly one alarmConstraints step")
+    if len(semantic_steps) != 1:
+        plan_errors.append(
+            "audit plan must contain exactly one idleSemanticStability step"
+        )
 
     step_path, steps_payload, step_errors, step_paths = _load_unique_json(
         root, "steps.json", list
@@ -1003,6 +1191,7 @@ def analyze(root: Path, *, expected_steps: int, expected_frames: int, lane: str)
     dynamic_frame_failures: list[dict[str, Any]] = []
     layout_windows: list[dict[str, Any]] = []
     idle_artifact_failures: list[dict[str, Any]] = []
+    exact_semantic_failures: list[dict[str, Any]] = []
     for index, step in frame_steps:
         base = _step_base(index, str(step.get("name", "")))
         frame_name = f"frames-{base}.txt"
@@ -1054,6 +1243,10 @@ def analyze(root: Path, *, expected_steps: int, expected_frames: int, lane: str)
         base = _step_base(index, str(step.get("name", "")))
         layouts: dict[str, LayoutSnapshot] = {}
         phase_dimensions: dict[str, tuple[int, int]] = {}
+        step_exact_specs = exact_specs_by_step.get(index, [])
+        exact_phase_values: dict[str, dict[str, list[str]]] = {
+            spec.identifier: {} for spec in step_exact_specs
+        }
         for phase in ("start", "mid", "end"):
             phase_base = _safe_label(f"idle-{base}-{phase}")
             png_name = phase_base + ".png"
@@ -1108,6 +1301,23 @@ def analyze(root: Path, *, expected_steps: int, expected_frames: int, lane: str)
                 else:
                     layouts[phase] = layout
                     hierarchy_paths.extend(str(path) for path in xml_candidates)
+                for spec in step_exact_specs:
+                    semantic_results = [
+                        _exact_semantic_values(path, spec) for path in xml_candidates
+                    ]
+                    semantic_errors = [error for _values, error in semantic_results if error]
+                    if semantic_errors:
+                        exact_semantic_failures.append(
+                            {
+                                "step": index,
+                                "phase": phase,
+                                "invariant": spec.identifier,
+                                "artifact": xml_name,
+                                "reason": "; ".join(semantic_errors),
+                            }
+                        )
+                    elif semantic_results and semantic_results[0][0] is not None:
+                        exact_phase_values[spec.identifier][phase] = semantic_results[0][0]
         if len(set(phase_dimensions.values())) > 1:
             idle_artifact_failures.append(
                 {"step": index, "reason": "idle screenshot dimensions changed across phases"}
@@ -1118,11 +1328,46 @@ def analyze(root: Path, *, expected_steps: int, expected_frames: int, lane: str)
                 comparison = _layout_comparison(layouts[before], layouts[after])
                 comparison.update({"before": before, "after": after})
                 comparisons.append(comparison)
+        exact_semantics: list[dict[str, Any]] = []
+        for spec in step_exact_specs:
+            values = exact_phase_values[spec.identifier]
+            stable = (
+                all(phase in values for phase in ("start", "mid", "end"))
+                and values["start"] == values["mid"] == values["end"]
+            )
+            if not stable and all(phase in values for phase in ("start", "mid", "end")):
+                exact_semantic_failures.append(
+                    {
+                        "step": index,
+                        "invariant": spec.identifier,
+                        "reason": "raw semantic values changed across start/mid/end",
+                        "values": values,
+                    }
+                )
+            exact_semantics.append(
+                {
+                    "id": spec.identifier,
+                    "attribute": spec.attribute,
+                    "fullmatch": spec.fullmatch,
+                    "expected_count": spec.expected_count,
+                    "ancestor": (
+                        {
+                            "attribute": spec.ancestor.attribute,
+                            "fullmatch": spec.ancestor.fullmatch,
+                        }
+                        if spec.ancestor is not None
+                        else None
+                    ),
+                    "values": values,
+                    "stable": stable,
+                }
+            )
         layout_windows.append(
             {
                 "step": index,
                 "name": step.get("name"),
                 "comparisons": comparisons,
+                "exact_semantics": exact_semantics,
                 "stable": len(comparisons) == 2 and all(row["stable"] for row in comparisons),
             }
         )
@@ -1189,6 +1434,15 @@ def analyze(root: Path, *, expected_steps: int, expected_frames: int, lane: str)
         and jank_ratio <= MAX_JANK_RATIO,
         "no_accessibility_layout_jump": bool(layout_windows)
         and all(window["stable"] for window in layout_windows),
+        "exact_idle_semantics_stable": len(semantic_steps) == 1
+        and len(exact_specs_by_step) == 1
+        and sum(len(specs) for specs in exact_specs_by_step.values()) == 1
+        and not exact_semantic_failures
+        and all(
+            invariant["stable"]
+            for window in layout_windows
+            for invariant in window["exact_semantics"]
+        ),
         "physical_alarm_constraints_exercised": not alarm_errors,
         "external_target_device_gates_declared": not external_errors,
         "authenticated_finance_reports_reconciled": not finance_errors,
@@ -1253,7 +1507,11 @@ def analyze(root: Path, *, expected_steps: int, expected_frames: int, lane: str)
         "layout_stability": {
             "windows": layout_windows,
             "artifact_failures": idle_artifact_failures,
-            "method": "start/mid/end accessibility bounds; numeric text normalised",
+            "exact_semantic_failures": exact_semantic_failures,
+            "method": (
+                "start/mid/end accessibility bounds with numeric text normalised; "
+                "plan-declared raw semantics compared exactly"
+            ),
         },
         "artifacts": {
             "screenshots": sorted(set(screenshot_paths)),

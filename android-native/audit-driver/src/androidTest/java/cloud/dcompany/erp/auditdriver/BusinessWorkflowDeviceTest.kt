@@ -183,7 +183,7 @@ class BusinessWorkflowDeviceTest {
             }
             "capture" -> Unit
             "alarmConstraints" -> exerciseAlarmConstraints(timeout)
-            "idleFrames", "idleStability" -> {
+            "idleFrames", "idleStability", "idleSemanticStability" -> {
                 val base = safeLabel("%03d-%s".format(stepNumber, label))
                 capture("idle-$base-start")
                 if (action == "idleFrames") {

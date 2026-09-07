@@ -57,18 +57,26 @@ candidate.
    cold-start recovery, Gaming, POS, shift, alarms, offline/retry, diagnostics,
    updates, and permissions.
 4. On physical Android tablet hardware, run the authenticated synthetic flow:
-   login, open shift, every supported Gaming tariff/player mode, extension,
-   add-on, stop, send to POS, discount, cash/UPI, receipt/history, finance/report,
-   close, restart, offline queue, reconnect, and duplicate protection. Record
+   login, open shift, all nine base Gaming package codes, all eight extension
+   package codes, every supported player mode, reasoned pause, stable paused
+   state, resume, add-on, stop, send to POS, discount, cash/UPI,
+   receipt/history, finance/report, close, restart, offline queue, reconnect,
+   and duplicate protection. Record
    crash, ANR, frozen-frame, layout-flicker, and frame-time evidence separately.
    Run only from a clean committed Code 26 tree. The physical runner records and
    rechecks the exact commit/tree, APK SHA-256, verified signer certificate and
    isolated `cloud.dcompany.erp.physicalaudit` manifest identity
    (`26` / `3.1.15-physical-audit`); it rejects dirty or drifting source. Its
-   322-step plan records exact per-step screenshots/hierarchies, start/mid/end
-   idle-window geometry across eight stability windows, strict non-zero frame
-   thresholds for the four live-timer windows, device constraint evidence, and
-   an authenticated Finance/Reports-to-fixture reconciliation. Named Finance
+   410-step plan completes 16 isolated Gaming-to-payment sessions and records
+   exact per-step screenshots/hierarchies, start/mid/end idle-window geometry
+   across nine stability windows, strict non-zero frame thresholds for the four
+   live-timer windows, exact raw paused-timer equality, device constraint
+   evidence, and an authenticated Finance/Reports-to-fixture reconciliation. Shared Gaming
+   pause is enabled only for that disposable loopback-backed audit process; the
+   post-run fixture requires exact pause/resume actor, terminal, reason, version,
+   response clock consistency, stable pause duration, unchanged package
+   snapshots, all 17 configured tariff codes, 16 unique paid orders and both
+   payment rails. Named Finance
    hierarchies must show the reconciled revenue, COGS, gross profit and
    operating profit; named Reports hierarchies must show the reconciled
    revenue, order count and net profit. Cash, UPI and Reports COGS remain exact

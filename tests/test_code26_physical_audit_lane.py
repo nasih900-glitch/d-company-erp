@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import importlib.util
 import json
 import struct
 import sys
 import zlib
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -29,11 +31,36 @@ def _steps() -> list[dict]:
     return json.loads(PLAN_PATH.read_text(encoding="utf-8"))["steps"]
 
 
+def _load_fixture_function(name: str):
+    """Load one dependency-free fixture helper without importing the backend app."""
+    source = FIXTURE_PATH.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(FIXTURE_PATH))
+    function = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == name
+    )
+    module = ast.Module(
+        body=[
+            ast.ImportFrom(
+                module="__future__",
+                names=[ast.alias(name="annotations")],
+                level=0,
+            ),
+            function,
+        ],
+        type_ignores=[],
+    )
+    namespace: dict[str, object] = {}
+    exec(compile(ast.fix_missing_locations(module), str(FIXTURE_PATH), "exec"), namespace)
+    return namespace[name]
+
+
 def test_physical_plan_is_bounded_and_contains_no_embedded_authority() -> None:
     steps = _steps()
     rendered = json.dumps(steps, sort_keys=True, ensure_ascii=False)
 
-    assert len(steps) == 322
+    assert len(steps) == 410
     assert {step["action"] for step in steps} <= {
         "launch",
         "restart",
@@ -49,6 +76,7 @@ def test_physical_plan_is_bounded_and_contains_no_embedded_authority() -> None:
         "capture",
         "idleFrames",
         "idleStability",
+        "idleSemanticStability",
         "alarmConstraints",
     }
     assert "http://" not in rendered
@@ -63,7 +91,7 @@ def test_physical_plan_is_bounded_and_contains_no_embedded_authority() -> None:
     assert all("value" not in step for step in credential_steps)
 
 
-def test_physical_plan_visibly_exercises_all_twelve_supported_modes() -> None:
+def test_physical_plan_submits_all_sixteen_supported_sessions() -> None:
     steps = _steps()
     names = [step["name"] for step in steps]
     starts = [
@@ -87,27 +115,160 @@ def test_physical_plan_visibly_exercises_all_twelve_supported_modes() -> None:
 
     required_prefixes = {
         "Offline Standard Single",
+        "Standard Single 60m + 30m extension",
         "Standard Dual 2-player",
         "Standard Dual 3-player",
         "Standard Dual 4-player",
         "Premium Single",
+        "Premium Single 60m extension coverage",
         "Premium Dual 2-player",
         "Premium Dual 3-player",
         "Premium Dual 4-player",
         "Simdrive",
+        "Simdrive 30m",
+        "Simdrive 60m",
         "VR open-ended transfer",
         "Streaming open-ended",
         "Shisha open-ended",
     }
     assert all(any(name.startswith(prefix + ":") for name in names) for prefix in required_prefixes)
-    assert len(starts) == 12
-    assert len(payments) == 12
+    assert len(starts) == 16
+    assert len(payments) == 16
     assert sum(step.get("text", "").startswith("CONFIRM CASH") for step in payments) == 2
     assert sum(
         step.get("text", "").startswith("CONFIRM UPI")
         or step.get("textRegex", "").startswith("^CONFIRM UPI")
         for step in payments
-    ) == 10
+    ) == 14
+    assert next(
+        step for step in steps if step["name"] == "All sixteen receipts loaded"
+    )["textContains"] == "16 most recent loaded"
+
+
+def test_physical_plan_proves_pause_resume_and_every_extension_option() -> None:
+    steps = _steps()
+    by_name = {step["name"]: (index, step) for index, step in enumerate(steps)}
+
+    pause_names = [
+        "Standard Single: open pause reason",
+        "Standard Single: enter physical pause reason",
+        "Standard Single: pause with reason",
+        "Measure paused session layout stability",
+        "Standard Single: resume after stable pause",
+    ]
+    assert [by_name[name][0] for name in pause_names] == sorted(
+        by_name[name][0] for name in pause_names
+    )
+    assert by_name[pause_names[0]][1] == {
+        "name": pause_names[0],
+        "action": "click",
+        "text": "Pause",
+        "clickable": True,
+        "timeoutMs": 60000,
+        "then": {"text": "Pause reason"},
+    }
+    assert by_name[pause_names[1]][1]["value"] == "Physical audit pause stability"
+    assert by_name[pause_names[2]][1]["then"] == {
+        "descriptionContains": "PS5 Station 1. Paused"
+    }
+    assert by_name[pause_names[3]][1] == {
+        "name": pause_names[3],
+        "action": "idleSemanticStability",
+        "durationMs": 10000,
+        "exactStableSemantics": [
+            {
+                "id": "ps5_station_1_paused_timer",
+                "attribute": "text",
+                "fullmatch": "[0-9]{2}:[0-9]{2}:[0-9]{2}",
+                "expectedCount": 1,
+                "ancestor": {
+                    "attribute": "content-desc",
+                    "fullmatch": (
+                        "PS5 Station 1\\. Paused\\. Standard · Single · "
+                        "₹80\\.00 fixed total\\."
+                    ),
+                },
+            }
+        ],
+    }
+    assert by_name[pause_names[4]][1]["then"] == {
+        "descriptionContains": "PS5 Station 1. Active"
+    }
+
+    expected_base_codes = {
+        "standard-single-session-30m",
+        "standard-single-session-60m",
+        "standard-dual-session-30m",
+        "standard-dual-session-60m",
+        "standard-simdrive-session-15m",
+        "standard-simdrive-session-30m",
+        "standard-simdrive-session-60m",
+        "premium-single-session-60m",
+        "premium-dual-session-60m",
+    }
+    expected_extension_codes = {
+        "standard-single-extension-30m",
+        "standard-single-extension-60m",
+        "standard-dual-extension-30m",
+        "standard-dual-extension-60m",
+        "premium-single-extension-30m",
+        "premium-single-extension-60m",
+        "premium-dual-extension-30m",
+        "premium-dual-extension-60m",
+    }
+    base_submits = [
+        step
+        for step in steps
+        if "-session-" in step.get("packageCode", "")
+    ]
+    extension_submits = [
+        step
+        for step in steps
+        if "-extension-" in step.get("packageCode", "")
+    ]
+    assert len(base_submits) == 13
+    assert len(extension_submits) == 9
+    assert {step["packageCode"] for step in base_submits} == expected_base_codes
+    assert {step["packageCode"] for step in extension_submits} == expected_extension_codes
+    assert all(
+        step["action"] == "click" and step.get("text", "").startswith("Start ·")
+        for step in base_submits
+    )
+    assert all(
+        step["action"] == "click" and step.get("text", "").startswith("Add ·")
+        for step in extension_submits
+    )
+
+
+def test_pause_event_interval_matches_authoritative_millisecond_floor() -> None:
+    matches = _load_fixture_function(
+        "_pause_event_interval_matches_authoritative_duration"
+    )
+    pause_at = datetime(2026, 9, 8, 0, 0, 0, 123_456, tzinfo=UTC)
+
+    # Persisted timestamps retain microseconds, while paused_duration_ms is the
+    # floor of that interval.  Anything within the same millisecond is valid.
+    assert matches(
+        pause_at,
+        pause_at + timedelta(milliseconds=8_000, microseconds=999),
+        8_000,
+    )
+    assert matches(pause_at, pause_at + timedelta(milliseconds=8_000), 8_000)
+
+    # Crossing either floor boundary, reversing the clock, or omitting the
+    # authoritative duration must fail closed.
+    assert not matches(
+        pause_at,
+        pause_at + timedelta(milliseconds=8_001),
+        8_000,
+    )
+    assert not matches(
+        pause_at,
+        pause_at + timedelta(milliseconds=7_999, microseconds=999),
+        8_000,
+    )
+    assert not matches(pause_at, pause_at - timedelta(microseconds=1), 0)
+    assert not matches(pause_at, pause_at + timedelta(milliseconds=8_000), -1)
 
 
 def test_physical_plan_covers_recovery_finance_receipts_and_cleanup() -> None:
@@ -121,12 +282,15 @@ def test_physical_plan_covers_recovery_finance_receipts_and_cleanup() -> None:
     assert actions.count("alarmConstraints") == 1
     assert actions.count("idleFrames") == 4
     assert actions.count("idleStability") == 4
+    assert actions.count("idleSemanticStability") == 1
     for evidence in (
         "Audit Cola",
         "Audit Crisps",
         "Cancellation reason: Entered by mistake",
+        "Physical audit pause stability",
+        "Standard Single: resume after stable pause",
         "Apply discount",
-        "Receipts (12)",
+        "Receipts (16)",
         "Financial controls",
         "Profit and loss",
         "Daily P&L",
@@ -145,12 +309,41 @@ def test_fixture_and_runner_are_fail_closed_and_disposable() -> None:
         "dcompany_physical_audit_",
         "@physical-audit.test",
         "zero companies",
-        "expected exactly 12 sessions, 12 orders and 12 payments",
+        "expected exactly 16 sessions, 16 orders and 16 payments",
         "journal entries are unbalanced",
         "Audit Cola FIFO batch expected 9",
         "The voided Audit Crisps item created a sale stock movement",
+        "GamingPauseEvent",
+        "pause/resume receipts must preserve the exact action, reason and version",
+        "pause/resume audit history is missing its exact actor, reason or session",
+        "pause/resume changed the locked package amount or duration snapshot",
+        "pause/resume response clock fields are incomplete",
+        "_pause_event_interval_matches_authoritative_duration",
+        "authoritative_pause_duration_ms",
+        "pause_event.occurred_at",
+        "resume_event.occurred_at",
     ):
         assert fixture_guard in fixture
+    for tariff_code in (
+        "standard-single-session-30m",
+        "standard-single-session-60m",
+        "standard-dual-session-30m",
+        "standard-dual-session-60m",
+        "standard-simdrive-session-15m",
+        "standard-simdrive-session-30m",
+        "standard-simdrive-session-60m",
+        "premium-single-session-60m",
+        "premium-dual-session-60m",
+        "standard-single-extension-30m",
+        "standard-single-extension-60m",
+        "standard-dual-extension-30m",
+        "standard-dual-extension-60m",
+        "premium-single-extension-30m",
+        "premium-single-extension-60m",
+        "premium-dual-extension-30m",
+        "premium-dual-extension-60m",
+    ):
+        assert tariff_code in fixture
     for runner_guard in (
         "An explicit --device emulator|firebase is required.",
         "Refusing physical acceptance from dirty source",
@@ -158,7 +351,11 @@ def test_fixture_and_runner_are_fail_closed_and_disposable() -> None:
         "apk-identities.json",
         "apksigner",
         "financial-api-reconciliation.json",
+        "PLAN_PACKAGE_STARTS",
+        "PLAN_EXTENSION_SUBMITS",
+        "PLAN_SEMANTIC_STABILITY",
         "physicalAudit",
+        "exec env GAMING_PAUSE_ENABLED=true",
         "dropdb --force --if-exists",
         "production_credentials_used:false",
         "production_data_mutated:false",
@@ -167,6 +364,8 @@ def test_fixture_and_runner_are_fail_closed_and_disposable() -> None:
         assert runner_guard in runner
     assert "d-company-erp-code25-final" not in runner
     assert "code25-physical-tablet-evidence" not in runner
+    assert runner.count("GAMING_PAUSE_ENABLED=true") == 1
+    assert "export GAMING_PAUSE_ENABLED" not in runner
     assert '--data-binary "$(jq' not in runner
     assert "rendered_finance_reports_match_reconciliation" in ANALYZER_PATH.read_text(
         encoding="utf-8"
@@ -333,11 +532,18 @@ def _png(path: Path, *, width: int = 2560, height: int = 1600) -> None:
     )
 
 
-def _hierarchy(path: Path, *, shift_y: int = 0, timer: str = "00:01") -> None:
+def _hierarchy(
+    path: Path,
+    *,
+    shift_y: int = 0,
+    timer: str = "00:01",
+    timer_copies: int = 1,
+    timer_ancestor_description: str | None = None,
+    unrelated_timer: str | None = None,
+) -> None:
     rows = [
         ("Screen", 0, 0, 2560, 1600),
         ("Gaming", 80, 100 + shift_y, 400, 180 + shift_y),
-        (f"Timer {timer}", 500, 300 + shift_y, 850, 390 + shift_y),
         ("Stop session", 500, 500 + shift_y, 900, 590 + shift_y),
         ("Add drinks", 950, 500 + shift_y, 1350, 590 + shift_y),
         ("Online", 1900, 100 + shift_y, 2200, 180 + shift_y),
@@ -348,6 +554,27 @@ def _hierarchy(path: Path, *, shift_y: int = 0, timer: str = "00:01") -> None:
         f'bounds="[{left},{top}][{right},{bottom}]" />'
         for text, left, top, right, bottom in rows
     )
+    timer_nodes = "".join(
+        f'<node class="android.widget.TextView" text="{timer}" content-desc="" '
+        f'bounds="[{500 + copy * 380},{300 + shift_y}]'
+        f'[{850 + copy * 380},{390 + shift_y}]" />'
+        for copy in range(timer_copies)
+    )
+    if timer_ancestor_description is None:
+        nodes += timer_nodes
+    else:
+        nodes += (
+            '<node class="android.view.View" text="" '
+            f'content-desc="{timer_ancestor_description}" '
+            f'bounds="[450,{250 + shift_y}][1300,{430 + shift_y}]">'
+            f"{timer_nodes}</node>"
+        )
+    if unrelated_timer is not None:
+        nodes += (
+            f'<node class="android.widget.TextView" text="{unrelated_timer}" '
+            f'content-desc="" bounds="[1700,{300 + shift_y}]'
+            f'[2050,{390 + shift_y}]" />'
+        )
     path.write_text(f"<hierarchy>{nodes}</hierarchy>", encoding="utf-8")
 
 
@@ -390,6 +617,25 @@ def _synthetic_evidence(root: Path) -> tuple[list[dict], dict[str, Path]]:
         {"name": "Measure Finance settled layout stability", "action": "idleStability"},
         {"name": "Reports revenue panel rendered", "action": "wait"},
         {"name": "Measure Reports settled layout stability", "action": "idleStability"},
+        {
+            "name": "Measure paused timer semantic stability",
+            "action": "idleSemanticStability",
+            "exactStableSemantics": [
+                {
+                    "id": "ps5_station_1_paused_timer",
+                    "attribute": "text",
+                    "fullmatch": "[0-9]{2}:[0-9]{2}:[0-9]{2}",
+                    "expectedCount": 1,
+                    "ancestor": {
+                        "attribute": "content-desc",
+                        "fullmatch": (
+                            "PS5 Station 1\\. Paused\\. Standard · Single · "
+                            "₹80\\.00 fixed total\\."
+                        ),
+                    },
+                }
+            ],
+        },
     ]
     (artifacts / "audit-plan.json").write_text(
         json.dumps({"steps": plan}), encoding="utf-8"
@@ -409,18 +655,30 @@ def _synthetic_evidence(root: Path) -> tuple[list[dict], dict[str, Path]]:
         _hierarchy(pulled / f"{base}.xml")
     frame_paths: dict[str, Path] = {}
     for index, step in enumerate(plan, start=1):
-        if step["action"] not in {"idleFrames", "idleStability"}:
+        if step["action"] not in {
+            "idleFrames",
+            "idleStability",
+            "idleSemanticStability",
+        }:
             continue
         idle_base = f"{index:03d}-{_safe_label(step['name'])}"
         for phase, timer in (("start", "00:01"), ("mid", "00:02"), ("end", "00:03")):
             _png(pulled / f"idle-{idle_base}-{phase}.png")
-            _hierarchy(pulled / f"idle-{idle_base}-{phase}.xml", timer=timer)
+            _hierarchy(
+                pulled / f"idle-{idle_base}-{phase}.xml",
+                timer="00:10:00" if step["action"] == "idleSemanticStability" else timer,
+                timer_ancestor_description=(
+                    "PS5 Station 1. Paused. Standard · Single · ₹80.00 fixed total."
+                    if step["action"] == "idleSemanticStability"
+                    else None
+                ),
+            )
         if step["action"] == "idleFrames":
             frame_path = pulled / f"frames-{idle_base}.txt"
             _frames(frame_path, [10.0] * 40)
             frame_paths["active"] = frame_path
 
-    revenue = 228_252
+    revenue = 316_252
     cogs = 5_000
     profit = revenue - cogs
     finance_values = [
@@ -429,17 +687,17 @@ def _synthetic_evidence(root: Path) -> tuple[list[dict], dict[str, Path]]:
         "Less: cost of goods sold",
         "Gross profit",
         "Operating profit",
-        "₹2,282.52",
+        "₹3,162.52",
         "₹50.00",
-        "₹2,232.52",
+        "₹3,112.52",
     ]
     reports_values = [
         "Revenue",
         "Orders",
         "Net profit",
-        "₹2,282.52",
-        "12",
-        "₹2,232.52",
+        "₹3,162.52",
+        "16",
+        "₹3,112.52",
     ]
     _semantic_hierarchy(
         pulled / "003-Finance-profit-and-loss-layout-rendered.xml", finance_values
@@ -480,9 +738,9 @@ def _synthetic_evidence(root: Path) -> tuple[list[dict], dict[str, Path]]:
                     "revenue_minor": revenue,
                     "cogs_minor": cogs,
                     "cash_minor": 28_000,
-                    "upi_minor": 200_252,
+                    "upi_minor": 288_252,
                     "discount_minor": 2_000,
-                    "orders": 12,
+                    "orders": 16,
                 },
                 "observed": {
                     "finance": {
@@ -496,13 +754,13 @@ def _synthetic_evidence(root: Path) -> tuple[list[dict], dict[str, Path]]:
                     },
                     "daily": {
                         "branch_id": "branch-a",
-                        "orders_count": 12,
+                        "orders_count": 16,
                         "gross_revenue_minor": revenue,
                         "net_revenue_minor": revenue,
                         "revenue": {"discounts_and_points_redeemed_minor": 2_000},
                         "payments_received": {
                             "cash_minor": 28_000,
-                            "upi_minor": 200_252,
+                            "upi_minor": 288_252,
                             "total_minor": revenue,
                         },
                         "net_payments_received_minor": revenue,
@@ -512,13 +770,13 @@ def _synthetic_evidence(root: Path) -> tuple[list[dict], dict[str, Path]]:
                     },
                     "monthly": {
                         "branch_id": "branch-a",
-                        "orders_count": 12,
+                        "orders_count": 16,
                         "gross_revenue_minor": revenue,
                         "net_revenue_minor": revenue,
                         "revenue": {"discounts_and_points_redeemed_minor": 2_000},
                         "payments_received": {
                             "cash_minor": 28_000,
-                            "upi_minor": 200_252,
+                            "upi_minor": 288_252,
                             "total_minor": revenue,
                         },
                         "net_payments_received_minor": revenue,
@@ -634,6 +892,128 @@ def test_evidence_analyzer_accepts_complete_named_stable_fixture(tmp_path: Path)
     plan, _frame_path = _synthetic_evidence(tmp_path)
     result = _analyze(tmp_path, plan)
     assert result["passed"], result
+    assert result["gates"]["exact_idle_semantics_stable"] is True
+    semantic_window = next(
+        window
+        for window in result["layout_stability"]["windows"]
+        if window["name"] == "Measure paused timer semantic stability"
+    )
+    assert semantic_window["exact_semantics"][0]["values"] == {
+        "start": ["00:10:00"],
+        "mid": ["00:10:00"],
+        "end": ["00:10:00"],
+    }
+
+
+def test_evidence_analyzer_rejects_changed_paused_timer_semantic(
+    tmp_path: Path,
+) -> None:
+    plan, _frame_path = _synthetic_evidence(tmp_path)
+    paused_base = f"007-{_safe_label(plan[6]['name'])}"
+    _hierarchy(
+        tmp_path / "device-pull" / f"idle-{paused_base}-mid.xml",
+        timer="00:10:01",
+        timer_ancestor_description=(
+            "PS5 Station 1. Paused. Standard · Single · ₹80.00 fixed total."
+        ),
+    )
+    result = _analyze(tmp_path, plan)
+    assert not result["passed"]
+    assert result["gates"]["no_accessibility_layout_jump"] is True
+    assert result["gates"]["exact_idle_semantics_stable"] is False
+    assert "raw semantic values changed" in json.dumps(
+        result["layout_stability"]["exact_semantic_failures"]
+    )
+
+
+def test_evidence_analyzer_rejects_missing_paused_timer_semantic(
+    tmp_path: Path,
+) -> None:
+    plan, _frame_path = _synthetic_evidence(tmp_path)
+    paused_base = f"007-{_safe_label(plan[6]['name'])}"
+    _hierarchy(
+        tmp_path / "device-pull" / f"idle-{paused_base}-mid.xml",
+        timer="Timer paused",
+        timer_ancestor_description=(
+            "PS5 Station 1. Paused. Standard · Single · ₹80.00 fixed total."
+        ),
+    )
+    result = _analyze(tmp_path, plan)
+    assert not result["passed"]
+    assert result["gates"]["exact_idle_semantics_stable"] is False
+    assert "matched 0 values; expected 1" in json.dumps(
+        result["layout_stability"]["exact_semantic_failures"]
+    )
+
+
+def test_evidence_analyzer_rejects_duplicate_paused_timer_semantic(
+    tmp_path: Path,
+) -> None:
+    plan, _frame_path = _synthetic_evidence(tmp_path)
+    paused_base = f"007-{_safe_label(plan[6]['name'])}"
+    _hierarchy(
+        tmp_path / "device-pull" / f"idle-{paused_base}-mid.xml",
+        timer="00:10:00",
+        timer_copies=2,
+        timer_ancestor_description=(
+            "PS5 Station 1. Paused. Standard · Single · ₹80.00 fixed total."
+        ),
+    )
+    result = _analyze(tmp_path, plan)
+    assert not result["passed"]
+    assert result["gates"]["exact_idle_semantics_stable"] is False
+    assert "matched 2 values; expected 1" in json.dumps(
+        result["layout_stability"]["exact_semantic_failures"]
+    )
+
+
+def test_evidence_analyzer_rejects_invalid_exact_semantic_schema(
+    tmp_path: Path,
+) -> None:
+    plan, _frame_path = _synthetic_evidence(tmp_path)
+    plan_path = tmp_path / "artifacts" / "audit-plan.json"
+    payload = json.loads(plan_path.read_text(encoding="utf-8"))
+    payload["steps"][6]["exactStableSemantics"][0]["attribute"] = "value"
+    plan_path.write_text(json.dumps(payload), encoding="utf-8")
+    result = _analyze(tmp_path, plan)
+    assert not result["passed"]
+    assert result["gates"]["copied_plan_valid"] is False
+    assert result["gates"]["exact_idle_semantics_stable"] is False
+
+
+def test_evidence_analyzer_rejects_unrelated_timer_outside_paused_station(
+    tmp_path: Path,
+) -> None:
+    plan, _frame_path = _synthetic_evidence(tmp_path)
+    paused_base = f"007-{_safe_label(plan[6]['name'])}"
+    _hierarchy(
+        tmp_path / "device-pull" / f"idle-{paused_base}-mid.xml",
+        timer="Timer paused",
+        timer_ancestor_description=(
+            "PS5 Station 1. Paused. Standard · Single · ₹80.00 fixed total."
+        ),
+        unrelated_timer="00:10:00",
+    )
+    result = _analyze(tmp_path, plan)
+    assert not result["passed"]
+    assert result["gates"]["exact_idle_semantics_stable"] is False
+    assert "matched 0 values; expected 1" in json.dumps(
+        result["layout_stability"]["exact_semantic_failures"]
+    )
+
+
+def test_evidence_analyzer_rejects_invalid_exact_semantic_regex(
+    tmp_path: Path,
+) -> None:
+    plan, _frame_path = _synthetic_evidence(tmp_path)
+    plan_path = tmp_path / "artifacts" / "audit-plan.json"
+    payload = json.loads(plan_path.read_text(encoding="utf-8"))
+    payload["steps"][6]["exactStableSemantics"][0]["fullmatch"] = "["
+    plan_path.write_text(json.dumps(payload), encoding="utf-8")
+    result = _analyze(tmp_path, plan)
+    assert not result["passed"]
+    assert result["gates"]["copied_plan_valid"] is False
+    assert result["gates"]["exact_idle_semantics_stable"] is False
 
 
 def test_evidence_analyzer_rejects_zero_sample_frames(tmp_path: Path) -> None:

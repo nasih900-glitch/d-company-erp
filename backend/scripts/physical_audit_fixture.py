@@ -28,7 +28,7 @@ import ipaddress
 import json
 import os
 from collections import Counter
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from urllib.parse import urlparse
@@ -65,6 +65,7 @@ from app.models import (
     User,
     UserRole,
 )
+from app.models.gaming import GamingPauseEvent
 from app.services.accounting.accounts import DEFAULT_CHART_OF_ACCOUNTS
 from app.services.auth.otp import normalize_account_email
 from app.services.gaming.tariff_catalog import upsert_d_company_gaming_tariff
@@ -82,6 +83,9 @@ FIXTURE_COLA_COGS_MINOR = 2_000
 FIXTURE_CRISPS_INGREDIENT_SKU = "AUDIT-CRISPS-UNIT"
 FIXTURE_CRISPS_OPENING_QTY = Decimal("10.0000")
 FIXTURE_CRISPS_COGS_MINOR = 1_000
+FIXTURE_PAUSE_REASON = "Physical audit pause stability"
+FIXTURE_RESUME_REASON = "Continue session"
+FIXTURE_MINIMUM_PAUSE_DURATION_MS = 8_000
 
 
 class PhysicalAuditFixtureError(RuntimeError):
@@ -100,6 +104,40 @@ def _is_loopback(host: str | None) -> bool:
             return ipaddress.ip_interface(host).ip.is_loopback
         except ValueError:
             return False
+
+
+def _parse_response_datetime(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(UTC)
+
+
+def _pause_event_interval_matches_authoritative_duration(
+    pause_at: datetime,
+    resume_at: datetime,
+    paused_duration_ms: int,
+) -> bool:
+    """Match persisted event timestamps to the server's floored millisecond duration."""
+    if paused_duration_ms < 0:
+        return False
+    delta = resume_at - pause_at
+    interval_us = (
+        delta.days * 86_400_000_000
+        + delta.seconds * 1_000_000
+        + delta.microseconds
+    )
+    authoritative_floor_us = paused_duration_ms * 1_000
+    # PostgreSQL retains microseconds while pause_clock.duration_ms deliberately
+    # floors to milliseconds.  The only valid difference is therefore 0..999us;
+    # network or device timing cannot justify a wider tolerance because both
+    # event timestamps and the duration are produced by the same server clock.
+    return authoritative_floor_us <= interval_us < authoritative_floor_us + 1_000
 
 
 def _validated_environment() -> str:
@@ -440,9 +478,9 @@ async def verify() -> None:
     """Reconcile the terminal state after the physical workflow.
 
     This intentionally requires evidence from both payment rails, a discount,
-    package and hourly sessions, add-on create/void, an extension, and a closed
-    shift.  A shorter smoke plan will fail this gate and must be reported as a
-    partial run.
+    package and hourly sessions, a reasoned pause/resume, add-on create/void,
+    extensions, and a closed shift. A shorter smoke plan will fail this gate
+    and must be reported as a partial run.
     """
 
     async with AsyncSessionLocal() as session:
@@ -499,6 +537,17 @@ async def verify() -> None:
                     select(GamingSessionExtension).where(
                         GamingSessionExtension.company_id == company_id
                     )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        pause_events = (
+            (
+                await session.execute(
+                    select(GamingPauseEvent)
+                    .where(GamingPauseEvent.company_id == company_id)
+                    .order_by(GamingPauseEvent.pause_version)
                 )
             )
             .scalars()
@@ -675,18 +724,18 @@ async def verify() -> None:
             failures.append("an ended gaming session remains unsent to POS")
         if any(order.status in {"open", "held"} for order in orders):
             failures.append("an open/held order remains")
-        if len(sessions) != 12 or len(orders) != 12 or len(payments) != 12:
+        if len(sessions) != 16 or len(orders) != 16 or len(payments) != 16:
             failures.append(
-                "expected exactly 12 sessions, 12 orders and 12 payments; "
+                "expected exactly 16 sessions, 16 orders and 16 payments; "
                 f"found {len(sessions)}, {len(orders)}, {len(payments)}"
             )
         linked_order_ids = [row.order_id for row in sessions if row.order_id is not None]
-        if len(linked_order_ids) != len(set(linked_order_ids)) or len(linked_order_ids) != 12:
+        if len(linked_order_ids) != len(set(linked_order_ids)) or len(linked_order_ids) != 16:
             failures.append("gaming session to POS order linkage is missing or duplicated")
         payments_per_order = Counter(payment.order_id for payment in payments)
         if (
             any(count != 1 for count in payments_per_order.values())
-            or len(payments_per_order) != 12
+            or len(payments_per_order) != 16
         ):
             failures.append("each Gaming order must have exactly one payment")
         methods = Counter(payment.method for payment in payments)
@@ -713,6 +762,129 @@ async def verify() -> None:
             failures.append("Gaming start/stop/POS-handoff actor attribution is incomplete")
         if any(extension.created_by != fixture_user.id for extension in extensions):
             failures.append("Gaming extension actor attribution is incomplete")
+        expected_pause_events = [
+            ("pause", FIXTURE_PAUSE_REASON, 1),
+            ("resume", FIXTURE_RESUME_REASON, 2),
+        ]
+        observed_pause_events = [
+            (event.action, event.reason, int(event.pause_version))
+            for event in pause_events
+        ]
+        if observed_pause_events != expected_pause_events:
+            failures.append(
+                "pause/resume receipts must preserve the exact action, reason and version: "
+                f"{observed_pause_events}"
+            )
+        if any(
+            event.actor_user_id != fixture_user.id
+            or not shifts
+            or event.terminal_id != shifts[0].terminal_id
+            for event in pause_events
+        ):
+            failures.append("Gaming pause/resume actor or terminal attribution is incomplete")
+        pause_session_ids = {event.gaming_session_id for event in pause_events}
+        paused_session = next(
+            (row for row in sessions if row.id in pause_session_ids),
+            None,
+        ) if len(pause_session_ids) == 1 else None
+        paused_session_extension_codes = [
+            code
+            for extension, code, _extra_controllers in extension_receipts
+            if paused_session is not None
+            and extension.gaming_session_id == paused_session.id
+        ]
+        if (
+            paused_session is None
+            or paused_session.billing_mode != "package"
+            or int(paused_session.package_price_minor_snapshot or -1) != 8_000
+            or int(paused_session.package_duration_minutes_snapshot or -1) != 30
+            or int(paused_session.timer_minutes or -1) != 90
+            or int(paused_session.amount_minor or -1) != 18_000
+            or int(paused_session.paused_duration_ms or 0)
+            < FIXTURE_MINIMUM_PAUSE_DURATION_MS
+            or int(paused_session.pause_version or 0) != 2
+            or paused_session.paused_at is not None
+            or paused_session_extension_codes != ["standard-single-extension-60m"]
+        ):
+            failures.append(
+                "the paused Standard Single session did not preserve its locked ₹80 "
+                "package, stable pause interval and billed ₹100 extension"
+            )
+        expected_pause_responses = [
+            ("paused", 8_000, 30, "package", 8_000, 30, "single", "standard"),
+            ("active", 8_000, 30, "package", 8_000, 30, "single", "standard"),
+        ]
+        observed_pause_responses = [
+            (
+                event.response.get("status"),
+                int(event.response.get("amount_minor", -1)),
+                int(event.response.get("timer_minutes", -1)),
+                event.response.get("billing_mode"),
+                int(event.response.get("package_price_minor_snapshot", -1)),
+                int(event.response.get("package_duration_minutes_snapshot", -1)),
+                event.response.get("package_variant_snapshot"),
+                event.response.get("package_pricing_tier_snapshot"),
+            )
+            for event in pause_events
+        ]
+        if observed_pause_responses != expected_pause_responses:
+            failures.append(
+                "pause/resume changed the locked package amount or duration snapshot: "
+                f"{observed_pause_responses}"
+            )
+        if len(pause_events) == 2:
+            pause_event, resume_event = pause_events
+            pause_response = pause_event.response
+            resume_response = resume_event.response
+            authoritative_pause_duration_ms = (
+                int(paused_session.paused_duration_ms)
+                if paused_session is not None
+                and paused_session.paused_duration_ms is not None
+                else -1
+            )
+            pause_response_at = _parse_response_datetime(pause_response.get("paused_at"))
+            resume_timer_ends_at = _parse_response_datetime(
+                resume_response.get("timer_ends_at")
+            )
+            resume_start_at = _parse_response_datetime(resume_response.get("start_at"))
+            resume_pause_duration_ms = int(
+                resume_response.get("paused_duration_ms", -1)
+            )
+            expected_resume_timer_ends_at = (
+                resume_start_at
+                + timedelta(
+                    minutes=int(resume_response.get("timer_minutes", -1)),
+                    milliseconds=resume_pause_duration_ms,
+                )
+                if resume_start_at is not None
+                and int(resume_response.get("timer_minutes", -1)) > 0
+                and resume_pause_duration_ms >= 0
+                else None
+            )
+            if (
+                int(pause_response.get("pause_version", -1)) != 1
+                or pause_response_at != pause_event.occurred_at.astimezone(UTC)
+                or int(pause_response.get("paused_duration_ms", -1)) != 0
+                or pause_response.get("timer_ends_at") is not None
+                or int(resume_response.get("pause_version", -1)) != 2
+                or resume_response.get("paused_at") is not None
+                or resume_pause_duration_ms < FIXTURE_MINIMUM_PAUSE_DURATION_MS
+                or paused_session is None
+                or resume_pause_duration_ms
+                != authoritative_pause_duration_ms
+                or not _pause_event_interval_matches_authoritative_duration(
+                    pause_event.occurred_at,
+                    resume_event.occurred_at,
+                    authoritative_pause_duration_ms,
+                )
+                or resume_timer_ends_at is None
+                or resume_timer_ends_at != expected_resume_timer_ends_at
+            ):
+                failures.append(
+                    "pause/resume response clock fields are incomplete or internally "
+                    "inconsistent (pause_version, paused_at, paused_duration_ms, "
+                    "event interval, timer_ends_at)"
+                )
         if any(
             addon.created_by != fixture_user.id
             or (addon.voided_at is not None and addon.voided_by != fixture_user.id)
@@ -727,14 +899,18 @@ async def verify() -> None:
         expected_package_sessions = Counter(
             {
                 ("standard-single-session-30m", 0, 18_000): 1,
+                ("standard-single-session-60m", 0, 18_000): 1,
                 ("standard-dual-session-30m", 0, 10_000): 1,
                 ("standard-dual-session-60m", 1, 28_000): 1,
                 ("standard-dual-session-60m", 2, 40_000): 1,
                 ("premium-single-session-60m", 0, 22_000): 1,
+                ("premium-single-session-60m", 0, 27_000): 1,
                 ("premium-dual-session-60m", 0, 34_000): 1,
                 ("premium-dual-session-60m", 1, 40_000): 1,
-                ("premium-dual-session-60m", 2, 25_000): 1,
+                ("premium-dual-session-60m", 2, 40_000): 1,
                 ("standard-simdrive-session-15m", 0, 7_000): 1,
+                ("standard-simdrive-session-30m", 0, 10_000): 1,
+                ("standard-simdrive-session-60m", 0, 18_000): 1,
             }
         )
         observed_package_sessions = Counter(
@@ -747,18 +923,21 @@ async def verify() -> None:
         )
         if observed_package_sessions != expected_package_sessions:
             failures.append(
-                "package/player/amount matrix differs from the 12-session physical plan: "
+                "package/player/amount matrix differs from the 16-session physical plan: "
                 f"{dict(observed_package_sessions)}"
             )
 
         expected_extensions = Counter(
             {
                 ("standard-single-extension-60m", 0, 30, 90, 10_000, 0, 10_000): 1,
+                ("standard-single-extension-30m", 0, 60, 90, 6_000, 0, 6_000): 1,
                 ("standard-dual-extension-30m", 1, 60, 90, 7_000, 3_000, 10_000): 1,
                 ("standard-dual-extension-60m", 2, 60, 120, 13_000, 6_000, 19_000): 1,
                 ("premium-single-extension-30m", 0, 60, 90, 7_000, 0, 7_000): 1,
+                ("premium-single-extension-60m", 0, 60, 120, 12_000, 0, 12_000): 1,
                 ("premium-dual-extension-60m", 0, 60, 120, 15_000, 0, 15_000): 1,
                 ("premium-dual-extension-60m", 1, 60, 120, 15_000, 3_000, 18_000): 1,
+                ("premium-dual-extension-30m", 2, 60, 90, 9_000, 6_000, 15_000): 1,
             }
         )
         observed_extensions = Counter(
@@ -863,7 +1042,7 @@ async def verify() -> None:
             ):
                 failures.append(f"receipt totals/invoice identity failed for order {order.id}")
         invoice_numbers = [order.invoice_no for order in orders if order.invoice_no is not None]
-        if len(invoice_numbers) != 12 or len(set(invoice_numbers)) != 12:
+        if len(invoice_numbers) != 16 or len(set(invoice_numbers)) != 16:
             failures.append("paid receipt invoice numbers are missing or duplicated")
         for payment in payments:
             if payment.method == "cash" and (
@@ -891,8 +1070,8 @@ async def verify() -> None:
         )
         if cash_receipts != expected_cash_receipts:
             failures.append(f"cash tender/change matrix is wrong: {dict(cash_receipts)}")
-        if methods != Counter({"upi": 10, "cash": 2}):
-            failures.append(f"expected 10 UPI and 2 cash payments, found {dict(methods)}")
+        if methods != Counter({"upi": 14, "cash": 2}):
+            failures.append(f"expected 14 UPI and 2 cash payments, found {dict(methods)}")
 
         if shifts:
             shift = shifts[0]
@@ -993,6 +1172,23 @@ async def verify() -> None:
             if row.action in required_explicit_audits
         ):
             failures.append("an explicit workflow audit action has the wrong actor")
+        expected_pause_audits = Counter(
+            {
+                ("gaming.session.pause", FIXTURE_PAUSE_REASON, str(paused_session.id)): 1,
+                ("gaming.session.resume", FIXTURE_RESUME_REASON, str(paused_session.id)): 1,
+            }
+        ) if paused_session is not None else Counter()
+        observed_pause_audits = Counter(
+            (row.action, row.reason, row.entity_id)
+            for row in audit_rows
+            if row.action in {"gaming.session.pause", "gaming.session.resume"}
+            and row.actor_user_id == fixture_user.id
+        )
+        if observed_pause_audits != expected_pause_audits:
+            failures.append(
+                "pause/resume audit history is missing its exact actor, reason or session: "
+                f"{dict(observed_pause_audits)}"
+            )
         tracked_runtime_types = {
             "GamingSession",
             "GamingSessionAddon",
@@ -1021,6 +1217,7 @@ async def verify() -> None:
                 "orders": len(orders),
                 "payments": len(payments),
                 "extensions": len(extensions),
+                "pause_events": len(pause_events),
                 "addons": len(addons),
                 "order_lines": len(order_lines),
                 "audit_rows": len(audit_rows),
@@ -1051,6 +1248,52 @@ async def verify() -> None:
                 }
                 for key, count in sorted(observed_extensions.items())
             ],
+            "pause_resume": {
+                "session_id": str(paused_session.id) if paused_session is not None else None,
+                "paused_duration_ms": (
+                    int(paused_session.paused_duration_ms or 0)
+                    if paused_session is not None
+                    else None
+                ),
+                "final_amount_minor": (
+                    int(paused_session.amount_minor or 0)
+                    if paused_session is not None
+                    else None
+                ),
+                "events": [
+                    {
+                        "action": event.action,
+                        "reason": event.reason,
+                        "pause_version": int(event.pause_version),
+                        "actor_user_id": str(event.actor_user_id),
+                        "terminal_id": str(event.terminal_id),
+                        "response_status": event.response.get("status"),
+                        "response_start_at": event.response.get("start_at"),
+                        "response_amount_minor": event.response.get("amount_minor"),
+                        "response_timer_minutes": event.response.get("timer_minutes"),
+                        "response_timer_ends_at": event.response.get("timer_ends_at"),
+                        "response_paused_at": event.response.get("paused_at"),
+                        "response_paused_duration_ms": event.response.get(
+                            "paused_duration_ms"
+                        ),
+                        "response_pause_version": event.response.get("pause_version"),
+                        "response_billing_mode": event.response.get("billing_mode"),
+                        "response_package_price_minor_snapshot": event.response.get(
+                            "package_price_minor_snapshot"
+                        ),
+                        "response_package_duration_minutes_snapshot": event.response.get(
+                            "package_duration_minutes_snapshot"
+                        ),
+                        "response_package_variant_snapshot": event.response.get(
+                            "package_variant_snapshot"
+                        ),
+                        "response_package_pricing_tier_snapshot": event.response.get(
+                            "package_pricing_tier_snapshot"
+                        ),
+                    }
+                    for event in pause_events
+                ],
+            },
             "hourly_station_types": dict(sorted(hourly_station_types.items())),
             "hourly_billing_matrix": [
                 {

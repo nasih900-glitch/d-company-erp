@@ -288,15 +288,80 @@ PLAN_PAYMENTS="$(jq '[.steps[] | select(
 )] | length' "$PLAN")"
 PLAN_FRAME_WINDOWS="$(jq '[.steps[] | select(.action == "idleFrames")] | length' "$PLAN")"
 PLAN_STABILITY_WINDOWS="$(jq '[.steps[] | select(
-  .action == "idleFrames" or .action == "idleStability"
+  .action == "idleFrames" or .action == "idleStability" or
+  .action == "idleSemanticStability"
 )] | length' "$PLAN")"
 PLAN_ALARM_CONSTRAINTS="$(jq '[.steps[] | select(.action == "alarmConstraints")] | length' "$PLAN")"
-if [[ "$PLAN_STEPS" -ne 322 || "$PLAN_STARTS" -ne 12 || "$PLAN_PAYMENTS" -ne 12 || \
-      "$PLAN_FRAME_WINDOWS" -ne 4 || "$PLAN_STABILITY_WINDOWS" -ne 8 || \
-      "$PLAN_ALARM_CONSTRAINTS" -ne 1 ]]; then
-  printf 'Plan safety gate failed: steps=%s starts=%s payments=%s frame_windows=%s stability_windows=%s alarm_constraints=%s\n' \
+PLAN_PAUSE_SEQUENCE="$(jq '[.steps[] | select(
+  (.name == "Standard Single: open pause reason" and .action == "click" and .text == "Pause") or
+  (.name == "Standard Single: enter physical pause reason" and .action == "fill" and
+    .value == "Physical audit pause stability") or
+  (.name == "Standard Single: pause with reason" and .action == "click" and
+    .text == "Pause session") or
+  (.name == "Measure paused session layout stability" and
+    .action == "idleSemanticStability") or
+  (.name == "Standard Single: resume after stable pause" and .action == "click" and
+    .text == "Resume")
+)] | length' "$PLAN")"
+PLAN_SEMANTIC_STABILITY="$(jq '[.steps[] | select(
+  .name == "Measure paused session layout stability" and
+  .action == "idleSemanticStability" and .durationMs == 10000 and
+  .exactStableSemantics == [{
+    id:"ps5_station_1_paused_timer",attribute:"text",
+    fullmatch:"[0-9]{2}:[0-9]{2}:[0-9]{2}",expectedCount:1,
+    ancestor:{attribute:"content-desc",fullmatch:"PS5 Station 1\\. Paused\\. Standard · Single · ₹80\\.00 fixed total\\."}
+  }]
+)] | length' "$PLAN")"
+PLAN_PACKAGE_STARTS="$(jq '[.steps[] | select(
+  .action == "click" and ((.text // "") | startswith("Start ·")) and
+  ((.packageCode // "") | contains("-session-"))
+)] | length' "$PLAN")"
+PLAN_EXTENSION_SUBMITS="$(jq '[.steps[] | select(
+  .action == "click" and ((.text // "") | startswith("Add ·")) and
+  ((.packageCode // "") | contains("-extension-"))
+)] | length' "$PLAN")"
+PLAN_BASE_CODES_COMPLETE="$(jq '(
+  [.steps[] | select(
+    .action == "click" and ((.text // "") | startswith("Start ·")) and
+    ((.packageCode // "") | contains("-session-"))
+  ) | .packageCode] | unique
+) == [
+  "premium-dual-session-60m",
+  "premium-single-session-60m",
+  "standard-dual-session-30m",
+  "standard-dual-session-60m",
+  "standard-simdrive-session-15m",
+  "standard-simdrive-session-30m",
+  "standard-simdrive-session-60m",
+  "standard-single-session-30m",
+  "standard-single-session-60m"
+]' "$PLAN")"
+PLAN_EXTENSION_CODES_COMPLETE="$(jq '(
+  [.steps[] | select(
+    .action == "click" and ((.text // "") | startswith("Add ·")) and
+    ((.packageCode // "") | contains("-extension-"))
+  ) | .packageCode] | unique
+) == [
+  "premium-dual-extension-30m",
+  "premium-dual-extension-60m",
+  "premium-single-extension-30m",
+  "premium-single-extension-60m",
+  "standard-dual-extension-30m",
+  "standard-dual-extension-60m",
+  "standard-single-extension-30m",
+  "standard-single-extension-60m"
+]' "$PLAN")"
+if [[ "$PLAN_STEPS" -ne 410 || "$PLAN_STARTS" -ne 16 || "$PLAN_PAYMENTS" -ne 16 || \
+      "$PLAN_FRAME_WINDOWS" -ne 4 || "$PLAN_STABILITY_WINDOWS" -ne 9 || \
+      "$PLAN_ALARM_CONSTRAINTS" -ne 1 || "$PLAN_PAUSE_SEQUENCE" -ne 5 || \
+      "$PLAN_SEMANTIC_STABILITY" -ne 1 || "$PLAN_PACKAGE_STARTS" -ne 13 || \
+      "$PLAN_EXTENSION_SUBMITS" -ne 9 || "$PLAN_BASE_CODES_COMPLETE" != true || \
+      "$PLAN_EXTENSION_CODES_COMPLETE" != true ]]; then
+  printf 'Plan safety gate failed: steps=%s starts=%s payments=%s frame_windows=%s stability_windows=%s alarm_constraints=%s pause_sequence=%s semantic_stability=%s package_starts=%s extension_submits=%s base_codes_complete=%s extension_codes_complete=%s\n' \
     "$PLAN_STEPS" "$PLAN_STARTS" "$PLAN_PAYMENTS" "$PLAN_FRAME_WINDOWS" \
-    "$PLAN_STABILITY_WINDOWS" "$PLAN_ALARM_CONSTRAINTS" >&2
+    "$PLAN_STABILITY_WINDOWS" "$PLAN_ALARM_CONSTRAINTS" "$PLAN_PAUSE_SEQUENCE" \
+    "$PLAN_SEMANTIC_STABILITY" "$PLAN_PACKAGE_STARTS" "$PLAN_EXTENSION_SUBMITS" \
+    "$PLAN_BASE_CODES_COMPLETE" "$PLAN_EXTENSION_CODES_COMPLETE" >&2
   exit 65
 fi
 
@@ -392,7 +457,11 @@ export PHYSICAL_AUDIT_USER_PASSWORD="$TEST_PASSWORD"
 
 (
   cd "$BACKEND_DIR"
-  exec "$PYTHON" -m uvicorn app.main:app --host 127.0.0.1 --port "$BACKEND_PORT"
+  # Shared pause stays disabled by default and in production. Enable it only
+  # for this disposable, loopback-database backend process so the physical
+  # workflow can prove the real pause/resume contract end to end.
+  exec env GAMING_PAUSE_ENABLED=true \
+    "$PYTHON" -m uvicorn app.main:app --host 127.0.0.1 --port "$BACKEND_PORT"
 ) > "$RUNTIME_DIR/backend.log" 2>&1 &
 BACKEND_PID=$!
 for _ in $(seq 1 120); do
@@ -708,7 +777,7 @@ if [[ "$VERIFY_RC" -eq 0 ]]; then
         (if $p.depreciation_minor == 0 then empty else "Finance depreciation" end),
         (if $p.net_profit_minor == ($revenue - $cogs) then empty else "Finance net profit" end),
         (if $d.branch_id == $f.branch_id then empty else "Daily report branch" end),
-        (if $d.orders_count == 12 then empty else "Daily order count" end),
+        (if $d.orders_count == 16 then empty else "Daily order count" end),
         (if $d.gross_revenue_minor == $revenue and $d.net_revenue_minor == $revenue
           then empty else "Daily revenue" end),
         (if $d.payments_received.cash_minor == $f.cash_collected_minor
@@ -725,7 +794,7 @@ if [[ "$VERIFY_RC" -eq 0 ]]; then
             $d.net_profit_minor == ($revenue - $cogs)
           then empty else "Daily profit" end),
         (if $m.branch_id == $f.branch_id then empty else "Monthly report branch" end),
-        (if $m.orders_count == 12 then empty else "Monthly order count" end),
+        (if $m.orders_count == 16 then empty else "Monthly order count" end),
         (if $m.gross_revenue_minor == $revenue and $m.net_revenue_minor == $revenue
           then empty else "Monthly revenue" end),
         (if $m.payments_received.cash_minor == $f.cash_collected_minor
@@ -746,7 +815,7 @@ if [[ "$VERIFY_RC" -eq 0 ]]; then
         business_date:$business_date,
         expected:{revenue_minor:$revenue,cogs_minor:$cogs,
           cash_minor:$f.cash_collected_minor,upi_minor:$f.upi_collected_minor,
-          discount_minor:$f.manual_discount_minor,orders:12},
+          discount_minor:$f.manual_discount_minor,orders:16},
         observed:{finance:$p,daily:$d,monthly:$m},
         failures:$failures,
         passed:($failures | length == 0)
