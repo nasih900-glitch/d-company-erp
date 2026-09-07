@@ -480,6 +480,13 @@
       "name": "Standard Single + Cola: apply exact discount",
       "action": "click",
       "text": "Apply discount",
+      "reveal": {
+        "scrollable": true,
+        "direction": "DOWN",
+        "amount": 0.55,
+        "speedPxPerSecond": 500,
+        "repeats": 3
+      },
       "timeoutMs": 60000,
       "then": {
         "text": "CONTINUE TO PAYMENT · ₹210.00"

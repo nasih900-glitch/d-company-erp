@@ -309,6 +309,23 @@ def test_physical_plan_covers_recovery_finance_receipts_and_cleanup() -> None:
         assert evidence in rendered
 
 
+def test_discount_apply_uses_bounded_human_speed_reveal() -> None:
+    steps = {step["name"]: step for step in _steps()}
+    apply_discount = steps["Standard Single + Cola: apply exact discount"]
+
+    assert apply_discount["text"] == "Apply discount"
+    assert apply_discount["then"] == {
+        "text": "CONTINUE TO PAYMENT · ₹210.00"
+    }
+    assert apply_discount["reveal"] == {
+        "scrollable": True,
+        "direction": "DOWN",
+        "amount": 0.55,
+        "speedPxPerSecond": 500,
+        "repeats": 3,
+    }
+
+
 def test_addon_flow_proves_immediate_feedback_and_durable_detail_rows() -> None:
     steps = {step["name"]: step for step in _steps()}
 
