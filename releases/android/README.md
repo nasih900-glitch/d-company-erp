@@ -39,19 +39,21 @@ and `v3.1.9` (code `20`) failed before signing and must not be reused. Code
 `21` (`3.1.10`) is immutable signed predecessor history. Code `22` (`3.1.11`)
 was superseded before signing and must not be approved or activated. Code `23`
 (`3.1.12`) was also superseded without an authorised signed artifact. Code
-`24` (`3.1.13`) failed before signing and remains immutable history. The
-current server-delivery candidate is the **unsigned** `3.1.14` (code `25`)
+`24` (`3.1.13`) failed before signing and remains immutable history. Code `25`
+(`3.1.14`) was rejected by its physical-tablet audit; its tag and any artifact
+remain immutable history and must not be staged or activated. The current
+corrective server-delivery candidate is the **unsigned** `3.1.15` (code `26`)
 source at migration `0071`; it is not yet a signed, tagged release artifact.
 Before any staging or activation, obtain the exact artifact from the protected
-green `v3.1.14` workflow and verify the
+green `v3.1.15` workflow and verify the
 immutable HTTPS bytes, SHA-256, byte size, package, version, expected signer and
 an in-place upgrade from the signed code-`21` predecessor. Android
-still requires the employee to approve installation. Until those gates and
-production deployment pass, Code 25 is not approved, advertised, active or
-partner-installable.
+still requires the employee to approve installation. Until all Code 26 gates in
+`docs/CODE26_RELEASE_CANDIDATE.md` and production deployment pass, Code 26 is
+not approved, advertised, active or partner-installable.
 
 Do not direct a tablet to the obsolete `3.1.0` APK as a current bootstrap. Use
-the verified, same-signer code-`21` direct predecessor. Code 25 may be installed
+the verified, same-signer code-`21` direct predecessor. Code 26 may be installed
 manually in place only after the protected workflow has produced and verified
 its signed artifact; never use an unsigned local candidate. Never uninstall
 while offline work is pending. After a verified direct build is installed,

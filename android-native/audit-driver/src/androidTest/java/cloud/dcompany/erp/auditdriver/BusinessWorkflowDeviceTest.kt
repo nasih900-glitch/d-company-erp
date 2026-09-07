@@ -91,7 +91,7 @@ class BusinessWorkflowDeviceTest {
                 val label = step.getString("name")
                 val started = SystemClock.elapsedRealtime()
                 try {
-                    execute(step)
+                    execute(step, index + 1, label)
                     val duration = SystemClock.elapsedRealtime() - started
                     timings.put(JSONObject().put("step", index + 1).put("name", label)
                         .put("duration_ms", duration).put("status", "passed"))
@@ -111,6 +111,15 @@ class BusinessWorkflowDeviceTest {
             // Restore the disposable device even if an offline assertion fails.
             device.executeShellCommand("cmd connectivity airplane-mode disable")
             device.executeShellCommand("svc wifi enable")
+            device.executeShellCommand("cmd deviceidle unforce")
+            device.executeShellCommand("cmd power set-mode 0")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                device.executeShellCommand(
+                    "pm grant $appPackage android.permission.POST_NOTIFICATIONS",
+                )
+            }
+            device.wakeUp()
+            device.executeShellCommand("wm dismiss-keyguard")
             device.unfreezeRotation()
             // Do not retain even synthetic login material in pulled artifacts.
             validatedCredentialPath?.let { device.executeShellCommand("rm $it") }
@@ -121,13 +130,22 @@ class BusinessWorkflowDeviceTest {
         require(path.matches(Regex("/sdcard/Download/[A-Za-z0-9._-]+\\.json")))
     }
 
-    private fun execute(step: JSONObject) {
+    private fun execute(step: JSONObject, stepNumber: Int, label: String) {
         val timeout = step.optLong("timeoutMs", 20_000L).coerceIn(500L, 60_000L)
         when (val action = step.getString("action")) {
             "launch", "restart" -> {
                 if (action == "restart") device.executeShellCommand("am force-stop $appPackage")
                 device.executeShellCommand("am start -W -n $appPackage/cloud.dcompany.erp.MainActivity")
                 assertTrue("ERP did not become visible", device.wait(Until.hasObject(By.pkg(appPackage)), timeout))
+                if (step.optBoolean("assertAlarmRegistered", false)) {
+                    assertTrue(
+                        "ERP restart did not rebuild its active-session AlarmManager entry",
+                        waitUntil(timeout) { alarmRegistered() },
+                    )
+                    File(output, "alarm-after-restart.txt").writeText(
+                        device.executeShellCommand("dumpsys alarm"),
+                    )
+                }
             }
             "click" -> {
                 val target = find(step, timeout)
@@ -160,15 +178,170 @@ class BusinessWorkflowDeviceTest {
                 device.executeShellCommand("svc wifi enable")
             }
             "capture" -> Unit
-            "idleFrames" -> {
-                device.executeShellCommand("dumpsys gfxinfo $appPackage reset")
-                SystemClock.sleep(step.optLong("durationMs", 10_000L).coerceIn(1_000L, 30_000L))
-                File(output, "frames-${timings.length()}.txt").writeText(
-                    device.executeShellCommand("dumpsys gfxinfo $appPackage framestats"),
-                )
+            "alarmConstraints" -> exerciseAlarmConstraints(timeout)
+            "idleFrames", "idleStability" -> {
+                val base = safeLabel("%03d-%s".format(stepNumber, label))
+                capture("idle-$base-start")
+                if (action == "idleFrames") {
+                    checkedShell(
+                        "frames-$base-reset.txt",
+                        "dumpsys gfxinfo $appPackage reset",
+                    )
+                }
+                val duration = step.optLong("durationMs", 10_000L).coerceIn(1_000L, 30_000L)
+                val firstHalf = duration / 2
+                SystemClock.sleep(firstHalf)
+                capture("idle-$base-mid")
+                SystemClock.sleep(duration - firstHalf)
+                capture("idle-$base-end")
+                if (action == "idleFrames") {
+                    File(output, "frames-$base.txt").writeText(
+                        device.executeShellCommand("dumpsys gfxinfo $appPackage framestats"),
+                    )
+                }
             }
             else -> error("Unsupported audit action: $action")
         }
+    }
+
+    /**
+     * Feasible cloud-device constraints are exercised against the real audit
+     * APK while a fixed Gaming session is pending offline. A true reboot would
+     * kill this instrumentation process, so target-Redmi reboot and OEM battery
+     * policy remain explicit external gates in the runner evidence.
+     */
+    private fun exerciseAlarmConstraints(timeout: Long) {
+        val evidence = JSONObject()
+        val alarmBefore = device.executeShellCommand("dumpsys alarm")
+        File(output, "alarm-before-constraints.txt").writeText(alarmBefore)
+        evidence.put("alarm_registered_before", operationalAlarmRegistered(alarmBefore))
+        check(evidence.getBoolean("alarm_registered_before")) {
+            "No AlarmManager entry exists for the active fixed-time session"
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            checkedShell(
+                "notification-revoke.txt",
+                "pm revoke $appPackage android.permission.POST_NOTIFICATIONS",
+            )
+            evidence.put("notification_denied", !notificationPermissionGranted())
+            check(evidence.getBoolean("notification_denied")) {
+                "Android notification permission did not enter the denied state"
+            }
+            checkedShell(
+                "notification-grant.txt",
+                "pm grant $appPackage android.permission.POST_NOTIFICATIONS",
+            )
+            evidence.put(
+                "notification_regranted",
+                waitUntil(timeout) { notificationPermissionGranted() },
+            )
+        } else {
+            evidence.put("notification_denied", true)
+            evidence.put("notification_regranted", true)
+            evidence.put("notification_permission_not_runtime_on_api", Build.VERSION.SDK_INT)
+        }
+        check(evidence.getBoolean("notification_regranted")) {
+            "Android notification permission was not restored"
+        }
+
+        device.sleep()
+        SystemClock.sleep(1_000L)
+        evidence.put("screen_locked", !device.isScreenOn)
+        device.wakeUp()
+        device.executeShellCommand("wm dismiss-keyguard")
+        evidence.put("screen_woken", waitUntil(timeout) { device.isScreenOn })
+        check(evidence.getBoolean("screen_locked") && evidence.getBoolean("screen_woken")) {
+            "Lock/wake recovery could not be exercised"
+        }
+
+        val dozeEnter = checkedShell("doze-enter.txt", "cmd deviceidle force-idle")
+        val dozeState = device.executeShellCommand("dumpsys deviceidle")
+        File(output, "doze-state.txt").writeText(dozeState)
+        evidence.put(
+            "doze_entered",
+            dozeEnter.contains("forced", ignoreCase = true) ||
+                dozeState.contains("mState=IDLE") || dozeState.contains("mForceIdle=true"),
+        )
+        checkedShell("doze-exit.txt", "cmd deviceidle unforce")
+        val dozeAfter = device.executeShellCommand("dumpsys deviceidle")
+        evidence.put(
+            "doze_exited",
+            !dozeAfter.contains("mForceIdle=true") && !dozeAfter.contains("mState=IDLE"),
+        )
+        check(evidence.getBoolean("doze_entered") && evidence.getBoolean("doze_exited")) {
+            "Doze force/restore constraint did not complete"
+        }
+
+        checkedShell("battery-saver-enable.txt", "cmd power set-mode 1")
+        evidence.put(
+            "battery_saver_enabled",
+            device.executeShellCommand("settings get global low_power").trim() == "1",
+        )
+        checkedShell("battery-saver-disable.txt", "cmd power set-mode 0")
+        evidence.put(
+            "battery_saver_disabled",
+            device.executeShellCommand("settings get global low_power").trim() == "0",
+        )
+        check(
+            evidence.getBoolean("battery_saver_enabled") &&
+                evidence.getBoolean("battery_saver_disabled"),
+        ) { "Battery-saver enable/restore constraint did not complete" }
+
+        val alarmAfter = device.executeShellCommand("dumpsys alarm")
+        File(output, "alarm-after-constraints.txt").writeText(alarmAfter)
+        evidence.put("alarm_registered_after", operationalAlarmRegistered(alarmAfter))
+        check(evidence.getBoolean("alarm_registered_after")) {
+            "Active-session alarm disappeared while exercising device constraints"
+        }
+        evidence.put("true_reboot_performed", false)
+        evidence.put("oem_background_policy_proven", false)
+        File(output, "alarm-constraints.json").writeText(evidence.toString(2))
+    }
+
+    private fun notificationPermissionGranted(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return true
+        val packageState = device.executeShellCommand("dumpsys package $appPackage")
+        return Regex(
+            "android\\.permission\\.POST_NOTIFICATIONS: granted=true",
+        ).containsMatchIn(packageState)
+    }
+
+    private fun alarmRegistered(): Boolean =
+        operationalAlarmRegistered(device.executeShellCommand("dumpsys alarm"))
+
+    private fun operationalAlarmRegistered(alarmDump: String): Boolean {
+        val action = "cloud.dcompany.erp.action.DELIVER_ALARM"
+        // Package presence alone is insufficient: WorkManager and sync jobs can
+        // also put this APK in dumpsys alarm even when the Gaming deadline was
+        // never scheduled. Require the dedicated operational-alarm action in
+        // the same bounded AlarmManager record neighbourhood.
+        val escapedPackage = Regex.escape(appPackage)
+        val escapedAction = Regex.escape(action)
+        return Regex(
+            "(?s)(?:$escapedPackage.{0,1600}$escapedAction|$escapedAction.{0,1600}$escapedPackage)",
+        ).containsMatchIn(alarmDump)
+    }
+
+    private fun checkedShell(filename: String, command: String): String {
+        val result = device.executeShellCommand(command)
+        File(output, filename).writeText("$command\n$result")
+        check(
+            !result.contains("permission denial", ignoreCase = true) &&
+                !result.contains("unknown command", ignoreCase = true) &&
+                !result.contains("security exception", ignoreCase = true) &&
+                !result.startsWith("Error", ignoreCase = true),
+        ) { "Device constraint command failed: $command" }
+        return result
+    }
+
+    private fun waitUntil(timeout: Long, condition: () -> Boolean): Boolean {
+        val deadline = SystemClock.elapsedRealtime() + timeout
+        do {
+            if (condition()) return true
+            SystemClock.sleep(250L)
+        } while (SystemClock.elapsedRealtime() < deadline)
+        return condition()
     }
 
     private fun credentialValue(path: String): String {
@@ -230,7 +403,7 @@ class BusinessWorkflowDeviceTest {
     }
 
     private fun capture(label: String) {
-        val safeLabel = label.replace(Regex("[^A-Za-z0-9._-]"), "-").take(110)
+        val safeLabel = safeLabel(label)
         device.takeScreenshot(File(output, "$safeLabel.png"))
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             check(InstrumentationRegistry.getInstrumentation().uiAutomation.clearCache()) {
@@ -239,4 +412,7 @@ class BusinessWorkflowDeviceTest {
         }
         device.dumpWindowHierarchy(File(output, "$safeLabel.xml"))
     }
+
+    private fun safeLabel(label: String): String =
+        label.replace(Regex("[^A-Za-z0-9._-]"), "-").take(110)
 }

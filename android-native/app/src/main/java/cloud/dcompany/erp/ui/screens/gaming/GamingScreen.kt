@@ -417,6 +417,7 @@ fun GamingScreen(
                     onSelectFilter = { selectedFilter = it },
                     onSelectStation = { selectedCommandStationId = it },
                     onOpenAttention = { attentionCenterOpen = true },
+                    onRefresh = vm::load,
                     onStart = { starting = it },
                     onStop = { station, session -> stopping = StopRequest(station, session) },
                     onSend = { sending = it },
@@ -1367,6 +1368,7 @@ private fun GamingCommandWorkspace(
     onSelectFilter: (String) -> Unit,
     onSelectStation: (String) -> Unit,
     onOpenAttention: () -> Unit,
+    onRefresh: () -> Unit,
     onStart: (Station) -> Unit,
     onStop: (Station, GameSession) -> Unit,
     onSend: (GameSession) -> Unit,
@@ -1412,17 +1414,20 @@ private fun GamingCommandWorkspace(
         // centre below so the station floor stays above the fold.
         GamingAlarmPermissionCard()
         GamingCommandMetrics(state)
-        if (attentionCount > 0) {
-            GamingCommandAttentionBar(
-                state = state,
-                access = access,
-                terminalBlocked = startTerminalBlockMessage != null,
-                focusRequested = focusRequested,
-                orphanedExtensionCount = state.orphanedPackageExtensionActions().size,
-                attentionCount = attentionCount,
-                onOpen = onOpenAttention,
-            )
-        }
+        // This status rail deliberately remains in the layout when an error is
+        // cleared or a payment is resolved. Inserting/removing the whole row
+        // moved both command panels vertically and looked like a screen flicker
+        // on the tablet. Its content changes in place instead.
+        GamingCommandAttentionBar(
+            state = state,
+            access = access,
+            terminalBlocked = startTerminalBlockMessage != null,
+            focusRequested = focusRequested,
+            orphanedExtensionCount = state.orphanedPackageExtensionActions().size,
+            attentionCount = attentionCount,
+            onOpen = onOpenAttention,
+            onRefresh = onRefresh,
+        )
         GamingFilterRow(
             filters = filters,
             stations = state.stations,
@@ -1480,20 +1485,43 @@ private fun GamingCommandWorkspace(
                     "${it.name} · actions and billing"
                 } ?: "Select a station from the floor",
                 icon = selectedStation?.let { stationTypeIcon(it.type) } ?: Icons.Filled.Visibility,
-                tone = selectedStation?.let { station ->
-                    stationPresentation(
-                        station = station,
-                        session = selectedSession,
-                        // The timer itself is observed inside the tile/detail
-                        // restart scopes. Avoid reading the one-second clock at
-                        // workspace level and recomposing metrics, filters and
-                        // both panels every tick merely to tint this header.
-                        nowMillis = System.currentTimeMillis(),
-                        hasActiveAddons = selectedSession?.let(state::addonsFor).orEmpty().any {
-                            !it.voided && !it.isRejectedLocalAdd()
-                        },
-                    ).tone
-                } ?: UiTone.Neutral,
+                // The right panel owns its derived status colour. The upstream
+                // workspace never reads the one-second clock, so the station
+                // floor, metrics and filters do not recompose every second.
+                // Structural equality invalidates this panel only when the
+                // status actually changes, including Active -> Overtime.
+                toneProvider = {
+                    val hasActiveAddons = selectedSession?.let(state::addonsFor).orEmpty().any {
+                        !it.voided && !it.isRejectedLocalAdd()
+                    }
+                    val observesOvertime = selectedSession?.status == "active" &&
+                        !selectedSession.timerEndsAt.isNullOrBlank()
+                    val stableNow = remember(
+                        selectedSession?.id,
+                        selectedSession?.status,
+                        selectedSession?.timerEndsAt,
+                    ) { System.currentTimeMillis() }
+                    val selectedTone by remember(
+                        selectedStation,
+                        selectedSession,
+                        wallClock,
+                        hasActiveAddons,
+                        observesOvertime,
+                        stableNow,
+                    ) {
+                        derivedStateOf(structuralEqualityPolicy()) {
+                            selectedStation?.let { station ->
+                                stationPresentation(
+                                    station = station,
+                                    session = selectedSession,
+                                    nowMillis = if (observesOvertime) wallClock.value else stableNow,
+                                    hasActiveAddons = hasActiveAddons,
+                                ).tone
+                            } ?: UiTone.Neutral
+                        }
+                    }
+                    selectedTone
+                },
                 contentPadding = PaddingValues(Spacing.md),
                 modifier = Modifier.weight(1f).fillMaxHeight(),
             ) {
@@ -1563,11 +1591,11 @@ private fun GamingCommandPanel(
     subtitle: String,
     icon: ImageVector,
     modifier: Modifier = Modifier,
-    tone: UiTone = UiTone.Neutral,
+    toneProvider: @Composable () -> UiTone = { UiTone.Neutral },
     contentPadding: PaddingValues = PaddingValues(Spacing.md),
     content: @Composable () -> Unit,
 ) {
-    val accent = statusColor(tone)
+    val accent = statusColor(toneProvider())
     Column(
         modifier = modifier.clip(Radius.shapeLg)
             .background(Brand.Surface)
@@ -1674,6 +1702,7 @@ private fun GamingCommandAttentionBar(
     orphanedExtensionCount: Int,
     attentionCount: Int,
     onOpen: () -> Unit,
+    onRefresh: () -> Unit,
 ) {
     val danger = state.needsCancellation.isNotEmpty() ||
         state.orphanedPackageExtensionActions().any {
@@ -1696,6 +1725,19 @@ private fun GamingCommandAttentionBar(
         if (!access.canManageSessions) add("view only")
         if (focusRequested) add("session alert")
     }
+    val healthy = attentionCount == 0
+    val statusTitle = when {
+        healthy && state.refreshing -> "Refreshing Gaming board"
+        healthy -> "Gaming board ready"
+        danger || warning -> "Action centre · $attentionCount to review"
+        else -> "Gaming activity · $attentionCount update${if (attentionCount == 1) "" else "s"}"
+    }
+    val statusDetail = when {
+        healthy && state.refreshing -> "Checking the server · saved station controls remain available"
+        healthy && state.online -> "Live data is connected · no action needs attention"
+        healthy -> "Saved station data is available · reconnect to refresh live changes"
+        else -> details.joinToString(" · ")
+    }
     Row(
         Modifier.fillMaxWidth().heightIn(min = 60.dp)
             .clip(Radius.shapeLg)
@@ -1703,7 +1745,7 @@ private fun GamingCommandAttentionBar(
             .border(1.dp, accent.copy(alpha = 0.48f), Radius.shapeLg)
             .semantics {
                 liveRegion = LiveRegionMode.Polite
-                contentDescription = "$attentionCount gaming updates. ${details.joinToString()}"
+                contentDescription = "$statusTitle. $statusDetail"
             }
             .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
         horizontalArrangement = Arrangement.spacedBy(Spacing.md),
@@ -1722,17 +1764,13 @@ private fun GamingCommandAttentionBar(
         }
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(
-                if (danger || warning) {
-                    "Action centre · $attentionCount to review"
-                } else {
-                    "Gaming activity · $attentionCount update${if (attentionCount == 1) "" else "s"}"
-                },
+                statusTitle,
                 color = Brand.Foreground,
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.SemiBold,
             )
             Text(
-                details.joinToString(" · "),
+                statusDetail,
                 color = Brand.ForegroundMuted,
                 style = MaterialTheme.typography.labelSmall,
                 maxLines = 1,
@@ -1740,10 +1778,12 @@ private fun GamingCommandAttentionBar(
             )
         }
         ErpButton(
-            text = "Review",
-            onClick = onOpen,
+            text = if (healthy && state.refreshing) "Refreshing…" else if (healthy) "Refresh" else "Review",
+            onClick = if (healthy) onRefresh else onOpen,
             intent = if (danger) ActionIntent.Warning else ActionIntent.Secondary,
-            leadingIcon = Icons.Filled.Visibility,
+            enabled = !healthy || !state.refreshing,
+            busy = healthy && state.refreshing,
+            leadingIcon = if (healthy) Icons.Filled.Refresh else Icons.Filled.Visibility,
         )
     }
 }

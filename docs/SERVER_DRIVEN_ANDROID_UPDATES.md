@@ -44,7 +44,7 @@ change their identity, or lower the compatibility floor.
 `3.1.3` (version code `14`) is historical manual-partner baseline evidence. It
 must remain unhosted, unregistered and unadvertised; it is not the current
 rollout target or upgrade predecessor. Code `21` (`3.1.10`) is the signed
-direct-channel predecessor from which the Code 25 upgrade must be tested.
+direct-channel predecessor from which the Code 26 upgrade must be tested.
 
 Code `15` (`3.1.4`) is the first identity accepted by the server-release
 registry. It remains a held audit build and must never be activated as a
@@ -58,13 +58,15 @@ tags are immutable and must never be moved, rebuilt, or reused. Code `21`
 superseded before signing and its waiting signing job must not be approved.
 Code `23` (`3.1.12`) was also superseded without an authorised signed artifact.
 Code `24` (`3.1.13`) failed before signing; its tag must not be moved or reused.
-The current server-delivery candidate is the **unsigned** `3.1.14` (version code
-`25`) source at migration `0071`. Only an exact signed artifact and release
-manifest produced together by a future green `v3.1.14` GitHub Actions workflow
+Code `25` (`3.1.14`) was rejected by its physical-tablet audit; its tag and any
+artifact remain immutable and must not be staged or activated. The current
+corrective server-delivery candidate is the **unsigned** `3.1.15` (version code
+`26`) source at migration `0071`. Only an exact signed artifact and release
+manifest produced together by a future green `v3.1.15` GitHub Actions workflow
 may be staged. A local Gradle build or
 local evidence bundle is not release authority, even when its package and
 signer are correct. Code `21` (`3.1.10`) remains the signed same-channel
-predecessor for in-place upgrade proof. Code 25 is not currently signed,
+predecessor for in-place upgrade proof. Code 26 is not currently signed,
 deployed, staged, activated, approved or partner-installable.
 
 Keep the minimum-compatible floor at code `8` during the initial rollout. A
@@ -123,11 +125,11 @@ responses and network uncertainty remain blocked. The APK itself must return:
 - `Cache-Control: public, immutable, no-transform, max-age=31536000` (or longer)
 - no redirect from its same-origin versioned URL
 
-## Code 25 staging procedure
+## Code 26 staging procedure
 
 1. Confirm the code-`21` partner installation is signed by the trusted
    certificate, can check for updates, and has no pending offline work.
-2. Coordinate the application at `3.1.14` / code `25`, with database migrations
+2. Coordinate the application at `3.1.15` / code `26`, with database migrations
    through `0071`. Run the complete
    release workflow and obtain its signed direct APK and
    `release-manifest.json` from the same workflow run.
@@ -136,8 +138,8 @@ responses and network uncertainty remain blocked. The APK itself must return:
 
    ```bash
    python3 ops/stage_android_release.py \
-     --manifest /secure/release-3.1.14/release-manifest.json \
-     --apk /secure/release-3.1.14/d-company-erp-v3.1.14-direct.apk \
+     --manifest /secure/release-3.1.15/release-manifest.json \
+     --apk /secure/release-3.1.15/d-company-erp-v3.1.15-direct.apk \
      --expected-signer-sha256 <trusted-release-certificate-sha256> \
      --release-notes "Gaming Centre billing and accountable shared-shift closing"
    ```
@@ -150,8 +152,8 @@ responses and network uncertainty remain blocked. The APK itself must return:
 
    ```bash
    python3 ops/stage_android_release.py \
-     --manifest /secure/release-3.1.14/release-manifest.json \
-     --apk /secure/release-3.1.14/d-company-erp-v3.1.14-direct.apk \
+     --manifest /secure/release-3.1.15/release-manifest.json \
+     --apk /secure/release-3.1.15/d-company-erp-v3.1.15-direct.apk \
      --expected-signer-sha256 <trusted-release-certificate-sha256> \
      --release-notes "Gaming Centre billing and accountable shared-shift closing" \
      --ssh-key ~/.ssh/dcompany_do \
@@ -165,11 +167,11 @@ responses and network uncertainty remain blocked. The APK itself must return:
    unadvertised immutable bytes; it must never cause a release offer.
 
 5. In the owner ERP release screen, compare version, release notes, SHA-256,
-   size, signer and source evidence. Activate only the staged code-`25` row.
+   size, signer and source evidence. Activate only the staged code-`26` row.
    The backend performs a second no-redirect public byte verification before the
    atomic status transition and records the owner action in the Audit Log.
 6. On one code-`21` tablet, refresh the update check, download, install and
-   reopen code `25`. Verify sign-in, shift, Gaming, POS settlement, offline queue
+   reopen code `26`. Verify sign-in, shift, Gaming, POS settlement, offline queue
    recovery and finance reconciliation before wider partner rollout.
 
 Do not activate an intermediate held build as its own update. Do not stage from an arbitrary

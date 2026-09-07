@@ -1,6 +1,5 @@
 package cloud.dcompany.erp
 
-import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.Application
 import android.app.Notification
@@ -10,7 +9,6 @@ import android.media.AudioAttributes
 import android.media.RingtoneManager
 import android.os.Bundle
 import android.os.SystemClock
-import android.os.Trace
 import android.util.Log
 import androidx.room.Room
 import cloud.dcompany.erp.core.alarm.GamingAlarmReconciler
@@ -46,8 +44,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -55,7 +51,6 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.retryWhen
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -188,6 +183,7 @@ class DCompanyApp : Application() {
          */
         const val ALARM_CHANNEL_ID = "dcompany_alarms_v1"
         private const val STARTUP_STATE_TRACE = "DCompany.persisted-startup-state"
+        private const val STARTUP_STATE_TIMEOUT_MILLIS = 5_000L
         private const val PERFORMANCE_LOG_TAG = "DCompanyPerformance"
         private const val COMPATIBILITY_RECHECK_INTERVAL_MILLIS = 15L * 60L * 1_000L
         // Matches the bounded compatibility request. It suppresses the pair of
@@ -230,6 +226,7 @@ class DCompanyApp : Application() {
         private set
 
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private lateinit var persistedStartupState: PersistedStartupStateRestorer
     private val operationalAlarmReconciliationGeneration = MutableStateFlow(0L)
     private val compatibilityRecheckThrottle = CompatibilityRecheckThrottle()
     private val reconnectCompatibilityLock = Any()
@@ -277,7 +274,17 @@ class DCompanyApp : Application() {
         shiftCache = ShiftCache(this)
         terminalStore = TerminalStore(this)
         outboxOwnerStore = OutboxOwnerStore(this)
-        loadPersistedStartupState()
+        persistedStartupState = PersistedStartupStateRestorer(
+            scope = appScope,
+            timeoutMillis = STARTUP_STATE_TIMEOUT_MILLIS,
+            loaders = listOf(
+                tokens::load,
+                shiftCache::loadProfile,
+                terminalStore::load,
+                outboxOwnerStore::load,
+            ),
+        )
+        startPersistedStartupStateRestoration()
         ApiClient.init(tokens, terminalStore)
         val updateRequirementStore = ClientUpdateRequirementStore(
             context = this,
@@ -430,39 +437,24 @@ class DCompanyApp : Application() {
         startAlarmReconciliation()
     }
 
-    /**
-     * Authentication and cache ownership must be published before any API,
-     * worker or screen can observe them. Keep that ordering, but do the four
-     * independent disk reads concurrently on the IO pool rather than running
-     * sequential DataStore work on Android's main thread.
-     *
-     * The trace section is visible in Perfetto and the debug timing gives QA a
-     * stable cold-start signal without collecting employee or business data.
-     */
-    @SuppressLint("UnclosedTrace") // runBlocking returns on this caller thread; finally always closes it.
-    private fun loadPersistedStartupState() {
+    private fun startPersistedStartupStateRestoration() {
         val startedAt = SystemClock.elapsedRealtime()
-        Trace.beginSection(STARTUP_STATE_TRACE)
-        try {
-            runBlocking(Dispatchers.IO) {
-                listOf(
-                    async { tokens.load() },
-                    async { shiftCache.loadProfile() },
-                    async { terminalStore.load() },
-                    async { outboxOwnerStore.load() },
-                ).awaitAll()
+        appScope.launch(Dispatchers.IO) {
+            val result = persistedStartupState.start().await()
+            if (BuildConfig.DEBUG) {
+                Log.d(
+                    PERFORMANCE_LOG_TAG,
+                    "$STARTUP_STATE_TRACE completed in " +
+                        "${SystemClock.elapsedRealtime() - startedAt}ms ($result)",
+                )
             }
-        } finally {
-            Trace.endSection()
-        }
-        if (BuildConfig.DEBUG) {
-            Log.d(
-                PERFORMANCE_LOG_TAG,
-                "$STARTUP_STATE_TRACE completed in " +
-                    "${SystemClock.elapsedRealtime() - startedAt}ms",
-            )
         }
     }
+
+    /** Awaited by every entry point before it reads authentication or scope. */
+    internal suspend fun awaitPersistedStartupState(
+        retryFailed: Boolean = false,
+    ): PersistedStartupStateResult = persistedStartupState.await(retryFailed)
 
     /**
      * A foreground return is a natural, low-noise opportunity to pick up a new

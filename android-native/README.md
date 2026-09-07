@@ -9,8 +9,8 @@ WebView.
 | Field | Value |
 | --- | --- |
 | Package / application ID | `cloud.dcompany.erp` |
-| Version name | `3.1.14` |
-| Version code | `25` |
+| Version name | `3.1.15` |
+| Version code | `26` |
 | Minimum compatible client code | `8` |
 | Minimum Android version | Android 8 (`minSdk 26`) |
 | Target Android version | Android 15 (`targetSdk 35`) |
@@ -23,7 +23,7 @@ build.
 
 ## Release status
 
-Version `3.1.14` (`25`) is the current unsigned recovery, finance, and
+Version `3.1.15` (`26`) is the current unsigned corrective reliability and
 server-delivery candidate following the signed `3.1.10` (`21`) predecessor.
 It includes Code 22's owner-approved Standard, Premium, Simdrive and multiplayer
 tariff, exact extension billing, held-bill discounts, session recovery and all
@@ -51,8 +51,9 @@ Code `21` remains immutable signed predecessor history. Code `22` was superseded
 before signing and must not be approved or activated. Code `23` was also
 superseded before signing after the deeper production audit; its immutable
 tag and evidence remain historical. Code `24` failed before signing and
-remains immutable history. Code `25` is the separately gated server-delivery
-candidate; source preparation alone does not authorise hosting, registering,
+remains immutable history. Code `25` is immutable rejected physical-audit
+history. Code `26` is the separately gated server-delivery candidate; source
+preparation alone does not authorise hosting, registering,
 staging, advertising, or activating it. Rollout requires a separately reviewed
 immutable APK,
 verified URL, SHA-256, byte size, package, version, expected signer, and
@@ -60,7 +61,7 @@ same-lineage upgrade proof. Android will still require the employee to approve
 installation. Do not raise the compatibility minimum merely because a newer
 candidate exists.
 
-See [`CODE25_RELEASE_CANDIDATE.md`](../docs/CODE25_RELEASE_CANDIDATE.md) for the
+See [`CODE26_RELEASE_CANDIDATE.md`](../docs/CODE26_RELEASE_CANDIDATE.md) for the
 current evidence boundary. The Code 24 and Code 23 briefs remain historical
 records of inherited audit, tariff, and shared-shift work.
 

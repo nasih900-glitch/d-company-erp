@@ -206,6 +206,23 @@ data class CacheScopeLease internal constructor(
     internal val generation: Long,
 )
 
+/** Atomic outcome for background-only cached-scope adoption. */
+internal sealed interface CachedScopeLeaseAdoption {
+    /** [adoptedLease] is non-null only when this caller owns cleanup. */
+    data class Ready(
+        val lease: CacheScopeLease,
+        val adopted: Boolean,
+    ) : CachedScopeLeaseAdoption {
+        val adoptedLease: CacheScopeLease? get() = lease.takeIf { adopted }
+    }
+
+    /** Another foreground workspace won the race; preserve it and retry later. */
+    data object ActiveScopeConflict : CachedScopeLeaseAdoption
+
+    /** No active lease exists and the persisted marker disproves this owner. */
+    data object StoredScopeMismatch : CachedScopeLeaseAdoption
+}
+
 sealed interface ScopedCommitResult<out T> {
     data class Committed<T>(val value: T) : ScopedCommitResult<T>
     data object Stale : ScopedCommitResult<Nothing>
@@ -275,6 +292,25 @@ class CacheIsolationCoordinator internal constructor(
     }
 
     /**
+     * Revoke an exact background-owned lease and clear its process-global
+     * projections in the same scope-transition critical section. Keeping the
+     * callback under [mutex] prevents a newly activated foreground workspace
+     * from being published between lease revocation and stale runtime cleanup.
+     *
+     * The callback must remain non-suspending and must not call back into this
+     * coordinator.
+     */
+    internal suspend fun deactivateIfCurrentWithCleanup(
+        lease: CacheScopeLease,
+        cleanup: () -> Unit,
+    ): Boolean = mutex.withLock {
+        if (activeLease != lease) return@withLock false
+        deactivateLocked()
+        cleanup()
+        true
+    }
+
+    /**
      * Sign-out's final outbox recheck and lease revocation are one critical
      * section. A feature write therefore either lands first and blocks the
      * gate, or observes the revoked lease and cannot land afterwards.
@@ -322,6 +358,39 @@ class CacheIsolationCoordinator internal constructor(
             val lease = newLease(scope)
             activeLease = lease
             CachedScopeLeaseActivation(CacheScopeActivation.RETAINED, lease)
+        }
+
+    /**
+     * Background recovery may borrow an already-active exact lease or adopt
+     * the persisted exact scope only while no lease is active. Unlike
+     * [activateCachedWithLease], this never replaces or revokes an active
+     * foreground workspace. An active-scope mismatch is an unknown transient
+     * race, not a definitive no-owner result. A stored-marker mismatch is
+     * distinct and definitive; marker read failures remain retryable errors.
+     */
+    internal suspend fun adoptCachedOnlyIfInactive(scope: CacheScope): CachedScopeLeaseAdoption =
+        mutex.withLock {
+            activeLease?.let { active ->
+                if (active.scope != scope) {
+                    return@withLock CachedScopeLeaseAdoption.ActiveScopeConflict
+                }
+                return@withLock CachedScopeLeaseAdoption.Ready(lease = active, adopted = false)
+            }
+
+            val stored = try {
+                marker.current()
+            } catch (error: Exception) {
+                throw CacheScopeException(
+                    "The tablet could not verify the saved account scope. Connect and try again.",
+                    error,
+                )
+            }
+            if (stored != scope) {
+                return@withLock CachedScopeLeaseAdoption.StoredScopeMismatch
+            }
+            val lease = newLease(scope)
+            activeLease = lease
+            CachedScopeLeaseAdoption.Ready(lease = lease, adopted = true)
         }
 
     /** A server-validated scope may replace another scope after an atomic full-data purge. */
@@ -424,4 +493,20 @@ internal suspend fun <T> CacheIsolationCoordinator.fetchAndCommitScoped(
     val lease = currentLease() ?: return false
     val payload = fetch()
     return commitIfCurrent(lease) { store(payload) }
+}
+
+/**
+ * Feature-action boundary for a lease that can expire after the employee's
+ * tap but before its local durable write enters the scope mutex. The callback
+ * runs only after [commitIfCurrent] has rejected the write, so callers can
+ * explain the no-write outcome without changing commit or idempotency order.
+ */
+internal suspend fun CacheIsolationCoordinator.commitIfCurrentOrNotifyStale(
+    lease: CacheScopeLease,
+    onStale: () -> Unit,
+    write: suspend () -> Unit,
+): Boolean {
+    val committed = commitIfCurrent(lease, write)
+    if (!committed) onStale()
+    return committed
 }

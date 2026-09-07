@@ -1,6 +1,11 @@
-# D Company ERP 3.1.14 (code 25) release candidate
+# D Company ERP 3.1.14 (code 25) rejected candidate history
 
-Code 25 is the current unreleased source candidate. Its planned coordinated
+Code 25 was rejected after its physical-tablet audit exposed release-blocking
+issues. Do not build, stage, activate, advertise, or install it. Its tag and any
+artifact remain immutable evidence; the corrective candidate is
+[Code 26 / 3.1.15](CODE26_RELEASE_CANDIDATE.md).
+
+Its planned coordinated
 release identity is tag `v3.1.14`, Android `versionName=3.1.14`, Android
 `versionCode=25`, and database migration head `0071`. The compatibility floor
 and fail-safe latest-code fallback remain `8`; production defaults do not
@@ -94,8 +99,7 @@ signed upgrade, production deployment, target-Redmi result, or owner activation.
 Protected CI must reproduce the required checks for the exact release commit and
 the signed artifacts must be verified independently before any update is offered.
 
-The candidate remains blocked from release until all of these exact-source gates
-are green:
+The candidate was rejected before these historical gates completed:
 
 1. Fresh migrated database plus the full backend suite and guarded disposable
    end-to-end workflow, including clean-reset evidence.
@@ -113,7 +117,7 @@ are green:
    and authenticated partner-Redmi acceptance with Gaming, POS, shift, finance,
    sync, offline recovery, alarm, performance, and pending-work reconciliation.
 
-## Required delivery sequence
+## Historical rejected delivery sequence — do not execute
 
 1. Freeze and review one exact commit; verify all coordinated metadata with
    `python3 scripts/verify_android_release_version.py --tag v3.1.14`.

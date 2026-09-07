@@ -107,6 +107,11 @@ jobs:
           --health-retries 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # The coordinated root suite contains the Code 25 regression freeze;
+          # retain its immutable baseline instead of allowing a shallow clone
+          # to bypass the release gate.
+          fetch-depth: 0
       - name: Validate safe Codex task routing
         run: python3 scripts/validate_codex_routing.py
       - name: Verify coordinated release tag and versions

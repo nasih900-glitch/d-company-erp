@@ -68,6 +68,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import cloud.dcompany.erp.core.money.normalizeRupeeInput
 import androidx.compose.ui.window.DialogProperties
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Motion
@@ -396,29 +397,20 @@ fun DecimalField(
     label: String,
     modifier: Modifier = Modifier,
     allowNegative: Boolean = false,
+    enabled: Boolean = true,
 ) {
     Field(
         label = label,
         value = value,
         modifier = modifier,
-        onChange = { onValueChange(filterDecimal(it, allowNegative)) },
+        onChange = { raw ->
+            normalizeRupeeInput(raw, allowNegative)?.let(onValueChange)
+        },
+        enabled = enabled,
         keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
             keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal,
         ),
     )
-}
-
-private fun filterDecimal(raw: String, allowNegative: Boolean): String {
-    val sb = StringBuilder()
-    var dotSeen = false
-    raw.forEachIndexed { index, c ->
-        when {
-            c.isDigit() -> sb.append(c)
-            c == '.' && !dotSeen -> { dotSeen = true; sb.append(c) }
-            c == '-' && allowNegative && index == 0 -> sb.append(c)
-        }
-    }
-    return sb.toString()
 }
 
 // ============================================================================
