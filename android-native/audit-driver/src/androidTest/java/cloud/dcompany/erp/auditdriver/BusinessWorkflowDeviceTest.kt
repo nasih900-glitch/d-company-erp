@@ -172,6 +172,7 @@ class BusinessWorkflowDeviceTest {
                 val target = find(step, timeout)
                 target.scroll(Direction.valueOf(step.getString("direction").uppercase()),
                     step.optDouble("amount", 0.75).toFloat().coerceIn(0.1f, 2f))
+                step.optJSONObject("then")?.let { waitFor(it, timeout) }
             }
             "offline" -> {
                 device.executeShellCommand("cmd connectivity airplane-mode enable")

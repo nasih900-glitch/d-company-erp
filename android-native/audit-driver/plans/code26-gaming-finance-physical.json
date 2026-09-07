@@ -317,14 +317,21 @@
       "text": "ADD · ₹50.00",
       "timeoutMs": 60000,
       "then": {
-        "text": "Audit Cola ×1"
+        "text": "Audit Cola ×1 saved. It will join this session's single POS bill after Sync."
       }
     },
     {
       "name": "Standard Single: Cola server receipt confirmed",
-      "action": "wait",
-      "text": "SAVED",
-      "timeoutMs": 60000
+      "action": "scroll",
+      "scrollable": true,
+      "index": 2,
+      "direction": "DOWN",
+      "amount": 0.9,
+      "timeoutMs": 60000,
+      "then": {
+        "description": "Status: SAVED",
+        "index": 0
+      }
     },
     {
       "name": "Standard Single: reopen add-on picker",
@@ -351,14 +358,21 @@
       "text": "ADD · ₹30.00",
       "timeoutMs": 60000,
       "then": {
-        "text": "Audit Crisps ×1"
+        "text": "Audit Crisps ×1 saved. It will join this session's single POS bill after Sync."
       }
     },
     {
       "name": "Standard Single: Crisps server receipt confirmed",
-      "action": "wait",
-      "text": "SAVED",
-      "timeoutMs": 60000
+      "action": "scroll",
+      "scrollable": true,
+      "index": 2,
+      "direction": "DOWN",
+      "amount": 0.9,
+      "timeoutMs": 60000,
+      "then": {
+        "description": "Status: SAVED",
+        "index": 1
+      }
     },
     {
       "name": "Standard Single: request Crisps void",

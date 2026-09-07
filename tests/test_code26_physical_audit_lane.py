@@ -19,6 +19,10 @@ PLAN_PATH = (
 FIXTURE_PATH = ROOT / "backend/scripts/physical_audit_fixture.py"
 RUNNER_PATH = ROOT / "scripts/run_code26_physical_business_audit.sh"
 ANALYZER_PATH = ROOT / "scripts/analyze_code26_physical_evidence.py"
+DRIVER_PATH = ROOT / (
+    "android-native/audit-driver/src/androidTest/java/"
+    "cloud/dcompany/erp/auditdriver/BusinessWorkflowDeviceTest.kt"
+)
 
 _SPEC = importlib.util.spec_from_file_location("code26_evidence_analyzer", ANALYZER_PATH)
 assert _SPEC and _SPEC.loader
@@ -303,6 +307,37 @@ def test_physical_plan_covers_recovery_finance_receipts_and_cleanup() -> None:
         "counted ₹780.00 · balanced",
     ):
         assert evidence in rendered
+
+
+def test_addon_flow_proves_immediate_feedback_and_durable_detail_rows() -> None:
+    steps = {step["name"]: step for step in _steps()}
+
+    for index, item in enumerate(("Audit Cola", "Audit Crisps")):
+        add = steps[f"Standard Single: add {item}"]
+        assert add["then"] == {
+            "text": (
+                f"{item} ×1 saved. It will join this session's single POS bill "
+                "after Sync."
+            )
+        }
+
+        receipt = steps[f"Standard Single: {item.removeprefix('Audit ')} server receipt confirmed"]
+        assert receipt == {
+            "name": receipt["name"],
+            "action": "scroll",
+            "scrollable": True,
+            "index": 2,
+            "direction": "DOWN",
+            "amount": 0.9,
+            "timeoutMs": 60_000,
+            "then": {"description": "Status: SAVED", "index": index},
+        }
+
+    driver = DRIVER_PATH.read_text(encoding="utf-8")
+    scroll_branch = driver.split('"scroll" -> {', maxsplit=1)[1].split(
+        '"offline" -> {', maxsplit=1
+    )[0]
+    assert 'step.optJSONObject("then")?.let { waitFor(it, timeout) }' in scroll_branch
 
 
 def test_fixture_and_runner_are_fail_closed_and_disposable() -> None:
