@@ -1532,53 +1532,48 @@ private fun GamingCommandWorkspace(
                         icon = Icons.Filled.Visibility,
                     )
                 } else {
-                    LazyColumn(
+                    GamingStationCard(
+                        station = selectedStation,
+                        session = selectedSession,
+                        packageExtensionAction = selectedSession?.let {
+                            state.packageExtensionFor(it.id)
+                        },
+                        sessionAddons = selectedSession?.let(state::addonsFor).orEmpty(),
+                        wallClock = wallClock,
+                        actionInProgress = state.busyStationId != null,
+                        busyHere = state.busyStationId == selectedStation.id,
+                        focused = selectedStation.id == focusStationId,
+                        canWrite = access.canManageSessions,
+                        canReconcileLegacy = access.canReconcileLegacySessions,
+                        activeShiftId = state.activeShiftId,
+                        activeShiftServerConfirmed = state.activeShiftServerConfirmed,
+                        activeShiftAllowsQueuedStart = state.activeShiftAllowsQueuedStart,
+                        startTerminalBlockMessage = startTerminalBlockMessage,
+                        online = state.online,
+                        packages = state.packages,
+                        hasTransferTarget = state.stations.any { candidate ->
+                            candidate.id != selectedStation.id &&
+                                candidate.type == selectedStation.type &&
+                                candidate.isActive && state.activeFor(candidate.id) == null
+                        },
+                        onStart = { onStart(selectedStation) },
+                        onStop = { onStop(selectedStation, it) },
+                        onSend = onSend,
+                        onCancelUnbilled = onCancelUnbilled,
+                        onExtendTimer = onExtendTimer,
+                        onExtendPackage = onExtendPackage,
+                        onTransfer = onTransfer,
+                        onPauseResume = onPauseResume,
+                        onReconcile = onReconcile,
+                        onRepairBilling = onRepairBilling,
+                        onResolveLegacyStart = onResolveLegacyStart,
+                        onDiscardPackageExtension = onDiscardPackageExtension,
+                        onAddItems = onAddItems,
+                        onVoidAddon = onVoidAddon,
+                        onReviewRejectedAddon = onReviewRejectedAddon,
+                        pinActiveSessionActions = true,
                         modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(bottom = Spacing.xs),
-                    ) {
-                        item(key = selectedStation.id) {
-                            GamingStationCard(
-                                station = selectedStation,
-                                session = selectedSession,
-                                packageExtensionAction = selectedSession?.let {
-                                    state.packageExtensionFor(it.id)
-                                },
-                                sessionAddons = selectedSession?.let(state::addonsFor).orEmpty(),
-                                wallClock = wallClock,
-                                actionInProgress = state.busyStationId != null,
-                                busyHere = state.busyStationId == selectedStation.id,
-                                focused = selectedStation.id == focusStationId,
-                                canWrite = access.canManageSessions,
-                                canReconcileLegacy = access.canReconcileLegacySessions,
-                                activeShiftId = state.activeShiftId,
-                                activeShiftServerConfirmed = state.activeShiftServerConfirmed,
-                                activeShiftAllowsQueuedStart = state.activeShiftAllowsQueuedStart,
-                                startTerminalBlockMessage = startTerminalBlockMessage,
-                                online = state.online,
-                                packages = state.packages,
-                                hasTransferTarget = state.stations.any { candidate ->
-                                    candidate.id != selectedStation.id &&
-                                        candidate.type == selectedStation.type &&
-                                        candidate.isActive && state.activeFor(candidate.id) == null
-                                },
-                                onStart = { onStart(selectedStation) },
-                                onStop = { onStop(selectedStation, it) },
-                                onSend = onSend,
-                                onCancelUnbilled = onCancelUnbilled,
-                                onExtendTimer = onExtendTimer,
-                                onExtendPackage = onExtendPackage,
-                                onTransfer = onTransfer,
-                                onPauseResume = onPauseResume,
-                                onReconcile = onReconcile,
-                                onRepairBilling = onRepairBilling,
-                                onResolveLegacyStart = onResolveLegacyStart,
-                                onDiscardPackageExtension = onDiscardPackageExtension,
-                                onAddItems = onAddItems,
-                                onVoidAddon = onVoidAddon,
-                                onReviewRejectedAddon = onReviewRejectedAddon,
-                            )
-                        }
-                    }
+                    )
                 }
             }
         }
@@ -2156,6 +2151,9 @@ internal fun GamingStationCard(
     onVoidAddon: (GameSession, GamingSessionAddonUi) -> Unit = { _, _ -> },
     onReviewRejectedAddon: (String) -> Unit = {},
     onPauseResume: (GameSession) -> Unit = {},
+    showActiveSessionActions: Boolean = true,
+    pinActiveSessionActions: Boolean = false,
+    modifier: Modifier = Modifier,
 ) {
     // Only operational play ticks. Paused clocks use the server's captured
     // pause instant, including after navigation or a process restart.
@@ -2223,6 +2221,126 @@ internal fun GamingStationCard(
             null
         }
 
+    if (pinActiveSessionActions) {
+        val hasPinnedActions = packageExtensionAction == null && session != null &&
+            presentation.state in setOf(
+                StationVisualState.Active,
+                StationVisualState.Overtime,
+                StationVisualState.Paused,
+                StationVisualState.StopFailed,
+            )
+        if (hasPinnedActions) {
+            Column(modifier.fillMaxSize()) {
+                LazyColumn(
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    contentPadding = PaddingValues(bottom = Spacing.xs),
+                ) {
+                    item(key = session.id) {
+                        GamingStationCard(
+                            station = station,
+                            session = session,
+                            packageExtensionAction = packageExtensionAction,
+                            sessionAddons = sessionAddons,
+                            wallClock = wallClock,
+                            actionInProgress = actionInProgress,
+                            busyHere = busyHere,
+                            focused = focused,
+                            canWrite = canWrite,
+                            canReconcileLegacy = canReconcileLegacy,
+                            activeShiftId = activeShiftId,
+                            activeShiftServerConfirmed = activeShiftServerConfirmed,
+                            activeShiftAllowsQueuedStart = activeShiftAllowsQueuedStart,
+                            startTerminalBlockMessage = startTerminalBlockMessage,
+                            online = online,
+                            packages = packages,
+                            hasTransferTarget = hasTransferTarget,
+                            onStart = onStart,
+                            onStop = onStop,
+                            onSend = onSend,
+                            onCancelUnbilled = onCancelUnbilled,
+                            onExtendTimer = onExtendTimer,
+                            onExtendPackage = onExtendPackage,
+                            onTransfer = onTransfer,
+                            onReconcile = onReconcile,
+                            onRepairBilling = onRepairBilling,
+                            onResolveLegacyStart = onResolveLegacyStart,
+                            onDiscardPackageExtension = onDiscardPackageExtension,
+                            onAddItems = onAddItems,
+                            onVoidAddon = onVoidAddon,
+                            onReviewRejectedAddon = onReviewRejectedAddon,
+                            onPauseResume = onPauseResume,
+                            showActiveSessionActions = false,
+                        )
+                    }
+                }
+                HorizontalDivider(color = Brand.BorderSubtle)
+                GamingActiveSessionActions(
+                    session = session,
+                    presentationState = presentation.state,
+                    actionsEnabled = actionsEnabled,
+                    ownsSession = ownsSession,
+                    online = online,
+                    alreadySettledAtPos = alreadySettledAtPos,
+                    packageBillingSnapshotMissing = packageBillingSnapshotMissing,
+                    matchingExtensions = matchingExtensions,
+                    hasTransferTarget = hasTransferTarget,
+                    canStopSession = canStopSession,
+                    busyHere = busyHere,
+                    onAddItems = onAddItems,
+                    onExtendTimer = onExtendTimer,
+                    onExtendPackage = onExtendPackage,
+                    onTransfer = onTransfer,
+                    onPauseResume = onPauseResume,
+                    onStop = onStop,
+                    modifier = Modifier.fillMaxWidth().padding(top = Spacing.sm),
+                )
+            }
+        } else {
+            LazyColumn(
+                modifier = modifier.fillMaxSize(),
+                contentPadding = PaddingValues(bottom = Spacing.xs),
+            ) {
+                item(key = station.id) {
+                    GamingStationCard(
+                        station = station,
+                        session = session,
+                        packageExtensionAction = packageExtensionAction,
+                        sessionAddons = sessionAddons,
+                        wallClock = wallClock,
+                        actionInProgress = actionInProgress,
+                        busyHere = busyHere,
+                        focused = focused,
+                        canWrite = canWrite,
+                        canReconcileLegacy = canReconcileLegacy,
+                        activeShiftId = activeShiftId,
+                        activeShiftServerConfirmed = activeShiftServerConfirmed,
+                        activeShiftAllowsQueuedStart = activeShiftAllowsQueuedStart,
+                        startTerminalBlockMessage = startTerminalBlockMessage,
+                        online = online,
+                        packages = packages,
+                        hasTransferTarget = hasTransferTarget,
+                        onStart = onStart,
+                        onStop = onStop,
+                        onSend = onSend,
+                        onCancelUnbilled = onCancelUnbilled,
+                        onExtendTimer = onExtendTimer,
+                        onExtendPackage = onExtendPackage,
+                        onTransfer = onTransfer,
+                        onReconcile = onReconcile,
+                        onRepairBilling = onRepairBilling,
+                        onResolveLegacyStart = onResolveLegacyStart,
+                        onDiscardPackageExtension = onDiscardPackageExtension,
+                        onAddItems = onAddItems,
+                        onVoidAddon = onVoidAddon,
+                        onReviewRejectedAddon = onReviewRejectedAddon,
+                        onPauseResume = onPauseResume,
+                    )
+                }
+            }
+        }
+        return
+    }
+
     val packageSelection = session?.let(::gamingPackageSelectionLabel)
     val pricingDescription = when {
         session?.isPackageBilling() == true -> buildString {
@@ -2239,7 +2357,7 @@ internal fun GamingStationCard(
     }
 
     Column(
-        Modifier.fillMaxWidth().heightIn(min = minimumCardHeight)
+        modifier.fillMaxWidth().heightIn(min = minimumCardHeight)
             // Operational state belongs in the badge, icon and copy. Keeping
             // the complete card neutral prevents payment/warning states from
             // turning the board into a field of competing colour blocks.
@@ -2365,101 +2483,48 @@ internal fun GamingStationCard(
             StationVisualState.Overtime,
             StationVisualState.Paused,
             StationVisualState.StopFailed,
-            -> Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                if (alreadySettledAtPos) {
-                    Text(
-                        "This session is already linked to a paid POS order. Extra paid time is locked; Stop still records the final play time without creating another bill.",
-                        color = Brand.Warning,
-                        style = MaterialTheme.typography.labelSmall,
-                    )
-                } else if (packageBillingSnapshotMissing) {
-                    Text(
-                        "Locked package timer or total is unavailable. Refresh Gaming; if it remains missing, ask the protected owner to review billing before extending.",
-                        color = Brand.Warning,
-                        style = MaterialTheme.typography.labelSmall,
-                    )
-                } else if (matchingPackageExtensionUnavailable) {
-                    Text(
-                        "No active extension matches this session's original package variant. Refresh Gaming or ask a manager to check the package catalogue.",
-                        color = Brand.Warning,
-                        style = MaterialTheme.typography.labelSmall,
-                    )
-                }
-                ErpButton(
-                    text = "Add drinks & snacks",
-                    onClick = { session?.let(onAddItems) },
-                    enabled = session != null && actionsEnabled && ownsSession &&
-                        session.orderId == null && session.status in setOf("active", "paused"),
-                    intent = ActionIntent.Secondary,
-                    leadingIcon = Icons.Filled.RestaurantMenu,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                BoxWithConstraints(Modifier.fillMaxWidth()) {
-                    // Three controls share one row. Narrow grid cards keep
-                    // complete words instead of spending their text width on
-                    // decorative icons; wide command panels retain the icons.
-                    // The 48dp targets and full-width Stop below stay unchanged.
-                    val compactActions = maxWidth < 360.dp
-                    val actionSpacing = if (compactActions) Spacing.xs else Spacing.sm
-                    Row(horizontalArrangement = Arrangement.spacedBy(actionSpacing)) {
-                        ErpButton(
-                            text = if (compactActions || session?.isPackageBilling() == true) "Extend" else "+30 min",
-                            onClick = {
-                                session?.let {
-                                    if (it.isPackageBilling()) onExtendPackage(it, matchingExtensions)
-                                    else onExtendTimer(it)
-                                }
-                            },
-                            enabled = session != null && actionsEnabled && ownsSession &&
-                                !alreadySettledAtPos &&
-                                !packageBillingSnapshotMissing &&
-                                (!session.isPackageBilling() || matchingExtensions.isNotEmpty()),
-                            intent = ActionIntent.Secondary,
-                            leadingIcon = if (compactActions) null else Icons.Filled.Add,
-                            contentPadding = PaddingValues(horizontal = actionSpacing),
-                            modifier = Modifier.weight(1f),
+            -> if (session != null) {
+                Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                    if (alreadySettledAtPos) {
+                        Text(
+                            "This session is already linked to a paid POS order. Extra paid time is locked; Stop still records the final play time without creating another bill.",
+                            color = Brand.Warning,
+                            style = MaterialTheme.typography.labelSmall,
                         )
-                        ErpButton(
-                            text = "Transfer",
-                            onClick = { session?.let(onTransfer) },
-                            enabled = actionsEnabled && ownsSession && hasTransferTarget,
-                            intent = ActionIntent.Secondary,
-                            leadingIcon = if (compactActions) null else Icons.Filled.SwapHoriz,
-                            contentPadding = PaddingValues(horizontal = actionSpacing),
-                            modifier = Modifier.weight(1f),
+                    } else if (packageBillingSnapshotMissing) {
+                        Text(
+                            "Locked package timer or total is unavailable. Refresh Gaming; if it remains missing, ask the protected owner to review billing before extending.",
+                            color = Brand.Warning,
+                            style = MaterialTheme.typography.labelSmall,
                         )
-                        ErpButton(
-                            text = if (session?.status == "paused") "Resume" else "Pause",
-                            onClick = { session?.let(onPauseResume) },
-                            enabled = session != null && actionsEnabled && ownsSession && online &&
-                                pauseActionError(session, session.status != "paused", "Operator pause") == null,
-                            intent = ActionIntent.Secondary,
-                            leadingIcon = if (compactActions) null
-                            else if (session?.status == "paused") Icons.Filled.PlayArrow else Icons.Filled.PauseCircle,
-                            contentPadding = PaddingValues(horizontal = actionSpacing),
-                            modifier = Modifier.weight(1f),
+                    } else if (matchingPackageExtensionUnavailable) {
+                        Text(
+                            "No active extension matches this session's original package variant. Refresh Gaming or ask a manager to check the package catalogue.",
+                            color = Brand.Warning,
+                            style = MaterialTheme.typography.labelSmall,
                         )
                     }
-                }
-                ErpButton(
-                    text = if (presentation.state == StationVisualState.StopFailed) "Retry stop" else "Stop & calculate",
-                    onClick = { session?.let(onStop) },
-                    enabled = actionsEnabled && canStopSession,
-                    busy = busyHere,
-                    intent = ActionIntent.Destructive,
-                    leadingIcon = Icons.Filled.StopCircle,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                if (!online || session?.pauseVersion == null ||
-                    (session?.let { it.status != "paused" && !it.pauseAvailable } == true)
-                ) {
-                    Text(
-                        if (!online) "Reconnect to pause or resume safely across devices."
-                        else if (session?.pauseVersion == null) "Refresh Gaming after the server update to enable pause controls."
-                        else "Pause is not enabled yet. The owner must update all tablets before enabling it.",
-                        color = Brand.ForegroundMuted,
-                        style = MaterialTheme.typography.labelSmall,
-                    )
+                    if (showActiveSessionActions) {
+                        GamingActiveSessionActions(
+                            session = session,
+                            presentationState = presentation.state,
+                            actionsEnabled = actionsEnabled,
+                            ownsSession = ownsSession,
+                            online = online,
+                            alreadySettledAtPos = alreadySettledAtPos,
+                            packageBillingSnapshotMissing = packageBillingSnapshotMissing,
+                            matchingExtensions = matchingExtensions,
+                            hasTransferTarget = hasTransferTarget,
+                            canStopSession = canStopSession,
+                            busyHere = busyHere,
+                            onAddItems = onAddItems,
+                            onExtendTimer = onExtendTimer,
+                            onExtendPackage = onExtendPackage,
+                            onTransfer = onTransfer,
+                            onPauseResume = onPauseResume,
+                            onStop = onStop,
+                        )
+                    }
                 }
             }
 
@@ -2602,6 +2667,105 @@ internal fun GamingStationCard(
             StationVisualState.Disabled,
             StationVisualState.Unavailable,
             -> Unit
+        }
+
+    }
+}
+
+@Composable
+private fun GamingActiveSessionActions(
+    session: GameSession,
+    presentationState: StationVisualState,
+    actionsEnabled: Boolean,
+    ownsSession: Boolean,
+    online: Boolean,
+    alreadySettledAtPos: Boolean,
+    packageBillingSnapshotMissing: Boolean,
+    matchingExtensions: List<GamingPackage>,
+    hasTransferTarget: Boolean,
+    canStopSession: Boolean,
+    busyHere: Boolean,
+    onAddItems: (GameSession) -> Unit,
+    onExtendTimer: (GameSession) -> Unit,
+    onExtendPackage: (GameSession, List<GamingPackage>) -> Unit,
+    onTransfer: (GameSession) -> Unit,
+    onPauseResume: (GameSession) -> Unit,
+    onStop: (GameSession) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+        ErpButton(
+            text = "Add drinks & snacks",
+            onClick = { onAddItems(session) },
+            enabled = actionsEnabled && ownsSession &&
+                session.orderId == null && session.status in setOf("active", "paused"),
+            intent = ActionIntent.Secondary,
+            leadingIcon = Icons.Filled.RestaurantMenu,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            // Three controls share one row. Narrow grid cards keep complete
+            // words instead of spending their text width on decorative icons;
+            // wide command panels retain the icons.
+            val compactActions = maxWidth < 360.dp
+            val actionSpacing = if (compactActions) Spacing.xs else Spacing.sm
+            Row(horizontalArrangement = Arrangement.spacedBy(actionSpacing)) {
+                ErpButton(
+                    text = if (compactActions || session.isPackageBilling()) "Extend" else "+30 min",
+                    onClick = {
+                        if (session.isPackageBilling()) onExtendPackage(session, matchingExtensions)
+                        else onExtendTimer(session)
+                    },
+                    enabled = actionsEnabled && ownsSession &&
+                        !alreadySettledAtPos &&
+                        !packageBillingSnapshotMissing &&
+                        (!session.isPackageBilling() || matchingExtensions.isNotEmpty()),
+                    intent = ActionIntent.Secondary,
+                    leadingIcon = if (compactActions) null else Icons.Filled.Add,
+                    contentPadding = PaddingValues(horizontal = actionSpacing),
+                    modifier = Modifier.weight(1f),
+                )
+                ErpButton(
+                    text = "Transfer",
+                    onClick = { onTransfer(session) },
+                    enabled = actionsEnabled && ownsSession && hasTransferTarget,
+                    intent = ActionIntent.Secondary,
+                    leadingIcon = if (compactActions) null else Icons.Filled.SwapHoriz,
+                    contentPadding = PaddingValues(horizontal = actionSpacing),
+                    modifier = Modifier.weight(1f),
+                )
+                ErpButton(
+                    text = if (session.status == "paused") "Resume" else "Pause",
+                    onClick = { onPauseResume(session) },
+                    enabled = actionsEnabled && ownsSession && online &&
+                        pauseActionError(session, session.status != "paused", "Operator pause") == null,
+                    intent = ActionIntent.Secondary,
+                    leadingIcon = if (compactActions) null
+                    else if (session.status == "paused") Icons.Filled.PlayArrow else Icons.Filled.PauseCircle,
+                    contentPadding = PaddingValues(horizontal = actionSpacing),
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+        ErpButton(
+            text = if (presentationState == StationVisualState.StopFailed) "Retry stop" else "Stop & calculate",
+            onClick = { onStop(session) },
+            enabled = actionsEnabled && canStopSession,
+            busy = busyHere,
+            intent = ActionIntent.Destructive,
+            leadingIcon = Icons.Filled.StopCircle,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        if (!online || session.pauseVersion == null ||
+            (session.status != "paused" && !session.pauseAvailable)
+        ) {
+            Text(
+                if (!online) "Reconnect to pause or resume safely across devices."
+                else if (session.pauseVersion == null) "Refresh Gaming after the server update to enable pause controls."
+                else "Pause is not enabled yet. The owner must update all tablets before enabling it.",
+                color = Brand.ForegroundMuted,
+                style = MaterialTheme.typography.labelSmall,
+            )
         }
     }
 }
