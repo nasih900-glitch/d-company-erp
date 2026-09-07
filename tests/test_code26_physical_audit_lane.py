@@ -329,6 +329,8 @@ def test_addon_flow_proves_immediate_feedback_and_durable_detail_rows() -> None:
             "index": 2,
             "direction": "DOWN",
             "amount": 0.9,
+            "speedPxPerSecond": 500,
+            "repeats": 3,
             "timeoutMs": 60_000,
             "then": {"description": "Status: SAVED", "index": index},
         }
@@ -337,7 +339,27 @@ def test_addon_flow_proves_immediate_feedback_and_durable_detail_rows() -> None:
     scroll_branch = driver.split('"scroll" -> {', maxsplit=1)[1].split(
         '"offline" -> {', maxsplit=1
     )[0]
-    assert 'step.optJSONObject("then")?.let { waitFor(it, timeout) }' in scroll_branch
+    for contract in (
+        'step.optInt("speedPxPerSecond", 1_500)',
+        'step.optInt("repeats", 1).coerceIn(1, 6)',
+        "val target = find(step, if (attempt == 0) timeout else minOf(timeout, 5_000L))",
+        "if (hasMatchingVisibleControl(expected))",
+        'expected?.let { waitFor(it, timeout) }',
+    ):
+        assert contract in scroll_branch
+
+    close_reveal = steps["Reveal close-shift action"]
+    assert close_reveal == {
+        "name": "Reveal close-shift action",
+        "action": "scroll",
+        "scrollable": True,
+        "index": 1,
+        "direction": "DOWN",
+        "amount": 0.9,
+        "speedPxPerSecond": 500,
+        "repeats": 3,
+        "then": {"text": "Close shift"},
+    }
 
 
 def test_fixture_and_runner_are_fail_closed_and_disposable() -> None:

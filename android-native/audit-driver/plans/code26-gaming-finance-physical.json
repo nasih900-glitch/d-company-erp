@@ -327,6 +327,8 @@
       "index": 2,
       "direction": "DOWN",
       "amount": 0.9,
+      "speedPxPerSecond": 500,
+      "repeats": 3,
       "timeoutMs": 60000,
       "then": {
         "description": "Status: SAVED",
@@ -368,6 +370,8 @@
       "index": 2,
       "direction": "DOWN",
       "amount": 0.9,
+      "speedPxPerSecond": 500,
+      "repeats": 3,
       "timeoutMs": 60000,
       "then": {
         "description": "Status: SAVED",
@@ -3059,7 +3063,12 @@
       "scrollable": true,
       "index": 1,
       "direction": "DOWN",
-      "amount": 0.9
+      "amount": 0.9,
+      "speedPxPerSecond": 500,
+      "repeats": 3,
+      "then": {
+        "text": "Close shift"
+      }
     },
     {
       "name": "Request shift close",

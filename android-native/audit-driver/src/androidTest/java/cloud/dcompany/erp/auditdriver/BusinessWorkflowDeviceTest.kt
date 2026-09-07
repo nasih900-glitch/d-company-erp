@@ -169,10 +169,28 @@ class BusinessWorkflowDeviceTest {
             "back" -> device.pressBack()
             "home" -> device.pressHome()
             "scroll" -> {
-                val target = find(step, timeout)
-                target.scroll(Direction.valueOf(step.getString("direction").uppercase()),
-                    step.optDouble("amount", 0.75).toFloat().coerceIn(0.1f, 2f))
-                step.optJSONObject("then")?.let { waitFor(it, timeout) }
+                val direction = Direction.valueOf(step.getString("direction").uppercase())
+                val amount = step.optDouble("amount", 0.75).toFloat().coerceIn(0.1f, 2f)
+                val speed = step.optInt("speedPxPerSecond", 1_500)
+                    .coerceIn(200, 5_000)
+                val repeats = step.optInt("repeats", 1).coerceIn(1, 6)
+                val expected = step.optJSONObject("then")
+                for (attempt in 0 until repeats) {
+                    // Re-read the nested Compose LazyColumn before every
+                    // gesture. A UiObject2 retained across a recomposition can
+                    // point at the previous accessibility node and make a real
+                    // swipe appear to do nothing on physical tablets.
+                    val target = find(step, if (attempt == 0) timeout else minOf(timeout, 5_000L))
+                    target.scroll(direction, amount, speed)
+                    if (expected != null) {
+                        SystemClock.sleep(250L)
+                        if (hasMatchingVisibleControl(expected)) break
+                    }
+                }
+                // The plan remains fail-closed: exhausting every bounded,
+                // human-speed gesture must still leave the expected receipt or
+                // control visible for the normal full-timeout assertion.
+                expected?.let { waitFor(it, timeout) }
             }
             "offline" -> {
                 device.executeShellCommand("cmd connectivity airplane-mode enable")
@@ -665,6 +683,17 @@ class BusinessWorkflowDeviceTest {
 
     private fun waitFor(spec: JSONObject, timeout: Long) {
         find(spec, timeout)
+    }
+
+    private fun hasMatchingVisibleControl(spec: JSONObject): Boolean {
+        val index = spec.optInt("index", 0)
+        require(index >= 0) { "Control index must not be negative" }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            check(InstrumentationRegistry.getInstrumentation().uiAutomation.clearCache()) {
+                "Could not invalidate the audit accessibility cache"
+            }
+        }
+        return device.findObjects(selector(spec)).size > index
     }
 
     private fun capture(label: String) {
