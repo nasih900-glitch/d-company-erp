@@ -214,7 +214,7 @@ def test_firebase_result_download_is_scoped_verified_and_fail_closed() -> None:
     assert 'firebase-download.log" 2>&1 || true' not in runner
 
 
-def test_physical_driver_polls_real_battery_saver_transitions() -> None:
+def test_physical_driver_simulates_unplugged_battery_and_restores_it() -> None:
     driver = (
         ROOT
         / "android-native/audit-driver/src/androidTest/java/cloud/dcompany/erp/"
@@ -222,17 +222,88 @@ def test_physical_driver_polls_real_battery_saver_transitions() -> None:
     ).read_text(encoding="utf-8")
 
     assert driver.count("waitUntil(timeout) { powerSaveModeEnabled() }") == 1
-    assert driver.count("waitUntil(timeout) { !powerSaveModeEnabled() }") == 1
+    assert driver.count("waitUntil(timeout) { !powerSaveModeEnabled() }") == 2
     assert 'private fun powerSaveModeEnabled(): Boolean' in driver
+    for contract in (
+        "import android.os.PowerManager",
+        'File(output, "battery-original.txt")',
+        'File(output, "power-original.txt")',
+        'checkedShell("battery-unplug.txt", "dumpsys battery unplug")',
+        'File(output, "battery-simulated-unplugged.txt")',
+        'File(output, "power-simulated-unplugged.txt")',
+        'File(output, "battery-saver-enabled-state.txt")',
+        'File(output, "battery-saver-disabled-state.txt")',
+        'capturedCleanupShell("battery-reset.txt", "dumpsys battery reset")',
+        'safeWriteEvidence("battery-restored.txt", restoredBatteryState)',
+        'safeWriteEvidence("power-restored.txt", restoredPowerState)',
+        'safeWriteEvidence("battery-constraints.json", batteryEvidence.toString(2))',
+        '"original_battery_powered"',
+        'originalBatteryPowered != null && originalPowerManagerPowered != null',
+        'originalBatteryPowered == originalPowerManagerPowered',
+        '!batteryEvidence.getBoolean("original_simulation_active")',
+        'evidence.put("battery_unplug_command_accepted", true)',
+        'evidence.put("battery_saver_enable_command_accepted", true)',
+        'evidence.put("battery_saver_disable_command_accepted", true)',
+        'batterySimulationActive(battery) && batteryPoweredState(battery) == false',
+        'batteryPoweredState(battery) == originalBatteryPowered',
+        'powerManagerIsPowered(power) == originalPowerManagerPowered',
+        'powerManagerIsPowered(power) == false',
+        'evidence.getBoolean("battery_restored_original_power_state")',
+        'evidence.getBoolean("battery_simulation_cleared")',
+        'evidence.getBoolean("battery_cleanup_evidence_written")',
+        'private fun batteryPoweredState(state: String): Boolean?',
+        'private fun batterySimulationActive(state: String): Boolean',
+        'private fun powerManagerIsPowered(state: String): Boolean?',
+        '.getSystemService(PowerManager::class.java)',
+        '.isPowerSaveMode',
+        'private fun safeWriteEvidence(filename: String, content: String): Boolean',
+        'runCatching { File(output, filename).writeText(content) }.isSuccess',
+    ):
+        assert contract in driver
     battery_block = driver.split('evidence.put("battery_saver_enabled", false)', 1)[1]
     battery_block = battery_block.split('val alarmAfter', 1)[0]
     assert "try {" in battery_block
     assert "} finally {" in battery_block
+    assert battery_block.index("dumpsys battery unplug") < battery_block.index(
+        "cmd power set-mode 1"
+    )
     assert battery_block.index("cmd power set-mode 1") < battery_block.index("} finally {")
-    assert battery_block.index("} finally {") < battery_block.index("cmd power set-mode 0")
+    assert battery_block.index("} finally {") < battery_block.index(
+        "battery-saver-final-disable.txt"
+    )
+    assert battery_block.index("battery-saver-final-disable.txt") < battery_block.index(
+        "battery-reset.txt"
+    )
+    assert driver.count('device.executeShellCommand("dumpsys battery reset")') == 1
+    assert driver.count('"dumpsys battery reset"') == 2
     assert driver.count(
-        'device.executeShellCommand("settings get global low_power").trim() == "1"'
+        'device.executeShellCommand("settings get global low_power").trim()'
     ) == 1
+    power_save_method = driver.split(
+        "private fun powerSaveModeEnabled(): Boolean =", 1
+    )[1].split("private fun alarmRegistered", 1)[0]
+    assert "PowerManager::class.java" in power_save_method
+    assert "settings get global low_power" not in power_save_method
+    assert 'getBoolean("original_powered")' not in battery_block
+    assert 'getBoolean("battery_restored_powered")' not in battery_block
+
+    # Cleanup commands are independent: a failure in an earlier restore must not
+    # skip the final battery reset, notification restore or credential removal.
+    outer_cleanup = driver.split("// Restore the disposable device", 1)[1]
+    outer_cleanup = outer_cleanup.split("private fun requireSafeInputPath", 1)[0]
+    for command in (
+        "cmd connectivity airplane-mode disable",
+        "svc wifi enable",
+        "cmd deviceidle unforce",
+        "cmd power set-mode 0",
+        "dumpsys battery reset",
+        "pm grant $appPackage android.permission.POST_NOTIFICATIONS",
+        "wm dismiss-keyguard",
+        "device.unfreezeRotation()",
+        'validatedCredentialPath?.let { device.executeShellCommand("rm $it") }',
+    ):
+        assert command in outer_cleanup
+    assert outer_cleanup.count("runCatching") >= 8
 
 
 def _safe_label(label: str) -> str:

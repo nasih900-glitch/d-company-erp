@@ -1,6 +1,7 @@
 package cloud.dcompany.erp.auditdriver
 
 import android.os.Build
+import android.os.PowerManager
 import android.os.SystemClock
 import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -109,18 +110,21 @@ class BusinessWorkflowDeviceTest {
             }
         } finally {
             // Restore the disposable device even if an offline assertion fails.
-            device.executeShellCommand("cmd connectivity airplane-mode disable")
-            device.executeShellCommand("svc wifi enable")
-            device.executeShellCommand("cmd deviceidle unforce")
-            device.executeShellCommand("cmd power set-mode 0")
+            runCatching { device.executeShellCommand("cmd connectivity airplane-mode disable") }
+            runCatching { device.executeShellCommand("svc wifi enable") }
+            runCatching { device.executeShellCommand("cmd deviceidle unforce") }
+            runCatching { device.executeShellCommand("cmd power set-mode 0") }
+            runCatching { device.executeShellCommand("dumpsys battery reset") }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                device.executeShellCommand(
-                    "pm grant $appPackage android.permission.POST_NOTIFICATIONS",
-                )
+                runCatching {
+                    device.executeShellCommand(
+                        "pm grant $appPackage android.permission.POST_NOTIFICATIONS",
+                    )
+                }
             }
-            device.wakeUp()
-            device.executeShellCommand("wm dismiss-keyguard")
-            device.unfreezeRotation()
+            runCatching { device.wakeUp() }
+            runCatching { device.executeShellCommand("wm dismiss-keyguard") }
+            runCatching { device.unfreezeRotation() }
             // Do not retain even synthetic login material in pulled artifacts.
             validatedCredentialPath?.let { device.executeShellCommand("rm $it") }
         }
@@ -273,31 +277,223 @@ class BusinessWorkflowDeviceTest {
             "Doze force/restore constraint did not complete"
         }
 
-        // PowerManagerService applies this asynchronously on physical Lenovo
-        // hardware. A one-shot settings read can observe the old value even
-        // after the shell command has been accepted, so prove each transition
-        // with the same bounded polling contract used by the other constraints.
-        // Restoration belongs in finally so a polling/interruption failure
-        // cannot leave the disposable tablet in power-save mode.
+        // Firebase physical devices remain connected to external power. Android
+        // deliberately refuses to enable Battery Saver while powered, so first
+        // simulate an unplugged battery and prove that simulation before testing
+        // the real low-power state. Always clear both low-power and battery
+        // simulation state even if a command, transition or assertion fails.
+        val batteryEvidence = JSONObject()
+        val originalBatteryState = batteryState()
+        val originalPowerState = powerState()
+        File(output, "battery-original.txt").writeText(originalBatteryState)
+        File(output, "power-original.txt").writeText(originalPowerState)
+        val originalBatteryPowered = batteryPoweredState(originalBatteryState)
+        val originalPowerManagerPowered = powerManagerIsPowered(originalPowerState)
+        batteryEvidence.put(
+            "original_battery_powered",
+            originalBatteryPowered ?: JSONObject.NULL,
+        )
+        batteryEvidence.put(
+            "original_power_manager_powered",
+            originalPowerManagerPowered ?: JSONObject.NULL,
+        )
+        batteryEvidence.put(
+            "original_simulation_active",
+            batterySimulationActive(originalBatteryState),
+        )
+        evidence.put("battery_unplug_command_accepted", false)
+        evidence.put("battery_simulated_unplugged", false)
+        evidence.put("battery_simulation_active", false)
+        evidence.put("battery_saver_enable_command_accepted", false)
         evidence.put("battery_saver_enabled", false)
+        evidence.put("battery_saver_disable_command_accepted", false)
         evidence.put("battery_saver_disabled", false)
+        evidence.put("battery_cleanup_saver_disabled", false)
+        evidence.put("battery_reset_command_accepted", false)
+        evidence.put("battery_restored_original_power_state", false)
+        evidence.put("battery_simulation_cleared", false)
         try {
+            check(
+                originalBatteryPowered != null && originalPowerManagerPowered != null &&
+                    originalBatteryPowered == originalPowerManagerPowered &&
+                    !batteryEvidence.getBoolean("original_simulation_active"),
+            ) { "Physical audit battery state was unreadable, inconsistent or already simulated" }
+
+            checkedShell("battery-unplug.txt", "dumpsys battery unplug")
+            evidence.put("battery_unplug_command_accepted", true)
+            val simulatedUnplugged = waitUntil(timeout) {
+                val battery = batteryState()
+                val power = powerState()
+                batterySimulationActive(battery) && batteryPoweredState(battery) == false &&
+                    powerManagerIsPowered(power) == false
+            }
+            val simulatedBatteryState = batteryState()
+            val simulatedPowerState = powerState()
+            File(output, "battery-simulated-unplugged.txt").writeText(simulatedBatteryState)
+            File(output, "power-simulated-unplugged.txt").writeText(simulatedPowerState)
+            evidence.put("battery_simulated_unplugged", simulatedUnplugged)
+            evidence.put(
+                "battery_simulation_active",
+                batterySimulationActive(simulatedBatteryState),
+            )
+            check(
+                evidence.getBoolean("battery_simulated_unplugged") &&
+                    evidence.getBoolean("battery_simulation_active") &&
+                    batteryPoweredState(simulatedBatteryState) == false &&
+                    powerManagerIsPowered(simulatedPowerState) == false,
+            ) { "Battery unplug simulation did not become authoritative" }
+
             checkedShell("battery-saver-enable.txt", "cmd power set-mode 1")
+            evidence.put("battery_saver_enable_command_accepted", true)
             evidence.put(
                 "battery_saver_enabled",
                 waitUntil(timeout) { powerSaveModeEnabled() },
             )
-        } finally {
+            File(output, "battery-saver-enabled-state.txt").writeText(
+                "power_manager_is_power_save_mode=${powerSaveModeEnabled()}\n" +
+                    "low_power_setting=${powerSaveModeValue()}\n${powerState()}",
+            )
+            check(evidence.getBoolean("battery_saver_enabled")) {
+                "Battery Saver did not enter the enabled state while simulated unplugged"
+            }
+
             checkedShell("battery-saver-disable.txt", "cmd power set-mode 0")
+            evidence.put("battery_saver_disable_command_accepted", true)
             evidence.put(
                 "battery_saver_disabled",
                 waitUntil(timeout) { !powerSaveModeEnabled() },
             )
+            File(output, "battery-saver-disabled-state.txt").writeText(
+                "power_manager_is_power_save_mode=${powerSaveModeEnabled()}\n" +
+                    "low_power_setting=${powerSaveModeValue()}\n${powerState()}",
+            )
+            check(evidence.getBoolean("battery_saver_disabled")) {
+                "Battery Saver did not return to the disabled state"
+            }
+        } finally {
+            var finalDisable = CapturedShellResult(false, false)
+            var cleanupSaverDisabled = false
+            var reset = CapturedShellResult(false, false)
+            var restoredOriginalPowerState = false
+            var simulationCleared = false
+            var restoredBatteryState = "Battery state was not captured"
+            var restoredPowerState = "Power state was not captured"
+            try {
+                finalDisable = capturedCleanupShell(
+                    "battery-saver-final-disable.txt",
+                    "cmd power set-mode 0",
+                )
+                cleanupSaverDisabled = finalDisable.commandAccepted && runCatching {
+                    waitUntil(timeout) { !powerSaveModeEnabled() }
+                }.getOrDefault(false)
+            } finally {
+                // This reset is structurally independent of saver disable and
+                // evidence-file failures so the device cannot retain simulated
+                // battery state after an interrupted/failed assertion.
+                reset = capturedCleanupShell("battery-reset.txt", "dumpsys battery reset")
+                restoredOriginalPowerState = runCatching {
+                    waitUntil(timeout) {
+                        val battery = batteryState()
+                        val power = powerState()
+                        !batterySimulationActive(battery) &&
+                            batteryPoweredState(battery) == originalBatteryPowered &&
+                            powerManagerIsPowered(power) == originalPowerManagerPowered
+                    }
+                }.getOrDefault(false)
+                restoredBatteryState = runCatching { batteryState() }
+                    .getOrElse {
+                        "Battery state capture failed: ${it.javaClass.simpleName}: ${it.message}"
+                    }
+                restoredPowerState = runCatching { powerState() }
+                    .getOrElse {
+                        "Power state capture failed: ${it.javaClass.simpleName}: ${it.message}"
+                    }
+                simulationCleared = !batterySimulationActive(restoredBatteryState)
+                safeWriteEvidence("battery-restored.txt", restoredBatteryState)
+                safeWriteEvidence("power-restored.txt", restoredPowerState)
+            }
+            evidence.put("battery_cleanup_saver_disabled", cleanupSaverDisabled)
+            evidence.put("battery_reset_command_accepted", reset.commandAccepted)
+            evidence.put(
+                "battery_restored_original_power_state",
+                restoredOriginalPowerState &&
+                    batteryPoweredState(restoredBatteryState) == originalBatteryPowered &&
+                    powerManagerIsPowered(restoredPowerState) == originalPowerManagerPowered,
+            )
+            evidence.put("battery_simulation_cleared", simulationCleared)
+            batteryEvidence.put(
+                "unplug_command_accepted",
+                evidence.getBoolean("battery_unplug_command_accepted"),
+            )
+            batteryEvidence.put(
+                "simulated_unplugged",
+                evidence.getBoolean("battery_simulated_unplugged"),
+            )
+            batteryEvidence.put(
+                "simulation_active_while_unplugged",
+                evidence.getBoolean("battery_simulation_active"),
+            )
+            batteryEvidence.put(
+                "saver_enable_command_accepted",
+                evidence.getBoolean("battery_saver_enable_command_accepted"),
+            )
+            batteryEvidence.put(
+                "saver_enabled",
+                evidence.getBoolean("battery_saver_enabled"),
+            )
+            batteryEvidence.put(
+                "saver_disable_command_accepted",
+                evidence.getBoolean("battery_saver_disable_command_accepted"),
+            )
+            batteryEvidence.put(
+                "saver_disabled",
+                evidence.getBoolean("battery_saver_disabled"),
+            )
+            batteryEvidence.put(
+                "cleanup_saver_disabled",
+                evidence.getBoolean("battery_cleanup_saver_disabled"),
+            )
+            batteryEvidence.put("cleanup_disable_evidence_written", finalDisable.evidenceWritten)
+            batteryEvidence.put(
+                "reset_command_accepted",
+                evidence.getBoolean("battery_reset_command_accepted"),
+            )
+            batteryEvidence.put("reset_evidence_written", reset.evidenceWritten)
+            batteryEvidence.put(
+                "restored_original_power_state",
+                evidence.getBoolean("battery_restored_original_power_state"),
+            )
+            batteryEvidence.put(
+                "restored_battery_powered",
+                batteryPoweredState(restoredBatteryState) ?: JSONObject.NULL,
+            )
+            batteryEvidence.put(
+                "restored_power_manager_powered",
+                powerManagerIsPowered(restoredPowerState) ?: JSONObject.NULL,
+            )
+            batteryEvidence.put(
+                "simulation_cleared",
+                evidence.getBoolean("battery_simulation_cleared"),
+            )
+            evidence.put(
+                "battery_cleanup_evidence_written",
+                safeWriteEvidence("battery-constraints.json", batteryEvidence.toString(2)),
+            )
         }
         check(
-            evidence.getBoolean("battery_saver_enabled") &&
-                evidence.getBoolean("battery_saver_disabled"),
-        ) { "Battery-saver enable/restore constraint did not complete" }
+            evidence.getBoolean("battery_unplug_command_accepted") &&
+                evidence.getBoolean("battery_simulated_unplugged") &&
+                evidence.getBoolean("battery_simulation_active") &&
+                evidence.getBoolean("battery_saver_enable_command_accepted") &&
+                evidence.getBoolean("battery_saver_enabled") &&
+                evidence.getBoolean("battery_saver_disable_command_accepted") &&
+                evidence.getBoolean("battery_saver_disabled") &&
+                evidence.getBoolean("battery_cleanup_saver_disabled") &&
+                evidence.getBoolean("battery_reset_command_accepted") &&
+                evidence.getBoolean("battery_restored_original_power_state") &&
+                evidence.getBoolean("battery_simulation_cleared") &&
+                evidence.getBoolean("battery_cleanup_evidence_written"),
+        ) { "Battery Saver exercise or powered-state restoration did not complete" }
 
         val alarmAfter = device.executeShellCommand("dumpsys alarm")
         File(output, "alarm-after-constraints.txt").writeText(alarmAfter)
@@ -318,8 +514,38 @@ class BusinessWorkflowDeviceTest {
         ).containsMatchIn(packageState)
     }
 
+    private fun batteryState(): String = device.executeShellCommand("dumpsys battery")
+
+    private fun powerState(): String = device.executeShellCommand("dumpsys power")
+
+    private fun batteryPoweredState(state: String): Boolean? {
+        val values = Regex(
+            "(?im)^\\s*(?:AC|USB|Wireless|Dock) powered:\\s*(true|false)\\s*$",
+        ).findAll(state).map { match ->
+            match.groupValues[1].equals("true", ignoreCase = true)
+        }.toList()
+        return values.takeIf { it.isNotEmpty() }?.any { it }
+    }
+
+    private fun batterySimulationActive(state: String): Boolean =
+        state.contains("UPDATES STOPPED", ignoreCase = true)
+
+    private fun powerManagerIsPowered(state: String): Boolean? {
+        val values = Regex("(?im)^\\s*mIsPowered=(true|false)\\s*$")
+            .findAll(state)
+            .map { match -> match.groupValues[1].equals("true", ignoreCase = true) }
+            .distinct()
+            .toList()
+        return values.singleOrNull()
+    }
+
+    private fun powerSaveModeValue(): String =
+        device.executeShellCommand("settings get global low_power").trim()
+
     private fun powerSaveModeEnabled(): Boolean =
-        device.executeShellCommand("settings get global low_power").trim() == "1"
+        InstrumentationRegistry.getInstrumentation().targetContext
+            .getSystemService(PowerManager::class.java)
+            .isPowerSaveMode
 
     private fun alarmRegistered(): Boolean =
         operationalAlarmRegistered(device.executeShellCommand("dumpsys alarm"))
@@ -340,14 +566,38 @@ class BusinessWorkflowDeviceTest {
     private fun checkedShell(filename: String, command: String): String {
         val result = device.executeShellCommand(command)
         File(output, filename).writeText("$command\n$result")
-        check(
-            !result.contains("permission denial", ignoreCase = true) &&
-                !result.contains("unknown command", ignoreCase = true) &&
-                !result.contains("security exception", ignoreCase = true) &&
-                !result.startsWith("Error", ignoreCase = true),
-        ) { "Device constraint command failed: $command" }
+        check(shellCommandSucceeded(result)) { "Device constraint command failed: $command" }
         return result
     }
+
+    private data class CapturedShellResult(
+        val commandAccepted: Boolean,
+        val evidenceWritten: Boolean,
+    )
+
+    private fun capturedCleanupShell(filename: String, command: String): CapturedShellResult {
+        var commandAccepted = false
+        val evidence = runCatching {
+            val result = device.executeShellCommand(command)
+            commandAccepted = shellCommandSucceeded(result)
+            "$command\n$result"
+        }.getOrElse { failure ->
+            "$command\n${failure.javaClass.simpleName}: ${failure.message}"
+        }
+        return CapturedShellResult(
+            commandAccepted = commandAccepted,
+            evidenceWritten = safeWriteEvidence(filename, evidence),
+        )
+    }
+
+    private fun safeWriteEvidence(filename: String, content: String): Boolean =
+        runCatching { File(output, filename).writeText(content) }.isSuccess
+
+    private fun shellCommandSucceeded(result: String): Boolean =
+        !result.contains("permission denial", ignoreCase = true) &&
+            !result.contains("unknown command", ignoreCase = true) &&
+            !result.contains("security exception", ignoreCase = true) &&
+            !result.startsWith("Error", ignoreCase = true)
 
     private fun waitUntil(timeout: Long, condition: () -> Boolean): Boolean {
         val deadline = SystemClock.elapsedRealtime() + timeout
