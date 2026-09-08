@@ -11,7 +11,7 @@ Current direct-channel release candidate:
 | --- | --- |
 | App name | `D Company` |
 | Package name | `cloud.dcompany.erp` |
-| Version name | `3.1.15` |
+| Version name | `3.1.16` |
 | Version code | `26` |
 | Minimum compatible client code | `8` |
 | Production API | `https://dcompany.duckdns.org/api/v1/` |
@@ -27,8 +27,12 @@ predecessor history. Code `22` (`3.1.11`) was superseded before signing and
 must not be approved or activated. Code `23` (`3.1.12`) was also superseded
 without an authorised signed artifact. Code `24` (`3.1.13`) failed before
 signing and its tag remains immutable. Code `25` (`3.1.14`) was rejected by its
-physical-tablet audit and must remain immutable, unadvertised history. Code `26`
-(`3.1.15`) is the current **unsigned** corrective direct-channel candidate only.
+physical-tablet audit and must remain immutable, unadvertised history. The
+`v3.1.15` attempt failed before build/signing and never produced a signed,
+distributed, registered, or production-installed direct Code 26 artifact;
+isolated debug installations are test evidence only. Its tag and evidence
+remain immutable. Code `26` (`3.1.16`) is the current **unsigned** corrective
+direct-channel candidate under that narrow never-issued-identity exception.
 Do not upload it to Play
 or register, stage, advertise, or activate it without the green tagged workflow
 and reviewed rollout procedure. Code `21` (`3.1.10`) is its signed

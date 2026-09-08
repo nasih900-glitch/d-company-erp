@@ -9,7 +9,7 @@ WebView.
 | Field | Value |
 | --- | --- |
 | Package / application ID | `cloud.dcompany.erp` |
-| Version name | `3.1.15` |
+| Version name | `3.1.16` |
 | Version code | `26` |
 | Minimum compatible client code | `8` |
 | Minimum Android version | Android 8 (`minSdk 26`) |
@@ -23,7 +23,7 @@ build.
 
 ## Release status
 
-Version `3.1.15` (`26`) is the current unsigned corrective reliability and
+Version `3.1.16` (`26`) is the current unsigned corrective reliability and
 server-delivery candidate following the signed `3.1.10` (`21`) predecessor.
 It includes Code 22's owner-approved Standard, Premium, Simdrive and multiplayer
 tariff, exact extension billing, held-bill discounts, session recovery and all
@@ -52,7 +52,12 @@ before signing and must not be approved or activated. Code `23` was also
 superseded before signing after the deeper production audit; its immutable
 tag and evidence remain historical. Code `24` failed before signing and
 remains immutable history. Code `25` is immutable rejected physical-audit
-history. Code `26` is the separately gated server-delivery candidate; source
+history. The `v3.1.15` attempt failed before build/signing and never produced a
+signed, distributed, registered, or production-installed direct Code 26
+artifact; isolated debug installations are test evidence only. Its tag and
+evidence remain immutable. Version `3.1.16` therefore retains code `26` under a
+narrow never-issued-identity exception. Code `26` is the separately gated
+server-delivery candidate; source
 preparation alone does not authorise hosting, registering,
 staging, advertising, or activating it. Rollout requires a separately reviewed
 immutable APK,

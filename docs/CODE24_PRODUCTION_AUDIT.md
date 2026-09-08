@@ -3,7 +3,7 @@
 Historical audit: Code 24 was superseded by rejected
 [Code 25 / 3.1.14](CODE25_RELEASE_CANDIDATE.md) after the immutable `v3.1.13`
 release failed before signing. The current corrective candidate is
-[Code 26 / 3.1.15](CODE26_RELEASE_CANDIDATE.md). References below to the current
+[Code 26 / 3.1.16](CODE26_RELEASE_CANDIDATE.md). References below to the current
 source or candidate describe the Code 24 audit window, not today's release
 identity. The original results are not Code 25 or Code 26 artifact acceptance.
 

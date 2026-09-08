@@ -36,12 +36,14 @@ Code `21` (`3.1.10`) is immutable signed predecessor history. Code `22`
 Code `23` (`3.1.12`) was also superseded without an authorised signed artifact.
 Code `24` (`3.1.13`) failed before signing; its tag remains immutable history.
 Code `25` (`3.1.14`) was rejected by its physical-tablet audit; its tag and any
-artifact remain immutable history and must not be staged or activated. Code
-`26` (`3.1.15`) is the current, separately gated **unsigned** corrective
-server-delivery candidate:
+artifact remain immutable history and must not be staged or activated. The
+`v3.1.15` attempt failed before build/signing and produced no authorised or
+distributed Code 26 artifact; its tag and evidence remain immutable. Code `26`
+(`3.1.16`) is the current, separately gated **unsigned** corrective
+server-delivery candidate under that narrow never-issued-identity exception:
 
 ```
-coordinate source at 3.1.15/code 26 through migration 0071
+coordinate source at 3.1.16/code 26 through migration 0071
         │
         ▼
 local/CI backend + web + Android candidate gates
@@ -49,14 +51,14 @@ local/CI backend + web + Android candidate gates
         ▼
 same-lineage Code 21 to Code 26 upgrade proof
         │
-        ▼ stage exact CI artifact, then owner review and activation
+        ▼ stage exact CI artifact inactive for owner review
+owner may offer to target tablet; supervised live trial gates wider rollout
 ```
 
 No signed Code 26 artifact exists merely because local or CI candidate checks
-pass. Until the protected signing workflow, exact-artifact verification,
-production deployment, staging, owner activation and target-device acceptance
-all succeed, Code 26 is not deployed, approved, advertised or
-partner-installable.
+pass. Protected signing, exact-artifact verification, production deployment,
+inactive staging, the owner's controlled target offer, and target-device
+acceptance remain separate gates. None may be inferred from another.
 
 The Tauri desktop and iOS projects are not built or published by the supported
 release workflow.
@@ -125,10 +127,11 @@ minimum supported version until that proof passes. See
 Choose one version and apply it consistently. For the current candidate:
 
 ```bash
-CURRENT_RELEASE_VERSION=3.1.15
+CURRENT_RELEASE_VERSION=3.1.16
 
 # Update the coordinated product version in:
-# - android-native/app/build.gradle.kts (versionName and a new versionCode)
+# - android-native/app/build.gradle.kts (versionName; normally also a new
+#   versionCode, except the documented never-issued 3.1.15/code-26 correction)
 # - backend/pyproject.toml
 # - backend/app/__init__.py
 # - frontend/package.json and frontend/package-lock.json
@@ -152,9 +155,13 @@ reused. Tags `v3.1.8` and `v3.1.9` are also immutable rejected history. Tag
 superseded history and its waiting signing job must not be approved. Tag
 `v3.1.12` is immutable superseded unsigned history. Tag `v3.1.13` is immutable
 failed-before-signing history. Tag `v3.1.14` is immutable rejected history. Tag
-`v3.1.15` may be created only after every product-version field is coordinated
-and the local release gates pass. Keep codes `14` through `25` immutable. Never
-use a blanket
+`v3.1.15` is immutable failed-before-build/signing history and must never be
+moved or reused. Tag `v3.1.16` may be created only after every product-version
+field is coordinated and the local release gates pass. Version code `26` is
+retained only because 3.1.15 produced no signed, distributed, registered,
+staged, offered, or production-installed direct artifact. Isolated debug
+installations are test evidence, not distribution. Keep codes `14` through `25` immutable.
+Never use a blanket
 version replacement: dependency versions and
 Android rollout policy intentionally differ from the product version.
 
@@ -201,7 +208,7 @@ signed predecessor history and is the required same-lineage upgrade baseline.
 Codes `22` and `23` were superseded without authorised signed artifacts. Code
 `24` failed before signing and its tag must not be moved or reused. Code `25`
 was rejected by its physical-tablet audit and must not be staged or activated.
-The current candidate is the unsigned `3.1.15` with version code `26`; its database
+The current candidate is the unsigned `3.1.16` with version code `26`; its database
 migration head is `0071`. It may be staged only after the exact green tagged
 workflow produces a signed artifact and becomes an optional server offer only
 after authenticated owner activation. It is not currently signed, deployed,
@@ -211,7 +218,7 @@ staged, active, approved or partner-installable.
 
 1. Bring the signed Code 21 installation online and reconcile its exact pending
    outbox without clearing app data.
-2. Build and sign `3.1.15` / code `26` only through the protected tagged
+2. Build and sign `3.1.16` / code `26` only through the protected tagged
    workflow. Verify its package, version, exact bytes, SHA-256, manifest and
    independent expected signer.
 3. Prove a same-key in-place Code 21 to Code 26 upgrade with Room data and
@@ -219,11 +226,15 @@ staged, active, approved or partner-installable.
 4. Rehearse the production-shaped migration through `0071`, then deploy the
    coordinated backend and web source with a fresh quiesced backup, restoration
    proof, rollback readiness and authenticated smoke tests.
-5. Stage the exact verified CI artifact, review it in the owner ERP and activate
-   only after the prior gates pass. Android still requires employee approval to
-   install it.
-6. Complete authenticated physical-target smoke, offline/restart, alarm,
-   performance and financial reconciliation before wider rollout.
+5. Stage the exact verified CI artifact inactive and review it in the owner ERP.
+   Staging does not advertise or activate an offer.
+6. After all four preparation phases in `CODE26_RELEASE_CANDIDATE.md`, the owner
+   may activate the exact staged candidate as a controlled offer to the target
+   tablet. Android still requires employee approval to install it. Run the
+   supervised real-live operational acceptance trial, authenticated
+   physical-target smoke, offline/restart, alarm, performance and financial
+   reconciliation after installation. The owner may approve wider rollout only
+   after that trial passes.
 
 ### Historical Code 14 rollout record (do not execute for Code 26)
 
@@ -461,9 +472,10 @@ signed predecessor history. Codes `22` and `23` are unsigned, superseded
 candidates and must never be activated. Code `24` failed before signing and
 its tag remains immutable. Code `25` failed its physical-tablet audit and is
 immutable rejected history; it must never be activated. Code `26` is the
-unsigned corrective candidate and may be activated only after its tagged
-signing workflow, production deployment, staging, review and target-device
-gates pass. Protected-owner status alone
+unsigned corrective candidate. After its four preparation phases, only the
+owner may activate a controlled offer to the target tablet; wider rollout
+remains blocked until supervised target-device acceptance passes.
+Protected-owner status alone
 grants no global release authority: only the exact company/user identity
 configured in `ANDROID_RELEASE_CONTROLLER_BINDINGS`, with `admin.system` and
 audit access, may activate a separately approved future release.
@@ -490,10 +502,10 @@ draft release contains:
 - `release-manifest.json` with source revision, version, API base URL, and
   signing-certificate fingerprint.
 
-Do not distribute an artifact for live café operation until the release
-workflow is green and the device acceptance checklist has passed on the target
-café tablet. Emulator proof supports candidate review but is not physical-device
-acceptance.
+Do not distribute an artifact beyond the controlled target-tablet offer until
+the release workflow is green and supervised device acceptance has passed on
+that tablet. Emulator proof supports candidate review but is not
+physical-device acceptance.
 
 ## Download page
 

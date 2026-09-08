@@ -128,7 +128,7 @@ separately identified prototype, not another supported ERP app.
 
 Tagging a release that exactly matches the Android `versionName` triggers
 `.github/workflows/release.yml`. The current local release candidate is the
-**unsigned** `3.1.15` (code `26`) corrective candidate; Android code `8` remains the
+**unsigned** `3.1.16` (code `26`) corrective candidate; Android code `8` remains the
 minimum-compatible floor. The signed
 `3.1.3` (`14`) direct-release APK is a historical manually distributed,
 update-capable baseline; Code `21` (`3.1.10`) is the current signed
@@ -150,8 +150,11 @@ Code `22` (`3.1.11`) and Code `23` (`3.1.12`) are unsigned, superseded
 candidates and must not be approved, staged, advertised, or activated. Code
 `24` (`3.1.13`) failed before signing and its tag remains immutable history.
 Code `25` (`3.1.14`) is immutable rejected audit history and must not be rebuilt
-or offered. Code `26` (`3.1.15`) is the current unsigned corrective candidate; it
-is not signed, deployed, staged, activated, approved, or partner-installable. Candidate database
+or offered. The `v3.1.15` attempt failed before build/signing and produced no
+authorised or distributed Code 26 artifact; its tag and evidence remain
+immutable. Code `26` (`3.1.16`) is the current unsigned corrective candidate
+under that narrow never-issued-identity exception; it is not signed, deployed,
+staged, activated, approved, or partner-installable. Candidate database
 migrations currently run through `0071`. The production compatibility defaults
 remain pinned until a rollout is explicitly reviewed. Any eventual artifact
 must be newly built and signed, verified against its exact SHA-256, byte size,

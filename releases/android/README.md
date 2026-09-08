@@ -41,11 +41,14 @@ was superseded before signing and must not be approved or activated. Code `23`
 (`3.1.12`) was also superseded without an authorised signed artifact. Code
 `24` (`3.1.13`) failed before signing and remains immutable history. Code `25`
 (`3.1.14`) was rejected by its physical-tablet audit; its tag and any artifact
-remain immutable history and must not be staged or activated. The current
-corrective server-delivery candidate is the **unsigned** `3.1.15` (code `26`)
-source at migration `0071`; it is not yet a signed, tagged release artifact.
+remain immutable history and must not be staged or activated. The `v3.1.15`
+attempt failed before build/signing and produced no authorised or distributed
+Code 26 artifact; its tag and evidence remain immutable. The current corrective
+server-delivery candidate is the **unsigned** `3.1.16` (code `26`) source at
+migration `0071`, retaining code 26 only under the narrow never-issued-identity
+exception; it is not yet a signed release artifact.
 Before any staging or activation, obtain the exact artifact from the protected
-green `v3.1.15` workflow and verify the
+green `v3.1.16` workflow and verify the
 immutable HTTPS bytes, SHA-256, byte size, package, version, expected signer and
 an in-place upgrade from the signed code-`21` predecessor. Android
 still requires the employee to approve installation. Until all Code 26 gates in

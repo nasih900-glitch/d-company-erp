@@ -2,7 +2,7 @@
 
 Historical candidate: the immutable `v3.1.13` release failed before signing.
 It was superseded by rejected [Code 25 / 3.1.14](CODE25_RELEASE_CANDIDATE.md);
-the current corrective candidate is [Code 26 / 3.1.15](CODE26_RELEASE_CANDIDATE.md).
+the current corrective candidate is [Code 26 / 3.1.16](CODE26_RELEASE_CANDIDATE.md).
 The evidence below remains Code 24 evidence, not Code 25 or Code 26 acceptance.
 
 This was an **unsigned** candidate, not a declaration of signing,

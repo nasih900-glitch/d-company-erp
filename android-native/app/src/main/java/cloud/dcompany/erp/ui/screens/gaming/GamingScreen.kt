@@ -261,6 +261,32 @@ internal val gamingImeAwareDialogProperties = DialogProperties(
     decorFitsSystemWindows = false,
 )
 
+internal fun legacyRecoveryVisibleBounds(
+    visibleFrame: IntRect,
+    rootOriginX: Int,
+    rootOriginY: Int,
+    rootWidth: Int,
+    rootHeight: Int,
+): IntRect? {
+    if (rootWidth <= 0 || rootHeight <= 0) return null
+    val left = (visibleFrame.left - rootOriginX).coerceAtLeast(0)
+    val top = (visibleFrame.top - rootOriginY).coerceAtLeast(0)
+    val right = (visibleFrame.right - rootOriginX).coerceAtMost(rootWidth)
+    val bottom = (visibleFrame.bottom - rootOriginY).coerceAtMost(rootHeight)
+    return IntRect(left, top, right, bottom).takeIf { it.width > 0 && it.height > 0 }
+}
+
+internal class LegacyRecoveryBoundsState {
+    var visibleBounds by mutableStateOf<IntRect?>(null)
+        private set
+
+    /** Refresh geometry without blocking the frame that lets Compose and the IME advance. */
+    fun refreshBeforeDraw(sampledBounds: IntRect?): Boolean {
+        if (visibleBounds != sampledBounds) visibleBounds = sampledBounds
+        return true
+    }
+}
+
 @Composable
 fun GamingScreen(
     access: GamingAccess = GamingAccess(),
@@ -3820,31 +3846,35 @@ private fun LegacyRecoveryDialogFrame(
     Dialog(onDismissRequest = onDismissRequest, properties = gamingImeAwareDialogProperties) {
         val view = LocalView.current
         val density = LocalDensity.current
-        var visibleBounds by remember(view) { mutableStateOf<IntRect?>(null) }
+        val boundsState = remember(view) { LegacyRecoveryBoundsState() }
+        fun sampleVisibleBounds(): IntRect? {
+            if (!view.isAttachedToWindow) return null
+            val frame = android.graphics.Rect()
+            view.getWindowVisibleDisplayFrame(frame)
+            val origin = IntArray(2)
+            view.getLocationOnScreen(origin)
+            return legacyRecoveryVisibleBounds(
+                visibleFrame = IntRect(frame.left, frame.top, frame.right, frame.bottom),
+                rootOriginX = origin[0],
+                rootOriginY = origin[1],
+                rootWidth = view.width,
+                rootHeight = view.height,
+            )
+        }
         DisposableEffect(view) {
             // Compose 1.7 floating-dialog IME insets can omit the dialog's
             // screen offset. Android's visible frame includes the real IME
-            // and system-bar bounds; convert it to this root's coordinates.
-            val listener = android.view.ViewTreeObserver.OnGlobalLayoutListener {
-                val frame = android.graphics.Rect()
-                view.getWindowVisibleDisplayFrame(frame)
-                val origin = IntArray(2)
-                view.getLocationOnScreen(origin)
-                if (view.isAttachedToWindow && view.width > 0 && view.height > 0) {
-                    val left = (frame.left - origin[0]).coerceAtLeast(0)
-                    val top = (frame.top - origin[1]).coerceAtLeast(0)
-                    val right = (frame.right - origin[0]).coerceAtMost(view.width)
-                    val bottom = (frame.bottom - origin[1]).coerceAtMost(view.height)
-                    val next = IntRect(left, top, right, bottom)
-                        .takeIf { it.width > 0 && it.height > 0 }
-                    if (visibleBounds != next) visibleBounds = next
-                }
+            // and system-bar bounds. Sample both frame and origin immediately
+            // before draw because WindowManager can relocate this full-height
+            // root without dispatching another global layout.
+            val listener = android.view.ViewTreeObserver.OnPreDrawListener {
+                boundsState.refreshBeforeDraw(sampleVisibleBounds())
             }
-            view.viewTreeObserver.addOnGlobalLayoutListener(listener)
-            listener.onGlobalLayout()
+            view.viewTreeObserver.addOnPreDrawListener(listener)
+            boundsState.refreshBeforeDraw(sampleVisibleBounds())
             onDispose {
                 val observer = view.viewTreeObserver
-                if (observer.isAlive) observer.removeOnGlobalLayoutListener(listener)
+                if (observer.isAlive) observer.removeOnPreDrawListener(listener)
             }
         }
         Box(Modifier.fillMaxSize()) {
@@ -3852,7 +3882,7 @@ private fun LegacyRecoveryDialogFrame(
             Box(Modifier.matchParentSize().pointerInput(onDismissRequest) {
                 detectTapGestures { onDismissRequest() }
             })
-            visibleBounds?.let { bounds ->
+            boundsState.visibleBounds?.let { bounds ->
                 Box(
                     modifier = Modifier
                         .absoluteOffset(

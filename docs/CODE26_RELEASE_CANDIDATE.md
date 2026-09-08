@@ -1,9 +1,18 @@
-# D Company ERP 3.1.15 (code 26) release candidate
+# D Company ERP 3.1.16 (code 26) release candidate
 
 Code 26 is the corrective candidate after the Code 25 physical-tablet audit.
-Its coordinated identity is tag `v3.1.15`, Android `versionName=3.1.15`, Android
+Its coordinated identity is tag `v3.1.16`, Android `versionName=3.1.16`, Android
 `versionCode=26`, and database migration head `0071`. Code 25 remains immutable;
 its APK must not be rebuilt or silently replaced.
+
+The immutable `v3.1.15` attempt failed before a release build or signing and
+produced no authorised or distributed APK. It was never registered, staged,
+activated, offered, or installed as a production direct-signed Code 26
+artifact; isolated debug test installations are not distribution evidence.
+Retaining version code `26` for `3.1.16` is a one-time narrow correction to that
+never-issued identity, not authority to reuse any version code that has
+produced a signed or distributed artifact. The `v3.1.15` tag and failed
+evidence must not be moved or rewritten.
 
 This ledger separates source checks from release approval. Code 26 is not ready
 for staff installation until one exact commit and signed APK pass every gate
@@ -54,17 +63,26 @@ This one exact locator migration is reviewed and normalized by the freeze
 gate; all original credential-cleanup assertions and their ordering remain
 mandatory. No application behavior is exempted from regression verification.
 
-## Required release gates
+## Required release phases and final owner decision
 
-1. Apply all migrations to a fresh disposable PostgreSQL database; run the full
-   backend suite and guarded Gaming/POS/Finance workflow without touching
-   production data.
-2. Run frontend typecheck, all tests, production build, and rendered Web ERP
-   checks for synchronized Gaming, billing, shift, finance, and update state.
-3. Run complete Android JVM/lint/build checks and instrumentation for input,
+The four preparation phases are ordered gates. Evidence from an earlier source
+identity does not substitute for the exact `v3.1.16` candidate commit. Within
+Phase 2, the full automated and bounded physical lanes may run in parallel
+against the same frozen source; both must pass.
+
+1. **Fixes and regression protection.** Complete the bounded corrective scope,
+   its focused regressions, independent code/security review, and the 491-file
+   Code 25 regression freeze without weakening business, auth, permission,
+   money, audit, or update contracts.
+2. **Full automated and bounded physical validation.** Apply all migrations to
+   a fresh disposable PostgreSQL database; run the full backend suite and
+   guarded Gaming/POS/Finance workflow without touching production data. Run
+   frontend typecheck, all tests, production build, and rendered Web ERP checks
+   for synchronized Gaming, billing, shift, finance, and update state. Run
+   complete Android JVM/lint/build checks and instrumentation for input,
    cold-start recovery, Gaming, POS, shift, alarms, offline/retry, diagnostics,
-   updates, and permissions.
-4. On physical Android tablet hardware, run the authenticated synthetic flow:
+   updates, and permissions. In the parallel bounded physical lane, run the
+   authenticated synthetic flow on physical Android tablet hardware:
    login, open shift, all nine base Gaming package codes, all eight extension
    package codes, every supported player mode, reasoned pause, stable paused
    state, resume, add-on, stop, send to POS, discount, cash/UPI,
@@ -74,7 +92,7 @@ mandatory. No application behavior is exempted from regression verification.
    Run only from a clean committed Code 26 tree. The physical runner records and
    rechecks the exact commit/tree, APK SHA-256, verified signer certificate and
    isolated `cloud.dcompany.erp.physicalaudit` manifest identity
-   (`26` / `3.1.15-physical-audit`); it rejects dirty or drifting source. Its
+   (`26` / `3.1.16-physical-audit`); it rejects dirty or drifting source. Its
    413-step plan completes 16 isolated Gaming-to-payment sessions and records
    exact per-step screenshots/hierarchies, start/mid/end idle-window geometry
    across nine stability windows, strict non-zero frame thresholds for the four
@@ -92,25 +110,34 @@ mandatory. No application behavior is exempted from regression verification.
    revenue, order count and net profit. Cash, UPI and Reports COGS remain exact
    authenticated API evidence because those cards are below the initial tablet
    viewport.
-5. Independently review authentication, tenant/workspace isolation, money,
-   idempotency, audit, signing, update, and rollback boundaries.
-   The interrupted eight-hour trial exposed a cross-client refresh race; its
-   failed evidence remains failed. After the corrective auth change, repeat
-   one uninterrupted eight-real-hour isolated shop-day trial on the exact
-   candidate, with authenticated Android health checks, natural token expiry,
-   cross-date financial reconciliation, and no automatic relogin. Completing
-   the remaining hours of the interrupted run is not an endurance pass. See
-   `CODE26_AUTH_REFRESH_INCIDENT.md` for the bounded incident and proof.
-6. Freeze one commit, build and sign through protected CI, then verify package,
-   version, signer, SHA-256, byte size, manifest, and provenance. Prove a
-   same-signing-key in-place Code 21 to Code 26 upgrade without uninstalling or
-   losing Room/outbox state.
-7. Back up and restore-test production before deploying the matching backend
-   and Web ERP. Verify live runtime identity and compatibility endpoints.
-8. Stage only the verified signed APK in Web ERP. The owner decides when to
-   offer it; Android still requires the employee to approve installation.
-9. Confirm the intended tablet reports Code 26, has no unsent work, and passes a
-   final smoke shift before calling the rollout complete.
+3. **Signing, upgrade, final audit, and deployment.** Perform the final exact
+   source audit, freeze one commit, build and sign through protected CI, then
+   verify package, version, signer, SHA-256, byte size, manifest, and provenance.
+   Prove a same-signing-key in-place Code 21 to Code 26 upgrade without
+   uninstalling or losing Room/outbox state. With fresh maintenance confirmation
+   and current tablet/outbox quiescence, back up and restore-test production,
+   deploy the matching backend and Web ERP, and verify live runtime identity and
+   compatibility endpoints. The old 5 September client heartbeat is not
+   evidence of current quiescence.
+4. **Owner-visible inactive staging.** Stage only the exact verified signed APK
+   in Web ERP as an inactive owner-visible record. Staging must not itself
+   activate or advertise an update offer.
+
+The user cancelled the separate eight-hour endurance requirement. The
+interrupted isolated shop-day remains preserved failed evidence of the
+cross-client refresh race; it is not reclassified or completed by adding its
+remaining hours. See `CODE26_AUTH_REFRESH_INCIDENT.md` for the bounded incident
+and corrective proof.
+
+Only after all four phases pass on the same source and artifact may the owner
+activate the exact staged candidate as a controlled offer for installation on
+the target tablet; no automated process may offer it. Android still requires
+employee installation approval. After installation, run the supervised
+real-live operational acceptance trial with authenticated Android health,
+natural token expiry, financial reconciliation, and no automatic relogin.
+Confirm the intended tablet reports Code 26, has no unsent work, and passes a
+final smoke shift. Passing that trial is required before the owner approves any
+wider rollout.
 
 Cloud physical hardware is valid defect-finding evidence but is not a claim
 that the partner's Redmi Pad 2 or HyperOS was tested. SMTP delivery, real UPI or

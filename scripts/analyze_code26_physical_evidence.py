@@ -751,8 +751,8 @@ def _source_errors(payload: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     if payload.get("clean") is not True:
         errors.append("source was not recorded clean")
-    if payload.get("version_code") != 26 or payload.get("version_name") != "3.1.15":
-        errors.append("source is not Code 26 / 3.1.15")
+    if payload.get("version_code") != 26 or payload.get("version_name") != "3.1.16":
+        errors.append("source is not Code 26 / 3.1.16")
     for key in ("commit", "tree"):
         if not re.fullmatch(r"[0-9a-f]{40}", str(payload.get(key, ""))):
             errors.append(f"source {key} is not an immutable git object id")
@@ -885,9 +885,9 @@ def _apk_errors(
         errors.append("one physicalAudit ERP APK identity is required")
     elif (
         erp_rows[0].get("version_code") != "26"
-        or erp_rows[0].get("version_name") != "3.1.15-physical-audit"
+        or erp_rows[0].get("version_name") != "3.1.16-physical-audit"
     ):
-        errors.append("physicalAudit APK is not Code 26 / 3.1.15-physical-audit")
+        errors.append("physicalAudit APK is not Code 26 / 3.1.16-physical-audit")
     return errors
 
 

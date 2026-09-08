@@ -113,6 +113,7 @@ def _normalise_release_identity(path: str, text: str) -> str:
         return text
     normalised = text
     for current, baseline in (
+        ("3.1.16", "3.1.14"),
         ("3.1.15", "3.1.14"),
         ("Code 26", "Code 25"),
         ("code 26", "code 25"),

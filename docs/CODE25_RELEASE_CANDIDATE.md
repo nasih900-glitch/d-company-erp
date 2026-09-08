@@ -3,7 +3,7 @@
 Code 25 was rejected after its physical-tablet audit exposed release-blocking
 issues. Do not build, stage, activate, advertise, or install it. Its tag and any
 artifact remain immutable evidence; the corrective candidate is
-[Code 26 / 3.1.15](CODE26_RELEASE_CANDIDATE.md).
+[Code 26 / 3.1.16](CODE26_RELEASE_CANDIDATE.md).
 
 Its planned coordinated
 release identity is tag `v3.1.14`, Android `versionName=3.1.14`, Android

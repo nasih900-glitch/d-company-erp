@@ -53,17 +53,24 @@ only the previously documented audit-reader locator normalization.
 - Full Android JVM tests and debug app/test assembly passed. Independent
   read-only verifier and security reviews found no blocking defect in this
   diff. Ordinary/remote client wiring is additionally guarded structurally;
-  a new long-running live-client test remains required.
+  the supervised real-live operational trial remains a later release gate.
 
 ## Remaining release evidence
 
-The original interrupted trial is not repaired by relogin or added hours.
-The replacement must use a fresh isolated shop, shift, app installation and
-browser profile, with one frozen source/harness identity. It must fail on an
-unexpected token-family revocation or loss of recent authenticated Android
-requests, rather than treating server readiness alone as login health.
+The original interrupted trial is not repaired by relogin or added hours, and
+its failed evidence remains preserved. The user cancelled the separate
+eight-hour endurance requirement; it must not silently reappear as a release
+gate. After all four preparation phases in `CODE26_RELEASE_CANDIDATE.md` pass
+on one exact source and artifact, the owner may offer that exact staged
+candidate to the target tablet for employee-approved installation. The
+replacement acceptance is then a supervised real-live operational trial with
+authenticated client health, natural token expiry, and financial
+reconciliation. An unexpected token-family revocation or loss of recent
+authenticated Android requests fails that trial; server readiness alone is not
+login health.
 
-Fresh full CI, physical workflow revalidation, the uninterrupted day trial,
-final source audit, protected signing, same-key upgrade/data preservation,
-matching production deployment and owner-visible staging remain separate
-gates. This correction alone does not authorize a tablet update offer.
+Fresh full CI, physical workflow revalidation, final source audit, protected
+signing, same-key upgrade/data preservation, matching production deployment
+and inactive owner-visible staging remain separate preparation gates. The owner
+alone controls the targeted offer and any wider rollout. This correction alone
+does not authorize either.
