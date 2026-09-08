@@ -2960,7 +2960,7 @@
     {
       "name": "Open newest Shisha receipt",
       "action": "click",
-      "text": "Shisha Table 1",
+      "textContains": "Shisha Table 1 ·",
       "timeoutMs": 60000,
       "then": {
         "text": "Gaming provenance"

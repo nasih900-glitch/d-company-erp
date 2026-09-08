@@ -414,6 +414,23 @@ def test_return_to_gaming_respects_the_persisted_service_filter() -> None:
     assert checked == service_switches
 
 
+def test_receipt_selection_includes_the_rendered_source_date_separator() -> None:
+    steps = {step["name"]: step for step in _steps()}
+    receipt = steps["Open newest Shisha receipt"]
+    # Receipt history appends the issue date to the station name. The name plus
+    # separator identifies this station without depending on the run's clock
+    # or accidentally matching a station such as Shisha Table 10.
+    assert receipt["action"] == "click"
+    assert receipt["textContains"] == "Shisha Table 1 ·"
+    assert "text" not in receipt
+    assert receipt["then"] == {"text": "Gaming provenance"}
+    assert steps["Receipt Gaming actor visible"]["text"] == "Audit Employee 1"
+    source = (
+        ROOT / "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/CanonicalReceiptHistoryDialog.kt"
+    ).read_text(encoding="utf-8")
+    assert '"$source · ${receipt.invoiceIssuedAt.receiptDateTime()}"' in source
+
+
 def test_addon_flow_proves_immediate_feedback_and_durable_detail_rows() -> None:
     steps = {step["name"]: step for step in _steps()}
 
