@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Fail closed when Code 26 weakens the proven Code 25 regression surface.
+"""Fail closed when Code 26/27 weakens the proven Code 25 regression surface.
 
 This is deliberately release-specific.  Code 25 is the behavioural baseline;
-Code 26 may add tests and narrowly change the allow-listed Android failure
-paths, but it may not delete, disable, reorder, or rewrite an existing test.
+Code 26 may add tests and narrowly change the allow-listed failure paths; Code
+27 may change release identity only. Neither may delete, disable, reorder, or
+rewrite an existing test.
 The sole reviewed audit-reader locator migration below preserves every
 credential-cleanup assertion while following the corrected UTF-8 reader.
 """
@@ -114,17 +115,24 @@ def _normalise_release_identity(path: str, text: str) -> str:
         return text
     normalised = text
     for current, baseline in (
+        ("3.1.17", "3.1.14"),
         ("3.1.16", "3.1.14"),
         ("3.1.15", "3.1.14"),
+        ("Code 27", "Code 25"),
+        ("code 27", "code 25"),
+        ("CODE27", "CODE25"),
+        ("code27", "code25"),
         ("Code 26", "Code 25"),
         ("code 26", "code 25"),
         ("CODE26", "CODE25"),
         ("code26", "code25"),
     ):
         normalised = normalised.replace(current, baseline)
-    normalised = re.sub(r"version_code\s*=\s*26\b", "version_code=25", normalised)
     normalised = re.sub(
-        r"assertEquals\(26,\s*BuildConfig\.VERSION_CODE\)",
+        r"version_code\s*=\s*(?:26|27)\b", "version_code=25", normalised
+    )
+    normalised = re.sub(
+        r"assertEquals\((?:26|27),\s*BuildConfig\.VERSION_CODE\)",
         "assertEquals(25, BuildConfig.VERSION_CODE)",
         normalised,
     )

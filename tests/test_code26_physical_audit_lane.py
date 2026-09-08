@@ -1137,8 +1137,8 @@ def _synthetic_evidence(root: Path) -> tuple[list[dict], dict[str, Path]]:
                 "commit": commit,
                 "tree": tree,
                 "clean": True,
-                "version_code": 26,
-                "version_name": "3.1.16",
+                "version_code": 27,
+                "version_name": "3.1.17",
             }
         ),
         encoding="utf-8",
@@ -1161,8 +1161,8 @@ def _synthetic_evidence(root: Path) -> tuple[list[dict], dict[str, Path]]:
         (
             "app-physicalAudit.apk",
             "cloud.dcompany.erp.physicalaudit",
-            "26",
-            "3.1.16-physical-audit",
+            "27",
+            "3.1.17-physical-audit",
         ),
         ("audit-driver-debug.apk", "cloud.dcompany.erp.auditdriver", "1", "1-test-only"),
         (

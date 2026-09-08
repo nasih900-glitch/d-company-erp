@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "name": "Code 26 full-route Gaming and Finance physical acceptance",
+  "name": "Code 27 full-route Gaming and Finance physical acceptance",
   "fixture": "backend/scripts/physical_audit_fixture.py",
   "expected_sessions": 16,
   "maximum_steps": 500,

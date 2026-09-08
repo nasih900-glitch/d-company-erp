@@ -88,6 +88,31 @@ class AndroidReleaseVersionTest(unittest.TestCase):
                 version,
             )
 
+    def test_code27_deployment_correction_accepts_v3_1_17(self) -> None:
+        version = read_gradle_version(
+            self.write_build_file(version_code="27", version_name='"3.1.17"')
+        )
+
+        validate_tag("v3.1.17", version)
+        validate_built_metadata(
+            self.write_metadata(version_code=27, version_name="3.1.17"), version
+        )
+
+        self.assertEqual(AndroidVersion(code=27, name="3.1.17"), version)
+
+    def test_code27_deployment_correction_rejects_code26_tag_and_metadata(self) -> None:
+        version = read_gradle_version(
+            self.write_build_file(version_code="27", version_name='"3.1.17"')
+        )
+
+        with self.assertRaisesRegex(ReleaseVersionError, "expected 'v3.1.17'"):
+            validate_tag("v3.1.16", version)
+        with self.assertRaisesRegex(ReleaseVersionError, "does not match"):
+            validate_built_metadata(
+                self.write_metadata(version_code=26, version_name="3.1.16"),
+                version,
+            )
+
     def test_tag_must_match_version_name_exactly(self) -> None:
         version = read_gradle_version(self.write_build_file())
 

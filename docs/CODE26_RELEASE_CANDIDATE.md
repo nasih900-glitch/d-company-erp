@@ -1,5 +1,10 @@
 # D Company ERP 3.1.16 (code 26) release candidate
 
+> **Historical candidate:** Code 26 was signed, but its production installer
+> stopped before image builds or cutover. Its identity and evidence remain
+> immutable. The deployment-only successor is
+> [Code 27 / 3.1.17](CODE27_RELEASE_CANDIDATE.md).
+
 Code 26 is the corrective candidate after the Code 25 physical-tablet audit.
 Its coordinated identity is tag `v3.1.16`, Android `versionName=3.1.16`, Android
 `versionCode=26`, and database migration head `0071`. Code 25 remains immutable;
