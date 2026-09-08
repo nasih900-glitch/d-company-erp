@@ -619,6 +619,9 @@ def _finance_errors(payload: dict[str, Any]) -> list[str]:
     observed = payload.get("observed")
     if not isinstance(expected, dict) or not isinstance(observed, dict):
         return errors + ["Finance/Reports reconciliation lacks expected/observed values"]
+    branch_id = expected.get("branch_id")
+    if not isinstance(branch_id, str) or not branch_id.strip():
+        errors.append("Finance/Reports reconciliation lacks the expected fixture branch")
 
     required_expected = (
         "revenue_minor",
@@ -711,9 +714,9 @@ def _finance_errors(payload: dict[str, Any]) -> list[str]:
         ),
         (monthly.get("net_payments_received_minor") == revenue, "Monthly net payments"),
         (
-            daily.get("branch_id") not in (None, "")
-            and monthly.get("branch_id") == daily.get("branch_id"),
-            "Daily/monthly branch parity",
+            daily.get("branch_id") == branch_id
+            and monthly.get("branch_id") == branch_id,
+            "Daily/monthly fixture branch parity",
         ),
     )
     errors.extend(

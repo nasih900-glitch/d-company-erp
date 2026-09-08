@@ -758,6 +758,7 @@ if [[ "$VERIFY_RC" -eq 0 ]]; then
       > "$ARTIFACT_DIR/reports-monthly-response.json"
     jq -n \
       --slurpfile fixture "$VERIFY_MANIFEST" \
+      --slurpfile seed "$SEED_MANIFEST" \
       --slurpfile finance "$ARTIFACT_DIR/finance-pnl-response.json" \
       --slurpfile daily "$ARTIFACT_DIR/reports-daily-response.json" \
       --slurpfile monthly "$ARTIFACT_DIR/reports-monthly-response.json" \
@@ -769,6 +770,9 @@ if [[ "$VERIFY_RC" -eq 0 ]]; then
       ($f.gross_order_minor) as $revenue |
       ($f.inventory.cogs_minor) as $cogs |
       [
+        (if ($f.branch_id | type) == "string" and ($f.branch_id | length) > 0 and
+            $f.branch_id == $seed[0].branch_id and $f.company_id == $seed[0].company_id
+          then empty else "Fixture business scope" end),
         (if $p.accounting_basis == "operational_receipt" then empty else "Finance basis" end),
         (if $p.revenue_minor == $revenue then empty else "Finance revenue" end),
         (if $p.cogs_minor == $cogs then empty else "Finance COGS" end),
@@ -813,7 +817,7 @@ if [[ "$VERIFY_RC" -eq 0 ]]; then
       ] as $failures |
       {
         business_date:$business_date,
-        expected:{revenue_minor:$revenue,cogs_minor:$cogs,
+        expected:{branch_id:$f.branch_id,revenue_minor:$revenue,cogs_minor:$cogs,
           cash_minor:$f.cash_collected_minor,upi_minor:$f.upi_collected_minor,
           discount_minor:$f.manual_discount_minor,orders:16},
         observed:{finance:$p,daily:$d,monthly:$m},

@@ -704,6 +704,11 @@ async def verify() -> None:
                 )
             )
         ).scalar_one()
+        fixture_branch_id = (
+            await session.execute(
+                select(UserRole.branch_id).where(UserRole.user_id == fixture_user.id)
+            )
+        ).scalar_one()
         cola_stock = (
             await session.execute(
                 select(Ingredient).where(
@@ -781,6 +786,10 @@ async def verify() -> None:
         )
 
         failures: list[str] = []
+        if fixture_branch_id is None or any(
+            row.branch_id != fixture_branch_id for row in [*shifts, *orders]
+        ):
+            failures.append("shift/order branch differs from the synthetic employee branch")
         if not shifts or any(shift.status != "closed" for shift in shifts):
             failures.append("every created shift must be closed")
         if len(shifts) != 1:
@@ -1331,6 +1340,7 @@ async def verify() -> None:
             "fixture": "physical-audit",
             "database": database,
             "company_id": str(company_id),
+            "branch_id": str(fixture_branch_id),
             "linkage_audit_expectations": linkage_expectations,
             "linkage_audit_records": linkage_audits,
             "counts": {

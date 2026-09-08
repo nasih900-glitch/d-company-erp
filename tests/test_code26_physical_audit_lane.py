@@ -646,6 +646,7 @@ def test_fixture_and_runner_are_fail_closed_and_disposable() -> None:
         "authoritative_pause_duration_ms",
         "pause_event.occurred_at",
         "resume_event.occurred_at",
+        "shift/order branch differs from the synthetic employee branch",
     ):
         assert fixture_guard in fixture
     for tariff_code in (
@@ -1059,6 +1060,7 @@ def _synthetic_evidence(root: Path) -> tuple[list[dict], dict[str, Path]]:
                 "passed": True,
                 "failures": [],
                 "expected": {
+                    "branch_id": "branch-a",
                     "revenue_minor": revenue,
                     "cogs_minor": cogs,
                     "cash_minor": 28_000,
@@ -1433,6 +1435,40 @@ def test_evidence_analyzer_independently_rejects_monthly_payment_mismatch(
     result = _analyze(tmp_path, plan)
     assert not result["passed"]
     assert result["gates"]["authenticated_finance_reports_reconciled"] is False
+
+
+def test_fixture_exports_the_authenticated_branch_for_report_reconciliation() -> None:
+    tree = ast.parse(FIXTURE_PATH.read_text(encoding="utf-8"))
+    verify = next(node for node in tree.body if isinstance(node, ast.AsyncFunctionDef) and node.name == "verify")
+    result = next(
+        node.value for node in ast.walk(verify)
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "result" for target in node.targets)
+    )
+    assert isinstance(result, ast.Dict)
+    fields = {key.value: value for key, value in zip(result.keys, result.values) if isinstance(key, ast.Constant)}
+    assert ast.unparse(fields["branch_id"]) == "str(fixture_branch_id)"
+    assert "select(UserRole.branch_id)" in ast.unparse(verify)
+    assert "fixture_user.branch_id" not in ast.unparse(verify)
+    runner = RUNNER_PATH.read_text(encoding="utf-8")
+    assert '--slurpfile seed "$SEED_MANIFEST"' in runner
+    assert '$f.branch_id == $seed[0].branch_id' in runner
+    assert '$f.company_id == $seed[0].company_id' in runner
+    assert 'expected:{branch_id:$f.branch_id,' in runner
+
+
+def test_finance_analyzer_rejects_missing_or_wrong_fixture_branch(tmp_path: Path) -> None:
+    _synthetic_evidence(tmp_path)
+    payload = json.loads((tmp_path / "artifacts/financial-api-reconciliation.json").read_text())
+    assert not _ANALYZER._finance_errors(payload)
+    for missing_branch in (None, "", " ", False, 42):
+        malformed = copy.deepcopy(payload)
+        malformed["expected"]["branch_id"] = missing_branch
+        assert _ANALYZER._finance_errors(malformed)
+    wrong = copy.deepcopy(payload)
+    for report in ("daily", "monthly"):
+        wrong["observed"][report]["branch_id"] = "different-branch"
+    assert _ANALYZER._finance_errors(wrong)
 
 
 def test_evidence_analyzer_rejects_conflicting_duplicate_named_artifact(
