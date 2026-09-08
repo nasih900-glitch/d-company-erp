@@ -139,6 +139,10 @@ jobs:
           python -m pip_audit -r backend/requirements.lock
           python -m pip_audit -r backend/requirements-ci.lock
           python -m pip_audit -r ops/backup-requirements.lock
+      - name: Install physical-audit contract prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends ripgrep
       - name: Run complete repository contract suite
         run: python -m pytest tests
       - name: Apply migrations to a fresh PostgreSQL database

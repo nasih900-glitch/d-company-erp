@@ -18,6 +18,15 @@ def _scan_block() -> str:
     return source[start:end]
 
 
+def test_complete_contract_lanes_install_the_required_real_scanner() -> None:
+    root = RUNNER.parents[1]
+    for workflow in ("ci.yml", "release.yml"):
+        source = (root / ".github/workflows" / workflow).read_text(encoding="utf-8")
+        install = source.index("sudo apt-get install --yes --no-install-recommends ripgrep")
+        contracts = source.index("run: python -m pytest tests")
+        assert install < contracts, f"{workflow} must provision ripgrep before exercising its contract"
+
+
 @pytest.mark.parametrize("scan_exit,expected_clean", [(0, "false"), (1, "true"), (2, "false")])
 def test_runtime_scan_distinguishes_matches_no_matches_and_read_errors(
     tmp_path: Path, scan_exit: int, expected_clean: str,

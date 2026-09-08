@@ -53,6 +53,10 @@ jobs:
       - run: |
           pip install --only-binary=:all: --require-hashes -r backend/requirements-ci.lock
           pip install --only-binary=:all: --require-hashes -r ops/backup-requirements.lock
+      - name: Install physical-audit contract prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends ripgrep
       - name: Run complete repository contract suite
         run: python -m pytest tests
       - name: Test operational monitoring contracts
