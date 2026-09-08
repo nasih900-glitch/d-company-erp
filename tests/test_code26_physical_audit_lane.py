@@ -254,11 +254,22 @@ def test_physical_plan_proves_pause_resume_and_every_extension_option() -> None:
         if "choose" in step["name"].lower()
         and "extension" in step["name"].lower()
         and "packageCode" not in step
-        and step.get("textContains") in {"30 min extension", "1 hour extension"}
+        and "extension ·" in step.get("text", "")
     ]
     assert len(extension_choices) == 9
-    assert all("text" not in step for step in extension_choices)
-    assert all(step["textContains"].isascii() for step in extension_choices)
+    assert all("textContains" not in step for step in extension_choices)
+    assert all("₹" in step["text"] for step in extension_choices)
+
+
+def test_instruction_reader_preserves_utf8_before_selector_parsing() -> None:
+    driver = DRIVER_PATH.read_text(encoding="utf-8")
+    assert 'JSONObject(readInstructionFile(planPath))' in driver
+    assert 'JSONObject(readInstructionFile(credentialPath))' in driver
+    assert 'JSONObject(device.executeShellCommand("cat ' not in driver
+    assert 'ParcelFileDescriptor.AutoCloseInputStream(descriptor).use(::readUtf8Instructions)' in driver
+    assert 'CodingErrorAction.REPORT' in driver
+    assert 'bytes.size() + count <= 1_048_576' in driver
+    assert 'fun utf8InstructionsSurviveSplitMultibyteReads()' in driver
 
 
 def test_pause_event_interval_matches_authoritative_millisecond_floor() -> None:

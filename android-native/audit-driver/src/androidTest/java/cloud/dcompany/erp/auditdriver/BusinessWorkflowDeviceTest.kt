@@ -1,6 +1,7 @@
 package cloud.dcompany.erp.auditdriver
 
 import android.os.Build
+import android.os.ParcelFileDescriptor
 import android.os.PowerManager
 import android.os.SystemClock
 import android.util.Log
@@ -13,6 +14,11 @@ import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.UiObject2
 import androidx.test.uiautomator.Until
 import java.io.File
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
+import java.nio.ByteBuffer
+import java.nio.charset.CodingErrorAction
 import java.util.regex.Pattern
 import org.json.JSONArray
 import org.json.JSONObject
@@ -36,6 +42,16 @@ class BusinessWorkflowDeviceTest {
     private lateinit var output: File
     private val timings = JSONArray()
     private lateinit var credentials: JSONObject
+
+    @Test
+    fun utf8InstructionsSurviveSplitMultibyteReads() {
+        val expected = "{\"text\":\"Start · ₹100.00\"}"
+        val fragmented = object : ByteArrayInputStream(expected.toByteArray(Charsets.UTF_8)) {
+            override fun read(buffer: ByteArray, offset: Int, length: Int): Int =
+                super.read(buffer, offset, minOf(length, 1))
+        }
+        assertTrue(readUtf8Instructions(fragmented) == expected)
+    }
 
     @Test
     fun completeBusinessWorkflow() {
@@ -76,8 +92,8 @@ class BusinessWorkflowDeviceTest {
             ).apply {
                 check(mkdirs()) { "Each audit run must use a fresh evidence directory" }
             }
-            val plan = JSONObject(device.executeShellCommand("cat $planPath"))
-            credentials = JSONObject(device.executeShellCommand("cat $credentialPath"))
+            val plan = JSONObject(readInstructionFile(planPath))
+            credentials = JSONObject(readInstructionFile(credentialPath))
             require(credentials.optString("fixture") in setOf("main", "lenovo", "samsung", "backend")) {
                 "Only explicit synthetic audit fixtures are accepted"
             }
@@ -132,6 +148,31 @@ class BusinessWorkflowDeviceTest {
 
     private fun requireSafeInputPath(path: String) {
         require(path.matches(Regex("/sdcard/Download/[A-Za-z0-9._-]+\\.json")))
+    }
+
+    private fun readInstructionFile(path: String): String {
+        requireSafeInputPath(path)
+        // UiDevice's shell helper decodes individual chunks, which can split
+        // UTF-8 characters such as ₹ and corrupt otherwise valid selectors.
+        // Preserve the raw bytes and decode once, rejecting malformed input.
+        val descriptor = InstrumentationRegistry.getInstrumentation().uiAutomation
+            .executeShellCommand("cat $path")
+        return ParcelFileDescriptor.AutoCloseInputStream(descriptor).use(::readUtf8Instructions)
+    }
+
+    private fun readUtf8Instructions(input: InputStream): String {
+        val bytes = ByteArrayOutputStream()
+        val chunk = ByteArray(4096)
+        while (true) {
+            val count = input.read(chunk)
+            if (count == -1) break
+            require(bytes.size() + count <= 1_048_576) { "Audit instructions exceed 1 MiB" }
+            bytes.write(chunk, 0, count)
+        }
+        return Charsets.UTF_8.newDecoder()
+            .onMalformedInput(CodingErrorAction.REPORT)
+            .onUnmappableCharacter(CodingErrorAction.REPORT)
+            .decode(ByteBuffer.wrap(bytes.toByteArray())).toString()
     }
 
     private fun execute(step: JSONObject, stepNumber: Int, label: String) {
