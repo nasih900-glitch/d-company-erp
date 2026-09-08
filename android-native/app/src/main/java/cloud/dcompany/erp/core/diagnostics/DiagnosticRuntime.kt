@@ -12,14 +12,18 @@ import android.util.Log
 import androidx.annotation.RequiresApi
 import cloud.dcompany.erp.core.auth.AccessTokenIdentityParser
 import cloud.dcompany.erp.core.auth.CacheScope
+import cloud.dcompany.erp.core.auth.OutboxOwnerIdentity
 import cloud.dcompany.erp.core.auth.SharedPreferencesCacheScopeMarker
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.system.exitProcess
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * Synchronous one-event safety net for a fatal Java crash. Room/WorkManager
@@ -256,10 +260,59 @@ private data class ExitClassification(
     val severity: DiagnosticSeverity,
 )
 
+/** The token loader completed, including the legitimate signed-out case. */
+internal data class PersistedDiagnosticStartupIdentity(
+    val tokenIdentity: OutboxOwnerIdentity?,
+)
+
+/** Retains the first completed token load across a retry of another startup store. */
+internal class PersistedDiagnosticStartupIdentityCapture {
+    private val lock = Any()
+    @Volatile private var captured: PersistedDiagnosticStartupIdentity? = null
+
+    fun capture(tokenIdentity: OutboxOwnerIdentity?) {
+        synchronized(lock) {
+            if (captured == null) {
+                captured = PersistedDiagnosticStartupIdentity(tokenIdentity)
+            }
+        }
+    }
+
+    fun current(): PersistedDiagnosticStartupIdentity? = captured
+}
+
+/** Immutable witnesses read before foreground restore can clear or replace them. */
+internal data class PersistedDiagnosticStartupWitness(
+    val cacheScope: CacheScope?,
+    val verifiedScopeHash: String?,
+)
+
+/** Serialises duplicate Ready hooks and permits retry when durable import fails. */
+internal class PersistedDiagnosticHistoryImportGate(
+    private val witness: PersistedDiagnosticStartupWitness,
+    private val importHistory: suspend (String?) -> Unit,
+) {
+    private val mutex = Mutex()
+    private var completed = false
+
+    suspend fun importOnce(identity: PersistedDiagnosticStartupIdentity) {
+        mutex.withLock {
+            if (completed) return
+            val scopeHash = verifiedPersistedDiagnosticScopeHash(
+                tokenIdentity = identity.tokenIdentity,
+                persistedCacheScope = witness.cacheScope,
+                persistedDiagnosticScopeHash = witness.verifiedScopeHash,
+            )
+            importHistory(scopeHash)
+            completed = true
+        }
+    }
+}
+
 /**
- * Process entry point. Installation is explicit so Application owns ordering:
- * encrypted token state is loaded first, then historical exits are bound only
- * to that same local account scope before WorkManager can deliver them.
+ * Process entry point. Installation immediately protects new crashes and freezes
+ * the prior process' non-secret scope witnesses. Historical exits are imported
+ * separately after encrypted startup state has completed.
  */
 internal object DiagnosticsRuntime {
     private val installLock = Any()
@@ -273,6 +326,7 @@ internal object DiagnosticsRuntime {
     @Volatile private var connectivityProvider: (() -> DiagnosticConnectivity)? = null
     @Volatile private var outbox: DiagnosticOutbox? = null
     @Volatile private var verifiedScopeStore: DiagnosticVerifiedScopeStore? = null
+    @Volatile private var historicalImportGate: PersistedDiagnosticHistoryImportGate? = null
 
     fun install(
         application: Application,
@@ -287,6 +341,12 @@ internal object DiagnosticsRuntime {
                 val markerStore = DiagnosticCrashMarkerStore(context)
                 val exitLedger = DiagnosticExitLedger(context)
                 val verifiedStore = DiagnosticVerifiedScopeStore(context)
+                val startupWitness = runCatching {
+                    PersistedDiagnosticStartupWitness(
+                        cacheScope = SharedPreferencesCacheScopeMarker(context).current(),
+                        verifiedScopeHash = verifiedStore.current(),
+                    )
+                }.getOrNull()
                 val dao = DiagnosticDatabaseProvider.get(context).outboxDao()
                 val diagnosticOutbox = DiagnosticOutbox(
                     dao = dao,
@@ -302,45 +362,49 @@ internal object DiagnosticsRuntime {
                 this.connectivityProvider = connectivityProvider
                 this.outbox = diagnosticOutbox
                 this.verifiedScopeStore = verifiedStore
-                installCrashHandler(markerStore)
-                isolateDiagnosticFailure(::reportDiagnosticFailure) {
-                    DiagnosticSyncScheduler.ensurePeriodic(context)
-                }
-                installed = true
-
-                // A historical exit has no in-memory lease. Bind it only when the
-                // token identity, canonical persisted cache scope, and the scope
-                // explicitly verified by the prior process all still agree.
-                val persistedScopeHash = verifiedPersistedDiagnosticScopeHash(
-                    tokenIdentity = runCatching { accessTokenProvider() }.getOrNull().orEmpty()
-                        .takeIf(String::isNotBlank)
-                        ?.let(AccessTokenIdentityParser::parse),
-                    persistedCacheScope = runCatching {
-                        SharedPreferencesCacheScopeMarker(context).current()
-                    }.getOrNull(),
-                    persistedDiagnosticScopeHash = verifiedStore.current(),
-                )
-
-                scope.launch {
-                    isolateDiagnosticFailure(::reportDiagnosticFailure) {
+                this.historicalImportGate = startupWitness?.let { witness ->
+                    PersistedDiagnosticHistoryImportGate(witness) { persistedScopeHash ->
                         dao.quarantineUnboundPending()
                         val marker = markerStore.peek()
                         marker?.let {
                             val provenMarkerScope = it.localScopeHash
                                 ?.takeIf { markerScope -> markerScope == persistedScopeHash }
                             diagnosticOutbox.capture(it.event, provenMarkerScope)
-                            // Only a durable insertion (or existing UUID) permits acknowledgement.
-                            markerStore.acknowledge(it.event.clientEventId)
+                            // A failed acknowledgement leaves the marker retryable.
+                            check(markerStore.acknowledge(it.event.clientEventId)) {
+                                "The historical crash marker could not be acknowledged"
+                            }
                         }
                         PreviousProcessExitCapture(context, exitLedger)
                             .read(markerCrashAtMillis = marker?.event?.occurredAtMillis)
                             .forEach {
                                 diagnosticOutbox.capture(it, persistedScopeHash)
-                                it.localDedupeKey?.let(exitLedger::remember)
+                                it.localDedupeKey?.let { key ->
+                                    check(exitLedger.remember(key)) {
+                                        "The historical exit could not be recorded durably"
+                                    }
+                                }
                             }
                     }
                 }
+                installCrashHandler(markerStore)
+                isolateDiagnosticFailure(::reportDiagnosticFailure) {
+                    DiagnosticSyncScheduler.ensurePeriodic(context)
+                }
+                installed = true
             }
+        }
+    }
+
+    /** Uses only the identity captured by the process-owned startup loader. */
+    suspend fun importPersistedStartupHistory(identity: PersistedDiagnosticStartupIdentity) {
+        val gate = historicalImportGate ?: return
+        try {
+            gate.importOnce(identity)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            reportDiagnosticFailure(failure)
         }
     }
 

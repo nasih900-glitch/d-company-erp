@@ -14,6 +14,7 @@ import androidx.room.Room
 import cloud.dcompany.erp.core.alarm.GamingAlarmReconciler
 import cloud.dcompany.erp.core.alarm.HeldOrderAlarmReconciler
 import cloud.dcompany.erp.core.alarm.OperationalNotificationRouteStore
+import cloud.dcompany.erp.core.auth.AccessTokenIdentityParser
 import cloud.dcompany.erp.core.auth.CacheIsolationCoordinator
 import cloud.dcompany.erp.core.auth.OutboxOwnerStore
 import cloud.dcompany.erp.core.auth.OutboxSafetyGate
@@ -25,6 +26,8 @@ import cloud.dcompany.erp.core.db.ErpDatabase
 import cloud.dcompany.erp.core.db.SHIFT_CLOSING_WRITE_GUARD_CALLBACK
 import cloud.dcompany.erp.core.diagnostics.DiagnosticConnectivity
 import cloud.dcompany.erp.core.diagnostics.DiagnosticsRuntime
+import cloud.dcompany.erp.core.diagnostics.PersistedDiagnosticStartupIdentity
+import cloud.dcompany.erp.core.diagnostics.PersistedDiagnosticStartupIdentityCapture
 import cloud.dcompany.erp.core.diagnostics.SyncHealthSample
 import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.ClientCompatibilityGate
@@ -74,6 +77,16 @@ internal fun nextCompatibilityDelayMillis(
     if (nowElapsedMillis < lastCheckElapsedMillis) return intervalMillis
     val elapsed = nowElapsedMillis - lastCheckElapsedMillis
     return if (elapsed >= intervalMillis) intervalMillis else intervalMillis - elapsed
+}
+
+internal fun importPersistedDiagnosticHistoryIfReady(
+    result: PersistedStartupStateResult,
+    identity: PersistedDiagnosticStartupIdentity?,
+    importHistory: (PersistedDiagnosticStartupIdentity) -> Unit,
+) {
+    if (result is PersistedStartupStateResult.Ready && identity != null) {
+        importHistory(identity)
+    }
 }
 
 /**
@@ -227,6 +240,7 @@ class DCompanyApp : Application() {
 
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private lateinit var persistedStartupState: PersistedStartupStateRestorer
+    private val persistedDiagnosticStartupIdentity = PersistedDiagnosticStartupIdentityCapture()
     private val operationalAlarmReconciliationGeneration = MutableStateFlow(0L)
     private val compatibilityRecheckThrottle = CompatibilityRecheckThrottle()
     private val reconnectCompatibilityLock = Any()
@@ -278,7 +292,12 @@ class DCompanyApp : Application() {
             scope = appScope,
             timeoutMillis = STARTUP_STATE_TIMEOUT_MILLIS,
             loaders = listOf(
-                tokens::load,
+                {
+                    tokens.load()
+                    persistedDiagnosticStartupIdentity.capture(
+                        tokens.accessToken()?.let(AccessTokenIdentityParser::parse),
+                    )
+                },
                 shiftCache::loadProfile,
                 terminalStore::load,
                 outboxOwnerStore::load,
@@ -364,6 +383,7 @@ class DCompanyApp : Application() {
                 }
             },
         )
+        startPersistedDiagnosticHistoryImport()
         remoteAssistance = RemoteAssistanceCoordinator(
             context = this,
             scope = appScope,
@@ -451,10 +471,34 @@ class DCompanyApp : Application() {
         }
     }
 
+    private fun startPersistedDiagnosticHistoryImport() {
+        appScope.launch(Dispatchers.IO) {
+            importPersistedDiagnosticHistoryIfReady(
+                result = persistedStartupState.start().await(),
+                identity = persistedDiagnosticStartupIdentity.current(),
+                importHistory = { identity ->
+                    appScope.launch(Dispatchers.IO) {
+                        DiagnosticsRuntime.importPersistedStartupHistory(identity)
+                    }
+                },
+            )
+        }
+    }
+
     /** Awaited by every entry point before it reads authentication or scope. */
     internal suspend fun awaitPersistedStartupState(
         retryFailed: Boolean = false,
-    ): PersistedStartupStateResult = persistedStartupState.await(retryFailed)
+    ): PersistedStartupStateResult = persistedStartupState.await(retryFailed).also { result ->
+        importPersistedDiagnosticHistoryIfReady(
+            result = result,
+            identity = persistedDiagnosticStartupIdentity.current(),
+            importHistory = { identity ->
+                appScope.launch(Dispatchers.IO) {
+                    DiagnosticsRuntime.importPersistedStartupHistory(identity)
+                }
+            },
+        )
+    }
 
     /**
      * A foreground return is a natural, low-noise opportunity to pick up a new

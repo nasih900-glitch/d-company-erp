@@ -835,13 +835,21 @@ if ! write_source_recheck; then
   SOURCE_RECHECK_RC=1
 fi
 
-if rg -n -i \
+RUNTIME_SCAN_RC=0
+if rg -n -i --glob '!runtime-failure-scan*' \
   'FATAL EXCEPTION.*cloud\.dcompany\.erp|ANR in cloud\.dcompany\.erp|cloud\.dcompany\.erp[^ ]* has died' \
-  "$ARTIFACT_DIR" "$RUNTIME_DIR" > "$ARTIFACT_DIR/runtime-failure-scan.txt"; then
-  RUNTIME_SCAN_CLEAN=false
+  "$ARTIFACT_DIR" "$RUNTIME_DIR" > "$ARTIFACT_DIR/runtime-failure-scan.txt" \
+  2> "$RUNTIME_DIR/runtime-failure-scan-stderr.txt"; then
+  RUNTIME_SCAN_RC=0
 else
+  RUNTIME_SCAN_RC=$?
+fi
+RUNTIME_SCAN_CLEAN=false
+if [[ "$RUNTIME_SCAN_RC" -eq 1 ]]; then
   RUNTIME_SCAN_CLEAN=true
-  : > "$ARTIFACT_DIR/runtime-failure-scan.txt"
+elif [[ "$RUNTIME_SCAN_RC" -gt 1 ]]; then
+  printf 'Runtime failure scan could not complete (exit %s); acceptance fails closed.\n' \
+    "$RUNTIME_SCAN_RC" >&2
 fi
 
 set +e

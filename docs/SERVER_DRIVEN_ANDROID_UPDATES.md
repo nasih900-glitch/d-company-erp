@@ -173,14 +173,17 @@ responses and network uncertainty remain blocked. The APK itself must return:
    size, signer and source evidence, but leave the staged code-`26` row inactive.
    Staging does not advertise an offer.
 6. After all four preparation phases in `CODE26_RELEASE_CANDIDATE.md`, the owner
-   may activate the exact staged candidate as a controlled offer to the target
-   code-`21` tablet. The backend performs a second no-redirect public byte
+   may activate the exact staged candidate only after explicitly accepting that
+   every eligible direct-channel client can see the offer. There is no
+   per-device allowlist; a pilot on the intended code-`21` tablet requires staff
+   coordination, not an enforced targeted offer. The backend performs a second no-redirect public byte
    verification before the atomic status transition and records the owner
    action in the Audit Log. Refresh the update check, download, approve Android's
    installer, and reopen code `26`. Then run the supervised real-live
    operational acceptance trial and verify sign-in, shift, Gaming, POS
    settlement, offline queue recovery and finance reconciliation. The owner may
-   approve wider partner rollout only after that trial passes.
+   ask other partners to install only after that trial passes; the public
+   update endpoint does not enforce that operational restriction.
 
 Do not activate an intermediate held build as its own update. Do not stage from an arbitrary
 local Gradle build, a renamed APK, a different workflow run, or a candidate

@@ -130,14 +130,18 @@ remaining hours. See `CODE26_AUTH_REFRESH_INCIDENT.md` for the bounded incident
 and corrective proof.
 
 Only after all four phases pass on the same source and artifact may the owner
-activate the exact staged candidate as a controlled offer for installation on
-the target tablet; no automated process may offer it. Android still requires
-employee installation approval. After installation, run the supervised
+activate the exact staged candidate; no automated process may offer it.
+Activation advertises the update to every eligible direct-channel client, not
+only one selected tablet: this release has no per-device allowlist. Keep it
+staged until the owner explicitly accepts that channel-wide exposure and has
+coordinated the intended pilot installation. Android still requires employee
+installation approval. After installation, run the supervised
 real-live operational acceptance trial with authenticated Android health,
 natural token expiry, financial reconciliation, and no automatic relogin.
 Confirm the intended tablet reports Code 26, has no unsent work, and passes a
-final smoke shift. Passing that trial is required before the owner approves any
-wider rollout.
+final smoke shift. Passing that trial is required before the owner asks other
+staff to install; that operational rollout restriction is not enforced by the
+update endpoint.
 
 Cloud physical hardware is valid defect-finding evidence but is not a claim
 that the partner's Redmi Pad 2 or HyperOS was tested. SMTP delivery, real UPI or

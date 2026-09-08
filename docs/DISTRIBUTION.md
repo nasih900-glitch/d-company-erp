@@ -229,12 +229,15 @@ staged, active, approved or partner-installable.
 5. Stage the exact verified CI artifact inactive and review it in the owner ERP.
    Staging does not advertise or activate an offer.
 6. After all four preparation phases in `CODE26_RELEASE_CANDIDATE.md`, the owner
-   may activate the exact staged candidate as a controlled offer to the target
-   tablet. Android still requires employee approval to install it. Run the
+   may activate the exact staged candidate only after explicitly accepting
+   channel-wide exposure. Every eligible direct-channel client can see that
+   offer; there is no per-device allowlist. Coordinate the intended pilot
+   tablet with staff. Android still requires employee approval to install it. Run the
    supervised real-live operational acceptance trial, authenticated
    physical-target smoke, offline/restart, alarm, performance and financial
-   reconciliation after installation. The owner may approve wider rollout only
-   after that trial passes.
+   reconciliation after installation. The owner may ask other staff to install
+   only after that trial passes; this restriction is operational, not enforced
+   by the update endpoint.
 
 ### Historical Code 14 rollout record (do not execute for Code 26)
 
@@ -473,8 +476,10 @@ candidates and must never be activated. Code `24` failed before signing and
 its tag remains immutable. Code `25` failed its physical-tablet audit and is
 immutable rejected history; it must never be activated. Code `26` is the
 unsigned corrective candidate. After its four preparation phases, only the
-owner may activate a controlled offer to the target tablet; wider rollout
-remains blocked until supervised target-device acceptance passes.
+owner may activate an offer after accepting exposure to all eligible
+direct-channel clients. There is no per-device targeting. Further staff
+installations require owner coordination after supervised target-device
+acceptance passes; the public update endpoint does not enforce that sequence.
 Protected-owner status alone
 grants no global release authority: only the exact company/user identity
 configured in `ANDROID_RELEASE_CONTROLLER_BINDINGS`, with `admin.system` and
