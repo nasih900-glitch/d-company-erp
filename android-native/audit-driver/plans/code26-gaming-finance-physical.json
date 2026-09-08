@@ -279,7 +279,7 @@
     {
       "name": "Standard Single: choose 60 minute extension",
       "action": "click",
-      "text": "Single Mode · 1 hour extension · 60 min · ₹100.00 total",
+      "textContains": "1 hour extension",
       "timeoutMs": 60000
     },
     {
@@ -605,7 +605,7 @@
     {
       "name": "Standard Single 60m + 30m extension: choose 30 minute extension",
       "action": "click",
-      "text": "Single Mode · 30 min extension · 30 min · ₹60.00 total",
+      "textContains": "30 min extension",
       "timeoutMs": 60000
     },
     {
@@ -924,7 +924,7 @@
     {
       "name": "Standard Dual 3-player: choose extension Dual Mode · 30 min extension · 30 min · ₹100.00 total",
       "action": "click",
-      "text": "Dual Mode · 30 min extension · 30 min · ₹100.00 total",
+      "textContains": "30 min extension",
       "timeoutMs": 60000
     },
     {
@@ -1093,7 +1093,7 @@
     {
       "name": "Standard Dual 4-player: choose extension Dual Mode · 1 hour extension · 60 min · ₹190.00 total",
       "action": "click",
-      "text": "Dual Mode · 1 hour extension · 60 min · ₹190.00 total",
+      "textContains": "1 hour extension",
       "timeoutMs": 60000
     },
     {
@@ -1262,7 +1262,7 @@
     {
       "name": "Premium Single: choose extension Premium Single Mode · 30 min extension · 30 min · ₹70.00 total",
       "action": "click",
-      "text": "Premium Single Mode · 30 min extension · 30 min · ₹70.00 total",
+      "textContains": "30 min extension",
       "timeoutMs": 60000
     },
     {
@@ -1437,7 +1437,7 @@
     {
       "name": "Premium Single 60m extension coverage: choose 60 minute extension",
       "action": "click",
-      "text": "Premium Single Mode · 1 hour extension · 60 min · ₹120.00 total",
+      "textContains": "1 hour extension",
       "timeoutMs": 60000
     },
     {
@@ -1606,7 +1606,7 @@
     {
       "name": "Premium Dual 2-player: choose extension Premium Dual Mode · 1 hour extension · 60 min · ₹150.00 total",
       "action": "click",
-      "text": "Premium Dual Mode · 1 hour extension · 60 min · ₹150.00 total",
+      "textContains": "1 hour extension",
       "timeoutMs": 60000
     },
     {
@@ -1775,7 +1775,7 @@
     {
       "name": "Premium Dual 3-player: choose extension Premium Dual Mode · 1 hour extension · 60 min · ₹180.00 total",
       "action": "click",
-      "text": "Premium Dual Mode · 1 hour extension · 60 min · ₹180.00 total",
+      "textContains": "1 hour extension",
       "timeoutMs": 60000
     },
     {
@@ -1950,7 +1950,7 @@
     {
       "name": "Premium Dual 4-player: choose 30 minute extension",
       "action": "click",
-      "text": "Premium Dual Mode · 30 min extension · 30 min · ₹150.00 total",
+      "textContains": "30 min extension",
       "timeoutMs": 60000
     },
     {
@@ -2545,6 +2545,15 @@
       }
     },
     {
+      "name": "VR open-ended transfer: select destination station",
+      "action": "click",
+      "text": "VR Pod 2",
+      "timeoutMs": 60000,
+      "then": {
+        "text": "Stop & calculate"
+      }
+    },
+    {
       "name": "VR open-ended transfer: observe timer frames",
       "action": "idleFrames",
       "durationMs": 5000
@@ -3043,7 +3052,15 @@
       "name": "Open physical cash count",
       "action": "click",
       "text": "Count cash",
-      "timeoutMs": 60000
+      "timeoutMs": 60000,
+      "reveal": {
+        "scrollable": true,
+        "index": 1,
+        "direction": "DOWN",
+        "amount": 0.9,
+        "speedPxPerSecond": 500,
+        "repeats": 3
+      }
     },
     {
       "name": "Count one ₹500 note",

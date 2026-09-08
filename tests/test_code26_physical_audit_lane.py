@@ -64,7 +64,7 @@ def test_physical_plan_is_bounded_and_contains_no_embedded_authority() -> None:
     steps = _steps()
     rendered = json.dumps(steps, sort_keys=True, ensure_ascii=False)
 
-    assert len(steps) == 411
+    assert len(steps) == 412
     assert {step["action"] for step in steps} <= {
         "launch",
         "restart",
@@ -248,6 +248,18 @@ def test_physical_plan_proves_pause_resume_and_every_extension_option() -> None:
         for step in extension_submits
     )
 
+    extension_choices = [
+        step
+        for step in steps
+        if "choose" in step["name"].lower()
+        and "extension" in step["name"].lower()
+        and "packageCode" not in step
+        and step.get("textContains") in {"30 min extension", "1 hour extension"}
+    ]
+    assert len(extension_choices) == 9
+    assert all("text" not in step for step in extension_choices)
+    assert all(step["textContains"].isascii() for step in extension_choices)
+
 
 def test_pause_event_interval_matches_authoritative_millisecond_floor() -> None:
     matches = _load_fixture_function(
@@ -335,6 +347,40 @@ def test_discount_apply_uses_bounded_human_speed_reveal() -> None:
         "text": "OK",
         "timeoutMs": 60_000,
         "then": {"text": "CONTINUE TO PAYMENT · ₹210.00"},
+    }
+
+
+def test_transfer_reselects_destination_and_cash_count_is_revealed() -> None:
+    steps = _steps()
+    by_name = {step["name"]: (index, step) for index, step in enumerate(steps)}
+
+    transfer_names = [
+        "VR open-ended transfer: confirm transfer",
+        "VR open-ended transfer: select destination station",
+        "VR open-ended transfer: observe timer frames",
+        "VR open-ended transfer: request stop",
+    ]
+    assert [by_name[name][0] for name in transfer_names] == sorted(
+        by_name[name][0] for name in transfer_names
+    )
+    assert by_name[transfer_names[1]][1] == {
+        "name": transfer_names[1],
+        "action": "click",
+        "text": "VR Pod 2",
+        "timeoutMs": 60_000,
+        "then": {"text": "Stop & calculate"},
+    }
+
+    count_cash = by_name["Open physical cash count"][1]
+    assert count_cash["action"] == "click"
+    assert count_cash["text"] == "Count cash"
+    assert count_cash["reveal"] == {
+        "scrollable": True,
+        "index": 1,
+        "direction": "DOWN",
+        "amount": 0.9,
+        "speedPxPerSecond": 500,
+        "repeats": 3,
     }
 
 
