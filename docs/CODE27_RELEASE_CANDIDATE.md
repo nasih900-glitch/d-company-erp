@@ -14,6 +14,24 @@ or Web ERP feature behavior changes from the signed Code 26 source are
 authorized. Code 27 requires a new protected signing approval and new artifact;
 the signed Code 26 APK must not be relabelled or reused.
 
+## Required development-tool security correction
+
+The exact `6170b3253fd19fe39cc75c0dd75e92dfce7657aa` Code 27 CI run failed its
+frontend audit gate before release completion because transitive development
+dependency `js-yaml` 4.3.1 is affected by the reviewed high-severity
+[GHSA-2883-xcg3-v3hh](https://github.com/advisories/GHSA-2883-xcg3-v3hh).
+The advisory affects 4.x versions below 4.3.2 and identifies 4.3.2 as patched.
+The corrective source updates only the `package-lock.json` entry to 4.3.2,
+within both existing parent ranges (`^4.1.0`); it does not change frontend
+application source or runtime dependencies.
+
+The audit also reports moderate
+[GHSA-82fw-gwwq-j7x9](https://github.com/vitest-dev/vitest/security/advisories/GHSA-82fw-gwwq-j7x9)
+through Vitest 3.2.7. Its patched stable line requires a major Vitest upgrade to
+4.1.11, so it is disclosed rather than hidden or force-upgraded in this narrow
+high-severity correction. All Code 27 exact-source gates must be rerun after the
+lockfile change; the failed `6170b32` evidence cannot approve the new source.
+
 This ledger records requirements, not completed Code 27 evidence. It does not
 claim that exact-source tests, builds, physical validation, signing, upgrade,
 deployment, staging, installation, or a live trial have passed.
