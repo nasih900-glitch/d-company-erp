@@ -395,6 +395,25 @@ def test_transfer_reselects_destination_and_cash_count_is_revealed() -> None:
     }
 
 
+def test_return_to_gaming_respects_the_persisted_service_filter() -> None:
+    steps = _steps()
+    service_switches = {
+        "Simdrive 30m: show Racing stations",
+        "Simdrive 60m: show Racing stations",
+        "VR open-ended transfer: show VR",
+        "Streaming open-ended: show Streaming",
+        "Shisha open-ended: show Shisha",
+    }
+    checked = set()
+    for index, step in enumerate(steps):
+        if step["name"] in service_switches:
+            navigation = steps[index - 1]
+            assert navigation["name"] == "Open Gaming"
+            assert navigation["then"] == {"text": "Station floor"}
+            checked.add(step["name"])
+    assert checked == service_switches
+
+
 def test_addon_flow_proves_immediate_feedback_and_durable_detail_rows() -> None:
     steps = {step["name"]: step for step in _steps()}
 
