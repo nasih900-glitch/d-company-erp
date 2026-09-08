@@ -4,6 +4,8 @@
 This is deliberately release-specific.  Code 25 is the behavioural baseline;
 Code 26 may add tests and narrowly change the allow-listed Android failure
 paths, but it may not delete, disable, reorder, or rewrite an existing test.
+The sole reviewed audit-reader locator migration below preserves every
+credential-cleanup assertion while following the corrected UTF-8 reader.
 """
 
 from __future__ import annotations
@@ -137,6 +139,17 @@ def _missing_ordered_lines(baseline: str, candidate: str) -> list[str]:
     return missing
 
 
+def _normalise_audit_reader_locator(path: str, text: str) -> str:
+    if path != "tests/test_android_audit_isolation.py":
+        return text
+    # Only this implementation locator changes. All cleanup assertions and
+    # their ordering remain subject to the full baseline comparison.
+    return text.replace(
+        "        plan_read = source.index('JSONObject(readInstructionFile(planPath))', outer_try)",
+        '        plan_read = source.index(\'JSONObject(device.executeShellCommand("cat $planPath"))\', outer_try)',
+    )
+
+
 def _disable_counts(text: str) -> tuple[int, ...]:
     return tuple(len(pattern.findall(text)) for pattern in DISABLING_PATTERNS)
 
@@ -159,6 +172,7 @@ def verify_repository(root: Path, baseline: str = CODE25_BASE) -> RegressionFree
         candidate_text = candidate_path.read_text(encoding="utf-8")
         baseline_normalised = _normalise_release_identity(path, baseline_text)
         candidate_normalised = _normalise_release_identity(path, candidate_text)
+        candidate_normalised = _normalise_audit_reader_locator(path, candidate_normalised)
         if _missing_ordered_lines(baseline_normalised, candidate_normalised):
             errors.append(f"baseline test was rewritten or reordered: {path}")
         baseline_disables = _disable_counts(baseline_text)

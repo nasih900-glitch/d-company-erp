@@ -8,6 +8,7 @@ from scripts.verify_code26_regression_freeze import (
     _disable_counts,
     _missing_ordered_lines,
     _normalise_release_identity,
+    _normalise_audit_reader_locator,
     verify_repository,
 )
 
@@ -34,6 +35,23 @@ def test_disable_marker_counter_detects_new_skip_paths() -> None:
     baseline = "def test_money():\n    assert True\n"
     candidate = "@pytest.mark.skip\ndef test_money():\n    assert True\n"
     assert sum(_disable_counts(candidate)) > sum(_disable_counts(baseline))
+
+
+def test_audit_reader_migration_only_normalises_one_locator() -> None:
+    path = "tests/test_android_audit_isolation.py"
+    previous = '        plan_read = source.index(\'JSONObject(device.executeShellCommand("cat $planPath"))\', outer_try)'
+    current = "        plan_read = source.index('JSONObject(readInstructionFile(planPath))', outer_try)"
+    assertion = "        self.assertLess(outer_finally, cleanup)"
+    assert _normalise_audit_reader_locator(path, current) == previous
+    assert _normalise_audit_reader_locator("tests/other.py", current) == current
+    assert not _missing_ordered_lines(
+        previous + "\n" + assertion,
+        _normalise_audit_reader_locator(path, current + "\n" + assertion),
+    )
+    assert _missing_ordered_lines(
+        previous + "\n" + assertion,
+        _normalise_audit_reader_locator(path, current),
+    ) == [assertion]
 
 
 def test_code26_preserves_the_complete_code25_test_surface() -> None:

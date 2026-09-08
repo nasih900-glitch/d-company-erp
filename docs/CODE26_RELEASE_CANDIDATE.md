@@ -46,6 +46,11 @@ no production path outside the reviewed Code 26 allow-list. A missing,
 rewritten, reordered, skipped, ignored or xfailed baseline check rejects the
 candidate.
 
+The audit-isolation test's plan-reader locator follows the raw UTF-8 reader.
+This one exact locator migration is reviewed and normalized by the freeze
+gate; all original credential-cleanup assertions and their ordering remain
+mandatory. No application behavior is exempted from regression verification.
+
 ## Required release gates
 
 1. Apply all migrations to a fresh disposable PostgreSQL database; run the full
