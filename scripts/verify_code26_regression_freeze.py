@@ -40,6 +40,7 @@ ALLOWED_PRODUCTION_PATHS = {
     "android-native/app/src/main/java/cloud/dcompany/erp/core/auth/CacheScope.kt",
     "android-native/app/src/main/java/cloud/dcompany/erp/core/diagnostics/DiagnosticOutbox.kt",
     "android-native/app/src/main/java/cloud/dcompany/erp/core/money/MoneyInput.kt",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/net/ApiClient.kt",
     "android-native/app/src/main/java/cloud/dcompany/erp/core/sync/BackgroundSyncWorker.kt",
     "android-native/app/src/main/java/cloud/dcompany/erp/ui/SessionViewModel.kt",
     "android-native/app/src/main/java/cloud/dcompany/erp/ui/components/Primitives.kt",

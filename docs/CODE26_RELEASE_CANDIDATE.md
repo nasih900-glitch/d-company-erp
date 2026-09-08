@@ -23,6 +23,9 @@ centre.
 - Replace silent Gaming start/stop and POS payment rejection with explicit,
   actionable workspace-recovery feedback.
 - Give every POS quantity control item-specific accessibility semantics.
+- Share one session-scoped refresh coordinator across ordinary ERP and remote
+  support clients. Preserve separate network clients, remote proof/price
+  boundaries, account-lineage guards and backend token-reuse revocation.
 - Preserve all Code 25 tariffs, billing, shift, offline, update, permission,
   audit, and finance contracts unchanged.
 
@@ -91,6 +94,13 @@ mandatory. No application behavior is exempted from regression verification.
    viewport.
 5. Independently review authentication, tenant/workspace isolation, money,
    idempotency, audit, signing, update, and rollback boundaries.
+   The interrupted eight-hour trial exposed a cross-client refresh race; its
+   failed evidence remains failed. After the corrective auth change, repeat
+   one uninterrupted eight-real-hour isolated shop-day trial on the exact
+   candidate, with authenticated Android health checks, natural token expiry,
+   cross-date financial reconciliation, and no automatic relogin. Completing
+   the remaining hours of the interrupted run is not an endurance pass. See
+   `CODE26_AUTH_REFRESH_INCIDENT.md` for the bounded incident and proof.
 6. Freeze one commit, build and sign through protected CI, then verify package,
    version, signer, SHA-256, byte size, manifest, and provenance. Prove a
    same-signing-key in-place Code 21 to Code 26 upgrade without uninstalling or
