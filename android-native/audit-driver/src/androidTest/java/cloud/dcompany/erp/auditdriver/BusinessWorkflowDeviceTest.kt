@@ -235,12 +235,6 @@ class BusinessWorkflowDeviceTest {
             "idleFrames", "idleStability", "idleSemanticStability" -> {
                 val base = safeLabel("%03d-%s".format(stepNumber, label))
                 capture("idle-$base-start")
-                if (action == "idleFrames") {
-                    checkedShell(
-                        "frames-$base-reset.txt",
-                        "dumpsys gfxinfo $appPackage reset",
-                    )
-                }
                 val duration = step.optLong("durationMs", 10_000L).coerceIn(1_000L, 30_000L)
                 val firstHalf = duration / 2
                 SystemClock.sleep(firstHalf)
@@ -248,6 +242,14 @@ class BusinessWorkflowDeviceTest {
                 SystemClock.sleep(duration - firstHalf)
                 capture("idle-$base-end")
                 if (action == "idleFrames") {
+                    // Observe geometry separately. Screenshot/accessibility work
+                    // must not overlap the app's steady-state frame measurement.
+                    SystemClock.sleep(2_000L)
+                    checkedShell(
+                        "frames-$base-reset.txt",
+                        "dumpsys gfxinfo $appPackage reset",
+                    )
+                    SystemClock.sleep(duration)
                     File(output, "frames-$base.txt").writeText(
                         device.executeShellCommand("dumpsys gfxinfo $appPackage framestats"),
                     )

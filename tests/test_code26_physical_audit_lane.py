@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import copy
 import hashlib
 import importlib.util
 import json
@@ -64,7 +65,7 @@ def test_physical_plan_is_bounded_and_contains_no_embedded_authority() -> None:
     steps = _steps()
     rendered = json.dumps(steps, sort_keys=True, ensure_ascii=False)
 
-    assert len(steps) == 412
+    assert len(steps) == 413
     assert {step["action"] for step in steps} <= {
         "launch",
         "restart",
@@ -301,6 +302,120 @@ def test_pause_event_interval_matches_authoritative_millisecond_floor() -> None:
     )
     assert not matches(pause_at, pause_at - timedelta(microseconds=1), 0)
     assert not matches(pause_at, pause_at + timedelta(milliseconds=8_000), -1)
+
+
+def test_receipt_rounding_preserves_raw_lines_and_exact_payment() -> None:
+    matches = _load_fixture_function("_receipt_amounts_match")
+    for raw, rounded, delta in ((584, 600, 16), (334, 300, -34), (100, 100, 0), (150, 200, 50)):
+        assert matches(raw, rounded, delta, rounded)
+        assert not matches(raw, rounded, delta + 1, rounded)
+        assert not matches(raw, rounded, delta, rounded + 1)
+        assert not matches(raw, rounded + 1, delta, rounded + 1)
+    # Only the line sum is rounded. Discount, points and tip apply afterwards.
+    assert matches(584, 549, 16, 549, 10, 40, 21)
+    assert not matches(584, 500, -33, 500, 10, 40, 21)
+    assert not matches(-1, 0, 1, 0)
+    assert not matches(584, 599, 16, 599, -1)
+    assert not matches(584, 601, 16, 601, 0, -1)
+    assert not matches(584, 601, 16, 601, 0, 0, -1)
+    assert not matches(584, 99, 16, 99, 100, 601)
+    assert not matches(584, 99, 16, 99, 100, 500, 101)
+    fixture = FIXTURE_PATH.read_text()
+    assert fixture.count("_receipt_amounts_match(") == 3
+    assert "int(linked_lines[0].line_total_minor) != int(hourly_session.amount_minor or -1)" in fixture
+
+
+def test_single_shift_send_audits_require_exact_linkage_and_attribution() -> None:
+    verify = _load_fixture_function("_single_shift_linkage_audit_failures")
+    link = {
+        "session_id": "session-1", "order_id": "order-1",
+        "company_id": "company-1", "actor_user_id": "employee-1",
+        "terminal_id": "terminal-1", "branch_id": "branch-1", "shift_id": "shift-1",
+        "sent_to_pos_at": "2026-09-08T09:00:00+00:00",
+    }
+    context = {key: link[key] for key in ("company_id", "actor_user_id", "terminal_id")}
+    update = {
+        **context, "entity_type": "GamingSession", "entity_id": "session-1",
+        "action": "update", "before": {"order_id": None},
+        "after": {"order_id": "order-1", "sent_to_pos_by": "employee-1",
+                  "sent_to_pos_at": link["sent_to_pos_at"]},
+    }
+    create = {
+        **context, "entity_type": "Order", "entity_id": "order-1", "action": "create",
+        "before": None, "after": {
+            **{key: link[key] for key in ("company_id", "branch_id", "terminal_id", "shift_id")},
+            "id": "order-1", "opened_by": "employee-1", "type": "session", "status": "held",
+            "total_minor": 600,
+        },
+    }
+    records = [update, create]
+    assert verify([link], records) == []
+    for invalid in ([], [update], [create], [update, update, create], [update, create, create]):
+        assert verify([link], invalid)
+    for index in (0, 1):
+        for key in ("company_id", "actor_user_id", "terminal_id", "entity_id", "action"):
+            changed = copy.deepcopy(records)
+            changed[index][key] = "wrong"
+            assert verify([link], changed), (index, key)
+    for key in ("order_id", "sent_to_pos_by", "sent_to_pos_at"):
+        changed = copy.deepcopy(records)
+        changed[0]["after"][key] = "wrong"
+        assert verify([link], changed), key
+    for before in ({}, {"order_id": "already-linked"}):
+        changed = copy.deepcopy(records)
+        changed[0]["before"] = before
+        assert verify([link], changed)
+    for key in ("id", "company_id", "branch_id", "terminal_id", "shift_id", "opened_by", "type", "status"):
+        changed = copy.deepcopy(records)
+        changed[1]["after"][key] = "wrong"
+        assert verify([link], changed), key
+    assert verify([link], records + [{"action": "gaming_session_handoff_to_pos"}])
+    assert verify([{**link, "sent_to_pos_at": None}], records)
+
+
+def test_frame_measurement_excludes_layout_capture_and_settles_first() -> None:
+    driver = DRIVER_PATH.read_text()
+    window = driver.split('"idleFrames", "idleStability", "idleSemanticStability" -> {', 1)[1].split(
+        'else -> error("Unsupported audit action:', 1
+    )[0]
+    end_capture = window.index('capture("idle-$base-end")')
+    settle = window.index("SystemClock.sleep(2_000L)")
+    reset = window.index('"dumpsys gfxinfo $appPackage reset"')
+    measurement = window.index("SystemClock.sleep(duration)")
+    result = window.index('"dumpsys gfxinfo $appPackage framestats"')
+    assert end_capture < settle < reset < measurement < result
+    for forbidden in ("capture(", "clearCache", "dumpWindowHierarchy"):
+        assert forbidden not in window[reset:result]
+
+
+def test_pause_feedback_finishes_before_unoccluded_stability_measurement() -> None:
+    steps = _steps()
+    index = next(index for index, step in enumerate(steps) if step["name"] == "Measure paused session layout stability")
+    assert steps[index - 1] == {
+        "name": "Standard Single: wait for pause confirmation to finish",
+        "action": "absent",
+        "text": "Session paused on the server. Connected devices will receive the paused clock and alarm state.",
+        "timeoutMs": 30000,
+    }
+    assert steps[index - 2]["name"] == "Standard Single: pause with reason"
+
+
+def test_finance_evidence_reveals_the_pnl_rows_with_bounded_touch_scroll() -> None:
+    steps = _steps()
+    index = next(index for index, step in enumerate(steps) if step["name"] == "Finance profit and loss layout rendered")
+    assert steps[index] == {
+        "name": "Finance profit and loss layout rendered",
+        "action": "scroll",
+        "class": "android.widget.ScrollView",
+        "index": 0,
+        "direction": "DOWN",
+        "amount": 0.55,
+        "speedPxPerSecond": 500,
+        "repeats": 3,
+        "timeoutMs": 60000,
+        "then": {"text": "Gross profit"},
+    }
+    assert steps[index + 1]["name"] == "Measure Finance settled layout stability"
 
 
 def test_physical_plan_covers_recovery_finance_receipts_and_cleanup() -> None:

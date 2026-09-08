@@ -242,6 +242,12 @@
       }
     },
     {
+      "name": "Standard Single: wait for pause confirmation to finish",
+      "action": "absent",
+      "text": "Session paused on the server. Connected devices will receive the paused clock and alarm state.",
+      "timeoutMs": 30000
+    },
+    {
       "name": "Measure paused session layout stability",
       "action": "idleSemanticStability",
       "durationMs": 10000,
@@ -3000,13 +3006,24 @@
       "name": "Finance inventory costing is authoritative",
       "action": "wait",
       "text": "Inventory costing complete",
-      "timeoutMs": 60000
+      "timeoutMs": 60000,
+      "then": {
+        "text": "Profit and loss"
+      }
     },
     {
       "name": "Finance profit and loss layout rendered",
-      "action": "wait",
-      "text": "Profit and loss",
-      "timeoutMs": 60000
+      "action": "scroll",
+      "class": "android.widget.ScrollView",
+      "index": 0,
+      "direction": "DOWN",
+      "amount": 0.55,
+      "speedPxPerSecond": 500,
+      "repeats": 3,
+      "timeoutMs": 60000,
+      "then": {
+        "text": "Gross profit"
+      }
     },
     {
       "name": "Measure Finance settled layout stability",

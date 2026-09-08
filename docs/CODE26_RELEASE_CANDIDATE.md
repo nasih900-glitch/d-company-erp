@@ -72,10 +72,12 @@ mandatory. No application behavior is exempted from regression verification.
    rechecks the exact commit/tree, APK SHA-256, verified signer certificate and
    isolated `cloud.dcompany.erp.physicalaudit` manifest identity
    (`26` / `3.1.15-physical-audit`); it rejects dirty or drifting source. Its
-   412-step plan completes 16 isolated Gaming-to-payment sessions and records
+   413-step plan completes 16 isolated Gaming-to-payment sessions and records
    exact per-step screenshots/hierarchies, start/mid/end idle-window geometry
    across nine stability windows, strict non-zero frame thresholds for the four
-   live-timer windows, exact raw paused-timer equality, device constraint
+   live-timer windows (after separate layout observations and a two-second
+   settle, with no screenshot/accessibility work during frame measurement),
+   exact raw paused-timer equality after the success snackbar finishes, device constraint
    evidence, and an authenticated Finance/Reports-to-fixture reconciliation. Shared Gaming
    pause is enabled only for that disposable loopback-backed audit process; the
    post-run fixture requires exact pause/resume actor, terminal, reason, version,

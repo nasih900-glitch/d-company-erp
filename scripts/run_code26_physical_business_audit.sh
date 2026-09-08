@@ -351,7 +351,7 @@ PLAN_EXTENSION_CODES_COMPLETE="$(jq '(
   "standard-single-extension-30m",
   "standard-single-extension-60m"
 ]' "$PLAN")"
-if [[ "$PLAN_STEPS" -ne 412 || "$PLAN_STARTS" -ne 16 || "$PLAN_PAYMENTS" -ne 16 || \
+if [[ "$PLAN_STEPS" -ne 413 || "$PLAN_STARTS" -ne 16 || "$PLAN_PAYMENTS" -ne 16 || \
       "$PLAN_FRAME_WINDOWS" -ne 4 || "$PLAN_STABILITY_WINDOWS" -ne 9 || \
       "$PLAN_ALARM_CONSTRAINTS" -ne 1 || "$PLAN_PAUSE_SEQUENCE" -ne 5 || \
       "$PLAN_SEMANTIC_STABILITY" -ne 1 || "$PLAN_PACKAGE_STARTS" -ne 13 || \

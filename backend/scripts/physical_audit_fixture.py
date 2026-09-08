@@ -140,6 +140,86 @@ def _pause_event_interval_matches_authoritative_duration(
     return authoritative_floor_us <= interval_us < authoritative_floor_us + 1_000
 
 
+def _receipt_amounts_match(
+    line_total_minor: int,
+    total_minor: int,
+    round_off_minor: int,
+    paid_minor: int,
+    tip_minor: int = 0,
+    manual_discount_minor: int = 0,
+    points_redeemed_minor: int = 0,
+) -> bool:
+    """Independently reconcile line rounding, then order-level adjustments."""
+    rounded_lines = ((line_total_minor + 50) // 100) * 100
+    expected_total = (
+        rounded_lines + tip_minor - manual_discount_minor - points_redeemed_minor
+    )
+    return (
+        line_total_minor >= 0
+        and tip_minor >= 0
+        and 0 <= manual_discount_minor <= rounded_lines
+        and 0 <= points_redeemed_minor <= rounded_lines - manual_discount_minor
+        and expected_total >= 0
+        and round_off_minor == rounded_lines - line_total_minor
+        and total_minor == expected_total
+        and paid_minor == expected_total
+    )
+
+
+def _single_shift_linkage_audit_failures(
+    links: list[dict], audit_rows: list[dict]
+) -> list[str]:
+    """Prove each ordinary Hybrid send, not an impossible cross-terminal handoff."""
+    failures = []
+    if any(row.get("action") == "gaming_session_handoff_to_pos" for row in audit_rows):
+        failures.append("unexpected cross-terminal handoff in the single-shift fixture")
+    for link in links:
+        session_id = link["session_id"]
+        updates = [
+            row for row in audit_rows
+            if row.get("entity_type") == "GamingSession"
+            and row.get("entity_id") == session_id
+            and row.get("action") == "update"
+            and "order_id" in (row.get("after") or {})
+        ]
+        creates = [
+            row for row in audit_rows
+            if row.get("entity_type") == "Order"
+            and row.get("entity_id") == link["order_id"]
+            and row.get("action") == "create"
+        ]
+        if len(updates) != 1 or len(creates) != 1:
+            failures.append(f"send-to-POS audit cardinality failed for session {session_id}")
+            continue
+        update, create = updates[0], creates[0]
+        before, after = update.get("before") or {}, update.get("after") or {}
+        order_after = create.get("after") or {}
+        context_matches = all(
+            row.get(field) == link[field]
+            for row in (update, create)
+            for field in ("company_id", "actor_user_id", "terminal_id")
+        )
+        if not (
+            context_matches
+            and "order_id" in before
+            and before["order_id"] is None
+            and after.get("order_id") == link["order_id"]
+            and after.get("sent_to_pos_by") == link["actor_user_id"]
+            and link["sent_to_pos_at"] is not None
+            and after.get("sent_to_pos_at") == link["sent_to_pos_at"]
+            and all(
+                order_after.get(field) == link[field]
+                for field in ("company_id", "branch_id", "terminal_id", "shift_id")
+            )
+            and order_after.get("id") == link["order_id"]
+            and order_after.get("opened_by") == link["actor_user_id"]
+            and order_after.get("type") == "session"
+            and order_after.get("status") == "held"
+        ):
+            failures.append(f"send-to-POS audit identity failed for session {session_id}")
+    return failures
+
+
 def _validated_environment() -> str:
     if os.environ.get("PHYSICAL_AUDIT_CONFIRMATION") != CONFIRMATION:
         raise PhysicalAuditFixtureError(
@@ -1006,11 +1086,21 @@ async def verify() -> None:
             linked_payments = (
                 payments_by_order.get(linked_order.id, []) if linked_order is not None else []
             )
+            linked_lines = [
+                line for line in lines_by_order.get(hourly_session.order_id, [])
+                if line.voided_at is None
+            ]
             if (
                 linked_order is None
-                or int(linked_order.total_minor) != int(hourly_session.amount_minor or -1)
+                or len(linked_lines) != 1
+                or int(linked_lines[0].line_total_minor) != int(hourly_session.amount_minor or -1)
                 or len(linked_payments) != 1
-                or int(linked_payments[0].amount_minor) != int(linked_order.total_minor)
+                or not _receipt_amounts_match(
+                    int(hourly_session.amount_minor or 0),
+                    int(linked_order.total_minor),
+                    int(linked_order.round_off_minor or 0),
+                    int(linked_payments[0].amount_minor),
+                )
             ):
                 failures.append(
                     "hourly Gaming to POS to payment reconciliation failed for "
@@ -1021,13 +1111,6 @@ async def verify() -> None:
                 line for line in lines_by_order.get(order.id, []) if line.voided_at is None
             ]
             line_total = sum(int(line.line_total_minor) for line in active_lines)
-            expected_total = (
-                line_total
-                + int(order.round_off_minor or 0)
-                + int(order.tip_minor or 0)
-                - int(order.manual_discount_minor or 0)
-                - int(order.points_redeemed_minor or 0)
-            )
             paid_total = sum(
                 int(payment.amount_minor) for payment in payments_by_order.get(order.id, [])
             )
@@ -1036,9 +1119,15 @@ async def verify() -> None:
                 or order.invoice_no is None
                 or order.invoice_issued_at is None
                 or order.fiscal_year is None
-                or expected_total != int(order.total_minor)
-                or paid_total != int(order.total_minor)
-                or int(order.round_off_minor or 0) != 0
+                or not _receipt_amounts_match(
+                    line_total,
+                    int(order.total_minor),
+                    int(order.round_off_minor or 0),
+                    paid_total,
+                    int(order.tip_minor or 0),
+                    int(order.manual_discount_minor or 0),
+                    int(order.points_redeemed_minor or 0),
+                )
             ):
                 failures.append(f"receipt totals/invoice identity failed for order {order.id}")
         invoice_numbers = [order.invoice_no for order in orders if order.invoice_no is not None]
@@ -1160,8 +1249,39 @@ async def verify() -> None:
             "login_success",
             "gaming_session_addon_added",
             "gaming_session_addon_voided",
-            "gaming_session_handoff_to_pos",
         }
+        linkage_audits = [
+            {
+                "entity_type": row.entity_type,
+                "entity_id": row.entity_id,
+                "action": row.action,
+                "company_id": str(row.company_id),
+                "actor_user_id": str(row.actor_user_id),
+                "terminal_id": str(row.terminal_id),
+                "before": row.before,
+                "after": row.after,
+            }
+            for row in audit_rows
+            if (row.entity_type in {"GamingSession", "Order"}
+                and row.action in {"create", "update"})
+            or row.action == "gaming_session_handoff_to_pos"
+        ]
+        linkage_expectations = [
+            {
+                "session_id": str(row.id),
+                "order_id": str(row.order_id),
+                "company_id": str(company_id),
+                "actor_user_id": str(fixture_user.id),
+                "terminal_id": str(orders_by_id[row.order_id].terminal_id),
+                "branch_id": str(orders_by_id[row.order_id].branch_id),
+                "shift_id": str(row.shift_id),
+                "sent_to_pos_at": row.sent_to_pos_at.isoformat() if row.sent_to_pos_at else None,
+            }
+            for row in sessions if row.order_id in orders_by_id
+        ]
+        if len(linkage_expectations) != 16:
+            failures.append("exactly sixteen session/order links are required for audit proof")
+        failures.extend(_single_shift_linkage_audit_failures(linkage_expectations, linkage_audits))
         observed_explicit_audits = {row.action for row in audit_rows}
         missing_audits = sorted(required_explicit_audits - observed_explicit_audits)
         if missing_audits:
@@ -1211,6 +1331,8 @@ async def verify() -> None:
             "fixture": "physical-audit",
             "database": database,
             "company_id": str(company_id),
+            "linkage_audit_expectations": linkage_expectations,
+            "linkage_audit_records": linkage_audits,
             "counts": {
                 "shifts": len(shifts),
                 "sessions": len(sessions),
