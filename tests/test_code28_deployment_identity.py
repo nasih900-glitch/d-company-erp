@@ -15,8 +15,13 @@ PROTECTED_APPLICATION_PREFIXES = (
     "android-native/app/schemas/",
     "android-native/audit-driver/src/",
 )
-SCANNER_DEPLOYMENT_PATHS = {
+REVIEWED_RELEASE_HARDENING_PATHS = {
     ".github/actions/scan-production-images/action.yml",
+    ".github/workflows/ci.yml",
+    ".github/workflows/release.yml",
+    "infra/docker/caddy-build/go.mod",
+    "infra/docker/caddy-build/go.sum",
+    "infra/docker/caddy.Dockerfile",
     "infra/scripts/install-on-vm.sh",
     "infra/scripts/run-hardened-image-scanners.sh",
 }
@@ -97,7 +102,9 @@ def test_code28_release_identity_files_change_only_expected_values() -> None:
 
 
 def test_code28_scanner_deployment_scope_is_exact() -> None:
-    assert _changed_files(".github/actions/", "infra/scripts/") == SCANNER_DEPLOYMENT_PATHS
+    assert _changed_files(
+        ".github/actions/", ".github/workflows/", "infra/docker/", "infra/scripts/"
+    ) == REVIEWED_RELEASE_HARDENING_PATHS
 
 
 def test_code28_physical_lane_changes_identity_only() -> None:

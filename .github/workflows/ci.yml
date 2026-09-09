@@ -240,7 +240,7 @@ jobs:
         run: >-
           docker run --rm --entrypoint sh erp-caddy:ci -ceu
           'test "$(sha256sum /usr/bin/caddy | cut -d" " -f1)" =
-          73c0169f0b72b465e2ae20bdb67a3e017044b2ab3d267816398b9d6ece243fb0;
+          951a0136950bb9edf60ff5cec6ca2df0a041b27ded9e610f0aab49b168739dac;
           caddy version | grep -F v2.11.4-dcompany.1;
           getcap /usr/bin/caddy | grep -F cap_net_bind_service'
       - name: Prove PostgreSQL 16 volume and rollback compatibility

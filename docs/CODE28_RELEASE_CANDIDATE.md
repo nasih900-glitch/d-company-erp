@@ -37,6 +37,23 @@ resource limits and runner-side path. It does not prove whole-host capacity on
 the intended 2 GiB RAM plus 2 GiB swap VPS; a guarded host run and free-space
 recheck before maintenance remain separate requirements.
 
+## Required Caddy dependency security correction
+
+Exact Code 28 CI run `34344571701` passed the backend, frontend, and Android
+lanes, but both container scanners rejected the Caddy image because its
+reproducible Go graph selected `google.golang.org/grpc v1.83.1`. The reviewed
+upstream [GHSA-2v4p-qf9q-27wj](https://github.com/grpc/grpc-go/security/advisories/GHSA-2v4p-qf9q-27wj)
+identifies `v1.83.2` as patched. This records a dependency gate failure; it does
+not claim that the deployed Caddy configuration exposes the vulnerable path.
+
+The correction selects only gRPC `v1.83.2` and its required existing
+`golang.org/x/net v0.58.0` dependency. The module set, Caddy `v2.11.4`, Go
+`1.26.8`, build tags, linker flags, base images, runtime capabilities, and
+application behavior remain unchanged. The generated module checksums and the
+deterministic Linux/amd64 Caddy binary hash are checked in the Dockerfile and
+both CI/release workflows. Run `34344571701` cannot approve this changed source;
+the exact new commit must rerun the complete gates and both scanners.
+
 No Android, Web, backend business, billing, permission, offline-queue, or
 database behavior change from signed Code 27 is authorized. Product application
 source must be byte-identical to signed Code 27 except the coordinated release
