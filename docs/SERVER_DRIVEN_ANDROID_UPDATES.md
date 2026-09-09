@@ -44,7 +44,7 @@ change their identity, or lower the compatibility floor.
 `3.1.3` (version code `14`) is historical manual-partner baseline evidence. It
 must remain unhosted, unregistered and unadvertised; it is not the current
 rollout target or upgrade predecessor. Code `21` (`3.1.10`) is the signed
-direct-channel predecessor from which the Code 27 upgrade must be tested.
+direct-channel predecessor from which the Code 28 upgrade must be tested.
 
 Code `15` (`3.1.4`) is the first identity accepted by the server-release
 registry. It remains a held audit build and must never be activated as a
@@ -64,16 +64,18 @@ attempt failed before build/signing and produced no authorised or distributed
 Code 26 artifact; its tag and evidence remain immutable. Code `26` (`3.1.16`)
 was subsequently signed under that narrow never-issued-identity exception, but
 its production installer stopped before image builds or cutover. Its source,
-tag, and signed artifacts are immutable, superseded history. The current
-deployment-only server-delivery candidate is the **unsigned** `3.1.17`
-(version code `27`) source at migration `0071`. Only a newly approved exact
-signed artifact and release manifest produced together by a future green
-`v3.1.17` GitHub Actions workflow may be staged. A local Gradle build or
+tag, and signed artifacts are immutable, superseded history. Code `27`
+(`3.1.17`) was signed but its Syft scanner gate failed before production deployment
+or cutover; its source, tag, and artifacts are also immutable superseded
+history. The current scanner-hardening server-delivery candidate is the
+**unsigned** `3.1.18` (version code `28`) source at migration `0071`. Only a
+newly approved exact signed artifact and release manifest produced together by
+a future green `v3.1.18` GitHub Actions workflow may be staged. A local Gradle build or
 local evidence bundle is not release authority, even when its package and
 signer are correct. Code `21` (`3.1.10`) remains the signed same-channel
-predecessor for in-place upgrade proof. Code 27 is not currently signed,
+predecessor for in-place upgrade proof. Code 28 is not currently signed,
 deployed, staged, activated, approved or partner-installable. Its complete
-gates are recorded in [`CODE27_RELEASE_CANDIDATE.md`](CODE27_RELEASE_CANDIDATE.md).
+gates are recorded in [`CODE28_RELEASE_CANDIDATE.md`](CODE28_RELEASE_CANDIDATE.md).
 
 Keep the minimum-compatible floor at code `8` during the initial rollout. A
 new build, a green workflow, a hosted APK, or a staged registry row is not
@@ -131,11 +133,11 @@ responses and network uncertainty remain blocked. The APK itself must return:
 - `Cache-Control: public, immutable, no-transform, max-age=31536000` (or longer)
 - no redirect from its same-origin versioned URL
 
-## Code 27 staging procedure
+## Code 28 staging procedure
 
 1. Confirm the code-`21` partner installation is signed by the trusted
    certificate, can check for updates, and has no pending offline work.
-2. Coordinate the application at `3.1.17` / code `27`, with database migrations
+2. Coordinate the application at `3.1.18` / code `28`, with database migrations
    through `0071`. Obtain new protected signing approval, run the complete
    release workflow, and obtain its newly signed direct APK and
    `release-manifest.json` from the same workflow run.
@@ -144,11 +146,11 @@ responses and network uncertainty remain blocked. The APK itself must return:
 
    ```bash
    python3 ops/stage_android_release.py \
-     --manifest /secure/release-3.1.17/release-manifest.json \
-     --apk /secure/release-3.1.17/d-company-erp-v3.1.17-direct.apk \
+     --manifest /secure/release-3.1.18/release-manifest.json \
+     --apk /secure/release-3.1.18/d-company-erp-v3.1.18-direct.apk \
      --expected-signer-sha256 <trusted-release-certificate-sha256> \
      --release-notes \
-       "Deployment-only installer correction; application behavior unchanged"
+       "Scanner runtime hardening; application behavior unchanged from signed Code 27"
    ```
 
    This checks the manifest, byte size, SHA-256, package
@@ -159,11 +161,11 @@ responses and network uncertainty remain blocked. The APK itself must return:
 
    ```bash
    python3 ops/stage_android_release.py \
-     --manifest /secure/release-3.1.17/release-manifest.json \
-     --apk /secure/release-3.1.17/d-company-erp-v3.1.17-direct.apk \
+     --manifest /secure/release-3.1.18/release-manifest.json \
+     --apk /secure/release-3.1.18/d-company-erp-v3.1.18-direct.apk \
      --expected-signer-sha256 <trusted-release-certificate-sha256> \
      --release-notes \
-       "Deployment-only installer correction; application behavior unchanged" \
+       "Scanner runtime hardening; application behavior unchanged from signed Code 27" \
      --ssh-key ~/.ssh/dcompany_do \
      --apply
    ```
@@ -175,17 +177,17 @@ responses and network uncertainty remain blocked. The APK itself must return:
    unadvertised immutable bytes; it must never cause a release offer.
 
 5. In the owner ERP release screen, compare version, release notes, SHA-256,
-   size, signer and source evidence, but leave the staged code-`27` row inactive.
+   size, signer and source evidence, but leave the staged code-`28` row inactive.
    Staging does not advertise an offer and must never trigger automatic
    activation.
-6. After all four preparation phases in `CODE27_RELEASE_CANDIDATE.md`, the owner
+6. After all four preparation phases in `CODE28_RELEASE_CANDIDATE.md`, the owner
    may activate the exact staged candidate only after explicitly accepting that
    every eligible direct-channel client can see the offer. There is no
    per-device allowlist; a pilot on the intended code-`21` tablet requires staff
    coordination, not an enforced targeted offer. The backend performs a second no-redirect public byte
    verification before the atomic status transition and records the owner
    action in the Audit Log. Refresh the update check, download, approve Android's
-   installer, and reopen code `27`. Then run the supervised real-live
+   installer, and reopen code `28`. Then run the supervised real-live
    operational acceptance trial and verify sign-in, shift, Gaming, POS
    settlement, offline queue recovery and finance reconciliation. The owner may
    ask other partners to install only after that trial passes; the public

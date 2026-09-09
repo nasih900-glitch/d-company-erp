@@ -1,4 +1,4 @@
-"""Fail-closed analysis for the Code 27 tablet business acceptance lane.
+"""Fail-closed analysis for the Code 28 tablet business acceptance lane.
 
 The device driver records a deterministic ledger plus named screenshot and
 accessibility evidence for every planned action. Live-timer frame windows and
@@ -751,8 +751,8 @@ def _source_errors(payload: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     if payload.get("clean") is not True:
         errors.append("source was not recorded clean")
-    if payload.get("version_code") != 27 or payload.get("version_name") != "3.1.17":
-        errors.append("source is not Code 27 / 3.1.17")
+    if payload.get("version_code") != 28 or payload.get("version_name") != "3.1.18":
+        errors.append("source is not Code 28 / 3.1.18")
     for key in ("commit", "tree"):
         if not re.fullmatch(r"[0-9a-f]{40}", str(payload.get(key, ""))):
             errors.append(f"source {key} is not an immutable git object id")
@@ -884,10 +884,10 @@ def _apk_errors(
     if len(erp_rows) != 1:
         errors.append("one physicalAudit ERP APK identity is required")
     elif (
-        erp_rows[0].get("version_code") != "27"
-        or erp_rows[0].get("version_name") != "3.1.17-physical-audit"
+        erp_rows[0].get("version_code") != "28"
+        or erp_rows[0].get("version_name") != "3.1.18-physical-audit"
     ):
-        errors.append("physicalAudit APK is not Code 27 / 3.1.17-physical-audit")
+        errors.append("physicalAudit APK is not Code 28 / 3.1.18-physical-audit")
     return errors
 
 

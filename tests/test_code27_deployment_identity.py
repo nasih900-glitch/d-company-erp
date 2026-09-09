@@ -7,6 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CODE26_SIGNED_BASE = "6fa5544d30958453e7c70d3883d6ccac4bcabed8"
+CODE27_SIGNED_BASE = "dd0a1626a4a0107b104a1098f4b36596e38b752c"
 REVIEWED_WEB_AUTH_PATHS = {
     "frontend/src/lib/api.ts",
     "frontend/src/lib/realtime.ts",
@@ -32,8 +33,8 @@ def _git(*arguments: str) -> str:
     ).stdout
 
 
-def _baseline_file(path: str) -> str:
-    return _git("show", f"{CODE26_SIGNED_BASE}:{path}")
+def _file_at(commit: str, path: str) -> str:
+    return _git("show", f"{commit}:{path}")
 
 
 def _replace_once(source: str, old: str, new: str) -> str:
@@ -47,14 +48,10 @@ def test_code27_preserves_signed_code26_application_behavior() -> None:
             "diff",
             "--name-only",
             CODE26_SIGNED_BASE,
+            CODE27_SIGNED_BASE,
             "--",
             *PROTECTED_APPLICATION_PREFIXES,
         ).splitlines()
-    )
-    changed_application_files.update(
-        path
-        for path in _git("ls-files", "--others", "--exclude-standard").splitlines()
-        if path.startswith(PROTECTED_APPLICATION_PREFIXES)
     )
     assert changed_application_files == {
         "backend/app/__init__.py",
@@ -62,18 +59,18 @@ def test_code27_preserves_signed_code26_application_behavior() -> None:
     }
 
     version_path = "backend/app/__init__.py"
-    code26_version_source = _baseline_file(version_path)
+    code26_version_source = _file_at(CODE26_SIGNED_BASE, version_path)
     assert code26_version_source.count('__version__ = "3.1.16"') == 1
     expected_code27_source = code26_version_source.replace(
         '__version__ = "3.1.16"', '__version__ = "3.1.17"'
     )
-    assert (ROOT / version_path).read_text(encoding="utf-8") == expected_code27_source
+    assert _file_at(CODE27_SIGNED_BASE, version_path) == expected_code27_source
 
 
 def test_code27_physical_lane_changes_identity_only() -> None:
     plan_path = "android-native/audit-driver/plans/code26-gaming-finance-physical.json"
-    code26_plan = json.loads(_baseline_file(plan_path))
-    code27_plan = json.loads((ROOT / plan_path).read_text(encoding="utf-8"))
+    code26_plan = json.loads(_file_at(CODE26_SIGNED_BASE, plan_path))
+    code27_plan = json.loads(_file_at(CODE27_SIGNED_BASE, plan_path))
     assert len(code27_plan["steps"]) == 413
     assert code27_plan["expected_sessions"] == 16
     assert code27_plan["name"] == "Code 27 full-route Gaming and Finance physical acceptance"
@@ -81,7 +78,7 @@ def test_code27_physical_lane_changes_identity_only() -> None:
     assert code27_plan == code26_plan
 
     runner_path = "scripts/run_code26_physical_business_audit.sh"
-    expected_runner = _baseline_file(runner_path)
+    expected_runner = _file_at(CODE26_SIGNED_BASE, runner_path)
     for old, new in (
         ("Run the Code 26 business", "Run the Code 27 business"),
         ("after the Code 26 source-settled", "after the Code 27 source-settled"),
@@ -94,10 +91,10 @@ def test_code27_physical_lane_changes_identity_only() -> None:
         ),
     ):
         expected_runner = _replace_once(expected_runner, old, new)
-    assert (ROOT / runner_path).read_text(encoding="utf-8") == expected_runner
+    assert _file_at(CODE27_SIGNED_BASE, runner_path) == expected_runner
 
     analyzer_path = "scripts/analyze_code26_physical_evidence.py"
-    expected_analyzer = _baseline_file(analyzer_path)
+    expected_analyzer = _file_at(CODE26_SIGNED_BASE, analyzer_path)
     for old, new in (
         ("Code 26 tablet business", "Code 27 tablet business"),
         (
@@ -116,4 +113,4 @@ def test_code27_physical_lane_changes_identity_only() -> None:
         ),
     ):
         expected_analyzer = _replace_once(expected_analyzer, old, new)
-    assert (ROOT / analyzer_path).read_text(encoding="utf-8") == expected_analyzer
+    assert _file_at(CODE27_SIGNED_BASE, analyzer_path) == expected_analyzer

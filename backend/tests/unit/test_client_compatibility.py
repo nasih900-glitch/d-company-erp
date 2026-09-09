@@ -202,7 +202,7 @@ def test_production_native_update_url_requires_https() -> None:
 def test_production_required_floor_needs_recovery_url_but_optional_registry_does_not(
     monkeypatch,
 ) -> None:
-    identity = ReleaseIdentity(version_name="3.1.17", source_git_sha="ab" * 20)
+    identity = ReleaseIdentity(version_name="3.1.18", source_git_sha="ab" * 20)
     monkeypatch.setattr(config, "read_backend_build_identity", lambda: identity)
     production = {
         "env": "prod",

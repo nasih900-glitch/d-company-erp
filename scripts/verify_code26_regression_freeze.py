@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Fail closed when Code 26/27 weakens the proven Code 25 regression surface.
+"""Fail closed when Code 26/27/28 weakens the proven Code 25 regression surface.
 
 This is deliberately release-specific.  Code 25 is the behavioural baseline;
 Code 26 may add tests and narrowly change the allow-listed failure paths. Code
 27 additionally carries the reviewed deployment correction and Web session
-expiry repair. Neither may delete, disable, reorder, or rewrite an existing
+expiry repair. Code 28 only hardens the release scanner path. None may delete,
+disable, reorder, or rewrite an existing
 test outside the exact fixture-only normalization below.
 The sole reviewed audit-reader locator migration below preserves every
 credential-cleanup assertion while following the corrected UTF-8 reader.
@@ -125,9 +126,14 @@ def _normalise_release_identity(path: str, text: str) -> str:
         return text
     normalised = text
     for current, baseline in (
+        ("3.1.18", "3.1.14"),
         ("3.1.17", "3.1.14"),
         ("3.1.16", "3.1.14"),
         ("3.1.15", "3.1.14"),
+        ("Code 28", "Code 25"),
+        ("code 28", "code 25"),
+        ("CODE28", "CODE25"),
+        ("code28", "code25"),
         ("Code 27", "Code 25"),
         ("code 27", "code 25"),
         ("CODE27", "CODE25"),
@@ -139,10 +145,10 @@ def _normalise_release_identity(path: str, text: str) -> str:
     ):
         normalised = normalised.replace(current, baseline)
     normalised = re.sub(
-        r"version_code\s*=\s*(?:26|27)\b", "version_code=25", normalised
+        r"version_code\s*=\s*(?:26|27|28)\b", "version_code=25", normalised
     )
     normalised = re.sub(
-        r"assertEquals\((?:26|27),\s*BuildConfig\.VERSION_CODE\)",
+        r"assertEquals\((?:26|27|28),\s*BuildConfig\.VERSION_CODE\)",
         "assertEquals(25, BuildConfig.VERSION_CODE)",
         normalised,
     )

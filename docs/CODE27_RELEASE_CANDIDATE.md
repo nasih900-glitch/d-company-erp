@@ -1,5 +1,12 @@
 # D Company ERP 3.1.17 (code 27) release candidate
 
+> **Superseded signed history.** Code 27 was signed, but its release scanner
+> stopped on a Syft scratch-mount permission error before production deployment
+> or cutover. Subsequent review also found unsafe Syft/Grype scratch capacities;
+> Grype had not yet run. Code 27 source, tag, and artifacts are immutable. The
+> unsigned successor and its new gates are recorded in
+> [`CODE28_RELEASE_CANDIDATE.md`](CODE28_RELEASE_CANDIDATE.md).
+
 Code 27 is a narrowly scoped corrective successor to signed Code 26. Its coordinated
 identity is tag `v3.1.17`, Android `versionName=3.1.17`, Android
 `versionCode=27`, and database migration head `0071`.

@@ -17,6 +17,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "infra" / "scripts" / "install-on-vm.sh"
 LOCK_HELPER = ROOT / "infra" / "scripts" / "production_install_lock.py"
+HARDENED_SCANNER = ROOT / "infra" / "scripts" / "run-hardened-image-scanners.sh"
 
 
 def _load_lock_helper():
@@ -52,6 +53,11 @@ def test_candidate_build_uses_a_private_immutable_git_archive() -> None:
 
 def test_exact_candidate_images_are_scanned_before_maintenance() -> None:
     source = INSTALLER.read_text(encoding="utf-8")
+    scanner_source = HARDENED_SCANNER.read_text(encoding="utf-8")
+    invocation = 'bash "$HARDENED_SCANNER_TOOL"'
+    source = source.replace(invocation, scanner_source + "\n" + invocation)
+    assert '600s \\\n  docker pull "$SYFT_IMAGE"' in source
+    assert '600s \\\n  docker pull "$GRYPE_IMAGE"' in source
 
     attestation = (
         'CANDIDATE_IMAGE_ATTESTATION=$(python3 "$CANDIDATE_PARITY_TOOL" candidate'
