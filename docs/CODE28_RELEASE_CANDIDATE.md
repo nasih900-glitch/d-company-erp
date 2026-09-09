@@ -54,6 +54,28 @@ deterministic Linux/amd64 Caddy binary hash are checked in the Dockerfile and
 both CI/release workflows. Run `34344571701` cannot approve this changed source;
 the exact new commit must rerun the complete gates and both scanners.
 
+## Physical audit network-acquisition correction
+
+Physical run 06 completed all 16 sessions and 16 payments with a zero-variance
+close, but its final reconnect assertion expired while Android was still
+bringing Wi-Fi online. The OS published a validated default network only about
+287 ms before the unchanged 30-second ERP `Online` assertion ended; the app
+then reached `Online` normally about 3.2 seconds later. This was a test timing
+defect, not evidence of a stranded application recovery state.
+
+The test-only audit driver now gives Android at most 60 seconds to expose an
+active default network with both `INTERNET` and `VALIDATED` capabilities. Only
+after that separate fail-closed precondition passes does the unchanged
+30-second ERP `Online` assertion begin. This deliberately gives reconnect up to
+60 seconds for OS acquisition plus 30 seconds for app recovery; it does not
+weaken or extend the existing product assertion itself. Each online step records
+only elapsed time, capability state, and result—never an IP address, SSID,
+credential, or network identifier. The 413-step plan, its assertions,
+production application source, physical runner, and evidence analyzer remain
+unchanged. Exact-source CI must run the deterministic audit-driver JVM
+regressions and compile both driver APKs; this ledger does not claim a corrected
+physical run has passed.
+
 No Android, Web, backend business, billing, permission, offline-queue, or
 database behavior change from signed Code 27 is authorized. Product application
 source must be byte-identical to signed Code 27 except the coordinated release

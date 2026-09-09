@@ -1,5 +1,8 @@
 package cloud.dcompany.erp.auditdriver
 
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.os.PowerManager
@@ -229,6 +232,7 @@ class BusinessWorkflowDeviceTest {
             "online" -> {
                 device.executeShellCommand("cmd connectivity airplane-mode disable")
                 device.executeShellCommand("svc wifi enable")
+                awaitValidatedAndroidNetwork(stepNumber, label)
             }
             "capture" -> Unit
             "alarmConstraints" -> exerciseAlarmConstraints(timeout)
@@ -619,6 +623,46 @@ class BusinessWorkflowDeviceTest {
         File(output, filename).writeText("$command\n$result")
         check(shellCommandSucceeded(result)) { "Device constraint command failed: $command" }
         return result
+    }
+
+    private fun awaitValidatedAndroidNetwork(stepNumber: Int, label: String) {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val outcome = awaitValidatedNetwork(
+            monotonicMillis = SystemClock::elapsedRealtime,
+            pollCapabilities = {
+                val manager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+                val network = manager.activeNetwork
+                    ?: return@awaitValidatedNetwork NetworkCapabilityState.MISSING
+                val capabilities = manager.getNetworkCapabilities(network)
+                    ?: return@awaitValidatedNetwork NetworkCapabilityState.MISSING
+                val state = when {
+                    !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) ->
+                        NetworkCapabilityState.WITHOUT_INTERNET
+                    !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) ->
+                        NetworkCapabilityState.INTERNET_ONLY
+                    else -> NetworkCapabilityState.VALIDATED
+                }
+                if (manager.activeNetwork == network) state else NetworkCapabilityState.MISSING
+            },
+            sleepMillis = SystemClock::sleep,
+        )
+        val evidence = JSONObject()
+            .put("elapsed_ms", outcome.elapsedMillis)
+            .put("capability_state", outcome.capabilityState.evidenceValue)
+            .put("result", outcome.result.evidenceValue)
+        val filename = "network-acquisition-${safeLabel("%03d-%s".format(stepNumber, label))}.json"
+        check(safeWriteEvidence(filename, evidence.toString(2))) {
+            "Could not preserve sanitized network-acquisition evidence"
+        }
+        when (outcome.result) {
+            ValidatedNetworkWaitResult.VALIDATED -> Unit
+            ValidatedNetworkWaitResult.TIMED_OUT -> error(
+                "Android did not validate the restored network within ${MAX_VALIDATED_NETWORK_WAIT_MILLIS}ms",
+            )
+            ValidatedNetworkWaitResult.ERROR -> error(
+                "Android network capabilities could not be read",
+            )
+        }
     }
 
     private data class CapturedShellResult(

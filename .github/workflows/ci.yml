@@ -153,6 +153,7 @@ jobs:
           ./gradlew --no-daemon --max-workers=1 --stacktrace
           '-Dorg.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8'
           -Pkotlin.compiler.execution.strategy=in-process
+          :audit-driver:testDebugUnitTest
           :audit-driver:assembleDebug :audit-driver:assembleDebugAndroidTest
       # GitHub's Linux runner exposes /dev/kvm, but the runner user is not
       # consistently granted access. Without KVM the API-35 emulator can take
@@ -196,6 +197,8 @@ jobs:
             android-native/app/build/test-results/
             android-native/app/build/outputs/androidTest-results/
             android-native/app/build/outputs/ci-diagnostics/
+            android-native/audit-driver/build/reports/tests/
+            android-native/audit-driver/build/test-results/
 
   docker:
     runs-on: ubuntu-latest

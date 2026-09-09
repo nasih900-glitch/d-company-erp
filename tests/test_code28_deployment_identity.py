@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 from pathlib import Path
@@ -24,6 +25,20 @@ REVIEWED_RELEASE_HARDENING_PATHS = {
     "infra/docker/caddy.Dockerfile",
     "infra/scripts/install-on-vm.sh",
     "infra/scripts/run-hardened-image-scanners.sh",
+}
+REVIEWED_AUDIT_NETWORK_PRECONDITION_PATHS = {
+    "android-native/audit-driver/build.gradle.kts":
+        "6e9578fa760b164f9584987b2a1efb3d0737062f88cbba41ab94ad341c515110",
+    "android-native/audit-driver/gradle.lockfile":
+        "27d945a45cfbdd3e9e187d7d0e041766aca2a56f417229b6ecbbe91250d47d9d",
+    "android-native/audit-driver/src/androidTest/java/cloud/dcompany/erp/auditdriver/BusinessWorkflowDeviceTest.kt":
+        "6dab416d36d419d41ae61ca3fb0f7bbaf6502eb40eeb4133c6394f92925b1b7b",
+    "android-native/audit-driver/src/main/AndroidManifest.xml":
+        "86746ae209f5fa35635329af3d0df196d247472055afd146f2ac9256906f514b",
+    "android-native/audit-driver/src/main/java/cloud/dcompany/erp/auditdriver/ValidatedNetworkWaiter.kt":
+        "5b0269c70e0c0c8587bf399fa723df1cf5b177c3d0b4d789b50a1f202410d63a",
+    "android-native/audit-driver/src/test/java/cloud/dcompany/erp/auditdriver/ValidatedNetworkWaiterTest.kt":
+        "1ebeb53711d1606c1da4fa5a1fa6a0888c5c91183765b4573177534ae40ea532",
 }
 
 
@@ -62,7 +77,12 @@ def _changed_files(*prefixes: str) -> set[str]:
 
 def test_code28_preserves_signed_code27_application_behavior() -> None:
     assert _changed_files(*PROTECTED_APPLICATION_PREFIXES) == {
-        "backend/app/__init__.py"
+        "backend/app/__init__.py",
+        *(
+            path
+            for path in REVIEWED_AUDIT_NETWORK_PRECONDITION_PATHS
+            if path.startswith("android-native/audit-driver/src/")
+        ),
     }
 
     version_path = "backend/app/__init__.py"
@@ -71,6 +91,24 @@ def test_code28_preserves_signed_code27_application_behavior() -> None:
         (('__version__ = "3.1.17"', '__version__ = "3.1.18"', 1),),
     )
     assert (ROOT / version_path).read_text(encoding="utf-8") == expected
+
+    for path, expected_sha256 in REVIEWED_AUDIT_NETWORK_PRECONDITION_PATHS.items():
+        assert hashlib.sha256((ROOT / path).read_bytes()).hexdigest() == expected_sha256
+
+
+def test_code28_runs_and_retains_audit_network_precondition_jvm_results() -> None:
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    assert ":audit-driver:testDebugUnitTest" in workflow
+    assert "android-native/audit-driver/build/reports/tests/" in workflow
+    assert "android-native/audit-driver/build/test-results/" in workflow
+
+
+def test_code28_audit_driver_changes_are_exact_and_pinned() -> None:
+    identity_only_plan = "android-native/audit-driver/plans/code26-gaming-finance-physical.json"
+    assert _changed_files("android-native/audit-driver/") == {
+        identity_only_plan,
+        *REVIEWED_AUDIT_NETWORK_PRECONDITION_PATHS,
+    }
 
 
 def test_code28_release_identity_files_change_only_expected_values() -> None:
