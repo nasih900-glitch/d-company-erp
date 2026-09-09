@@ -66,6 +66,25 @@ let volatileAccessToken: string | null = null;
 let volatilePricingToken: string | null = null;
 let volatilePricingExpiresAt = 0;
 let legacyRefreshForCookieMigration: string | null = null;
+let sessionGeneration = 0;
+
+type ActiveSessionRenewal = {
+  generation: number;
+  controller: AbortController;
+  promise: Promise<string>;
+};
+let activeSessionRenewal: ActiveSessionRenewal | null = null;
+
+function advanceSessionGeneration(): void {
+  sessionGeneration += 1;
+  const previousRenewal = activeSessionRenewal;
+  activeSessionRenewal = null;
+  // In cookie mode this also asks the browser to stop accepting a late
+  // Set-Cookie from the superseded account's refresh response. The generation
+  // check below remains the final application-side guard if cancellation loses
+  // a race with a response already delivered by the network stack.
+  previousRenewal?.controller.abort();
+}
 
 function readStorage(key: string): string | null {
   try {
@@ -107,8 +126,19 @@ export function readAccessToken(): string | null {
   return COOKIE_SESSION_MODE ? volatileAccessToken : readStorage('access_token');
 }
 
-export function installSessionTokens(accessToken: string, refreshToken?: string): void {
+/** Non-secret lineage used to retire callbacks owned by an earlier login. */
+export function readSessionGeneration(): number {
+  return sessionGeneration;
+}
+
+function validateSessionTokens(accessToken: string, refreshToken?: string): void {
   if (!accessToken.trim()) throw new Error('The server returned an empty access token.');
+  if (!COOKIE_SESSION_MODE && !refreshToken?.trim()) {
+    throw new Error('The server returned an empty refresh token.');
+  }
+}
+
+function applySessionTokens(accessToken: string, refreshToken?: string): void {
   volatileAccessToken = accessToken;
   if (COOKIE_SESSION_MODE) {
     cookieRefreshState = 'available';
@@ -116,9 +146,16 @@ export function installSessionTokens(accessToken: string, refreshToken?: string)
     removeStorage('access_token', 'refresh_token', COOKIE_SESSION_SIGNED_OUT_KEY);
     return;
   }
-  if (!refreshToken?.trim()) throw new Error('The server returned an empty refresh token.');
   writeStorage('access_token', accessToken);
-  writeStorage('refresh_token', refreshToken);
+  writeStorage('refresh_token', refreshToken!);
+}
+
+export function installSessionTokens(accessToken: string, refreshToken?: string): void {
+  // Validate before superseding a healthy session. A malformed login response
+  // must not cancel the current account's valid renewal authority.
+  validateSessionTokens(accessToken, refreshToken);
+  advanceSessionGeneration();
+  applySessionTokens(accessToken, refreshToken);
 }
 
 export function clearPricingToken(): void {
@@ -161,6 +198,7 @@ export function hasActivePricingToken(): boolean {
 }
 
 export function clearSessionCredentials(): void {
+  advanceSessionGeneration();
   volatileAccessToken = null;
   legacyRefreshForCookieMigration = null;
   cookieRefreshState = 'absent';
@@ -200,7 +238,24 @@ export function isBugReportApiRequest(url: string): boolean {
 
 // ---------------------------------------------------------------- request side
 // Inject access token + tenant headers.
+type SessionRequestConfig = AxiosRequestConfig & {
+  _retried?: boolean;
+  _sessionGeneration?: number;
+};
+
 api.interceptors.request.use((config) => {
+  const sessionConfig = config as typeof config & SessionRequestConfig;
+  if (sessionConfig._sessionGeneration === undefined) {
+    sessionConfig._sessionGeneration = sessionGeneration;
+  } else if (sessionConfig._sessionGeneration !== sessionGeneration) {
+    // api.request() runs request interceptors asynchronously. Recheck here so
+    // a replacement login queued after the response-side check cannot attach
+    // its bearer to the prior account's retried operation.
+    throw sessionRenewalError(
+      'session_changed',
+      'The request belongs to a session that is no longer active.',
+    );
+  }
   const token = readAccessToken();
   if (token) config.headers.Authorization = `Bearer ${token}`;
   const url = String(config.url || '');
@@ -229,8 +284,6 @@ api.interceptors.request.use((config) => {
 // Single-flight refresh: if 10 requests fire concurrently and each gets a 401,
 // only ONE call to /auth/refresh is made; the rest wait on the same promise
 // and then retry with the new token.
-let refreshPromise: Promise<string> | null = null;
-
 // This module lives outside React, so it cannot clear AuthContext state or
 // navigate on its own. AuthProvider registers a handler here on mount; a
 // forced logout then goes through exactly the same path as a manual logout
@@ -275,30 +328,87 @@ function isRefreshRejection(error: unknown): boolean {
   return status === 401 || status === 403;
 }
 
-async function refreshAccessToken(): Promise<string> {
-  if (refreshPromise) return refreshPromise;
-  refreshPromise = (async () => {
+function sessionRenewalError(
+  code: 'network_error' | 'session_changed' | 'unauthorized',
+  message: string,
+  status?: number,
+): ApiError {
+  const error: ApiError = new Error(message);
+  error.code = code;
+  error.status = status;
+  return error;
+}
+
+function isSessionChanged(error: unknown): boolean {
+  return error instanceof Error
+    && (error as ApiError).code === 'session_changed';
+}
+
+/**
+ * Renews one logical session for both Axios and WebSocket callers. A logout or
+ * replacement login detaches and aborts the old generation, so the new account
+ * can never join its promise or receive its tokens.
+ */
+export function renewSessionAccessToken(): Promise<string> {
+  if (activeSessionRenewal?.generation === sessionGeneration) {
+    return activeSessionRenewal.promise;
+  }
+
+  const generation = sessionGeneration;
+  const controller = new AbortController();
+  const promise = (async () => {
     const refresh = COOKIE_SESSION_MODE
       ? legacyRefreshForCookieMigration
       : readStorage('refresh_token');
-    if (!COOKIE_SESSION_MODE && !refresh) throw new Error('no refresh token');
-    const r = await axios.post<{ access_token: string; refresh_token: string }>(
-      `${BASE_URL}/auth/refresh`,
-      COOKIE_SESSION_MODE
-        ? (refresh ? { refresh_token: refresh } : {})
-        : { refresh_token: refresh },
-      {
-        timeout: API_TIMEOUT_MS,
-        withCredentials: COOKIE_SESSION_MODE,
-        headers: sessionTransportHeaders(),
-      },
-    );
-    installSessionTokens(r.data.access_token, r.data.refresh_token);
-    return r.data.access_token;
+    try {
+      if (!COOKIE_SESSION_MODE && !refresh) throw new Error('no refresh token');
+      const response = await axios.post<{ access_token: string; refresh_token: string }>(
+        `${BASE_URL}/auth/refresh`,
+        COOKIE_SESSION_MODE
+          ? (refresh ? { refresh_token: refresh } : {})
+          : { refresh_token: refresh },
+        {
+          timeout: API_TIMEOUT_MS,
+          withCredentials: COOKIE_SESSION_MODE,
+          headers: sessionTransportHeaders(),
+          signal: controller.signal,
+        },
+      );
+      if (generation !== sessionGeneration) {
+        throw sessionRenewalError(
+          'session_changed',
+          'The session changed while its access was being renewed.',
+        );
+      }
+      validateSessionTokens(response.data.access_token, response.data.refresh_token);
+      applySessionTokens(response.data.access_token, response.data.refresh_token);
+      return response.data.access_token;
+    } catch (error) {
+      if (generation !== sessionGeneration || isSessionChanged(error)) {
+        throw sessionRenewalError(
+          'session_changed',
+          'The session changed while its access was being renewed.',
+        );
+      }
+      if (isRefreshRejection(error)) {
+        const status = axios.isAxiosError(error) ? error.response?.status : 401;
+        forceLogout();
+        throw sessionRenewalError(
+          'unauthorized',
+          axios.isAxiosError(error) ? error.message : 'The session can no longer be renewed.',
+          status ?? 401,
+        );
+      }
+      throw sessionRenewalError(
+        'network_error',
+        'Could not reach the server to renew this session. Check the connection and try again.',
+      );
+    }
   })().finally(() => {
-    refreshPromise = null;
+    if (activeSessionRenewal?.promise === promise) activeSessionRenewal = null;
   });
-  return refreshPromise;
+  activeSessionRenewal = { generation, controller, promise };
+  return promise;
 }
 
 export async function restoreSessionFromRefresh(): Promise<string> {
@@ -309,16 +419,10 @@ export async function restoreSessionFromRefresh(): Promise<string> {
     throw error;
   }
   try {
-    return await refreshAccessToken();
+    return await renewSessionAccessToken();
   } catch (error) {
-    const status = axios.isAxiosError(error) ? error.response?.status : undefined;
-    if (status === 401 || status === 403) clearSessionCredentials();
-    const enriched: ApiError = new Error(
-      axios.isAxiosError(error) ? error.message : (error as Error).message,
-    );
-    enriched.code = status ? 'unauthorized' : 'network_error';
-    enriched.status = status;
-    throw enriched;
+    if (error instanceof Error) throw error;
+    throw sessionRenewalError('network_error', 'Could not renew this session.');
   }
 }
 
@@ -345,9 +449,10 @@ export async function clearBrowserRefreshCookie(): Promise<void> {
 api.interceptors.response.use(
   (r) => r,
   async (err: AxiosError<{ error?: { code: string; message: string } }>) => {
+    if ((err as ApiError)?.code === 'session_changed') return Promise.reject(err);
     if (isExpectedRequestCancellation(err)) return Promise.reject(err);
 
-    const cfg = err.config as AxiosRequestConfig & { _retried?: boolean };
+    const cfg = err.config as SessionRequestConfig;
 
     // 401 → try to refresh the token once, then retry the original request.
     // Skip refresh for the /auth/login or /auth/refresh routes themselves so
@@ -362,29 +467,46 @@ api.interceptors.response.use(
       err.response?.status === 401 &&
       hasRefresh && !isAuthRoute && !cfg._retried
     ) {
+      if (
+        cfg._sessionGeneration !== undefined
+        && cfg._sessionGeneration !== sessionGeneration
+      ) {
+        return Promise.reject(sessionRenewalError(
+          'session_changed',
+          'The request belongs to a session that is no longer active.',
+        ));
+      }
       try {
-        const newToken = await refreshAccessToken();
+        const newToken = await renewSessionAccessToken();
+        if (
+          cfg._sessionGeneration !== undefined
+          && cfg._sessionGeneration !== sessionGeneration
+        ) {
+          throw sessionRenewalError(
+            'session_changed',
+            'The request belongs to a session that is no longer active.',
+          );
+        }
         cfg._retried = true;
         cfg.headers = { ...(cfg.headers || {}), Authorization: `Bearer ${newToken}` };
         return api.request(cfg);
       } catch (refreshError) {
-        if (isRefreshRejection(refreshError)) {
-          // The server really did reject this session — log out for real.
-          forceLogout();
-        } else {
+        const refreshCode = (refreshError as ApiError)?.code;
+        if (refreshCode === 'network_error') {
           // Bad link, not a bad token: keep the refresh token and report a
           // retryable failure instead of the misleading original 401.
-          const retryable: ApiError = new Error(
-            'Could not reach the server to renew this session. Check the connection and try again.',
-          );
-          retryable.code = 'network_error';
           recordFailedSupportAction({
             method: cfg.method,
             url,
-            errorCode: retryable.code,
+            errorCode: 'network_error',
           });
-          return Promise.reject(retryable);
+          return Promise.reject(refreshError);
         }
+        if (refreshCode !== 'unauthorized') {
+          return Promise.reject(refreshError);
+        }
+        // Preserve the established caller-facing 401 mapping below after the
+        // shared renewal boundary has already performed the definitive logout.
       }
     }
 

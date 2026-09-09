@@ -5,10 +5,12 @@ import pytest
 from scripts.verify_code26_regression_freeze import (
     CODE25_BASE,
     RegressionFreezeError,
+    REVIEWED_WEB_AUTH_PATHS,
     _disable_counts,
     _missing_ordered_lines,
     _normalise_release_identity,
     _normalise_audit_reader_locator,
+    _normalise_realtime_api_mock,
     verify_repository,
 )
 
@@ -70,6 +72,19 @@ def test_audit_reader_migration_only_normalises_one_locator() -> None:
     ) == [assertion]
 
 
+def test_realtime_fixture_normalisation_only_adds_required_auth_exports() -> None:
+    path = "frontend/src/lib/realtime-lifecycle.test.ts"
+    previous = "vi.mock('./api', () => ({ BASE_URL: '/api/v1', readAccessToken: () => 'test-token' }));"
+    current = "vi.mock('./api', () => ({ BASE_URL: '/api/v1', readAccessToken: () => 'test-token', readSessionGeneration: () => 0, renewSessionAccessToken: async () => 'test-token' }));"
+    assertion = "expect(TestSocket.instances).toHaveLength(2);"
+    assert _normalise_realtime_api_mock(path, current) == previous
+    assert _normalise_realtime_api_mock("frontend/src/lib/other.test.ts", current) == current
+    assert not _missing_ordered_lines(
+        previous + "\n" + assertion,
+        _normalise_realtime_api_mock(path, current + "\n" + assertion),
+    )
+
+
 def test_code26_preserves_the_complete_code25_test_surface() -> None:
     try:
         report = verify_repository(ROOT, CODE25_BASE)
@@ -81,4 +96,4 @@ def test_code26_preserves_the_complete_code25_test_surface() -> None:
     # shrinking the frozen baseline.
     assert report.baseline_test_files == 491
     assert report.preserved_test_files == report.baseline_test_files
-    assert "frontend/src" not in "\n".join(report.changed_production_files)
+    assert {path for path in report.changed_production_files if path.startswith("frontend/src/")} == REVIEWED_WEB_AUTH_PATHS

@@ -7,6 +7,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CODE26_SIGNED_BASE = "6fa5544d30958453e7c70d3883d6ccac4bcabed8"
+REVIEWED_WEB_AUTH_PATHS = {
+    "frontend/src/lib/api.ts",
+    "frontend/src/lib/realtime.ts",
+    "frontend/src/lib/api-cookie-session-renewal.test.ts",
+    "frontend/src/lib/api-session-renewal.test.ts",
+    "frontend/src/lib/realtime-auth-renewal.test.ts",
+    "frontend/src/lib/realtime-lifecycle.test.ts",
+}
 PROTECTED_APPLICATION_PREFIXES = (
     "backend/app/",
     "frontend/src/",
@@ -48,7 +56,10 @@ def test_code27_preserves_signed_code26_application_behavior() -> None:
         for path in _git("ls-files", "--others", "--exclude-standard").splitlines()
         if path.startswith(PROTECTED_APPLICATION_PREFIXES)
     )
-    assert changed_application_files == {"backend/app/__init__.py"}
+    assert changed_application_files == {
+        "backend/app/__init__.py",
+        *REVIEWED_WEB_AUTH_PATHS,
+    }
 
     version_path = "backend/app/__init__.py"
     code26_version_source = _baseline_file(version_path)

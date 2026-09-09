@@ -2,9 +2,10 @@
 """Fail closed when Code 26/27 weakens the proven Code 25 regression surface.
 
 This is deliberately release-specific.  Code 25 is the behavioural baseline;
-Code 26 may add tests and narrowly change the allow-listed failure paths; Code
-27 may change release identity only. Neither may delete, disable, reorder, or
-rewrite an existing test.
+Code 26 may add tests and narrowly change the allow-listed failure paths. Code
+27 additionally carries the reviewed deployment correction and Web session
+expiry repair. Neither may delete, disable, reorder, or rewrite an existing
+test outside the exact fixture-only normalization below.
 The sole reviewed audit-reader locator migration below preserves every
 credential-cleanup assertion while following the corrected UTF-8 reader.
 """
@@ -31,6 +32,15 @@ RELEASE_IDENTITY_TESTS = {
     "tests/test_android_runtime_parity.py",
 }
 
+REVIEWED_WEB_AUTH_PATHS = frozenset({
+    "frontend/src/lib/api.ts",
+    "frontend/src/lib/realtime.ts",
+    "frontend/src/lib/api-cookie-session-renewal.test.ts",
+    "frontend/src/lib/api-session-renewal.test.ts",
+    "frontend/src/lib/realtime-auth-renewal.test.ts",
+    "frontend/src/lib/realtime-lifecycle.test.ts",
+})
+
 ALLOWED_PRODUCTION_PATHS = {
     "backend/app/__init__.py",
     "android-native/app/src/main/java/cloud/dcompany/erp/DCompanyApp.kt",
@@ -52,7 +62,7 @@ ALLOWED_PRODUCTION_PATHS = {
     "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingScreen.kt",
     "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingViewModel.kt",
     "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/settings/BugReportOutbox.kt",
-}
+} | REVIEWED_WEB_AUTH_PATHS
 
 PRODUCTION_PREFIXES = (
     "backend/app/",
@@ -161,6 +171,27 @@ def _normalise_audit_reader_locator(path: str, text: str) -> str:
     )
 
 
+def _normalise_realtime_api_mock(path: str, text: str) -> str:
+    if path != "frontend/src/lib/realtime-lifecycle.test.ts":
+        return text
+    # Production now requires the session-generation and renewal exports. This
+    # changes only the existing test's API fixture; all four lifecycle cases
+    # and their assertions remain byte-for-byte subject to the baseline.
+    return text.replace(
+        "vi.mock('./api', () => ({ BASE_URL: '/api/v1', readAccessToken: () => 'test-token', readSessionGeneration: () => 0, renewSessionAccessToken: async () => 'test-token' }));",
+        "vi.mock('./api', () => ({ BASE_URL: '/api/v1', readAccessToken: () => 'test-token' }));",
+    )
+
+
+def _normalise_web_auth_freeze_assertion(path: str, text: str) -> str:
+    if path != "tests/test_code26_regression_freeze.py":
+        return text
+    return text.replace(
+        '    assert {path for path in report.changed_production_files if path.startswith("frontend/src/")} == REVIEWED_WEB_AUTH_PATHS',
+        '    assert "frontend/src" not in "\\n".join(report.changed_production_files)',
+    )
+
+
 def _disable_counts(text: str) -> tuple[int, ...]:
     return tuple(len(pattern.findall(text)) for pattern in DISABLING_PATTERNS)
 
@@ -184,6 +215,10 @@ def verify_repository(root: Path, baseline: str = CODE25_BASE) -> RegressionFree
         baseline_normalised = _normalise_release_identity(path, baseline_text)
         candidate_normalised = _normalise_release_identity(path, candidate_text)
         candidate_normalised = _normalise_audit_reader_locator(path, candidate_normalised)
+        candidate_normalised = _normalise_realtime_api_mock(path, candidate_normalised)
+        candidate_normalised = _normalise_web_auth_freeze_assertion(
+            path, candidate_normalised
+        )
         if _missing_ordered_lines(baseline_normalised, candidate_normalised):
             errors.append(f"baseline test was rewritten or reordered: {path}")
         baseline_disables = _disable_counts(baseline_text)

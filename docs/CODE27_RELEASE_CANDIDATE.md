@@ -1,6 +1,6 @@
 # D Company ERP 3.1.17 (code 27) release candidate
 
-Code 27 is the deployment-only successor to signed Code 26. Its coordinated
+Code 27 is a narrowly scoped corrective successor to signed Code 26. Its coordinated
 identity is tag `v3.1.17`, Android `versionName=3.1.17`, Android
 `versionCode=27`, and database migration head `0071`.
 
@@ -10,9 +10,41 @@ preparation, before candidate image builds, maintenance, database migration,
 or cutover. Code 27 corrects that defect by passing the existing production
 configuration to the frozen preparation helper as the absolute
 `$REPO_DIR/.env` path instead of the relative `.env` path. No Android, backend,
-or Web ERP feature behavior changes from the signed Code 26 source are
-authorized. Code 27 requires a new protected signing approval and new artifact;
-the signed Code 26 APK must not be relabelled or reused.
+money, permission, or synchronization-queue behavior changes from the signed
+Code 26 source are authorized. The only Web application exception is the
+narrow session-renewal correction below. Code 27 requires a new protected
+signing approval and new artifact; the signed Code 26 APK must not be relabelled
+or reused.
+
+## Required Web realtime expiry correction
+
+The exact Code 27 physical/Web observation found a release-blocking natural
+access-expiry gap. The backend correctly closed the authenticated WebSocket
+with `4401`, but the Web client reconnected with the expired access token and
+reset its delay on TCP `open` before the server's authenticated `connected`
+message. The preserved raw observer report recorded 66 empty reconnect attempts
+and an approximately 75-second event gap; an unrelated REST `401` was the only
+operation that eventually renewed access.
+
+The reviewed correction is limited to `frontend/src/lib/api.ts` and
+`frontend/src/lib/realtime.ts` plus additive auth-lifecycle regressions. HTTP
+and WebSocket expiry share one refresh promise; same-origin Web continues using
+the HttpOnly cookie body/header contract, while native/cross-origin clients keep
+their JSON refresh contract. A definitive refresh `401`/`403` signs out, a
+transient network failure preserves credentials and reconnects with bounded
+backoff, and logout/replacement-login generations abort and reject stale work.
+Reconnect delay resets only after the backend sends authenticated `connected`.
+No credential is added to the WebSocket URL or logs, and there is no proactive
+refresh polling.
+
+The exact-source Web gate must include lint, typecheck, the complete frontend
+suite and production build. Runtime evidence must additionally cross natural
+access expiry without a triggering REST request, show a single shared renewal,
+resume authenticated events without a repeated-`4401` storm, preserve the
+session through a temporary renewal-network failure, and prove that definitive
+revocation returns to login. Existing physical and financial gates remain
+required; the earlier observer failure is evidence of the defect, not approval
+of the correction.
 
 ## Required development-tool security correction
 
@@ -42,10 +74,11 @@ All evidence must bind to one clean Code 27 commit and, where applicable, the
 same newly signed artifact. Code 26 evidence remains historical and may inform
 the regression floor, but cannot complete a Code 27 gate.
 
-1. **Fix and regression protection.** Review the one-line installer correction,
-   execute its frozen-source boundary regression, validate coordinated release
-   identity, and prove that the complete 491-file Code 25 regression surface
-   and signed Code 26 application behavior remain unchanged.
+1. **Fix and regression protection.** Review the one-line installer correction
+   and narrow Web realtime-expiry repair, execute their focused regressions,
+   validate coordinated release identity, and prove that the complete 491-file
+   Code 25 regression surface and all non-allow-listed signed Code 26 application
+   behavior remain unchanged.
 2. **Full automated and bounded physical validation.** Run the complete backend,
    frontend, Android JVM/instrumentation, release-safety, migration, and build
    suites from the exact source. The existing 413-step, 16-session synthetic
