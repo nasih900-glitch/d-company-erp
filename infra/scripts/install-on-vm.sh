@@ -924,7 +924,7 @@ handle_post_ingress_failure() {
 trap handle_install_failure EXIT
 MAINTENANCE_ACTIVE=false
 if [ -f .env ]; then
-  SOURCE_ENV=.env
+  SOURCE_ENV="$REPO_DIR/.env"
 else
   SOURCE_ENV=-
 fi

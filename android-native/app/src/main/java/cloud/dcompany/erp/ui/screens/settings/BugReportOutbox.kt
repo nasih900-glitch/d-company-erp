@@ -13,6 +13,8 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import cloud.dcompany.erp.DCompanyApp
+import cloud.dcompany.erp.PersistedStartupStateResult
+import cloud.dcompany.erp.retryFailedPersistedStartupForWorkAttempt
 import cloud.dcompany.erp.core.auth.AccessTokenIdentityParser
 import cloud.dcompany.erp.core.auth.OutboxOwnerIdentity
 import cloud.dcompany.erp.core.db.BugReportDao
@@ -435,6 +437,13 @@ class BugReportSyncWorker(
 
     override suspend fun doWork(): Result {
         val app = applicationContext as? DCompanyApp ?: return Result.failure()
+        if (
+            app.awaitPersistedStartupState(
+                retryFailed = retryFailedPersistedStartupForWorkAttempt(runAttemptCount),
+            ) !is PersistedStartupStateResult.Ready
+        ) {
+            return Result.retry()
+        }
         try {
             app.db.bugReportDao().expireAttachmentContent(
                 cutoffMillis = System.currentTimeMillis() - BUG_REPORT_ATTACHMENT_RETENTION_MILLIS,

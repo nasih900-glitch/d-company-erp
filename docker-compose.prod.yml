@@ -26,7 +26,7 @@ services:
       context: .
       dockerfile: infra/docker/caddy.Dockerfile
       args:
-        APP_VERSION: ${APP_VERSION:-3.1.14}
+        APP_VERSION: ${APP_VERSION:-3.1.17}
         APP_REVISION: ${APP_REVISION:-unknown}
     restart: unless-stopped
     logging: *default-logging
@@ -61,7 +61,7 @@ services:
       context: .
       dockerfile: infra/docker/postgres.Dockerfile
       args:
-        APP_VERSION: ${APP_VERSION:-3.1.14}
+        APP_VERSION: ${APP_VERSION:-3.1.17}
         APP_REVISION: ${APP_REVISION:-unknown}
     restart: unless-stopped
     logging: *default-logging
@@ -121,14 +121,14 @@ services:
       context: .
       dockerfile: infra/docker/backend.Dockerfile
       args:
-        APP_VERSION: ${APP_VERSION:-3.1.14}
+        APP_VERSION: ${APP_VERSION:-3.1.17}
         APP_REVISION: ${APP_REVISION:-unknown}
     restart: unless-stopped
     logging: *default-logging
     environment:
       ENV: prod
       # Runtime declarations are checked against the independently baked file.
-      APP_VERSION: ${APP_VERSION:-3.1.14}
+      APP_VERSION: ${APP_VERSION:-3.1.17}
       APP_REVISION: ${APP_REVISION:-unknown}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: json
@@ -214,8 +214,8 @@ services:
       dockerfile: infra/docker/frontend.Dockerfile
       args:
         VITE_API_URL: https://${DOMAIN}/api/v1
-        VITE_APP_VERSION: ${APP_VERSION:-3.1.14}
-        APP_VERSION: ${APP_VERSION:-3.1.14}
+        VITE_APP_VERSION: ${APP_VERSION:-3.1.17}
+        APP_VERSION: ${APP_VERSION:-3.1.17}
         APP_REVISION: ${APP_REVISION:-unknown}
     restart: unless-stopped
     logging: *default-logging

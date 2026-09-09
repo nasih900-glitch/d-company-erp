@@ -13,9 +13,11 @@ import cloud.dcompany.erp.core.checkout.DirectOrderPublishPolicy
 import cloud.dcompany.erp.core.checkout.HeldCheckoutInteractionPolicy
 import cloud.dcompany.erp.core.checkout.HeldOrderClaimPolicy
 import cloud.dcompany.erp.core.checkout.PreparedHeldCheckoutAction
+import cloud.dcompany.erp.core.auth.CacheScopeLease
 import cloud.dcompany.erp.core.auth.PosAccess
 import cloud.dcompany.erp.core.auth.VIEW_ONLY_MESSAGE
 import cloud.dcompany.erp.core.auth.authorizeAction
+import cloud.dcompany.erp.core.auth.commitIfCurrentOrNotifyStale
 import cloud.dcompany.erp.core.db.HeldOrderCacheEntity
 import cloud.dcompany.erp.core.db.CustomerCacheEntity
 import cloud.dcompany.erp.core.db.CanonicalReceiptSyncStateEntity
@@ -1001,6 +1003,12 @@ class PosViewModel : ViewModel() {
         notice.value = "Changing or clearing a manual discount requires manager discount permission."
     }
 
+    private fun scopeLeaseOrNotice(message: String): CacheScopeLease? {
+        val lease = app.cacheIsolation.currentLease()
+        if (lease == null) notice.value = message
+        return lease
+    }
+
     fun selectCategory(id: String?) { selectedCategory.value = id }
 
     fun add(item: MenuItemEntity) {
@@ -1096,7 +1104,7 @@ class PosViewModel : ViewModel() {
     fun clearCart() {
         if (!requireWrite()) return
         if (checkoutBusy.value) return
-        val scopeLease = app.cacheIsolation.currentLease() ?: return
+        val scopeLease = scopeLeaseOrNotice(POS_CART_WORKSPACE_UNAVAILABLE_MESSAGE) ?: return
         viewModelScope.launch {
             cartMutationMutex.withLock {
                 val current = db.orderDao().activeDraft() ?: return@withLock
@@ -1104,7 +1112,10 @@ class PosViewModel : ViewModel() {
                     notice.value = "This bill was already prepared by the server. Cancel that bill before clearing it."
                     return@withLock
                 }
-                app.cacheIsolation.commitIfCurrent(scopeLease) {
+                app.cacheIsolation.commitIfCurrentOrNotifyStale(
+                    lease = scopeLease,
+                    onStale = { notice.value = POS_CART_WORKSPACE_UNAVAILABLE_MESSAGE },
+                ) {
                     db.orderDao().deleteDraft(current.order.localId)
                 }
             }
@@ -1122,7 +1133,7 @@ class PosViewModel : ViewModel() {
             notice.value = "Enter a discount of ₹0.00 or more."
             return
         }
-        val scopeLease = app.cacheIsolation.currentLease() ?: return
+        val scopeLease = scopeLeaseOrNotice(POS_CART_WORKSPACE_UNAVAILABLE_MESSAGE) ?: return
         viewModelScope.launch {
             cartMutationMutex.withLock {
                 val current = db.orderDao().activeDraft()
@@ -1136,7 +1147,10 @@ class PosViewModel : ViewModel() {
                     return@withLock
                 }
                 val now = System.currentTimeMillis()
-                app.cacheIsolation.commitIfCurrent(scopeLease) {
+                app.cacheIsolation.commitIfCurrentOrNotifyStale(
+                    lease = scopeLease,
+                    onStale = { notice.value = POS_CART_WORKSPACE_UNAVAILABLE_MESSAGE },
+                ) {
                     db.orderDao().saveDraft(
                         current.order.copy(
                             customerName = customerName?.trim()?.takeIf(String::isNotEmpty),
@@ -1156,7 +1170,7 @@ class PosViewModel : ViewModel() {
     private fun mutateEditableCart(transform: (List<CartLine>) -> List<CartLine>) {
         if (checkoutBusy.value) return
         val shiftId = authorisedShiftId() ?: return
-        val scopeLease = app.cacheIsolation.currentLease() ?: return
+        val scopeLease = scopeLeaseOrNotice(POS_CART_WORKSPACE_UNAVAILABLE_MESSAGE) ?: return
         viewModelScope.launch {
             cartMutationMutex.withLock {
                 val current = db.orderDao().activeDraft()
@@ -1177,7 +1191,10 @@ class PosViewModel : ViewModel() {
                 }
                 val after = transform(before)
                 val now = System.currentTimeMillis()
-                app.cacheIsolation.commitIfCurrent(scopeLease) {
+                app.cacheIsolation.commitIfCurrentOrNotifyStale(
+                    lease = scopeLease,
+                    onStale = { notice.value = POS_CART_WORKSPACE_UNAVAILABLE_MESSAGE },
+                ) {
                     if (after.isEmpty()) {
                         current?.let { db.orderDao().deleteDraft(it.order.localId) }
                     } else {
@@ -1206,9 +1223,12 @@ class PosViewModel : ViewModel() {
     fun dismissNotice() { notice.value = null }
 
     fun acknowledgeReceipt(receiptId: String) {
-        val scopeLease = app.cacheIsolation.currentLease() ?: return
+        val scopeLease = scopeLeaseOrNotice(POS_RECEIPT_WORKSPACE_UNAVAILABLE_MESSAGE) ?: return
         viewModelScope.launch {
-            app.cacheIsolation.commitIfCurrent(scopeLease) {
+            app.cacheIsolation.commitIfCurrentOrNotifyStale(
+                lease = scopeLease,
+                onStale = { notice.value = POS_RECEIPT_WORKSPACE_UNAVAILABLE_MESSAGE },
+            ) {
                 db.posReceiptDao().acknowledge(receiptId, System.currentTimeMillis())
             }
         }
@@ -1243,14 +1263,16 @@ class PosViewModel : ViewModel() {
             checkoutBusy.value || heldOrderReview.value != null ||
             preparedHeldCheckout.value != null
         ) return
-        val scopeLease = app.cacheIsolation.currentLease() ?: return
+        val scopeLease = scopeLeaseOrNotice(POS_CHECKOUT_WORKSPACE_UNAVAILABLE_MESSAGE) ?: return
         checkoutBusy.value = true
         viewModelScope.launch {
+            var checkoutLocalId: String? = null
             try {
                 cartMutationMutex.withLock {
                     val snapshot = db.orderDao().activeDraft()
                         ?: throw IllegalStateException("Add at least one item before payment.")
                     val initialLocal = snapshot.order
+                    checkoutLocalId = initialLocal.localId
                     if (snapshot.lines.isEmpty()) {
                         throw IllegalStateException("Add at least one item before payment.")
                     }
@@ -1282,6 +1304,7 @@ class PosViewModel : ViewModel() {
                             )
                         }
                         if (transitioned !is cloud.dcompany.erp.core.auth.ScopedCommitResult.Committed) {
+                            notice.value = POS_CHECKOUT_WORKSPACE_UNAVAILABLE_MESSAGE
                             return@withLock
                         }
                     }
@@ -1373,10 +1396,13 @@ class PosViewModel : ViewModel() {
                             updatedAtMillis = System.currentTimeMillis(),
                         )
                     }
-                    if (
-                        checkpointed !is cloud.dcompany.erp.core.auth.ScopedCommitResult.Committed ||
-                        checkpointed.value != 1
-                    ) {
+                    if (checkpointed !is cloud.dcompany.erp.core.auth.ScopedCommitResult.Committed) {
+                        notice.value = POS_CHECKOUT_RESULT_WORKSPACE_UNAVAILABLE_MESSAGE
+                        return@withLock
+                    }
+                    if (checkpointed.value != 1) {
+                        notice.value =
+                            "The saved cart changed while its live bill was being prepared. Reopen POS and review it; no payment was recorded."
                         return@withLock
                     }
 
@@ -1505,14 +1531,24 @@ class PosViewModel : ViewModel() {
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (e: Exception) {
-                val current = db.orderDao().activeDraft()
-                current?.takeUnless { it.order.syncState == SyncState.AWAITING_PAYMENT }?.let {
-                    db.orderDao().updateDraftState(
-                        it.order.localId,
-                        SyncState.PREPARING,
-                        System.currentTimeMillis(),
-                        e.message,
-                    )
+                val localId = checkoutLocalId
+                if (localId != null) {
+                    val scopeStillCurrent = app.cacheIsolation.commitIfCurrentOrNotifyStale(
+                        lease = scopeLease,
+                        onStale = { notice.value = POS_CHECKOUT_RESULT_WORKSPACE_UNAVAILABLE_MESSAGE },
+                    ) {
+                        db.orderDao().withLines(localId)
+                            ?.takeUnless { it.order.syncState == SyncState.AWAITING_PAYMENT }
+                            ?.let { current ->
+                                db.orderDao().updateDraftState(
+                                    current.order.localId,
+                                    SyncState.PREPARING,
+                                    System.currentTimeMillis(),
+                                    e.message,
+                                )
+                            }
+                    }
+                    if (!scopeStillCurrent) return@launch
                 }
                 notice.value = directCheckoutPreparationNotice(e)
             } finally {
@@ -1588,7 +1624,7 @@ class PosViewModel : ViewModel() {
             return
         }
         val prepared = state.value.preparedDirectCheckout ?: return
-        val scopeLease = app.cacheIsolation.currentLease() ?: return
+        val scopeLease = scopeLeaseOrNotice(POS_CHECKOUT_CLOSE_WORKSPACE_UNAVAILABLE_MESSAGE) ?: return
         viewModelScope.launch {
             // Remove the local collectible state first. Releasing the server
             // lease before this commit would leave a crash window where the
@@ -1647,10 +1683,16 @@ class PosViewModel : ViewModel() {
         }
         if (points == review.pointsRedeemed) return
 
-        val scopeLease = app.cacheIsolation.currentLease() ?: return
+        val scopeLease = scopeLeaseOrNotice(POS_POINTS_WORKSPACE_UNAVAILABLE_MESSAGE) ?: return
         checkoutBusy.value = true
         viewModelScope.launch {
             try {
+                if (!app.cacheIsolation.commitIfCurrentOrNotifyStale(
+                        lease = scopeLease,
+                        onStale = { notice.value = POS_POINTS_WORKSPACE_UNAVAILABLE_MESSAGE },
+                        write = {},
+                    )
+                ) return@launch
                 val updated = ApiClient.api.updateOrderPoints(
                     id = review.orderId,
                     body = OrderPointsRedemptionUpdateRequest(
@@ -1720,11 +1762,17 @@ class PosViewModel : ViewModel() {
             return
         }
         if (checkoutBusy.value) return
-        val scopeLease = app.cacheIsolation.currentLease() ?: return
+        val scopeLease = scopeLeaseOrNotice(POS_ZERO_WORKSPACE_UNAVAILABLE_MESSAGE) ?: return
         checkoutBusy.value = true
         viewModelScope.launch {
             var acceptedInvoiceNo: String? = null
             try {
+                if (!app.cacheIsolation.commitIfCurrentOrNotifyStale(
+                        lease = scopeLease,
+                        onStale = { notice.value = POS_ZERO_WORKSPACE_UNAVAILABLE_MESSAGE },
+                        write = {},
+                    )
+                ) return@launch
                 val result = try {
                     ApiClient.api.finalizeZeroTotalOrder(
                         id = prepared.orderId,
@@ -1860,10 +1908,17 @@ class PosViewModel : ViewModel() {
         if (checkoutBusy.value) return
         val direct = state.value.preparedDirectCheckout?.takeIf { it.orderId == orderId }
         val held = preparedHeldCheckout.value?.takeIf { it.orderId == orderId }
-        val scopeLease = app.cacheIsolation.currentLease() ?: return
+        val scopeLease = scopeLeaseOrNotice(POS_VOID_WORKSPACE_UNAVAILABLE_MESSAGE) ?: return
         checkoutBusy.value = true
         viewModelScope.launch {
+            var checkoutClosedSafely = false
             try {
+                if (!app.cacheIsolation.commitIfCurrentOrNotifyStale(
+                        lease = scopeLease,
+                        onStale = { notice.value = POS_VOID_WORKSPACE_UNAVAILABLE_MESSAGE },
+                        write = {},
+                    )
+                ) return@launch
                 if (direct != null) {
                     // A checkout lease must never be released while its local
                     // bearer is still rendered as payable. If the process
@@ -1877,19 +1932,26 @@ class PosViewModel : ViewModel() {
                             claimToken = direct.claimToken,
                         )
                     }
-                    check(
-                        removed is cloud.dcompany.erp.core.auth.ScopedCommitResult.Committed &&
-                            removed.value,
-                    ) {
-                        "The bill changed before it could be made safe for voiding. " +
-                            "It remains reserved; close this message and try again."
+                    if (removed !is cloud.dcompany.erp.core.auth.ScopedCommitResult.Committed) {
+                        notice.value = POS_VOID_BEARER_WORKSPACE_UNAVAILABLE_MESSAGE
+                        return@launch
                     }
+                    if (!removed.value) {
+                        notice.value =
+                            "The bill changed before its checkout reservation could be closed. " +
+                                "No void request was sent; it may remain reserved. Reload the payment queue and try again."
+                        return@launch
+                    }
+                    checkoutClosedSafely = true
                 }
                 if (held != null) {
-                    check(preparedHeldCheckout.compareAndSet(held, null)) {
-                        "The selected bill changed before it could be made safe for voiding. " +
-                            "Reload the payment queue and try again."
+                    if (!preparedHeldCheckout.compareAndSet(held, null)) {
+                        notice.value =
+                            "The selected bill changed before its checkout could be closed. " +
+                                "No void request was sent; reload the payment queue and review the bill."
+                        return@launch
                     }
+                    checkoutClosedSafely = true
                 }
                 ApiClient.api.voidOrder(
                     orderId,
@@ -1902,16 +1964,12 @@ class PosViewModel : ViewModel() {
                 throw cancelled
             } catch (e: Exception) {
                 if (direct != null || held != null) app.sync.refresh("orders")
-                notice.value = if (direct != null || held != null) {
-                    "The void was not confirmed. The old checkout was closed safely; " +
-                        "reload the payment queue before taking any further action. " +
-                        (e.message ?: "Check the connection and try the void again.")
-                } else if (e is ApiException) {
-                    e.message ?: "The bill could not be voided. It remains in the payment queue."
-                } else {
-                    "The bill could not be voided. It remains in the payment queue; " +
-                        "check the connection and retry."
-                }
+                notice.value = posVoidFailureNotice(
+                    checkoutClosedSafely = checkoutClosedSafely,
+                    checkoutWasSelected = direct != null || held != null,
+                    apiFailure = e is ApiException,
+                    detail = e.message,
+                )
             } finally {
                 checkoutBusy.value = false
             }
@@ -1977,7 +2035,11 @@ class PosViewModel : ViewModel() {
             notice.value = "This tablet's workspace is not verified. Sign in online before collecting."
             return
         }
-        val scopeLease = app.cacheIsolation.currentLease() ?: return
+        val scopeLease = app.cacheIsolation.currentLease()
+        if (scopeLease == null) {
+            notice.value = POS_PAYMENT_WORKSPACE_UNAVAILABLE_MESSAGE
+            return
+        }
         checkoutBusy.value = true
         startHeldSelectionTapGuard()
         val payment = LocalHeldOrderPaymentEntity(
@@ -2000,7 +2062,10 @@ class PosViewModel : ViewModel() {
             try {
                 var inserted = -1L
                 var existing: LocalHeldOrderPaymentEntity? = null
-                if (!app.cacheIsolation.commitIfCurrent(scopeLease) {
+                if (!app.cacheIsolation.commitIfCurrentOrNotifyStale(
+                        lease = scopeLease,
+                        onStale = { notice.value = POS_PAYMENT_WORKSPACE_UNAVAILABLE_MESSAGE },
+                    ) {
                         db.withTransaction {
                             inserted = db.heldOrderDao().insertPayment(payment)
                             if (inserted == -1L) {
@@ -2049,7 +2114,11 @@ class PosViewModel : ViewModel() {
             notice.value = "Review the cart and enter enough cash before saving this offline payment."
             return
         }
-        val scopeLease = app.cacheIsolation.currentLease() ?: return
+        val scopeLease = app.cacheIsolation.currentLease()
+        if (scopeLease == null) {
+            notice.value = POS_PAYMENT_WORKSPACE_UNAVAILABLE_MESSAGE
+            return
+        }
         checkoutBusy.value = true
         viewModelScope.launch {
             try {
@@ -2094,7 +2163,10 @@ class PosViewModel : ViewModel() {
                         )
                     }
                     var captured = 0
-                    if (!app.cacheIsolation.commitIfCurrent(scopeLease) {
+                    if (!app.cacheIsolation.commitIfCurrentOrNotifyStale(
+                            lease = scopeLease,
+                            onStale = { notice.value = POS_PAYMENT_WORKSPACE_UNAVAILABLE_MESSAGE },
+                        ) {
                             captured = db.orderDao().captureOfflineDraft(
                                 localId = confirmation.localId,
                                 expectedRevision = confirmation.revision,
@@ -2134,46 +2206,49 @@ class PosViewModel : ViewModel() {
             return
         }
         if (localId in retryingRejectedSaleIds.value) return
-        val scopeLease = app.cacheIsolation.currentLease() ?: return
+        val scopeLease = scopeLeaseOrNotice(POS_RETRY_WORKSPACE_UNAVAILABLE_MESSAGE) ?: return
         retryingRejectedSaleIds.update { it + localId }
         viewModelScope.launch {
-            var moved = 0
-            val committed = try {
-                app.cacheIsolation.commitIfCurrent(scopeLease) {
-                    moved = db.orderDao().retryRejected(localId)
-                }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (e: Exception) {
-                notice.value = e.shiftClosingMessageOr(
-                    "The tablet could not queue this retry. The failed sale is still " +
-                        "saved; do not collect payment again.",
-                )
-                retryingRejectedSaleIds.update { it - localId }
-                return@launch
-            }
-            if (!committed) return@launch
-            if (moved == 0) {
-                notice.value = "This failed sale has already changed state. Refresh and review it; " +
-                    "do not collect payment again."
-                retryingRejectedSaleIds.update { it - localId }
-                return@launch
-            }
-            notice.value = "The original saved sale is queued for confirmation using the same " +
-                "sale identity. Do not collect payment again."
-            watchRetriedSaleOutcome(localId)
             try {
-                // A refusal becomes visible while a sync pass may still be
-                // draining other rows. Wait for that pass before starting the
-                // human-requested replay, or SyncEngine's single-flight guard
-                // would correctly drop the overlapping call.
-                app.sync.syncing.first { syncing -> !syncing }
-                app.sync.sync()
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (_: Exception) {
-                notice.value = "The original sale remains saved and is still awaiting server " +
-                    "confirmation. Do not collect payment again; ask a manager to check the pending queue."
+                var moved = 0
+                val committed = try {
+                    app.cacheIsolation.commitIfCurrentOrNotifyStale(
+                        lease = scopeLease,
+                        onStale = { notice.value = POS_RETRY_WORKSPACE_UNAVAILABLE_MESSAGE },
+                    ) {
+                        moved = db.orderDao().retryRejected(localId)
+                    }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (e: Exception) {
+                    notice.value = e.shiftClosingMessageOr(
+                        "The tablet could not queue this retry. The failed sale is still " +
+                            "saved; do not collect payment again.",
+                    )
+                    return@launch
+                }
+                if (!committed) return@launch
+                if (moved == 0) {
+                    notice.value = "This failed sale has already changed state. Refresh and review it; " +
+                        "do not collect payment again."
+                    return@launch
+                }
+                notice.value = "The original saved sale is queued for confirmation using the same " +
+                    "sale identity. Do not collect payment again."
+                watchRetriedSaleOutcome(localId)
+                try {
+                    // A refusal becomes visible while a sync pass may still be
+                    // draining other rows. Wait for that pass before starting the
+                    // human-requested replay, or SyncEngine's single-flight guard
+                    // would correctly drop the overlapping call.
+                    app.sync.syncing.first { syncing -> !syncing }
+                    app.sync.sync()
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    notice.value = "The original sale remains saved and is still awaiting server " +
+                        "confirmation. Do not collect payment again; ask a manager to check the pending queue."
+                }
             } finally {
                 retryingRejectedSaleIds.update { it - localId }
             }
@@ -2589,7 +2664,11 @@ class PosViewModel : ViewModel() {
             notice.value = "The payment amount is invalid. Review the live total before confirming."
             return
         }
-        val scopeLease = app.cacheIsolation.currentLease() ?: return
+        val scopeLease = app.cacheIsolation.currentLease()
+        if (scopeLease == null) {
+            notice.value = POS_PAYMENT_WORKSPACE_UNAVAILABLE_MESSAGE
+            return
+        }
         // These writes are synchronous and precede the coroutine launch: a
         // second callback cannot bind itself to another order, and the second
         // pointer-up cannot click through onto the newly shifted held list.
@@ -2616,7 +2695,10 @@ class PosViewModel : ViewModel() {
             try {
                 var inserted = -1L
                 var existing: LocalHeldOrderPaymentEntity? = null
-                if (!app.cacheIsolation.commitIfCurrent(scopeLease) {
+                if (!app.cacheIsolation.commitIfCurrentOrNotifyStale(
+                        lease = scopeLease,
+                        onStale = { notice.value = POS_PAYMENT_WORKSPACE_UNAVAILABLE_MESSAGE },
+                    ) {
                         inserted = db.heldOrderDao().insertPayment(payment)
                         if (inserted == -1L) {
                             existing = db.heldOrderDao().paymentForTarget(prepared.orderId)
@@ -2721,7 +2803,7 @@ class PosViewModel : ViewModel() {
         // Synchronous state is the ViewModel-level one-shot boundary. The
         // dialog has its own atomic gate, so rapid queued callbacks are also
         // rejected before they reach here.
-        val scopeLease = app.cacheIsolation.currentLease() ?: return
+        val scopeLease = scopeLeaseOrNotice(POS_ZERO_WORKSPACE_UNAVAILABLE_MESSAGE) ?: return
         confirmingHeldOrderId.value = prepared.orderId
         startHeldSelectionTapGuard()
         checkoutBusy.value = true
@@ -2732,6 +2814,12 @@ class PosViewModel : ViewModel() {
         viewModelScope.launch {
             var acceptedInvoiceNo: String? = null
             try {
+                if (!app.cacheIsolation.commitIfCurrentOrNotifyStale(
+                        lease = scopeLease,
+                        onStale = { notice.value = POS_ZERO_WORKSPACE_UNAVAILABLE_MESSAGE },
+                        write = {},
+                    )
+                ) return@launch
                 val result = try {
                     ApiClient.api.finalizeZeroTotalOrder(
                         id = prepared.orderId,
@@ -2862,34 +2950,38 @@ class PosViewModel : ViewModel() {
             return
         }
         if (localId in retryingHeldPaymentIds.value) return
-        val scopeLease = app.cacheIsolation.currentLease() ?: return
+        val scopeLease = scopeLeaseOrNotice(POS_RETRY_WORKSPACE_UNAVAILABLE_MESSAGE) ?: return
         retryingHeldPaymentIds.update { it + localId }
         viewModelScope.launch {
-            var moved = 0
-            val committed = try {
-                app.cacheIsolation.commitIfCurrent(scopeLease) {
-                    moved = db.heldOrderDao().retryRejectedPayment(localId)
+            try {
+                var moved = 0
+                val committed = try {
+                    app.cacheIsolation.commitIfCurrentOrNotifyStale(
+                        lease = scopeLease,
+                        onStale = { notice.value = POS_RETRY_WORKSPACE_UNAVAILABLE_MESSAGE },
+                    ) {
+                        moved = db.heldOrderDao().retryRejectedPayment(localId)
+                    }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    notice.value = "The tablet could not queue this reconciliation. The original " +
+                        "payment is still saved; do not collect again."
+                    return@launch
                 }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (_: Exception) {
-                notice.value = "The tablet could not queue this reconciliation. The original " +
-                    "payment is still saved; do not collect again."
+                if (!committed) return@launch
+                if (moved == 0) {
+                    notice.value = "This held-order payment has already changed state. Review its " +
+                        "current status; do not collect again."
+                    return@launch
+                }
+                notice.value = "The original held-order payment is queued with the same safe payment " +
+                    "identity. Do not collect again."
+                watchRetriedHeldPaymentOutcome(localId)
+                requestHeldPaymentSyncAfterActivePass()
+            } finally {
                 retryingHeldPaymentIds.update { it - localId }
-                return@launch
             }
-            if (!committed) return@launch
-            if (moved == 0) {
-                notice.value = "This held-order payment has already changed state. Review its " +
-                    "current status; do not collect again."
-                retryingHeldPaymentIds.update { it - localId }
-                return@launch
-            }
-            notice.value = "The original held-order payment is queued with the same safe payment " +
-                "identity. Do not collect again."
-            watchRetriedHeldPaymentOutcome(localId)
-            requestHeldPaymentSyncAfterActivePass()
-            retryingHeldPaymentIds.update { it - localId }
         }
     }
 
@@ -2964,6 +3056,71 @@ class PosViewModel : ViewModel() {
 /** Small helper so cart edits read as one expression. */
 private inline fun <T> MutableStateFlow<T>.update(block: (T) -> T) {
     value = block(value)
+}
+
+internal const val POS_PAYMENT_WORKSPACE_UNAVAILABLE_MESSAGE =
+    "This tablet's verified workspace expired before payment was saved. Sign in online again, " +
+        "reopen POS, and review the bill. No ERP payment was recorded; do not collect or retry until it is verified."
+
+internal const val POS_CART_WORKSPACE_UNAVAILABLE_MESSAGE =
+    "This tablet's verified workspace expired before the cart change was saved. Sign in online again, " +
+        "reopen POS, and review the cart before continuing."
+
+internal const val POS_RECEIPT_WORKSPACE_UNAVAILABLE_MESSAGE =
+    "This tablet's verified workspace expired before the receipt was dismissed. Sign in online again, " +
+        "reopen POS, and review the receipt."
+
+internal const val POS_CHECKOUT_WORKSPACE_UNAVAILABLE_MESSAGE =
+    "This tablet's verified workspace expired before checkout could be prepared. Sign in online again, " +
+        "reopen POS, and review the bill. No payment was recorded."
+
+internal const val POS_CHECKOUT_RESULT_WORKSPACE_UNAVAILABLE_MESSAGE =
+    "This tablet's verified workspace changed while the server was preparing the bill. Sign in online again, " +
+        "reopen POS, and review the cart before retrying. The server bill may already exist, but no ERP payment was recorded."
+
+internal const val POS_CHECKOUT_CLOSE_WORKSPACE_UNAVAILABLE_MESSAGE =
+    "This tablet's verified workspace expired before the checkout could be closed safely. Sign in online again, " +
+        "reopen POS, and review the reserved bill. No payment was recorded."
+
+internal const val POS_POINTS_WORKSPACE_UNAVAILABLE_MESSAGE =
+    "This tablet's verified workspace expired before loyalty points could be changed. Sign in online again, " +
+        "reopen POS, and verify the live bill. No payment was recorded."
+
+internal const val POS_ZERO_WORKSPACE_UNAVAILABLE_MESSAGE =
+    "This tablet's verified workspace expired before the ₹0.00 completion could start. Sign in online again, " +
+        "reopen POS, and review the bill. Collect no money."
+
+internal const val POS_VOID_WORKSPACE_UNAVAILABLE_MESSAGE =
+    "This tablet's verified workspace expired before the void could start. Sign in online again, " +
+        "reopen POS, and review the bill. It was not voided."
+
+internal const val POS_VOID_BEARER_WORKSPACE_UNAVAILABLE_MESSAGE =
+    "This tablet's verified workspace changed before the checkout reservation could be closed. " +
+        "No void request was sent and the bill may remain reserved. Sign in online again, reopen POS, " +
+        "and review the payment queue."
+
+internal const val POS_RETRY_WORKSPACE_UNAVAILABLE_MESSAGE =
+    "This tablet's verified workspace expired before reconciliation could be queued. Sign in online again, " +
+        "reopen POS, and review the original saved payment. Do not collect payment again."
+
+internal fun posVoidFailureNotice(
+    checkoutClosedSafely: Boolean,
+    checkoutWasSelected: Boolean,
+    apiFailure: Boolean,
+    detail: String?,
+): String = when {
+    checkoutClosedSafely ->
+        "The void was not confirmed. The old checkout was closed safely; " +
+            "reload the payment queue before taking any further action. " +
+            (detail ?: "Check the connection and try the void again.")
+    checkoutWasSelected ->
+        "The void request was not sent because this checkout could not be closed safely. " +
+            "It may remain reserved; reload the payment queue before trying again. " +
+            (detail ?: "The local checkout state could not be verified.")
+    apiFailure -> detail ?: "The bill could not be voided. It remains in the payment queue."
+    else ->
+        "The bill could not be voided. It remains in the payment queue; " +
+            "check the connection and retry."
 }
 
 /** Stable across an ambiguous retry, distinct for every versioned absolute set. */

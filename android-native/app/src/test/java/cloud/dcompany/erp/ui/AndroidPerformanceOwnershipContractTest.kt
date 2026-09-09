@@ -10,6 +10,40 @@ import org.junit.Test
 class AndroidPerformanceOwnershipContractTest {
 
     @Test
+    fun `persisted authentication restoration never blocks Application onCreate`() {
+        val app = read("src/main/java/cloud/dcompany/erp/DCompanyApp.kt")
+        val session = read("src/main/java/cloud/dcompany/erp/ui/SessionViewModel.kt")
+        val startup = read("src/main/java/cloud/dcompany/erp/PersistedStartupState.kt")
+
+        val onCreate = app.between(
+            "override fun onCreate()",
+            "private fun startPersistedStartupStateRestoration()",
+        )
+        val restore = session.between(
+            "fun restore()",
+            "/** Validate display identity only",
+        )
+
+        assertFalse("Application startup must not use runBlocking", "runBlocking" in app)
+        assertTrue(
+            "Application must launch persisted restoration instead of awaiting it on Main",
+            "startPersistedStartupStateRestoration()" in onCreate &&
+                "appScope.launch(Dispatchers.IO)" in app,
+        )
+        assertTrue(
+            "Session restore must await persisted authority before reading tokens",
+            "awaitPersistedStartupState" in restore &&
+                restore.indexOf("awaitPersistedStartupState") < restore.indexOf("tokens.hasSession()"),
+        )
+        assertTrue(
+            "Persisted restoration must be bounded and fail closed",
+            "withTimeout(timeoutMillis)" in startup &&
+                "PersistedStartupFailure.TIMEOUT" in startup &&
+                "PersistedStartupFailure.STORAGE" in startup,
+        )
+    }
+
+    @Test
     fun `application owns reactive gaming alarm observation`() {
         val app = read("src/main/java/cloud/dcompany/erp/DCompanyApp.kt")
         val gaming = read(
@@ -167,6 +201,48 @@ class AndroidPerformanceOwnershipContractTest {
             "(if (state.notice != null)" in board ||
                 "(if (state.busyStationId != null)" in board,
         )
+    }
+
+    @Test
+    fun `Gaming command status stays in place and overtime tint is locally derived`() {
+        val gaming = read("src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingScreen.kt")
+        val workspace = gaming.between(
+            "private fun GamingCommandWorkspace(",
+            "@Composable\nprivate fun GamingCommandPanel(",
+        )
+
+        assertTrue(
+            "The command workspace must retain one in-place status rail even when attention clears",
+            "GamingCommandAttentionBar(" in workspace,
+        )
+        assertFalse(
+            "Attention changes must not insert or remove the command status rail",
+            "if (attentionCount > 0)" in workspace,
+        )
+        assertTrue(
+            "Only the selected command panel may observe the overtime clock",
+            "toneProvider = {" in workspace &&
+                "derivedStateOf(structuralEqualityPolicy())" in workspace &&
+                "if (observesOvertime) wallClock.value else stableNow" in workspace,
+        )
+        assertFalse(
+            "The command header must not freeze its tone at an unobserved wall-clock snapshot",
+            "nowMillis = System.currentTimeMillis()" in workspace,
+        )
+    }
+
+    @Test
+    fun `Gaming start and stop never silently abandon an expired workspace lease`() {
+        val gaming = read(
+            "src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingViewModel.kt",
+        )
+        val start = gaming.between("    fun start(", "    fun stop(")
+        val stop = gaming.between("    fun stop(", "    fun addSessionAddon(")
+
+        assertFalse("Start must not silently return when its lease is absent", "currentLease() ?: return" in start)
+        assertTrue("Start must explain recovery and confirm no play was saved", "gamingStartWorkspaceUnavailableMessage" in start)
+        assertFalse("Stop must not silently return when its lease is absent", "currentLease() ?: return" in stop)
+        assertTrue("Stop must explain that the session remains running", "GAMING_STOP_WORKSPACE_UNAVAILABLE_MESSAGE" in stop)
     }
 
     private fun read(relativePath: String): String =

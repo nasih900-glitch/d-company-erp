@@ -51,7 +51,7 @@ class AndroidAuditIsolationTest(unittest.TestCase):
         credential_validation = source.index("requireSafeInputPath(credentialPath)", outer_try)
         credential_assignment = source.index("validatedCredentialPath = credentialPath", outer_try)
         plan_validation = source.index("requireSafeInputPath(planPath)", outer_try)
-        plan_read = source.index('JSONObject(device.executeShellCommand("cat $planPath"))', outer_try)
+        plan_read = source.index('JSONObject(readInstructionFile(planPath))', outer_try)
         fixture_check = source.index('require(credentials.optString("fixture")', outer_try)
         cleanup = source.index(
             'validatedCredentialPath?.let { device.executeShellCommand("rm $it") }',
