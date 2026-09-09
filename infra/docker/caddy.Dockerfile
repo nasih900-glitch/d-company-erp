@@ -24,9 +24,9 @@ RUN set -eux; \
     go mod verify; \
     test "$(go list -mod=readonly -m -f '{{.Version}}' github.com/caddyserver/caddy/v2)" = "v2.11.4"; \
     test "$(go list -mod=readonly -m -f '{{.Version}}' golang.org/x/crypto)" = "v0.56.0"; \
-    test "$(go list -mod=readonly -m -f '{{.Version}}' golang.org/x/net)" = "v0.57.0"; \
+    test "$(go list -mod=readonly -m -f '{{.Version}}' golang.org/x/net)" = "v0.58.0"; \
     test "$(go list -mod=readonly -m -f '{{.Version}}' golang.org/x/text)" = "v0.41.0"; \
-    test "$(go list -mod=readonly -m -f '{{.Version}}' google.golang.org/grpc)" = "v1.83.1"
+    test "$(go list -mod=readonly -m -f '{{.Version}}' google.golang.org/grpc)" = "v1.83.2"
 
 COPY infra/docker/caddy-build/main.go ./
 
@@ -38,7 +38,7 @@ RUN set -eux; \
         -trimpath \
         -ldflags='-s -w -buildid= -X github.com/caddyserver/caddy/v2.CustomVersion=v2.11.4-dcompany.1' \
         -o /out/caddy .; \
-    echo '73c0169f0b72b465e2ae20bdb67a3e017044b2ab3d267816398b9d6ece243fb0  /out/caddy' | sha256sum -c -; \
+    echo '951a0136950bb9edf60ff5cec6ca2df0a041b27ded9e610f0aab49b168739dac  /out/caddy' | sha256sum -c -; \
     go version -m /out/caddy | grep -F 'go1.26.8'; \
     go version -m /out/caddy | grep -F 'github.com/caddyserver/caddy/v2'; \
     go version -m /out/caddy | grep -F 'v2.11.4'

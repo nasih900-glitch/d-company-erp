@@ -17,6 +17,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "infra" / "scripts" / "install-on-vm.sh"
 LOCK_HELPER = ROOT / "infra" / "scripts" / "production_install_lock.py"
+HARDENED_SCANNER = ROOT / "infra" / "scripts" / "run-hardened-image-scanners.sh"
 
 
 def _load_lock_helper():
@@ -52,6 +53,11 @@ def test_candidate_build_uses_a_private_immutable_git_archive() -> None:
 
 def test_exact_candidate_images_are_scanned_before_maintenance() -> None:
     source = INSTALLER.read_text(encoding="utf-8")
+    scanner_source = HARDENED_SCANNER.read_text(encoding="utf-8")
+    invocation = 'bash "$HARDENED_SCANNER_TOOL"'
+    source = source.replace(invocation, scanner_source + "\n" + invocation)
+    assert '600s \\\n  docker pull "$SYFT_IMAGE"' in source
+    assert '600s \\\n  docker pull "$GRYPE_IMAGE"' in source
 
     attestation = (
         'CANDIDATE_IMAGE_ATTESTATION=$(python3 "$CANDIDATE_PARITY_TOOL" candidate'
@@ -473,6 +479,148 @@ def test_rollback_keeps_the_live_signed_apk_directory_across_legacy_compose() ->
     assert prior_compose in source
     assert source.index(override) < source.index(manifest)
     assert source.index(live_root) < source.index(prior_compose)
+
+
+def test_existing_environment_crosses_the_frozen_source_boundary_by_absolute_path(
+    tmp_path: Path,
+) -> None:
+    """Execute the installer's real prepare step from a separate source snapshot."""
+
+    repository = tmp_path / "existing repository with spaces"
+    frozen_root = tmp_path / "frozen source with spaces"
+    repository.mkdir()
+    (frozen_root / "infra" / "scripts").mkdir(parents=True)
+    for relative_path in (
+        Path(".env.production.example"),
+        Path("infra/scripts/generate-secrets.sh"),
+        Path("infra/scripts/prepare-production-env.sh"),
+        Path("infra/scripts/validate-production-env.sh"),
+    ):
+        destination = frozen_root / relative_path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / relative_path, destination)
+
+    domain = "erp.example.org"
+    revision = "a" * 40
+    frozen_template = (frozen_root / ".env.production.example").read_text(
+        encoding="utf-8"
+    )
+    frozen_version_match = re.search(
+        r"^APP_VERSION=(\d+\.\d+\.\d+)$", frozen_template, re.MULTILINE
+    )
+    assert frozen_version_match is not None
+    frozen_version = frozen_version_match.group(1)
+    credentials = {
+        "POSTGRES_PASSWORD": "p" * 48,
+        "JWT_SECRET": "j" * 64,
+        "REDIS_PASSWORD": "1" * 64,
+        "REMOTE_ASSISTANCE_PAIRING_SECRET": "q" * 64,
+        "REMOTE_ASSISTANCE_RELAY_SECRET": (
+            "QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE="
+        ),
+        "S3_SECRET_KEY": "m" * 48,
+        "SEED_OWNER_PASSWORD": "source-only-secret-must-not-enter-snapshot",
+    }
+    existing_environment = (
+        frozen_template
+        .replace("CHANGE_ME_git_commit_sha", "b" * 40)
+        .replace(f"APP_VERSION={frozen_version}", "APP_VERSION=3.1.14")
+        .replace("CHANGE_ME.com", domain)
+        .replace("CHANGE_ME_strong_random_password", credentials["POSTGRES_PASSWORD"])
+        .replace("CHANGE_ME_48_char_base64_secret", credentials["JWT_SECRET"])
+        .replace("CHANGE_ME_64_hex_redis_password", credentials["REDIS_PASSWORD"])
+        .replace(
+            "CHANGE_ME_48_char_dedicated_pairing_secret",
+            credentials["REMOTE_ASSISTANCE_PAIRING_SECRET"],
+        )
+        .replace(
+            "CHANGE_ME_32_byte_base64_relay_key",
+            credentials["REMOTE_ASSISTANCE_RELAY_SECRET"],
+        )
+        .replace("CHANGE_ME_minio_password", credentials["S3_SECRET_KEY"])
+        .replace(
+            "CHANGE_ME_strong_owner_password", credentials["SEED_OWNER_PASSWORD"]
+        )
+    )
+    source_environment = repository / ".env"
+    source_environment.write_text(existing_environment, encoding="utf-8")
+    source_environment.chmod(0o600)
+    original_source_bytes = source_environment.read_bytes()
+    original_source_mode = stat.S_IMODE(source_environment.stat().st_mode)
+    assert b"APP_VERSION=3.1.14" in original_source_bytes
+    assert f"APP_REVISION={'b' * 40}".encode() in original_source_bytes
+
+    installer_source = INSTALLER.read_text(encoding="utf-8")
+    prepare_call = installer_source.index('bash "$PREPARE_ENV_TOOL"')
+    prepare_start = installer_source.rindex("if [ -f .env ]; then", 0, prepare_call)
+    prepare_end_marker = (
+        '  "$SOURCE_ENV" "$ENV_CANDIDATE" "$DOMAIN" "$CURRENT_REVISION"\n'
+    )
+    prepare_end = installer_source.index(prepare_end_marker, prepare_start) + len(
+        prepare_end_marker
+    )
+    installer_prepare_step = installer_source[prepare_start:prepare_end]
+    candidate_environment = repository / ".env.candidate"
+    result = subprocess.run(
+        ["bash", "-c", "set -euo pipefail\n" + installer_prepare_step],
+        cwd=repository,
+        env={
+            **os.environ,
+            "PREPARE_ENV_TOOL": str(
+                frozen_root / "infra" / "scripts" / "prepare-production-env.sh"
+            ),
+            "ENV_CANDIDATE": str(candidate_environment),
+            "DOMAIN": domain,
+            "CURRENT_REVISION": revision,
+            "REPO_DIR": str(repository),
+        },
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert source_environment.read_bytes() == original_source_bytes
+    assert stat.S_IMODE(source_environment.stat().st_mode) == original_source_mode
+    candidate_source = candidate_environment.read_text(encoding="utf-8")
+    assert f"APP_REVISION={revision}" in candidate_source
+    assert f"APP_VERSION={frozen_version}" in candidate_source
+    assert stat.S_IMODE(candidate_environment.stat().st_mode) == 0o600
+    candidate_lines = set(candidate_source.splitlines())
+    for key, credential in credentials.items():
+        assert f"{key}={credential}" in candidate_lines
+        assert credential not in result.stdout
+        assert credential not in result.stderr
+    assert not (frozen_root / ".env").exists()
+    frozen_files = [path for path in frozen_root.rglob("*") if path.is_file()]
+    for credential in credentials.values():
+        assert all(
+            credential.encode() not in path.read_bytes() for path in frozen_files
+        )
+
+    fresh_repository = tmp_path / "fresh repository with spaces"
+    fresh_repository.mkdir()
+    fresh_candidate = fresh_repository / ".env.candidate"
+    fresh_result = subprocess.run(
+        ["bash", "-c", "set -euo pipefail\n" + installer_prepare_step],
+        cwd=fresh_repository,
+        env={
+            **os.environ,
+            "PREPARE_ENV_TOOL": str(
+                frozen_root / "infra" / "scripts" / "prepare-production-env.sh"
+            ),
+            "ENV_CANDIDATE": str(fresh_candidate),
+            "DOMAIN": domain,
+            "CURRENT_REVISION": revision,
+            "REPO_DIR": str(fresh_repository),
+        },
+        capture_output=True,
+        text=True,
+    )
+    assert fresh_result.returncode == 0, fresh_result.stderr
+    assert fresh_candidate.is_file()
+    assert stat.S_IMODE(fresh_candidate.stat().st_mode) == 0o600
+    assert not (fresh_repository / ".env").exists()
+    assert not (frozen_root / ".env").exists()
 
 
 @pytest.mark.skipif(

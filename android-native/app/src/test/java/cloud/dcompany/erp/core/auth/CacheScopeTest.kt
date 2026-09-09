@@ -2,10 +2,14 @@ package cloud.dcompany.erp.core.auth
 
 import cloud.dcompany.erp.ui.verifyRemoteBeforeCachedActivation
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.atomic.AtomicReference
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -56,6 +60,150 @@ class CacheScopeTest {
             runBlocking { coordinator.activateCached(scopeA.copy(terminalId = "other-terminal")) }
         }
         assertFalse(coordinator.isReady())
+    }
+
+    @Test
+    fun `stale A cached recovery cannot replace B activated after its inactive observation`() = runBlocking {
+        val coordinator = CacheIsolationCoordinator(FakePurger(), FakeMarker(scopeA))
+        val staleAObservedInactive = CompletableDeferred<Unit>()
+        val releaseStaleA = CompletableDeferred<Unit>()
+        val staleA = async {
+            assertNull(coordinator.currentLease())
+            staleAObservedInactive.complete(Unit)
+            releaseStaleA.await()
+            coordinator.adoptCachedOnlyIfInactive(scopeA)
+        }
+
+        staleAObservedInactive.await()
+        assertEquals(CacheScopeActivation.PURGED, coordinator.activateValidated(scopeB))
+        val leaseB = requireNotNull(coordinator.currentLease())
+        releaseStaleA.complete(Unit)
+
+        assertEquals(CachedScopeLeaseAdoption.ActiveScopeConflict, staleA.await())
+        assertEquals(leaseB, coordinator.currentLease())
+        assertEquals(scopeB, coordinator.currentLease()?.scope)
+    }
+
+    @Test
+    fun `background recovery borrows an existing exact lease without replacing or owning it`() = runBlocking {
+        val coordinator = CacheIsolationCoordinator(FakePurger(), FakeMarker(scopeB))
+        assertEquals(CacheScopeActivation.RETAINED, coordinator.activateValidated(scopeB))
+        val foregroundLease = requireNotNull(coordinator.currentLease())
+
+        val adoption = requireNotNull(
+            coordinator.adoptCachedOnlyIfInactive(scopeB) as? CachedScopeLeaseAdoption.Ready,
+        )
+
+        assertEquals(foregroundLease, adoption.lease)
+        assertFalse(adoption.adopted)
+        assertNull(adoption.adoptedLease)
+        assertEquals(foregroundLease, coordinator.currentLease())
+    }
+
+    @Test
+    fun `marker mismatch or read failure never revokes an active B lease`() = runBlocking {
+        val marker = ToggleReadMarker(scopeB)
+        val coordinator = CacheIsolationCoordinator(FakePurger(), marker)
+        coordinator.activateValidated(scopeB)
+        val leaseB = requireNotNull(coordinator.currentLease())
+
+        // A stale A recovery is rejected from the active lease under the
+        // mutex; it does not consult or mutate a failing disk marker.
+        marker.failCurrent = true
+        assertEquals(
+            CachedScopeLeaseAdoption.ActiveScopeConflict,
+            coordinator.adoptCachedOnlyIfInactive(scopeA),
+        )
+        assertEquals(leaseB, coordinator.currentLease())
+        val borrowedB = requireNotNull(
+            coordinator.adoptCachedOnlyIfInactive(scopeB) as? CachedScopeLeaseAdoption.Ready,
+        )
+        assertEquals(leaseB, borrowedB.lease)
+        assertEquals(leaseB, coordinator.currentLease())
+
+        // With no active lease, the same storage failure remains fail-closed
+        // and does not publish a replacement lease.
+        coordinator.deactivate()
+        assertThrows(CacheScopeException::class.java) {
+            runBlocking { coordinator.adoptCachedOnlyIfInactive(scopeB) }
+        }
+        assertNull(coordinator.currentLease())
+
+        val mismatch = CacheIsolationCoordinator(FakePurger(), FakeMarker(scopeA))
+        assertEquals(
+            CachedScopeLeaseAdoption.StoredScopeMismatch,
+            mismatch.adoptCachedOnlyIfInactive(scopeB),
+        )
+        assertNull(mismatch.currentLease())
+    }
+
+    @Test
+    fun `token loss revokes only the exact lease adopted by background recovery`() = runBlocking {
+        val coordinator = CacheIsolationCoordinator(FakePurger(), FakeMarker(scopeA))
+        val adoptionA = requireNotNull(
+            coordinator.adoptCachedOnlyIfInactive(scopeA) as? CachedScopeLeaseAdoption.Ready,
+        )
+        val adoptedLeaseA = requireNotNull(adoptionA.adoptedLease)
+
+        assertTrue(coordinator.deactivateIfCurrent(adoptedLeaseA))
+        assertNull(coordinator.currentLease())
+
+        val secondAdoptionA = requireNotNull(
+            coordinator.adoptCachedOnlyIfInactive(scopeA) as? CachedScopeLeaseAdoption.Ready,
+        )
+        val staleLeaseA = requireNotNull(secondAdoptionA.adoptedLease)
+        assertEquals(CacheScopeActivation.PURGED, coordinator.activateValidated(scopeB))
+        val leaseB = requireNotNull(coordinator.currentLease())
+        var staleCleanupCalls = 0
+
+        assertFalse(coordinator.deactivateIfCurrent(staleLeaseA))
+        assertFalse(
+            coordinator.deactivateIfCurrentWithCleanup(staleLeaseA) {
+                staleCleanupCalls += 1
+            },
+        )
+        assertEquals(0, staleCleanupCalls)
+        assertEquals(leaseB, coordinator.currentLease())
+    }
+
+    @Test
+    fun `background cleanup completes before a foreground workspace can publish`() = runBlocking {
+        val coordinator = CacheIsolationCoordinator(FakePurger(), FakeMarker(scopeA))
+        val adoptionA = requireNotNull(
+            coordinator.adoptCachedOnlyIfInactive(scopeA) as? CachedScopeLeaseAdoption.Ready,
+        )
+        val leaseA = requireNotNull(adoptionA.adoptedLease)
+        val cleanupEntered = CountDownLatch(1)
+        val releaseCleanup = CountDownLatch(1)
+        val workspaceBPublished = CompletableDeferred<Unit>()
+        val terminalProjection = AtomicReference(scopeA.terminalId)
+
+        val staleCleanup = async(Dispatchers.Default) {
+            coordinator.deactivateIfCurrentWithCleanup(leaseA) {
+                cleanupEntered.countDown()
+                check(releaseCleanup.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                terminalProjection.set(null)
+            }
+        }
+        check(cleanupEntered.await(5, java.util.concurrent.TimeUnit.SECONDS))
+
+        val activateB = launch(Dispatchers.Default) {
+            coordinator.activateValidated(scopeB)
+            terminalProjection.set(scopeB.terminalId)
+            workspaceBPublished.complete(Unit)
+        }
+
+        assertNull(
+            "Workspace B must wait until A's process-global cleanup is complete",
+            withTimeoutOrNull(100L) { workspaceBPublished.await() },
+        )
+        releaseCleanup.countDown()
+        assertTrue(staleCleanup.await())
+        workspaceBPublished.await()
+        activateB.join()
+
+        assertEquals(scopeB, coordinator.currentLease()?.scope)
+        assertEquals(scopeB.terminalId, terminalProjection.get())
     }
 
     @Test
@@ -246,6 +394,45 @@ class CacheScopeTest {
     }
 
     @Test
+    fun `revoked feature lease reports one no-write recovery message`() = runBlocking {
+        val coordinator = CacheIsolationCoordinator(FakePurger(), FakeMarker(scopeA))
+        coordinator.activateValidated(scopeA)
+        val leaseA = requireNotNull(coordinator.currentLease())
+        coordinator.deactivate()
+        var writes = 0
+        var feedback = 0
+
+        val committed = coordinator.commitIfCurrentOrNotifyStale(
+            lease = leaseA,
+            onStale = { feedback += 1 },
+            write = { writes += 1 },
+        )
+
+        assertFalse(committed)
+        assertEquals(0, writes)
+        assertEquals(1, feedback)
+    }
+
+    @Test
+    fun `current feature lease preserves the original write path without stale feedback`() = runBlocking {
+        val coordinator = CacheIsolationCoordinator(FakePurger(), FakeMarker(scopeA))
+        coordinator.activateValidated(scopeA)
+        val leaseA = requireNotNull(coordinator.currentLease())
+        var writes = 0
+        var feedback = 0
+
+        val committed = coordinator.commitIfCurrentOrNotifyStale(
+            lease = leaseA,
+            onStale = { feedback += 1 },
+            write = { writes += 1 },
+        )
+
+        assertTrue(committed)
+        assertEquals(1, writes)
+        assertEquals(0, feedback)
+    }
+
+    @Test
     fun `local mutation that wins mutex is seen by preflight and blocks B`() = runBlocking {
         val purger = FakePurger()
         val coordinator = CacheIsolationCoordinator(purger, FakeMarker(scopeA))
@@ -417,6 +604,26 @@ class CacheScopeTest {
         override fun clear(): Boolean {
             events += "clear"
             if (failClear) return false
+            stored = null
+            return true
+        }
+    }
+
+    private class ToggleReadMarker(initial: CacheScope?) : CacheScopeMarker {
+        private var stored = initial
+        var failCurrent: Boolean = false
+
+        override fun current(): CacheScope? {
+            if (failCurrent) error("marker read failed")
+            return stored
+        }
+
+        override fun remember(scope: CacheScope): Boolean {
+            stored = scope
+            return true
+        }
+
+        override fun clear(): Boolean {
             stored = null
             return true
         }

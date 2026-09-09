@@ -11,12 +11,16 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import cloud.dcompany.erp.DCompanyApp
+import cloud.dcompany.erp.PersistedStartupStateResult
+import cloud.dcompany.erp.retryFailedPersistedStartupForWorkAttempt
 import cloud.dcompany.erp.core.auth.AccessTokenIdentityParser
 import cloud.dcompany.erp.core.auth.CacheScope
 import cloud.dcompany.erp.core.auth.CacheScopeException
 import cloud.dcompany.erp.core.auth.CacheScopeLease
+import cloud.dcompany.erp.core.auth.CachedScopeLeaseAdoption
 import cloud.dcompany.erp.core.auth.EffectivePermissions
 import cloud.dcompany.erp.core.auth.OutboxOwnerIdentity
+import cloud.dcompany.erp.core.auth.ScopedCommitResult
 import cloud.dcompany.erp.core.auth.TerminalResolution
 import cloud.dcompany.erp.core.auth.resolveTerminalAssignment
 import cloud.dcompany.erp.core.db.UnresolvedOutboxGroup
@@ -74,6 +78,13 @@ class BackgroundSyncWorker(
 
     override suspend fun doWork(): Result {
         val app = applicationContext as? DCompanyApp ?: return Result.failure()
+        if (
+            app.awaitPersistedStartupState(
+                retryFailed = retryFailedPersistedStartupForWorkAttempt(runAttemptCount),
+            ) !is PersistedStartupStateResult.Ready
+        ) {
+            return Result.retry()
+        }
         return try {
             when (val prepared = prepareVerifiedScope(app)) {
                 BackgroundScopeResult.NO_SESSION,
@@ -94,12 +105,7 @@ class BackgroundSyncWorker(
                         // authenticated cache lease active after its job. A
                         // foreground restore creates a newer lease, and the
                         // compare-and-deactivate guard cannot revoke that one.
-                        prepared.workerActivatedLease?.let { lease ->
-                            if (app.cacheIsolation.deactivateIfCurrent(lease)) {
-                                ApiClient.deactivateTerminalScope()
-                                app.terminalStore.deactivateValidatedDisplay()
-                            }
-                        }
+                        releaseWorkerAdoptedScope(app, prepared.workerActivatedLease)
                     }
                 }
             }
@@ -171,35 +177,61 @@ class BackgroundSyncWorker(
             branchId = liveProfile.branchId?.trim()?.takeIf(String::isNotEmpty),
             terminalId = terminalId,
         )
-        val currentLease = app.cacheIsolation.currentLease()
-        if (currentLease != null && currentLease.scope != expectedScope) {
-            return BackgroundScopeResult.BLOCKED
-        }
         if (app.tokens.currentAccessFor(sessionLease) == null) {
             return BackgroundScopeResult.NO_SESSION
         }
-        val workerActivatedLease: CacheScopeLease?
-        if (currentLease == null) {
-            try {
-                workerActivatedLease = app.cacheIsolation
-                    .activateCachedWithLease(expectedScope)
-                    .lease
-            } catch (_: CacheScopeException) {
-                return BackgroundScopeResult.BLOCKED
-            }
-        } else {
-            workerActivatedLease = null
+        val adoptionResult = try {
+            app.cacheIsolation.adoptCachedOnlyIfInactive(expectedScope)
+        } catch (_: CacheScopeException) {
+            return BackgroundScopeResult.BLOCKED
         }
-        if (requiresTerminal && !app.terminalStore.activateCachedValidated(
+        val adoption = adoptionResult as? CachedScopeLeaseAdoption.Ready
+            ?: return BackgroundScopeResult.BLOCKED
+        val workerActivatedLease = adoption.adoptedLease
+        val terminalActivation = app.cacheIsolation.commitResultIfCurrent(adoption.lease) {
+            !requiresTerminal || app.terminalStore.activateCachedValidated(
                 terminalId,
                 expectedScope.branchId,
             )
+        }
+        if (
+            terminalActivation !is ScopedCommitResult.Committed ||
+            !terminalActivation.value
         ) {
-            workerActivatedLease?.let { app.cacheIsolation.deactivateIfCurrent(it) }
+            releaseWorkerAdoptedScope(app, workerActivatedLease)
             return BackgroundScopeResult.BLOCKED
         }
-        ApiClient.activateTerminalScope(terminalId)
+        if (app.tokens.currentAccessFor(sessionLease) == null) {
+            releaseWorkerAdoptedScope(app, workerActivatedLease)
+            return BackgroundScopeResult.NO_SESSION
+        }
+        // Publish the terminal header only while the exact lease selected
+        // above is still current. A foreground B activation that wins first
+        // must not inherit a stale A worker's header.
+        val terminalHeaderActivated = app.cacheIsolation.commitIfCurrent(adoption.lease) {
+            ApiClient.activateTerminalScope(terminalId)
+        }
+        if (!terminalHeaderActivated) {
+            releaseWorkerAdoptedScope(app, workerActivatedLease)
+            return BackgroundScopeResult.BLOCKED
+        }
         return BackgroundScopeResult.Ready(workerActivatedLease)
+    }
+
+    private suspend fun releaseWorkerAdoptedScope(
+        app: DCompanyApp,
+        adoptedLease: CacheScopeLease?,
+    ) {
+        if (adoptedLease != null) {
+            app.cacheIsolation.deactivateIfCurrentWithCleanup(adoptedLease) {
+                // These are process-global projections of the exact lease.
+                // Clear them while the cache-scope mutex is still held so a
+                // foreground B activation cannot be published in between and
+                // then erased by this stale A worker.
+                ApiClient.deactivateTerminalScope()
+                app.terminalStore.deactivateValidatedDisplay()
+            }
+        }
     }
 
     private companion object {

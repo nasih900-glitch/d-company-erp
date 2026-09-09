@@ -34,6 +34,11 @@ jobs:
           --health-retries 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # Code 26's regression-freeze test compares every inherited test to
+          # the immutable Code 25 commit and must not degrade into a shallow-
+          # checkout skip or false pass.
+          fetch-depth: 0
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.13'
@@ -48,6 +53,10 @@ jobs:
       - run: |
           pip install --only-binary=:all: --require-hashes -r backend/requirements-ci.lock
           pip install --only-binary=:all: --require-hashes -r ops/backup-requirements.lock
+      - name: Install physical-audit contract prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends ripgrep
       - name: Run complete repository contract suite
         run: python -m pytest tests
       - name: Test operational monitoring contracts
@@ -144,6 +153,7 @@ jobs:
           ./gradlew --no-daemon --max-workers=1 --stacktrace
           '-Dorg.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8'
           -Pkotlin.compiler.execution.strategy=in-process
+          :audit-driver:testDebugUnitTest
           :audit-driver:assembleDebug :audit-driver:assembleDebugAndroidTest
       # GitHub's Linux runner exposes /dev/kvm, but the runner user is not
       # consistently granted access. Without KVM the API-35 emulator can take
@@ -187,6 +197,8 @@ jobs:
             android-native/app/build/test-results/
             android-native/app/build/outputs/androidTest-results/
             android-native/app/build/outputs/ci-diagnostics/
+            android-native/audit-driver/build/reports/tests/
+            android-native/audit-driver/build/test-results/
 
   docker:
     runs-on: ubuntu-latest
@@ -231,7 +243,7 @@ jobs:
         run: >-
           docker run --rm --entrypoint sh erp-caddy:ci -ceu
           'test "$(sha256sum /usr/bin/caddy | cut -d" " -f1)" =
-          73c0169f0b72b465e2ae20bdb67a3e017044b2ab3d267816398b9d6ece243fb0;
+          951a0136950bb9edf60ff5cec6ca2df0a041b27ded9e610f0aab49b168739dac;
           caddy version | grep -F v2.11.4-dcompany.1;
           getcap /usr/bin/caddy | grep -F cap_net_bind_service'
       - name: Prove PostgreSQL 16 volume and rollback compatibility

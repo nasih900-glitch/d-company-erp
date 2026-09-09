@@ -5,6 +5,8 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import cloud.dcompany.erp.DCompanyApp
+import cloud.dcompany.erp.PersistedStartupFailure
+import cloud.dcompany.erp.PersistedStartupStateResult
 import cloud.dcompany.erp.core.alarm.OperationalAlarmRegistry
 import cloud.dcompany.erp.core.auth.AccessTokenIdentityParser
 import cloud.dcompany.erp.core.auth.CacheScope
@@ -192,15 +194,16 @@ internal suspend fun <T : Any> rollbackCancelledLoginAndRethrow(
 
 class SessionViewModel(app: Application) : AndroidViewModel(app) {
 
-    private val tokens = (app as DCompanyApp).tokens
-    private val cache = (app as DCompanyApp).shiftCache
-    private val terminals = (app as DCompanyApp).terminalStore
-    private val realtime = (app as DCompanyApp).realtime
-    private val sync = (app as DCompanyApp).sync
-    private val connectivity = (app as DCompanyApp).connectivity
-    private val db = (app as DCompanyApp).db
-    private val outboxSafety = (app as DCompanyApp).outboxSafety
-    private val cacheIsolation = (app as DCompanyApp).cacheIsolation
+    private val dCompanyApp = app as DCompanyApp
+    private val tokens = dCompanyApp.tokens
+    private val cache = dCompanyApp.shiftCache
+    private val terminals = dCompanyApp.terminalStore
+    private val realtime = dCompanyApp.realtime
+    private val sync = dCompanyApp.sync
+    private val connectivity = dCompanyApp.connectivity
+    private val db = dCompanyApp.db
+    private val outboxSafety = dCompanyApp.outboxSafety
+    private val cacheIsolation = dCompanyApp.cacheIsolation
     private val shiftApi = ApiClient.create<ShiftApi>()
     private val gamingApi = ApiClient.create<GamingApi>()
     private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
@@ -219,6 +222,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     private val _terminalChange = MutableStateFlow<TerminalChangeUiState>(TerminalChangeUiState.Idle)
     val terminalChange: StateFlow<TerminalChangeUiState> = _terminalChange.asStateFlow()
     private var restoreJob: Job? = null
+    private var persistedStartupRestoreAttempted = false
     private var terminalChangeJob: Job? = null
     private val terminalChangeGate = TerminalReassignmentRequestGate()
     private var pendingTerminalSession: PendingTerminalSession? = null
@@ -342,6 +346,28 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         deactivateTerminalRuntime()
         _state.value = AuthState.Loading
         restoreJob = viewModelScope.launch {
+            val retryStartupRestore = persistedStartupRestoreAttempted
+            persistedStartupRestoreAttempted = true
+            when (
+                val restored = dCompanyApp.awaitPersistedStartupState(
+                    retryFailed = retryStartupRestore,
+                )
+            ) {
+                PersistedStartupStateResult.Ready -> Unit
+                is PersistedStartupStateResult.Unavailable -> {
+                    _state.value = AuthState.Blocked(
+                        when (restored.failure) {
+                            PersistedStartupFailure.TIMEOUT ->
+                                "The tablet took too long to restore its saved sign-in and offline work. " +
+                                    "Nothing was changed. Tap Verify again; if this continues, restart the app or contact support."
+                            PersistedStartupFailure.STORAGE ->
+                                "The tablet could not safely restore its saved sign-in and offline work. " +
+                                    "Nothing was changed. Tap Verify again or contact support."
+                        },
+                    )
+                    return@launch
+                }
+            }
             cacheIsolation.deactivate()
             sync.clearSessionFeedback()
             if (!tokens.hasSession()) {

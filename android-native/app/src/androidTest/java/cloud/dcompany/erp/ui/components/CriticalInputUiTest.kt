@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Button
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -30,6 +31,7 @@ import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.semantics.SemanticsProperties
 import cloud.dcompany.erp.ui.theme.DCompanyTheme
+import cloud.dcompany.erp.ui.screens.finance.FinanceFormDialog
 import org.junit.Rule
 import org.junit.Test
 
@@ -56,6 +58,52 @@ class CriticalInputUiTest {
 
         compose.onNodeWithContentDescription("Opening float (₹), 210.50")
             .assertTextContains("210.50")
+    }
+
+    @Test
+    fun decimalMoneyFieldTreatsCommaAsDecimalWithoutJoiningDigits() {
+        compose.setContent {
+            var value by remember { mutableStateOf("") }
+            DCompanyTheme {
+                DecimalField(
+                    value = value,
+                    onValueChange = { value = it },
+                    label = "Finance amount (₹)",
+                    modifier = Modifier.testTag("finance-decimal"),
+                )
+            }
+        }
+
+        compose.onNodeWithTag("finance-decimal")
+            .performTextReplacement("12,50")
+        compose.onNodeWithTag("finance-decimal")
+            .assertTextContains("12.50")
+    }
+
+    @Test
+    fun financeDialogLocksEditableContentWhileSubmissionIsBusy() {
+        compose.setContent {
+            var value by remember { mutableStateOf("Evidence") }
+            DCompanyTheme {
+                FinanceFormDialog(
+                    title = "Record collection",
+                    confirmLabel = "Save",
+                    busy = true,
+                    error = null,
+                    onDismiss = {},
+                    onConfirm = {},
+                ) { formEnabled ->
+                    OutlinedTextField(
+                        value = value,
+                        onValueChange = { value = it },
+                        enabled = formEnabled,
+                        modifier = Modifier.testTag("finance-evidence"),
+                    )
+                }
+            }
+        }
+
+        compose.onNodeWithTag("finance-evidence").assertIsNotEnabled()
     }
 
     @Test

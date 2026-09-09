@@ -166,6 +166,110 @@ runs:
         output-format: json
         output-file: ${{ runner.temp }}/container-security/postgres-grype.json
 
+    # The four locally built images additionally run through the exact
+    # hardened archive scanner used by the production installer. Its Syft JSON
+    # preserves source image IDs and its bounded mounts exercise the VM path.
+    - name: Exercise hardened archive scanner on all candidate images
+      if: ${{ !cancelled() }}
+      shell: bash
+      env:
+        BACKEND_IMAGE: ${{ inputs.backend-image }}
+        FRONTEND_IMAGE: ${{ inputs.frontend-image }}
+        CADDY_IMAGE: ${{ inputs.caddy-image }}
+        POSTGRES_IMAGE: ${{ inputs.postgres-image }}
+        SOURCE_GIT_SHA: ${{ inputs.source-git-sha }}
+      run: |
+        set -euo pipefail
+        evidence_dir="$RUNNER_TEMP/container-security"
+        # Keep retained root-private scanner state outside the recursively
+        # uploaded evidence directory. Safe reports are copied below.
+        scanner_evidence="$RUNNER_TEMP/dcompany-hardened-scanner-private"
+        scanner_work="$scanner_evidence/scanner-work"
+        scanner_tool="$GITHUB_ACTION_PATH/../../../infra/scripts/run-hardened-image-scanners.sh"
+        syft_image='anchore/syft:v1.42.3@sha256:5999d209a342e55e9edf70bf8930fb5b86d8f2a783fa401178372c50e21b1d36'
+        grype_image='anchore/grype:v0.118.0@sha256:8a93fc48da96bd6ec5981279d099b69de11541dc68fdf222fb9161f8ff284af7'
+        # Pull before the helper's bounded docker-create calls so a cold
+        # registry transfer cannot consume the container-creation deadline.
+        timeout --foreground --signal TERM --kill-after=30s 600s docker pull "$syft_image"
+        timeout --foreground --signal TERM --kill-after=30s 600s docker pull "$grype_image"
+        runner_uid=$(id -u)
+        runner_gid=$(id -g)
+        mkdir "$scanner_evidence"
+        chmod 700 "$scanner_evidence"
+        mkdir "$scanner_work"
+        chmod 700 "$scanner_work"
+        metadata="$scanner_evidence/hardened-scan-metadata.txt"
+        printf 'source_git_sha=%s\nscanned_at_utc=%s\n' \
+          "$SOURCE_GIT_SHA" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$metadata"
+        chmod 600 "$metadata"
+        services=(backend frontend caddy postgres)
+        images=("$BACKEND_IMAGE" "$FRONTEND_IMAGE" "$CADDY_IMAGE" "$POSTGRES_IMAGE")
+        image_ids=()
+        archives=()
+        scanner_arguments=()
+        for index in "${!services[@]}"; do
+          service=${services[$index]}
+          image=${images[$index]}
+          image_id=$(docker image inspect --format '{{.Id}}' "$image")
+          if ! [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Candidate $service image has no immutable ID." >&2
+            exit 1
+          fi
+          archive="$scanner_evidence/$service-image.tar"
+          docker image save "$image_id" --output "$archive"
+          test -s "$archive"
+          chmod 0444 "$archive"
+          printf '%s_image_ref=%s\n%s_image_id=%s\n%s_archive_sha256=%s\n' \
+            "$service" "$image" "$service" "$image_id" "$service" \
+            "$(sha256sum "$archive" | awk '{print $1}')" >> "$metadata"
+          image_ids+=("$image_id")
+          archives+=("$archive")
+          scanner_arguments+=(
+            "$service" "$image_id" "$archive"
+            "$scanner_evidence/$service.syft.json"
+            "$scanner_evidence/$service-hardened-grype.json"
+          )
+        done
+        sudo chown -R root:root "$scanner_evidence"
+        scan_status=0
+        sudo /bin/bash "$scanner_tool" \
+          "$scanner_work" "$metadata" "$syft_image" "$grype_image" \
+          "${image_ids[0]}" "${scanner_arguments[@]}" || scan_status=$?
+        for index in "${!services[@]}"; do
+          service=${services[$index]}
+          if [ "$(docker image inspect --format '{{.Id}}' "${images[$index]}")" \
+            != "${image_ids[$index]}" ]; then
+            echo "Candidate $service tag changed during hardened scanning." >&2
+            scan_status=1
+          fi
+        done
+        for evidence in hardened-scan-metadata.txt \
+          backend.syft.json backend-hardened-grype.json \
+          frontend.syft.json frontend-hardened-grype.json \
+          caddy.syft.json caddy-hardened-grype.json \
+          postgres.syft.json postgres-hardened-grype.json; do
+          if sudo test -f "$scanner_evidence/$evidence"; then
+            sudo install -o "$runner_uid" -g "$runner_gid" -m 0600 \
+              "$scanner_evidence/$evidence" "$evidence_dir/$evidence"
+          fi
+        done
+        if [ "$scan_status" -ne 0 ]; then
+          echo "Hardened candidate archive scanning failed; archives remain in its private runtime." >&2
+          exit "$scan_status"
+        fi
+        for archive in "${archives[@]}"; do
+          sudo rm -f "$archive"
+        done
+        for evidence in hardened-scan-metadata.txt \
+          backend.syft.json backend-hardened-grype.json \
+          frontend.syft.json frontend-hardened-grype.json \
+          caddy.syft.json caddy-hardened-grype.json \
+          postgres.syft.json postgres-hardened-grype.json; do
+          sudo rm -f "$scanner_evidence/$evidence"
+        done
+        sudo rmdir "$scanner_work"
+        sudo rmdir "$scanner_evidence"
+
     - name: Scan Redis image
       if: ${{ !cancelled() }}
       uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
