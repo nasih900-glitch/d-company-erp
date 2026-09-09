@@ -81,6 +81,20 @@ def test_caddy_binary_hash_is_coordinated_across_ci_and_release() -> None:
         expected = _replace_once(
             _baseline_file(workflow), OLD_BINARY_SHA256, PATCHED_BINARY_SHA256
         )
+        if workflow == CI_WORKFLOW:
+            expected = _replace_once(
+                expected,
+                "          :audit-driver:assembleDebug :audit-driver:assembleDebugAndroidTest\n",
+                "          :audit-driver:testDebugUnitTest\n"
+                "          :audit-driver:assembleDebug :audit-driver:assembleDebugAndroidTest\n",
+            )
+            expected = _replace_once(
+                expected,
+                "            android-native/app/build/outputs/ci-diagnostics/\n",
+                "            android-native/app/build/outputs/ci-diagnostics/\n"
+                "            android-native/audit-driver/build/reports/tests/\n"
+                "            android-native/audit-driver/build/test-results/\n",
+            )
         current = workflow.read_text(encoding="utf-8")
         assert current == expected
         assert current.count(PATCHED_BINARY_SHA256) == 1
