@@ -16,12 +16,17 @@ import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.layout.absoluteOffset
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -30,26 +35,33 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AlertDialogDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.ProvideTextStyle
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -59,17 +71,23 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.dp
-import cloud.dcompany.erp.core.money.normalizeRupeeInput
+import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import cloud.dcompany.erp.core.money.normalizeRupeeInput
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Motion
 import cloud.dcompany.erp.ui.theme.Radius
@@ -443,7 +461,13 @@ fun PrimaryButton(
 // DIALOGS
 // ============================================================================
 
+private val formDialogImeAwareProperties = DialogProperties(
+    usePlatformDefaultWidth = false,
+    decorFitsSystemWindows = false,
+)
+
 @Composable
+@OptIn(ExperimentalLayoutApi::class)
 fun FormDialog(
     title: String,
     confirmLabel: String,
@@ -455,40 +479,127 @@ fun FormDialog(
     confirmEnabled: Boolean = true,
     content: @Composable () -> Unit,
 ) {
-    AlertDialog(
+    Dialog(
         onDismissRequest = { if (!busy) onDismiss() },
-        modifier = Modifier.widthIn(max = width).fillMaxWidth(0.92f).imePadding(),
-        properties = DialogProperties(usePlatformDefaultWidth = false),
-        containerColor = Brand.SurfaceOverlay,
-        shape = Radius.shapeLg,
-        title = { Text(title, color = Brand.Foreground) },
-        text = {
-            Column(
-                modifier = Modifier.heightIn(max = 520.dp),
-                verticalArrangement = Arrangement.spacedBy(Spacing.md),
-            ) {
-                error?.let {
-                    Text(
-                        it,
-                        color = Brand.Danger,
-                        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive },
-                    )
-                }
-                Column(
-                    modifier = Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(Spacing.md),
+        properties = formDialogImeAwareProperties,
+    ) {
+        val view = LocalView.current
+        val density = LocalDensity.current
+        var visibleBounds by remember(view) { mutableStateOf<IntRect?>(null) }
+        fun sampleVisibleBounds(): IntRect? {
+            if (!view.isAttachedToWindow) return null
+            val frame = android.graphics.Rect()
+            view.getWindowVisibleDisplayFrame(frame)
+            val origin = IntArray(2)
+            view.getLocationOnScreen(origin)
+            val left = (frame.left - origin[0]).coerceAtLeast(0)
+            val top = (frame.top - origin[1]).coerceAtLeast(0)
+            val right = (frame.right - origin[0]).coerceAtMost(view.width)
+            val bottom = (frame.bottom - origin[1]).coerceAtMost(view.height)
+            return IntRect(left, top, right, bottom).takeIf {
+                it.width > 0 && it.height > 0
+            }
+        }
+        DisposableEffect(view) {
+            val listener = android.view.ViewTreeObserver.OnPreDrawListener {
+                val sampledBounds = sampleVisibleBounds()
+                if (visibleBounds != sampledBounds) visibleBounds = sampledBounds
+                true
+            }
+            view.viewTreeObserver.addOnPreDrawListener(listener)
+            val sampledBounds = sampleVisibleBounds()
+            if (visibleBounds != sampledBounds) visibleBounds = sampledBounds
+            onDispose {
+                val observer = view.viewTreeObserver
+                if (observer.isAlive) observer.removeOnPreDrawListener(listener)
+            }
+        }
+        Box(Modifier.fillMaxSize()) {
+            Box(Modifier.matchParentSize().pointerInput(busy, onDismiss) {
+                detectTapGestures { if (!busy) onDismiss() }
+            })
+            visibleBounds?.let { bounds ->
+                BoxWithConstraints(
+                    modifier = Modifier.absoluteOffset(
+                        with(density) { bounds.left.toDp() },
+                        with(density) { bounds.top.toDp() },
+                    ).size(
+                        with(density) { bounds.width.toDp() },
+                        with(density) { bounds.height.toDp() },
+                    ).padding(Spacing.md),
+                    contentAlignment = Alignment.Center,
                 ) {
-                    content()
+                    Surface(
+                        modifier = Modifier.widthIn(max = width).fillMaxWidth(0.92f)
+                            .heightIn(max = maxHeight)
+                            .semantics { paneTitle = title }
+                            // Prevent blank surface space from reaching the sibling backdrop.
+                            .pointerInput(Unit) {
+                                awaitPointerEventScope {
+                                    while (true) awaitPointerEvent()
+                                }
+                            },
+                        color = Brand.SurfaceOverlay,
+                        tonalElevation = AlertDialogDefaults.TonalElevation,
+                        shape = Radius.shapeLg,
+                    ) {
+                        Column(Modifier.padding(Spacing.xl)) {
+                            Text(
+                                title,
+                                color = Brand.Foreground,
+                                style = MaterialTheme.typography.headlineSmall,
+                            )
+                            Spacer(Modifier.height(Spacing.lg))
+                            CompositionLocalProvider(
+                                LocalContentColor provides AlertDialogDefaults.textContentColor,
+                            ) {
+                                ProvideTextStyle(MaterialTheme.typography.bodyMedium) {
+                                    error?.let {
+                                        Text(
+                                            it,
+                                            color = Brand.Danger,
+                                            modifier = Modifier.semantics {
+                                                liveRegion = LiveRegionMode.Assertive
+                                            },
+                                        )
+                                        Spacer(Modifier.height(Spacing.md))
+                                    }
+                                    Column(
+                                        modifier = Modifier.heightIn(max = 520.dp)
+                                            .weight(1f, fill = false)
+                                            .verticalScroll(rememberScrollState()),
+                                        verticalArrangement = Arrangement.spacedBy(Spacing.md),
+                                    ) {
+                                        content()
+                                    }
+                                }
+                            }
+                            Spacer(Modifier.height(Spacing.xl))
+                            FlowRow(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(
+                                    Spacing.sm,
+                                    Alignment.End,
+                                ),
+                                verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+                            ) {
+                                TextButton(
+                                    onClick = onDismiss,
+                                    enabled = !busy,
+                                ) { Text("Cancel") }
+                                PrimaryButton(
+                                    onClick = onConfirm,
+                                    enabled = confirmEnabled && !busy,
+                                ) {
+                                    Text(if (busy) "$confirmLabel…" else confirmLabel)
+                                }
+                            }
+                        }
+                    }
                 }
             }
-        },
-        confirmButton = {
-            PrimaryButton(onClick = onConfirm, enabled = confirmEnabled && !busy) {
-                Text(if (busy) "$confirmLabel…" else confirmLabel)
-            }
-        },
-        dismissButton = { TextButton(onClick = onDismiss, enabled = !busy) { Text("Cancel") } },
-    )
+        }
+    }
 }
 
 @Composable

@@ -16,11 +16,13 @@ unchanged record of what that candidate required; later Code 28 results do not
 retroactively rewrite that ledger.
 
 The Code 29 source change is bounded to the coordinated identity, the reviewed
-Android quantity-input correction, the reviewed image archive/scanner evidence
-path, and tests and current operator records that protect those changes. It
-does not authorize pricing, money or Finance calculations, database schema,
-sync/outbox, permissions, production installer behavior, Caddy module graph or
-binary, or unrelated Android/Web/backend behavior changes.
+Android quantity-input correction, the reviewed shared FormDialog IME-inset
+correction, the reviewed RecipeDetail constrained-scrolling correction, the
+reviewed image archive/scanner evidence path, and tests and current operator
+records that protect those changes. It does not authorize
+pricing, money or Finance calculations, database schema, sync/outbox,
+permissions, production installer behavior, Caddy module graph or binary, or
+unrelated Android/Web/backend behavior changes.
 
 The test-only audit driver's lockfile also gains the missing release-unit-test
 configuration coverage for its existing JUnit and Hamcrest dependencies. No
@@ -56,6 +58,27 @@ targeted inventory-form runtime gate remains pending for ingredient, GRN, and
 adjustment local-first behavior and recipes' online-only behavior. The existing
 413-step, 16-session Gaming/POS/Finance driver is unchanged except candidate
 identity and must not be expanded or presented as that inventory-form proof.
+
+The shared FormDialog correction is limited to a finite dialog surface centered
+inside Android's measured visible frame, which excludes the areas occupied by
+the status bar, navigation bar, and real software keyboard. Its title,
+validation error, and wrapping actions remain fixed while only the form body
+can shrink and scroll.
+An explicit backdrop retains idle outside-tap dismissal, rejects dismissal while
+busy, and does not treat blank content inside the surface as outside. The change
+preserves form content, callbacks, enable/busy behavior, visual tokens, and
+inventory behavior. The targeted real-IME instrumentation test must capture the
+real keyboard and prove the warning remains scrollable and both expanded 48dp
+action touch targets remain above it on the API-35 tablet profile before this
+source correction is considered verified.
+
+The RecipeDetail correction keeps the SectionCard header fixed and makes its
+bounded detail content scrollable. The active recipe's name, recorded cost,
+ingredient lines, Edit/Remove controls, and Add ingredient action must remain
+reachable in the reproduced 162dp and 224dp panels; the analogous Retry and
+Link recipe actions must remain reachable in error and no-active-recipe states.
+It preserves the displayed recipe data, ingredient availability behavior,
+prices, enabled states, and exact ViewModel callback payloads.
 
 This ledger records requirements, not completed Code 29 release evidence. It
 does not claim that exact-source hosted Linux CI, a signed artifact, an in-place

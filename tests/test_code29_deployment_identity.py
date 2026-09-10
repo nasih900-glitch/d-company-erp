@@ -10,6 +10,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 CODE28_SIGNED_BASE = "ab10a3138f41c5acf709e6275dfac55c6652d0d8"
+CODE29_REVIEW_BASE = "525ed771968ee1754c7cc553bb3b5ef07f8f4ac4"
 CADDY_SHA256 = "951a0136950bb9edf60ff5cec6ca2df0a041b27ded9e610f0aab49b168739dac"
 PROTECTED_APPLICATION_PREFIXES = (
     "backend/app/",
@@ -19,19 +20,138 @@ PROTECTED_APPLICATION_PREFIXES = (
     "android-native/app/schemas/",
     "android-native/audit-driver/src/",
 )
+PRIMITIVES_PATH = "android-native/app/src/main/java/cloud/dcompany/erp/ui/components/Primitives.kt"
+PRIMITIVES_SIGNED28_SHA256 = "3a20353339fa43b218edc96f1bd0f4d9e11cc07d7739e2dd4a274abdf92078f6"
+PRIMITIVES_FORM_DIALOG_SHA256 = "1ae57ced450c77c3b4dc61e0b57929f0a4e9b992051f91cb1a640f90b9964771"
+PRIMITIVES_REVIEWED_IMPORT_REPLACEMENTS = (
+    (
+        "import androidx.compose.foundation.clickable\n",
+        "import androidx.compose.foundation.clickable\n"
+        "import androidx.compose.foundation.gestures.detectTapGestures\n",
+        1,
+    ),
+    (
+        "import androidx.compose.foundation.interaction.collectIsPressedAsState\n",
+        "import androidx.compose.foundation.interaction.collectIsPressedAsState\n"
+        "import androidx.compose.foundation.layout.absoluteOffset\n",
+        1,
+    ),
+    (
+        "import androidx.compose.foundation.layout.Box\n",
+        "import androidx.compose.foundation.layout.Box\n"
+        "import androidx.compose.foundation.layout.BoxWithConstraints\n",
+        1,
+    ),
+    (
+        "import androidx.compose.foundation.layout.ColumnScope\n",
+        "import androidx.compose.foundation.layout.ColumnScope\n"
+        "import androidx.compose.foundation.layout.ExperimentalLayoutApi\n"
+        "import androidx.compose.foundation.layout.FlowRow\n",
+        1,
+    ),
+    (
+        "import androidx.compose.foundation.layout.padding\n",
+        "import androidx.compose.foundation.layout.padding\n"
+        "import androidx.compose.foundation.layout.size\n",
+        1,
+    ),
+    (
+        "import androidx.compose.material3.AlertDialog\n",
+        "import androidx.compose.material3.AlertDialog\n"
+        "import androidx.compose.material3.AlertDialogDefaults\n",
+        1,
+    ),
+    (
+        "import androidx.compose.material3.Icon\n",
+        "import androidx.compose.material3.Icon\n"
+        "import androidx.compose.material3.LocalContentColor\n",
+        1,
+    ),
+    (
+        "import androidx.compose.material3.OutlinedTextField\n",
+        "import androidx.compose.material3.OutlinedTextField\n"
+        "import androidx.compose.material3.ProvideTextStyle\n"
+        "import androidx.compose.material3.Surface\n",
+        1,
+    ),
+    (
+        "import androidx.compose.runtime.Composable\n",
+        "import androidx.compose.runtime.Composable\n"
+        "import androidx.compose.runtime.CompositionLocalProvider\n"
+        "import androidx.compose.runtime.DisposableEffect\n",
+        1,
+    ),
+    (
+        "import androidx.compose.ui.graphics.graphicsLayer\n",
+        "import androidx.compose.ui.graphics.graphicsLayer\n"
+        "import androidx.compose.ui.input.pointer.pointerInput\n"
+        "import androidx.compose.ui.platform.LocalDensity\n"
+        "import androidx.compose.ui.platform.LocalView\n",
+        1,
+    ),
+    (
+        "import androidx.compose.ui.semantics.liveRegion\n",
+        "import androidx.compose.ui.semantics.liveRegion\n"
+        "import androidx.compose.ui.semantics.paneTitle\n",
+        1,
+    ),
+    (
+        "import androidx.compose.ui.text.style.TextOverflow\n",
+        "import androidx.compose.ui.text.style.TextOverflow\n"
+        "import androidx.compose.ui.unit.IntRect\n",
+        1,
+    ),
+    (
+        "import androidx.compose.ui.unit.dp\n"
+        "import cloud.dcompany.erp.core.money.normalizeRupeeInput\n"
+        "import androidx.compose.ui.window.DialogProperties\n",
+        "import androidx.compose.ui.unit.dp\n"
+        "import androidx.compose.ui.window.Dialog\n"
+        "import androidx.compose.ui.window.DialogProperties\n"
+        "import cloud.dcompany.erp.core.money.normalizeRupeeInput\n",
+        1,
+    ),
+)
+INVENTORY_SCREEN_PATH = (
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/inventory/InventoryScreen.kt"
+)
+INVENTORY_SCREEN_CODE29_BASE_SHA256 = (
+    "4fc2996e39049b7824fbb1a5b6c2f13e420d3b781e03e62bd78a2a3cd0df5759"
+)
+INVENTORY_SCREEN_RECIPE_DETAIL_SHA256 = (
+    "21822f1666a38b7ce567b09b1f7e01917117bfdd0c9fb66e25f501c8b39816e3"
+)
 QUANTITY_HASHES = {
     "android-native/app/src/main/java/cloud/dcompany/erp/core/quantity/QuantityInput.kt":
         "dda127f5286e4eef50edba0cd5e4bc2a69c706b48a90337ac317b2ac37a40001",
     "android-native/app/src/main/java/cloud/dcompany/erp/ui/components/QuantityField.kt":
         "7ecd1b6180fbde2623c6dd6e004c9913d1213d7d2b249da4a2a99ca82f59add4",
-    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/inventory/InventoryScreen.kt":
-        "4fc2996e39049b7824fbb1a5b6c2f13e420d3b781e03e62bd78a2a3cd0df5759",
+    INVENTORY_SCREEN_PATH:
+        "7f3797179f88910c9aafc1b47e9564fcc99bbb5b654f1204f1b001df11b2ee0f",
     "android-native/app/src/test/java/cloud/dcompany/erp/core/quantity/QuantityInputTest.kt":
         "5524be07edbef3bf5550f4bc65c3c0d49a05ac27e8c20d826a5aef622a4a1bbf",
     "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/inventory/InventoryQuantityContractTest.kt":
         "451ef166585eabf2b9587d0ecf5f8b7f7733e392f2f7912f52601099fd591457",
     "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/inventory/QuantityFieldUiTest.kt":
         "33c01b1ff19cf62552b0860d0e34b9e8ebe78334f70fc1cd35e862656d5ee5f6",
+}
+NEW_CODE29_TEST_HASHES = {
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/inventory/InventoryAdjustmentImeUiTest.kt":
+        "08d0494a9c24846bed0995a07e44ba8808ce9a46939749e56257a82bdb465f5a",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/inventory/RecipeDetailUiTest.kt":
+        "d1891e350ec458951e920d786752ca7f1e6e89f5b1fd23a98af3750392a4e200",
+}
+EXPECTED_NEW_CODE29_TEST_PATHS = {
+    *NEW_CODE29_TEST_HASHES,
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/inventory/QuantityFieldUiTest.kt",
+    "android-native/app/src/test/java/cloud/dcompany/erp/core/quantity/QuantityInputTest.kt",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/inventory/InventoryQuantityContractTest.kt",
+    "tests/fixtures/image_archive_identity_fixtures.py",
+    "tests/test_ci_docker_connection.py",
+    "tests/test_ci_redis_prerequisite.py",
+    "tests/test_code29_deployment_identity.py",
+    "tests/test_image_archive_identity.py",
+    "tests/test_image_archive_parser_python312_runner.py",
 }
 SCANNER_HASHES = {
     "infra/scripts/run-hardened-image-scanners.sh":
@@ -99,7 +219,7 @@ OPERATOR_RECORD_HASHES = {
     ".env.production.example":
         "461bc7178d90bf06ce222f6c2a42f5cba6778139574629a9941dbce66719a4b0",
     "docs/CODE29_RELEASE_CANDIDATE.md":
-        "f873ba63532408b5540620e00210a4cace68ea720fce6d2518ac2bdf007381e3",
+        "90d2dc29c2bac983f2a1953f602a79800e45649c7fc32228bd0205c4d7fc0ed2",
     "docs/DISTRIBUTION.md":
         "f0d7b770bab05bad668267cc4905a97546f5cb9c8a5ba95fda298c12eeb19853",
     "docs/SERVER_DRIVEN_ANDROID_UPDATES.md":
@@ -122,6 +242,26 @@ def _replace_exact(source: str, replacements: tuple[tuple[str, str, int], ...]) 
         assert source.count(old) == expected_count
         source = source.replace(old, new)
     return source
+
+
+def _split_primitives_form_dialog(source: str) -> tuple[str, str, str]:
+    marker = "// DIALOGS\n// ============================================================================\n\n"
+    assert source.count(marker) == 1
+    start = source.index(marker) + len(marker)
+    end_marker = "\n@Composable\nfun ConfirmDialog("
+    assert source.count(end_marker) == 1
+    end = source.index(end_marker, start)
+    return source[:start], source[start:end], source[end:]
+
+
+def _split_inventory_recipe_detail(source: str) -> tuple[str, str, str]:
+    start_marker = "@Composable\nprivate fun RecipeDetail("
+    end_marker = "\n// -------------------------------------------------------------- ingredients\n"
+    assert source.count(start_marker) == 1
+    start = source.index(start_marker)
+    assert source.count(end_marker) == 1
+    end = source.index(end_marker, start)
+    return source[:start], source[start:end], source[end:]
 
 
 def _current_changed(*prefixes: str) -> set[str]:
@@ -223,6 +363,7 @@ def _validate_workflow_contracts(ci: str, release: str, action: str) -> None:
 def test_code29_application_scope_is_strictly_signed28_plus_reviewed_quantity() -> None:
     assert _current_changed(*PROTECTED_APPLICATION_PREFIXES) == {
         "backend/app/__init__.py",
+        PRIMITIVES_PATH,
         *(
             path
             for path in QUANTITY_HASHES
@@ -231,6 +372,21 @@ def test_code29_application_scope_is_strictly_signed28_plus_reviewed_quantity() 
     }
     for path, expected in QUANTITY_HASHES.items():
         assert _sha256(path) == expected
+
+
+def test_inventory_screen_is_exact_code29_base_plus_reviewed_recipe_detail() -> None:
+    base = _git("show", f"{CODE29_REVIEW_BASE}:{INVENTORY_SCREEN_PATH}")
+    assert hashlib.sha256(base.encode()).hexdigest() == INVENTORY_SCREEN_CODE29_BASE_SHA256
+    base_prefix, _, base_suffix = _split_inventory_recipe_detail(base)
+    current_prefix, current_recipe_detail, current_suffix = _split_inventory_recipe_detail(
+        (ROOT / INVENTORY_SCREEN_PATH).read_text(encoding="utf-8")
+    )
+    assert current_prefix == base_prefix
+    assert current_suffix == base_suffix
+    assert (
+        hashlib.sha256(current_recipe_detail.encode()).hexdigest()
+        == INVENTORY_SCREEN_RECIPE_DETAIL_SHA256
+    )
 
 
 def test_code29_coordinated_identity_is_exactly_29_and_3_1_19() -> None:
@@ -259,10 +415,29 @@ def test_database_audit_money_and_display_boundaries_are_byte_identical() -> Non
         "backend/app/services/reports/aggregator.py",
         "frontend/src/lib/inr.ts",
         "android-native/app/src/main/java/cloud/dcompany/erp/core/money/MoneyInput.kt",
-        "android-native/app/src/main/java/cloud/dcompany/erp/ui/components/Primitives.kt",
+        PRIMITIVES_PATH,
     )
     for path in protected:
-        assert (ROOT / path).read_text(encoding="utf-8") == _file_at(path)
+        signed28 = _file_at(path)
+        if path == PRIMITIVES_PATH:
+            assert hashlib.sha256(signed28.encode()).hexdigest() == PRIMITIVES_SIGNED28_SHA256
+            expected_outside = _replace_exact(
+                signed28, PRIMITIVES_REVIEWED_IMPORT_REPLACEMENTS
+            )
+            current_prefix, current_form_dialog, current_suffix = (
+                _split_primitives_form_dialog((ROOT / path).read_text(encoding="utf-8"))
+            )
+            expected_prefix, _, expected_suffix = _split_primitives_form_dialog(
+                expected_outside
+            )
+            assert current_prefix == expected_prefix
+            assert current_suffix == expected_suffix
+            assert (
+                hashlib.sha256(current_form_dialog.encode()).hexdigest()
+                == PRIMITIVES_FORM_DIALOG_SHA256
+            )
+        else:
+            assert (ROOT / path).read_text(encoding="utf-8") == signed28
     assert not _current_changed(
         "backend/alembic/",
         "android-native/app/schemas/",
@@ -447,6 +622,17 @@ def test_every_signed28_test_support_file_is_unchanged_or_exactly_pinned() -> No
     test_paths = sorted(path for path in baseline_paths if _is_test_support(path))
     assert len(test_paths) == 512
     assert set(REVIEWED_EXISTING_TEST_HASHES) <= set(test_paths)
+    current_test_paths = {
+        path for path in _git("ls-files").splitlines() if _is_test_support(path)
+    }
+    current_test_paths.update(
+        path
+        for path in _git("ls-files", "--others", "--exclude-standard").splitlines()
+        if _is_test_support(path)
+    )
+    assert current_test_paths - set(test_paths) == EXPECTED_NEW_CODE29_TEST_PATHS
+    for path, expected in NEW_CODE29_TEST_HASHES.items():
+        assert _sha256(path) == expected
     changed_existing = _current_changed(
         "backend/tests/",
         "tests/",

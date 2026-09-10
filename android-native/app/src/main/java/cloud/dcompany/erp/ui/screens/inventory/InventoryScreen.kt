@@ -702,6 +702,37 @@ private fun RecipeItemList(
 
 @Composable
 private fun RecipeDetail(state: InventoryUiState, vm: InventoryViewModel, modifier: Modifier) {
+    RecipeDetailPresentation(
+        state = state,
+        modifier = modifier,
+        onRetry = vm::retryRecipes,
+        onLinkRecipe = { item -> vm.openDialog(InventoryDialog.RecipeCreate(item)) },
+        onDeactivateRecipe = { recipe ->
+            vm.openDialog(InventoryDialog.ConfirmDeleteRecipe(recipe))
+        },
+        onEditRecipeLine = { recipe, line ->
+            vm.openDialog(InventoryDialog.RecipeLineForm(recipe, line))
+        },
+        onRemoveRecipeLine = { recipe, line ->
+            vm.openDialog(InventoryDialog.ConfirmDeleteRecipeLine(recipe, line))
+        },
+        onAddRecipeLine = { recipe ->
+            vm.openDialog(InventoryDialog.RecipeLineForm(recipe, null))
+        },
+    )
+}
+
+@Composable
+internal fun RecipeDetailPresentation(
+    state: InventoryUiState,
+    modifier: Modifier,
+    onRetry: () -> Unit,
+    onLinkRecipe: (cloud.dcompany.erp.core.db.MenuItemEntity) -> Unit,
+    onDeactivateRecipe: (Recipe) -> Unit,
+    onEditRecipeLine: (Recipe, RecipeLine) -> Unit,
+    onRemoveRecipeLine: (Recipe, RecipeLine) -> Unit,
+    onAddRecipeLine: (Recipe) -> Unit,
+) {
     val item = state.selectedRecipeMenuItem
     val active = state.activeRecipe
     SectionCard(
@@ -721,47 +752,84 @@ private fun RecipeDetail(state: InventoryUiState, vm: InventoryViewModel, modifi
             state.recipesLoading -> Box(Modifier.fillMaxSize(), Alignment.Center) {
                 CircularProgressIndicator(color = Brand.Gold)
             }
-            state.recipesError != null -> DesignedEmptyState(
-                title = "Could not load recipe",
-                body = state.recipesError,
-                icon = Icons.Default.CloudOff,
-                primaryLabel = "Retry",
-                onPrimary = vm::retryRecipes,
-            )
-            active == null -> DesignedEmptyState(
-                title = "No active recipe",
-                body = "Sales of ${item.name} do not currently deduct ingredient stock. Link at least one ingredient before relying on COGS.",
-                icon = Icons.Default.WarningAmber,
-                primaryLabel = "Link recipe",
-                onPrimary = { vm.openDialog(InventoryDialog.RecipeCreate(item)) },
-            )
-            else -> {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(active.name, color = Brand.Foreground, fontWeight = FontWeight.Bold)
-                        Text(
-                            "Version ${active.version} · yield ${active.yieldQty.asQty()}",
-                            color = Brand.ForegroundMuted,
-                            style = MaterialTheme.typography.labelSmall,
-                        )
-                    }
-                    TextButton(
-                        onClick = { vm.openDialog(InventoryDialog.ConfirmDeleteRecipe(active)) },
-                    ) { Text("Deactivate", color = Brand.Danger) }
-                }
-                InfoRow("Recorded recipe cost", active.costMinor.asRupees())
-                PanelDivider()
-                Text("Ingredient deductions", color = Brand.Foreground, fontWeight = FontWeight.SemiBold)
-                if (active.lines.isEmpty()) {
-                    OperationalBanner(
-                        title = "Empty recipe",
-                        detail = "This item will not deduct stock until at least one ingredient line is added.",
-                        tone = UiTone.Warning,
-                        icon = Icons.Default.WarningAmber,
+            state.recipesError != null -> LazyColumn(Modifier.fillMaxSize()) {
+                item {
+                    DesignedEmptyState(
+                        title = "Could not load recipe",
+                        body = state.recipesError,
+                        icon = Icons.Default.CloudOff,
+                        primaryLabel = "Retry",
+                        onPrimary = onRetry,
                     )
                 }
-                LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(active.lines, key = { it.id }) { line ->
+            }
+            active == null -> LazyColumn(Modifier.fillMaxSize()) {
+                item {
+                    DesignedEmptyState(
+                        title = "No active recipe",
+                        body = "Sales of ${item.name} do not currently deduct ingredient stock. Link at least one ingredient before relying on COGS.",
+                        icon = Icons.Default.WarningAmber,
+                        primaryLabel = "Link recipe",
+                        onPrimary = { onLinkRecipe(item) },
+                    )
+                }
+            }
+            else -> LazyColumn(Modifier.fillMaxSize()) {
+                item {
+                    Column {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text(active.name, color = Brand.Foreground, fontWeight = FontWeight.Bold)
+                                Text(
+                                    "Version ${active.version} · yield ${active.yieldQty.asQty()}",
+                                    color = Brand.ForegroundMuted,
+                                    style = MaterialTheme.typography.labelSmall,
+                                )
+                            }
+                            TextButton(
+                                onClick = { onDeactivateRecipe(active) },
+                            ) { Text("Deactivate", color = Brand.Danger) }
+                        }
+                        Spacer(Modifier.height(12.dp))
+                    }
+                }
+                item {
+                    Column {
+                        InfoRow("Recorded recipe cost", active.costMinor.asRupees())
+                        Spacer(Modifier.height(12.dp))
+                    }
+                }
+                item {
+                    Column {
+                        PanelDivider()
+                        Spacer(Modifier.height(12.dp))
+                    }
+                }
+                item {
+                    Column {
+                        Text(
+                            "Ingredient deductions",
+                            color = Brand.Foreground,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Spacer(Modifier.height(12.dp))
+                    }
+                }
+                if (active.lines.isEmpty()) {
+                    item {
+                        Column {
+                            OperationalBanner(
+                                title = "Empty recipe",
+                                detail = "This item will not deduct stock until at least one ingredient line is added.",
+                                tone = UiTone.Warning,
+                                icon = Icons.Default.WarningAmber,
+                            )
+                            Spacer(Modifier.height(12.dp))
+                        }
+                    }
+                }
+                itemsIndexed(active.lines, key = { _, line -> line.id }) { index, line ->
+                    Column {
                         val ingredient = state.syncedIngredients.firstOrNull { it.id == line.ingredientId }
                         Column(
                             Modifier.fillMaxWidth().clip(Radius.shapeSm)
@@ -782,28 +850,29 @@ private fun RecipeDetail(state: InventoryUiState, vm: InventoryViewModel, modifi
                                     )
                                 }
                                 TextButton(
-                                    onClick = {
-                                        vm.openDialog(InventoryDialog.RecipeLineForm(active, line))
-                                    },
+                                    onClick = { onEditRecipeLine(active, line) },
                                 ) { Text("Edit") }
                                 TextButton(
-                                    onClick = {
-                                        vm.openDialog(
-                                            InventoryDialog.ConfirmDeleteRecipeLine(active, line),
-                                        )
-                                    },
+                                    onClick = { onRemoveRecipeLine(active, line) },
                                 ) { Text("Remove", color = Brand.Danger) }
                             }
                         }
+                        Spacer(
+                            Modifier.height(
+                                if (index == active.lines.lastIndex) 12.dp else 8.dp,
+                            ),
+                        )
                     }
                 }
-                ErpButton(
-                    text = "Add ingredient",
-                    onClick = { vm.openDialog(InventoryDialog.RecipeLineForm(active, null)) },
-                    enabled = state.syncedIngredients.isNotEmpty(),
-                    leadingIcon = Icons.Default.Add,
-                    modifier = Modifier.fillMaxWidth(),
-                )
+                item {
+                    ErpButton(
+                        text = "Add ingredient",
+                        onClick = { onAddRecipeLine(active) },
+                        enabled = state.syncedIngredients.isNotEmpty(),
+                        leadingIcon = Icons.Default.Add,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
             }
         }
     }
