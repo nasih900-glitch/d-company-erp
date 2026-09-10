@@ -57,6 +57,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends ripgrep
+      - name: Install pinned CI Redis prerequisite
+        run: bash infra/scripts/install-ci-redis.sh
       - name: Run complete repository contract suite
         run: python -m pytest tests
       - name: Test operational monitoring contracts

@@ -16,8 +16,8 @@ CADDY_DOCKERFILE = ROOT / "infra" / "docker" / "caddy.Dockerfile"
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
 CURRENT_WORKFLOW_SHA256 = {
-    CI_WORKFLOW: "e89ad041dd684a18b00da7c5c8bd67b6106fd0a4d4ef84e6807390bb33ac82f9",
-    RELEASE_WORKFLOW: "f2feb493ff6237c48f9d5618ab4e625a9cc25c3c737640e6c794765f13bceb6a",
+    CI_WORKFLOW: "73ec527d02e6b166844f41257cfe97bc709034cbe6507aefdb9a9c4d151e0ff3",
+    RELEASE_WORKFLOW: "0c31c53b7a4ab06facfdf92945541241b0f8cb1c4eee97eed93d096988d5e6d7",
 }
 
 

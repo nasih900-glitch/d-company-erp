@@ -65,7 +65,7 @@ REVIEWED_EXISTING_TEST_HASHES = {
     "tests/test_android_runtime_parity.py":
         "8290224155977f4d159223e03b06206c808c38a8a6b91977a1542b1adede5704",
     "tests/test_caddy_dependency_security.py":
-        "2c66eceafc62e0eec4cbf0174a77717b856333ae45accd93cb4066ba2d68139a",
+        "05ac3a538c5d071af35b5579f4aa0b6f15a4eb50bd480ce59ac8eb5ecbdc2d6a",
     "tests/test_code26_physical_audit_lane.py":
         "84af8e8af26b5185099075aae50f2db1311848c0af14d8699e61b043efb90849",
     "tests/test_code26_regression_freeze.py":
@@ -79,9 +79,11 @@ PHASE2C_INFRA_HASHES = {
     ".github/actions/scan-production-images/action.yml":
         "dd20083cc1ac2f75629d5859468f2f3ef969086b0a981bfed68ed7866c431e64",
     ".github/workflows/ci.yml":
-        "e89ad041dd684a18b00da7c5c8bd67b6106fd0a4d4ef84e6807390bb33ac82f9",
+        "73ec527d02e6b166844f41257cfe97bc709034cbe6507aefdb9a9c4d151e0ff3",
     ".github/workflows/release.yml":
-        "f2feb493ff6237c48f9d5618ab4e625a9cc25c3c737640e6c794765f13bceb6a",
+        "0c31c53b7a4ab06facfdf92945541241b0f8cb1c4eee97eed93d096988d5e6d7",
+    "infra/scripts/install-ci-redis.sh":
+        "75d9c46e517ebf6b0d96c3452439bf8bd7d8bf735a02e60ea4c4ab9f718eda67",
     "infra/scripts/run-ci-docker-connection-check.sh":
         "bb3e8751fa6cafae0560e05d915db44e766434b93a703e14cd2413d6c8914a29",
     "infra/scripts/verify-ci-docker-connection.py":
@@ -90,6 +92,8 @@ PHASE2C_INFRA_HASHES = {
         "12a2014cb9176ad4b1e6dbab67152ce4abf49739f78d611f389b46cc546d207a",
     "scripts/verify_image_archive_parser_python312.py":
         "7788b7f3a2c5e3d12e0904a2e2628aee2a0ca107b09930d592174aad57505a6e",
+    "tests/test_ci_redis_prerequisite.py":
+        "3d6e02e2cbd13ed34884c5cdd2bd7fde7e522bc4d15766a371e0ee047bde8275",
 }
 OPERATOR_RECORD_HASHES = {
     ".env.production.example":
@@ -304,6 +308,7 @@ def test_code29_pipeline_and_runtime_identity_files_are_exactly_pinned() -> None
         ".github/workflows/release.yml",
     }
     assert _current_changed("infra/scripts/") == {
+        "infra/scripts/install-ci-redis.sh",
         "infra/scripts/run-ci-docker-connection-check.sh",
         "infra/scripts/run-hardened-image-scanners.sh",
         "infra/scripts/verify-ci-docker-connection.py",
