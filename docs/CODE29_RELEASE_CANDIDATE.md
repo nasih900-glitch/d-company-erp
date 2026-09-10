@@ -61,16 +61,20 @@ identity and must not be expanded or presented as that inventory-form proof.
 
 The shared FormDialog correction is limited to a finite dialog surface centered
 inside Android's measured visible frame, which excludes the areas occupied by
-the status bar, navigation bar, and real software keyboard. Its title,
-validation error, and wrapping actions remain fixed while only the form body
-can shrink and scroll.
+the status bar, navigation bar, and real software keyboard. On spacious frames,
+its title and validation error remain fixed while the form body retains its
+existing 520dp scroll cap. On smaller visible frames, the title, validation
+error, and body share one scroll region so the wrapping actions retain reserved
+space and remain fixed; existing 16dp spacing tokens replace the spacious 24dp
+surface padding and footer separation to preserve readable content height.
 An explicit backdrop retains idle outside-tap dismissal, rejects dismissal while
 busy, and does not treat blank content inside the surface as outside. The change
-preserves form content, callbacks, enable/busy behavior, visual tokens, and
-inventory behavior. The targeted real-IME instrumentation test must capture the
-real keyboard and prove the warning remains scrollable and both expanded 48dp
-action touch targets remain above it on the API-35 tablet profile before this
-source correction is considered verified.
+preserves form content, focus and entered values across IME resizing, callbacks,
+enable/busy behavior, visual tokens, and inventory behavior. The targeted
+real-IME instrumentation test must capture the real keyboard and prove, after
+the IME layout stabilizes, that long warnings and errors remain scrollable and
+both expanded 48dp action touch targets remain above it on the API-35 tablet
+profile before this source correction is considered verified.
 
 The RecipeDetail correction keeps the SectionCard header fixed and makes its
 bounded detail content scrollable. The active recipe's name, recorded cost,

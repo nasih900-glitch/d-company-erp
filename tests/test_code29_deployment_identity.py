@@ -22,7 +22,7 @@ PROTECTED_APPLICATION_PREFIXES = (
 )
 PRIMITIVES_PATH = "android-native/app/src/main/java/cloud/dcompany/erp/ui/components/Primitives.kt"
 PRIMITIVES_SIGNED28_SHA256 = "3a20353339fa43b218edc96f1bd0f4d9e11cc07d7739e2dd4a274abdf92078f6"
-PRIMITIVES_FORM_DIALOG_SHA256 = "1ae57ced450c77c3b4dc61e0b57929f0a4e9b992051f91cb1a640f90b9964771"
+PRIMITIVES_FORM_DIALOG_SHA256 = "2d42c0a400487c19ec3ccc3712f1eb88ce73e233440db43bca3aa137645e0bc5"
 PRIMITIVES_REVIEWED_IMPORT_REPLACEMENTS = (
     (
         "import androidx.compose.foundation.clickable\n",
@@ -137,7 +137,7 @@ QUANTITY_HASHES = {
 }
 NEW_CODE29_TEST_HASHES = {
     "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/inventory/InventoryAdjustmentImeUiTest.kt":
-        "08d0494a9c24846bed0995a07e44ba8808ce9a46939749e56257a82bdb465f5a",
+        "3278d7d89e906be0c9001ef78c4d4328330334f5fb990c4b7ef1576185fe68d1",
     "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/inventory/RecipeDetailUiTest.kt":
         "d1891e350ec458951e920d786752ca7f1e6e89f5b1fd23a98af3750392a4e200",
 }
@@ -219,7 +219,7 @@ OPERATOR_RECORD_HASHES = {
     ".env.production.example":
         "461bc7178d90bf06ce222f6c2a42f5cba6778139574629a9941dbce66719a4b0",
     "docs/CODE29_RELEASE_CANDIDATE.md":
-        "90d2dc29c2bac983f2a1953f602a79800e45649c7fc32228bd0205c4d7fc0ed2",
+        "8b7f7a8fae13f90f3f0059af9c07ef8779ba637de46f5eeeecb14645dfb25f43",
     "docs/DISTRIBUTION.md":
         "f0d7b770bab05bad668267cc4905a97546f5cb9c8a5ba95fda298c12eeb19853",
     "docs/SERVER_DRIVEN_ANDROID_UPDATES.md":

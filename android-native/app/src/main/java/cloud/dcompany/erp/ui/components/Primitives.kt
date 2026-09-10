@@ -529,6 +529,10 @@ fun FormDialog(
                     ).padding(Spacing.md),
                     contentAlignment = Alignment.Center,
                 ) {
+                    // Below the existing body cap, scroll main content to reserve the wrapped footer.
+                    val compact = maxHeight < 520.dp
+                    val compactScrollState = rememberScrollState()
+                    val bodyScrollState = rememberScrollState()
                     Surface(
                         modifier = Modifier.widthIn(max = width).fillMaxWidth(0.92f)
                             .heightIn(max = maxHeight)
@@ -543,38 +547,49 @@ fun FormDialog(
                         tonalElevation = AlertDialogDefaults.TonalElevation,
                         shape = Radius.shapeLg,
                     ) {
-                        Column(Modifier.padding(Spacing.xl)) {
-                            Text(
-                                title,
-                                color = Brand.Foreground,
-                                style = MaterialTheme.typography.headlineSmall,
-                            )
-                            Spacer(Modifier.height(Spacing.lg))
-                            CompositionLocalProvider(
-                                LocalContentColor provides AlertDialogDefaults.textContentColor,
+                        Column(Modifier.padding(if (compact) Spacing.lg else Spacing.xl)) {
+                            Column(
+                                modifier = Modifier.weight(1f, fill = false).then(
+                                    if (compact) Modifier.verticalScroll(compactScrollState)
+                                    else Modifier,
+                                ),
                             ) {
-                                ProvideTextStyle(MaterialTheme.typography.bodyMedium) {
-                                    error?.let {
-                                        Text(
-                                            it,
-                                            color = Brand.Danger,
-                                            modifier = Modifier.semantics {
-                                                liveRegion = LiveRegionMode.Assertive
+                                Text(
+                                    title,
+                                    color = Brand.Foreground,
+                                    style = MaterialTheme.typography.headlineSmall,
+                                )
+                                Spacer(Modifier.height(Spacing.lg))
+                                CompositionLocalProvider(
+                                    LocalContentColor provides AlertDialogDefaults.textContentColor,
+                                ) {
+                                    ProvideTextStyle(MaterialTheme.typography.bodyMedium) {
+                                        error?.let {
+                                            Text(
+                                                it,
+                                                color = Brand.Danger,
+                                                modifier = Modifier.semantics {
+                                                    liveRegion = LiveRegionMode.Assertive
+                                                },
+                                            )
+                                            Spacer(Modifier.height(Spacing.md))
+                                        }
+                                        Column(
+                                            modifier = if (compact) {
+                                                Modifier
+                                            } else {
+                                                Modifier.heightIn(max = 520.dp)
+                                                    .weight(1f, fill = false)
+                                                    .verticalScroll(bodyScrollState)
                                             },
-                                        )
-                                        Spacer(Modifier.height(Spacing.md))
-                                    }
-                                    Column(
-                                        modifier = Modifier.heightIn(max = 520.dp)
-                                            .weight(1f, fill = false)
-                                            .verticalScroll(rememberScrollState()),
-                                        verticalArrangement = Arrangement.spacedBy(Spacing.md),
-                                    ) {
-                                        content()
+                                            verticalArrangement = Arrangement.spacedBy(Spacing.md),
+                                        ) {
+                                            content()
+                                        }
                                     }
                                 }
                             }
-                            Spacer(Modifier.height(Spacing.xl))
+                            Spacer(Modifier.height(if (compact) Spacing.lg else Spacing.xl))
                             FlowRow(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(

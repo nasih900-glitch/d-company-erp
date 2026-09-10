@@ -151,12 +151,8 @@ class InventoryAdjustmentImeUiTest {
             .assertIsFocused()
             .performTextReplacement("-1000")
         quantity.assertTextContains("-1000")
-        compose.onNodeWithText(TRANSFER_UNAVAILABLE_MESSAGE)
-            .performScrollTo()
-            .assertIsDisplayed()
-        compose.onNodeWithText(PREVIEW_WARNING)
-            .performScrollTo()
-            .assertIsDisplayed()
+        val transferWarning = compose.onNodeWithText(TRANSFER_UNAVAILABLE_MESSAGE)
+        val previewWarning = compose.onNodeWithText(PREVIEW_WARNING)
         val resolvedContent = compose.onNodeWithTag(PREVIEW_TAG)
 
         val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
@@ -168,6 +164,17 @@ class InventoryAdjustmentImeUiTest {
             val confirm = compose.onNode(dialogButton("Queue adjustment"))
             val cancel = compose.onNode(dialogButton("Cancel"))
             val dialog = compose.onNode(dialogPane("Adjust Arabica coffee beans"))
+            val initialEvidence = awaitStableRealImeEvidence(
+                confirm,
+                cancel,
+                resolvedContent,
+                dialog,
+            )
+            initialEvidence.assertRealSoftwareIme()
+            quantity.assertIsFocused().assertTextContains("-1000")
+
+            transferWarning.performScrollTo().assertIsDisplayed()
+            previewWarning.performScrollTo().assertIsDisplayed()
             val evidence = awaitStableRealImeEvidence(
                 confirm,
                 cancel,
@@ -177,6 +184,7 @@ class InventoryAdjustmentImeUiTest {
             saveEvidence("inventory-adjustment-ime-actions.png", evidence)
 
             evidence.assertRealSoftwareIme()
+            quantity.assertIsFocused().assertTextContains("-1000")
             evidence.assertResolvedContentVisible()
             evidence.confirm.assertCompleteTouchTargetAbove(evidence, "Queue adjustment")
             evidence.cancel.assertCompleteTouchTargetAbove(evidence, "Cancel")
@@ -406,9 +414,10 @@ class InventoryAdjustmentImeUiTest {
         }
 
         val quantityField = compose.onNodeWithTag(NARROW_QUANTITY_TAG)
-        quantityField.performClick().assertIsFocused().performTextReplacement("12")
+        quantityField.performScrollTo().assertIsDisplayed()
+            .performClick().assertIsFocused().performTextReplacement("12")
         quantityField.assertTextContains("12")
-        val error = compose.onNodeWithText(LONG_VALIDATION_ERROR).assertIsDisplayed()
+        val error = compose.onNodeWithText(LONG_VALIDATION_ERROR)
 
         val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
         val originalFlags = automation.serviceInfo.flags
@@ -419,10 +428,16 @@ class InventoryAdjustmentImeUiTest {
             val confirm = compose.onNode(dialogButton("Queue adjustment"))
             val cancel = compose.onNode(dialogButton("Cancel"))
             val dialog = compose.onNode(dialogPane(NARROW_DIALOG_TITLE))
+            val initialEvidence = awaitStableRealImeEvidence(confirm, cancel, error, dialog)
+            initialEvidence.assertRealSoftwareIme()
+            quantityField.assertIsFocused().assertTextContains("12")
+
+            error.performScrollTo().assertIsDisplayed()
             val evidence = awaitStableRealImeEvidence(confirm, cancel, error, dialog)
             saveEvidence("form-dialog-narrow-long-error-ime.png", evidence)
 
             evidence.assertRealSoftwareIme()
+            quantityField.assertIsFocused().assertTextContains("12")
             evidence.confirm.assertCompleteTouchTargetAbove(evidence, "Queue adjustment")
             evidence.cancel.assertCompleteTouchTargetAbove(evidence, "Cancel")
             evidence.assertActionsWrapWithoutOverlap()
