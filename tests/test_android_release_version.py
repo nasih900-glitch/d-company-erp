@@ -138,6 +138,31 @@ class AndroidReleaseVersionTest(unittest.TestCase):
                 version,
             )
 
+    def test_code29_image_identity_correction_accepts_v3_1_19(self) -> None:
+        version = read_gradle_version(
+            self.write_build_file(version_code="29", version_name='"3.1.19"')
+        )
+
+        validate_tag("v3.1.19", version)
+        validate_built_metadata(
+            self.write_metadata(version_code=29, version_name="3.1.19"), version
+        )
+
+        self.assertEqual(AndroidVersion(code=29, name="3.1.19"), version)
+
+    def test_code29_image_identity_correction_rejects_code28_identity(self) -> None:
+        version = read_gradle_version(
+            self.write_build_file(version_code="29", version_name='"3.1.19"')
+        )
+
+        with self.assertRaisesRegex(ReleaseVersionError, "expected 'v3.1.19'"):
+            validate_tag("v3.1.18", version)
+        with self.assertRaisesRegex(ReleaseVersionError, "does not match"):
+            validate_built_metadata(
+                self.write_metadata(version_code=28, version_name="3.1.18"),
+                version,
+            )
+
     def test_tag_must_match_version_name_exactly(self) -> None:
         version = read_gradle_version(self.write_build_file())
 

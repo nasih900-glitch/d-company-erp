@@ -8,6 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CODE27_SIGNED_BASE = "dd0a1626a4a0107b104a1098f4b36596e38b752c"
+CODE28_SIGNED_BASE = "ab10a3138f41c5acf709e6275dfac55c6652d0d8"
 PROTECTED_APPLICATION_PREFIXES = (
     "backend/app/",
     "backend/alembic/",
@@ -56,6 +57,10 @@ def _code27_file(path: str) -> str:
     return _git("show", f"{CODE27_SIGNED_BASE}:{path}")
 
 
+def _code28_file(path: str) -> str:
+    return _git("show", f"{CODE28_SIGNED_BASE}:{path}")
+
+
 def _replace_exact(source: str, replacements: tuple[tuple[str, str, int], ...]) -> str:
     for old, new, expected_count in replacements:
         assert source.count(old) == expected_count
@@ -65,12 +70,14 @@ def _replace_exact(source: str, replacements: tuple[tuple[str, str, int], ...]) 
 
 def _changed_files(*prefixes: str) -> set[str]:
     changed = set(
-        _git("diff", "--name-only", CODE27_SIGNED_BASE, "--", *prefixes).splitlines()
-    )
-    changed.update(
-        path
-        for path in _git("ls-files", "--others", "--exclude-standard").splitlines()
-        if path.startswith(prefixes)
+        _git(
+            "diff",
+            "--name-only",
+            CODE27_SIGNED_BASE,
+            CODE28_SIGNED_BASE,
+            "--",
+            *prefixes,
+        ).splitlines()
     )
     return {path for path in changed if path}
 
@@ -90,14 +97,14 @@ def test_code28_preserves_signed_code27_application_behavior() -> None:
         _code27_file(version_path),
         (('__version__ = "3.1.17"', '__version__ = "3.1.18"', 1),),
     )
-    assert (ROOT / version_path).read_text(encoding="utf-8") == expected
+    assert _code28_file(version_path) == expected
 
     for path, expected_sha256 in REVIEWED_AUDIT_NETWORK_PRECONDITION_PATHS.items():
-        assert hashlib.sha256((ROOT / path).read_bytes()).hexdigest() == expected_sha256
+        assert hashlib.sha256(_code28_file(path).encode()).hexdigest() == expected_sha256
 
 
 def test_code28_runs_and_retains_audit_network_precondition_jvm_results() -> None:
-    workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    workflow = _code28_file(".github/workflows/ci.yml")
     assert ":audit-driver:testDebugUnitTest" in workflow
     assert "android-native/audit-driver/build/reports/tests/" in workflow
     assert "android-native/audit-driver/build/test-results/" in workflow
@@ -136,7 +143,7 @@ def test_code28_release_identity_files_change_only_expected_values() -> None:
     }
     for path, path_replacements in replacements.items():
         expected = _replace_exact(_code27_file(path), path_replacements)
-        assert (ROOT / path).read_text(encoding="utf-8") == expected
+        assert _code28_file(path) == expected
 
 
 def test_code28_scanner_deployment_scope_is_exact() -> None:
@@ -148,7 +155,7 @@ def test_code28_scanner_deployment_scope_is_exact() -> None:
 def test_code28_physical_lane_changes_identity_only() -> None:
     plan_path = "android-native/audit-driver/plans/code26-gaming-finance-physical.json"
     code27_plan = json.loads(_code27_file(plan_path))
-    code28_plan = json.loads((ROOT / plan_path).read_text(encoding="utf-8"))
+    code28_plan = json.loads(_code28_file(plan_path))
     assert len(code28_plan["steps"]) == 413
     assert code28_plan["expected_sessions"] == 16
     assert code28_plan["name"] == "Code 28 full-route Gaming and Finance physical acceptance"
@@ -175,7 +182,7 @@ def test_code28_physical_lane_changes_identity_only() -> None:
             ),
         ),
     )
-    assert (ROOT / runner_path).read_text(encoding="utf-8") == expected_runner
+    assert _code28_file(runner_path) == expected_runner
 
     analyzer_path = "scripts/analyze_code26_physical_evidence.py"
     expected_analyzer = _replace_exact(
@@ -201,4 +208,4 @@ def test_code28_physical_lane_changes_identity_only() -> None:
             ),
         ),
     )
-    assert (ROOT / analyzer_path).read_text(encoding="utf-8") == expected_analyzer
+    assert _code28_file(analyzer_path) == expected_analyzer

@@ -18,6 +18,7 @@ cd "$(dirname "$0")/../.."
 ROOT=$(pwd)
 PROJECT_NAME="code25-runtime-${GITHUB_RUN_ID:-$$}-${GITHUB_RUN_ATTEMPT:-0}"
 PROJECT_NAME=$(printf '%s' "$PROJECT_NAME" | tr '[:upper:]' '[:lower:]')
+REDIS_REF='redis:7-alpine@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf'
 CANDIDATE_ENV=$(mktemp)
 ROUTED_READY=$(mktemp)
 DIAGNOSTIC_LOG=$(mktemp)
@@ -97,8 +98,12 @@ for service in caddy postgres backend frontend; do
   docker image tag "$source_id" "$target_ref"
   test "$(docker image inspect --format '{{.Id}}' "$target_ref")" = "$source_id"
 done
-docker pull 'redis:7-alpine@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf' \
-  >/dev/null
+docker pull "$REDIS_REF" >/dev/null
+REDIS_EXPECTED_ID=$(docker image inspect --format '{{.Id}}' "$REDIS_REF")
+if ! [[ "$REDIS_EXPECTED_ID" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+  echo "Pinned Redis reference did not resolve to one immutable local image ID." >&2
+  exit 1
+fi
 
 DCE_SKIP_BACKUP=true bash infra/scripts/prepare-production-env.sh \
   - "$CANDIDATE_ENV" ci-runtime.example.org "$APP_REVISION"
@@ -112,6 +117,24 @@ candidate_images=$(python3 ops/runtime_release_parity.py candidate \
 
 "${compose[@]}" up -d --no-build --wait --wait-timeout 180 \
   postgres redis backend frontend
+mapfile -t REDIS_CONTAINERS < <("${compose[@]}" ps --all --status running -q redis)
+if [ "${#REDIS_CONTAINERS[@]}" -ne 1 ] || \
+   ! [[ "${REDIS_CONTAINERS[0]}" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "Runtime verification requires exactly one running Redis container." >&2
+  exit 1
+fi
+REDIS_RUNNING_ID=$(docker inspect --format '{{.Image}}' "${REDIS_CONTAINERS[0]}")
+REDIS_HEALTH=$(docker inspect --format '{{.State.Health.Status}}' "${REDIS_CONTAINERS[0]}")
+if [ "$REDIS_RUNNING_ID" != "$REDIS_EXPECTED_ID" ] || [ "$REDIS_HEALTH" != healthy ]; then
+  echo "Running Redis identity or health differs from the pinned candidate." >&2
+  exit 1
+fi
+if [ "$(docker image inspect --format '{{.Id}}' "$REDIS_REF")" != "$REDIS_EXPECTED_ID" ]; then
+  echo "Pinned Redis reference changed during runtime verification." >&2
+  exit 1
+fi
+printf 'redis_reference=%s\nredis_image_id=%s\nredis_health=%s\n' \
+  "$REDIS_REF" "$REDIS_RUNNING_ID" "$REDIS_HEALTH"
 "${compose[@]}" exec -T backend python -c \
   "import urllib.request; urllib.request.urlopen('http://localhost:8000/readyz', timeout=5).read()"
 "${compose[@]}" exec -T backend alembic current

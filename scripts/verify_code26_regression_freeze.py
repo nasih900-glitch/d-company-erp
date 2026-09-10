@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Fail closed when Code 26/27/28 weakens the proven Code 25 regression surface.
+"""Fail closed when Code 26/27/28/29 weakens the proven Code 25 regression surface.
 
 This is deliberately release-specific.  Code 25 is the behavioural baseline;
 Code 26 may add tests and narrowly change the allow-listed failure paths. Code
 27 additionally carries the reviewed deployment correction and Web session
-expiry repair. Code 28 only hardens the release scanner path. None may delete,
+expiry repair. Code 28 hardens the release scanner path. Code 29 carries only
+the reviewed image-format and Android quantity corrections. None may delete,
 disable, reorder, or rewrite an existing
 test outside the exact fixture-only normalization below.
 The sole reviewed audit-reader locator migration below preserves every
@@ -54,14 +55,17 @@ ALLOWED_PRODUCTION_PATHS = {
     "android-native/app/src/main/java/cloud/dcompany/erp/core/diagnostics/DiagnosticRuntime.kt",
     "android-native/app/src/main/java/cloud/dcompany/erp/core/money/MoneyInput.kt",
     "android-native/app/src/main/java/cloud/dcompany/erp/core/net/ApiClient.kt",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/quantity/QuantityInput.kt",
     "android-native/app/src/main/java/cloud/dcompany/erp/core/sync/BackgroundSyncWorker.kt",
     "android-native/app/src/main/java/cloud/dcompany/erp/ui/SessionViewModel.kt",
     "android-native/app/src/main/java/cloud/dcompany/erp/ui/components/Primitives.kt",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/components/QuantityField.kt",
     "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/PosScreen.kt",
     "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/PosViewModel.kt",
     "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/finance/FinanceScreen.kt",
     "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingScreen.kt",
     "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingViewModel.kt",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/inventory/InventoryScreen.kt",
     "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/settings/BugReportOutbox.kt",
 } | REVIEWED_WEB_AUTH_PATHS
 
@@ -126,10 +130,15 @@ def _normalise_release_identity(path: str, text: str) -> str:
         return text
     normalised = text
     for current, baseline in (
+        ("3.1.19", "3.1.14"),
         ("3.1.18", "3.1.14"),
         ("3.1.17", "3.1.14"),
         ("3.1.16", "3.1.14"),
         ("3.1.15", "3.1.14"),
+        ("Code 29", "Code 25"),
+        ("code 29", "code 25"),
+        ("CODE29", "CODE25"),
+        ("code29", "code25"),
         ("Code 28", "Code 25"),
         ("code 28", "code 25"),
         ("CODE28", "CODE25"),
@@ -145,10 +154,10 @@ def _normalise_release_identity(path: str, text: str) -> str:
     ):
         normalised = normalised.replace(current, baseline)
     normalised = re.sub(
-        r"version_code\s*=\s*(?:26|27|28)\b", "version_code=25", normalised
+        r"version_code\s*=\s*(?:26|27|28|29)\b", "version_code=25", normalised
     )
     normalised = re.sub(
-        r"assertEquals\((?:26|27|28),\s*BuildConfig\.VERSION_CODE\)",
+        r"assertEquals\((?:26|27|28|29),\s*BuildConfig\.VERSION_CODE\)",
         "assertEquals(25, BuildConfig.VERSION_CODE)",
         normalised,
     )
@@ -198,6 +207,49 @@ def _normalise_web_auth_freeze_assertion(path: str, text: str) -> str:
     )
 
 
+def _normalise_android_release_pipeline(path: str, text: str) -> str:
+    if path != "tests/test_android_release_pipeline.py":
+        return text
+    replacements = (
+        (
+            '            "needs: [coordinated-release-gates, production-image-gates, android-instrumentation]",',
+            '            "needs: [coordinated-release-gates, android-instrumentation]",',
+            2,
+        ),
+        (
+            '        image_start = workflow.index("  production-image-gates:")\n'
+            '        instrumentation_start = workflow.index("  android-instrumentation:")\n'
+            '        coordinated_job = workflow[coordinated_start:image_start]\n'
+            '        image_job = workflow[image_start:instrumentation_start]',
+            '        instrumentation_start = workflow.index("  android-instrumentation:")\n'
+            '        coordinated_job = workflow[coordinated_start:instrumentation_start]',
+            1,
+        ),
+        (
+            '        self.assertNotIn("docker buildx build", coordinated_job)\n'
+            '        self.assertNotIn("scan-production-images", coordinated_job)\n'
+            '        self.assertIn("needs: coordinated-release-gates", image_job)\n'
+            '        self.assertIn("caddy validate --config /etc/caddy/Caddyfile", image_job)\n'
+            '        self.assertIn("verify-postgres16-image-compatibility.sh", image_job)\n'
+            '        self.assertIn("verify-production-runtime-images.sh", image_job)\n'
+            '        self.assertIn("scan-production-images", image_job)\n'
+            '        self.assertNotIn("run: python -m pytest tests", image_job)\n'
+            '        self.assertNotIn("run: pytest", image_job)\n'
+            '        self.assertNotIn("npm run test", image_job)',
+            '        self.assertIn(\n'
+            '            "caddy validate --config /etc/caddy/Caddyfile", coordinated_job\n'
+            '        )',
+            1,
+        ),
+    )
+    normalised = text
+    for current, baseline, expected_count in replacements:
+        if normalised.count(current) != expected_count:
+            return text
+        normalised = normalised.replace(current, baseline)
+    return normalised
+
+
 def _disable_counts(text: str) -> tuple[int, ...]:
     return tuple(len(pattern.findall(text)) for pattern in DISABLING_PATTERNS)
 
@@ -223,6 +275,9 @@ def verify_repository(root: Path, baseline: str = CODE25_BASE) -> RegressionFree
         candidate_normalised = _normalise_audit_reader_locator(path, candidate_normalised)
         candidate_normalised = _normalise_realtime_api_mock(path, candidate_normalised)
         candidate_normalised = _normalise_web_auth_freeze_assertion(
+            path, candidate_normalised
+        )
+        candidate_normalised = _normalise_android_release_pipeline(
             path, candidate_normalised
         )
         if _missing_ordered_lines(baseline_normalised, candidate_normalised):

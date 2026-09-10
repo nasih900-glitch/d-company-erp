@@ -52,6 +52,14 @@ print(os.path.realpath(sys.argv[1]))
 PY
 }
 
+SCANNER_TOOL_DIR=$(canonical_path "$(dirname "${BASH_SOURCE[0]}")")
+ARCHIVE_IDENTITY_VERIFIER="$SCANNER_TOOL_DIR/verify-image-archive-identity.py"
+if [ ! -f "$ARCHIVE_IDENTITY_VERIFIER" ] || [ -L "$ARCHIVE_IDENTITY_VERIFIER" ] || \
+   [ "$(canonical_path "$ARCHIVE_IDENTITY_VERIFIER")" != "$ARCHIVE_IDENTITY_VERIFIER" ]; then
+  echo "Archive identity verifier is missing or linked." >&2
+  exit 1
+fi
+
 if [ ! -d "$WORK_ROOT" ] || [ -L "$WORK_ROOT" ] || \
    [ "$(canonical_path "$WORK_ROOT")" != "$WORK_ROOT" ] || \
    [ "$(stat -Lc '%u:%g:%a:%F' "$WORK_ROOT")" != "0:0:700:directory" ]; then
@@ -79,6 +87,7 @@ declare -a IMAGE_IDS=()
 declare -a ARCHIVES=()
 declare -a SYFT_REPORTS=()
 declare -a GRYPE_REPORTS=()
+declare -a CONFIG_IMAGE_IDS=()
 SERVICE_KEYS='|'
 OUTPUT_KEYS='|'
 archive_total_bytes=0
@@ -124,6 +133,35 @@ while [ "$#" -gt 0 ]; do
   SYFT_REPORTS+=("$syft_report")
   GRYPE_REPORTS+=("$grype_report")
   archive_total_bytes=$((archive_total_bytes + $(stat -Lc '%s' "$archive")))
+done
+
+for index in "${!SERVICES[@]}"; do
+  service=${SERVICES[$index]}
+  image_id=${IMAGE_IDS[$index]}
+  archive=${ARCHIVES[$index]}
+  identity_validation=$(timeout --foreground --signal TERM --kill-after=15s 300s \
+    python3 "$ARCHIVE_IDENTITY_VERIFIER" \
+    "$archive" "$image_id" "$service") || {
+      echo "Archive identity verification failed for $service." >&2
+      exit 1
+    }
+  config_key=${service//-/_}_scanner_config_image_id
+  scanner_config_id=""
+  while IFS='=' read -r key value; do
+    if [ "$key" = "$config_key" ]; then
+      if [ -n "$scanner_config_id" ]; then
+        echo "Archive identity verifier returned duplicate config identity for $service." >&2
+        exit 1
+      fi
+      scanner_config_id=$value
+    fi
+  done <<< "$identity_validation"
+  if ! [[ "$scanner_config_id" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+    echo "Archive identity verifier returned invalid config identity for $service." >&2
+    exit 1
+  fi
+  CONFIG_IMAGE_IDS+=("$scanner_config_id")
+  printf '%s\n' "$identity_validation" >> "$METADATA"
 done
 
 available_bytes=$(df -PB1 "$WORK_ROOT" | awk 'END {print $4}')
@@ -441,7 +479,7 @@ MONITOR_PID=$!
 
 for index in "${!SERVICES[@]}"; do
   service=${SERVICES[$index]}
-  image_id=${IMAGE_IDS[$index]}
+  config_image_id=${CONFIG_IMAGE_IDS[$index]}
   archive=${ARCHIVES[$index]}
   syft_report=${SYFT_REPORTS[$index]}
   grype_report=${GRYPE_REPORTS[$index]}
@@ -463,7 +501,7 @@ for index in "${!SERVICES[@]}"; do
     echo "Syft produced no evidence for $service." >&2
     exit 1
   fi
-  syft_validation=$(python3 - "$syft_report" "$service" "$image_id" <<'PY'
+  syft_validation=$(python3 - "$syft_report" "$service" "$config_image_id" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -514,7 +552,7 @@ PY
     echo "Grype produced no evidence for $service." >&2
     exit 1
   fi
-  validation=$(python3 - "$grype_report" "$service" "$image_id" <<'PY'
+  validation=$(python3 - "$grype_report" "$service" "$config_image_id" <<'PY'
 import json
 import sys
 from pathlib import Path

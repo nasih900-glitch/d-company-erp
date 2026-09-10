@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run the Code 28 business acceptance lane against a disposable local backend.
+# Run the Code 29 business acceptance lane against a disposable local backend.
 #
 # This script is deliberately explicit: it never defaults to a cloud device,
 # never accepts a non-loopback database, never uses production credentials and
@@ -20,7 +20,7 @@ Optional environment variables:
   CODE26_GCP_PROJECT    Firebase project (default: erp-15f1617a).
 
 The firebase mode is synchronous and may consume paid Test Lab quota. It must
-only be invoked after the Code 28 source-settled release gate has been given.
+only be invoked after the Code 29 source-settled release gate has been given.
 EOF
 }
 
@@ -118,7 +118,7 @@ ARTIFACT_DIR="$EVIDENCE_DIR/artifacts"
 
 # Physical evidence may only name an immutable, clean commit. A dirty source
 # tree can otherwise build bytes that are absent from source_commit and make a
-# Code 25 HEAD look like a Code 28 result.
+# Code 25 HEAD look like a Code 29 result.
 SOURCE_COMMIT="$(git -C "$REPO_ROOT" rev-parse --verify 'HEAD^{commit}')"
 SOURCE_TREE="$(git -C "$REPO_ROOT" rev-parse --verify 'HEAD^{tree}')"
 SOURCE_BRANCH="$(git -C "$REPO_ROOT" symbolic-ref --quiet --short HEAD || printf 'DETACHED')"
@@ -130,8 +130,8 @@ if [[ -n "$SOURCE_DIRTY" ]]; then
 fi
 VERSION_CODE="$(sed -nE 's/^[[:space:]]*versionCode[[:space:]]*=[[:space:]]*([0-9]+).*/\1/p' "$ANDROID_DIR/app/build.gradle.kts" | head -1)"
 VERSION_NAME="$(sed -nE 's/^[[:space:]]*versionName[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' "$ANDROID_DIR/app/build.gradle.kts" | head -1)"
-if [[ "$VERSION_CODE" != "28" || "$VERSION_NAME" != "3.1.18" ]]; then
-  printf 'Refusing non-Code-28 source identity: versionCode=%s versionName=%s\n' \
+if [[ "$VERSION_CODE" != "29" || "$VERSION_NAME" != "3.1.19" ]]; then
+  printf 'Refusing non-Code-29 source identity: versionCode=%s versionName=%s\n' \
     "$VERSION_CODE" "$VERSION_NAME" >&2
   exit 65
 fi
@@ -563,7 +563,7 @@ record_apk_identity() {
       source_commit:$source_commit,signature_verified:true,copied_hash_verified:true}' \
     >> "$APK_IDENTITIES_NDJSON"
 }
-record_apk_identity "$ERP_APK" cloud.dcompany.erp.physicalaudit 28 3.1.18-physical-audit
+record_apk_identity "$ERP_APK" cloud.dcompany.erp.physicalaudit 29 3.1.19-physical-audit
 record_apk_identity "$DRIVER_APK"
 record_apk_identity "$DRIVER_TEST_APK"
 jq -s --arg commit "$SOURCE_COMMIT" --arg tree "$SOURCE_TREE" \

@@ -76,6 +76,12 @@ import cloud.dcompany.erp.core.auth.InventoryAccess
 import cloud.dcompany.erp.core.db.BatchCacheEntity
 import cloud.dcompany.erp.core.money.parseRupeesToMinor
 import cloud.dcompany.erp.core.net.asRupees
+import cloud.dcompany.erp.core.quantity.QuantityInputResult
+import cloud.dcompany.erp.core.quantity.normalizedOrNull
+import cloud.dcompany.erp.core.quantity.parseQuantityInput
+import cloud.dcompany.erp.core.quantity.percentageInputText
+import cloud.dcompany.erp.core.quantity.quantityInputText
+import cloud.dcompany.erp.core.quantity.valueOrNull
 import cloud.dcompany.erp.ui.WorkspaceFeatureProfiles
 import cloud.dcompany.erp.ui.WorkspacePresentationPolicy
 import cloud.dcompany.erp.ui.presentationPolicy
@@ -95,6 +101,7 @@ import cloud.dcompany.erp.ui.components.OperationalStatusBadge
 import cloud.dcompany.erp.ui.components.PanelDivider
 import cloud.dcompany.erp.ui.components.PickerField
 import cloud.dcompany.erp.ui.components.PremiumTabBar
+import cloud.dcompany.erp.ui.components.QuantityField
 import cloud.dcompany.erp.ui.components.SearchInput
 import cloud.dcompany.erp.ui.components.SectionCard
 import cloud.dcompany.erp.ui.components.TabOption
@@ -1563,16 +1570,24 @@ private fun IngredientDialog(
         error = state.formError,
         onDismiss = vm::closeDialog,
         onConfirm = {
+            val parsedThreshold = optionalQuantityValue(threshold)
+            val parsedReorderQty = optionalQuantityValue(reorderQty)
             when {
                 editing == null && sku.isBlank() -> vm.showFormError("SKU is required.")
                 name.isBlank() -> vm.showFormError("Name is required.")
+                parsedThreshold == null -> vm.showFormError(
+                    "Reorder level must be blank, zero or a positive ungrouped quantity.",
+                )
+                parsedReorderQty == null -> vm.showFormError(
+                    "Reorder quantity must be blank, zero or a positive ungrouped quantity.",
+                )
                 else -> vm.saveIngredient(
                     editing = editing,
                     sku = sku,
                     name = name,
                     baseUnit = unit,
-                    reorderThreshold = threshold.toDoubleOrNull() ?: 0.0,
-                    reorderQty = reorderQty.toDoubleOrNull() ?: 0.0,
+                    reorderThreshold = parsedThreshold,
+                    reorderQty = parsedReorderQty,
                 )
             }
         },
@@ -1606,13 +1621,13 @@ private fun IngredientDialog(
             onSelect = { unit = it },
         )
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            DecimalField(
+            QuantityField(
                 value = threshold,
                 onValueChange = { threshold = it },
                 label = "Reorder at",
                 modifier = Modifier.weight(1f),
             )
-            DecimalField(
+            QuantityField(
                 value = reorderQty,
                 onValueChange = { reorderQty = it },
                 label = "Reorder qty",
@@ -1678,7 +1693,7 @@ private fun SupplierDialog(
     }
 }
 
-private data class GrnLineDraft(
+internal data class GrnLineDraft(
     val ingredientId: String = "",
     val qty: String = "",
     val unitCostRupees: String = "",
@@ -1686,25 +1701,38 @@ private data class GrnLineDraft(
     val lotCode: String = "",
 )
 
-private data class RecipeLineDraft(
+internal data class RecipeLineDraft(
     val ingredientId: String = "",
     val qty: String = "",
     val wastagePercent: String = "0",
 ) {
-    fun error(lineNumber: Int): String? = when {
-        ingredientId.isBlank() -> "Select an ingredient on recipe line $lineNumber."
-        qty.toDoubleOrNull() == null || qty.toDouble() <= 0 ->
-            "Enter a quantity greater than zero on recipe line $lineNumber."
-        wastagePercent.toDoubleOrNull() == null || wastagePercent.toDouble() !in 0.0..100.0 ->
-            "Wastage on recipe line $lineNumber must be from 0 to 100%."
-        else -> null
+    fun error(lineNumber: Int): String? {
+        if (ingredientId.isBlank()) return "Select an ingredient on recipe line $lineNumber."
+        val parsedQty = parseQuantityInput(qty)
+        val quantity = parsedQty.valueOrNull()
+        if (quantity == null || quantity <= 0.0) {
+            return parsedQty.formErrorOr("Enter a quantity greater than zero on recipe line $lineNumber.")
+        }
+        val parsedWastage = parseQuantityInput(wastagePercent)
+        val wastage = parsedWastage.valueOrNull()
+        if (wastage == null || wastage !in 0.0..100.0) {
+            return parsedWastage.formErrorOr(
+                "Wastage on recipe line $lineNumber must be from 0 to 100%.",
+            )
+        }
+        return null
     }
 
-    fun toBody(): RecipeLineBody = RecipeLineBody(
-        ingredientId = ingredientId,
-        qty = qty.toDouble(),
-        wastagePct = wastagePercent.toDouble() / 100.0,
-    )
+    fun toBody(): RecipeLineBody? {
+        val quantity = parseQuantityInput(qty).valueOrNull() ?: return null
+        val wastage = parseQuantityInput(wastagePercent).valueOrNull() ?: return null
+        if (ingredientId.isBlank() || quantity <= 0.0 || wastage !in 0.0..100.0) return null
+        return RecipeLineBody(
+            ingredientId = ingredientId,
+            qty = quantity,
+            wastagePct = wastage / 100.0,
+        )
+    }
 }
 
 @Composable
@@ -1728,19 +1756,22 @@ private fun RecipeCreateDialog(
         width = 760.dp,
         onDismiss = vm::closeDialog,
         onConfirm = {
-            val parsedYield = yieldQty.toDoubleOrNull()
+            val parsedYieldResult = parseQuantityInput(yieldQty)
+            val parsedYield = parsedYieldResult.valueOrNull()
             val lineError = lines.mapIndexedNotNull { index, line -> line.error(index + 1) }.firstOrNull()
+            val bodies = lines.mapNotNull(RecipeLineDraft::toBody)
             val duplicates = lines.map { it.ingredientId }.filter(String::isNotBlank)
                 .groupingBy { it }.eachCount().any { it.value > 1 }
             when {
                 name.isBlank() -> vm.showFormError("Enter a recipe name.")
                 parsedYield == null || parsedYield <= 0 ->
-                    vm.showFormError("Yield must be greater than zero.")
+                    vm.showFormError(parsedYieldResult.formErrorOr("Yield must be greater than zero."))
                 lineError != null -> vm.showFormError(lineError)
+                bodies.size != lines.size -> vm.showFormError("Check every recipe quantity and wastage value.")
                 duplicates -> vm.showFormError(
                     "Each ingredient can appear only once. Combine duplicate quantities into one line.",
                 )
-                else -> vm.createRecipe(menuItem, name, parsedYield, lines.map(RecipeLineDraft::toBody))
+                else -> vm.createRecipe(menuItem, name, parsedYield, bodies)
             }
         },
     ) {
@@ -1757,7 +1788,7 @@ private fun RecipeCreateDialog(
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
-        DecimalField(
+        QuantityField(
             value = yieldQty,
             onValueChange = { yieldQty = it },
             label = "Menu units produced by these quantities",
@@ -1782,13 +1813,13 @@ private fun RecipeCreateDialog(
                     onSelect = { id -> lines = lines.replaceAt(index) { it.copy(ingredientId = id) } },
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    DecimalField(
+                    QuantityField(
                         value = line.qty,
                         onValueChange = { value -> lines = lines.replaceAt(index) { it.copy(qty = value) } },
                         label = "Quantity for full yield",
                         modifier = Modifier.weight(1f),
                     )
-                    DecimalField(
+                    QuantityField(
                         value = line.wastagePercent,
                         onValueChange = { value ->
                             lines = lines.replaceAt(index) { it.copy(wastagePercent = value) }
@@ -1820,9 +1851,11 @@ private fun RecipeLineDialog(
 ) {
     val initialIngredient = editing?.ingredientId ?: state.syncedIngredients.firstOrNull()?.id.orEmpty()
     var ingredientId by remember(recipe.id, editing?.id) { mutableStateOf(initialIngredient) }
-    var qty by remember(recipe.id, editing?.id) { mutableStateOf(editing?.qty?.asQty() ?: "") }
+    var qty by remember(recipe.id, editing?.id) {
+        mutableStateOf(editing?.qty?.let(::quantityInputText) ?: "")
+    }
     var wastage by remember(recipe.id, editing?.id) {
-        mutableStateOf(editing?.let { (it.wastagePct * 100).asQty() } ?: "0")
+        mutableStateOf(editing?.let { percentageInputText(it.wastagePct) } ?: "0")
     }
     FormDialog(
         title = if (editing == null) "Add recipe ingredient" else "Edit recipe ingredient",
@@ -1838,7 +1871,11 @@ private fun RecipeLineDialog(
                 duplicate -> vm.showFormError(
                     "This ingredient is already linked. Edit its existing line instead.",
                 )
-                else -> vm.saveRecipeLine(recipe, editing, draft.toBody())
+                else -> {
+                    val body = draft.toBody()
+                    if (body == null) vm.showFormError("Check the quantity and wastage value.")
+                    else vm.saveRecipeLine(recipe, editing, body)
+                }
             }
         },
     ) {
@@ -1849,13 +1886,13 @@ private fun RecipeLineDialog(
             options = state.syncedIngredients.map { it.id to "${it.name} (${it.baseUnit})" },
             onSelect = { ingredientId = it },
         )
-        DecimalField(
+        QuantityField(
             value = qty,
             onValueChange = { qty = it },
             label = "Quantity for full yield (${recipe.yieldQty.asQty()} menu units)",
             modifier = Modifier.fillMaxWidth(),
         )
-        DecimalField(
+        QuantityField(
             value = wastage,
             onValueChange = { wastage = it },
             label = "Wastage %",
@@ -1878,12 +1915,16 @@ private fun GrnDialog(state: InventoryUiState, vm: InventoryViewModel) {
 
     val branchId = state.branchId
     val lineTotals = lines.map { line ->
-        grnLineTotalMinor(line.qty, parseRupeesToMinor(line.unitCostRupees))
+        line.normalizedQuantity()?.let { quantity ->
+            grnLineTotalMinor(quantity, parseRupeesToMinor(line.unitCostRupees))
+        }
     }
     // The backend rounds each line HALF_UP to whole paise before summing.
     // Never round the combined receipt or truncate fractional paise here.
     val totalMinor = grnReceiptTotalMinor(
-        lines.map { it.qty to parseRupeesToMinor(it.unitCostRupees) },
+        lines.map { line ->
+            line.normalizedQuantity().orEmpty() to parseRupeesToMinor(line.unitCostRupees)
+        },
     )
 
     FormDialog(
@@ -1903,6 +1944,7 @@ private fun GrnDialog(state: InventoryUiState, vm: InventoryViewModel) {
                 branchId.isNullOrBlank() -> vm.showFormError("Select a branch.")
                 supplierId.isBlank() -> vm.showFormError("Select a supplier.")
                 lineError != null -> vm.showFormError(lineError)
+                ready.size != lines.size -> vm.showFormError("Check every receipt line.")
                 ready.isEmpty() -> vm.showFormError("Add at least one line.")
                 invoiceNo.isNotBlank() && invoiceTotal.isBlank() ->
                     vm.showFormError("Enter the supplier invoice total, or clear the invoice number.")
@@ -2008,7 +2050,7 @@ private fun GrnDialog(state: InventoryUiState, vm: InventoryViewModel) {
                             lines = lines.replaceAt(index) { it.copy(ingredientId = id) }
                         },
                     )
-                    DecimalField(
+                    QuantityField(
                         value = line.qty,
                         onValueChange = { v -> lines = lines.replaceAt(index) { it.copy(qty = v) } },
                         label = "Qty",
@@ -2087,7 +2129,8 @@ private fun AdjustDialog(
     var note by remember { mutableStateOf("") }
 
     val branchId = state.branchId
-    val typed = qty.toDoubleOrNull()
+    val parsedQty = parseQuantityInput(qty, allowNegative = allowsNegativeInput(type))
+    val typed = parsedQty.valueOrNull()
     // The exact number that will be sent, from the same function the request
     // uses. Nothing here re-derives the sign.
     val delta = typed?.let { adjustmentDelta(type, it) }
@@ -2102,7 +2145,7 @@ private fun AdjustDialog(
         onConfirm = {
             when {
                 branchId.isNullOrBlank() -> vm.showFormError("Select a branch.")
-                typed == null -> vm.showFormError("Enter a quantity.")
+                typed == null -> vm.showFormError(parsedQty.formErrorOr("Enter a quantity."))
                 delta == null || delta == 0.0 ->
                     vm.showFormError("A zero adjustment changes nothing — enter an amount.")
                 delta < 0 && -delta > ingredient.currentQty ->
@@ -2137,7 +2180,7 @@ private fun AdjustDialog(
                 type = picked
             },
         )
-        DecimalField(
+        QuantityField(
             value = qty,
             onValueChange = { qty = it },
             label = if (type == ADJ_COUNT) {
@@ -2194,22 +2237,24 @@ private fun AdjustDialog(
 
 // ------------------------------------------------------------------ helpers
 
-private fun Double.asQtyInput(): String = if (this == 0.0) "" else asQty().replace(",", "")
+internal fun Double.asQtyInput(): String = quantityInputText(this, blankZero = true)
 
-private fun GrnLineDraft.validationError(lineNumber: Int): String? {
+internal fun GrnLineDraft.validationError(lineNumber: Int): String? {
     if (ingredientId.isBlank()) return "Line $lineNumber: select an ingredient."
-    val quantity = qty.toDoubleOrNull()
-    if (quantity == null || !quantity.isFinite() || quantity <= 0.0) {
-        return "Line $lineNumber: quantity must be greater than 0."
+    val parsedQuantity = parseQuantityInput(qty)
+    val quantity = parsedQuantity.valueOrNull()
+    if (quantity == null || quantity <= 0.0) {
+        return parsedQuantity.formErrorOr("Line $lineNumber: quantity must be greater than 0.")
     }
-    if (!isSupportedGrnQuantity(qty)) {
+    val normalizedQuantity = parsedQuantity.normalizedOrNull() ?: return "Line $lineNumber: invalid quantity."
+    if (!isSupportedGrnQuantity(normalizedQuantity)) {
         return "Line $lineNumber: quantity supports up to 10 whole-number digits and 4 decimal places."
     }
     val unitCostMinor = parseRupeesToMinor(unitCostRupees)
     if (unitCostMinor == null) {
         return "Line $lineNumber: unit cost must be rupees with no more than 2 decimal places."
     }
-    if (grnLineTotalMinor(qty, unitCostMinor) == null) {
+    if (grnLineTotalMinor(normalizedQuantity, unitCostMinor) == null) {
         return "Line $lineNumber: quantity and unit cost are too large to value safely."
     }
     val expiry = expiresAt.trim()
@@ -2219,11 +2264,14 @@ private fun GrnLineDraft.validationError(lineNumber: Int): String? {
     return null
 }
 
-private fun GrnLineDraft.toBody(): GrnLineBody? {
+internal fun GrnLineDraft.toBody(): GrnLineBody? {
     if (ingredientId.isBlank()) return null
-    val quantity = qty.toDoubleOrNull() ?: return null
-    if (!quantity.isFinite() || quantity <= 0) return null
+    val parsedQuantity = parseQuantityInput(qty)
+    val quantity = parsedQuantity.valueOrNull() ?: return null
+    val normalizedQuantity = parsedQuantity.normalizedOrNull() ?: return null
+    if (quantity <= 0 || !isSupportedGrnQuantity(normalizedQuantity)) return null
     val unitCostMinor = parseRupeesToMinor(unitCostRupees) ?: return null
+    if (grnLineTotalMinor(normalizedQuantity, unitCostMinor) == null) return null
     val expiry = expiresAt.trim()
     if (expiry.isNotEmpty() && !Regex("""\d{4}-\d{2}-\d{2}""").matches(expiry)) return null
     return GrnLineBody(
@@ -2235,6 +2283,18 @@ private fun GrnLineDraft.toBody(): GrnLineBody? {
         lotCode = lotCode.trim().ifBlank { null },
     )
 }
+
+internal fun GrnLineDraft.normalizedQuantity(): String? =
+    parseQuantityInput(qty).normalizedOrNull()
+
+internal fun optionalQuantityValue(raw: String): Double? {
+    if (raw.isEmpty()) return 0.0
+    val value = parseQuantityInput(raw).valueOrNull() ?: return null
+    return value.takeIf { it >= 0.0 }
+}
+
+private fun QuantityInputResult.formErrorOr(fallback: String): String =
+    (this as? QuantityInputResult.Invalid)?.message ?: fallback
 
 private fun <T> List<T>.replaceAt(index: Int, block: (T) -> T): List<T> =
     mapIndexed { i, item -> if (i == index) block(item) else item }

@@ -402,7 +402,7 @@ class AndroidReleasePipelineTest(unittest.TestCase):
         self.assertNotIn("ANDROID_KEYSTORE_BASE64", instrumentation_job)
         self.assertNotIn("cache: gradle", instrumentation_job)
         self.assertIn(
-            "needs: [coordinated-release-gates, android-instrumentation]",
+            "needs: [coordinated-release-gates, production-image-gates, android-instrumentation]",
             build_job,
         )
         self.assertNotIn("reactivecircus/android-emulator-runner@", build_job)
@@ -686,8 +686,10 @@ class AndroidReleasePipelineTest(unittest.TestCase):
     def test_tag_release_rechecks_exact_backend_and_web_contracts(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
         coordinated_start = workflow.index("  coordinated-release-gates:")
+        image_start = workflow.index("  production-image-gates:")
         instrumentation_start = workflow.index("  android-instrumentation:")
-        coordinated_job = workflow[coordinated_start:instrumentation_start]
+        coordinated_job = workflow[coordinated_start:image_start]
+        image_job = workflow[image_start:instrumentation_start]
 
         self.assertIn(
             "python -m pip install --only-binary=:all: --require-hashes "
@@ -709,8 +711,71 @@ class AndroidReleasePipelineTest(unittest.TestCase):
             "docker compose -f docker-compose.prod.yml", coordinated_job
         )
         self.assertIn("--env-file .env.production.example config --quiet", coordinated_job)
+        self.assertNotIn("docker buildx build", coordinated_job)
+        self.assertNotIn("scan-production-images", coordinated_job)
+        self.assertIn("needs: coordinated-release-gates", image_job)
+        self.assertIn("caddy validate --config /etc/caddy/Caddyfile", image_job)
+        self.assertIn("verify-postgres16-image-compatibility.sh", image_job)
+        self.assertIn("verify-production-runtime-images.sh", image_job)
+        self.assertIn("scan-production-images", image_job)
+        self.assertNotIn("run: python -m pytest tests", image_job)
+        self.assertNotIn("run: pytest", image_job)
+        self.assertNotIn("npm run test", image_job)
+
+    def test_image_gates_are_two_isolated_blocking_real_store_lanes(self) -> None:
+        for workflow_path, suffix in (
+            (CI_WORKFLOW, "ci"),
+            (WORKFLOW, "release-gate"),
+        ):
+            workflow = workflow_path.read_text(encoding="utf-8")
+            if workflow_path == CI_WORKFLOW:
+                image_start = workflow.index("  docker:")
+                image_job = workflow[image_start:]
+                self.assertIn("needs: [backend, frontend]", image_job)
+            else:
+                image_start = workflow.index("  production-image-gates:")
+                instrumentation_start = workflow.index("  android-instrumentation:")
+                image_job = workflow[image_start:instrumentation_start]
+                self.assertIn("needs: coordinated-release-gates", image_job)
+
+            with self.subTest(workflow=workflow_path.name):
+                self.assertIn("runs-on: ubuntu-24.04", image_job)
+                self.assertIn("fail-fast: false", image_job)
+                self.assertEqual(1, image_job.count("- store: classic"))
+                self.assertEqual(1, image_job.count("- store: containerd"))
+                self.assertIn("containerd-snapshotter", image_job)
+                self.assertIn("version: v29.6.1", image_job)
+                self.assertIn("set-host: true", image_job)
+                self.assertIn("rootless: false", image_job)
+                self.assertIn("--provenance=false", image_job)
+                self.assertIn("--provenance=mode=min", image_job)
+                self.assertEqual(4, image_job.count("docker buildx build --load"))
+                self.assertEqual(4, image_job.count("--platform linux/amd64"))
+                self.assertEqual(4, image_job.count("${{ matrix.provenance }}"))
+                self.assertIn("verify_image_archive_parser_python312.py", image_job)
+                self.assertIn(f"erp-backend:{suffix}", image_job)
+                self.assertIn("docker-host: ${{ steps.setup-docker.outputs.sock }}", image_job)
+                self.assertIn("docker-store: ${{ matrix.store }}", image_job)
+                self.assertNotIn("continue-on-error", image_job)
+                evidence_start = image_job.index(
+                    "      - name: Retain bounded Docker connection evidence"
+                )
+                gated_steps = image_job[:evidence_start]
+                evidence_step = image_job[evidence_start:]
+                self.assertNotIn("if: always()", gated_steps)
+                self.assertEqual(1, evidence_step.count("if: always()"))
+                self.assertIn("docker-connection-pre-build.json.runner", evidence_step)
+                self.assertIn("docker-connection-pre-build.json.root", evidence_step)
+                self.assertNotIn("scanner-runtime", evidence_step)
+                self.assertNotIn(".env", evidence_step)
+
+        release = WORKFLOW.read_text(encoding="utf-8")
+        build_start = release.index("  build-android:")
+        verifier_start = release.index("  verify-android-reproducibility:")
+        build_job = release[build_start:verifier_start]
         self.assertIn(
-            "caddy validate --config /etc/caddy/Caddyfile", coordinated_job
+            "needs: [coordinated-release-gates, production-image-gates, android-instrumentation]",
+            build_job,
         )
 
     def test_ci_token_is_read_only_and_actions_are_commit_pinned(self) -> None:

@@ -10,6 +10,7 @@ from scripts.verify_code26_regression_freeze import (
     _missing_ordered_lines,
     _normalise_release_identity,
     _normalise_audit_reader_locator,
+    _normalise_android_release_pipeline,
     _normalise_realtime_api_mock,
     verify_repository,
 )
@@ -55,6 +56,37 @@ def test_code28_identity_normalises_directly_to_inherited_code25_baseline() -> N
     assert _normalise_release_identity(path, current) == (
         'assertEquals(25, BuildConfig.VERSION_CODE)\n"3.1.14"\ncode 25 artifact\n'
     )
+
+
+def test_code29_identity_normalises_directly_to_inherited_code25_baseline() -> None:
+    path = "android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt"
+    current = 'assertEquals(29, BuildConfig.VERSION_CODE)\n"3.1.19"\ncode 29 artifact\n'
+    assert _normalise_release_identity(path, current) == (
+        'assertEquals(25, BuildConfig.VERSION_CODE)\n"3.1.14"\ncode 25 artifact\n'
+    )
+
+
+def test_pipeline_normalisation_requires_the_exact_counted_transform() -> None:
+    path = "tests/test_android_release_pipeline.py"
+    current = (ROOT / path).read_text(encoding="utf-8")
+    normalised = _normalise_android_release_pipeline(path, current)
+
+    assert normalised != current
+    assert (
+        "        coordinated_job = workflow[coordinated_start:instrumentation_start]"
+        in normalised
+    )
+    assert normalised.count(
+        '            "needs: [coordinated-release-gates, android-instrumentation]",'
+    ) == 2
+
+    unexpected = current.replace(
+        "class AndroidReleasePipelineTest",
+        '            "needs: [coordinated-release-gates, production-image-gates, android-instrumentation]",\n\n'
+        "class AndroidReleasePipelineTest",
+        1,
+    )
+    assert _normalise_android_release_pipeline(path, unexpected) == unexpected
 
 
 def test_disable_marker_counter_detects_new_skip_paths() -> None:
