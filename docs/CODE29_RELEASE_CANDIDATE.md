@@ -2,7 +2,7 @@
 
 > **Current correction record:** The original `v3.1.19` candidate record below
 > is preserved as signed history. The final section of this document supersedes
-> its identity and phase order for corrected Code 29 at `v3.1.20`.
+> its identity and phase order for current Code 29 at `v3.1.21`.
 
 Code 29 is the unsigned successor to signed Code 28. Its coordinated candidate
 identity is tag `v3.1.19`, Android `versionName=3.1.19`, Android
@@ -142,7 +142,7 @@ battery policy behavior, the targeted inventory-form cases, and the supervised
 real-live operational and financial reconciliation trial before a wider staff
 rollout. Mac/device access is not part of this source phase.
 
-## Corrected Code 29 current record (`3.1.20`)
+## Current Code 29 patch record (`3.1.21`)
 
 Original signed Code 29 (`3.1.19`, commit
 `0949620b4632ebd6accdfa62a203be8d85b31a24`) is immutable. Its production
@@ -154,57 +154,90 @@ The existing production lock happened to contain seven bytes, so it did not
 reproduce the failure; a normally created empty lock, including a new lock
 after reboot, did.
 
-The corrected Code 29 identity is tag `v3.1.20`, Android
-`versionName=3.1.20`, Android `versionCode=29`, and migration head `0071`.
-Changing `versionName` distinguishes the corrected package and manifest while
-retaining Code 29. The original `v3.1.19` tag, source, manifest, signatures,
-and artifacts must not be moved, rebuilt, overwritten, or relabelled.
+The reviewed installer correction uses GNU stat's numeric `%f` mode and requires
+exact raw Linux mode `8180` (`S_IFREG | 0600`) with root UID/GID, one link, and
+the exact device/inode passed by the Python bootstrap. Descriptor-relative
+`O_NOFOLLOW`, no truncation, nonblocking `flock`, private runtime directories,
+and all other fail-closed checks remain intact. Normal CI and the tagged
+coordinated-release job run the standalone Linux/root descriptor regression
+through `sudo -n` with the configured Python interpreter. The `v3.1.20`
+release workflow run `34716757359` was cancelled before build or signing after
+the POS notice defect was confirmed; it produced no release artifact and is
+preserved as historical evidence.
 
-The installer now uses GNU stat's numeric `%f` mode and requires exact raw
-Linux mode `8180` (`S_IFREG | 0600`) with root UID/GID, one link, and the exact
-device/inode passed by the Python bootstrap. Descriptor-relative `O_NOFOLLOW`,
-no truncation, nonblocking `flock`, private runtime directories, and all other
-fail-closed checks remain intact. Normal CI and the tagged coordinated-release
-job run the standalone Linux/root descriptor regression through `sudo -n` with
-the configured Python interpreter.
+The current Code 29 identity is tag `v3.1.21`, Android `versionName=3.1.21`,
+Android `versionCode=29`, and migration head `0071`. Version name distinguishes
+the current package and manifest from immutable `v3.1.19` and cancelled
+`v3.1.20` history while retaining Code 29. Minimum supported code `8`, latest
+default code `8`, compatibility policy revision `1`, and all parsers and schema
+contracts remain unchanged.
 
-No Android, Web, backend business, billing, money, permission, database,
-offline/sync, scanner, or Caddy behavior change is authorized. Application
-source remains byte-identical to original signed Code 29 except the backend
-version string. The physical plan retains all 413 steps and 16 sessions and
-changes identity only. Compatibility stays at minimum code `8`, latest default
-code `8`, and policy revision `1`. The broader signed-Code29 scanner-source
-review remains incomplete evidence and is not claimed as passed.
+Two bounded Android presentation defects are corrected. A same-order held POS
+review now keeps its success notice above checkout-version refreshes while its
+inner versioned `rememberSaveable` editor state remains intact. The loaded
+Inventory workspace now scrolls naturally measured header content and keeps a
+finite stock/FIFO pane when refresh errors, pending changes, summaries, and low
+stock fill a landscape viewport. The reviewed changes preserve all POS and
+Inventory callbacks, permissions, mutation safeguards, billing, money,
+database, offline/sync, scanner, Caddy, and backend business behavior. The
+physical audit plan retains all 413 steps and 16 sessions and changes identity
+only.
 
-The earlier phase order in this ledger is superseded for this correction:
+Evidence is phase-specific. Full CI run `34715219053` passed against the
+preceding `3.1.20` source at commit
+`0c072b8ce9bb69776525ea5fb6a9c799d64a66ff`; it is not a pass for `3.1.21`.
+The isolated recovery harness at that commit passed pre-ingress rollback,
+committed-data retention after ingress, and same-candidate reopen with 117
+tables and was independently audited before its VM stopped. That evidence
+supports the unchanged recovery mechanism, but it was not executed against
+`3.1.21`. Reviewed before/after instrumentation proves both new UI defects and
+their focused corrections. The focused stock trial at the preceding commit
+completed all 87 checks at 22:18:55 UTC on the clean `0c072b8` source using the
+debug `3.1.20` build and synthetic API on port `55905`; the recipe checks used
+the recorded portrait workaround, and cleanup was verified at 22:21 UTC. This
+is prior-source evidence, not final `3.1.21` acceptance. The broader signed-Code29
+scanner-source review remains incomplete evidence and is not claimed as passed.
 
-1. Independently approve the exact original-Code29-to-corrected-Code29 delta.
-   Run the mandatory Linux/root lock verifier, complete repository, backend,
-   Web, Android, migration, syntax, and both production-image-store scanner
-   gates on one clean commit.
-2. Only after those checks pass, tag the exact commit and obtain protected
-   signing approval. Produce the `3.1.20` Code 29 APK/AAB, checksums, and
-   manifest together, then independently verify their source, bytes, package,
-   version code/name, and preserved signer. Retain the anonymous offline fixture
-   chain from signed Code 21 to original signed Code 29 and then the same-code
-   corrected Code 29 replacement, with IPv4 and IPv6 blocked. This is chained
-   upgrade evidence, not a direct Code21-to-corrected-Code29 proof, and remains
-   separate from the authenticated user-and-agent trial.
-3. Complete the authenticated available-device, offline/restart, inventory,
-   Gaming, POS, notification, performance, and financial-reconciliation trial.
-   While the Redmi tablet is unavailable, authenticated emulator execution and
-   Web ERP reconciliation are the accepted alternative. Preserve prior Lenovo
-   physical evidence separately; do not describe it as a new physical run. A
-   signed package is not authority to deploy, stage, activate, or offer it.
-4. Only after the user accepts a successful trial may production preparation
-   and deployment begin. The user has already confirmed the real staff tablet
-   was synced and paused; repeat fresh read-only outbox and paused-state checks
-   before production work without clearing app data. Reconfirm quiescence,
-   backup, migration rehearsal, restore, rollback, exact runtime images,
-   authentication, compatibility, and public network behavior. Any later
-   inactive staging and channel-wide offer remains a separate owner-controlled
-   action.
+The current user direction authorizes completing this bounded Code 29 patch,
+its required checks, the final-source synthetic trial, protected signing, and
+signed-byte continuity, followed by production deployment and the controlled
+offer only if every preceding gate passes. No additional generic permission
+loop is required. This authority does not waive a gate, permit moving historical
+tags or artifacts, or turn evidence from another source identity into `3.1.21`
+evidence.
 
-This correction record does not claim that corrected Code 29 is release-ready,
-signed, trial-accepted, deployed, staged, active, offered, or installed in
-production.
+The current sequence is:
+
+1. Independently approve the exact source delta and run final exact-source CI,
+   backend, Web, Android, migration, syntax, Linux/root installer, and both
+   production-image-store scanner gates on one clean `3.1.21` commit.
+2. Before tagging, run the canonical authenticated synthetic Android and Web
+   business trial from the final clean `3.1.21` source using its `physicalAudit`
+   APK. Separately run the preserved-cache landscape acceptance with the final
+   debug APK. These test variants prove the final source against synthetic
+   services; they are not the production-signed release bytes. While Redmi is
+   unavailable, the authenticated emulator and Web route is accepted; preserve
+   prior Lenovo physical evidence separately.
+3. Tag that exact commit as `v3.1.21`; use the protected workflow to produce the
+   Code 29 APK/AAB, checksums, and manifest together, then independently verify
+   source, bytes, package, version code/name, and the preserved signer.
+4. On the isolated emulator `5574`, prove anonymous offline continuity for those
+   exact signed bytes as a same-code replacement of original signed Code 29
+   `3.1.19`, without uninstalling or clearing data. The completed signed chain is
+   only Code 21 `3.1.10` to original Code 29 `3.1.19`; no signed or installed
+   `3.1.20` link exists. The pending `3.1.21` replacement is separate from the
+   synthetic business trial and is not direct Code-21-to-`3.1.21` proof.
+5. After the final-source trials, signed-byte continuity, and runtime gates pass,
+   complete production preparation and deployment under the existing authority.
+   The user has already confirmed the real staff tablet was synced and paused;
+   repeat fresh read-only outbox and paused-state checks before production work
+   without clearing app data. Reconfirm quiescence, backup, migration rehearsal,
+   restore, rollback, exact runtime images, authentication, compatibility, and
+   public network behavior, then stage and activate only the independently
+   verified artifact through the bound release-controller. The offer is
+   channel-wide for eligible direct clients, and Android still requires user
+   consent to install.
+
+This record does not claim that `3.1.21` final CI, signing, continuity,
+final-source synthetic trial, production deployment, staging, activation, offer, or
+production installation has passed.

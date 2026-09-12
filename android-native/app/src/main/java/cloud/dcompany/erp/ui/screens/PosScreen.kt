@@ -505,7 +505,7 @@ fun PosScreen(
     state.heldOrderReview
         ?.takeIf { access.canCreateAndCollect && voidTarget == null }
         ?.let { review ->
-            key(review.orderId, review.checkoutVersion) {
+            key(review.orderId) {
                 HeldOrderReviewDialog(
                     review = review,
                     online = state.online,

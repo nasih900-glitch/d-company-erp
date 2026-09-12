@@ -82,7 +82,7 @@ android {
         // version code so an installed tablet upgrades in place instead of
         // requiring an uninstall that would destroy its offline outbox.
         versionCode = 29
-        versionName = "3.1.20"
+        versionName = "3.1.21"
         buildConfigField("boolean", "DIRECT_UPDATES_ENABLED", "false")
         buildConfigField("String", "DISTRIBUTION_CHANNEL", buildConfigString("play"))
 

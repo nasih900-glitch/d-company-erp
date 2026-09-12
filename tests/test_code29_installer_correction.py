@@ -19,9 +19,23 @@ HISTORICAL_CADDY_GUARD_SHA256 = (
     "2395767f4fc278a45822bc2cc45f476c8a44e9211fc9db7b747196462579c881"
 )
 OPERATOR_RECORD_SHA256 = {
-    "docs/CODE29_RELEASE_CANDIDATE.md": "3924bd14f7c82cf20aeb5e4ea2bcb5074063ee128490249ccb77123d0a3fd296",
-    "docs/DISTRIBUTION.md": "78e41f50f44d5a59372a55e9be863bec776f62f1c35b3d4a282be5ee29537404",
-    "docs/SERVER_DRIVEN_ANDROID_UPDATES.md": "6f64b81a4627c527f2e221dd034b446f8ea6f8be94422a98496a30ebb43c9f0d",
+    "docs/CODE29_RELEASE_CANDIDATE.md": "8f15d3f031daef79ecd1a5680b8bf9f527598d558a004ea198225919898821e4",
+    "docs/DISTRIBUTION.md": "601007e7eaca4b700c82e5e70ffd139a6ff9c9921e5c53581284491808710b1e",
+    "docs/SERVER_DRIVEN_ANDROID_UPDATES.md": "5808e0f8e5d9eb0829c5e3e570bc3304028d2f828e858eb75c2cce3440afe583",
+}
+REVIEWED_UI_SHA256 = {
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/PosScreen.kt": (
+        "c2473b6b54f430d5cfcad724fcd7f51451ea3a5064839dd91c6e2000cd6a1f95"
+    ),
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/PosEmptyCatalogueUiTest.kt": (
+        "b56a28fda657fd04490b5dd055e24c524747dd3ba5b1b2e5f34af79f7e907ef5"
+    ),
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/inventory/InventoryScreen.kt": (
+        "8010a5d76b911d59887d10224130d374632f3fe7e50b5731b2e4e066e8e167cd"
+    ),
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/inventory/InventoryLoadedWorkspaceUiTest.kt": (
+        "635cb58a15d42e52a5d226afe68b89f3510bf626357635159b64a6b33e7514bb"
+    ),
 }
 
 EXPECTED_CORRECTION_PATHS = {
@@ -29,6 +43,10 @@ EXPECTED_CORRECTION_PATHS = {
     ".github/workflows/ci.yml",
     ".github/workflows/release.yml",
     "android-native/app/build.gradle.kts",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/PosEmptyCatalogueUiTest.kt",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/inventory/InventoryLoadedWorkspaceUiTest.kt",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/PosScreen.kt",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/inventory/InventoryScreen.kt",
     "android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt",
     "android-native/audit-driver/plans/code26-gaming-finance-physical.json",
     "backend/app/__init__.py",
@@ -95,6 +113,12 @@ def _assert_exact_text(path: str, actual: str, expected: str) -> None:
     assert actual == expected, f"unexpected corrected Code 29 content: {path}"
 
 
+def _assert_sha256(path: str, content: bytes, expected: str) -> None:
+    assert hashlib.sha256(content).hexdigest() == expected, (
+        f"unexpected corrected Code 29 content: {path}"
+    )
+
+
 def _identity_expected(path: str) -> str:
     counts = {
         "android-native/app/build.gradle.kts": 1,
@@ -106,7 +130,7 @@ def _identity_expected(path: str) -> str:
         "docker-compose.prod.yml": 6,
     }
     return _replace_exact(
-        _original(path), (("3.1.19", "3.1.20", counts[path]),)
+        _original(path), (("3.1.19", "3.1.21", counts[path]),)
     )
 
 
@@ -145,10 +169,14 @@ def test_live_delta_is_exactly_the_reviewed_code29_correction() -> None:
         for path in _changed_paths()
         if path.startswith(("backend/app/", "frontend/src/", "android-native/app/src/main/"))
     }
-    assert protected_application_changes == {"backend/app/__init__.py"}
+    assert protected_application_changes == {
+        "backend/app/__init__.py",
+        "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/PosScreen.kt",
+        "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/inventory/InventoryScreen.kt",
+    }
 
 
-def test_live_coordinated_identity_is_version_name_3_1_20_with_code_29() -> None:
+def test_live_coordinated_identity_is_version_name_3_1_21_with_code_29() -> None:
     for path in (
         "android-native/app/build.gradle.kts",
         "backend/pyproject.toml",
@@ -162,10 +190,10 @@ def test_live_coordinated_identity_is_version_name_3_1_20_with_code_29() -> None
 
     build = _current("android-native/app/build.gradle.kts")
     assert build.count("versionCode = 29") == 1
-    assert build.count('versionName = "3.1.20"') == 1
+    assert build.count('versionName = "3.1.21"') == 1
 
     env_replacements = (
-        ("APP_VERSION=3.1.19", "APP_VERSION=3.1.20", 1),
+        ("APP_VERSION=3.1.19", "APP_VERSION=3.1.21", 1),
         (
             "# immutable history. Signed Code 28 (3.1.18) failed its production image-identity\n"
             "# gate before maintenance or cutover and was never staged or offered. Code 29\n"
@@ -173,8 +201,10 @@ def test_live_coordinated_identity_is_version_name_3_1_20_with_code_29() -> None
             "# gate in docs/CODE29_RELEASE_CANDIDATE.md passes for its exact source and artifacts.",
             "# immutable history. Original signed Code 29 (3.1.19) failed its production\n"
             "# installer lock gate before builds or maintenance and was never staged or offered.\n"
-            "# Corrected Code 29 (3.1.20) is the unsigned correction; it is not advertised unless\n"
-            "# every gate in docs/CODE29_RELEASE_CANDIDATE.md passes for its exact source and artifacts.",
+            "# Code 29 (3.1.20) was cancelled before build/signing after the POS notice defect.\n"
+            "# Current Code 29 (3.1.21) carries the reviewed incremental UI corrections and is\n"
+            "# not advertised unless every gate in docs/CODE29_RELEASE_CANDIDATE.md passes for\n"
+            "# its exact source and artifacts.",
             1,
         ),
     )
@@ -188,15 +218,15 @@ def test_live_coordinated_identity_is_version_name_3_1_20_with_code_29() -> None
 def test_live_identity_fixtures_are_exact_counted_transformations() -> None:
     replacements = {
         "android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt": (
-            ("3.1.19", "3.1.20", 2),
+            ("3.1.19", "3.1.21", 2),
         ),
-        "backend/tests/unit/test_client_compatibility.py": (("3.1.19", "3.1.20", 1),),
-        "backend/tests/unit/test_release_audit_fixes.py": (("3.1.19", "3.1.20", 1),),
-        "backend/tests/unit/test_release_contracts.py": (("3.1.19", "3.1.20", 1),),
-        "backend/tests/unit/test_remote_assistance_contract.py": (("3.1.19", "3.1.20", 4),),
-        "backend/tests/unit/test_runtime_release_parity.py": (("3.1.19", "3.1.20", 6),),
-        "tests/test_android_runtime_parity.py": (("3.1.19", "3.1.20", 2),),
-        "tests/test_code26_physical_audit_lane.py": (("3.1.19", "3.1.20", 2),),
+        "backend/tests/unit/test_client_compatibility.py": (("3.1.19", "3.1.21", 1),),
+        "backend/tests/unit/test_release_audit_fixes.py": (("3.1.19", "3.1.21", 1),),
+        "backend/tests/unit/test_release_contracts.py": (("3.1.19", "3.1.21", 1),),
+        "backend/tests/unit/test_remote_assistance_contract.py": (("3.1.19", "3.1.21", 4),),
+        "backend/tests/unit/test_runtime_release_parity.py": (("3.1.19", "3.1.21", 6),),
+        "tests/test_android_runtime_parity.py": (("3.1.19", "3.1.21", 2),),
+        "tests/test_code26_physical_audit_lane.py": (("3.1.19", "3.1.21", 2),),
     }
     for path, path_replacements in replacements.items():
         expected = _replace_exact(_original(path), path_replacements)
@@ -226,9 +256,33 @@ def test_original_release_name_tests_remain_and_patch_cases_are_exactly_added() 
         "            validate_built_metadata(\n"
         "                self.write_metadata(version_code=29, version_name=\"3.1.19\"),\n"
         "                version,\n"
+            "            )\n\n"
+    )
+    current_addition = (
+        "    def test_code29_ui_patch_accepts_v3_1_21(self) -> None:\n"
+        "        version = read_gradle_version(\n"
+        "            self.write_build_file(version_code=\"29\", version_name='\"3.1.21\"')\n"
+        "        )\n\n"
+        "        validate_tag(\"v3.1.21\", version)\n"
+        "        validate_built_metadata(\n"
+        "            self.write_metadata(version_code=29, version_name=\"3.1.21\"), version\n"
+        "        )\n\n"
+        "        self.assertEqual(AndroidVersion(code=29, name=\"3.1.21\"), version)\n\n"
+        "    def test_code29_ui_patch_rejects_prior_package_identity(self) -> None:\n"
+        "        version = read_gradle_version(\n"
+        "            self.write_build_file(version_code=\"29\", version_name='\"3.1.21\"')\n"
+        "        )\n\n"
+        "        with self.assertRaisesRegex(ReleaseVersionError, \"expected 'v3.1.21'\"):\n"
+        "            validate_tag(\"v3.1.20\", version)\n"
+        "        with self.assertRaisesRegex(ReleaseVersionError, \"does not match\"):\n"
+        "            validate_built_metadata(\n"
+        "                self.write_metadata(version_code=29, version_name=\"3.1.20\"),\n"
+        "                version,\n"
         "            )\n\n"
     )
-    expected = _replace_exact(_original(path), ((anchor, addition + anchor, 1),))
+    expected = _replace_exact(
+        _original(path), ((anchor, addition + current_addition + anchor, 1),)
+    )
     _assert_exact_text(path, _current(path), expected)
     assert "test_code29_image_identity_correction_accepts_v3_1_19" in expected
 
@@ -275,13 +329,13 @@ def test_physical_lane_keeps_413_steps_and_changes_identity_only() -> None:
     corrected_plan = json.loads(_current(plan_path))
     assert len(corrected_plan["steps"]) == 413
     assert corrected_plan["expected_sessions"] == 16
-    assert corrected_plan["name"] == "Code 29 3.1.20 full-route Gaming and Finance physical acceptance"
+    assert corrected_plan["name"] == "Code 29 3.1.21 full-route Gaming and Finance physical acceptance"
     corrected_plan["name"] = original_plan["name"]
     assert corrected_plan == original_plan
 
     replacements = {
-        "scripts/run_code26_physical_business_audit.sh": (("3.1.19", "3.1.20", 2),),
-        "scripts/analyze_code26_physical_evidence.py": (("3.1.19", "3.1.20", 4),),
+        "scripts/run_code26_physical_business_audit.sh": (("3.1.19", "3.1.21", 2),),
+        "scripts/analyze_code26_physical_evidence.py": (("3.1.19", "3.1.21", 4),),
     }
     for path, path_replacements in replacements.items():
         expected = _replace_exact(_original(path), path_replacements)
@@ -291,8 +345,25 @@ def test_physical_lane_keeps_413_steps_and_changes_identity_only() -> None:
 def test_freeze_extensions_and_historical_guards_are_exact() -> None:
     freeze_script_replacements = (
         (
+            "import argparse\nimport json\n",
+            "import argparse\nimport hashlib\nimport json\n",
+            1,
+        ),
+        (
+            'CODE25_BASE = "715ba8c2671c7fbceb362ab59052a8a128b67668"\n\n',
+            'CODE25_BASE = "715ba8c2671c7fbceb362ab59052a8a128b67668"\n'
+            'POS_NOTICE_TEST_PATH = (\n'
+            '    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/"\n'
+            '    "PosEmptyCatalogueUiTest.kt"\n'
+            ')\n'
+            'POS_NOTICE_TEST_SHA256 = (\n'
+            '    "b56a28fda657fd04490b5dd055e24c524747dd3ba5b1b2e5f34af79f7e907ef5"\n'
+            ')\n\n',
+            1,
+        ),
+        (
             '"""Fail closed when Code 26/27/28/29 weakens the proven Code 25 regression surface.',
-            '"""Fail closed when Code 26 through corrected Code 29 weakens the proven Code 25 regression surface.',
+            '"""Fail closed when Code 26 through current Code 29 weakens the proven Code 25 regression surface.',
             1,
         ),
         (
@@ -300,13 +371,47 @@ def test_freeze_extensions_and_historical_guards_are_exact() -> None:
             "the reviewed image-format and Android quantity corrections. None may delete,",
             "expiry repair. Code 28 hardens the release scanner path. Original Code 29\n"
             "carries the reviewed image-format and Android quantity corrections; corrected\n"
-            "Code 29 adds only coordinated identity and the reviewed installer lock path. None may delete,",
+            "Code 29 adds coordinated identity and the reviewed installer lock path. Current\n"
+            "Code 29 adds only the reviewed POS-notice and inventory-layout corrections. None may delete,",
             1,
         ),
         (
             '    for current, baseline in (\n        ("3.1.19", "3.1.14"),',
-            '    for current, baseline in (\n        ("3.1.20", "3.1.14"),\n'
+            '    for current, baseline in (\n        ("3.1.21", "3.1.14"),\n'
+            '        ("3.1.20", "3.1.14"),\n'
             '        ("3.1.19", "3.1.14"),',
+            1,
+        ),
+        (
+            "\n\ndef _missing_ordered_lines(baseline: str, candidate: str) -> list[str]:\n",
+            "\n\ndef _normalise_pos_notice_dynamic_state_host(path: str, text: str) -> str:\n"
+            "    if path != POS_NOTICE_TEST_PATH:\n"
+            "        return text\n"
+            "    if hashlib.sha256(text.encode(\"utf-8\")).hexdigest() != POS_NOTICE_TEST_SHA256:\n"
+            "        return text\n"
+            "    replacements = (\n"
+            "        (\"                        state = state.value,\", \"                        state = state,\"),\n"
+            "        (\n"
+            "            \"                        onDismissNotice = onDismissNotice,\",\n"
+            "            \"                        onDismissNotice = {},\",\n"
+            "        ),\n"
+            "    )\n"
+            "    if any(text.count(current) != 1 for current, _ in replacements):\n"
+            "        return text\n"
+            "    for current, baseline in replacements:\n"
+            "        text = text.replace(current, baseline)\n"
+            "    return text\n"
+            "\n\ndef _missing_ordered_lines(baseline: str, candidate: str) -> list[str]:\n",
+            1,
+        ),
+        (
+            "        candidate_normalised = _normalise_release_identity(path, candidate_text)\n"
+            "        candidate_normalised = _normalise_audit_reader_locator(path, candidate_normalised)\n",
+            "        candidate_normalised = _normalise_release_identity(path, candidate_text)\n"
+            "        candidate_normalised = _normalise_pos_notice_dynamic_state_host(\n"
+            "            path, candidate_normalised\n"
+            "        )\n"
+            "        candidate_normalised = _normalise_audit_reader_locator(path, candidate_normalised)\n",
             1,
         ),
     )
@@ -321,8 +426,69 @@ def test_freeze_extensions_and_historical_guards_are_exact() -> None:
     )
 
     freeze_test_path = "tests/test_code26_regression_freeze.py"
+    freeze_test_anchor = "def test_pipeline_normalisation_requires_the_exact_counted_transform() -> None:\n"
+    freeze_test_addition = (
+        "def test_current_code29_patch_identity_normalises_directly_to_inherited_code25_baseline() -> None:\n"
+        "    path = \"android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt\"\n"
+        "    current = 'assertEquals(29, BuildConfig.VERSION_CODE)\\n\"3.1.21\"\\ncode 29 artifact\\n'\n"
+        "    assert _normalise_release_identity(path, current) == (\n"
+        "        'assertEquals(25, BuildConfig.VERSION_CODE)\\n\"3.1.14\"\\ncode 25 artifact\\n'\n"
+        "    )\n\n\n"
+    )
+    normalizer_test_addition = (
+        "def test_pos_notice_dynamic_state_host_normalises_only_the_approved_bytes() -> None:\n"
+        "    path = (\n"
+        "        \"android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/\"\n"
+        "        \"PosEmptyCatalogueUiTest.kt\"\n"
+        "    )\n"
+        "    current = (ROOT / path).read_text(encoding=\"utf-8\")\n"
+        "    baseline = subprocess.run(\n"
+        "        [\"git\", \"show\", f\"{CODE25_BASE}:{path}\"],\n"
+        "        cwd=ROOT,\n"
+        "        check=True,\n"
+        "        capture_output=True,\n"
+        "        text=True,\n"
+        "    ).stdout\n"
+        "    normalised = _normalise_pos_notice_dynamic_state_host(path, current)\n\n"
+        "    assert normalised != current\n"
+        "    assert not _missing_ordered_lines(baseline, normalised)\n"
+        "    assert _normalise_pos_notice_dynamic_state_host(\"tests/other.kt\", current) == current\n\n"
+        "    for mutated in (\n"
+        "        current + \"\\n\",\n"
+        "        current.replace(\"                        state = state.value,\", \"\", 1),\n"
+        "        current.replace(\n"
+        "            \"                        state = state.value,\",\n"
+        "            \"                        state = state.value,\\n                        state = state.value,\",\n"
+        "            1,\n"
+        "        ),\n"
+        "    ):\n"
+        "        assert _normalise_pos_notice_dynamic_state_host(path, mutated) == mutated\n\n"
+        "    original_assertion = (\n"
+        "        '        compose.onNodeWithText(\"CONTINUE TO PAYMENT\").assertDoesNotExist()'\n"
+        "    )\n"
+        "    assertion_mutation = current.replace(original_assertion, \"\", 1)\n"
+        "    assert _normalise_pos_notice_dynamic_state_host(path, assertion_mutation) == assertion_mutation\n"
+        "    assert _missing_ordered_lines(baseline, assertion_mutation) == [original_assertion]\n"
+        "    assert _normalise_pos_notice_dynamic_state_host(path, baseline) == baseline\n\n\n"
+    )
     expected_test = _replace_exact(
-        _original(freeze_test_path), (("3.1.19", "3.1.20", 1),)
+        _original(freeze_test_path),
+        (
+            ("from pathlib import Path\n", "from pathlib import Path\nimport subprocess\n", 1),
+            (
+                "    _normalise_release_identity,\n    _normalise_audit_reader_locator,\n",
+                "    _normalise_release_identity,\n"
+                "    _normalise_pos_notice_dynamic_state_host,\n"
+                "    _normalise_audit_reader_locator,\n",
+                1,
+            ),
+            ("3.1.19", "3.1.20", 1),
+            (
+                freeze_test_anchor,
+                freeze_test_addition + normalizer_test_addition + freeze_test_anchor,
+                1,
+            ),
+        ),
     )
     _assert_exact_text(freeze_test_path, _current(freeze_test_path), expected_test)
 
@@ -334,27 +500,66 @@ def test_freeze_extensions_and_historical_guards_are_exact() -> None:
     ).hexdigest() == HISTORICAL_CADDY_GUARD_SHA256
 
 
+def test_reviewed_pos_and_inventory_ui_corrections_are_exact() -> None:
+    pos_path = "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/PosScreen.kt"
+    expected_pos = _replace_exact(
+        _original(pos_path),
+        (
+            (
+                "    state.heldOrderReview\n"
+                "        ?.takeIf { access.canCreateAndCollect && voidTarget == null }\n"
+                "        ?.let { review ->\n"
+                "            key(review.orderId, review.checkoutVersion) {",
+                "    state.heldOrderReview\n"
+                "        ?.takeIf { access.canCreateAndCollect && voidTarget == null }\n"
+                "        ?.let { review ->\n"
+                "            key(review.orderId) {",
+                1,
+            ),
+        ),
+    )
+    _assert_exact_text(pos_path, _current(pos_path), expected_pos)
+
+    for path, expected_sha256 in REVIEWED_UI_SHA256.items():
+        _assert_sha256(path, (ROOT / path).read_bytes(), expected_sha256)
+
+
+@pytest.mark.parametrize("path", REVIEWED_UI_SHA256)
+def test_reviewed_ui_hash_guards_reject_working_tree_mutations(path: str) -> None:
+    with pytest.raises(AssertionError, match="unexpected corrected Code 29 content"):
+        _assert_sha256(path, (ROOT / path).read_bytes() + b"\n", REVIEWED_UI_SHA256[path])
+
+
 def test_operator_records_are_frozen_and_trial_precedes_production() -> None:
     for path, expected_sha256 in OPERATOR_RECORD_SHA256.items():
         assert hashlib.sha256((ROOT / path).read_bytes()).hexdigest() == expected_sha256
     combined = "\n".join(_current(path) for path in OPERATOR_RECORD_SHA256)
     for contract in (
         "Original signed Code 29",
-        "Corrected Code 29",
+        "Current Code 29",
         "v3.1.20",
+        "cancelled before build or signing",
+        "v3.1.21",
         "versionCode=29",
         "migration head `0071`",
-        "user-and-agent trial",
-        "accepted available-device route",
+        "final-source synthetic trial",
+        "authenticated emulator and Web route",
         "prior Lenovo physical",
-        "Only after the user accepts a successful trial",
         "ANDROID_MIN_SUPPORTED_VERSION_CODE=8",
         "channel-wide",
         "user consent",
+        "87 checks",
+        "cleanup was verified",
+        "signed-byte continuity",
+        "emulator `5574`",
+        "no signed or installed",
+        "existing authority",
+        "not executed against `3.1.21`",
+        "generic permission loop",
     ):
         assert contract in combined
-    assert "broader signed-Code29 scanner-source\nreview remains incomplete" in combined
-    assert "does not claim that corrected Code 29 is release-ready" in combined
+    assert "broader signed-Code29\nscanner-source review remains incomplete" in combined
+    assert "does not claim that `3.1.21` final CI" in combined
 
 
 @pytest.mark.parametrize(
@@ -362,7 +567,7 @@ def test_operator_records_are_frozen_and_trial_precedes_production() -> None:
     [
         ("infra/scripts/install-on-vm.sh", "%f:%d:%i", "%F:%d:%i"),
         (".github/workflows/ci.yml", "sudo -n --", "sudo --"),
-        ("backend/app/__init__.py", '"3.1.20"', '"3.1.20-mutated"'),
+        ("backend/app/__init__.py", '"3.1.21"', '"3.1.21-mutated"'),
     ],
 )
 def test_live_exact_guards_reject_working_tree_mutations(

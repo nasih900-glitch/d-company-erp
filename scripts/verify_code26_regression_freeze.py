@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Fail closed when Code 26 through corrected Code 29 weakens the proven Code 25 regression surface.
+"""Fail closed when Code 26 through current Code 29 weakens the proven Code 25 regression surface.
 
 This is deliberately release-specific.  Code 25 is the behavioural baseline;
 Code 26 may add tests and narrowly change the allow-listed failure paths. Code
 27 additionally carries the reviewed deployment correction and Web session
 expiry repair. Code 28 hardens the release scanner path. Original Code 29
 carries the reviewed image-format and Android quantity corrections; corrected
-Code 29 adds only coordinated identity and the reviewed installer lock path. None may delete,
+Code 29 adds coordinated identity and the reviewed installer lock path. Current
+Code 29 adds only the reviewed POS-notice and inventory-layout corrections. None may delete,
 disable, reorder, or rewrite an existing
 test outside the exact fixture-only normalization below.
 The sole reviewed audit-reader locator migration below preserves every
@@ -16,6 +17,7 @@ credential-cleanup assertion while following the corrected UTF-8 reader.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import subprocess
@@ -24,6 +26,13 @@ from pathlib import Path
 
 
 CODE25_BASE = "715ba8c2671c7fbceb362ab59052a8a128b67668"
+POS_NOTICE_TEST_PATH = (
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/"
+    "PosEmptyCatalogueUiTest.kt"
+)
+POS_NOTICE_TEST_SHA256 = (
+    "b56a28fda657fd04490b5dd055e24c524747dd3ba5b1b2e5f34af79f7e907ef5"
+)
 
 RELEASE_IDENTITY_TESTS = {
     "android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt",
@@ -131,6 +140,7 @@ def _normalise_release_identity(path: str, text: str) -> str:
         return text
     normalised = text
     for current, baseline in (
+        ("3.1.21", "3.1.14"),
         ("3.1.20", "3.1.14"),
         ("3.1.19", "3.1.14"),
         ("3.1.18", "3.1.14"),
@@ -164,6 +174,25 @@ def _normalise_release_identity(path: str, text: str) -> str:
         normalised,
     )
     return normalised
+
+
+def _normalise_pos_notice_dynamic_state_host(path: str, text: str) -> str:
+    if path != POS_NOTICE_TEST_PATH:
+        return text
+    if hashlib.sha256(text.encode("utf-8")).hexdigest() != POS_NOTICE_TEST_SHA256:
+        return text
+    replacements = (
+        ("                        state = state.value,", "                        state = state,"),
+        (
+            "                        onDismissNotice = onDismissNotice,",
+            "                        onDismissNotice = {},",
+        ),
+    )
+    if any(text.count(current) != 1 for current, _ in replacements):
+        return text
+    for current, baseline in replacements:
+        text = text.replace(current, baseline)
+    return text
 
 
 def _missing_ordered_lines(baseline: str, candidate: str) -> list[str]:
@@ -274,6 +303,9 @@ def verify_repository(root: Path, baseline: str = CODE25_BASE) -> RegressionFree
         candidate_text = candidate_path.read_text(encoding="utf-8")
         baseline_normalised = _normalise_release_identity(path, baseline_text)
         candidate_normalised = _normalise_release_identity(path, candidate_text)
+        candidate_normalised = _normalise_pos_notice_dynamic_state_host(
+            path, candidate_normalised
+        )
         candidate_normalised = _normalise_audit_reader_locator(path, candidate_normalised)
         candidate_normalised = _normalise_realtime_api_mock(path, candidate_normalised)
         candidate_normalised = _normalise_web_auth_freeze_assertion(

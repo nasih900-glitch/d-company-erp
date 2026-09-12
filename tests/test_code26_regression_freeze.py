@@ -1,4 +1,5 @@
 from pathlib import Path
+import subprocess
 
 import pytest
 
@@ -9,6 +10,7 @@ from scripts.verify_code26_regression_freeze import (
     _disable_counts,
     _missing_ordered_lines,
     _normalise_release_identity,
+    _normalise_pos_notice_dynamic_state_host,
     _normalise_audit_reader_locator,
     _normalise_android_release_pipeline,
     _normalise_realtime_api_mock,
@@ -64,6 +66,53 @@ def test_code29_identity_normalises_directly_to_inherited_code25_baseline() -> N
     assert _normalise_release_identity(path, current) == (
         'assertEquals(25, BuildConfig.VERSION_CODE)\n"3.1.14"\ncode 25 artifact\n'
     )
+
+
+def test_current_code29_patch_identity_normalises_directly_to_inherited_code25_baseline() -> None:
+    path = "android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt"
+    current = 'assertEquals(29, BuildConfig.VERSION_CODE)\n"3.1.21"\ncode 29 artifact\n'
+    assert _normalise_release_identity(path, current) == (
+        'assertEquals(25, BuildConfig.VERSION_CODE)\n"3.1.14"\ncode 25 artifact\n'
+    )
+
+
+def test_pos_notice_dynamic_state_host_normalises_only_the_approved_bytes() -> None:
+    path = (
+        "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/"
+        "PosEmptyCatalogueUiTest.kt"
+    )
+    current = (ROOT / path).read_text(encoding="utf-8")
+    baseline = subprocess.run(
+        ["git", "show", f"{CODE25_BASE}:{path}"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    normalised = _normalise_pos_notice_dynamic_state_host(path, current)
+
+    assert normalised != current
+    assert not _missing_ordered_lines(baseline, normalised)
+    assert _normalise_pos_notice_dynamic_state_host("tests/other.kt", current) == current
+
+    for mutated in (
+        current + "\n",
+        current.replace("                        state = state.value,", "", 1),
+        current.replace(
+            "                        state = state.value,",
+            "                        state = state.value,\n                        state = state.value,",
+            1,
+        ),
+    ):
+        assert _normalise_pos_notice_dynamic_state_host(path, mutated) == mutated
+
+    original_assertion = (
+        '        compose.onNodeWithText("CONTINUE TO PAYMENT").assertDoesNotExist()'
+    )
+    assertion_mutation = current.replace(original_assertion, "", 1)
+    assert _normalise_pos_notice_dynamic_state_host(path, assertion_mutation) == assertion_mutation
+    assert _missing_ordered_lines(baseline, assertion_mutation) == [original_assertion]
+    assert _normalise_pos_notice_dynamic_state_host(path, baseline) == baseline
 
 
 def test_pipeline_normalisation_requires_the_exact_counted_transform() -> None:

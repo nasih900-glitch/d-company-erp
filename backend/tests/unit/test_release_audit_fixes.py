@@ -54,7 +54,7 @@ def test_prod_accepts_strong_jwt_secret(monkeypatch):
     from app.core import config
     from app.core.release_identity import ReleaseIdentity
 
-    identity = ReleaseIdentity(version_name="3.1.20", source_git_sha="ab" * 20)
+    identity = ReleaseIdentity(version_name="3.1.21", source_git_sha="ab" * 20)
     monkeypatch.setattr(config, "read_backend_build_identity", lambda: identity)
     s = _settings(
         env="prod",
