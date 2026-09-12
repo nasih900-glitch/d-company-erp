@@ -123,7 +123,9 @@ private val UNITS = listOf(
 
 internal const val INVENTORY_WORKSPACE_TAG = "inventory-loaded-workspace"
 internal const val INVENTORY_PANE_TAG = "inventory-active-pane"
+internal const val INVENTORY_DETAIL_BODY_TAG = "inventory-selected-detail-body"
 internal fun inventoryIngredientRowTag(sku: String) = "inventory-ingredient-row-$sku"
+internal fun inventoryBatchRowTag(id: String) = "inventory-batch-row-$id"
 internal fun inventoryPendingGrnRetryTag(id: String) = "inventory-pending-grn-retry-$id"
 internal fun inventoryPendingAdjustmentRetryTag(id: String) =
     "inventory-pending-adjustment-retry-$id"
@@ -1328,94 +1330,111 @@ private fun DetailPanel(
             return@SectionCard
         }
 
-        InfoRow(
-            label = "On hand",
-            value = "${ingredient.currentQty.asQty()} ${ingredient.baseUnit}",
-            valueColor = if (ingredient.isLow) Brand.Danger else Brand.Foreground,
-        )
-        InfoRow(
-            label = "Weighted cost",
-            value = "${ingredient.avgCostMinor.asRupees()}/${ingredient.baseUnit}",
-        )
-        InfoRow(
-            label = "Exact FIFO value",
-            value = ingredient.stockValueMinor?.asRupees() ?: "Unavailable — refresh Inventory",
-            valueColor = if (ingredient.stockValueMinor == null) Brand.Warning else Brand.Foreground,
-        )
-        if (ingredient.isUnsyncedDraft) {
-            OperationalBanner(
-                title = "Ingredient pending sync",
-                detail = "Stock actions unlock after the ingredient is confirmed by the server.",
-                tone = UiTone.Warning,
-                icon = Icons.Default.SyncProblem,
-            )
-        } else {
-            ErpButton(
-                text = "Adjust stock",
-                onClick = { actions.openDialog(InventoryDialog.Adjust(ingredient)) },
-                enabled = canWrite,
-                modifier = Modifier.fillMaxWidth(),
-                intent = ActionIntent.Secondary,
-                leadingIcon = Icons.Default.Tune,
-            )
-        }
-
-        Text(
-            "Batches (oldest first)",
-            style = MaterialTheme.typography.labelLarge,
-            color = Brand.Foreground,
-        )
-        if (state.batchesLoading) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                CircularProgressIndicator(
-                    color = Brand.Gold,
-                    strokeWidth = 2.dp,
-                    modifier = Modifier.width(20.dp).height(20.dp),
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().testTag(INVENTORY_DETAIL_BODY_TAG),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            item {
+                InfoRow(
+                    label = "On hand",
+                    value = "${ingredient.currentQty.asQty()} ${ingredient.baseUnit}",
+                    valueColor = if (ingredient.isLow) Brand.Danger else Brand.Foreground,
                 )
-                Text("Refreshing batches…", color = Brand.ForegroundMuted)
             }
-        }
-        state.batchesError?.let { message ->
-            Column(
-                Modifier.fillMaxWidth().clip(Radius.shapeSm)
-                    .background(Brand.SurfaceRaised)
-                    .border(1.dp, Brand.Danger, Radius.shapeSm)
-                    .padding(10.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                Text(message, color = Brand.Danger, style = MaterialTheme.typography.bodyMedium)
-                if (state.batches.isNotEmpty()) {
-                    Text(
-                        "Saved batch quantities are shown below and may be out of date.",
-                        color = Brand.ForegroundMuted,
-                        style = MaterialTheme.typography.labelSmall,
+            item {
+                InfoRow(
+                    label = "Weighted cost",
+                    value = "${ingredient.avgCostMinor.asRupees()}/${ingredient.baseUnit}",
+                )
+            }
+            item {
+                InfoRow(
+                    label = "Exact FIFO value",
+                    value = ingredient.stockValueMinor?.asRupees() ?: "Unavailable — refresh Inventory",
+                    valueColor = if (ingredient.stockValueMinor == null) Brand.Warning else Brand.Foreground,
+                )
+            }
+            item {
+                if (ingredient.isUnsyncedDraft) {
+                    OperationalBanner(
+                        title = "Ingredient pending sync",
+                        detail = "Stock actions unlock after the ingredient is confirmed by the server.",
+                        tone = UiTone.Warning,
+                        icon = Icons.Default.SyncProblem,
+                    )
+                } else {
+                    ErpButton(
+                        text = "Adjust stock",
+                        onClick = { actions.openDialog(InventoryDialog.Adjust(ingredient)) },
+                        enabled = canWrite,
+                        modifier = Modifier.fillMaxWidth(),
+                        intent = ActionIntent.Secondary,
+                        leadingIcon = Icons.Default.Tune,
                     )
                 }
-                TextButton(onClick = actions.retryBatches) { Text("Retry batch refresh") }
             }
-        }
-        when {
-            ingredient.isUnsyncedDraft -> Text(
-                "No batches yet — this ingredient hasn't synced.",
-                color = Brand.ForegroundMuted,
-                style = MaterialTheme.typography.bodyMedium,
-            )
-            state.batches.isEmpty() && state.batchesLoading -> Unit
-            state.batches.isEmpty() && state.batchesError != null -> Unit
-            state.batches.isEmpty() -> Text(
-                "No open batches. Record a stock receipt (GRN) — a positive adjustment " +
-                    "needs an existing batch to attach to.",
-                color = Brand.ForegroundMuted,
-                style = MaterialTheme.typography.bodyMedium,
-            )
-            else -> LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                items(state.batches, key = { it.id }) { batch ->
+            item {
+                Text(
+                    "Batches (oldest first)",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = Brand.Foreground,
+                )
+            }
+            if (state.batchesLoading) {
+                item {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        CircularProgressIndicator(
+                            color = Brand.Gold,
+                            strokeWidth = 2.dp,
+                            modifier = Modifier.width(20.dp).height(20.dp),
+                        )
+                        Text("Refreshing batches…", color = Brand.ForegroundMuted)
+                    }
+                }
+            }
+            state.batchesError?.let { message ->
+                item {
+                    Column(
+                        Modifier.fillMaxWidth().clip(Radius.shapeSm)
+                            .background(Brand.SurfaceRaised)
+                            .border(1.dp, Brand.Danger, Radius.shapeSm)
+                            .padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Text(message, color = Brand.Danger, style = MaterialTheme.typography.bodyMedium)
+                        if (state.batches.isNotEmpty()) {
+                            Text(
+                                "Saved batch quantities are shown below and may be out of date.",
+                                color = Brand.ForegroundMuted,
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                        }
+                        TextButton(onClick = actions.retryBatches) { Text("Retry batch refresh") }
+                    }
+                }
+            }
+            when {
+                ingredient.isUnsyncedDraft -> item {
+                    Text(
+                        "No batches yet — this ingredient hasn't synced.",
+                        color = Brand.ForegroundMuted,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+                state.batches.isEmpty() && state.batchesLoading -> Unit
+                state.batches.isEmpty() && state.batchesError != null -> Unit
+                state.batches.isEmpty() -> item {
+                    Text(
+                        "No open batches. Record a stock receipt (GRN) — a positive adjustment " +
+                            "needs an existing batch to attach to.",
+                        color = Brand.ForegroundMuted,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+                else -> items(state.batches, key = { it.id }) { batch ->
                     BatchRow(
                         batch,
                         ingredient.baseUnit,
@@ -1431,7 +1450,7 @@ private fun DetailPanel(
 private fun BatchRow(batch: BatchCacheEntity, unit: String, branchName: String?) {
     Column(
         Modifier.fillMaxWidth().clip(Radius.shapeSm)
-            .background(Brand.SurfaceRaised).padding(10.dp),
+            .background(Brand.SurfaceRaised).testTag(inventoryBatchRowTag(batch.id)).padding(10.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {

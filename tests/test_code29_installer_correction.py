@@ -31,10 +31,10 @@ REVIEWED_UI_SHA256 = {
         "b56a28fda657fd04490b5dd055e24c524747dd3ba5b1b2e5f34af79f7e907ef5"
     ),
     "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/inventory/InventoryScreen.kt": (
-        "8010a5d76b911d59887d10224130d374632f3fe7e50b5731b2e4e066e8e167cd"
+        "ef0b0be225b11243a918cf503a4ef0df59fd5504150cdbf65f64bad67c03c79e"
     ),
     "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/inventory/InventoryLoadedWorkspaceUiTest.kt": (
-        "635cb58a15d42e52a5d226afe68b89f3510bf626357635159b64a6b33e7514bb"
+        "69d099d8bfa6df2d6db7a23d4f9ac70dd6a30d8729bd3ec3c5a1e586a5ab91af"
     ),
 }
 

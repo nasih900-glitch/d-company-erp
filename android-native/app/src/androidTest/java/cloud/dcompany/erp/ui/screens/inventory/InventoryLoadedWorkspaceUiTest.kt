@@ -29,6 +29,7 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.unit.dp
 import cloud.dcompany.erp.core.auth.InventoryAccess
+import cloud.dcompany.erp.core.db.BatchCacheEntity
 import cloud.dcompany.erp.ui.WorkspaceFeatureProfiles
 import cloud.dcompany.erp.ui.presentationPolicy
 import cloud.dcompany.erp.ui.theme.DCompanyTheme
@@ -120,6 +121,85 @@ class InventoryLoadedWorkspaceUiTest {
     }
 
     @Test
+    fun selectedIngredientDetailKeepsBatchErrorRetryAndCachedBatchReachable() {
+        val target = healthyIngredient().copy(
+            id = "ingredient-audit-1",
+            sku = "INV-AUDIT-20260912",
+            name = "Inventory Audit Ingredient Edited",
+            currentQty = 12.0,
+            reorderThreshold = 2.0,
+            avgCostMinor = 100L,
+            valuationMinor = 1_200L,
+            projectionBranchId = "branch-1",
+        )
+        val state = mutableStateOf(
+            errorState(target).copy(
+                selectedSku = target.sku,
+                batchesError = BATCH_ERROR,
+                batches = listOf(
+                    BatchCacheEntity(
+                        id = "batch-cached-1",
+                        ingredientId = target.id,
+                        branchId = "branch-1",
+                        receivedAt = "2026-09-12T20:30:00Z",
+                        expiresAt = null,
+                        qtyOnHand = 7.25,
+                        costPerUnitMinor = 123L,
+                        lotCode = "DETAIL-CACHE",
+                    ),
+                ),
+            ),
+        )
+        val calls = Calls()
+        render(state.value, actions(state, calls), widthDp = 1280, heightDp = 800) {
+            state.value
+        }
+
+        val workspace = compose.onNodeWithTag(INVENTORY_WORKSPACE_TAG)
+        val root = compose.onNodeWithTag(ROOT_TAG)
+        workspace.performScrollToNode(hasText("Search ingredients or SKU"))
+        compose.onNodeWithText("Search ingredients or SKU").assertIsDisplayed()
+
+        compose.onNodeWithText(BATCH_ERROR)
+            .performScrollTo()
+            .assertCompleteNodeInside(root, "Complete batch refresh warning")
+
+        compose.onNode(actionButton("Retry batch refresh"))
+            .performScrollTo()
+            .assertCompleteActionInside(root, "Retry batch refresh")
+            .assertIsEnabled()
+            .performClick()
+
+        val detail = compose.onNodeWithTag(INVENTORY_DETAIL_BODY_TAG).assert(hasScrollAction())
+        detail.performScrollToNode(actionButton("Adjust stock"))
+        compose.onNode(actionButton("Adjust stock"))
+            .assertCompleteActionInside(root, "Adjust stock")
+            .assertIsEnabled()
+            .performClick()
+
+        val batchRow = SemanticsMatcher.expectValue(
+            SemanticsProperties.TestTag,
+            inventoryBatchRowTag("batch-cached-1"),
+        )
+        detail.performScrollToNode(batchRow)
+        compose.onNode(batchRow).assertCompleteNodeInside(root, "Cached FIFO batch row")
+        compose.onNode(hasText("7.25 unit") and hasAnyAncestor(batchRow)).assertIsDisplayed()
+        compose.onNode(hasText("₹1.23/unit") and hasAnyAncestor(batchRow)).assertIsDisplayed()
+        compose.onNode(
+            hasText("Physical Audit Shop · Received 2026-09-12 · lot DETAIL-CACHE") and
+                hasAnyAncestor(batchRow),
+        ).assertIsDisplayed()
+
+        compose.runOnIdle {
+            assertEquals(1, calls.batchRetries)
+            assertEquals(listOf(InventoryDialog.Adjust(target)), calls.openedDialogs)
+            assertTrue(calls.selections.isEmpty())
+            assertEquals(0, calls.refreshes)
+            assertTrue(calls.grnRetries.isEmpty() && calls.adjustmentRetries.isEmpty())
+        }
+    }
+
+    @Test
     fun healthyWideWorkspaceUsesRemainingHeightAndKeepsToolbarAndStockReachable() {
         verifyHealthyWorkspace(widthDp = 1280, heightDp = 800)
     }
@@ -197,6 +277,7 @@ class InventoryLoadedWorkspaceUiTest {
         retryGrn = calls.grnRetries::add,
         retryAdjustment = calls.adjustmentRetries::add,
         openDialog = calls.openedDialogs::add,
+        retryBatches = { calls.batchRetries++ },
         selectIngredient = { ingredient ->
             calls.selections += ingredient?.sku
             state.value = state.value.copy(selectedSku = ingredient?.sku)
@@ -268,6 +349,43 @@ class InventoryLoadedWorkspaceUiTest {
                     touch.top >= visibleRoot.top - tolerancePx &&
                     touch.right <= visibleRoot.right + tolerancePx &&
                     touch.bottom <= visibleRoot.bottom + tolerancePx,
+            )
+        }
+        return this
+    }
+
+    private fun SemanticsNodeInteraction.assertCompleteNodeInside(
+        rootNode: SemanticsNodeInteraction,
+        label: String,
+    ): SemanticsNodeInteraction {
+        assertIsDisplayed()
+        val node = fetchSemanticsNode()
+        val root = rootNode.fetchSemanticsNode()
+        check(node.root === root.root) { "$label and inventory root must share one window" }
+        val viewRoot = node.root as ViewRootForTest
+        compose.runOnIdle {
+            val screenOrigin = IntArray(2).also(viewRoot.view::getLocationOnScreen)
+            val windowOrigin = IntArray(2).also(viewRoot.view::getLocationInWindow)
+            val offsetX = (screenOrigin[0] - windowOrigin[0]).toFloat()
+            val offsetY = (screenOrigin[1] - windowOrigin[1]).toFloat()
+            val visual = node.visualBoundsOnScreen()
+            val clipped = node.boundsInWindow.translate(offsetX, offsetY)
+            val visibleRoot = root.boundsInWindow.translate(offsetX, offsetY)
+            val tolerancePx = 1f
+            assertTrue(
+                "$label must not be clipped: visual=$visual clipped=$clipped",
+                abs(visual.left - clipped.left) <= tolerancePx &&
+                    abs(visual.top - clipped.top) <= tolerancePx &&
+                    abs(visual.right - clipped.right) <= tolerancePx &&
+                    abs(visual.bottom - clipped.bottom) <= tolerancePx,
+            )
+            assertTrue(
+                "$label must be wholly inside the visible inventory root: " +
+                    "visual=$visual root=$visibleRoot",
+                visual.left >= visibleRoot.left - tolerancePx &&
+                    visual.top >= visibleRoot.top - tolerancePx &&
+                    visual.right <= visibleRoot.right + tolerancePx &&
+                    visual.bottom <= visibleRoot.bottom + tolerancePx,
             )
         }
         return this
@@ -352,6 +470,7 @@ class InventoryLoadedWorkspaceUiTest {
 
     private data class Calls(
         var refreshes: Int = 0,
+        var batchRetries: Int = 0,
         val grnRetries: MutableList<String> = mutableListOf(),
         val adjustmentRetries: MutableList<String> = mutableListOf(),
         val selections: MutableList<String?> = mutableListOf(),
@@ -360,5 +479,9 @@ class InventoryLoadedWorkspaceUiTest {
 
     private companion object {
         const val ROOT_TAG = "inventory-workspace-test-root"
+        const val BATCH_ERROR =
+            "Could not refresh inventory data: Could not reach the server. Check the connection " +
+                "and try again. Saved data is still available. Try again; if it continues, ask " +
+                "a manager for help."
     }
 }
