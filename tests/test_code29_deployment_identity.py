@@ -22,7 +22,7 @@ PROTECTED_APPLICATION_PREFIXES = (
 )
 PRIMITIVES_PATH = "android-native/app/src/main/java/cloud/dcompany/erp/ui/components/Primitives.kt"
 PRIMITIVES_SIGNED28_SHA256 = "3a20353339fa43b218edc96f1bd0f4d9e11cc07d7739e2dd4a274abdf92078f6"
-PRIMITIVES_FORM_DIALOG_SHA256 = "2d42c0a400487c19ec3ccc3712f1eb88ce73e233440db43bca3aa137645e0bc5"
+PRIMITIVES_FORM_DIALOG_SHA256 = "c3012fcc02b63071c30eda36a55cc3feca56b751475a7b8ddf1b149c86e3fb3a"
 PRIMITIVES_REVIEWED_IMPORT_REPLACEMENTS = (
     (
         "import androidx.compose.foundation.clickable\n",
@@ -78,7 +78,8 @@ PRIMITIVES_REVIEWED_IMPORT_REPLACEMENTS = (
         "import androidx.compose.runtime.Composable\n",
         "import androidx.compose.runtime.Composable\n"
         "import androidx.compose.runtime.CompositionLocalProvider\n"
-        "import androidx.compose.runtime.DisposableEffect\n",
+        "import androidx.compose.runtime.DisposableEffect\n"
+        "import androidx.compose.runtime.LaunchedEffect\n",
         1,
     ),
     (
@@ -137,7 +138,7 @@ QUANTITY_HASHES = {
 }
 NEW_CODE29_TEST_HASHES = {
     "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/inventory/InventoryAdjustmentImeUiTest.kt":
-        "3278d7d89e906be0c9001ef78c4d4328330334f5fb990c4b7ef1576185fe68d1",
+        "dc8a52ea993cc9bf461cb9d3658c76f903c92cc6705f61865d1f497a0716b456",
     "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/inventory/RecipeDetailUiTest.kt":
         "d1891e350ec458951e920d786752ca7f1e6e89f5b1fd23a98af3750392a4e200",
 }
@@ -219,7 +220,7 @@ OPERATOR_RECORD_HASHES = {
     ".env.production.example":
         "461bc7178d90bf06ce222f6c2a42f5cba6778139574629a9941dbce66719a4b0",
     "docs/CODE29_RELEASE_CANDIDATE.md":
-        "8b7f7a8fae13f90f3f0059af9c07ef8779ba637de46f5eeeecb14645dfb25f43",
+        "3592225431c1d5f9c9be90b46a8caa056c0e7032ba823273df2a72b60438f6ed",
     "docs/DISTRIBUTION.md":
         "f0d7b770bab05bad668267cc4905a97546f5cb9c8a5ba95fda298c12eeb19853",
     "docs/SERVER_DRIVEN_ANDROID_UPDATES.md":

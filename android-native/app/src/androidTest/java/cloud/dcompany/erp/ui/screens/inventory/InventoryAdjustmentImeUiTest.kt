@@ -12,8 +12,10 @@ import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.accessibility.AccessibilityWindowInfo
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -58,6 +60,7 @@ import cloud.dcompany.erp.ui.components.QuantityField
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.DCompanyTheme
 import cloud.dcompany.erp.ui.theme.Radius
+import cloud.dcompany.erp.ui.theme.Spacing
 import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -306,7 +309,8 @@ class InventoryAdjustmentImeUiTest {
             }
         }
 
-        compose.onNode(dialogPane(BACK_DIALOG_TITLE)).assertIsDisplayed()
+        val idleDialog = compose.onNode(dialogPane(BACK_DIALOG_TITLE)).assertIsDisplayed()
+        idleDialog.awaitDialogWindowFocus()
         injectAndroidBack()
         compose.waitForIdle()
         compose.runOnIdle {
@@ -317,7 +321,8 @@ class InventoryAdjustmentImeUiTest {
         }
         compose.waitForIdle()
 
-        compose.onNode(dialogPane(BACK_DIALOG_TITLE)).assertIsDisplayed()
+        val busyDialog = compose.onNode(dialogPane(BACK_DIALOG_TITLE)).assertIsDisplayed()
+        busyDialog.awaitDialogWindowFocus()
         injectAndroidBack()
         compose.waitForIdle()
         compose.runOnIdle {
@@ -376,6 +381,192 @@ class InventoryAdjustmentImeUiTest {
     }
 
     @Test
+    fun spaciousToCompactImeTransitionAcceptsNativeInputAcrossFields() {
+        var sku by mutableStateOf("")
+        var name by mutableStateOf("")
+        var reorderAt by mutableStateOf("")
+        var reorderQuantity by mutableStateOf("")
+
+        compose.setContent {
+            DCompanyTheme {
+                FormDialog(
+                    title = FOCUS_TRANSITION_DIALOG_TITLE,
+                    confirmLabel = "Save",
+                    busy = false,
+                    error = null,
+                    onDismiss = {},
+                    onConfirm = {},
+                ) {
+                    OutlinedTextField(
+                        value = sku,
+                        onValueChange = { sku = it },
+                        label = { Text("SKU (e.g. MILK-1L, COFFEE-BEAN)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    OutlinedTextField(
+                        value = name,
+                        onValueChange = { name = it },
+                        label = { Text("Name") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().testTag(NAME_FOCUS_TRANSITION_TAG),
+                    )
+                    PickerField(
+                        label = "Base unit",
+                        selectedLabel = "g (grams)",
+                        options = listOf("g" to "g (grams)"),
+                        onSelect = {},
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        QuantityField(
+                            value = reorderAt,
+                            onValueChange = { reorderAt = it },
+                            label = "Reorder at",
+                            modifier = Modifier.weight(1f).testTag(LOWER_FOCUS_TRANSITION_TAG),
+                        )
+                        QuantityField(
+                            value = reorderQuantity,
+                            onValueChange = { reorderQuantity = it },
+                            label = "Reorder qty",
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                }
+            }
+        }
+
+        val dialog = compose.onNode(dialogPane(FOCUS_TRANSITION_DIALOG_TITLE))
+            .assertIsDisplayed()
+        dialog.assertSpaciousWithoutIme()
+        val lowerField = compose.onNodeWithTag(LOWER_FOCUS_TRANSITION_TAG)
+            .assertIsDisplayed()
+        injectAndroidTap(lowerField.touchCenterOnScreen())
+        compose.waitForIdle()
+        lowerField.assertIsFocused()
+
+        val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+        val originalFlags = automation.serviceInfo.flags
+        try {
+            automation.serviceInfo = automation.serviceInfo.apply {
+                flags = flags or AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
+            }
+            val confirm = compose.onNode(dialogButton("Save"))
+            val cancel = compose.onNode(dialogButton("Cancel"))
+            val lowerFieldEvidence = awaitStableRealImeEvidence(
+                confirm,
+                cancel,
+                lowerField,
+                dialog,
+            )
+            lowerFieldEvidence.assertRealSoftwareIme()
+            lowerFieldEvidence.assertCompactDialogHeight()
+            lowerField.assertIsFocused()
+
+            injectAndroidKey(KeyEvent.KEYCODE_1)
+            injectAndroidKey(KeyEvent.KEYCODE_2)
+            compose.waitForIdle()
+            lowerField.assertIsFocused().assertTextContains("12")
+
+            val nameField = compose.onNodeWithTag(NAME_FOCUS_TRANSITION_TAG)
+            nameField.performScrollTo().assertIsDisplayed()
+            injectAndroidTap(nameField.touchCenterOnScreen())
+            compose.waitForIdle()
+            nameField.assertIsFocused()
+
+            val nameFieldEvidence = awaitStableRealImeEvidence(
+                confirm,
+                cancel,
+                nameField,
+                dialog,
+            )
+            nameFieldEvidence.assertRealSoftwareIme()
+            injectAndroidKey(KeyEvent.KEYCODE_A)
+            injectAndroidKey(KeyEvent.KEYCODE_B)
+            compose.waitForIdle()
+            nameField.assertIsFocused().assertTextContains("ab")
+            lowerField.assertTextContains("12")
+
+            lowerField.performScrollTo().assertIsDisplayed()
+            injectAndroidTap(lowerField.touchCenterOnScreen())
+            compose.waitForIdle()
+            lowerField.assertIsFocused()
+            injectAndroidKey(KeyEvent.KEYCODE_3)
+            compose.waitForIdle()
+            lowerField.assertIsFocused().assertTextContains("123")
+            nameField.assertTextContains("ab")
+
+            injectAndroidBack()
+            val hiddenEvidence = awaitStableHiddenImeEvidence(
+                confirm,
+                cancel,
+                lowerField,
+                dialog,
+            )
+            hiddenEvidence.assertSoftwareImeHidden()
+            hiddenEvidence.assertSpaciousDialogHeight()
+            dialog.assertIsDisplayed()
+            lowerField.assertTextContains("123")
+            nameField.assertTextContains("ab")
+
+            injectAndroidTap(lowerField.touchCenterOnScreen())
+            val reopenedEvidence = awaitStableRealImeEvidence(
+                confirm,
+                cancel,
+                lowerField,
+                dialog,
+            )
+            reopenedEvidence.assertRealSoftwareIme()
+            lowerField.assertIsFocused().assertTextContains("123")
+            nameField.assertTextContains("ab")
+            saveEvidence("form-dialog-native-focus-transition.png", reopenedEvidence)
+        } finally {
+            automation.serviceInfo = automation.serviceInfo.apply { flags = originalFlags }
+        }
+    }
+
+    @Test
+    fun spaciousLongBodyRevealsNewErrorAndKeepsBottomReachable() {
+        var error by mutableStateOf<String?>(null)
+
+        compose.setContent {
+            DCompanyTheme {
+                FormDialog(
+                    title = LATE_ERROR_DIALOG_TITLE,
+                    confirmLabel = "Save",
+                    busy = false,
+                    error = error,
+                    onDismiss = {},
+                    onConfirm = {},
+                ) {
+                    repeat(20) { index -> Text("Long form row ${index + 1}") }
+                    Text("Long form bottom", modifier = Modifier.testTag(LONG_BODY_BOTTOM_TAG))
+                }
+            }
+        }
+
+        val dialog = compose.onNode(dialogPane(LATE_ERROR_DIALOG_TITLE)).assertIsDisplayed()
+        dialog.assertSpaciousWithoutIme()
+        val scroll = compose.onNode(hasScrollAction())
+        val bottom = compose.onNodeWithTag(LONG_BODY_BOTTOM_TAG)
+        bottom.performScrollTo().assertIsDisplayed()
+        bottom.assertWhollyVisible("Long spacious form bottom")
+        val bottomPosition = scroll.verticalScrollPosition()
+        assertTrue("Long spacious form must have a real scroll range", bottomPosition > 0f)
+
+        compose.runOnIdle { error = LATE_SERVER_ERROR }
+        compose.waitForIdle()
+        val lateError = compose.onNodeWithText(LATE_SERVER_ERROR).assertIsDisplayed()
+        lateError.assertWhollyVisible("New server error")
+        assertTrue(
+            "A newly introduced error must return the main scroll owner to the top",
+            scroll.verticalScrollPosition() <= 1f,
+        )
+
+        bottom.performScrollTo().assertIsDisplayed()
+        bottom.assertWhollyVisible("Long spacious form bottom after error")
+    }
+
+    @Test
     fun narrowLongErrorKeepsWrappedActionsAboveRealSoftwareIme() {
         var quantity by mutableStateOf("")
 
@@ -415,8 +606,7 @@ class InventoryAdjustmentImeUiTest {
 
         val quantityField = compose.onNodeWithTag(NARROW_QUANTITY_TAG)
         quantityField.performScrollTo().assertIsDisplayed()
-            .performClick().assertIsFocused().performTextReplacement("12")
-        quantityField.assertTextContains("12")
+            .performClick().assertIsFocused()
         val error = compose.onNodeWithText(LONG_VALIDATION_ERROR)
 
         val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
@@ -430,6 +620,11 @@ class InventoryAdjustmentImeUiTest {
             val dialog = compose.onNode(dialogPane(NARROW_DIALOG_TITLE))
             val initialEvidence = awaitStableRealImeEvidence(confirm, cancel, error, dialog)
             initialEvidence.assertRealSoftwareIme()
+            quantityField.assertIsFocused()
+
+            injectAndroidKey(KeyEvent.KEYCODE_1)
+            injectAndroidKey(KeyEvent.KEYCODE_2)
+            compose.waitForIdle()
             quantityField.assertIsFocused().assertTextContains("12")
 
             error.performScrollTo().assertIsDisplayed()
@@ -576,11 +771,40 @@ class InventoryAdjustmentImeUiTest {
             get() = imeBounds != null && !imeBounds.isEmpty && imeInsetBottom > 0 &&
                 imeVisibleByInsets && windowFocused && !layoutPending
 
+        val readyWithoutIme: Boolean
+            get() = imeBounds == null && imeInsetBottom == 0 && !imeVisibleByInsets &&
+                windowFocused && !layoutPending
+
+        val formDialogAvailableHeightDp: Float
+            get() = visibleFrame.height() / density - 2f * Spacing.md.value
+
         fun assertRealSoftwareIme() {
             assertTrue("Expected a TYPE_INPUT_METHOD accessibility window: $this", imeBounds != null)
             assertTrue("Expected non-empty software IME bounds: $this", imeBounds?.isEmpty == false)
             assertTrue("Expected WindowInsetsCompat.Type.ime() to be visible: $this", imeVisibleByInsets)
             assertTrue("Expected a positive real IME inset: $this", imeInsetBottom > 0)
+        }
+
+        fun assertSoftwareImeHidden() {
+            assertTrue("Expected no TYPE_INPUT_METHOD accessibility window: $this", imeBounds == null)
+            assertTrue("Expected WindowInsetsCompat.Type.ime() to be hidden: $this", !imeVisibleByInsets)
+            assertTrue("Expected no residual IME inset: $this", imeInsetBottom == 0)
+            assertTrue("Expected the dialog window to retain focus: $this", windowFocused)
+            assertTrue("Expected the hidden-IME layout to be settled: $this", !layoutPending)
+        }
+
+        fun assertCompactDialogHeight() {
+            assertTrue(
+                "Real IME must move the fixture below FormDialog's compact threshold: $this",
+                formDialogAvailableHeightDp < 520f,
+            )
+        }
+
+        fun assertSpaciousDialogHeight() {
+            assertTrue(
+                "Hidden IME must return the fixture above FormDialog's compact threshold: $this",
+                formDialogAvailableHeightDp >= 520f,
+            )
         }
 
         fun assertResolvedContentVisible() {
@@ -696,6 +920,33 @@ class InventoryAdjustmentImeUiTest {
             throw failure
         }
         return checkNotNull(previous) { "No IME/window evidence was observed" }
+    }
+
+    /** Waits for both IME removal and the resulting spacious dialog geometry to settle. */
+    private fun awaitStableHiddenImeEvidence(
+        confirm: SemanticsNodeInteraction,
+        cancel: SemanticsNodeInteraction,
+        resolvedContent: SemanticsNodeInteraction,
+        dialog: SemanticsNodeInteraction,
+    ): ImeEvidence {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        instrumentation.uiAutomation.waitForIdle(500, 5_000)
+        compose.waitForIdle()
+        var previous: ImeEvidence? = null
+        var stableSamples = 0
+        compose.waitUntil(timeoutMillis = 5_000) {
+            awaitAndroidFrame()
+            val current = readImeEvidence(confirm, cancel, resolvedContent, dialog)
+            if (current != previous) Log.i(LOG_TAG, "Hidden IME evidence: $current")
+            stableSamples = if (current.readyWithoutIme && current == previous) {
+                stableSamples + 1
+            } else {
+                0
+            }
+            previous = current
+            stableSamples >= 2
+        }
+        return checkNotNull(previous) { "No hidden-IME/window evidence was observed" }
     }
 
     private fun readImeEvidence(
@@ -976,14 +1227,53 @@ class InventoryAdjustmentImeUiTest {
     private fun injectAndroidTap(point: Offset) = injectAndroidTap(point.x, point.y)
 
     private fun injectAndroidBack() {
-        InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
+        injectAndroidKey(KeyEvent.KEYCODE_BACK)
+    }
+
+    private fun injectAndroidKey(keyCode: Int) {
+        InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(keyCode)
+    }
+
+    private fun SemanticsNodeInteraction.awaitDialogWindowFocus() {
+        val root = fetchSemanticsNode().root as ViewRootForTest
+        compose.waitUntil(timeoutMillis = 5_000) {
+            root.view.hasWindowFocus()
+        }
+    }
+
+    private fun SemanticsNodeInteraction.assertSpaciousWithoutIme() {
+        val node = fetchSemanticsNode()
+        val root = node.root as ViewRootForTest
+        compose.runOnIdle {
+            val view = root.view
+            val insets = checkNotNull(ViewCompat.getRootWindowInsets(view))
+            val visibleFrame = AndroidRect().also(view::getWindowVisibleDisplayFrame)
+            val contentHeightDp = visibleFrame.height() / view.resources.displayMetrics.density -
+                2f * Spacing.md.value
+            assertTrue(
+                "Fixture must start without an IME before focusing the lower field: " +
+                    "frame=$visibleFrame dialog=${node.visualBoundsOnScreen()}",
+                !insets.isVisible(WindowInsetsCompat.Type.ime()),
+            )
+            assertTrue(
+                "Fixture must start in spacious FormDialog mode: " +
+                    "contentHeightDp=$contentHeightDp frame=$visibleFrame",
+                contentHeightDp >= 520f,
+            )
+        }
     }
 
     private companion object {
         const val BACK_DIALOG_TITLE = "Android Back dismissal"
         const val BACKDROP_DIALOG_TITLE = "Backdrop dismissal"
         const val CONFIRM_GUARD_DIALOG_TITLE = "Confirm callback guards"
+        const val FOCUS_TRANSITION_DIALOG_TITLE = "Native input focus transition"
         const val INTERIOR_BLANK_TAG = "form-dialog-interior-blank"
+        const val LATE_ERROR_DIALOG_TITLE = "Long form server error"
+        const val LATE_SERVER_ERROR =
+            "The server rejected this form. Review the highlighted values and try again."
+        const val LOWER_FOCUS_TRANSITION_TAG = "form-dialog-lower-focus-transition"
+        const val LONG_BODY_BOTTOM_TAG = "form-dialog-long-body-bottom"
         const val LONG_VALIDATION_ERROR =
             "The correction cannot be queued until the branch count and reason are reviewed."
         const val NARROW_BODY_END = "End"
@@ -1000,6 +1290,7 @@ class InventoryAdjustmentImeUiTest {
         const val PREVIEW_TAG = "inventory-adjustment-preview"
         const val PREVIEW_WARNING =
             "That exceeds this branch's recorded balance and cannot be queued."
+        const val NAME_FOCUS_TRANSITION_TAG = "form-dialog-name-focus-transition"
         const val LOG_TAG = "InventoryAdjustmentIme"
     }
 }

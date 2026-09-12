@@ -62,6 +62,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -529,10 +530,12 @@ fun FormDialog(
                     ).padding(Spacing.md),
                     contentAlignment = Alignment.Center,
                 ) {
-                    // Below the existing body cap, scroll main content to reserve the wrapped footer.
+                    // One scroll owner keeps focused fields stable while the IME changes the height.
                     val compact = maxHeight < 520.dp
-                    val compactScrollState = rememberScrollState()
-                    val bodyScrollState = rememberScrollState()
+                    val mainScrollState = rememberScrollState()
+                    LaunchedEffect(error) {
+                        if (!error.isNullOrBlank()) mainScrollState.scrollTo(0)
+                    }
                     Surface(
                         modifier = Modifier.widthIn(max = width).fillMaxWidth(0.92f)
                             .heightIn(max = maxHeight)
@@ -549,10 +552,8 @@ fun FormDialog(
                     ) {
                         Column(Modifier.padding(if (compact) Spacing.lg else Spacing.xl)) {
                             Column(
-                                modifier = Modifier.weight(1f, fill = false).then(
-                                    if (compact) Modifier.verticalScroll(compactScrollState)
-                                    else Modifier,
-                                ),
+                                modifier = Modifier.weight(1f, fill = false)
+                                    .verticalScroll(mainScrollState),
                             ) {
                                 Text(
                                     title,
@@ -575,13 +576,6 @@ fun FormDialog(
                                             Spacer(Modifier.height(Spacing.md))
                                         }
                                         Column(
-                                            modifier = if (compact) {
-                                                Modifier
-                                            } else {
-                                                Modifier.heightIn(max = 520.dp)
-                                                    .weight(1f, fill = false)
-                                                    .verticalScroll(bodyScrollState)
-                                            },
                                             verticalArrangement = Arrangement.spacedBy(Spacing.md),
                                         ) {
                                             content()

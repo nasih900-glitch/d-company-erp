@@ -61,12 +61,15 @@ identity and must not be expanded or presented as that inventory-form proof.
 
 The shared FormDialog correction is limited to a finite dialog surface centered
 inside Android's measured visible frame, which excludes the areas occupied by
-the status bar, navigation bar, and real software keyboard. On spacious frames,
-its title and validation error remain fixed while the form body retains its
-existing 520dp scroll cap. On smaller visible frames, the title, validation
-error, and body share one scroll region so the wrapping actions retain reserved
-space and remain fixed; existing 16dp spacing tokens replace the spacious 24dp
-surface padding and footer separation to preserve readable content height.
+the status bar, navigation bar, and real software keyboard. Its title,
+validation error, and body share one permanent scroll region at every height,
+while wrapping actions retain reserved space and remain fixed. This deliberately
+lets headings scroll in long spacious forms: replacing a focused field's scroll
+ancestor when the keyboard opened caused native input loss and a focus-tree
+crash. One stable ancestor avoids that failure and nested unbounded measurement.
+On smaller frames, existing 16dp spacing tokens replace the spacious 24dp surface
+padding and footer separation. New or changed nonblank form errors return the
+main scroll region to the top so their explanation remains discoverable.
 An explicit backdrop retains idle outside-tap dismissal, rejects dismissal while
 busy, and does not treat blank content inside the surface as outside. The change
 preserves form content, focus and entered values across IME resizing, callbacks,
@@ -74,7 +77,12 @@ enable/busy behavior, visual tokens, and inventory behavior. The targeted
 real-IME instrumentation test must capture the real keyboard and prove, after
 the IME layout stabilizes, that long warnings and errors remain scrollable and
 both expanded 48dp action touch targets remain above it on the API-35 tablet
-profile before this source correction is considered verified.
+profile before this source correction is considered verified. Native Android
+input must also survive spacious-to-compact resizing, lower numeric-to-upper
+text field switching, return traversal, and keyboard hide/reopen; semantic text
+replacement alone is not acceptance for typing. Back tests must establish
+separate dialog-window focus before injecting the key. Long-form error and
+bottom-content reachability must remain verified independently of those keys.
 
 The RecipeDetail correction keeps the SectionCard header fixed and makes its
 bounded detail content scrollable. The active recipe's name, recorded cost,
