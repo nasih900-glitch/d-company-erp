@@ -12,7 +12,7 @@ import yaml
 from ops import runtime_release_parity as parity
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "3.1.19"
+VERSION = "3.1.20"
 REVISION = "a" * 40
 IMAGE = "sha256:" + "b" * 64
 CONTAINER = "c" * 64
@@ -110,7 +110,7 @@ class RuntimeParityTest(unittest.TestCase):
                 run.assert_not_called()
 
     def test_invalid_identity_fails_before_any_docker_command(self):
-        for version, revision in (("dev", REVISION), ("03.1.19", REVISION), (VERSION, "unknown"), (VERSION, "A" * 40), ("0.0.0", "0" * 40), (VERSION, "0" * 40)):
+        for version, revision in (("dev", REVISION), ("03.1.20", REVISION), (VERSION, "unknown"), (VERSION, "A" * 40), ("0.0.0", "0" * 40), (VERSION, "0" * 40)):
             with patch.object(parity, "_run") as run:
                 with self.assertRaises(parity.RuntimeParityError):
                     parity.inspect_release_pair("/erp", "/erp/.env", version, revision, running=True)

@@ -11,6 +11,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 CODE28_SIGNED_BASE = "ab10a3138f41c5acf709e6275dfac55c6652d0d8"
 CODE29_REVIEW_BASE = "525ed771968ee1754c7cc553bb3b5ef07f8f4ac4"
+CODE29_SIGNED_BASE = "0949620b4632ebd6accdfa62a203be8d85b31a24"
 CADDY_SHA256 = "951a0136950bb9edf60ff5cec6ca2df0a041b27ded9e610f0aab49b168739dac"
 PROTECTED_APPLICATION_PREFIXES = (
     "backend/app/",
@@ -238,6 +239,10 @@ def _file_at(path: str) -> str:
     return _git("show", f"{CODE28_SIGNED_BASE}:{path}")
 
 
+def _code29_file(path: str) -> str:
+    return _git("show", f"{CODE29_SIGNED_BASE}:{path}")
+
+
 def _replace_exact(source: str, replacements: tuple[tuple[str, str, int], ...]) -> str:
     for old, new, expected_count in replacements:
         assert source.count(old) == expected_count
@@ -265,20 +270,22 @@ def _split_inventory_recipe_detail(source: str) -> tuple[str, str, str]:
     return source[:start], source[start:end], source[end:]
 
 
-def _current_changed(*prefixes: str) -> set[str]:
+def _code29_changed(*prefixes: str) -> set[str]:
     changed = set(
-        _git("diff", "--name-only", CODE28_SIGNED_BASE, "--", *prefixes).splitlines()
-    )
-    changed.update(
-        path
-        for path in _git("ls-files", "--others", "--exclude-standard").splitlines()
-        if path.startswith(prefixes)
+        _git(
+            "diff",
+            "--name-only",
+            CODE28_SIGNED_BASE,
+            CODE29_SIGNED_BASE,
+            "--",
+            *prefixes,
+        ).splitlines()
     )
     return {path for path in changed if path}
 
 
 def _sha256(path: str) -> str:
-    return hashlib.sha256((ROOT / path).read_bytes()).hexdigest()
+    return hashlib.sha256(_code29_file(path).encode()).hexdigest()
 
 
 def _validate_reviewed_test_source(path: str, content: bytes, expected_sha256: str) -> None:
@@ -362,7 +369,7 @@ def _validate_workflow_contracts(ci: str, release: str, action: str) -> None:
 
 
 def test_code29_application_scope_is_strictly_signed28_plus_reviewed_quantity() -> None:
-    assert _current_changed(*PROTECTED_APPLICATION_PREFIXES) == {
+    assert _code29_changed(*PROTECTED_APPLICATION_PREFIXES) == {
         "backend/app/__init__.py",
         PRIMITIVES_PATH,
         *(
@@ -380,7 +387,7 @@ def test_inventory_screen_is_exact_code29_base_plus_reviewed_recipe_detail() -> 
     assert hashlib.sha256(base.encode()).hexdigest() == INVENTORY_SCREEN_CODE29_BASE_SHA256
     base_prefix, _, base_suffix = _split_inventory_recipe_detail(base)
     current_prefix, current_recipe_detail, current_suffix = _split_inventory_recipe_detail(
-        (ROOT / INVENTORY_SCREEN_PATH).read_text(encoding="utf-8")
+        _code29_file(INVENTORY_SCREEN_PATH)
     )
     assert current_prefix == base_prefix
     assert current_suffix == base_suffix
@@ -407,7 +414,7 @@ def test_code29_coordinated_identity_is_exactly_29_and_3_1_19() -> None:
     }
     for path, path_replacements in replacements.items():
         expected = _replace_exact(_file_at(path), path_replacements)
-        assert (ROOT / path).read_text(encoding="utf-8") == expected
+        assert _code29_file(path) == expected
 
 
 def test_database_audit_money_and_display_boundaries_are_byte_identical() -> None:
@@ -426,7 +433,7 @@ def test_database_audit_money_and_display_boundaries_are_byte_identical() -> Non
                 signed28, PRIMITIVES_REVIEWED_IMPORT_REPLACEMENTS
             )
             current_prefix, current_form_dialog, current_suffix = (
-                _split_primitives_form_dialog((ROOT / path).read_text(encoding="utf-8"))
+                _split_primitives_form_dialog(_code29_file(path))
             )
             expected_prefix, _, expected_suffix = _split_primitives_form_dialog(
                 expected_outside
@@ -438,8 +445,8 @@ def test_database_audit_money_and_display_boundaries_are_byte_identical() -> Non
                 == PRIMITIVES_FORM_DIALOG_SHA256
             )
         else:
-            assert (ROOT / path).read_text(encoding="utf-8") == signed28
-    assert not _current_changed(
+            assert _code29_file(path) == signed28
+    assert not _code29_changed(
         "backend/alembic/",
         "android-native/app/schemas/",
         "android-native/audit-driver/src/",
@@ -464,9 +471,9 @@ def test_audit_driver_lock_only_completes_existing_release_unit_dependencies() -
     assert configurations.count("testImplementationDependenciesMetadata") == 1
     configurations.remove("testImplementationDependenciesMetadata")
     expected = _replace_exact(expected, ((empty, "empty=" + ",".join(configurations), 1),))
-    assert (ROOT / path).read_text(encoding="utf-8") == expected
+    assert _code29_file(path) == expected
     build = "android-native/audit-driver/build.gradle.kts"
-    assert (ROOT / build).read_text(encoding="utf-8") == _file_at(build)
+    assert _code29_file(build) == _file_at(build)
 
 
 def test_code29_scanner_files_are_exactly_pinned() -> None:
@@ -478,12 +485,12 @@ def test_code29_scanner_files_are_exactly_pinned() -> None:
 def test_code29_pipeline_and_runtime_identity_files_are_exactly_pinned() -> None:
     for path, expected in PHASE2C_INFRA_HASHES.items():
         assert _sha256(path) == expected
-    assert _current_changed(".github/") == {
+    assert _code29_changed(".github/") == {
         ".github/actions/scan-production-images/action.yml",
         ".github/workflows/ci.yml",
         ".github/workflows/release.yml",
     }
-    assert _current_changed("infra/scripts/") == {
+    assert _code29_changed("infra/scripts/") == {
         "infra/scripts/install-ci-redis.sh",
         "infra/scripts/run-ci-docker-connection-check.sh",
         "infra/scripts/run-hardened-image-scanners.sh",
@@ -496,7 +503,7 @@ def test_code29_pipeline_and_runtime_identity_files_are_exactly_pinned() -> None
 def test_code29_physical_lane_changes_identity_only() -> None:
     plan_path = "android-native/audit-driver/plans/code26-gaming-finance-physical.json"
     code28_plan = json.loads(_file_at(plan_path))
-    code29_plan = json.loads((ROOT / plan_path).read_text(encoding="utf-8"))
+    code29_plan = json.loads(_code29_file(plan_path))
     assert len(code29_plan["steps"]) == 413
     assert code29_plan["expected_sessions"] == 16
     assert code29_plan["name"] == "Code 29 full-route Gaming and Finance physical acceptance"
@@ -516,7 +523,7 @@ def test_code29_physical_lane_changes_identity_only() -> None:
             1,
         ),
     )
-    assert (ROOT / runner_path).read_text(encoding="utf-8") == _replace_exact(
+    assert _code29_file(runner_path) == _replace_exact(
         _file_at(runner_path), runner_replacements
     )
 
@@ -541,17 +548,17 @@ def test_code29_physical_lane_changes_identity_only() -> None:
             1,
         ),
     )
-    assert (ROOT / analyzer_path).read_text(encoding="utf-8") == _replace_exact(
+    assert _code29_file(analyzer_path) == _replace_exact(
         _file_at(analyzer_path), analyzer_replacements
     )
 
 
 def test_code29_operator_records_preserve_history_and_current_authority() -> None:
     historical_path = "docs/CODE28_RELEASE_CANDIDATE.md"
-    assert (ROOT / historical_path).read_text(encoding="utf-8") == _file_at(
+    assert _code29_file(historical_path) == _file_at(
         historical_path
     )
-    assert _current_changed("docs/") == {
+    assert _code29_changed("docs/") == {
         "docs/CODE29_RELEASE_CANDIDATE.md",
         "docs/DISTRIBUTION.md",
         "docs/SERVER_DRIVEN_ANDROID_UPDATES.md",
@@ -559,7 +566,7 @@ def test_code29_operator_records_preserve_history_and_current_authority() -> Non
     for path, expected in OPERATOR_RECORD_HASHES.items():
         assert _sha256(path) == expected
     combined = "\n".join(
-        (ROOT / path).read_text(encoding="utf-8")
+        _code29_file(path)
         for path in (
             "docs/CODE29_RELEASE_CANDIDATE.md",
             "docs/DISTRIBUTION.md",
@@ -583,11 +590,9 @@ def test_code29_operator_records_preserve_history_and_current_authority() -> Non
 
 def test_code29_workflow_contracts_are_complete_and_fail_closed() -> None:
     _validate_workflow_contracts(
-        (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"),
-        (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8"),
-        (ROOT / ".github/actions/scan-production-images/action.yml").read_text(
-            encoding="utf-8"
-        ),
+        _code29_file(".github/workflows/ci.yml"),
+        _code29_file(".github/workflows/release.yml"),
+        _code29_file(".github/actions/scan-production-images/action.yml"),
     )
 
 
@@ -606,9 +611,9 @@ def test_code29_workflow_contracts_are_complete_and_fail_closed() -> None:
 )
 def test_workflow_negative_mutations_are_rejected(target: str, old: str, new: str) -> None:
     sources = {
-        "ci": (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"),
-        "release": (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8"),
-        "action": (ROOT / ".github/actions/scan-production-images/action.yml").read_text(encoding="utf-8"),
+        "ci": _code29_file(".github/workflows/ci.yml"),
+        "release": _code29_file(".github/workflows/release.yml"),
+        "action": _code29_file(".github/actions/scan-production-images/action.yml"),
     }
     assert old in sources[target]
     sources[target] = sources[target].replace(old, new, 1)
@@ -624,17 +629,14 @@ def test_every_signed28_test_support_file_is_unchanged_or_exactly_pinned() -> No
     assert len(test_paths) == 512
     assert set(REVIEWED_EXISTING_TEST_HASHES) <= set(test_paths)
     current_test_paths = {
-        path for path in _git("ls-files").splitlines() if _is_test_support(path)
-    }
-    current_test_paths.update(
         path
-        for path in _git("ls-files", "--others", "--exclude-standard").splitlines()
+        for path in _git("ls-tree", "-r", "--name-only", CODE29_SIGNED_BASE).splitlines()
         if _is_test_support(path)
-    )
+    }
     assert current_test_paths - set(test_paths) == EXPECTED_NEW_CODE29_TEST_PATHS
     for path, expected in NEW_CODE29_TEST_HASHES.items():
         assert _sha256(path) == expected
-    changed_existing = _current_changed(
+    changed_existing = _code29_changed(
         "backend/tests/",
         "tests/",
         "android-native/app/src/test/",
@@ -643,14 +645,13 @@ def test_every_signed28_test_support_file_is_unchanged_or_exactly_pinned() -> No
     ) & set(test_paths)
     assert changed_existing == set(REVIEWED_EXISTING_TEST_HASHES)
     for path in test_paths:
-        candidate = ROOT / path
-        assert candidate.is_file()
+        candidate = _code29_file(path).encode()
         if path in REVIEWED_EXISTING_TEST_HASHES:
             _validate_reviewed_test_source(
-                path, candidate.read_bytes(), REVIEWED_EXISTING_TEST_HASHES[path]
+                path, candidate, REVIEWED_EXISTING_TEST_HASHES[path]
             )
         else:
-            assert candidate.read_text(encoding="utf-8") == _file_at(path)
+            assert candidate.decode() == _file_at(path)
 
 
 def test_exact_test_snapshot_rejects_early_return_and_unexpected_rewrite() -> None:

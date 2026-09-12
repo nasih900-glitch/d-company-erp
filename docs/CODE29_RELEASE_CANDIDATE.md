@@ -1,5 +1,9 @@
 # D Company ERP 3.1.19 (code 29) release candidate
 
+> **Current correction record:** The original `v3.1.19` candidate record below
+> is preserved as signed history. The final section of this document supersedes
+> its identity and phase order for corrected Code 29 at `v3.1.20`.
+
 Code 29 is the unsigned successor to signed Code 28. Its coordinated candidate
 identity is tag `v3.1.19`, Android `versionName=3.1.19`, Android
 `versionCode=29`, and database migration head `0071`.
@@ -137,3 +141,70 @@ smoke, offline/restart recovery, alarms and notification-denial recovery, OEM
 battery policy behavior, the targeted inventory-form cases, and the supervised
 real-live operational and financial reconciliation trial before a wider staff
 rollout. Mac/device access is not part of this source phase.
+
+## Corrected Code 29 current record (`3.1.20`)
+
+Original signed Code 29 (`3.1.19`, commit
+`0949620b4632ebd6accdfa62a203be8d85b31a24`) is immutable. Its production
+installer securely opened and locked the root-owned mode-`0600` lock, then
+rejected the inherited descriptor before image builds or maintenance. GNU
+coreutils 8.32 reports an empty regular file as `regular empty file` for
+`stat %F`, while the shell expected the content-sensitive text `regular file`.
+The existing production lock happened to contain seven bytes, so it did not
+reproduce the failure; a normally created empty lock, including a new lock
+after reboot, did.
+
+The corrected Code 29 identity is tag `v3.1.20`, Android
+`versionName=3.1.20`, Android `versionCode=29`, and migration head `0071`.
+Changing `versionName` distinguishes the corrected package and manifest while
+retaining Code 29. The original `v3.1.19` tag, source, manifest, signatures,
+and artifacts must not be moved, rebuilt, overwritten, or relabelled.
+
+The installer now uses GNU stat's numeric `%f` mode and requires exact raw
+Linux mode `8180` (`S_IFREG | 0600`) with root UID/GID, one link, and the exact
+device/inode passed by the Python bootstrap. Descriptor-relative `O_NOFOLLOW`,
+no truncation, nonblocking `flock`, private runtime directories, and all other
+fail-closed checks remain intact. Normal CI and the tagged coordinated-release
+job run the standalone Linux/root descriptor regression through `sudo -n` with
+the configured Python interpreter.
+
+No Android, Web, backend business, billing, money, permission, database,
+offline/sync, scanner, or Caddy behavior change is authorized. Application
+source remains byte-identical to original signed Code 29 except the backend
+version string. The physical plan retains all 413 steps and 16 sessions and
+changes identity only. Compatibility stays at minimum code `8`, latest default
+code `8`, and policy revision `1`. The broader signed-Code29 scanner-source
+review remains incomplete evidence and is not claimed as passed.
+
+The earlier phase order in this ledger is superseded for this correction:
+
+1. Independently approve the exact original-Code29-to-corrected-Code29 delta.
+   Run the mandatory Linux/root lock verifier, complete repository, backend,
+   Web, Android, migration, syntax, and both production-image-store scanner
+   gates on one clean commit.
+2. Only after those checks pass, tag the exact commit and obtain protected
+   signing approval. Produce the `3.1.20` Code 29 APK/AAB, checksums, and
+   manifest together, then independently verify their source, bytes, package,
+   version code/name, and preserved signer. Retain the anonymous offline fixture
+   chain from signed Code 21 to original signed Code 29 and then the same-code
+   corrected Code 29 replacement, with IPv4 and IPv6 blocked. This is chained
+   upgrade evidence, not a direct Code21-to-corrected-Code29 proof, and remains
+   separate from the authenticated user-and-agent trial.
+3. Complete the authenticated available-device, offline/restart, inventory,
+   Gaming, POS, notification, performance, and financial-reconciliation trial.
+   While the Redmi tablet is unavailable, authenticated emulator execution and
+   Web ERP reconciliation are the accepted alternative. Preserve prior Lenovo
+   physical evidence separately; do not describe it as a new physical run. A
+   signed package is not authority to deploy, stage, activate, or offer it.
+4. Only after the user accepts a successful trial may production preparation
+   and deployment begin. The user has already confirmed the real staff tablet
+   was synced and paused; repeat fresh read-only outbox and paused-state checks
+   before production work without clearing app data. Reconfirm quiescence,
+   backup, migration rehearsal, restore, rollback, exact runtime images,
+   authentication, compatibility, and public network behavior. Any later
+   inactive staging and channel-wide offer remains a separate owner-controlled
+   action.
+
+This correction record does not claim that corrected Code 29 is release-ready,
+signed, trial-accepted, deployed, staged, active, offered, or installed in
+production.

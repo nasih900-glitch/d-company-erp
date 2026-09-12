@@ -139,6 +139,15 @@ jobs:
           python -m pip_audit -r backend/requirements.lock
           python -m pip_audit -r backend/requirements-ci.lock
           python -m pip_audit -r ops/backup-requirements.lock
+      - name: Verify production installer lock metadata
+        run: |
+          set -euo pipefail
+          test -n "$pythonLocation"
+          configured_python="$pythonLocation/bin/python"
+          test "${configured_python#/}" != "$configured_python"
+          test -x "$configured_python"
+          sudo -n -- "$configured_python" \
+            tests/verify_production_installer_lock_metadata.py
       - name: Install physical-audit contract prerequisites
         run: |
           sudo apt-get update

@@ -47,24 +47,27 @@ Code `28` (`3.1.18`) was signed, received owner maintenance authorization and an
 isolated upgrade test, then failed its exact production-image identity gate
 before the installer entered maintenance/cutover and before production or
 partner installation, staging, or offer.
-Its source, tag, manifest, and artifacts are immutable superseded history. Code
-`29` (`3.1.19`) is the current, separately gated **unsigned** candidate:
+Its source, tag, manifest, and artifacts are immutable superseded history.
+Original Code `29` (`3.1.19`) was signed, but its production installer rejected
+the normally empty root-owned lock before builds or maintenance. Its source,
+tag, manifest, signatures, and artifacts are immutable. Corrected Code `29`
+(`3.1.20`) is the current, separately gated **unsigned** candidate:
 
 ```
-coordinate source at 3.1.19/code 29 through migration 0071
+coordinate source at 3.1.20/code 29 through migration 0071
         │
         ▼
 local/CI backend + web + Android candidate gates
         │
-        ▼
-same-lineage Code 21 to Code 29 upgrade proof
+        ▼ build, sign and independently verify the exact package
+user-and-agent same-lineage upgrade and operational trial
         │
-        ▼ stage exact CI artifact inactive for owner review
-owner may offer to target tablet; supervised live trial gates wider rollout
+        ▼ only after accepted trial: production preparation and deployment
+inactive staging and any channel-wide offer remain separate owner actions
 ```
 
-No signed Code 29 artifact exists merely because local or CI candidate checks
-pass. New protected signing approval, exact-artifact verification, production
+No signed corrected Code 29 artifact exists merely because local or CI candidate
+checks pass. New protected signing approval, exact-artifact verification, production
 deployment,
 inactive staging, the owner's controlled target offer, and target-device
 acceptance remain separate gates. None may be inferred from another.
@@ -142,7 +145,7 @@ minimum supported version until that proof passes. See
 Choose one version and apply it consistently. For the current candidate:
 
 ```bash
-CURRENT_RELEASE_VERSION=3.1.19
+CURRENT_RELEASE_VERSION=3.1.20
 
 # Update the coordinated product version in:
 # - android-native/app/build.gradle.kts (versionName; normally also a new
@@ -174,13 +177,18 @@ failed-before-signing history. Tag `v3.1.14` is immutable rejected history. Tag
 moved or reused. Tag `v3.1.16` and its signed Code 26 artifact are immutable
 history. Tag `v3.1.17` and its signed Code 27 artifacts are immutable after the
 Syft scanner-gate failure. Tag `v3.1.18` and its signed Code 28 artifact are
-immutable after the production-image identity failure. Tag `v3.1.19` may be
-created only after every product-version field is coordinated and the local
-release gates pass. Version code `26` was retained
+immutable after the production-image identity failure. Tag `v3.1.19` and its
+original signed Code 29 artifacts are immutable after the installer lock gate
+failed before builds or maintenance. Tag `v3.1.20` may be created only after
+every product-version field is coordinated and the local release gates pass.
+Corrected Code 29 retains version code `29`; the new version name and tag keep
+its package and manifest distinct from immutable `v3.1.19`. Version code `26`
+was retained
 only because 3.1.15 produced no signed, distributed, registered, staged,
 offered, or production-installed direct artifact; every signed successor now
 requires a strictly monotonic identity. Isolated debug installations are test
-evidence, not distribution. Keep codes `14` through `28` immutable.
+evidence, not distribution. Keep codes `14` through `28` immutable and never
+reuse the original Code 29 package identity.
 Never use a blanket
 version replacement: dependency versions and
 Android rollout policy intentionally differ from the product version.
@@ -233,9 +241,11 @@ stopped before builds or cutover. Code `27` (`3.1.17`) is immutable signed
 history after its Syft scanner gate failed before production deployment or
 cutover. Code `28` (`3.1.18`) is immutable signed history after its exact
 production-image identity gate failed before the authorized installer entered
-maintenance/cutover or any production/partner install or offer. The current
-candidate is the unsigned `3.1.19` with version code `29`; its
-database migration head is `0071`. It may
+maintenance/cutover or any production/partner install or offer. Original Code
+`29` (`3.1.19`) is immutable signed history after the content-sensitive
+installer lock check rejected its empty lock before builds or maintenance. The
+current candidate is corrected Code 29 at unsigned `3.1.20` with version code
+`29`; its database migration head is `0071`. It may
 be staged only after the exact green tagged
 workflow produces a signed artifact and becomes an optional server offer only
 after authenticated owner activation. It is not currently signed, deployed,
@@ -243,28 +253,37 @@ staged, active, approved or partner-installable.
 
 ### Current Code 29 rollout sequence
 
-1. Bring the signed Code 21 installation online and reconcile its exact pending
-   outbox without clearing app data.
-2. Build and sign `3.1.19` / code `29` only through the protected tagged
+1. Retain the anonymous offline fixture proof: signed Code 21 upgraded to
+   original signed Code 29, followed by the same-code corrected Code 29
+   replacement, with IPv4 and IPv6 blocked throughout. This is chained
+   Code21-to-original-Code29-to-corrected-Code29 evidence, not a direct
+   Code21-to-corrected-Code29 upgrade or an authenticated trial.
+2. Build and sign `3.1.20` / code `29` only through the protected tagged
    workflow. Verify its package, version, exact bytes, SHA-256, manifest and
    independent expected signer.
-3. Prove a same-key in-place Code 21 to Code 29 upgrade with Room data and
-   offline work preserved. Do not uninstall or clear storage.
-4. Rehearse the production-shaped migration through `0071`, then deploy the
+3. Run the separate authenticated user-and-agent operational and financial
+   trial against that exact signed package. While Redmi is unavailable, use the
+   authenticated emulator and Web ERP as the accepted available-device route,
+   and retain prior Lenovo physical evidence separately rather than presenting
+   it as a new physical run.
+4. Only after the user accepts the successful trial, rehearse the
+   production-shaped migration through `0071`. The user has already confirmed
+   the real staff tablet was synced and paused; before production work, repeat
+   the fresh read-only outbox and paused-state checks without clearing app data.
+   Then deploy the
    coordinated backend and web source with a fresh quiesced backup, restoration
    proof, rollback readiness and authenticated smoke tests.
 5. Stage the exact verified CI artifact inactive and review it in the owner ERP.
-   Staging does not advertise or activate an offer.
+   Staging does not advertise or activate an offer and must not occur before
+   trial acceptance.
 6. After all four preparation phases in `CODE29_RELEASE_CANDIDATE.md`, the owner
    may activate the exact staged candidate only after explicitly accepting
    channel-wide exposure. Every eligible direct-channel client can see that
    offer; there is no per-device allowlist. Coordinate the intended pilot
-   tablet with staff. Android still requires employee approval to install it. Run the
-   supervised real-live operational acceptance trial, authenticated
-   physical-target smoke, offline/restart, alarm, performance and financial
-   reconciliation after installation. The owner may ask other staff to install
-   only after that trial passes; this restriction is operational, not enforced
-   by the update endpoint.
+   tablet with staff. Android still requires employee approval to install it.
+   The owner may ask other staff to install only after the earlier trial and
+   production gates pass; this restriction is operational, not enforced by the
+   update endpoint.
 
 ### Historical Code 14 rollout record (do not execute for Code 29)
 
@@ -508,11 +527,13 @@ Code `27` (`3.1.17`) is immutable signed history after its Syft scanner gate
 failed before production deployment or cutover. Code `28` (`3.1.18`) is
 immutable signed history after the image-identity gate failed before the
 authorized installer entered maintenance/cutover or any production/partner
-install or offer. Code `29` (`3.1.19`) is the unsigned corrective
+install or offer. Original signed Code `29` (`3.1.19`) is immutable after its
+installer lock gate failed. Corrected Code `29` (`3.1.20`) is the unsigned
 candidate and requires its own complete gates and new signing approval. After
 its four
-preparation phases, only the owner may activate an offer after accepting
-exposure to all eligible direct-channel clients. There is no per-device
+preparation phases, including successful user-and-agent trial acceptance and
+subsequent production verification, only the owner may activate an offer after
+accepting exposure to all eligible direct-channel clients. There is no per-device
 targeting. Further staff
 installations require owner coordination after supervised target-device
 acceptance passes; the public update endpoint does not enforce that sequence.

@@ -115,8 +115,10 @@ if ! [[ "${DCOMPANY_PRODUCTION_INSTALL_LOCK_ID:-}" =~ ^[0-9]+:[0-9]+$ ]]; then
   echo "Production lock descriptor identity is missing." >&2
   exit 1
 fi
-lock_fd_metadata=$(stat -Lc '%u:%g:%a:%h:%F:%d:%i' "/proc/$$/fd/9")
-expected_lock_fd_metadata="0:0:600:1:regular file:${DCOMPANY_PRODUCTION_INSTALL_LOCK_ID}"
+# GNU stat's raw mode is independent of file contents and localized type names;
+# 8180 is the exact Linux mode for a regular file with permissions 0600.
+lock_fd_metadata=$(stat -Lc '%u:%g:%a:%h:%f:%d:%i' "/proc/$$/fd/9")
+expected_lock_fd_metadata="0:0:600:1:8180:${DCOMPANY_PRODUCTION_INSTALL_LOCK_ID}"
 if [ "$lock_fd_metadata" != "$expected_lock_fd_metadata" ]; then
   echo "Production lock descriptor failed ownership/type validation." >&2
   exit 1

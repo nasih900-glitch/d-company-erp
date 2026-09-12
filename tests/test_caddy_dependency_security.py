@@ -8,6 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 CODE28_SCANNER_BASE = "aac3a2167a298b0eae5330a831fb01875c37bf25"
 CODE28_SIGNED_BASE = "ab10a3138f41c5acf709e6275dfac55c6652d0d8"
+CODE29_SIGNED_BASE = "0949620b4632ebd6accdfa62a203be8d85b31a24"
 OLD_BINARY_SHA256 = "73c0169f0b72b465e2ae20bdb67a3e017044b2ab3d267816398b9d6ece243fb0"
 PATCHED_BINARY_SHA256 = "951a0136950bb9edf60ff5cec6ca2df0a041b27ded9e610f0aab49b168739dac"
 GO_MOD = ROOT / "infra" / "docker" / "caddy-build" / "go.mod"
@@ -109,7 +110,7 @@ def test_caddy_binary_hash_is_coordinated_across_ci_and_release() -> None:
                 "            android-native/audit-driver/build/test-results/\n",
             )
         assert _file_at(CODE28_SIGNED_BASE, workflow) == expected
-        current_bytes = workflow.read_bytes()
+        current_bytes = _file_at(CODE29_SIGNED_BASE, workflow).encode()
         current = current_bytes.decode("utf-8")
         assert hashlib.sha256(current_bytes).hexdigest() == CURRENT_WORKFLOW_SHA256[workflow]
         assert current.count(PATCHED_BINARY_SHA256) == 1
