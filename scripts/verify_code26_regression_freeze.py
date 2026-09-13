@@ -7,8 +7,8 @@ Code 26 may add tests and narrowly change the allow-listed failure paths. Code
 expiry repair. Code 28 hardens the release scanner path. Original Code 29
 carries the reviewed image-format and Android quantity corrections; corrected
 Code 29 adds coordinated identity and the reviewed installer lock path. Current
-Code 29 adds only the reviewed POS-notice, inventory-layout, and Web session
-corrections. None may delete, disable, reorder, or rewrite an existing
+Code 29 adds only the reviewed POS-notice, inventory-layout, Web session, and
+refresh-lock corrections. None may delete, disable, reorder, or rewrite an existing
 test outside the exact fixture-only normalization below.
 The sole reviewed audit-reader locator migration below preserves every
 credential-cleanup assertion while following the corrected UTF-8 reader.
@@ -33,6 +33,10 @@ POS_NOTICE_TEST_PATH = (
 POS_NOTICE_TEST_SHA256 = (
     "b56a28fda657fd04490b5dd055e24c524747dd3ba5b1b2e5f34af79f7e907ef5"
 )
+REFRESH_LOCKING_TEST_PATH = "backend/tests/integration/test_auth_refresh_locking.py"
+REFRESH_LOCKING_TEST_SHA256 = (
+    "719ba8b478d70e2a6a565f564b785df8e4ee7f89c0f92260891c4e7e808887cf"
+)
 
 RELEASE_IDENTITY_TESTS = {
     "android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt",
@@ -55,6 +59,7 @@ REVIEWED_WEB_AUTH_PATHS = frozenset({
 
 ALLOWED_PRODUCTION_PATHS = {
     "backend/app/__init__.py",
+    "backend/app/services/auth/refresh_sessions.py",
     "android-native/app/src/main/java/cloud/dcompany/erp/DCompanyApp.kt",
     "android-native/app/src/main/java/cloud/dcompany/erp/PersistedStartupState.kt",
     "android-native/app/src/main/java/cloud/dcompany/erp/core/alarm/AlarmReceiver.kt",
@@ -320,6 +325,16 @@ def verify_repository(root: Path, baseline: str = CODE25_BASE) -> RegressionFree
         candidate_disables = _disable_counts(candidate_text)
         if any(after > before for before, after in zip(baseline_disables, candidate_disables)):
             errors.append(f"baseline test gained a skip/xfail/ignore path: {path}")
+
+    refresh_locking_test = root / REFRESH_LOCKING_TEST_PATH
+    if not refresh_locking_test.is_file():
+        errors.append(f"reviewed test file was removed: {REFRESH_LOCKING_TEST_PATH}")
+    elif hashlib.sha256(refresh_locking_test.read_bytes()).hexdigest() != (
+        REFRESH_LOCKING_TEST_SHA256
+    ):
+        errors.append(
+            f"reviewed test file differs from its approved bytes: {REFRESH_LOCKING_TEST_PATH}"
+        )
 
     changed = set(
         _git(

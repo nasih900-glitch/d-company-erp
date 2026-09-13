@@ -46,6 +46,14 @@ REVIEWED_WEB_SESSION_SHA256 = {
         "03bde0984b2a6e09657d4f93bd5ea3b1e6be37d7b22345f235f6733b1b856129"
     ),
 }
+REVIEWED_BACKEND_REFRESH_LOCK_SHA256 = {
+    "backend/app/services/auth/refresh_sessions.py": (
+        "6c13788eb0198bece160f7275b9c9a9f6bfc59ac382d96bbeaf682ccca561465"
+    ),
+    "backend/tests/integration/test_auth_refresh_locking.py": (
+        "719ba8b478d70e2a6a565f564b785df8e4ee7f89c0f92260891c4e7e808887cf"
+    ),
+}
 
 EXPECTED_CORRECTION_PATHS = {
     ".env.production.example",
@@ -59,7 +67,9 @@ EXPECTED_CORRECTION_PATHS = {
     "android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt",
     "android-native/audit-driver/plans/code26-gaming-finance-physical.json",
     "backend/app/__init__.py",
+    "backend/app/services/auth/refresh_sessions.py",
     "backend/pyproject.toml",
+    "backend/tests/integration/test_auth_refresh_locking.py",
     "backend/tests/unit/test_client_compatibility.py",
     "backend/tests/unit/test_release_audit_fixes.py",
     "backend/tests/unit/test_release_contracts.py",
@@ -183,6 +193,7 @@ def test_live_delta_is_exactly_the_reviewed_code29_correction() -> None:
     }
     assert protected_application_changes == {
         "backend/app/__init__.py",
+        "backend/app/services/auth/refresh_sessions.py",
         "frontend/src/lib/api-cookie-session-renewal.test.ts",
         "frontend/src/lib/api-session-renewal.test.ts",
         "frontend/src/lib/api.ts",
@@ -373,6 +384,10 @@ def test_freeze_extensions_and_historical_guards_are_exact() -> None:
             ')\n'
             'POS_NOTICE_TEST_SHA256 = (\n'
             '    "b56a28fda657fd04490b5dd055e24c524747dd3ba5b1b2e5f34af79f7e907ef5"\n'
+            ')\n'
+            'REFRESH_LOCKING_TEST_PATH = "backend/tests/integration/test_auth_refresh_locking.py"\n'
+            'REFRESH_LOCKING_TEST_SHA256 = (\n'
+            '    "719ba8b478d70e2a6a565f564b785df8e4ee7f89c0f92260891c4e7e808887cf"\n'
             ')\n\n',
             1,
         ),
@@ -388,8 +403,15 @@ def test_freeze_extensions_and_historical_guards_are_exact() -> None:
             "expiry repair. Code 28 hardens the release scanner path. Original Code 29\n"
             "carries the reviewed image-format and Android quantity corrections; corrected\n"
             "Code 29 adds coordinated identity and the reviewed installer lock path. Current\n"
-            "Code 29 adds only the reviewed POS-notice, inventory-layout, and Web session\n"
-            "corrections. None may delete, disable, reorder, or rewrite an existing",
+            "Code 29 adds only the reviewed POS-notice, inventory-layout, Web session, and\n"
+            "refresh-lock corrections. None may delete, disable, reorder, or rewrite an existing",
+            1,
+        ),
+        (
+            'ALLOWED_PRODUCTION_PATHS = {\n    "backend/app/__init__.py",',
+            'ALLOWED_PRODUCTION_PATHS = {\n'
+            '    "backend/app/__init__.py",\n'
+            '    "backend/app/services/auth/refresh_sessions.py",',
             1,
         ),
         (
@@ -429,6 +451,20 @@ def test_freeze_extensions_and_historical_guards_are_exact() -> None:
             "            path, candidate_normalised\n"
             "        )\n"
             "        candidate_normalised = _normalise_audit_reader_locator(path, candidate_normalised)\n",
+            1,
+        ),
+        (
+            "\n    changed = set(\n",
+            "\n    refresh_locking_test = root / REFRESH_LOCKING_TEST_PATH\n"
+            "    if not refresh_locking_test.is_file():\n"
+            "        errors.append(f\"reviewed test file was removed: {REFRESH_LOCKING_TEST_PATH}\")\n"
+            "    elif hashlib.sha256(refresh_locking_test.read_bytes()).hexdigest() != (\n"
+            "        REFRESH_LOCKING_TEST_SHA256\n"
+            "    ):\n"
+            "        errors.append(\n"
+            "            f\"reviewed test file differs from its approved bytes: {REFRESH_LOCKING_TEST_PATH}\"\n"
+            "        )\n"
+            "\n    changed = set(\n",
             1,
         ),
     )
@@ -544,6 +580,21 @@ def test_reviewed_pos_and_inventory_ui_corrections_are_exact() -> None:
 def test_reviewed_web_session_correction_is_exact() -> None:
     for path, expected_sha256 in REVIEWED_WEB_SESSION_SHA256.items():
         _assert_sha256(path, (ROOT / path).read_bytes(), expected_sha256)
+
+
+def test_reviewed_backend_refresh_lock_correction_is_exact() -> None:
+    for path, expected_sha256 in REVIEWED_BACKEND_REFRESH_LOCK_SHA256.items():
+        _assert_sha256(path, (ROOT / path).read_bytes(), expected_sha256)
+
+
+@pytest.mark.parametrize("path", REVIEWED_BACKEND_REFRESH_LOCK_SHA256)
+def test_reviewed_backend_refresh_lock_hash_guards_reject_mutations(path: str) -> None:
+    with pytest.raises(AssertionError, match="unexpected corrected Code 29 content"):
+        _assert_sha256(
+            path,
+            (ROOT / path).read_bytes() + b"\n",
+            REVIEWED_BACKEND_REFRESH_LOCK_SHA256[path],
+        )
 
 
 @pytest.mark.parametrize("path", REVIEWED_WEB_SESSION_SHA256)
