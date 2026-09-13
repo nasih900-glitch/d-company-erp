@@ -9,7 +9,8 @@ carries the reviewed image-format and Android quantity corrections; corrected
 Code 29 adds coordinated identity and the reviewed installer lock path. Current
 Code 29 adds only the reviewed POS-notice, inventory-layout, Web session,
 refresh-lock, owner-approved pricing-card, Code 29.1 packaging-label, and the
-reviewed Code29.2 customer-playtime draft. None may delete, disable, reorder, or rewrite an existing test
+reviewed Code29.2 customer-playtime draft. Code30 adds the reviewed saved-customer
+lookup. None may delete, disable, reorder, or rewrite an existing test
 outside the exact fixture-only normalization or exact reviewed-test hashes below.
 The sole reviewed audit-reader locator migration below preserves every
 credential-cleanup assertion while following the corrected UTF-8 reader.
@@ -81,6 +82,11 @@ REVIEWED_CODE29_2_TEST_SHA256 = {
     "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/finance/FinancePresentationPolicyTest.kt": "6754029ae8b59b5c9a0c1b273f8f9e735a3be243b88f8ee527be2e36af537535",
     "backend/tests/integration/test_points_reservation_balance.py": "ef4bd05349fde10b2e1c14bc2b968e388f9a76318bceaad8e471f6a9912118a1",
     "frontend/src/lib/product-profile.test.ts": "c6f6a2e6a53967c85abda6ab9c6ff343b4cb2922e4258b4b5a97f1b64a2ba6b1",
+}
+REVIEWED_CODE30_TEST_SHA256 = {
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/core/db/MigrationTest.kt": "898d83ae44d48ba617a0b62eb8536a00239ddf8759b9605e08a9976c5bf59abe",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingDialogUiTest.kt": "dcefe98b7ff7ea65a56e80b4af99563b70ab8c25c20f02c26d4f0cc252f191eb",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/gaming/GamingApiContractTest.kt": "a91358fff7ea9c147c346dd2a20941f6cac156c91f012a6bb2e1cd745fd1b3a1",
 }
 
 RELEASE_IDENTITY_TESTS = {
@@ -154,6 +160,12 @@ REVIEWED_CODE29_2_PRODUCTION_PATHS = frozenset({
     "frontend/src/modules/customers/customer-playtime.test.ts",
     "frontend/src/modules/customers/customer-playtime.ts",
 })
+REVIEWED_CODE30_PRODUCTION_PATHS = frozenset({
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/db/CustomerDao.kt",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingCustomerSearch.kt",
+    "frontend/src/modules/gaming/GamingCustomerPicker.test.ts",
+    "frontend/src/modules/gaming/GamingCustomerPicker.tsx",
+})
 
 ALLOWED_PRODUCTION_PATHS = {
     "backend/app/__init__.py",
@@ -180,7 +192,7 @@ ALLOWED_PRODUCTION_PATHS = {
     "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingViewModel.kt",
     "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/inventory/InventoryScreen.kt",
     "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/settings/BugReportOutbox.kt",
-} | REVIEWED_WEB_AUTH_PATHS | REVIEWED_PRICING_PRODUCTION_PATHS | REVIEWED_PACKAGING_UI_PATHS | REVIEWED_CODE29_2_PRODUCTION_PATHS
+} | REVIEWED_WEB_AUTH_PATHS | REVIEWED_PRICING_PRODUCTION_PATHS | REVIEWED_PACKAGING_UI_PATHS | REVIEWED_CODE29_2_PRODUCTION_PATHS | REVIEWED_CODE30_PRODUCTION_PATHS
 
 PRODUCTION_PREFIXES = (
     "backend/app/",
@@ -243,6 +255,7 @@ def _normalise_release_identity(path: str, text: str) -> str:
         return text
     normalised = text
     for current, baseline in (
+        ("3.1.24", "3.1.14"),
         ("3.1.23", "3.1.14"),
         ("3.1.22", "3.1.14"),
         ("3.1.21", "3.1.14"),
@@ -252,6 +265,10 @@ def _normalise_release_identity(path: str, text: str) -> str:
         ("3.1.17", "3.1.14"),
         ("3.1.16", "3.1.14"),
         ("3.1.15", "3.1.14"),
+        ("Code 30", "Code 25"),
+        ("code 30", "code 25"),
+        ("CODE30", "CODE25"),
+        ("code30", "code25"),
         ("Code 29", "Code 25"),
         ("code 29", "code 25"),
         ("CODE29", "CODE25"),
@@ -271,10 +288,10 @@ def _normalise_release_identity(path: str, text: str) -> str:
     ):
         normalised = normalised.replace(current, baseline)
     normalised = re.sub(
-        r"version_code\s*=\s*(?:26|27|28|29|30|31)\b", "version_code=25", normalised
+        r"version_code\s*=\s*(?:26|27|28|29|30|31|32)\b", "version_code=25", normalised
     )
     normalised = re.sub(
-        r"assertEquals\((?:26|27|28|29|30|31),\s*BuildConfig\.VERSION_CODE\)",
+        r"assertEquals\((?:26|27|28|29|30|31|32),\s*BuildConfig\.VERSION_CODE\)",
         "assertEquals(25, BuildConfig.VERSION_CODE)",
         normalised,
     )
@@ -420,7 +437,8 @@ def verify_repository(root: Path, baseline: str = CODE25_BASE) -> RegressionFree
             path, candidate_normalised
         )
         reviewed_test_sha256 = (
-            REVIEWED_CODE29_2_TEST_SHA256.get(path)
+            REVIEWED_CODE30_TEST_SHA256.get(path)
+            or REVIEWED_CODE29_2_TEST_SHA256.get(path)
             or REVIEWED_PRICING_TEST_SHA256.get(path)
             or REVIEWED_PACKAGING_TEST_SHA256.get(path)
         )

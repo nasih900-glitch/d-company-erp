@@ -2154,8 +2154,8 @@ export interface RewardDTO {
 }
 
 export const customers = {
-  list: (q?: string) =>
-    api.get<CustomerDTO[]>('/customers', { params: q ? { q } : {} }).then((r) => r.data),
+  list: (q?: string, signal?: AbortSignal) =>
+    api.get<CustomerDTO[]>('/customers', { params: q ? { q } : {}, signal }).then((r) => r.data),
   byPhone: (phone: string) =>
     api.get<CustomerDTO | null>(`/customers/by-phone/${encodeURIComponent(phone)}`).then((r) => r.data),
   get: (id: string) => api.get<CustomerDTO>(`/customers/${id}`).then((r) => r.data),
@@ -3179,7 +3179,7 @@ export const gaming = {
     { headers: { 'Idempotency-Key': idempotencyKey } },
   ).then((r) => r.data),
   startSession: (body: {
-    station_id: string; shift_id: string; customer_name?: string; customer_phone?: string;
+    station_id: string; shift_id: string; customer_id?: string; customer_name?: string; customer_phone?: string;
     timer_minutes?: number; package_id?: string; extra_controllers?: number; player_count?: number;
     expected_rate_per_hour_minor: number;
     expected_package_price_minor?: number;

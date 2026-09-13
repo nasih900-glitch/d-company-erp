@@ -1620,7 +1620,7 @@ class GamingDialogUiTest {
                         type = "streaming",
                     ),
                     onDismiss = {},
-                    onConfirm = { name, phone, minutes, _, _ ->
+                    onConfirm = { _, name, phone, minutes, _, _ ->
                         submittedName = name
                         submittedPhone = phone
                         submittedMinutes = minutes
@@ -1628,6 +1628,8 @@ class GamingDialogUiTest {
                 )
             }
         }
+
+        compose.onNodeWithText("Add new").performClick()
 
         compose.onNodeWithContentDescription("Customer name (optional)")
             .bringIntoViewIfNeeded()
@@ -1650,6 +1652,50 @@ class GamingDialogUiTest {
             assertEquals("Booking guest", submittedName)
             assertEquals("+91 98765 43210", submittedPhone)
             assertEquals(60, submittedMinutes)
+        }
+    }
+
+    @Test
+    fun startSession_savedCustomerSearchSelectAndChangeNeverLeakHiddenSnapshots() {
+        var submittedCustomerId: String? = "not-submitted"
+        var submittedName: String? = "not-submitted"
+        var submittedPhone: String? = "not-submitted"
+        var searched = ""
+        compose.setContent {
+            DCompanyTheme {
+                StartSessionDialog(
+                    station = testStation().copy(type = "streaming", name = "Streaming Booth 2"),
+                    customers = listOf(
+                        GamingCustomerOption(
+                            customerId = "customer-501",
+                            name = "Amina Returning",
+                            phone = "9876543210",
+                            pending = false,
+                        ),
+                    ),
+                    online = true,
+                    onSearchCustomer = { searched = it },
+                    onDismiss = {},
+                    onConfirm = { customerId, name, phone, _, _, _ ->
+                        submittedCustomerId = customerId
+                        submittedName = name
+                        submittedPhone = phone
+                    },
+                )
+            }
+        }
+
+        compose.onNodeWithContentDescription("Search saved customers by name or phone")
+            .performTextReplacement("Amina")
+        compose.runOnIdle { assertEquals("Amina", searched) }
+        compose.onNodeWithText("Amina Returning").performClick()
+        compose.onNodeWithText("Change").performClick()
+        compose.onNodeWithText("Start session").bringIntoViewIfNeeded().performClick()
+
+        compose.runOnIdle {
+            assertEquals(null, submittedCustomerId)
+            assertEquals(null, submittedName)
+            assertEquals(null, submittedPhone)
         }
     }
 
@@ -1692,7 +1738,7 @@ class GamingDialogUiTest {
                         ),
                     ),
                     onDismiss = {},
-                    onConfirm = { _, _, minutes, packageId, controllers ->
+                    onConfirm = { _, _, _, minutes, packageId, controllers ->
                         submittedMinutes = minutes
                         submittedPackage = packageId
                         submittedControllers = controllers
@@ -1734,7 +1780,7 @@ class GamingDialogUiTest {
                         GamingPackage("premium-stale", "premium-single-session-60m", "simulator", "premium", "simdrive", 1, 1, "base", "Premium stale", 60, 15_000),
                     ),
                     onDismiss = {},
-                    onConfirm = { _, _, _, packageId, _ -> submittedPackage = packageId },
+                    onConfirm = { _, _, _, _, packageId, _ -> submittedPackage = packageId },
                 )
             }
         }

@@ -83,6 +83,7 @@ data class GameSession(
     @SerialName("package_station_type_snapshot") val packageStationTypeSnapshot: String? = null,
     @SerialName("package_pricing_tier_snapshot") val packagePricingTierSnapshot: String? = null,
     @SerialName("extra_controllers") val extraControllers: Int = 0,
+    @SerialName("customer_id") val customerId: String? = null,
     @SerialName("customer_name") val customerName: String? = null,
     @SerialName("customer_phone") val customerPhone: String? = null,
     @SerialName("order_id") val orderId: String? = null,
@@ -105,6 +106,7 @@ data class SessionStartBody(
     @SerialName("shift_id") val shiftId: String,
     /** Exact durable-capture timestamp; must match the offline provenance header. */
     @SerialName("started_at") val startedAt: String,
+    @SerialName("customer_id") val customerId: String? = null,
     @SerialName("customer_name") val customerName: String? = null,
     @SerialName("customer_phone") val customerPhone: String? = null,
     @SerialName("timer_minutes") val timerMinutes: Int? = null,

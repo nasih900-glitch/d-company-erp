@@ -53,8 +53,12 @@ import cloud.dcompany.erp.core.sync.ResourceRefreshResult
 import cloud.dcompany.erp.ui.screens.CartModifierSelection
 import cloud.dcompany.erp.ui.screens.configuredUnitPriceMinor
 import cloud.dcompany.erp.ui.WorkspaceFeatureProfiles
+import cloud.dcompany.erp.ui.screens.customers.Customer
+import cloud.dcompany.erp.ui.screens.customers.CustomersApi
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -64,6 +68,8 @@ import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.time.Instant
 import java.util.UUID
 import kotlinx.serialization.json.JsonNull
@@ -72,6 +78,8 @@ data class GamingUiState(
     val stations: List<Station> = emptyList(),
     val packages: List<GamingPackage> = emptyList(),
     val sessions: List<GameSession> = emptyList(),
+    /** Scoped Room projection; the server customer pull is currently capped at 500 rows. */
+    val customers: List<GamingCustomerOption> = emptyList(),
     val busyStationId: String? = null,
     val error: String? = null,
     val notice: String? = null,
@@ -913,6 +921,7 @@ class GamingViewModel : ViewModel() {
     private val appCtx = DCompanyApp.instance
     private val db = appCtx.db
     private val gamingApi = ApiClient.create<GamingApi>()
+    private val customersApi = ApiClient.create<CustomersApi>()
     /** Validated, persisted purpose is part of the same terminal authority as X-Terminal-Id. */
     val activeTerminal: StateFlow<ValidatedTerminalDisplay?> =
         appCtx.terminalStore.activeValidatedTerminal
@@ -926,6 +935,9 @@ class GamingViewModel : ViewModel() {
     private val notice = MutableStateFlow<String?>(null)
     private val refreshing = MutableStateFlow(true)
     private val refreshError = MutableStateFlow<String?>(null)
+    private var customerSearchJob: Job? = null
+    private var customerSearchGeneration = 0L
+    private val customerLookupMutex = Mutex()
     private val _posTargetSelection = MutableStateFlow<PosTargetSelectionUi?>(null)
     val posTargetSelection: StateFlow<PosTargetSelectionUi?> = _posTargetSelection
     @Volatile private var access = GamingAccess()
@@ -946,6 +958,7 @@ class GamingViewModel : ViewModel() {
         val variants: List<MenuVariantEntity>,
         val modifierGroups: List<MenuModifierGroupEntity>,
         val modifiers: List<MenuModifierEntity>,
+        val customers: List<GamingCustomerOption>,
     )
 
     private data class AddonState(
@@ -973,7 +986,8 @@ class GamingViewModel : ViewModel() {
         ) { categories, items, variants, groups, modifiers ->
             AddonCatalogState(categories, items, variants, groups, modifiers)
         },
-    ) { gaming, menu ->
+        combine(db.customerDao().observeCache(), db.customerDao().observeLocal(), ::Pair),
+    ) { gaming, menu, customerRows ->
         ReferenceState(
             stations = gaming.first,
             packages = gaming.second,
@@ -982,6 +996,7 @@ class GamingViewModel : ViewModel() {
             variants = menu.variants,
             modifierGroups = menu.modifierGroups,
             modifiers = menu.modifiers,
+            customers = projectGamingCustomers(customerRows.first, customerRows.second),
         )
     }
 
@@ -1059,6 +1074,7 @@ class GamingViewModel : ViewModel() {
             stations = references.stations.map { it.toStation() },
             packages = references.packages.map { it.toGamingPackage() },
             sessions = cacheSessions + localOnly,
+            customers = references.customers,
             busyStationId = actionState.busyStationId,
             error = actionState.actionError,
             notice = actionState.notice,
@@ -1151,6 +1167,56 @@ class GamingViewModel : ViewModel() {
         refreshing.value = true
         refreshError.value = null
         viewModelScope.launch { refreshGaming() }
+    }
+
+    fun refreshCustomersForStart() {
+        viewModelScope.launch {
+            // Best effort: the scoped Room cache remains usable offline and the
+            // dialog states the backend's current 500-row pull bound.
+            customerLookupMutex.withLock { appCtx.sync.refresh("customers") }
+        }
+    }
+
+    fun searchCustomersForStart(rawQuery: String) {
+        customerSearchJob?.cancel()
+        val generation = ++customerSearchGeneration
+        val query = onlineGamingCustomerQuery(rawQuery, state.value.online) ?: return
+        val workspaceMessage = gamingWorkspaceUnavailableMessage(
+            action = "saved customers could be searched",
+            preservedState = "No customer was selected or changed.",
+        )
+        val lease = scopeLeaseOrError(workspaceMessage) ?: return
+        customerSearchJob = viewModelScope.launch {
+            delay(250)
+            try {
+                customerLookupMutex.withLock {
+                    if (!isCurrentGamingCustomerSearch(generation, customerSearchGeneration)) return@withLock
+                    if (!appCtx.cacheIsolation.commitIfCurrentOrNotifyStale(
+                            lease = lease,
+                            onStale = { error.value = workspaceMessage },
+                            write = {},
+                        )
+                    ) return@withLock
+                    val rows = customersApi.list(q = query, limit = 50)
+                    if (!isCurrentGamingCustomerSearch(generation, customerSearchGeneration)) return@withLock
+                    appCtx.cacheIsolation.commitIfCurrentOrNotifyStale(
+                        lease = lease,
+                        onStale = { error.value = workspaceMessage },
+                    ) {
+                        if (!isCurrentGamingCustomerSearch(generation, customerSearchGeneration)) {
+                            return@commitIfCurrentOrNotifyStale
+                        }
+                        // A query subset augments the scoped offline cache. It must
+                        // never wholesale-replace the first-page cache.
+                        db.customerDao().upsertCache(rows.map { it.toGamingCacheEntity() })
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                Log.w("GamingViewModel", "Saved-customer search failed; retaining local cache", failure)
+            }
+        }
     }
 
     private suspend fun refreshGaming() {
@@ -1260,6 +1326,7 @@ class GamingViewModel : ViewModel() {
 
     fun start(
         station: Station,
+        customerId: String?,
         name: String?,
         phone: String?,
         timerMinutes: Int?,
@@ -1375,11 +1442,19 @@ class GamingViewModel : ViewModel() {
                                 return@withTransaction
                             }
                         }
+                        if (customerId != null &&
+                            db.customerDao().getCache(customerId) == null &&
+                            db.customerDao().pendingLocalForServerId(customerId) == null
+                        ) {
+                            shiftCaptureError = "That saved customer is no longer available in this workspace. Search again; no play was saved."
+                            return@withTransaction
+                        }
                         inserted = db.gamingDao().insertStartIfStationAvailable(
                             LocalGamingSessionEntity(
                                 localId = UUID.randomUUID().toString(),
                                 stationId = station.id,
                                 shiftId = shift,
+                                customerId = customerId,
                                 customerName = name?.trim()?.takeIf { it.isNotEmpty() },
                                 customerPhone = phone?.trim()?.takeIf { it.isNotEmpty() },
                                 timerMinutes = capturedTimerMinutes,
@@ -3262,6 +3337,25 @@ private fun GamingPackageCacheEntity.toGamingPackage() = GamingPackage(
     priceMinor = priceMinor,
 )
 
+private fun Customer.toGamingCacheEntity() = cloud.dcompany.erp.core.db.CustomerCacheEntity(
+    id = id,
+    name = name,
+    phone = phone,
+    email = email,
+    birthday = birthday,
+    visitCount = visitCount,
+    totalSpentMinor = totalSpentMinor,
+    loyaltyPoints = loyaltyPoints,
+    lifetimeGamingPointsEarned = lifetimeGamingPointsEarned,
+    gamingRank = gamingRank,
+    gamingRankFloor = gamingRankFloor,
+    nextGamingRank = nextGamingRank,
+    nextGamingRankFloor = nextGamingRankFloor,
+    pointsToNextGamingRank = pointsToNextGamingRank,
+    lastVisitAt = lastVisitAt,
+    notes = notes,
+)
+
 internal fun GamingSessionCacheEntity.toGameSession() = GameSession(
     id = id,
     stationId = stationId,
@@ -3287,6 +3381,7 @@ internal fun GamingSessionCacheEntity.toGameSession() = GameSession(
     packageStationTypeSnapshot = packageStationTypeSnapshot,
     packagePricingTierSnapshot = packagePricingTierSnapshot,
     extraControllers = extraControllers,
+    customerId = customerId,
     customerName = customerName,
     customerPhone = customerPhone,
     orderId = orderId,
@@ -3317,6 +3412,7 @@ internal fun GameSession.toCacheEntity() = GamingSessionCacheEntity(
     packageStationTypeSnapshot = packageStationTypeSnapshot,
     packagePricingTierSnapshot = packagePricingTierSnapshot,
     extraControllers = extraControllers,
+    customerId = customerId,
     customerName = customerName,
     customerPhone = customerPhone,
     orderId = orderId,
@@ -3342,6 +3438,7 @@ private fun LocalGamingSessionEntity.toGameSession() = GameSession(
     packageStationTypeSnapshot = packageStationTypeSnapshot,
     packagePricingTierSnapshot = packagePricingTierSnapshot,
     extraControllers = extraControllers,
+    customerId = customerId,
     customerName = customerName,
     customerPhone = customerPhone,
     orderId = orderId,

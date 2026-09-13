@@ -7,16 +7,16 @@ import org.junit.Test
 /** Guards the installable Android artifact identity against accidental reuse. */
 class AndroidReleaseIdentityTest {
     @Test
-    fun `code 29 artifact keeps production and isolated audit identities distinct`() {
-        assertEquals(31, BuildConfig.VERSION_CODE)
+    fun `code 30 artifact keeps production and isolated audit identities distinct`() {
+        assertEquals(32, BuildConfig.VERSION_CODE)
         if (BuildConfig.BUILD_TYPE == "physicalAudit") {
             assertEquals("cloud.dcompany.erp.physicalaudit", BuildConfig.APPLICATION_ID)
-            assertEquals("3.1.23-physical-audit", BuildConfig.VERSION_NAME)
+            assertEquals("3.1.24-physical-audit", BuildConfig.VERSION_NAME)
             assertEquals("managed", BuildConfig.DISTRIBUTION_CHANNEL)
             assertFalse(BuildConfig.DIRECT_UPDATES_ENABLED)
         } else {
             assertEquals("cloud.dcompany.erp", BuildConfig.APPLICATION_ID)
-            assertEquals("3.1.23", BuildConfig.VERSION_NAME)
+            assertEquals("3.1.24", BuildConfig.VERSION_NAME)
         }
     }
 }

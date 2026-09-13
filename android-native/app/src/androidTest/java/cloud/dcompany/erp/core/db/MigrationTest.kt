@@ -35,6 +35,32 @@ class MigrationTest {
     )
 
     @Test
+    fun migrate46To47PreservesQueuedStartAndAddsStableCustomerIdentity() {
+        helper.createDatabase(dbName, 46).apply {
+            execSQL(
+                "INSERT INTO local_gaming_sessions " +
+                    "(localId, stationId, shiftId, customerName, customerPhone, timerMinutes, " +
+                    "startedAtMillis, state, status, extraControllers) VALUES " +
+                    "('queued-customer-start', 'station-1', 'shift-1', 'Amina', '9876543210', " +
+                    "60, 1000, 'start_pending', 'starting', 0)",
+            )
+            close()
+        }
+
+        val migrated = helper.runMigrationsAndValidate(dbName, 47, true, MIGRATION_46_47)
+        migrated.query(
+            "SELECT customerName, customerPhone, customerId FROM local_gaming_sessions " +
+                "WHERE localId = 'queued-customer-start'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("Amina", cursor.getString(0))
+            assertEquals("9876543210", cursor.getString(1))
+            assertTrue(cursor.isNull(2))
+        }
+        migrated.close()
+    }
+
+    @Test
     fun migrate1To2_preservesExistingDataAndAddsLocalShifts() {
         // Seed a v1 database with real rows — the migration is additive-only
         // (CREATE TABLE, no ALTER against menu_items/local_orders/etc), but

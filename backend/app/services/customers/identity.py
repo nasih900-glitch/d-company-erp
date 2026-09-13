@@ -103,3 +103,22 @@ async def resolve_gaming_customer(
     if name and not customer.name:
         customer.name = name
     return customer
+
+
+async def get_selected_gaming_customer(
+    session,
+    *,
+    company_id: UUID,
+    customer_id: UUID,
+) -> Customer | None:
+    """Load one live saved identity inside the authenticated company."""
+
+    return (
+        await session.execute(
+            select(Customer).where(
+                Customer.id == customer_id,
+                Customer.company_id == company_id,
+                Customer.deleted_at.is_(None),
+            ).with_for_update()
+        )
+    ).scalar_one_or_none()

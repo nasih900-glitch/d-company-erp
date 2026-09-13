@@ -179,6 +179,33 @@ REVIEWED_CODE29_2_FEATURE_SHA256 = {
     "frontend/src/modules/customers/customer-playtime.ts": "b4b879c0eff0f00314c6c27a21b5c6968ee7223d1df6b0c9836c8ab67278649b",
     "frontend/src/modules/gaming/GamingScreen.tsx": "f21c3d6936f1d84db891f1087da3a1d680ba96dd0b5e3fc82364871197f6b7e9",
 }
+REVIEWED_CODE30_FEATURE_SHA256 = {
+    "android-native/app/schemas/cloud.dcompany.erp.core.db.ErpDatabase/47.json": "4343888a27a56edd0a0ba2307a7ff269990b64558fbd895840bbbb20bca52057",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/core/db/MigrationTest.kt": "898d83ae44d48ba617a0b62eb8536a00239ddf8759b9605e08a9976c5bf59abe",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingDialogUiTest.kt": "dcefe98b7ff7ea65a56e80b4af99563b70ab8c25c20f02c26d4f0cc252f191eb",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/db/CustomerDao.kt": "e5a36d1bdcbba83ce7b1c557830396db5f05b996f9ae6bc9b605f92c9dc1e1f9",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/db/Dao.kt": "93257a72c347398abe2a5859102a139b311b2cb869a99127dcbff17654ab9c29",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/db/GamingEntities.kt": "520dbdcc79b3a4f028a4350370ab7b840498e798ac743d5285afc8d29d50ec53",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/db/Migrations.kt": "221d45efaf731a5eb77c576e9d1440ffe90374b75ce2da276625fe72acbd4f9a",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/sync/SyncEngine.kt": "505b192e9765b1f4fd7429727aa0e6a4bbd7d1e0202206666790065be5f16bf9",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingApi.kt": "9279123af258022a65e42d95dccd720915fdda473468707e471d1ed4f08c82c6",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingCustomerSearch.kt": "c41599dc2fb4d19fef26d2d8d087224d016abd398b9300b88d980b09f149415a",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingScreen.kt": "b80b033d4a8ae25252dd826e313652482c8ee0cfffd9e77b85042074dc6de465",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingViewModel.kt": "8bdc5b836805c7405007cd8261dcc97fa71a409909f4bec2badb660fd8283971",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/gaming/GamingApiContractTest.kt": "a91358fff7ea9c147c346dd2a20941f6cac156c91f012a6bb2e1cd745fd1b3a1",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/gaming/GamingCustomerSearchTest.kt": "335fd894ca07e092177ff0f12bd39093313b3d8fd338d11eef55f95fc46ceb2d",
+    "backend/app/api/v1/gaming/router.py": "10d6a0f2508e516ce26687d9babde517d94b57fc79b778c536df40f32008f722",
+    "backend/app/services/customers/identity.py": "61bf633142010cf773a633fcf7095daf52eab795360d1a93985fe1c9596813a7",
+    "backend/tests/integration/test_gaming_customer_selection.py": "c7843c8d7fd2ad3771fedb75256ce638881979c81fcbfafa1928cd31f2b5ffe3",
+    "frontend/src/lib/erp-api.ts": "7f8a349baf5a3993f7390d7febf4f7de23a89d468139ababeeb3605b5c814246",
+    "frontend/src/modules/gaming/GamingCustomerPicker.test.ts": "8d604cc52f28c041cc5c5b541dc288ea739ba691b062db0856950ca59c1f818c",
+    "frontend/src/modules/gaming/GamingCustomerPicker.tsx": "e68934a406f7ac952a199d716a838ad473e672bb4be10e794d3e670af0fa391b",
+    "frontend/src/modules/gaming/GamingScreen.tsx": "b4a8a8c85f27bcc3875ab23ce4707f2375b45dd548568365628998a25e08e4ab",
+}
+CODE30_RELEASE_METADATA_PATHS = {
+    "docs/CODE30_RELEASE_CANDIDATE.md",
+}
+
 CODE29_2_RELEASE_METADATA_PATHS = {
     "AGENTS.md",
     "README.md",
@@ -293,7 +320,9 @@ def _assert_sha256(path: str, content: bytes, expected: str) -> None:
 
 
 def _reviewed_sha256(path: str, historical: dict[str, str]) -> str:
-    return REVIEWED_CODE29_2_FEATURE_SHA256.get(path, historical[path])
+    return REVIEWED_CODE30_FEATURE_SHA256.get(
+        path, REVIEWED_CODE29_2_FEATURE_SHA256.get(path, historical[path])
+    )
 
 
 def _identity_expected(path: str) -> str:
@@ -306,9 +335,9 @@ def _identity_expected(path: str) -> str:
         "frontend/.env.example": 1,
         "docker-compose.prod.yml": 6,
     }
-    replacements = [("3.1.19", "3.1.23", counts[path])]
+    replacements = [("3.1.19", "3.1.24", counts[path])]
     if path == "android-native/app/build.gradle.kts":
-        replacements.append(("versionCode = 29", "versionCode = 31", 1))
+        replacements.append(("versionCode = 29", "versionCode = 32", 1))
     return _replace_exact(_original(path), tuple(replacements))
 
 
@@ -344,7 +373,9 @@ def test_live_delta_is_exactly_the_reviewed_code29_correction() -> None:
     assert _changed_paths() == (
         EXPECTED_CORRECTION_PATHS
         | set(REVIEWED_CODE29_2_FEATURE_SHA256)
+        | set(REVIEWED_CODE30_FEATURE_SHA256)
         | CODE29_2_RELEASE_METADATA_PATHS
+        | CODE30_RELEASE_METADATA_PATHS
     )
     protected_application_changes = {
         path
@@ -374,10 +405,14 @@ def test_live_delta_is_exactly_the_reviewed_code29_correction() -> None:
         path
         for path in REVIEWED_CODE29_2_FEATURE_SHA256
         if path.startswith(("backend/app/", "frontend/src/", "android-native/app/src/main/"))
+    } | {
+        path
+        for path in REVIEWED_CODE30_FEATURE_SHA256
+        if path.startswith(("backend/app/", "frontend/src/", "android-native/app/src/main/"))
     }
 
 
-def test_live_coordinated_identity_is_version_name_3_1_23_with_build_31() -> None:
+def test_live_coordinated_identity_is_version_name_3_1_24_with_build_32() -> None:
     for path in (
         "android-native/app/build.gradle.kts",
         "backend/pyproject.toml",
@@ -390,11 +425,11 @@ def test_live_coordinated_identity_is_version_name_3_1_23_with_build_31() -> Non
         _assert_exact_text(path, _current(path), _identity_expected(path))
 
     build = _current("android-native/app/build.gradle.kts")
-    assert build.count("versionCode = 31") == 1
-    assert build.count('versionName = "3.1.23"') == 1
+    assert build.count("versionCode = 32") == 1
+    assert build.count('versionName = "3.1.24"') == 1
 
     env_replacements = (
-        ("APP_VERSION=3.1.19", "APP_VERSION=3.1.23", 1),
+        ("APP_VERSION=3.1.19", "APP_VERSION=3.1.24", 1),
         (
             "# immutable history. Signed Code 28 (3.1.18) failed its production image-identity\n"
             "# gate before maintenance or cutover and was never staged or offered. Code 29\n"
@@ -403,9 +438,9 @@ def test_live_coordinated_identity_is_version_name_3_1_23_with_build_31() -> Non
             "# immutable history. Original signed Code 29 (3.1.19) failed its production\n"
             "# installer lock gate before builds or maintenance and was never staged or offered.\n"
             "# Code 29 (3.1.20) was cancelled before build/signing after the POS notice defect.\n"
-            "# Current Code 29.2 (3.1.23, installation build 31) adds the reviewed customer\n"
-            "# playtime draft while reward activation and WhatsApp messaging remain disabled. It is\n"
-            "# not advertised unless every gate in docs/CODE29_RELEASE_CANDIDATE.md passes for\n"
+            "# Current Code 30 (3.1.24, installation build 32) adds the reviewed saved-customer\n"
+            "# lookup while reward activation and WhatsApp messaging remain disabled. It is\n"
+            "# not advertised unless every gate in docs/CODE30_RELEASE_CANDIDATE.md passes for\n"
             "# its exact source and artifacts.",
             1,
         ),
@@ -420,18 +455,19 @@ def test_live_coordinated_identity_is_version_name_3_1_23_with_build_31() -> Non
 def test_live_identity_fixtures_are_exact_counted_transformations() -> None:
     replacements = {
         "android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt": (
-            ("3.1.19", "3.1.23", 2),
-            ("assertEquals(29, BuildConfig.VERSION_CODE)", "assertEquals(31, BuildConfig.VERSION_CODE)", 1),
+            ("3.1.19", "3.1.24", 2),
+            ("assertEquals(29, BuildConfig.VERSION_CODE)", "assertEquals(32, BuildConfig.VERSION_CODE)", 1),
+            ("code 29 artifact", "code 30 artifact", 1),
         ),
-        "backend/tests/unit/test_client_compatibility.py": (("3.1.19", "3.1.23", 1),),
-        "backend/tests/unit/test_release_audit_fixes.py": (("3.1.19", "3.1.23", 1),),
-        "backend/tests/unit/test_release_contracts.py": (("3.1.19", "3.1.23", 1),),
-        "backend/tests/unit/test_remote_assistance_contract.py": (("3.1.19", "3.1.23", 4),),
+        "backend/tests/unit/test_client_compatibility.py": (("3.1.19", "3.1.24", 1),),
+        "backend/tests/unit/test_release_audit_fixes.py": (("3.1.19", "3.1.24", 1),),
+        "backend/tests/unit/test_release_contracts.py": (("3.1.19", "3.1.24", 1),),
+        "backend/tests/unit/test_remote_assistance_contract.py": (("3.1.19", "3.1.24", 4),),
         "backend/tests/unit/test_runtime_release_parity.py": (
-            ("3.1.19", "3.1.23", 6),
-            ("version_code=29,", "version_code=31,", 1),
+            ("3.1.19", "3.1.24", 6),
+            ("version_code=29,", "version_code=32,", 1),
         ),
-        "tests/test_android_runtime_parity.py": (("3.1.19", "3.1.23", 2),),
+        "tests/test_android_runtime_parity.py": (("3.1.19", "3.1.24", 2),),
         "tests/test_code26_physical_audit_lane.py": (("3.1.19", "3.1.21", 2),),
     }
     for path, path_replacements in replacements.items():
@@ -530,9 +566,31 @@ def test_original_release_name_tests_remain_and_patch_cases_are_exactly_added() 
         "                version,\n"
         "            )\n\n"
     )
+    code30_addition = (
+        "    def test_code30_customer_lookup_accepts_v3_1_24_build32(self) -> None:\n"
+        "        version = read_gradle_version(\n"
+        "            self.write_build_file(version_code=\"32\", version_name='\"3.1.24\"')\n"
+        "        )\n\n"
+        "        validate_tag(\"v3.1.24\", version)\n"
+        "        validate_built_metadata(\n"
+        "            self.write_metadata(version_code=32, version_name=\"3.1.24\"), version\n"
+        "        )\n\n"
+        "        self.assertEqual(AndroidVersion(code=32, name=\"3.1.24\"), version)\n\n"
+        "    def test_code30_customer_lookup_rejects_code29_point2_identity(self) -> None:\n"
+        "        version = read_gradle_version(\n"
+        "            self.write_build_file(version_code=\"32\", version_name='\"3.1.24\"')\n"
+        "        )\n\n"
+        "        with self.assertRaisesRegex(ReleaseVersionError, \"expected 'v3.1.24'\"):\n"
+        "            validate_tag(\"v3.1.23\", version)\n"
+        "        with self.assertRaisesRegex(ReleaseVersionError, \"does not match\"):\n"
+        "            validate_built_metadata(\n"
+        "                self.write_metadata(version_code=31, version_name=\"3.1.23\"),\n"
+        "                version,\n"
+        "            )\n\n"
+    )
     expected = _replace_exact(
         _original(path),
-        ((anchor, addition + current_addition + packaging_addition + code29_2_addition + anchor, 1),),
+        ((anchor, addition + current_addition + packaging_addition + code29_2_addition + code30_addition + anchor, 1),),
     )
     _assert_exact_text(path, _current(path), expected)
     assert "test_code29_image_identity_correction_accepts_v3_1_19" in expected
@@ -963,6 +1021,81 @@ def test_freeze_extensions_and_historical_guards_are_exact() -> None:
             ),
         ),
     )
+    code30_test_paths = (
+        "android-native/app/src/androidTest/java/cloud/dcompany/erp/core/db/MigrationTest.kt",
+        "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingDialogUiTest.kt",
+        "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/gaming/GamingApiContractTest.kt",
+    )
+    code30_test_hashes = "REVIEWED_CODE30_TEST_SHA256 = {\n" + "".join(
+        f'    "{path}": "{REVIEWED_CODE30_FEATURE_SHA256[path]}",\n'
+        for path in code30_test_paths
+    ) + "}\n"
+    code30_production_paths = (
+        "android-native/app/src/main/java/cloud/dcompany/erp/core/db/CustomerDao.kt",
+        "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingCustomerSearch.kt",
+        "frontend/src/modules/gaming/GamingCustomerPicker.test.ts",
+        "frontend/src/modules/gaming/GamingCustomerPicker.tsx",
+    )
+    code30_production_set = "REVIEWED_CODE30_PRODUCTION_PATHS = frozenset({\n" + "".join(
+        f'    "{path}",\n' for path in code30_production_paths
+    ) + "})\n\n"
+    expected_script = _replace_exact(
+        expected_script,
+        (
+            (
+                "reviewed Code29.2 customer-playtime draft. None may delete, disable, reorder, or rewrite an existing test\n",
+                "reviewed Code29.2 customer-playtime draft. Code30 adds the reviewed saved-customer\n"
+                "lookup. None may delete, disable, reorder, or rewrite an existing test\n",
+                1,
+            ),
+            (code29_2_test_hashes, code29_2_test_hashes + code30_test_hashes, 1),
+            (
+                code29_2_production_set,
+                code29_2_production_set[:-1] + code30_production_set,
+                1,
+            ),
+            (
+                "REVIEWED_PACKAGING_UI_PATHS | REVIEWED_CODE29_2_PRODUCTION_PATHS\n\n"
+                "PRODUCTION_PREFIXES",
+                "REVIEWED_PACKAGING_UI_PATHS | REVIEWED_CODE29_2_PRODUCTION_PATHS | "
+                "REVIEWED_CODE30_PRODUCTION_PATHS\n\nPRODUCTION_PREFIXES",
+                1,
+            ),
+            (
+                '        ("3.1.23", "3.1.14"),\n',
+                '        ("3.1.24", "3.1.14"),\n'
+                '        ("3.1.23", "3.1.14"),\n',
+                1,
+            ),
+            (
+                '        ("Code 29", "Code 25"),\n',
+                '        ("Code 30", "Code 25"),\n'
+                '        ("code 30", "code 25"),\n'
+                '        ("CODE30", "CODE25"),\n'
+                '        ("code30", "code25"),\n'
+                '        ("Code 29", "Code 25"),\n',
+                1,
+            ),
+            (
+                'r"version_code\\s*=\\s*(?:26|27|28|29|30|31)\\b"',
+                'r"version_code\\s*=\\s*(?:26|27|28|29|30|31|32)\\b"',
+                1,
+            ),
+            (
+                'r"assertEquals\\((?:26|27|28|29|30|31),\\s*BuildConfig\\.VERSION_CODE\\)"',
+                'r"assertEquals\\((?:26|27|28|29|30|31|32),\\s*BuildConfig\\.VERSION_CODE\\)"',
+                1,
+            ),
+            (
+                "        reviewed_test_sha256 = (\n"
+                "            REVIEWED_CODE29_2_TEST_SHA256.get(path)\n",
+                "        reviewed_test_sha256 = (\n"
+                "            REVIEWED_CODE30_TEST_SHA256.get(path)\n"
+                "            or REVIEWED_CODE29_2_TEST_SHA256.get(path)\n",
+                1,
+            ),
+        ),
+    )
     _assert_exact_text(
         "scripts/verify_code26_regression_freeze.py",
         _current("scripts/verify_code26_regression_freeze.py"),
@@ -1170,6 +1303,70 @@ def test_freeze_extensions_and_historical_guards_are_exact() -> None:
             ),
         ),
     )
+    code30_identity_test = (
+        "def test_code30_build32_identity_normalises_to_inherited_code25_baseline() -> None:\n"
+        "    path = \"android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt\"\n"
+        "    current = 'assertEquals(32, BuildConfig.VERSION_CODE)\\n\"3.1.24\"\\ncode 30 artifact\\n'\n"
+        "    assert _normalise_release_identity(path, current) == (\n"
+        "        'assertEquals(25, BuildConfig.VERSION_CODE)\\n\"3.1.14\"\\ncode 25 artifact\\n'\n"
+        "    )\n\n\n"
+    )
+    code30_guard_test = (
+        '@pytest.mark.parametrize(("path", "expected_sha256"), REVIEWED_CODE30_TEST_SHA256.items())\n'
+        "def test_code30_test_rewrites_require_exact_reviewed_bytes(\n"
+        "    path: str,\n"
+        "    expected_sha256: str,\n"
+        ") -> None:\n"
+        "    current = (ROOT / path).read_bytes()\n"
+        "    assert hashlib.sha256(current).hexdigest() == expected_sha256\n"
+        '    assert hashlib.sha256(current + b"\\n").hexdigest() != expected_sha256\n\n\n'
+    )
+    expected_test = _replace_exact(
+        expected_test,
+        (
+            (
+                "    REVIEWED_CODE29_2_TEST_SHA256,\n"
+                "    REVIEWED_PACKAGING_TEST_SHA256,\n",
+                "    REVIEWED_CODE29_2_TEST_SHA256,\n"
+                "    REVIEWED_CODE30_PRODUCTION_PATHS,\n"
+                "    REVIEWED_CODE30_TEST_SHA256,\n"
+                "    REVIEWED_PACKAGING_TEST_SHA256,\n",
+                1,
+            ),
+            (
+                code29_2_identity_test
+                + "def test_pos_notice_dynamic_state_host_normalises_only_the_approved_bytes() -> None:\n",
+                code29_2_identity_test
+                + code30_identity_test
+                + "def test_pos_notice_dynamic_state_host_normalises_only_the_approved_bytes() -> None:\n",
+                1,
+            ),
+            (
+                "    current_expected = REVIEWED_CODE29_2_TEST_SHA256.get(path, expected_sha256)\n",
+                "    current_expected = REVIEWED_CODE30_TEST_SHA256.get(\n"
+                "        path, REVIEWED_CODE29_2_TEST_SHA256.get(path, expected_sha256)\n"
+                "    )\n",
+                1,
+            ),
+            (
+                "def test_audit_reader_migration_only_normalises_one_locator() -> None:\n",
+                code30_guard_test
+                + "def test_audit_reader_migration_only_normalises_one_locator() -> None:\n",
+                1,
+            ),
+            (
+                "    } | REVIEWED_PACKAGING_UI_PATHS | {\n"
+                "        path for path in REVIEWED_CODE29_2_PRODUCTION_PATHS if path.startswith(\"frontend/src/\")\n"
+                "    }\n",
+                "    } | REVIEWED_PACKAGING_UI_PATHS | {\n"
+                "        path for path in REVIEWED_CODE29_2_PRODUCTION_PATHS if path.startswith(\"frontend/src/\")\n"
+                "    } | {\n"
+                "        path for path in REVIEWED_CODE30_PRODUCTION_PATHS if path.startswith(\"frontend/src/\")\n"
+                "    }\n",
+                1,
+            ),
+        ),
+    )
     _assert_exact_text(freeze_test_path, _current(freeze_test_path), expected_test)
 
     assert hashlib.sha256(
@@ -1245,7 +1442,16 @@ def test_reviewed_packaging_labels_are_exact() -> None:
 
 
 def test_reviewed_code29_2_feature_files_are_exact() -> None:
-    for path, expected_sha256 in REVIEWED_CODE29_2_FEATURE_SHA256.items():
+    for path in REVIEWED_CODE29_2_FEATURE_SHA256:
+        _assert_sha256(
+            path,
+            (ROOT / path).read_bytes(),
+            _reviewed_sha256(path, REVIEWED_CODE29_2_FEATURE_SHA256),
+        )
+
+
+def test_reviewed_code30_feature_files_are_exact() -> None:
+    for path, expected_sha256 in REVIEWED_CODE30_FEATURE_SHA256.items():
         _assert_sha256(path, (ROOT / path).read_bytes(), expected_sha256)
 
 
@@ -1307,7 +1513,17 @@ def test_reviewed_code29_2_feature_hash_guards_reject_mutations(path: str) -> No
         _assert_sha256(
             path,
             (ROOT / path).read_bytes() + b"\n",
-            REVIEWED_CODE29_2_FEATURE_SHA256[path],
+            _reviewed_sha256(path, REVIEWED_CODE29_2_FEATURE_SHA256),
+        )
+
+
+@pytest.mark.parametrize("path", REVIEWED_CODE30_FEATURE_SHA256)
+def test_reviewed_code30_feature_hash_guards_reject_mutations(path: str) -> None:
+    with pytest.raises(AssertionError, match="unexpected corrected Code 29 content"):
+        _assert_sha256(
+            path,
+            (ROOT / path).read_bytes() + b"\n",
+            REVIEWED_CODE30_FEATURE_SHA256[path],
         )
 
 
@@ -1348,7 +1564,7 @@ def test_operator_records_are_frozen_and_trial_precedes_production() -> None:
     [
         ("infra/scripts/install-on-vm.sh", "%f:%d:%i", "%F:%d:%i"),
         (".github/workflows/ci.yml", "sudo -n --", "sudo --"),
-        ("backend/app/__init__.py", '"3.1.23"', '"3.1.23-mutated"'),
+        ("backend/app/__init__.py", '"3.1.24"', '"3.1.24-mutated"'),
     ],
 )
 def test_live_exact_guards_reject_working_tree_mutations(

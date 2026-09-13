@@ -64,7 +64,10 @@ from app.models import (
     Terminal,
     User,
 )
-from app.services.customers.identity import resolve_gaming_customer
+from app.services.customers.identity import (
+    get_selected_gaming_customer,
+    resolve_gaming_customer,
+)
 from app.services.gaming.billing_mode import (
     has_complete_package_snapshot,
     has_partial_package_snapshot,
@@ -137,6 +140,7 @@ class StationUpdate(BaseModel):
 class SessionStart(BaseModel):
     station_id: UUID
     shift_id: UUID
+    customer_id: UUID | None = None
     # Durable native outbox actions capture when the employee tapped Start.
     # Ordinary web/online callers omit this and retain authoritative server
     # receipt time. A supplied value is accepted only with matching offline
@@ -2524,12 +2528,26 @@ async def start_session(
     elif payload.extra_controllers or payload.player_count is not None:
         raise BusinessRuleError("player_count and extra_controllers require a package_id")
 
-    customer = await resolve_gaming_customer(
-        session,
-        company_id=tenant.company_id,
-        phone=payload.customer_phone,
-        name=payload.customer_name,
-    )
+    if payload.customer_id is not None:
+        customer = await get_selected_gaming_customer(
+            session,
+            company_id=tenant.company_id,
+            customer_id=payload.customer_id,
+        )
+        if customer is None:
+            # Deleted and foreign identities are deliberately indistinguishable.
+            raise NotFoundError("customer not found")
+        customer_name = customer.name
+        customer_phone = customer.phone
+    else:
+        customer = await resolve_gaming_customer(
+            session,
+            company_id=tenant.company_id,
+            phone=payload.customer_phone,
+            name=payload.customer_name,
+        )
+        customer_name = payload.customer_name
+        customer_phone = payload.customer_phone
     gs = GamingSession(
         id=uuid4(),
         company_id=tenant.company_id,
@@ -2550,8 +2568,8 @@ async def start_session(
         extra_controllers=resolved_extra_controllers,
         amount_minor=locked_in_amount_minor,
         status="active",
-        customer_name=payload.customer_name,
-        customer_phone=payload.customer_phone,
+        customer_name=customer_name,
+        customer_phone=customer_phone,
         customer_id=customer.id if customer is not None else None,
         customer_identity_provenance=(
             "start_linked" if customer is not None else "start_unlinked"

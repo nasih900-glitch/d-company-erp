@@ -9,6 +9,8 @@ from scripts.verify_code26_regression_freeze import (
     RegressionFreezeError,
     REVIEWED_CODE29_2_PRODUCTION_PATHS,
     REVIEWED_CODE29_2_TEST_SHA256,
+    REVIEWED_CODE30_PRODUCTION_PATHS,
+    REVIEWED_CODE30_TEST_SHA256,
     REVIEWED_PACKAGING_TEST_SHA256,
     REVIEWED_PACKAGING_UI_PATHS,
     REVIEWED_PRICING_TEST_SHA256,
@@ -98,6 +100,14 @@ def test_code29_point2_build31_identity_normalises_to_inherited_code25_baseline(
     )
 
 
+def test_code30_build32_identity_normalises_to_inherited_code25_baseline() -> None:
+    path = "android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt"
+    current = 'assertEquals(32, BuildConfig.VERSION_CODE)\n"3.1.24"\ncode 30 artifact\n'
+    assert _normalise_release_identity(path, current) == (
+        'assertEquals(25, BuildConfig.VERSION_CODE)\n"3.1.14"\ncode 25 artifact\n'
+    )
+
+
 def test_pos_notice_dynamic_state_host_normalises_only_the_approved_bytes() -> None:
     path = (
         "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/"
@@ -172,13 +182,25 @@ def test_pricing_test_rewrites_require_exact_reviewed_bytes(
     expected_sha256: str,
 ) -> None:
     current = (ROOT / path).read_bytes()
-    current_expected = REVIEWED_CODE29_2_TEST_SHA256.get(path, expected_sha256)
+    current_expected = REVIEWED_CODE30_TEST_SHA256.get(
+        path, REVIEWED_CODE29_2_TEST_SHA256.get(path, expected_sha256)
+    )
     assert hashlib.sha256(current).hexdigest() == current_expected
     assert hashlib.sha256(current + b"\n").hexdigest() != current_expected
 
 
 @pytest.mark.parametrize(("path", "expected_sha256"), REVIEWED_PACKAGING_TEST_SHA256.items())
 def test_packaging_label_test_rewrite_requires_exact_reviewed_bytes(
+    path: str,
+    expected_sha256: str,
+) -> None:
+    current = (ROOT / path).read_bytes()
+    assert hashlib.sha256(current).hexdigest() == expected_sha256
+    assert hashlib.sha256(current + b"\n").hexdigest() != expected_sha256
+
+
+@pytest.mark.parametrize(("path", "expected_sha256"), REVIEWED_CODE30_TEST_SHA256.items())
+def test_code30_test_rewrites_require_exact_reviewed_bytes(
     path: str,
     expected_sha256: str,
 ) -> None:
@@ -233,4 +255,6 @@ def test_code26_preserves_the_complete_code25_test_surface() -> None:
         "frontend/src/modules/gaming/gaming-tariff.test.ts",
     } | REVIEWED_PACKAGING_UI_PATHS | {
         path for path in REVIEWED_CODE29_2_PRODUCTION_PATHS if path.startswith("frontend/src/")
+    } | {
+        path for path in REVIEWED_CODE30_PRODUCTION_PATHS if path.startswith("frontend/src/")
     }

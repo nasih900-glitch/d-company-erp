@@ -14,6 +14,9 @@ interface CustomerDao {
     @Query("SELECT * FROM customer_cache ORDER BY name")
     fun observeCache(): Flow<List<CustomerCacheEntity>>
 
+    @Query("SELECT * FROM customer_cache WHERE id = :id LIMIT 1")
+    suspend fun getCache(id: String): CustomerCacheEntity?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertCache(rows: List<CustomerCacheEntity>)
 

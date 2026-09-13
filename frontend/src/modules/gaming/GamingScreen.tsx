@@ -34,6 +34,7 @@ import {
   type GamingPackageDTO,
   type GamingPosTargetShiftDTO,
   type GamingSessionAddonDTO,
+  type CustomerDTO,
   type LegacyPausedSessionResolutionDTO,
   type MenuItemDTO,
   type StationDTO,
@@ -109,6 +110,11 @@ import {
   type GamingAddonCreateTerminalScope,
 } from './gaming-addon-create-attempt';
 import { enterGamingMutation, leaveGamingMutation } from './gaming-mutation-gate';
+import {
+  buildGamingCustomerStartIdentity,
+  clearStartedStationCustomer,
+  GamingCustomerPicker,
+} from './GamingCustomerPicker';
 
 async function loadGamingCentreAddonCatalog(): Promise<MenuItemDTO[]> {
   const [items, categories] = await Promise.all([menuApi.items(), menuApi.categories()]);
@@ -482,6 +488,7 @@ export default function GamingScreen() {
   // snapshot and intentionally does not create identity.
   const [sessionName, setSessionName] = useState<Record<string, string>>({});
   const [sessionPhone, setSessionPhone] = useState<Record<string, string>>({});
+  const [selectedCustomers, setSelectedCustomers] = useState<Record<string, CustomerDTO | undefined>>({});
   const [packages, setPackages] = useState<GamingPackageDTO[]>([]);
   const [pickerVariant, setPickerVariant] = useState<Record<string, string>>({});
   const [pickerPlayerCount, setPickerPlayerCount] = useState<Record<string, number>>({});
@@ -1159,6 +1166,7 @@ export default function GamingScreen() {
     customer = '',
     pkg?: { packageId: string; extraControllers: number; playerCount: number },
     phone = '',
+    selectedCustomer?: CustomerDTO,
   ) {
     const write = requireGamingWrite('Cannot start session');
     if (!write.allowed) return;
@@ -1202,8 +1210,7 @@ export default function GamingScreen() {
         const r = await write.dispatch('startSession', {
           station_id: st.id,
           shift_id: shiftId,
-          customer_name: customer || undefined,
-          customer_phone: phone.trim() || undefined,
+          ...buildGamingCustomerStartIdentity(selectedCustomer, customer, phone),
           timer_minutes: timerMinutes ?? undefined,
           package_id: pkg?.packageId,
           extra_controllers: pkg?.extraControllers,
@@ -1281,6 +1288,7 @@ export default function GamingScreen() {
     setPickerPlayerCount((p) => ({ ...p, [st.id]: 1 }));
     setSessionName((p) => ({ ...p, [st.id]: '' }));
     setSessionPhone((p) => ({ ...p, [st.id]: '' }));
+    setSelectedCustomers((current) => clearStartedStationCustomer(current, st.id));
     setCustomDurationFor(null);
     notifications.success(`${st.name} session started.`, { title: 'Session running' });
   }
@@ -3336,21 +3344,16 @@ export default function GamingScreen() {
                   ));
                   return (
                     <>
-                      <div className="grid grid-cols-1 gap-2 mb-1.5 sm:grid-cols-2">
-                        <input type="text" placeholder="Customer name (optional)"
-                          className="input !py-1.5 text-xs w-full"
-                          disabled={!canManageStations || !canStartOnSelectedTerminal}
-                          value={customerName}
-                          onChange={(e) => setSessionName((s) => ({ ...s, [st.id]: e.target.value }))}/>
-                        <input type="tel" placeholder="Customer phone (optional)"
-                          className="input !py-1.5 text-xs w-full"
-                          disabled={!canManageStations || !canStartOnSelectedTerminal}
-                          value={phone}
-                          onChange={(e) => setSessionPhone((s) => ({ ...s, [st.id]: e.target.value }))}/>
-                      </div>
-                      <p className="mb-2 text-[11px] text-fg-muted">
-                        Add a valid phone to track this named customer's play hours.
-                      </p>
+                      <GamingCustomerPicker
+                        stationId={st.id}
+                        disabled={!canManageStations || !canStartOnSelectedTerminal}
+                        selected={selectedCustomers[st.id]}
+                        name={customerName}
+                        phone={phone}
+                        onSelect={(customer) => setSelectedCustomers((current) => ({ ...current, [st.id]: customer }))}
+                        onNameChange={(value) => setSessionName((current) => ({ ...current, [st.id]: value }))}
+                        onPhoneChange={(value) => setSessionPhone((current) => ({ ...current, [st.id]: value }))}
+                      />
                       {st.type === 'simulator' && availableVariants.length > 1 && (
                         <div
                           className="flex items-center gap-1.5 mb-2"
@@ -3408,7 +3411,7 @@ export default function GamingScreen() {
                               packageId: tariff.id,
                               extraControllers,
                               playerCount: supportsPlayerModes ? playerCount : tariff.included_players,
-                            }, phone)}
+                            }, phone, selectedCustomers[st.id])}
                             disabled={!st.is_active || !packageStartRecoveryReady || !canStartOnSelectedTerminal || startingSession !== null}
                             title={packageStartRecoveryReady
                               ? canStartOnSelectedTerminal
@@ -3447,21 +3450,16 @@ export default function GamingScreen() {
                   </div>
                 ) : (
                   <>
-                    <div className="grid grid-cols-1 gap-2 mb-1.5 sm:grid-cols-2">
-                      <input type="text" placeholder="Customer name (optional)"
-                        className="input !py-1.5 text-xs w-full"
-                        disabled={!canManageStations || !canStartOnSelectedTerminal}
-                        value={customerName}
-                        onChange={(e) => setSessionName((s) => ({ ...s, [st.id]: e.target.value }))}/>
-                      <input type="tel" placeholder="Customer phone (optional)"
-                        className="input !py-1.5 text-xs w-full"
-                        disabled={!canManageStations || !canStartOnSelectedTerminal}
-                        value={phone}
-                        onChange={(e) => setSessionPhone((s) => ({ ...s, [st.id]: e.target.value }))}/>
-                    </div>
-                    <p className="mb-2 text-[11px] text-fg-muted">
-                      Add a valid phone to track this named customer's play hours.
-                    </p>
+                    <GamingCustomerPicker
+                      stationId={st.id}
+                      disabled={!canManageStations || !canStartOnSelectedTerminal}
+                      selected={selectedCustomers[st.id]}
+                      name={customerName}
+                      phone={phone}
+                      onSelect={(customer) => setSelectedCustomers((current) => ({ ...current, [st.id]: customer }))}
+                      onNameChange={(value) => setSessionName((current) => ({ ...current, [st.id]: value }))}
+                      onPhoneChange={(value) => setSessionPhone((current) => ({ ...current, [st.id]: value }))}
+                    />
                     <div className="flex items-center gap-1.5 mb-2 flex-wrap">
                       {DURATION_PRESETS.map((p) => (
                         <button key={p.label}
@@ -3493,7 +3491,7 @@ export default function GamingScreen() {
                     <GamingMutationButton
                       canManageSessions={canManageStations}
                       className="btn btn-primary w-full"
-                      onClick={() => startSession(st, customerName, undefined, phone)}
+                      onClick={() => startSession(st, customerName, undefined, phone, selectedCustomers[st.id])}
                       disabled={!st.is_active || !canStartOnSelectedTerminal || startingSession !== null}
                       title={canStartOnSelectedTerminal
                         ? undefined

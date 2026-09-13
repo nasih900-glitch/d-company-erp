@@ -102,7 +102,7 @@ d-company-erp/
 ## Release status
 
 The current local candidate is documented in
-[`docs/CODE29_2_RELEASE_CANDIDATE.md`](docs/CODE29_2_RELEASE_CANDIDATE.md). That file
+[`docs/CODE30_RELEASE_CANDIDATE.md`](docs/CODE30_RELEASE_CANDIDATE.md). That file
 separates source/test evidence from signing, hosted-update, physical-device, and
 production-deployment approval.
 
@@ -127,11 +127,11 @@ separately identified prototype, not another supported ERP app.
   links only to the live web ERP and verified artifacts from the official GitHub repository.
 
 Tagging a release that exactly matches the Android `versionName` triggers
-`.github/workflows/release.yml`. The current local candidate is Code29.2,
-technical version `3.1.23` with Android installation build `31`; Android code
-`8` remains the minimum-compatible floor. Its customer-playtime and leaderboard
-scope is described in [`docs/CUSTOMER_PLAYTIME_DRAFT.md`](docs/CUSTOMER_PLAYTIME_DRAFT.md),
-with reward activation and WhatsApp messaging disabled. It is not signed,
+`.github/workflows/release.yml`. The current local candidate is cumulative Code30,
+technical version `3.1.24` with Android installation build `32`; Android code
+`8` remains the minimum-compatible floor. It includes the Code29.1 pricing work,
+the Code29.2 customer-playtime draft, and saved-customer lookup when starting a
+gaming session. Reward activation and WhatsApp messaging remain disabled. It is not signed,
 deployed, staged, activated, offered, installed, or approved by this source change.
 The signed
 `3.1.3` (`14`) direct-release APK is a historical manually distributed,
@@ -165,7 +165,7 @@ package, version and expected signer, and pass a same-lineage Code 21 to Code 26
 upgrade proof. Android still requires the employee to approve installation.
 Emulator or cloud-device evidence is not physical Redmi Pad 2 proof.
 
-See [`docs/CODE29_2_RELEASE_CANDIDATE.md`](docs/CODE29_2_RELEASE_CANDIDATE.md) for
+See [`docs/CODE30_RELEASE_CANDIDATE.md`](docs/CODE30_RELEASE_CANDIDATE.md) for
 the complete candidate scope, evidence boundaries, and remaining delivery gates.
 
 ## License

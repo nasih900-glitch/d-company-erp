@@ -444,7 +444,10 @@ fun GamingScreen(
                     onSelectStation = { selectedCommandStationId = it },
                     onOpenAttention = { attentionCenterOpen = true },
                     onRefresh = vm::load,
-                    onStart = { starting = it },
+                    onStart = {
+                        vm.refreshCustomersForStart()
+                        starting = it
+                    },
                     onStop = { station, session -> stopping = StopRequest(station, session) },
                     onSend = { sending = it },
                     onCancelUnbilled = { cancelling = it },
@@ -662,7 +665,10 @@ fun GamingScreen(
                             candidate.id != station.id && candidate.type == station.type &&
                                 candidate.isActive && state.activeFor(candidate.id) == null
                         },
-                        onStart = { starting = station },
+                        onStart = {
+                            vm.refreshCustomersForStart()
+                            starting = station
+                        },
                         onStop = { session -> stopping = StopRequest(station, session) },
                         onSend = { sending = it },
                         onCancelUnbilled = { cancelling = it },
@@ -745,10 +751,13 @@ fun GamingScreen(
             StartSessionDialog(
                 station = station,
                 packages = state.packages.filter { it.stationType == station.type && it.kind == "base" },
+                customers = state.customers,
+                online = state.online,
+                onSearchCustomer = vm::searchCustomersForStart,
                 onDismiss = { starting = null },
-                onConfirm = { name, phone, minutes, packageId, extraControllers ->
+                onConfirm = { customerId, name, phone, minutes, packageId, extraControllers ->
                     starting = null
-                    vm.start(station, name, phone, minutes, packageId, extraControllers)
+                    vm.start(station, customerId, name, phone, minutes, packageId, extraControllers)
                 },
             )
         }
@@ -4350,14 +4359,20 @@ private fun ReconcileSessionDialog(
 internal fun StartSessionDialog(
     station: Station,
     packages: List<GamingPackage> = emptyList(),
+    customers: List<GamingCustomerOption> = emptyList(),
+    online: Boolean = false,
+    onSearchCustomer: (String) -> Unit = {},
     onDismiss: () -> Unit,
-    onConfirm: (String?, String?, Int?, String?, Int) -> Unit,
+    onConfirm: (String?, String?, String?, Int?, String?, Int) -> Unit,
 ) {
     val contentMaxHeight = gamingDialogBodyMaxHeight(
         LocalConfiguration.current.screenHeightDp,
     )
     var name by remember { mutableStateOf("") }
     var phone by remember { mutableStateOf("") }
+    var customerMode by rememberSaveable(station.id) { mutableStateOf("search") }
+    var customerQuery by rememberSaveable(station.id) { mutableStateOf("") }
+    var selectedCustomer by remember(station.id) { mutableStateOf<GamingCustomerOption?>(null) }
     var minutes by remember { mutableStateOf<Int?>(60) }
     val basePackages = remember(packages) {
         packages.filter {
@@ -4413,6 +4428,18 @@ internal fun StartSessionDialog(
     val hasFixedTariff = basePackages.isNotEmpty()
     val fixedTariffRequired = requiresCanonicalGamingTariff(station.type)
     val fixedTariffUnavailable = fixedTariffRequired && !hasFixedTariff
+    val customerResults = remember(customers, customerQuery) {
+        filterGamingCustomerOptions(customers, customerQuery).take(8)
+    }
+    LaunchedEffect(customers) {
+        val selectedId = selectedCustomer?.customerId
+        if (selectedId != null && customers.none { it.customerId == selectedId }) {
+            selectedCustomer = null
+            name = ""
+            phone = ""
+            customerQuery = ""
+        }
+    }
 
     AlertDialog(
         containerColor = Brand.SurfaceOverlay,
@@ -4558,28 +4585,134 @@ internal fun StartSessionDialog(
                         }
                     }
                 }
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it.take(200) },
-                    label = { Text("Customer name (optional)") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth().semantics {
-                        contentDescription = "Customer name (optional)"
-                    },
-                )
-                OutlinedTextField(
-                    value = phone,
-                    onValueChange = { phone = it.take(20) },
-                    label = { Text("Customer phone (optional)") },
-                    supportingText = {
-                        Text("A valid phone is required to track this named customer's play hours.")
-                    },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
-                    modifier = Modifier.fillMaxWidth().semantics {
-                        contentDescription = "Customer phone (optional)"
-                    },
-                )
+                Text("Customer", color = Brand.Foreground, style = MaterialTheme.typography.labelLarge)
+                selectedCustomer?.let { selected ->
+                    SectionCard(
+                        title = selected.name?.takeIf(String::isNotBlank) ?: "Saved customer",
+                        subtitle = selected.phone + if (selected.pending) " · waiting to sync" else "",
+                    ) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                            TextButton(onClick = {
+                                selectedCustomer = null
+                                customerMode = "search"
+                                customerQuery = ""
+                                onSearchCustomer("")
+                                name = ""
+                                phone = ""
+                            }) { Text("Change") }
+                            TextButton(onClick = {
+                                selectedCustomer = null
+                                customerMode = "search"
+                                customerQuery = ""
+                                onSearchCustomer("")
+                                name = ""
+                                phone = ""
+                            }) { Text("Clear") }
+                        }
+                    }
+                } ?: run {
+                    Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                        FilterChip(
+                            selected = customerMode == "search",
+                            onClick = {
+                                customerMode = "search"
+                                customerQuery = ""
+                                onSearchCustomer("")
+                                name = ""
+                                phone = ""
+                            },
+                            label = { Text("Saved customer") },
+                            colors = gamingPackageChipColors(),
+                        )
+                        FilterChip(
+                            selected = customerMode == "add",
+                            onClick = {
+                                customerMode = "add"
+                                customerQuery = ""
+                                onSearchCustomer("")
+                            },
+                            label = { Text("Add new") },
+                            colors = gamingPackageChipColors(),
+                        )
+                    }
+                    if (customerMode == "search") {
+                        OutlinedTextField(
+                            value = customerQuery,
+                            onValueChange = {
+                                customerQuery = it.take(200)
+                                onSearchCustomer(customerQuery)
+                            },
+                            label = { Text("Search by name or phone") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth().semantics {
+                                contentDescription = "Search saved customers by name or phone"
+                            },
+                        )
+                        customerResults.forEach { option ->
+                            TextButton(
+                                onClick = {
+                                    selectedCustomer = option
+                                    name = option.name.orEmpty()
+                                    phone = option.phone
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Column(Modifier.fillMaxWidth()) {
+                                    Text(option.name?.takeIf(String::isNotBlank) ?: "— no name —")
+                                    Text(
+                                        option.phone + if (option.pending) " · waiting to sync" else "",
+                                        color = Brand.ForegroundMuted,
+                                        style = MaterialTheme.typography.labelSmall,
+                                    )
+                                }
+                            }
+                        }
+                        if (customerQuery.isNotBlank() && customerResults.isEmpty()) {
+                            Text(
+                                if (online) {
+                                    "Searching saved customers online. Cached matches appear immediately; online matches may take a moment."
+                                } else {
+                                    "No match in this tablet's latest saved customer cache (up to 500). Connect to search beyond it, or choose Add new."
+                                },
+                                color = Brand.ForegroundMuted,
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                        } else {
+                            Text(
+                                if (online) {
+                                    "Search checks the server by name or phone and saves matches on this tablet for offline reuse."
+                                } else {
+                                    "Offline search uses this workspace's latest cached customers (up to 500)."
+                                },
+                                color = Brand.ForegroundMuted,
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                        }
+                    } else {
+                        OutlinedTextField(
+                            value = name,
+                            onValueChange = { name = it.take(200) },
+                            label = { Text("Customer name (optional)") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth().semantics {
+                                contentDescription = "Customer name (optional)"
+                            },
+                        )
+                        OutlinedTextField(
+                            value = phone,
+                            onValueChange = { phone = it.take(20) },
+                            label = { Text("Customer phone (optional)") },
+                            supportingText = {
+                                Text("A valid new phone is saved on Start. A name alone stays an untracked receipt note.")
+                            },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                            modifier = Modifier.fillMaxWidth().semantics {
+                                contentDescription = "Customer phone (optional)"
+                            },
+                        )
+                    }
+                }
                 Text(
                     if (selectedPackage != null) {
                         "Price, duration and controller surcharge are captured now and verified by the server. The timer starts at this tap."
@@ -4599,9 +4732,23 @@ internal fun StartSessionDialog(
             ErpButton(
                 text = selectedPackageTotalMinor?.let { "Start · ${it.asRupees()}" } ?: "Start session",
                 onClick = {
+                    val selected = selectedCustomer
+                    val snapshotName = when {
+                        selected?.customerId != null -> null
+                        selected != null -> selected.name?.takeIf(String::isNotBlank)
+                        customerMode == "add" -> name.takeIf(String::isNotBlank)
+                        else -> null
+                    }
+                    val snapshotPhone = when {
+                        selected?.customerId != null -> null
+                        selected != null -> selected.phone.takeIf(String::isNotBlank)
+                        customerMode == "add" -> phone.takeIf(String::isNotBlank)
+                        else -> null
+                    }
                     onConfirm(
-                        name.takeIf(String::isNotBlank),
-                        phone.takeIf(String::isNotBlank),
+                        selected?.customerId,
+                        snapshotName,
+                        snapshotPhone,
                         if (selectedPackage == null) minutes else null,
                         selectedPackage?.id,
                         extraControllers,
