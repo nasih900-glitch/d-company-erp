@@ -85,7 +85,7 @@ REVIEWED_CODE29_2_TEST_SHA256 = {
 }
 REVIEWED_CODE30_TEST_SHA256 = {
     "android-native/app/src/androidTest/java/cloud/dcompany/erp/core/db/MigrationTest.kt": "898d83ae44d48ba617a0b62eb8536a00239ddf8759b9605e08a9976c5bf59abe",
-    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingDialogUiTest.kt": "dcefe98b7ff7ea65a56e80b4af99563b70ab8c25c20f02c26d4f0cc252f191eb",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingDialogUiTest.kt": "3663476bd9d05f4ad077e1660a446dcdbb6dcf73fa4451b10e6164a696c77220",
     "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/gaming/GamingApiContractTest.kt": "a91358fff7ea9c147c346dd2a20941f6cac156c91f012a6bb2e1cd745fd1b3a1",
 }
 
@@ -255,6 +255,7 @@ def _normalise_release_identity(path: str, text: str) -> str:
         return text
     normalised = text
     for current, baseline in (
+        ("3.1.25", "3.1.14"),
         ("3.1.24", "3.1.14"),
         ("3.1.23", "3.1.14"),
         ("3.1.22", "3.1.14"),
@@ -288,10 +289,10 @@ def _normalise_release_identity(path: str, text: str) -> str:
     ):
         normalised = normalised.replace(current, baseline)
     normalised = re.sub(
-        r"version_code\s*=\s*(?:26|27|28|29|30|31|32)\b", "version_code=25", normalised
+        r"version_code\s*=\s*(?:26|27|28|29|30|31|32|33)\b", "version_code=25", normalised
     )
     normalised = re.sub(
-        r"assertEquals\((?:26|27|28|29|30|31|32),\s*BuildConfig\.VERSION_CODE\)",
+        r"assertEquals\((?:26|27|28|29|30|31|32|33),\s*BuildConfig\.VERSION_CODE\)",
         "assertEquals(25, BuildConfig.VERSION_CODE)",
         normalised,
     )

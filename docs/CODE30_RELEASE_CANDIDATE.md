@@ -2,9 +2,9 @@
 
 Code30 is the cumulative public candidate containing the reviewed Code29.1
 pricing correction, the Code29.2 customer-playtime draft, and saved-customer
-lookup at gaming start. Its coordinated technical identity is tag `v3.1.24`,
-Android `versionName=3.1.24`, Android `versionCode=32`, Room schema `47`, and
-server migration head `0072`. Backend and Web package versions are `3.1.24`.
+lookup at gaming start. Its coordinated technical identity is tag `v3.1.25`,
+Android `versionName=3.1.25`, Android `versionCode=33`, Room schema `47`, and
+server migration head `0072`. Backend and Web package versions are `3.1.25`.
 
 All earlier source tags, packages, manifests, and artifacts remain immutable.
 At the last verified preparation snapshot, Code29.2 backend/Web version `3.1.23`
@@ -53,9 +53,9 @@ WhatsApp send, provider credential, or external messaging activation.
    Code29.1/29.2 behavior against an isolated backend.
 4. Deploy the matching backend and migration before any APK distribution. Then
    verify authenticated runtime identity and the selected `customer_id` path.
-5. Tag the exact approved commit as `v3.1.24`. Produce the APK, AAB, checksums,
+5. Tag the exact approved commit as `v3.1.25`. Produce the APK, AAB, checksums,
    and manifest together through the protected workflow and independently
-   verify source, package, build 32, version name, bytes, size, and signer.
+   verify source, package, build 33, version name, bytes, size, and signer.
 6. Prove signed in-place upgrade and local-data continuity without uninstalling,
    clearing app data, or dropping queued work. Stage the verified inactive
    release record, then require the user's separate offer action.

@@ -100,9 +100,9 @@ def test_code29_point2_build31_identity_normalises_to_inherited_code25_baseline(
     )
 
 
-def test_code30_build32_identity_normalises_to_inherited_code25_baseline() -> None:
+def test_code30_build33_identity_normalises_to_inherited_code25_baseline() -> None:
     path = "android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt"
-    current = 'assertEquals(32, BuildConfig.VERSION_CODE)\n"3.1.24"\ncode 30 artifact\n'
+    current = 'assertEquals(33, BuildConfig.VERSION_CODE)\n"3.1.25"\ncode 30 artifact\n'
     assert _normalise_release_identity(path, current) == (
         'assertEquals(25, BuildConfig.VERSION_CODE)\n"3.1.14"\ncode 25 artifact\n'
     )

@@ -263,24 +263,24 @@ class AndroidReleaseVersionTest(unittest.TestCase):
                 version,
             )
 
-    def test_code30_customer_lookup_accepts_v3_1_24_build32(self) -> None:
+    def test_code30_customer_lookup_accepts_v3_1_25_build33(self) -> None:
         version = read_gradle_version(
-            self.write_build_file(version_code="32", version_name='"3.1.24"')
+            self.write_build_file(version_code="33", version_name='"3.1.25"')
         )
 
-        validate_tag("v3.1.24", version)
+        validate_tag("v3.1.25", version)
         validate_built_metadata(
-            self.write_metadata(version_code=32, version_name="3.1.24"), version
+            self.write_metadata(version_code=33, version_name="3.1.25"), version
         )
 
-        self.assertEqual(AndroidVersion(code=32, name="3.1.24"), version)
+        self.assertEqual(AndroidVersion(code=33, name="3.1.25"), version)
 
     def test_code30_customer_lookup_rejects_code29_point2_identity(self) -> None:
         version = read_gradle_version(
-            self.write_build_file(version_code="32", version_name='"3.1.24"')
+            self.write_build_file(version_code="33", version_name='"3.1.25"')
         )
 
-        with self.assertRaisesRegex(ReleaseVersionError, "expected 'v3.1.24'"):
+        with self.assertRaisesRegex(ReleaseVersionError, "expected 'v3.1.25'"):
             validate_tag("v3.1.23", version)
         with self.assertRaisesRegex(ReleaseVersionError, "does not match"):
             validate_built_metadata(

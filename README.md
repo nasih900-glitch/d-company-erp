@@ -128,7 +128,7 @@ separately identified prototype, not another supported ERP app.
 
 Tagging a release that exactly matches the Android `versionName` triggers
 `.github/workflows/release.yml`. The current local candidate is cumulative Code30,
-technical version `3.1.24` with Android installation build `32`; Android code
+technical version `3.1.25` with Android installation build `33`; Android code
 `8` remains the minimum-compatible floor. It includes the Code29.1 pricing work,
 the Code29.2 customer-playtime draft, and saved-customer lookup when starting a
 gaming session. Reward activation and WhatsApp messaging remain disabled. It is not signed,

@@ -182,7 +182,7 @@ REVIEWED_CODE29_2_FEATURE_SHA256 = {
 REVIEWED_CODE30_FEATURE_SHA256 = {
     "android-native/app/schemas/cloud.dcompany.erp.core.db.ErpDatabase/47.json": "4343888a27a56edd0a0ba2307a7ff269990b64558fbd895840bbbb20bca52057",
     "android-native/app/src/androidTest/java/cloud/dcompany/erp/core/db/MigrationTest.kt": "898d83ae44d48ba617a0b62eb8536a00239ddf8759b9605e08a9976c5bf59abe",
-    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingDialogUiTest.kt": "dcefe98b7ff7ea65a56e80b4af99563b70ab8c25c20f02c26d4f0cc252f191eb",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingDialogUiTest.kt": "3663476bd9d05f4ad077e1660a446dcdbb6dcf73fa4451b10e6164a696c77220",
     "android-native/app/src/main/java/cloud/dcompany/erp/core/db/CustomerDao.kt": "e5a36d1bdcbba83ce7b1c557830396db5f05b996f9ae6bc9b605f92c9dc1e1f9",
     "android-native/app/src/main/java/cloud/dcompany/erp/core/db/Dao.kt": "93257a72c347398abe2a5859102a139b311b2cb869a99127dcbff17654ab9c29",
     "android-native/app/src/main/java/cloud/dcompany/erp/core/db/GamingEntities.kt": "520dbdcc79b3a4f028a4350370ab7b840498e798ac743d5285afc8d29d50ec53",
@@ -335,9 +335,9 @@ def _identity_expected(path: str) -> str:
         "frontend/.env.example": 1,
         "docker-compose.prod.yml": 6,
     }
-    replacements = [("3.1.19", "3.1.24", counts[path])]
+    replacements = [("3.1.19", "3.1.25", counts[path])]
     if path == "android-native/app/build.gradle.kts":
-        replacements.append(("versionCode = 29", "versionCode = 32", 1))
+        replacements.append(("versionCode = 29", "versionCode = 33", 1))
     return _replace_exact(_original(path), tuple(replacements))
 
 
@@ -412,7 +412,7 @@ def test_live_delta_is_exactly_the_reviewed_code29_correction() -> None:
     }
 
 
-def test_live_coordinated_identity_is_version_name_3_1_24_with_build_32() -> None:
+def test_live_coordinated_identity_is_version_name_3_1_25_with_build_33() -> None:
     for path in (
         "android-native/app/build.gradle.kts",
         "backend/pyproject.toml",
@@ -425,11 +425,11 @@ def test_live_coordinated_identity_is_version_name_3_1_24_with_build_32() -> Non
         _assert_exact_text(path, _current(path), _identity_expected(path))
 
     build = _current("android-native/app/build.gradle.kts")
-    assert build.count("versionCode = 32") == 1
-    assert build.count('versionName = "3.1.24"') == 1
+    assert build.count("versionCode = 33") == 1
+    assert build.count('versionName = "3.1.25"') == 1
 
     env_replacements = (
-        ("APP_VERSION=3.1.19", "APP_VERSION=3.1.24", 1),
+        ("APP_VERSION=3.1.19", "APP_VERSION=3.1.25", 1),
         (
             "# immutable history. Signed Code 28 (3.1.18) failed its production image-identity\n"
             "# gate before maintenance or cutover and was never staged or offered. Code 29\n"
@@ -438,7 +438,7 @@ def test_live_coordinated_identity_is_version_name_3_1_24_with_build_32() -> Non
             "# immutable history. Original signed Code 29 (3.1.19) failed its production\n"
             "# installer lock gate before builds or maintenance and was never staged or offered.\n"
             "# Code 29 (3.1.20) was cancelled before build/signing after the POS notice defect.\n"
-            "# Current Code 30 (3.1.24, installation build 32) adds the reviewed saved-customer\n"
+            "# Current Code 30 (3.1.25, installation build 33) adds the reviewed saved-customer\n"
             "# lookup while reward activation and WhatsApp messaging remain disabled. It is\n"
             "# not advertised unless every gate in docs/CODE30_RELEASE_CANDIDATE.md passes for\n"
             "# its exact source and artifacts.",
@@ -455,19 +455,19 @@ def test_live_coordinated_identity_is_version_name_3_1_24_with_build_32() -> Non
 def test_live_identity_fixtures_are_exact_counted_transformations() -> None:
     replacements = {
         "android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt": (
-            ("3.1.19", "3.1.24", 2),
-            ("assertEquals(29, BuildConfig.VERSION_CODE)", "assertEquals(32, BuildConfig.VERSION_CODE)", 1),
+            ("3.1.19", "3.1.25", 2),
+            ("assertEquals(29, BuildConfig.VERSION_CODE)", "assertEquals(33, BuildConfig.VERSION_CODE)", 1),
             ("code 29 artifact", "code 30 artifact", 1),
         ),
-        "backend/tests/unit/test_client_compatibility.py": (("3.1.19", "3.1.24", 1),),
-        "backend/tests/unit/test_release_audit_fixes.py": (("3.1.19", "3.1.24", 1),),
-        "backend/tests/unit/test_release_contracts.py": (("3.1.19", "3.1.24", 1),),
-        "backend/tests/unit/test_remote_assistance_contract.py": (("3.1.19", "3.1.24", 4),),
+        "backend/tests/unit/test_client_compatibility.py": (("3.1.19", "3.1.25", 1),),
+        "backend/tests/unit/test_release_audit_fixes.py": (("3.1.19", "3.1.25", 1),),
+        "backend/tests/unit/test_release_contracts.py": (("3.1.19", "3.1.25", 1),),
+        "backend/tests/unit/test_remote_assistance_contract.py": (("3.1.19", "3.1.25", 4),),
         "backend/tests/unit/test_runtime_release_parity.py": (
-            ("3.1.19", "3.1.24", 6),
-            ("version_code=29,", "version_code=32,", 1),
+            ("3.1.19", "3.1.25", 6),
+            ("version_code=29,", "version_code=33,", 1),
         ),
-        "tests/test_android_runtime_parity.py": (("3.1.19", "3.1.24", 2),),
+        "tests/test_android_runtime_parity.py": (("3.1.19", "3.1.25", 2),),
         "tests/test_code26_physical_audit_lane.py": (("3.1.19", "3.1.21", 2),),
     }
     for path, path_replacements in replacements.items():
@@ -567,20 +567,20 @@ def test_original_release_name_tests_remain_and_patch_cases_are_exactly_added() 
         "            )\n\n"
     )
     code30_addition = (
-        "    def test_code30_customer_lookup_accepts_v3_1_24_build32(self) -> None:\n"
+        "    def test_code30_customer_lookup_accepts_v3_1_25_build33(self) -> None:\n"
         "        version = read_gradle_version(\n"
-        "            self.write_build_file(version_code=\"32\", version_name='\"3.1.24\"')\n"
+        "            self.write_build_file(version_code=\"33\", version_name='\"3.1.25\"')\n"
         "        )\n\n"
-        "        validate_tag(\"v3.1.24\", version)\n"
+        "        validate_tag(\"v3.1.25\", version)\n"
         "        validate_built_metadata(\n"
-        "            self.write_metadata(version_code=32, version_name=\"3.1.24\"), version\n"
+        "            self.write_metadata(version_code=33, version_name=\"3.1.25\"), version\n"
         "        )\n\n"
-        "        self.assertEqual(AndroidVersion(code=32, name=\"3.1.24\"), version)\n\n"
+        "        self.assertEqual(AndroidVersion(code=33, name=\"3.1.25\"), version)\n\n"
         "    def test_code30_customer_lookup_rejects_code29_point2_identity(self) -> None:\n"
         "        version = read_gradle_version(\n"
-        "            self.write_build_file(version_code=\"32\", version_name='\"3.1.24\"')\n"
+        "            self.write_build_file(version_code=\"33\", version_name='\"3.1.25\"')\n"
         "        )\n\n"
-        "        with self.assertRaisesRegex(ReleaseVersionError, \"expected 'v3.1.24'\"):\n"
+        "        with self.assertRaisesRegex(ReleaseVersionError, \"expected 'v3.1.25'\"):\n"
         "            validate_tag(\"v3.1.23\", version)\n"
         "        with self.assertRaisesRegex(ReleaseVersionError, \"does not match\"):\n"
         "            validate_built_metadata(\n"
@@ -1063,6 +1063,7 @@ def test_freeze_extensions_and_historical_guards_are_exact() -> None:
             ),
             (
                 '        ("3.1.23", "3.1.14"),\n',
+                '        ("3.1.25", "3.1.14"),\n'
                 '        ("3.1.24", "3.1.14"),\n'
                 '        ("3.1.23", "3.1.14"),\n',
                 1,
@@ -1078,12 +1079,12 @@ def test_freeze_extensions_and_historical_guards_are_exact() -> None:
             ),
             (
                 'r"version_code\\s*=\\s*(?:26|27|28|29|30|31)\\b"',
-                'r"version_code\\s*=\\s*(?:26|27|28|29|30|31|32)\\b"',
+                'r"version_code\\s*=\\s*(?:26|27|28|29|30|31|32|33)\\b"',
                 1,
             ),
             (
                 'r"assertEquals\\((?:26|27|28|29|30|31),\\s*BuildConfig\\.VERSION_CODE\\)"',
-                'r"assertEquals\\((?:26|27|28|29|30|31|32),\\s*BuildConfig\\.VERSION_CODE\\)"',
+                'r"assertEquals\\((?:26|27|28|29|30|31|32|33),\\s*BuildConfig\\.VERSION_CODE\\)"',
                 1,
             ),
             (
@@ -1304,9 +1305,9 @@ def test_freeze_extensions_and_historical_guards_are_exact() -> None:
         ),
     )
     code30_identity_test = (
-        "def test_code30_build32_identity_normalises_to_inherited_code25_baseline() -> None:\n"
+        "def test_code30_build33_identity_normalises_to_inherited_code25_baseline() -> None:\n"
         "    path = \"android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt\"\n"
-        "    current = 'assertEquals(32, BuildConfig.VERSION_CODE)\\n\"3.1.24\"\\ncode 30 artifact\\n'\n"
+        "    current = 'assertEquals(33, BuildConfig.VERSION_CODE)\\n\"3.1.25\"\\ncode 30 artifact\\n'\n"
         "    assert _normalise_release_identity(path, current) == (\n"
         "        'assertEquals(25, BuildConfig.VERSION_CODE)\\n\"3.1.14\"\\ncode 25 artifact\\n'\n"
         "    )\n\n\n"
@@ -1564,7 +1565,7 @@ def test_operator_records_are_frozen_and_trial_precedes_production() -> None:
     [
         ("infra/scripts/install-on-vm.sh", "%f:%d:%i", "%F:%d:%i"),
         (".github/workflows/ci.yml", "sudo -n --", "sudo --"),
-        ("backend/app/__init__.py", '"3.1.24"', '"3.1.24-mutated"'),
+        ("backend/app/__init__.py", '"3.1.25"', '"3.1.25-mutated"'),
     ],
 )
 def test_live_exact_guards_reject_working_tree_mutations(

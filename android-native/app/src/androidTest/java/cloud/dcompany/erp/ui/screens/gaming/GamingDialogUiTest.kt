@@ -1631,16 +1631,29 @@ class GamingDialogUiTest {
 
         compose.onNodeWithText("Add new").performClick()
 
-        compose.onNodeWithContentDescription("Customer name (optional)")
-            .bringIntoViewIfNeeded()
-            .performClick()
-            .performTextReplacement("Booking guest")
+        val nameField = compose.onNodeWithContentDescription("Customer name (optional)")
+        val phoneField = compose.onNodeWithContentDescription("Customer phone (optional)")
+        val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+        val originalFlags = automation.serviceInfo.flags
+        try {
+            automation.serviceInfo = automation.serviceInfo.apply {
+                flags = flags or AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
+            }
+            nameField
+                .bringIntoViewIfNeeded()
+                .performClick()
+                .performTextReplacement("Booking guest")
+            nameField.assertIsDisplayed().assertIsFocused().awaitImeSettledTouchTarget()
 
-        compose.onNodeWithContentDescription("Customer phone (optional)")
-            .bringIntoViewIfNeeded()
-            .performClick()
-            .assertIsFocused()
-            .performTextReplacement("+91 98765 43210")
+            phoneField
+                .performScrollTo()
+                .assertIsDisplayed()
+                .performAndroidScreenTouch()
+                .assertIsFocused()
+                .performTextReplacement("+91 98765 43210")
+        } finally {
+            automation.serviceInfo = automation.serviceInfo.apply { flags = originalFlags }
+        }
 
         compose.onNodeWithText("Start session")
             .bringIntoViewIfNeeded()
@@ -1685,11 +1698,27 @@ class GamingDialogUiTest {
             }
         }
 
-        compose.onNodeWithContentDescription("Search saved customers by name or phone")
-            .performTextReplacement("Amina")
-        compose.runOnIdle { assertEquals("Amina", searched) }
-        compose.onNodeWithText("Amina Returning").performClick()
-        compose.onNodeWithText("Change").performClick()
+        val searchField = compose.onNodeWithContentDescription(
+            "Search saved customers by name or phone",
+        )
+        val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+        val originalFlags = automation.serviceInfo.flags
+        try {
+            automation.serviceInfo = automation.serviceInfo.apply {
+                flags = flags or AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
+            }
+            searchField.performTextReplacement("Amina")
+            compose.runOnIdle { assertEquals("Amina", searched) }
+            searchField.assertIsDisplayed().assertIsFocused().awaitImeSettledTouchTarget()
+            compose.onNodeWithText("Amina Returning")
+                .performScrollTo()
+                .assertIsDisplayed()
+                .performAndroidScreenTouch()
+        } finally {
+            automation.serviceInfo = automation.serviceInfo.apply { flags = originalFlags }
+        }
+        compose.onNodeWithText("9876543210").assertIsDisplayed()
+        compose.onNodeWithText("Change").assertIsDisplayed().performClick()
         compose.onNodeWithText("Start session").bringIntoViewIfNeeded().performClick()
 
         compose.runOnIdle {
