@@ -64,8 +64,8 @@ async def test_captured_shift_drives_offline_session_chain_and_durable_replay(
         company_id=seed_owner["company"].id,
         branch_id=seed_owner["branch"].id,
         code=f"OFF-{uuid4().hex[:8]}",
-        name="Offline VR",
-        type="vr",
+        name="Offline streaming",
+        type="streaming",
         rate_per_hour_minor=6000,
         tax_rate=0,
     )

@@ -1609,14 +1609,14 @@ class GamingDialogUiTest {
         compose.setContent {
             DCompanyTheme {
                 StartSessionDialog(
-                    // VR remains an hourly station in Code22. PS5 and racing
+                    // Streaming remains hourly. PS5, racing and VR
                     // deliberately fail closed until the canonical fixed
                     // tariff has synced, so they cannot exercise this generic
                     // phone-and-duration path without a package catalogue.
                     station = testStation().copy(
-                        code = "VR-1",
-                        name = "VR Pod 1",
-                        type = "vr",
+                        code = "STREAM-1",
+                        name = "Streaming Booth 1",
+                        type = "streaming",
                     ),
                     onDismiss = {},
                     onConfirm = { phone, minutes, _, _ ->
@@ -1711,6 +1711,31 @@ class GamingDialogUiTest {
             assertEquals("standard-dual-60", submittedPackage)
             assertEquals(1, submittedControllers)
         }
+    }
+
+    @Test
+    fun startSession_simulatorUsesModeSelectorAndNeverOffersStalePremium() {
+        var submittedPackage: String? = null
+        compose.setContent {
+            DCompanyTheme {
+                StartSessionDialog(
+                    station = testStation().copy(type = "simulator", name = "Racing Simulator 1"),
+                    packages = listOf(
+                        GamingPackage("simdrive-15", "standard-simdrive-session-15m", "simulator", "standard", "simdrive", 1, 1, "base", "Racing Sim · 15 min", 15, 7_000),
+                        GamingPackage("vr-racing-15", "vr-racing-session-15m", "simulator", "standard", "vr_racing", 1, 1, "base", "VR Racing Sim · 15 min", 15, 10_000),
+                        GamingPackage("premium-stale", "premium-single-session-60m", "simulator", "premium", "simdrive", 1, 1, "base", "Premium stale", 60, 15_000),
+                    ),
+                    onDismiss = {},
+                    onConfirm = { _, _, packageId, _ -> submittedPackage = packageId },
+                )
+            }
+        }
+
+        compose.onNodeWithText("Premium stale").assertDoesNotExist()
+        compose.onNodeWithText("VR Racing Sim").performClick()
+        compose.onNodeWithText("15 min · ₹100.00 total").performClick()
+        compose.onNodeWithText("Start · ₹100.00").performClick()
+        compose.runOnIdle { assertEquals("vr-racing-15", submittedPackage) }
     }
 
     @Test

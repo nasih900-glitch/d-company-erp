@@ -1,3 +1,4 @@
+import hashlib
 from pathlib import Path
 import subprocess
 
@@ -6,6 +7,9 @@ import pytest
 from scripts.verify_code26_regression_freeze import (
     CODE25_BASE,
     RegressionFreezeError,
+    REVIEWED_PACKAGING_TEST_SHA256,
+    REVIEWED_PACKAGING_UI_PATHS,
+    REVIEWED_PRICING_TEST_SHA256,
     REVIEWED_WEB_AUTH_PATHS,
     _disable_counts,
     _missing_ordered_lines,
@@ -71,6 +75,14 @@ def test_code29_identity_normalises_directly_to_inherited_code25_baseline() -> N
 def test_current_code29_patch_identity_normalises_directly_to_inherited_code25_baseline() -> None:
     path = "android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt"
     current = 'assertEquals(29, BuildConfig.VERSION_CODE)\n"3.1.21"\ncode 29 artifact\n'
+    assert _normalise_release_identity(path, current) == (
+        'assertEquals(25, BuildConfig.VERSION_CODE)\n"3.1.14"\ncode 25 artifact\n'
+    )
+
+
+def test_code29_point1_build30_identity_normalises_to_inherited_code25_baseline() -> None:
+    path = "android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt"
+    current = 'assertEquals(30, BuildConfig.VERSION_CODE)\n"3.1.22"\ncode 29 artifact\n'
     assert _normalise_release_identity(path, current) == (
         'assertEquals(25, BuildConfig.VERSION_CODE)\n"3.1.14"\ncode 25 artifact\n'
     )
@@ -144,6 +156,26 @@ def test_disable_marker_counter_detects_new_skip_paths() -> None:
     assert sum(_disable_counts(candidate)) > sum(_disable_counts(baseline))
 
 
+@pytest.mark.parametrize(("path", "expected_sha256"), REVIEWED_PRICING_TEST_SHA256.items())
+def test_pricing_test_rewrites_require_exact_reviewed_bytes(
+    path: str,
+    expected_sha256: str,
+) -> None:
+    current = (ROOT / path).read_bytes()
+    assert hashlib.sha256(current).hexdigest() == expected_sha256
+    assert hashlib.sha256(current + b"\n").hexdigest() != expected_sha256
+
+
+@pytest.mark.parametrize(("path", "expected_sha256"), REVIEWED_PACKAGING_TEST_SHA256.items())
+def test_packaging_label_test_rewrite_requires_exact_reviewed_bytes(
+    path: str,
+    expected_sha256: str,
+) -> None:
+    current = (ROOT / path).read_bytes()
+    assert hashlib.sha256(current).hexdigest() == expected_sha256
+    assert hashlib.sha256(current + b"\n").hexdigest() != expected_sha256
+
+
 def test_audit_reader_migration_only_normalises_one_locator() -> None:
     path = "tests/test_android_audit_isolation.py"
     previous = '        plan_read = source.index(\'JSONObject(device.executeShellCommand("cat $planPath"))\', outer_try)'
@@ -185,4 +217,7 @@ def test_code26_preserves_the_complete_code25_test_surface() -> None:
     # shrinking the frozen baseline.
     assert report.baseline_test_files == 491
     assert report.preserved_test_files == report.baseline_test_files
-    assert {path for path in report.changed_production_files if path.startswith("frontend/src/")} == REVIEWED_WEB_AUTH_PATHS
+    assert {path for path in report.changed_production_files if path.startswith("frontend/src/")} == REVIEWED_WEB_AUTH_PATHS | {
+        "frontend/src/modules/gaming/GamingScreen.tsx",
+        "frontend/src/modules/gaming/gaming-tariff.test.ts",
+    } | REVIEWED_PACKAGING_UI_PATHS

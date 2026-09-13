@@ -77,6 +77,7 @@ from app.services.gaming.pause_clock import (
     finish_pause,
     timer_deadline,
 )
+from app.services.gaming.tariff_catalog import FIXED_TARIFF_STATION_TYPES
 from app.services.pos.order_validation import require_operational_order
 from app.services.pos.pricing import (
     LineRequest,
@@ -2399,26 +2400,11 @@ async def start_session(
             "sessions. Select the Gaming Area terminal."
         ),
     )
-    if payload.package_id is None and station.type in {"ps5", "simulator"}:
-        fixed_tariff_available = (
-            await session.execute(
-                select(GamingPackage.id)
-                .where(
-                    GamingPackage.company_id == tenant.company_id,
-                    GamingPackage.branch_id == station.branch_id,
-                    GamingPackage.station_type == station.type,
-                    GamingPackage.kind == "base",
-                    GamingPackage.is_active.is_(True),
-                    GamingPackage.deleted_at.is_(None),
-                )
-                .limit(1)
-            )
-        ).scalar_one_or_none()
-        if fixed_tariff_available is not None:
-            raise BusinessRuleError(
-                "This station requires a fixed-price tariff package. Refresh Gaming and "
-                "choose Standard or Premium, player count, and duration; no session was started."
-            )
+    if payload.package_id is None and station.type in FIXED_TARIFF_STATION_TYPES:
+        raise BusinessRuleError(
+            "This station requires a fixed-price tariff package. Refresh Gaming and "
+            "choose a mode and duration; no session was started."
+        )
     if (
         payload.package_id is None
         and payload.expected_rate_per_hour_minor is None
@@ -2504,6 +2490,8 @@ async def start_session(
             raise NotFoundError("package not found")
         if package.kind != "base":
             raise BusinessRuleError("only a base package can start a session")
+        if package.pricing_tier != "standard":
+            raise BusinessRuleError("this package is retired for new sessions")
         if package.station_type != station.type:
             raise BusinessRuleError("this package is not offered for this station type")
         # Presence is guaranteed by SessionStart's conditional validator.

@@ -21,6 +21,42 @@ import org.junit.Test
 class GamingViewModelRecoveryTest {
 
     @Test
+    fun `fresh start rejects stale Premium package without changing replay policy`() {
+        val station = Station(
+            id = "station-1",
+            code = "PS5-1",
+            name = "PS5 Station 1",
+            type = "ps5",
+            ratePerHourMinor = 15_000,
+        )
+        val standard = GamingPackage(
+            id = "standard",
+            code = "standard-single-session-30m",
+            stationType = "ps5",
+            pricingTier = "standard",
+            variant = "single",
+            kind = "base",
+            name = "Single Mode · 30 min",
+            durationMinutes = 30,
+            priceMinor = 8_000,
+        )
+        val premium = standard.copy(
+            id = "premium",
+            code = "premium-single-session-60m",
+            pricingTier = "premium",
+        )
+
+        assertEquals(null, newGamingPackageStartError(station, standard.id, standard))
+        assertTrue(
+            newGamingPackageStartError(station, premium.id, premium)
+                .orEmpty().contains("no longer available"),
+        )
+        // Queued replay does not call this new-intent boundary; its immutable
+        // package snapshot remains governed by the existing recovery path.
+        assertEquals(null, newGamingPackageStartError(station, null, null))
+    }
+
+    @Test
     fun delegatedLegacyRecoveryAcceptsOnlySameScopeProtectedAuditOwner() {
         val staff = profile(
             userId = "staff-user",

@@ -11,16 +11,22 @@ import org.junit.Test
 class GamingPackageExtensionReplayPolicyTest {
 
     @Test
-    fun `ambiguous replay retains the exact original action UUID as idempotency key`() {
+    fun `ambiguous and rejected replays retain the exact original payload and action UUID`() {
         val original = action(state = GamingPackageExtensionState.PENDING)
         val afterLostResponse = original.copy(
             state = GamingPackageExtensionState.AMBIGUOUS,
             lastError = "response lost",
         )
+        val afterDefinitiveRejection = original.copy(
+            state = GamingPackageExtensionState.REJECTED,
+            lastError = "package retired for new selections",
+        )
 
         assertEquals(original.actionId, packageExtensionIdempotencyKey(original))
         assertEquals(original.actionId, packageExtensionIdempotencyKey(afterLostResponse))
+        assertEquals(original.actionId, packageExtensionIdempotencyKey(afterDefinitiveRejection))
         assertEquals(original.toPackageExtendBody(), afterLostResponse.toPackageExtendBody())
+        assertEquals(original.toPackageExtendBody(), afterDefinitiveRejection.toPackageExtendBody())
         assertEquals(60, original.toPackageExtendBody().expectedTimerMinutes)
         assertEquals(23_000L, original.toPackageExtendBody().expectedAmountMinor)
     }

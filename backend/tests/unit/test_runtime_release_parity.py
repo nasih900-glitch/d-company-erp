@@ -29,7 +29,7 @@ from app.services.client_updates.runtime_parity import (
 )
 from scripts import register_android_release as registration
 
-IDENTITY = {"version_name": "3.1.21", "source_git_sha": "ab" * 20}
+IDENTITY = {"version_name": "3.1.22", "source_git_sha": "ab" * 20}
 BODY = json.dumps(IDENTITY).encode()
 HEADERS = {
     "Content-Type": "application/json",
@@ -171,7 +171,7 @@ async def test_direct_registration_rejects_each_development_sentinel_before_data
             "frontend_identity_invalid",
         ),
         (
-            _response(body=json.dumps({"version_name": "3.1.21"}).encode()),
+            _response(body=json.dumps({"version_name": "3.1.22"}).encode()),
             "frontend_identity_invalid",
         ),
         (
@@ -190,7 +190,7 @@ async def test_direct_registration_rejects_each_development_sentinel_before_data
             _response(body=json.dumps({**IDENTITY, "version_name": "3.1.13"}).encode()),
             "frontend_release_mismatch",
         ),
-        (_response(body=BODY[:-1] + b',"version_name":"3.1.21"}'), "frontend_identity_invalid"),
+        (_response(body=BODY[:-1] + b',"version_name":"3.1.22"}'), "frontend_identity_invalid"),
         (
             _response(headers={**HEADERS, "Content-Type": "text/html"}),
             "frontend_identity_content_type_invalid",
@@ -522,7 +522,7 @@ async def test_production_lifespan_warms_before_serving_and_cancels_supervisor(
     monkeypatch.setattr(application_main, "refresh_active_public_runtime_parity", warm)
     monkeypatch.setattr(application_main, "maintain_public_runtime_parity", maintain)
 
-    async with application_main.lifespan(SimpleNamespace(version="3.1.21")):
+    async with application_main.lifespan(SimpleNamespace(version="3.1.22")):
         assert events == ["warm"]
         await asyncio.wait_for(supervisor_started.wait(), timeout=1)
         assert events == ["warm", "supervisor_started"]
@@ -561,7 +561,7 @@ async def test_production_lifespan_keeps_api_available_after_failed_warmup(
     monkeypatch.setattr(application_main, "maintain_public_runtime_parity", maintain)
     monkeypatch.setattr(application_main.logger, "warning", warning)
 
-    async with application_main.lifespan(SimpleNamespace(version="3.1.21")):
+    async with application_main.lifespan(SimpleNamespace(version="3.1.22")):
         await asyncio.wait_for(supervisor_started.wait(), timeout=1)
 
     assert supervisor_stopped.is_set()
@@ -895,7 +895,7 @@ def _release(status="staged") -> SimpleNamespace:
     return SimpleNamespace(
         id=uuid4(),
         channel="direct",
-        version_code=29,
+        version_code=30,
         **IDENTITY,
         update_url="https://erp.example.test/downloads/android/code29.apk",
         release_notes="Checked release",
@@ -903,7 +903,7 @@ def _release(status="staged") -> SimpleNamespace:
         apk_size_bytes=100,
         apk_signing_cert_sha256="ef" * 32,
         manifest_sha256="01" * 32,
-        source_release_ref="v3.1.21",
+        source_release_ref="v3.1.22",
         source_workflow_run_id=1,
         source_workflow_run_attempt=1,
         status=status,

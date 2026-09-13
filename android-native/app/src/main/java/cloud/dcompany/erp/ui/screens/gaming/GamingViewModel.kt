@@ -1295,12 +1295,13 @@ class GamingViewModel : ViewModel() {
                 "The exact fixed-price tariff has not synced for ${station.name}. Reconnect and refresh Gaming; no session was started."
             return
         }
-        if (packageId != null && (
-                selectedPackage == null || selectedPackage.kind != "base" ||
-                    selectedPackage.stationType != station.type || selectedPackage.code.isBlank()
-                )
-        ) {
-            error.value = "That package is no longer available for ${station.name}. Refresh Gaming and choose again."
+        val packageStartError = newGamingPackageStartError(
+            station = station,
+            packageId = packageId,
+            selectedPackage = selectedPackage,
+        )
+        if (packageStartError != null) {
+            error.value = packageStartError
             return
         }
         val maximumExtraControllers = selectedPackage?.let {
@@ -3216,6 +3217,22 @@ class GamingViewModel : ViewModel() {
     fun dismissNotice(expected: String) {
         notice.compareAndSet(expected, null)
     }
+}
+
+internal fun newGamingPackageStartError(
+    station: Station,
+    packageId: String?,
+    selectedPackage: GamingPackage?,
+): String? {
+    if (packageId == null) return null
+    if (
+        selectedPackage == null || selectedPackage.kind != "base" ||
+        selectedPackage.stationType != station.type || selectedPackage.code.isBlank() ||
+        selectedPackage.pricingTier != "standard"
+    ) {
+        return "That package is no longer available for ${station.name}. Refresh Gaming and choose again."
+    }
+    return null
 }
 
 private fun GamingStationEntity.toStation() = Station(
