@@ -27,6 +27,7 @@ const BASE_URL =
 const API_TIMEOUT_MS = 20_000;
 const COOKIE_SESSION_HEADER = 'X-Session-Transport';
 const COOKIE_SESSION_SIGNED_OUT_KEY = 'dcompany_cookie_session_signed_out';
+const COOKIE_SESSION_RENEWAL_LOCK = 'dcompany-cookie-session-renewal';
 
 /**
  * HttpOnly refresh cookies are safe only when the browser and API are the same
@@ -361,28 +362,50 @@ export function renewSessionAccessToken(): Promise<string> {
       ? legacyRefreshForCookieMigration
       : readStorage('refresh_token');
     try {
-      if (!COOKIE_SESSION_MODE && !refresh) throw new Error('no refresh token');
-      const response = await axios.post<{ access_token: string; refresh_token: string }>(
-        `${BASE_URL}/auth/refresh`,
-        COOKIE_SESSION_MODE
-          ? (refresh ? { refresh_token: refresh } : {})
-          : { refresh_token: refresh },
-        {
-          timeout: API_TIMEOUT_MS,
-          withCredentials: COOKIE_SESSION_MODE,
-          headers: sessionTransportHeaders(),
-          signal: controller.signal,
-        },
-      );
-      if (generation !== sessionGeneration) {
+      const renew = async (): Promise<string> => {
+        if (generation !== sessionGeneration || controller.signal.aborted) {
+          throw sessionRenewalError(
+            'session_changed',
+            'The session changed while its access was being renewed.',
+          );
+        }
+        if (!COOKIE_SESSION_MODE && !refresh) throw new Error('no refresh token');
+        const response = await axios.post<{ access_token: string; refresh_token: string }>(
+          `${BASE_URL}/auth/refresh`,
+          COOKIE_SESSION_MODE
+            ? (refresh ? { refresh_token: refresh } : {})
+            : { refresh_token: refresh },
+          {
+            timeout: API_TIMEOUT_MS,
+            withCredentials: COOKIE_SESSION_MODE,
+            headers: sessionTransportHeaders(),
+            signal: controller.signal,
+          },
+        );
+        if (generation !== sessionGeneration || controller.signal.aborted) {
+          throw sessionRenewalError(
+            'session_changed',
+            'The session changed while its access was being renewed.',
+          );
+        }
+        validateSessionTokens(response.data.access_token, response.data.refresh_token);
+        applySessionTokens(response.data.access_token, response.data.refresh_token);
+        return response.data.access_token;
+      };
+
+      if (!COOKIE_SESSION_MODE) return await renew();
+      const locks = typeof navigator === 'undefined' ? undefined : navigator.locks;
+      if (!locks || typeof locks.request !== 'function') {
         throw sessionRenewalError(
-          'session_changed',
-          'The session changed while its access was being renewed.',
+          'network_error',
+          'This browser cannot safely coordinate session renewal across tabs.',
         );
       }
-      validateSessionTokens(response.data.access_token, response.data.refresh_token);
-      applySessionTokens(response.data.access_token, response.data.refresh_token);
-      return response.data.access_token;
+      return await locks.request(
+        COOKIE_SESSION_RENEWAL_LOCK,
+        { mode: 'exclusive', signal: controller.signal },
+        renew,
+      );
     } catch (error) {
       if (generation !== sessionGeneration || isSessionChanged(error)) {
         throw sessionRenewalError(

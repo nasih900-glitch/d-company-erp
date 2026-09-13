@@ -127,6 +127,18 @@ describe('shared session renewal boundary', () => {
     expect(localStorage.getItem('refresh_token')).toBe('refresh-b');
   });
 
+  it('keeps native JSON renewal independent of Web Locks', async () => {
+    vi.stubGlobal('navigator', {});
+    postSpy.mockResolvedValue(refreshResponse('access-b', 'refresh-b'));
+
+    await expect(renewSessionAccessToken()).resolves.toBe('access-b');
+
+    expect(postSpy).toHaveBeenCalledOnce();
+    expect(postSpy.mock.calls[0]?.[1]).toEqual({ refresh_token: 'refresh-a' });
+    expect(readAccessToken()).toBe('access-b');
+    expect(localStorage.getItem('refresh_token')).toBe('refresh-b');
+  });
+
   it('does not let an old renewal overwrite a logout followed by a new account login', async () => {
     const pendingRefresh = deferred<AxiosResponse>();
     postSpy.mockReturnValue(pendingRefresh.promise);

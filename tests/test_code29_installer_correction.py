@@ -37,6 +37,15 @@ REVIEWED_UI_SHA256 = {
         "69d099d8bfa6df2d6db7a23d4f9ac70dd6a30d8729bd3ec3c5a1e586a5ab91af"
     ),
 }
+REVIEWED_WEB_SESSION_SHA256 = {
+    "frontend/src/lib/api.ts": "9818163fcf287f512da6b7a74dc322fcf6a24ecd4bacb710077d33bfc9163084",
+    "frontend/src/lib/api-cookie-session-renewal.test.ts": (
+        "a0e8f10b66e0992a4ff0562c901c5f322bc8e3231c56cb9b150d897918cbd6ea"
+    ),
+    "frontend/src/lib/api-session-renewal.test.ts": (
+        "03bde0984b2a6e09657d4f93bd5ea3b1e6be37d7b22345f235f6733b1b856129"
+    ),
+}
 
 EXPECTED_CORRECTION_PATHS = {
     ".env.production.example",
@@ -63,6 +72,9 @@ EXPECTED_CORRECTION_PATHS = {
     "frontend/.env.example",
     "frontend/package-lock.json",
     "frontend/package.json",
+    "frontend/src/lib/api-cookie-session-renewal.test.ts",
+    "frontend/src/lib/api-session-renewal.test.ts",
+    "frontend/src/lib/api.ts",
     "infra/scripts/install-on-vm.sh",
     "scripts/analyze_code26_physical_evidence.py",
     "scripts/run_code26_physical_business_audit.sh",
@@ -171,6 +183,9 @@ def test_live_delta_is_exactly_the_reviewed_code29_correction() -> None:
     }
     assert protected_application_changes == {
         "backend/app/__init__.py",
+        "frontend/src/lib/api-cookie-session-renewal.test.ts",
+        "frontend/src/lib/api-session-renewal.test.ts",
+        "frontend/src/lib/api.ts",
         "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/PosScreen.kt",
         "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/inventory/InventoryScreen.kt",
     }
@@ -368,11 +383,13 @@ def test_freeze_extensions_and_historical_guards_are_exact() -> None:
         ),
         (
             "expiry repair. Code 28 hardens the release scanner path. Code 29 carries only\n"
-            "the reviewed image-format and Android quantity corrections. None may delete,",
+            "the reviewed image-format and Android quantity corrections. None may delete,\n"
+            "disable, reorder, or rewrite an existing",
             "expiry repair. Code 28 hardens the release scanner path. Original Code 29\n"
             "carries the reviewed image-format and Android quantity corrections; corrected\n"
             "Code 29 adds coordinated identity and the reviewed installer lock path. Current\n"
-            "Code 29 adds only the reviewed POS-notice and inventory-layout corrections. None may delete,",
+            "Code 29 adds only the reviewed POS-notice, inventory-layout, and Web session\n"
+            "corrections. None may delete, disable, reorder, or rewrite an existing",
             1,
         ),
         (
@@ -522,6 +539,23 @@ def test_reviewed_pos_and_inventory_ui_corrections_are_exact() -> None:
 
     for path, expected_sha256 in REVIEWED_UI_SHA256.items():
         _assert_sha256(path, (ROOT / path).read_bytes(), expected_sha256)
+
+
+def test_reviewed_web_session_correction_is_exact() -> None:
+    for path, expected_sha256 in REVIEWED_WEB_SESSION_SHA256.items():
+        _assert_sha256(path, (ROOT / path).read_bytes(), expected_sha256)
+
+
+@pytest.mark.parametrize("path", REVIEWED_WEB_SESSION_SHA256)
+def test_reviewed_web_session_hash_guards_reject_working_tree_mutations(
+    path: str,
+) -> None:
+    with pytest.raises(AssertionError, match="unexpected corrected Code 29 content"):
+        _assert_sha256(
+            path,
+            (ROOT / path).read_bytes() + b"\n",
+            REVIEWED_WEB_SESSION_SHA256[path],
+        )
 
 
 @pytest.mark.parametrize("path", REVIEWED_UI_SHA256)

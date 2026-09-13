@@ -7,8 +7,8 @@ Code 26 may add tests and narrowly change the allow-listed failure paths. Code
 expiry repair. Code 28 hardens the release scanner path. Original Code 29
 carries the reviewed image-format and Android quantity corrections; corrected
 Code 29 adds coordinated identity and the reviewed installer lock path. Current
-Code 29 adds only the reviewed POS-notice and inventory-layout corrections. None may delete,
-disable, reorder, or rewrite an existing
+Code 29 adds only the reviewed POS-notice, inventory-layout, and Web session
+corrections. None may delete, disable, reorder, or rewrite an existing
 test outside the exact fixture-only normalization below.
 The sole reviewed audit-reader locator migration below preserves every
 credential-cleanup assertion while following the corrected UTF-8 reader.
