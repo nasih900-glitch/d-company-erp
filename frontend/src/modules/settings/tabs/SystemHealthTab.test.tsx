@@ -79,7 +79,7 @@ describe('Owner System Health presentation', () => {
     expect(markup).toContain('Server protection');
     expect(markup).toContain('Backup proof');
     expect(markup).toContain('Not connected');
-    expect(markup).toContain('Code 15');
+    expect(markup).toContain('Build 15');
     expect(markup).toContain('2 outdated');
     expect(markup).toContain('Crashes');
     expect(markup).toContain('App not responding');

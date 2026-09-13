@@ -4359,37 +4359,40 @@ internal fun StartSessionDialog(
     var phone by remember { mutableStateOf("") }
     var minutes by remember { mutableStateOf<Int?>(60) }
     val basePackages = remember(packages) {
-        packages.filter { it.kind == "base" && it.code.isNotBlank() }
+        packages.filter {
+            it.kind == "base" && it.code.isNotBlank() && it.pricingTier == "standard"
+        }
     }
-    val pricingTiers = remember(basePackages) {
-        basePackages.map(GamingPackage::pricingTier).distinct()
-            .sortedBy { if (it == "standard") 0 else 1 }
+    val availableVariants = remember(basePackages) {
+        basePackages.map(GamingPackage::variant).distinct()
     }
-    var selectedPricingTier by rememberSaveable(station.id) {
-        mutableStateOf(pricingTiers.firstOrNull() ?: "standard")
+    var selectedVariant by rememberSaveable(station.id) {
+        mutableStateOf(
+            availableVariants.firstOrNull { it == "simdrive" }
+                ?: availableVariants.firstOrNull(),
+        )
     }
     val supportsPlayerModes = stationFilterId(station.type) == "ps5" &&
         basePackages.any { it.variant in setOf("single", "dual") }
     var playerCount by rememberSaveable(station.id) { mutableIntStateOf(1) }
-    val maximumPlayers = remember(basePackages, selectedPricingTier) {
-        basePackages.filter { it.pricingTier == selectedPricingTier }
-            .maxOfOrNull(GamingPackage::maxPlayers)?.coerceIn(1, 8) ?: 1
+    val maximumPlayers = remember(basePackages) {
+        basePackages.maxOfOrNull(GamingPackage::maxPlayers)?.coerceIn(1, 8) ?: 1
     }
     val requiredVariant = if (supportsPlayerModes) {
         if (playerCount == 1) "single" else "dual"
     } else {
-        null
+        selectedVariant
     }
     val eligiblePackages = basePackages.filter {
-        it.pricingTier == selectedPricingTier &&
-            (requiredVariant == null || it.variant == requiredVariant)
+        requiredVariant == null || it.variant == requiredVariant
     }
     var selectedPackageId by rememberSaveable(station.id) {
         mutableStateOf<String?>(eligiblePackages.firstOrNull()?.id)
     }
-    LaunchedEffect(selectedPricingTier, playerCount, packages) {
-        if (selectedPricingTier !in pricingTiers) {
-            selectedPricingTier = pricingTiers.firstOrNull() ?: "standard"
+    LaunchedEffect(selectedVariant, playerCount, packages) {
+        if (selectedVariant !in availableVariants) {
+            selectedVariant = availableVariants.firstOrNull { it == "simdrive" }
+                ?: availableVariants.firstOrNull()
         }
         playerCount = playerCount.coerceAtMost(maximumPlayers)
         if (eligiblePackages.none { it.id == selectedPackageId }) {
@@ -4466,14 +4469,14 @@ internal fun StartSessionDialog(
                         style = MaterialTheme.typography.bodyMedium,
                     )
                 } else if (hasFixedTariff) {
-                    if (pricingTiers.size > 1) {
-                        Text("Service tier", color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelMedium)
+                    if (stationFilterId(station.type) == "racing" && availableVariants.size > 1) {
+                        Text("Mode", color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelMedium)
                         LazyRow(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                            items(pricingTiers) { tier ->
+                            items(availableVariants) { variant ->
                                 FilterChip(
-                                    selected = selectedPricingTier == tier,
-                                    onClick = { selectedPricingTier = tier },
-                                    label = { Text(tier.replaceFirstChar(Char::uppercase)) },
+                                    selected = selectedVariant == variant,
+                                    onClick = { selectedVariant = variant },
+                                    label = { Text(gamingModeLabel(variant)) },
                                     colors = gamingPackageChipColors(),
                                     modifier = Modifier.heightIn(min = 48.dp),
                                 )
@@ -4641,7 +4644,7 @@ private fun stationFilterId(type: String): String {
 }
 
 internal fun requiresCanonicalGamingTariff(stationType: String): Boolean =
-    stationFilterId(stationType) in setOf("ps5", "racing")
+    stationFilterId(stationType) in setOf("ps5", "racing", "vr")
 
 /**
  * Price copy for an available station. PS5 and simulator operation is governed
@@ -4665,20 +4668,25 @@ internal fun availableStationPricingDescription(
 
 internal fun gamingPackageSelectionLabel(session: GameSession): String? {
     if (!session.isPackageBilling()) return null
-    val tier = session.packagePricingTierSnapshot
-        ?.takeIf(String::isNotBlank)
-        ?.replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
+    val tier = session.packagePricingTierSnapshot?.takeIf { it == "premium" }?.let { "Premium" }
     val mode = when (session.packageVariantSnapshot) {
         "single" -> "Single"
         "dual" -> when (val players = 2 + session.extraControllers.coerceAtLeast(0)) {
             2 -> "Two players"
             else -> "$players players"
         }
-        "simdrive" -> "Simdrive"
-        else -> session.packageVariantSnapshot?.takeIf(String::isNotBlank)
-            ?.replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
+        else -> session.packageVariantSnapshot?.takeIf(String::isNotBlank)?.let(::gamingModeLabel)
     }
     return listOfNotNull(tier, mode).takeIf { it.isNotEmpty() }?.joinToString(" · ")
+}
+
+internal fun gamingModeLabel(variant: String): String = when (variant) {
+    "simdrive" -> "Racing Sim"
+    "vr_racing" -> "VR Racing Sim"
+    "vr_games" -> "VR Games"
+    else -> variant.replace('_', ' ').split(' ').joinToString(" ") { word ->
+        word.replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
+    }
 }
 
 private fun stationTypeLabel(type: String): String = when (stationFilterId(type)) {

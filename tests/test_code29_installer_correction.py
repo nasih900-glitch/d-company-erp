@@ -54,6 +54,73 @@ REVIEWED_BACKEND_REFRESH_LOCK_SHA256 = {
         "719ba8b478d70e2a6a565f564b785df8e4ee7f89c0f92260891c4e7e808887cf"
     ),
 }
+REVIEWED_PRICING_CARD_SHA256 = {
+    "backend/app/api/v1/gaming/router.py": (
+        "4f10b4ecbfc82cbcc82f1bff2eb14e5835c6eea60a34b31438215213b880f177"
+    ),
+    "backend/app/services/gaming/tariff_catalog.py": (
+        "c050f6df3a19681c46af9d649cbd112ea135960052393f6f50d4d9565ea97839"
+    ),
+    "backend/scripts/ensure_gaming_tariff.py": (
+        "33eed139be67dc8800065b23c3abe19f6f885ca38a1aa3b7e4e6e0e0048619c1"
+    ),
+    "backend/tests/unit/test_gaming_tariff_catalog.py": (
+        "26ab1a7adb35ee4110b0357854c07f363c42cc191845d3d9cc10770f98836699"
+    ),
+    "backend/tests/integration/test_gaming_tariff_pos_e2e.py": (
+        "98838882791dc32c9fac9a42932b3743611962f02a8e0b32cb0e5c427e101f1f"
+    ),
+    "backend/tests/integration/test_gaming_phase2_contracts.py": (
+        "7d37f3fb0ae085fb61e92a24ffbb5415cca20dc4b26ae9f667ceece3be48d4db"
+    ),
+    "backend/tests/integration/test_captured_shift_opening.py": (
+        "c2723589654819903ed6d5d3ae7d362e6389a18c9b4ea42becee947279ddf04f"
+    ),
+    "backend/tests/integration/test_gaming_co_owner_stop.py": (
+        "bf30afe6916d6ad8c3547ae5de9ba94e6a1f4bc9f354d7743783d4d39e8b3d80"
+    ),
+    "frontend/src/modules/gaming/GamingScreen.tsx": (
+        "01ca0860071ef0cc555556e4c5f92f06e0d35ad707a8fbf5d21f17f111d5f422"
+    ),
+    "frontend/src/modules/gaming/gaming-tariff.test.ts": (
+        "03b1f1ca87c7e04c3d6e48470403ac383080384d1bc69a0282e3f9e4a0771e50"
+    ),
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingScreen.kt": (
+        "7059c4f228680263cc7dda5822d54db000b64a5b735e438f514db04dad9d4160"
+    ),
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingViewModel.kt": (
+        "8c38bccc106338cd761df36fd396dfe153cb6e6d670b733a1bce2a7c8fb9a6f1"
+    ),
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingDialogUiTest.kt": (
+        "fe8f3202225b2ee0387c26bca1ffd3b6477434f17336b5cca7aaf5ed771893ac"
+    ),
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/gaming/GamingStationPresentationTest.kt": (
+        "a9db63a7cc106918c04929b3b0c02dc6fce0b9c52695a838adce83f3125dd547"
+    ),
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/gaming/GamingViewModelRecoveryTest.kt": (
+        "5a90ad73d21081150ab012ea33774457164accfa413ef3e6da5fe0be65ce0314"
+    ),
+    "android-native/app/src/test/java/cloud/dcompany/erp/core/sync/GamingPackageExtensionReplayPolicyTest.kt": (
+        "6292de870fa7c02ecb99bfe2d81e8e99a1561b3faee8c8f5807409cf674208f1"
+    ),
+}
+REVIEWED_PACKAGING_LABEL_SHA256 = {
+    "frontend/src/modules/settings/tabs/DevicesUpdatesTab.tsx": (
+        "dcdce6cb8ae599bf4b2dd67ca79131df1ea657383b752c0679b79202965172a8"
+    ),
+    "frontend/src/modules/settings/tabs/SystemHealthTab.tsx": (
+        "a3976e9634de7536ead6b0a0b58444fe51636a3ee83848aed5427a5841c14367"
+    ),
+    "frontend/src/modules/settings/tabs/SystemHealthTab.test.tsx": (
+        "0c6e16e7c782ef96463685ea8509b7f0a61070a5e4305c1540188dc7ac7d2724"
+    ),
+    "frontend/src/modules/remote-assistance/DeviceListPanel.tsx": (
+        "d425456084f4160d31b77480dc55eca9beb6d4a0216bef8328f04046ca11b99f"
+    ),
+    "frontend/src/modules/remote-assistance/DeviceDetailPanel.tsx": (
+        "a902ea672d9464a9cd53b7c73ed926f03745d83beaab3a4be7a41c9d3607efea"
+    ),
+}
 
 EXPECTED_CORRECTION_PATHS = {
     ".env.production.example",
@@ -61,16 +128,30 @@ EXPECTED_CORRECTION_PATHS = {
     ".github/workflows/release.yml",
     "android-native/app/build.gradle.kts",
     "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/PosEmptyCatalogueUiTest.kt",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingDialogUiTest.kt",
     "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/inventory/InventoryLoadedWorkspaceUiTest.kt",
     "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/PosScreen.kt",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingScreen.kt",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingViewModel.kt",
     "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/inventory/InventoryScreen.kt",
     "android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt",
+    "android-native/app/src/test/java/cloud/dcompany/erp/core/sync/GamingPackageExtensionReplayPolicyTest.kt",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/gaming/GamingStationPresentationTest.kt",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/gaming/GamingViewModelRecoveryTest.kt",
     "android-native/audit-driver/plans/code26-gaming-finance-physical.json",
     "backend/app/__init__.py",
+    "backend/app/api/v1/gaming/router.py",
+    "backend/app/services/gaming/tariff_catalog.py",
     "backend/app/services/auth/refresh_sessions.py",
     "backend/pyproject.toml",
+    "backend/scripts/ensure_gaming_tariff.py",
     "backend/tests/integration/test_auth_refresh_locking.py",
+    "backend/tests/integration/test_captured_shift_opening.py",
+    "backend/tests/integration/test_gaming_co_owner_stop.py",
+    "backend/tests/integration/test_gaming_phase2_contracts.py",
+    "backend/tests/integration/test_gaming_tariff_pos_e2e.py",
     "backend/tests/unit/test_client_compatibility.py",
+    "backend/tests/unit/test_gaming_tariff_catalog.py",
     "backend/tests/unit/test_release_audit_fixes.py",
     "backend/tests/unit/test_release_contracts.py",
     "backend/tests/unit/test_remote_assistance_contract.py",
@@ -85,6 +166,13 @@ EXPECTED_CORRECTION_PATHS = {
     "frontend/src/lib/api-cookie-session-renewal.test.ts",
     "frontend/src/lib/api-session-renewal.test.ts",
     "frontend/src/lib/api.ts",
+    "frontend/src/modules/remote-assistance/DeviceDetailPanel.tsx",
+    "frontend/src/modules/remote-assistance/DeviceListPanel.tsx",
+    "frontend/src/modules/gaming/GamingScreen.tsx",
+    "frontend/src/modules/gaming/gaming-tariff.test.ts",
+    "frontend/src/modules/settings/tabs/DevicesUpdatesTab.tsx",
+    "frontend/src/modules/settings/tabs/SystemHealthTab.test.tsx",
+    "frontend/src/modules/settings/tabs/SystemHealthTab.tsx",
     "infra/scripts/install-on-vm.sh",
     "scripts/analyze_code26_physical_evidence.py",
     "scripts/run_code26_physical_business_audit.sh",
@@ -151,9 +239,10 @@ def _identity_expected(path: str) -> str:
         "frontend/.env.example": 1,
         "docker-compose.prod.yml": 6,
     }
-    return _replace_exact(
-        _original(path), (("3.1.19", "3.1.21", counts[path]),)
-    )
+    replacements = [("3.1.19", "3.1.22", counts[path])]
+    if path == "android-native/app/build.gradle.kts":
+        replacements.append(("versionCode = 29", "versionCode = 30", 1))
+    return _replace_exact(_original(path), tuple(replacements))
 
 
 def _workflow_step() -> str:
@@ -193,16 +282,27 @@ def test_live_delta_is_exactly_the_reviewed_code29_correction() -> None:
     }
     assert protected_application_changes == {
         "backend/app/__init__.py",
+        "backend/app/api/v1/gaming/router.py",
+        "backend/app/services/gaming/tariff_catalog.py",
         "backend/app/services/auth/refresh_sessions.py",
         "frontend/src/lib/api-cookie-session-renewal.test.ts",
         "frontend/src/lib/api-session-renewal.test.ts",
         "frontend/src/lib/api.ts",
+        "frontend/src/modules/remote-assistance/DeviceDetailPanel.tsx",
+        "frontend/src/modules/remote-assistance/DeviceListPanel.tsx",
+        "frontend/src/modules/gaming/GamingScreen.tsx",
+        "frontend/src/modules/gaming/gaming-tariff.test.ts",
+        "frontend/src/modules/settings/tabs/DevicesUpdatesTab.tsx",
+        "frontend/src/modules/settings/tabs/SystemHealthTab.test.tsx",
+        "frontend/src/modules/settings/tabs/SystemHealthTab.tsx",
         "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/PosScreen.kt",
+        "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingScreen.kt",
+        "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingViewModel.kt",
         "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/inventory/InventoryScreen.kt",
     }
 
 
-def test_live_coordinated_identity_is_version_name_3_1_21_with_code_29() -> None:
+def test_live_coordinated_identity_is_version_name_3_1_22_with_build_30() -> None:
     for path in (
         "android-native/app/build.gradle.kts",
         "backend/pyproject.toml",
@@ -215,11 +315,11 @@ def test_live_coordinated_identity_is_version_name_3_1_21_with_code_29() -> None
         _assert_exact_text(path, _current(path), _identity_expected(path))
 
     build = _current("android-native/app/build.gradle.kts")
-    assert build.count("versionCode = 29") == 1
-    assert build.count('versionName = "3.1.21"') == 1
+    assert build.count("versionCode = 30") == 1
+    assert build.count('versionName = "3.1.22"') == 1
 
     env_replacements = (
-        ("APP_VERSION=3.1.19", "APP_VERSION=3.1.21", 1),
+        ("APP_VERSION=3.1.19", "APP_VERSION=3.1.22", 1),
         (
             "# immutable history. Signed Code 28 (3.1.18) failed its production image-identity\n"
             "# gate before maintenance or cutover and was never staged or offered. Code 29\n"
@@ -228,7 +328,8 @@ def test_live_coordinated_identity_is_version_name_3_1_21_with_code_29() -> None
             "# immutable history. Original signed Code 29 (3.1.19) failed its production\n"
             "# installer lock gate before builds or maintenance and was never staged or offered.\n"
             "# Code 29 (3.1.20) was cancelled before build/signing after the POS notice defect.\n"
-            "# Current Code 29 (3.1.21) carries the reviewed incremental UI corrections and is\n"
+            "# Current Code 29.1 (3.1.22, installation build 30) carries the reviewed incremental\n"
+            "# UI and pricing corrections and is\n"
             "# not advertised unless every gate in docs/CODE29_RELEASE_CANDIDATE.md passes for\n"
             "# its exact source and artifacts.",
             1,
@@ -244,14 +345,18 @@ def test_live_coordinated_identity_is_version_name_3_1_21_with_code_29() -> None
 def test_live_identity_fixtures_are_exact_counted_transformations() -> None:
     replacements = {
         "android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt": (
-            ("3.1.19", "3.1.21", 2),
+            ("3.1.19", "3.1.22", 2),
+            ("assertEquals(29, BuildConfig.VERSION_CODE)", "assertEquals(30, BuildConfig.VERSION_CODE)", 1),
         ),
-        "backend/tests/unit/test_client_compatibility.py": (("3.1.19", "3.1.21", 1),),
-        "backend/tests/unit/test_release_audit_fixes.py": (("3.1.19", "3.1.21", 1),),
-        "backend/tests/unit/test_release_contracts.py": (("3.1.19", "3.1.21", 1),),
-        "backend/tests/unit/test_remote_assistance_contract.py": (("3.1.19", "3.1.21", 4),),
-        "backend/tests/unit/test_runtime_release_parity.py": (("3.1.19", "3.1.21", 6),),
-        "tests/test_android_runtime_parity.py": (("3.1.19", "3.1.21", 2),),
+        "backend/tests/unit/test_client_compatibility.py": (("3.1.19", "3.1.22", 1),),
+        "backend/tests/unit/test_release_audit_fixes.py": (("3.1.19", "3.1.22", 1),),
+        "backend/tests/unit/test_release_contracts.py": (("3.1.19", "3.1.22", 1),),
+        "backend/tests/unit/test_remote_assistance_contract.py": (("3.1.19", "3.1.22", 4),),
+        "backend/tests/unit/test_runtime_release_parity.py": (
+            ("3.1.19", "3.1.22", 6),
+            ("version_code=29,", "version_code=30,", 1),
+        ),
+        "tests/test_android_runtime_parity.py": (("3.1.19", "3.1.22", 2),),
         "tests/test_code26_physical_audit_lane.py": (("3.1.19", "3.1.21", 2),),
     }
     for path, path_replacements in replacements.items():
@@ -306,8 +411,30 @@ def test_original_release_name_tests_remain_and_patch_cases_are_exactly_added() 
         "                version,\n"
         "            )\n\n"
     )
+    packaging_addition = (
+        "    def test_code29_point1_pricing_patch_accepts_v3_1_22_build30(self) -> None:\n"
+        "        version = read_gradle_version(\n"
+        "            self.write_build_file(version_code=\"30\", version_name='\"3.1.22\"')\n"
+        "        )\n\n"
+        "        validate_tag(\"v3.1.22\", version)\n"
+        "        validate_built_metadata(\n"
+        "            self.write_metadata(version_code=30, version_name=\"3.1.22\"), version\n"
+        "        )\n\n"
+        "        self.assertEqual(AndroidVersion(code=30, name=\"3.1.22\"), version)\n\n"
+        "    def test_code29_point1_pricing_patch_rejects_build29_identity(self) -> None:\n"
+        "        version = read_gradle_version(\n"
+        "            self.write_build_file(version_code=\"30\", version_name='\"3.1.22\"')\n"
+        "        )\n\n"
+        "        with self.assertRaisesRegex(ReleaseVersionError, \"expected 'v3.1.22'\"):\n"
+        "            validate_tag(\"v3.1.21\", version)\n"
+        "        with self.assertRaisesRegex(ReleaseVersionError, \"does not match\"):\n"
+        "            validate_built_metadata(\n"
+        "                self.write_metadata(version_code=29, version_name=\"3.1.21\"),\n"
+        "                version,\n"
+        "            )\n\n"
+    )
     expected = _replace_exact(
-        _original(path), ((anchor, addition + current_addition + anchor, 1),)
+        _original(path), ((anchor, addition + current_addition + packaging_addition + anchor, 1),)
     )
     _assert_exact_text(path, _current(path), expected)
     assert "test_code29_image_identity_correction_accepts_v3_1_19" in expected
@@ -472,6 +599,190 @@ def test_freeze_extensions_and_historical_guards_are_exact() -> None:
         _original("scripts/verify_code26_regression_freeze.py"),
         freeze_script_replacements,
     )
+    pricing_test_hashes = (
+        'REVIEWED_PRICING_TEST_SHA256 = {\n'
+        '    "backend/tests/unit/test_gaming_tariff_catalog.py": (\n'
+        '        "26ab1a7adb35ee4110b0357854c07f363c42cc191845d3d9cc10770f98836699"\n'
+        '    ),\n'
+        '    "backend/tests/integration/test_gaming_tariff_pos_e2e.py": (\n'
+        '        "98838882791dc32c9fac9a42932b3743611962f02a8e0b32cb0e5c427e101f1f"\n'
+        '    ),\n'
+        '    "backend/tests/integration/test_gaming_phase2_contracts.py": (\n'
+        '        "7d37f3fb0ae085fb61e92a24ffbb5415cca20dc4b26ae9f667ceece3be48d4db"\n'
+        '    ),\n'
+        '    "backend/tests/integration/test_captured_shift_opening.py": (\n'
+        '        "c2723589654819903ed6d5d3ae7d362e6389a18c9b4ea42becee947279ddf04f"\n'
+        '    ),\n'
+        '    "backend/tests/integration/test_gaming_co_owner_stop.py": (\n'
+        '        "bf30afe6916d6ad8c3547ae5de9ba94e6a1f4bc9f354d7743783d4d39e8b3d80"\n'
+        '    ),\n'
+        '    "frontend/src/modules/gaming/gaming-tariff.test.ts": (\n'
+        '        "03b1f1ca87c7e04c3d6e48470403ac383080384d1bc69a0282e3f9e4a0771e50"\n'
+        '    ),\n'
+        '    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingDialogUiTest.kt": (\n'
+        '        "fe8f3202225b2ee0387c26bca1ffd3b6477434f17336b5cca7aaf5ed771893ac"\n'
+        '    ),\n'
+        '    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/gaming/GamingStationPresentationTest.kt": (\n'
+        '        "a9db63a7cc106918c04929b3b0c02dc6fce0b9c52695a838adce83f3125dd547"\n'
+        '    ),\n'
+        '    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/gaming/GamingViewModelRecoveryTest.kt": (\n'
+        '        "5a90ad73d21081150ab012ea33774457164accfa413ef3e6da5fe0be65ce0314"\n'
+        '    ),\n'
+        '    "android-native/app/src/test/java/cloud/dcompany/erp/core/sync/GamingPackageExtensionReplayPolicyTest.kt": (\n'
+        '        "6292de870fa7c02ecb99bfe2d81e8e99a1561b3faee8c8f5807409cf674208f1"\n'
+        '    ),\n'
+        '}\n'
+    )
+    pricing_freeze_script_replacements = (
+        (
+            "Code 29 adds only the reviewed POS-notice, inventory-layout, Web session, and\n"
+            "refresh-lock corrections. None may delete, disable, reorder, or rewrite an existing\n"
+            "test outside the exact fixture-only normalization below.",
+            "Code 29 adds only the reviewed POS-notice, inventory-layout, Web session,\n"
+            "refresh-lock, and owner-approved pricing-card corrections. None may delete,\n"
+            "disable, reorder, or rewrite an existing test outside the exact fixture-only\n"
+            "normalization or exact reviewed-test hashes below.",
+            1,
+        ),
+        (
+            'REFRESH_LOCKING_TEST_SHA256 = (\n'
+            '    "719ba8b478d70e2a6a565f564b785df8e4ee7f89c0f92260891c4e7e808887cf"\n'
+            ')\n',
+            'REFRESH_LOCKING_TEST_SHA256 = (\n'
+            '    "719ba8b478d70e2a6a565f564b785df8e4ee7f89c0f92260891c4e7e808887cf"\n'
+            ')\n' + pricing_test_hashes,
+            1,
+        ),
+        (
+            "\nALLOWED_PRODUCTION_PATHS = {\n",
+            "\nREVIEWED_PRICING_PRODUCTION_PATHS = frozenset({\n"
+            '    "backend/app/api/v1/gaming/router.py",\n'
+            '    "backend/app/services/gaming/tariff_catalog.py",\n'
+            '    "frontend/src/modules/gaming/GamingScreen.tsx",\n'
+            '    "frontend/src/modules/gaming/gaming-tariff.test.ts",\n'
+            "})\n\n"
+            "ALLOWED_PRODUCTION_PATHS = {\n",
+            1,
+        ),
+        (
+            "} | REVIEWED_WEB_AUTH_PATHS\n\nPRODUCTION_PREFIXES",
+            "} | REVIEWED_WEB_AUTH_PATHS | REVIEWED_PRICING_PRODUCTION_PATHS\n\n"
+            "PRODUCTION_PREFIXES",
+            1,
+        ),
+        (
+            '        \'    assert {path for path in report.changed_production_files if path.startswith("frontend/src/")} == REVIEWED_WEB_AUTH_PATHS\',\n',
+            '        \'    assert {path for path in report.changed_production_files if path.startswith("frontend/src/")} == REVIEWED_WEB_AUTH_PATHS | {"frontend/src/modules/gaming/GamingScreen.tsx", "frontend/src/modules/gaming/gaming-tariff.test.ts"}\',\n',
+            1,
+        ),
+        (
+            "        if _missing_ordered_lines(baseline_normalised, candidate_normalised):\n"
+            '            errors.append(f"baseline test was rewritten or reordered: {path}")\n',
+            "        reviewed_pricing_sha256 = REVIEWED_PRICING_TEST_SHA256.get(path)\n"
+            "        reviewed_pricing_bytes_match = reviewed_pricing_sha256 is not None and (\n"
+            "            hashlib.sha256(candidate_path.read_bytes()).hexdigest()\n"
+            "            == reviewed_pricing_sha256\n"
+            "        )\n"
+            "        if reviewed_pricing_sha256 is not None and not reviewed_pricing_bytes_match:\n"
+            '            errors.append(f"reviewed pricing test differs from its approved bytes: {path}")\n'
+            "        if not reviewed_pricing_bytes_match and _missing_ordered_lines(\n"
+            "            baseline_normalised, candidate_normalised\n"
+            "        ):\n"
+            '            errors.append(f"baseline test was rewritten or reordered: {path}")\n',
+            1,
+        ),
+    )
+    expected_script = _replace_exact(expected_script, pricing_freeze_script_replacements)
+    packaging_test_hashes = (
+        'REVIEWED_PACKAGING_TEST_SHA256 = {\n'
+        '    "frontend/src/modules/settings/tabs/SystemHealthTab.test.tsx": (\n'
+        '        "0c6e16e7c782ef96463685ea8509b7f0a61070a5e4305c1540188dc7ac7d2724"\n'
+        '    ),\n'
+        '}\n'
+    )
+    packaging_ui_paths = (
+        "REVIEWED_PACKAGING_UI_PATHS = frozenset({\n"
+        '    "frontend/src/modules/settings/tabs/DevicesUpdatesTab.tsx",\n'
+        '    "frontend/src/modules/settings/tabs/SystemHealthTab.tsx",\n'
+        '    "frontend/src/modules/settings/tabs/SystemHealthTab.test.tsx",\n'
+        '    "frontend/src/modules/remote-assistance/DeviceListPanel.tsx",\n'
+        '    "frontend/src/modules/remote-assistance/DeviceDetailPanel.tsx",\n'
+        "})\n\n"
+    )
+    packaging_freeze_script_replacements = (
+        (
+            "Code 29 adds only the reviewed POS-notice, inventory-layout, Web session,\n"
+            "refresh-lock, and owner-approved pricing-card corrections. None may delete,\n"
+            "disable, reorder, or rewrite an existing test outside the exact fixture-only\n"
+            "normalization or exact reviewed-test hashes below.",
+            "Code 29 adds only the reviewed POS-notice, inventory-layout, Web session,\n"
+            "refresh-lock, owner-approved pricing-card, and Code 29.1 packaging-label\n"
+            "corrections. None may delete, disable, reorder, or rewrite an existing test\n"
+            "outside the exact fixture-only normalization or exact reviewed-test hashes below.",
+            1,
+        ),
+        (pricing_test_hashes, pricing_test_hashes + packaging_test_hashes, 1),
+        (
+            '        ("3.1.21", "3.1.14"),\n',
+            '        ("3.1.22", "3.1.14"),\n'
+            '        ("3.1.21", "3.1.14"),\n',
+            1,
+        ),
+        (
+            'r"version_code\\s*=\\s*(?:26|27|28|29)\\b"',
+            'r"version_code\\s*=\\s*(?:26|27|28|29|30)\\b"',
+            1,
+        ),
+        (
+            'r"assertEquals\\((?:26|27|28|29),\\s*BuildConfig\\.VERSION_CODE\\)"',
+            'r"assertEquals\\((?:26|27|28|29|30),\\s*BuildConfig\\.VERSION_CODE\\)"',
+            1,
+        ),
+        (
+            "\nALLOWED_PRODUCTION_PATHS = {\n",
+            "\n" + packaging_ui_paths + "ALLOWED_PRODUCTION_PATHS = {\n",
+            1,
+        ),
+        (
+            "} | REVIEWED_WEB_AUTH_PATHS | REVIEWED_PRICING_PRODUCTION_PATHS\n\n"
+            "PRODUCTION_PREFIXES",
+            "} | REVIEWED_WEB_AUTH_PATHS | REVIEWED_PRICING_PRODUCTION_PATHS | "
+            "REVIEWED_PACKAGING_UI_PATHS\n\nPRODUCTION_PREFIXES",
+            1,
+        ),
+        (
+            '        \'    assert {path for path in report.changed_production_files if path.startswith("frontend/src/")} == REVIEWED_WEB_AUTH_PATHS | {"frontend/src/modules/gaming/GamingScreen.tsx", "frontend/src/modules/gaming/gaming-tariff.test.ts"}\',\n',
+            '        \'    assert {path for path in report.changed_production_files if path.startswith("frontend/src/")} == REVIEWED_WEB_AUTH_PATHS | {"frontend/src/modules/gaming/GamingScreen.tsx", "frontend/src/modules/gaming/gaming-tariff.test.ts"} | REVIEWED_PACKAGING_UI_PATHS\',\n',
+            1,
+        ),
+        (
+            "        reviewed_pricing_sha256 = REVIEWED_PRICING_TEST_SHA256.get(path)\n"
+            "        reviewed_pricing_bytes_match = reviewed_pricing_sha256 is not None and (\n"
+            "            hashlib.sha256(candidate_path.read_bytes()).hexdigest()\n"
+            "            == reviewed_pricing_sha256\n"
+            "        )\n"
+            "        if reviewed_pricing_sha256 is not None and not reviewed_pricing_bytes_match:\n"
+            '            errors.append(f"reviewed pricing test differs from its approved bytes: {path}")\n'
+            "        if not reviewed_pricing_bytes_match and _missing_ordered_lines(\n"
+            "            baseline_normalised, candidate_normalised\n"
+            "        ):\n",
+            "        reviewed_test_sha256 = (\n"
+            "            REVIEWED_PRICING_TEST_SHA256.get(path)\n"
+            "            or REVIEWED_PACKAGING_TEST_SHA256.get(path)\n"
+            "        )\n"
+            "        reviewed_test_bytes_match = reviewed_test_sha256 is not None and (\n"
+            "            hashlib.sha256(candidate_path.read_bytes()).hexdigest()\n"
+            "            == reviewed_test_sha256\n"
+            "        )\n"
+            "        if reviewed_test_sha256 is not None and not reviewed_test_bytes_match:\n"
+            '            errors.append(f"reviewed test differs from its approved bytes: {path}")\n'
+            "        if not reviewed_test_bytes_match and _missing_ordered_lines(\n"
+            "            baseline_normalised, candidate_normalised\n"
+            "        ):\n",
+            1,
+        ),
+    )
+    expected_script = _replace_exact(expected_script, packaging_freeze_script_replacements)
     _assert_exact_text(
         "scripts/verify_code26_regression_freeze.py",
         _current("scripts/verify_code26_regression_freeze.py"),
@@ -543,6 +854,101 @@ def test_freeze_extensions_and_historical_guards_are_exact() -> None:
             ),
         ),
     )
+    pricing_freeze_test = (
+        '@pytest.mark.parametrize(("path", "expected_sha256"), REVIEWED_PRICING_TEST_SHA256.items())\n'
+        "def test_pricing_test_rewrites_require_exact_reviewed_bytes(\n"
+        "    path: str,\n"
+        "    expected_sha256: str,\n"
+        ") -> None:\n"
+        "    current = (ROOT / path).read_bytes()\n"
+        "    assert hashlib.sha256(current).hexdigest() == expected_sha256\n"
+        '    assert hashlib.sha256(current + b"\\n").hexdigest() != expected_sha256\n\n\n'
+    )
+    expected_test = _replace_exact(
+        expected_test,
+        (
+            (
+                "from pathlib import Path\nimport subprocess\n",
+                "import hashlib\nfrom pathlib import Path\nimport subprocess\n",
+                1,
+            ),
+            (
+                "    RegressionFreezeError,\n    REVIEWED_WEB_AUTH_PATHS,\n",
+                "    RegressionFreezeError,\n"
+                "    REVIEWED_PRICING_TEST_SHA256,\n"
+                "    REVIEWED_WEB_AUTH_PATHS,\n",
+                1,
+            ),
+            (
+                "def test_audit_reader_migration_only_normalises_one_locator() -> None:\n",
+                pricing_freeze_test
+                + "def test_audit_reader_migration_only_normalises_one_locator() -> None:\n",
+                1,
+            ),
+            (
+                '    assert {path for path in report.changed_production_files if path.startswith("frontend/src/")} == REVIEWED_WEB_AUTH_PATHS\n',
+                '    assert {path for path in report.changed_production_files if path.startswith("frontend/src/")} == REVIEWED_WEB_AUTH_PATHS | {\n'
+                '        "frontend/src/modules/gaming/GamingScreen.tsx",\n'
+                '        "frontend/src/modules/gaming/gaming-tariff.test.ts",\n'
+                "    }\n",
+                1,
+            ),
+        ),
+    )
+    packaging_identity_test = (
+        "def test_code29_point1_build30_identity_normalises_to_inherited_code25_baseline() -> None:\n"
+        "    path = \"android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt\"\n"
+        "    current = 'assertEquals(30, BuildConfig.VERSION_CODE)\\n\"3.1.22\"\\ncode 29 artifact\\n'\n"
+        "    assert _normalise_release_identity(path, current) == (\n"
+        "        'assertEquals(25, BuildConfig.VERSION_CODE)\\n\"3.1.14\"\\ncode 25 artifact\\n'\n"
+        "    )\n\n\n"
+    )
+    packaging_guard_test = (
+        '@pytest.mark.parametrize(("path", "expected_sha256"), REVIEWED_PACKAGING_TEST_SHA256.items())\n'
+        "def test_packaging_label_test_rewrite_requires_exact_reviewed_bytes(\n"
+        "    path: str,\n"
+        "    expected_sha256: str,\n"
+        ") -> None:\n"
+        "    current = (ROOT / path).read_bytes()\n"
+        "    assert hashlib.sha256(current).hexdigest() == expected_sha256\n"
+        '    assert hashlib.sha256(current + b"\\n").hexdigest() != expected_sha256\n\n\n'
+    )
+    expected_test = _replace_exact(
+        expected_test,
+        (
+            (
+                "    RegressionFreezeError,\n    REVIEWED_PRICING_TEST_SHA256,\n",
+                "    RegressionFreezeError,\n"
+                "    REVIEWED_PACKAGING_TEST_SHA256,\n"
+                "    REVIEWED_PACKAGING_UI_PATHS,\n"
+                "    REVIEWED_PRICING_TEST_SHA256,\n",
+                1,
+            ),
+            (
+                "def test_pos_notice_dynamic_state_host_normalises_only_the_approved_bytes() -> None:\n",
+                packaging_identity_test
+                + "def test_pos_notice_dynamic_state_host_normalises_only_the_approved_bytes() -> None:\n",
+                1,
+            ),
+            (
+                "def test_audit_reader_migration_only_normalises_one_locator() -> None:\n",
+                packaging_guard_test
+                + "def test_audit_reader_migration_only_normalises_one_locator() -> None:\n",
+                1,
+            ),
+            (
+                '    assert {path for path in report.changed_production_files if path.startswith("frontend/src/")} == REVIEWED_WEB_AUTH_PATHS | {\n'
+                '        "frontend/src/modules/gaming/GamingScreen.tsx",\n'
+                '        "frontend/src/modules/gaming/gaming-tariff.test.ts",\n'
+                "    }\n",
+                '    assert {path for path in report.changed_production_files if path.startswith("frontend/src/")} == REVIEWED_WEB_AUTH_PATHS | {\n'
+                '        "frontend/src/modules/gaming/GamingScreen.tsx",\n'
+                '        "frontend/src/modules/gaming/gaming-tariff.test.ts",\n'
+                "    } | REVIEWED_PACKAGING_UI_PATHS\n",
+                1,
+            ),
+        ),
+    )
     _assert_exact_text(freeze_test_path, _current(freeze_test_path), expected_test)
 
     assert hashlib.sha256(
@@ -587,6 +993,16 @@ def test_reviewed_backend_refresh_lock_correction_is_exact() -> None:
         _assert_sha256(path, (ROOT / path).read_bytes(), expected_sha256)
 
 
+def test_reviewed_pricing_card_correction_is_exact() -> None:
+    for path, expected_sha256 in REVIEWED_PRICING_CARD_SHA256.items():
+        _assert_sha256(path, (ROOT / path).read_bytes(), expected_sha256)
+
+
+def test_reviewed_packaging_labels_are_exact() -> None:
+    for path, expected_sha256 in REVIEWED_PACKAGING_LABEL_SHA256.items():
+        _assert_sha256(path, (ROOT / path).read_bytes(), expected_sha256)
+
+
 @pytest.mark.parametrize("path", REVIEWED_BACKEND_REFRESH_LOCK_SHA256)
 def test_reviewed_backend_refresh_lock_hash_guards_reject_mutations(path: str) -> None:
     with pytest.raises(AssertionError, match="unexpected corrected Code 29 content"):
@@ -594,6 +1010,26 @@ def test_reviewed_backend_refresh_lock_hash_guards_reject_mutations(path: str) -
             path,
             (ROOT / path).read_bytes() + b"\n",
             REVIEWED_BACKEND_REFRESH_LOCK_SHA256[path],
+        )
+
+
+@pytest.mark.parametrize("path", REVIEWED_PRICING_CARD_SHA256)
+def test_reviewed_pricing_card_hash_guards_reject_mutations(path: str) -> None:
+    with pytest.raises(AssertionError, match="unexpected corrected Code 29 content"):
+        _assert_sha256(
+            path,
+            (ROOT / path).read_bytes() + b"\n",
+            REVIEWED_PRICING_CARD_SHA256[path],
+        )
+
+
+@pytest.mark.parametrize("path", REVIEWED_PACKAGING_LABEL_SHA256)
+def test_reviewed_packaging_label_hash_guards_reject_mutations(path: str) -> None:
+    with pytest.raises(AssertionError, match="unexpected corrected Code 29 content"):
+        _assert_sha256(
+            path,
+            (ROOT / path).read_bytes() + b"\n",
+            REVIEWED_PACKAGING_LABEL_SHA256[path],
         )
 
 
@@ -652,7 +1088,7 @@ def test_operator_records_are_frozen_and_trial_precedes_production() -> None:
     [
         ("infra/scripts/install-on-vm.sh", "%f:%d:%i", "%F:%d:%i"),
         (".github/workflows/ci.yml", "sudo -n --", "sudo --"),
-        ("backend/app/__init__.py", '"3.1.21"', '"3.1.21-mutated"'),
+        ("backend/app/__init__.py", '"3.1.22"', '"3.1.22-mutated"'),
     ],
 )
 def test_live_exact_guards_reject_working_tree_mutations(

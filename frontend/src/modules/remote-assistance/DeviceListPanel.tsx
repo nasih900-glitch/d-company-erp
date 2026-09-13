@@ -66,7 +66,7 @@ export function DeviceList({
                   {relativeTime(row.device.remote_support_last_seen_at ?? row.device.last_seen_at)}
                 </p>
                 <p className="mt-1 text-xs text-fg-subtle">
-                  App {row.device.version_name} · code {row.device.version_code}
+                  App {row.device.version_name} · build {row.device.version_code}
                 </p>
               </div>
               <div className="flex items-center justify-between gap-2 sm:justify-end xl:justify-between 2xl:justify-end">

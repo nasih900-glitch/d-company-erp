@@ -299,7 +299,7 @@ export default function DevicesUpdatesTab() {
           icon={<PackageCheck size={18} aria-hidden="true" />}
           label="Active release"
           value={activeRelease ? `v${activeRelease.version_name}` : 'None'}
-          detail={activeRelease ? `Android code ${activeRelease.version_code}` : 'No update is being offered'}
+          detail={activeRelease ? `Android build ${activeRelease.version_code}` : 'No update is being offered'}
           tone={activeRelease ? 'good' : 'neutral'}
         />
       </section>
@@ -517,7 +517,7 @@ function InstallationCard({
       </div>
 
       <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
-        <InfoItem label="Installed version" value={`v${installation.version_name} · code ${installation.version_code}`} mono />
+        <InfoItem label="Installed version" value={`v${installation.version_name} · build ${installation.version_code}`} mono />
         <InfoItem
           label="Last seen"
           value={`${relativeTime(installation.last_seen_at, serverTime)} · ${formatDate(installation.last_seen_at)}`}
@@ -647,7 +647,7 @@ function ReleaseCard({
         <div>
           <p className="text-xs font-medium uppercase tracking-wide text-fg-muted">Android direct</p>
           <h5 className="mt-1 font-mono text-xl font-semibold tabular-nums">
-            v{release.version_name} <span className="text-sm text-fg-muted">· code {release.version_code}</span>
+            v{release.version_name} <span className="text-sm text-fg-muted">· build {release.version_code}</span>
           </h5>
         </div>
         <StatusPill label={status.label} className={status.className} />
@@ -870,8 +870,8 @@ export function ReleaseActionConfirmation({
     <div className="space-y-4 text-sm text-fg-muted">
       <p>
         {offering
-          ? `Offering version ${release.version_name} (code ${release.version_code}) publishes this staged record to eligible direct-install tablets and replaces any other active offer. Android still requires installation approval on each tablet.`
-          : `Withdrawing version ${release.version_name} (code ${release.version_code}) stops future offers. Tablets that already installed it are unchanged, and saved sales or offline work are not deleted.`}
+          ? `Offering version ${release.version_name} (build ${release.version_code}) publishes this staged record to eligible direct-install tablets and replaces any other active offer. Android still requires installation approval on each tablet.`
+          : `Withdrawing version ${release.version_name} (build ${release.version_code}) stops future offers. Tablets that already installed it are unchanged, and saved sales or offline work are not deleted.`}
       </p>
 
       <div className="rounded-lg border border-accent-gold/35 bg-accent-gold/10 p-3" role="note">

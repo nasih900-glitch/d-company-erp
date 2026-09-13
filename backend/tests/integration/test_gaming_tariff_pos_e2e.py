@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 import pytest
@@ -33,11 +34,15 @@ from app.models import (
     User,
     UserRole,
 )
-from app.services.gaming.tariff_catalog import upsert_d_company_gaming_tariff
+from app.services.audit.recorder import install_audit_listeners
+from app.services.gaming.tariff_catalog import (
+    RETIRED_PREMIUM_CODES,
+    upsert_d_company_gaming_tariff,
+)
 
 
 def _require_isolated_gaming_database(database_name: str, *, in_ci: bool) -> None:
-    if database_name in {
+    if database_name.startswith("dcompany_pricing_patch_") or database_name in {
         "dcompany_code22_audit_20260903",
         "dcompany_audit_test",
         # Both GitHub workflows create this disposable PostgreSQL service DB.
@@ -120,10 +125,9 @@ async def _install_tariff(session, seed_owner) -> dict[str, GamingPackage]:
     assert len(audit_rows) == 17
     assert all(row.action == "create" for row in audit_rows)
     assert all(row.actor_user_id is None for row in audit_rows)
-    assert all(row.user_agent == "script/ensure_gaming_tariff-v1" for row in audit_rows)
+    assert all(row.user_agent == "script/ensure_gaming_tariff-v2" for row in audit_rows)
     assert all(
-        row.after and row.after["branch_id"] == str(seed_owner["branch"].id)
-        for row in audit_rows
+        row.after and row.after["branch_id"] == str(seed_owner["branch"].id) for row in audit_rows
     )
     return {row.code: row for row in rows}
 
@@ -137,9 +141,7 @@ async def test_tariff_repair_is_audited_once_and_noop_restart_writes_nothing(
     packages = await _install_tariff(session, seed_owner)
     package = packages["standard-single-session-60m"]
     await session.execute(
-        update(GamingPackage)
-        .where(GamingPackage.id == package.id)
-        .values(price_minor=99_999)
+        update(GamingPackage).where(GamingPackage.id == package.id).values(price_minor=99_999)
     )
     await session.commit()
 
@@ -159,7 +161,7 @@ async def test_tariff_repair_is_audited_once_and_noop_restart_writes_nothing(
                     AuditLog.entity_type == "GamingPackage",
                     AuditLog.entity_id == str(package.id),
                     AuditLog.action == "update",
-                    AuditLog.user_agent == "script/ensure_gaming_tariff-v1",
+                    AuditLog.user_agent == "script/ensure_gaming_tariff-v2",
                 )
             )
         )
@@ -185,7 +187,7 @@ async def test_tariff_repair_is_audited_once_and_noop_restart_writes_nothing(
                     AuditLog.entity_type == "GamingPackage",
                     AuditLog.entity_id == str(package.id),
                     AuditLog.action == "update",
-                    AuditLog.user_agent == "script/ensure_gaming_tariff-v1",
+                    AuditLog.user_agent == "script/ensure_gaming_tariff-v2",
                 )
             )
         )
@@ -193,6 +195,239 @@ async def test_tariff_repair_is_audited_once_and_noop_restart_writes_nothing(
         .all()
     )
     assert second_count == 1
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_exact_premium_rows_are_retired_once_without_mutating_identity_or_price(
+    session,
+    seed_owner,
+) -> None:
+    install_audit_listeners()
+    definitions = (
+        ("premium-single-session-60m", "single", "base", 60, 15_000, 1, 1),
+        ("premium-single-extension-30m", "single", "extension", 30, 7_000, 1, 1),
+        ("premium-single-extension-60m", "single", "extension", 60, 12_000, 1, 1),
+        ("premium-dual-session-60m", "dual", "base", 60, 19_000, 2, 4),
+        ("premium-dual-extension-30m", "dual", "extension", 30, 9_000, 2, 4),
+        ("premium-dual-extension-60m", "dual", "extension", 60, 15_000, 2, 4),
+    )
+    premium_rows = [
+        GamingPackage(
+            id=uuid4(),
+            company_id=seed_owner["company"].id,
+            branch_id=seed_owner["branch"].id,
+            code=code,
+            station_type="ps5",
+            variant=variant,
+            pricing_tier="premium",
+            kind=kind,
+            name=f"Historical {code}",
+            duration_minutes=duration,
+            price_minor=price,
+            included_players=included,
+            max_players=maximum,
+            sort_order=900,
+            is_active=True,
+        )
+        for code, variant, kind, duration, price, included, maximum in definitions
+    ]
+    session.add_all(premium_rows)
+    await session.commit()
+    before = {
+        row.code: (row.id, row.name, row.price_minor, row.pricing_tier) for row in premium_rows
+    }
+
+    applied = await upsert_d_company_gaming_tariff(
+        session,
+        company_id=seed_owner["company"].id,
+        branch_id=seed_owner["branch"].id,
+    )
+    await session.commit()
+    assert set(applied.retired_codes) == RETIRED_PREMIUM_CODES
+
+    refreshed = (
+        (
+            await session.execute(
+                select(GamingPackage)
+                .where(GamingPackage.id.in_([row.id for row in premium_rows]))
+                .execution_options(populate_existing=True)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert all(row.is_active is False for row in refreshed)
+    assert {
+        row.code: (row.id, row.name, row.price_minor, row.pricing_tier) for row in refreshed
+    } == before
+    retirement_audits = (
+        (
+            await session.execute(
+                select(AuditLog).where(
+                    AuditLog.company_id == seed_owner["company"].id,
+                    AuditLog.entity_id.in_([str(row.id) for row in premium_rows]),
+                    AuditLog.action == "update",
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(retirement_audits) == 6
+    assert all(row.before == {"is_active": True} for row in retirement_audits)
+    assert all(row.after == {"is_active": False} for row in retirement_audits)
+
+    repeated = await upsert_d_company_gaming_tariff(
+        session,
+        company_id=seed_owner["company"].id,
+        branch_id=seed_owner["branch"].id,
+    )
+    await session.commit()
+    assert repeated.changed_count == 0
+    assert repeated.retired_codes == ()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_accepted_premium_extension_replays_after_retirement_and_settles_original_total(
+    client,
+    session,
+    seed_owner,
+) -> None:
+    seed_owner["company"].gstin = "32AAAAA0000A1Z5"
+    seed_owner["branch"].state_code = "32"
+    await session.commit()
+    token = await _login(client, email=seed_owner["owner"].email, password=seed_owner["password"])
+    shift_id = await _open_shift(client, seed_owner, token)
+    station = _station(seed_owner, "ps5", 1)
+    base = GamingPackage(
+        id=uuid4(),
+        company_id=seed_owner["company"].id,
+        branch_id=seed_owner["branch"].id,
+        code="premium-single-session-60m",
+        station_type="ps5",
+        variant="single",
+        pricing_tier="premium",
+        kind="base",
+        name="Historical Premium Single",
+        duration_minutes=60,
+        price_minor=15_000,
+        included_players=1,
+        max_players=1,
+        sort_order=110,
+        is_active=True,
+    )
+    extension = GamingPackage(
+        id=uuid4(),
+        company_id=seed_owner["company"].id,
+        branch_id=seed_owner["branch"].id,
+        code="premium-single-extension-30m",
+        station_type="ps5",
+        variant="single",
+        pricing_tier="premium",
+        kind="extension",
+        name="Historical Premium extension",
+        duration_minutes=30,
+        price_minor=7_000,
+        included_players=1,
+        max_players=1,
+        sort_order=120,
+        is_active=True,
+    )
+    gaming_session = GamingSession(
+        id=uuid4(),
+        company_id=seed_owner["company"].id,
+        station_id=station.id,
+        opened_by=seed_owner["owner"].id,
+        shift_id=shift_id,
+        start_at=datetime.now(UTC),
+        rate_per_hour_minor=station.rate_per_hour_minor,
+        package_id=base.id,
+        billing_mode="package",
+        package_price_minor_snapshot=15_000,
+        package_duration_minutes_snapshot=60,
+        package_variant_snapshot="single",
+        package_station_type_snapshot="ps5",
+        package_pricing_tier_snapshot="premium",
+        timer_minutes=90,
+        amount_minor=22_000,
+        status="active",
+        extra_controllers=0,
+        tax_rate=station.tax_rate,
+        sac_code=station.sac_code,
+        rate_includes_tax=station.rate_includes_tax,
+    )
+    replay_key = f"historical-premium-extension:{uuid4()}"
+    receipt = GamingSessionExtension(
+        id=uuid4(),
+        company_id=seed_owner["company"].id,
+        gaming_session_id=gaming_session.id,
+        package_id=extension.id,
+        package_name=extension.name,
+        package_variant="single",
+        station_type="ps5",
+        duration_minutes=30,
+        package_price_minor=7_000,
+        controller_surcharge_minor=0,
+        total_minor=7_000,
+        timer_before_minutes=60,
+        timer_after_minutes=90,
+        amount_before_minor=15_000,
+        amount_after_minor=22_000,
+        idempotency_key=replay_key,
+        created_by=seed_owner["owner"].id,
+    )
+    session.add_all([station, base, extension])
+    await session.flush()
+    session.add_all([gaming_session, receipt])
+    await session.commit()
+
+    retired = await upsert_d_company_gaming_tariff(
+        session,
+        company_id=seed_owner["company"].id,
+        branch_id=seed_owner["branch"].id,
+    )
+    await session.commit()
+    assert {base.code, extension.code}.issubset(retired.retired_codes)
+
+    replay = await client.post(
+        f"/api/v1/gaming/sessions/{gaming_session.id}/extend",
+        json={
+            "package_id": str(extension.id),
+            "expected_timer_minutes": 60,
+            "expected_amount_minor": 15_000,
+            "expected_package_price_minor": 7_000,
+            "expected_package_duration_minutes": 30,
+            "expected_package_variant": "single",
+        },
+        headers=_headers(seed_owner, token, key=replay_key),
+    )
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["timer_minutes"] == 90
+    assert replay.json()["amount_minor"] == 22_000
+
+    stopped = await client.post(
+        f"/api/v1/gaming/sessions/{gaming_session.id}/stop",
+        json={},
+        headers=_headers(seed_owner, token, key=f"historical-premium-stop:{uuid4()}"),
+    )
+    assert stopped.status_code == 200, stopped.text
+    assert stopped.json()["amount_minor"] == 22_000
+    sent = await client.post(
+        f"/api/v1/gaming/sessions/{gaming_session.id}/send-to-pos",
+        headers=_headers(seed_owner, token, key=f"historical-premium-pos:{uuid4()}"),
+    )
+    assert sent.status_code == 201, sent.text
+    _claim, payment = await _claim_and_pay(
+        client,
+        seed_owner,
+        token=token,
+        order_id=sent.json()["order_id"],
+        method="upi",
+        amount_minor=22_000,
+    )
+    assert payment["amount_minor"] == 22_000
 
 
 @pytest.mark.integration
@@ -243,7 +478,7 @@ async def test_parallel_tariff_applies_serialize_and_write_one_truthful_audit(
                     AuditLog.company_id == company_id,
                     AuditLog.entity_type == "GamingPackage",
                     AuditLog.action == "create",
-                    AuditLog.user_agent == "script/ensure_gaming_tariff-v1",
+                    AuditLog.user_agent == "script/ensure_gaming_tariff-v2",
                 )
             )
         )
@@ -269,13 +504,17 @@ async def test_tariff_apply_rejects_a_branch_from_another_tenant(
         )
 
     audits = (
-        await session.execute(
-            select(AuditLog).where(
-                AuditLog.company_id == seed_owner["company"].id,
-                AuditLog.entity_type == "GamingPackage",
+        (
+            await session.execute(
+                select(AuditLog).where(
+                    AuditLog.company_id == seed_owner["company"].id,
+                    AuditLog.entity_type == "GamingPackage",
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert audits == []
 
 
@@ -361,13 +600,15 @@ async def test_printed_tariff_is_exact_through_package_start_and_stop(
         ("standard-dual-session-60m", 2, 15_000),
         ("standard-dual-session-60m", 3, 18_000),
         ("standard-dual-session-60m", 4, 21_000),
-        ("premium-single-session-60m", 1, 15_000),
-        ("premium-dual-session-60m", 2, 19_000),
-        ("premium-dual-session-60m", 3, 22_000),
-        ("premium-dual-session-60m", 4, 25_000),
         ("standard-simdrive-session-15m", 1, 7_000),
         ("standard-simdrive-session-30m", 1, 10_000),
         ("standard-simdrive-session-60m", 1, 18_000),
+        ("vr-games-session-15m", 1, 8_000),
+        ("vr-games-session-30m", 1, 12_000),
+        ("vr-games-session-60m", 1, 20_000),
+        ("vr-racing-session-15m", 1, 10_000),
+        ("vr-racing-session-30m", 1, 14_000),
+        ("vr-racing-session-60m", 1, 25_000),
     )
     stations = [
         _station(seed_owner, packages[code].station_type, index)
@@ -475,7 +716,25 @@ async def test_multiplayer_extensions_charge_only_cumulative_controller_delta(
     assert started.json()["amount_minor"] == 13_000  # ₹100 + minimum ₹30
     session_id = started.json()["id"]
 
-    premium_extension = packages["premium-dual-extension-30m"]
+    premium_extension = GamingPackage(
+        id=uuid4(),
+        company_id=seed_owner["company"].id,
+        branch_id=seed_owner["branch"].id,
+        code="premium-dual-extension-30m",
+        station_type="ps5",
+        variant="dual",
+        pricing_tier="premium",
+        kind="extension",
+        name="Retired Premium Dual extension",
+        duration_minutes=30,
+        price_minor=9_000,
+        included_players=2,
+        max_players=4,
+        sort_order=120,
+        is_active=True,
+    )
+    session.add(premium_extension)
+    await session.commit()
     wrong_tier = await client.post(
         f"/api/v1/gaming/sessions/{session_id}/extend",
         json={
@@ -524,6 +783,18 @@ async def test_multiplayer_extensions_charge_only_cumulative_controller_delta(
     )
     assert replay.status_code == 200, replay.text
     assert replay.json() == first.json()
+
+    extension.is_active = False
+    await session.commit()
+    retired_replay = await client.post(
+        f"/api/v1/gaming/sessions/{session_id}/extend",
+        json=extension_payload(timer=30, amount=13_000),
+        headers=_headers(seed_owner, token, key=first_key),
+    )
+    assert retired_replay.status_code == 200, retired_replay.text
+    assert retired_replay.json() == first.json()
+    extension.is_active = True
+    await session.commit()
 
     second = await client.post(
         f"/api/v1/gaming/sessions/{session_id}/extend",
@@ -580,10 +851,6 @@ async def test_multiplayer_extensions_charge_only_cumulative_controller_delta(
         ("standard-single-session-60m", "standard-single-extension-60m", 22_000),
         ("standard-dual-session-60m", "standard-dual-extension-30m", 22_000),
         ("standard-dual-session-60m", "standard-dual-extension-60m", 28_000),
-        ("premium-single-session-60m", "premium-single-extension-30m", 22_000),
-        ("premium-single-session-60m", "premium-single-extension-60m", 27_000),
-        ("premium-dual-session-60m", "premium-dual-extension-30m", 28_000),
-        ("premium-dual-session-60m", "premium-dual-extension-60m", 34_000),
     ],
 )
 async def test_every_printed_ps5_extension_reaches_the_exact_locked_total(
@@ -807,7 +1074,7 @@ async def test_other_co_owner_can_finish_cash_upi_and_close_without_audit_access
     assert "admin.audit.read" not in identity.json()["effective_permissions"]
 
     cash_station = _station(seed_owner, "ps5", 1)
-    upi_station = _station(seed_owner, "ps5", 2)
+    upi_station = _station(seed_owner, "simulator", 2)
     session.add_all([cash_station, upi_station])
     await session.commit()
 
@@ -918,18 +1185,18 @@ async def test_other_co_owner_can_finish_cash_upi_and_close_without_audit_access
         token=co_owner_token,
         station=upi_station,
         shift_id=shift_id,
-        package=packages["premium-dual-session-60m"],
-        player_count=3,
+        package=packages["vr-racing-session-60m"],
+        player_count=1,
     )
-    assert upi_started["amount_minor"] == 22_000
-    assert upi_stopped["amount_minor"] == 22_000
+    assert upi_started["amount_minor"] == 25_000
+    assert upi_stopped["amount_minor"] == 25_000
     _upi_claim, upi_payment = await _claim_and_pay(
         client,
         seed_owner,
         token=co_owner_token,
         order_id=upi_sent["order_id"],
         method="upi",
-        amount_minor=22_000,
+        amount_minor=25_000,
     )
     assert upi_payment["method"] == "upi"
     assert upi_payment["change_minor"] is None
@@ -945,14 +1212,14 @@ async def test_other_co_owner_can_finish_cash_upi_and_close_without_audit_access
     report = report_response.json()
     assert report["branch_id"] == str(seed_owner["branch"].id)
     assert report["orders_count"] == 2
-    assert report["revenue"]["gaming_minor"] == 34_000
+    assert report["revenue"]["gaming_minor"] == 37_000
     assert report["revenue"]["discounts_and_points_redeemed_minor"] == 2_000
-    assert report["revenue"]["total_minor"] == 32_000
+    assert report["revenue"]["total_minor"] == 35_000
     assert report["payments_received"]["cash_minor"] == 10_000
-    assert report["payments_received"]["upi_minor"] == 22_000
-    assert report["payments_received"]["total_minor"] == 32_000
-    assert report["gross_revenue_minor"] == 32_000
-    assert report["net_payments_received_minor"] == 32_000
+    assert report["payments_received"]["upi_minor"] == 25_000
+    assert report["payments_received"]["total_minor"] == 35_000
+    assert report["gross_revenue_minor"] == 35_000
+    assert report["net_payments_received_minor"] == 35_000
 
     stored_shift = (
         await session.execute(
@@ -1030,7 +1297,7 @@ async def test_other_co_owner_can_finish_cash_upi_and_close_without_audit_access
         .all()
     )
     assert [order.status for order in orders] == ["paid", "paid"]
-    assert [int(order.total_minor) for order in orders] == [10_000, 22_000]
+    assert [int(order.total_minor) for order in orders] == [10_000, 25_000]
     assert [payment.method for payment in payments] == ["cash", "upi"]
     assert all(payment.recorded_by == co_owner.id for payment in payments)
 
@@ -1123,7 +1390,46 @@ async def test_read_only_partner_cannot_start_and_parallel_starts_create_one_ses
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_fixed_tariff_guard_rejects_hourly_ps5_and_simulator_but_not_vr(
+async def test_racing_and_vr_racing_modes_share_one_physical_station_lock(
+    client,
+    session,
+    seed_owner,
+) -> None:
+    packages = await _install_tariff(session, seed_owner)
+    station = _station(seed_owner, "simulator", 1)
+    session.add(station)
+    await session.commit()
+    token = await _login(client, email=seed_owner["owner"].email, password=seed_owner["password"])
+    shift_id = await _open_shift(client, seed_owner, token)
+    payloads = [
+        _start_payload(
+            station_id=station.id,
+            shift_id=shift_id,
+            package=packages[code],
+            player_count=1,
+        )
+        for code in ("standard-simdrive-session-15m", "vr-racing-session-15m")
+    ]
+
+    responses = await asyncio.gather(
+        *(
+            client.post(
+                "/api/v1/gaming/sessions/start",
+                json=payload,
+                headers=_headers(seed_owner, token, key=f"shared-rig:{uuid4()}"),
+            )
+            for payload in payloads
+        )
+    )
+    assert sorted(response.status_code for response in responses) == [201, 409]
+    winner = next(response.json() for response in responses if response.status_code == 201)
+    assert winner["package_variant_snapshot"] in {"simdrive", "vr_racing"}
+    assert sum(response.status_code == 201 for response in responses) == 1
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_fixed_tariff_guard_rejects_hourly_ps5_simulator_and_vr(
     client,
     session,
     seed_owner,
@@ -1143,7 +1449,7 @@ async def test_fixed_tariff_guard_rejects_hourly_ps5_and_simulator_but_not_vr(
     )
     shift_id = await _open_shift(client, seed_owner, token)
 
-    for station in stations[:2]:
+    for station in stations:
         response = await client.post(
             "/api/v1/gaming/sessions/start",
             json={
@@ -1156,18 +1462,78 @@ async def test_fixed_tariff_guard_rejects_hourly_ps5_and_simulator_but_not_vr(
         assert response.status_code == 422, response.text
         assert "requires a fixed-price tariff package" in response.json()["error"]["message"]
 
-    vr = stations[2]
-    allowed = await client.post(
-        "/api/v1/gaming/sessions/start",
-        json={
-            "station_id": str(vr.id),
-            "shift_id": str(shift_id),
-            "expected_rate_per_hour_minor": int(vr.rate_per_hour_minor),
-        },
-        headers=_headers(seed_owner, token, key=f"uncovered-hourly:{uuid4()}"),
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_start_replay_precedes_retirement_but_stale_premium_cannot_start(
+    client,
+    session,
+    seed_owner,
+) -> None:
+    packages = await _install_tariff(session, seed_owner)
+    station = _station(seed_owner, "ps5", 1)
+    session.add(station)
+    await session.commit()
+    token = await _login(client, email=seed_owner["owner"].email, password=seed_owner["password"])
+    shift_id = await _open_shift(client, seed_owner, token)
+    standard = packages["standard-single-session-30m"]
+    payload = _start_payload(
+        station_id=station.id,
+        shift_id=shift_id,
+        package=standard,
+        player_count=1,
     )
-    assert allowed.status_code == 201, allowed.text
-    assert allowed.json()["billing_mode"] == "hourly"
+    replay_key = f"retired-start-replay:{uuid4()}"
+    first = await client.post(
+        "/api/v1/gaming/sessions/start",
+        json=payload,
+        headers=_headers(seed_owner, token, key=replay_key),
+    )
+    assert first.status_code == 201, first.text
+    standard.is_active = False
+    await session.commit()
+    replay = await client.post(
+        "/api/v1/gaming/sessions/start",
+        json=payload,
+        headers=_headers(seed_owner, token, key=replay_key),
+    )
+    assert replay.status_code == 201, replay.text
+    assert replay.json() == first.json()
+
+    premium = GamingPackage(
+        id=uuid4(),
+        company_id=seed_owner["company"].id,
+        branch_id=seed_owner["branch"].id,
+        code="premium-single-session-60m",
+        station_type="ps5",
+        variant="single",
+        pricing_tier="premium",
+        kind="base",
+        name="Retired Premium Single",
+        duration_minutes=60,
+        price_minor=15_000,
+        included_players=1,
+        max_players=1,
+        sort_order=110,
+        is_active=True,
+    )
+    session.add(premium)
+    await session.commit()
+    second_station = _station(seed_owner, "ps5", 2)
+    session.add(second_station)
+    await session.commit()
+    rejected = await client.post(
+        "/api/v1/gaming/sessions/start",
+        json=_start_payload(
+            station_id=second_station.id,
+            shift_id=shift_id,
+            package=premium,
+            player_count=1,
+        ),
+        headers=_headers(seed_owner, token, key=f"stale-premium:{uuid4()}"),
+    )
+    assert rejected.status_code == 422, rejected.text
+    assert "retired for new sessions" in rejected.json()["error"]["message"]
 
 
 @pytest.mark.integration
@@ -1230,12 +1596,14 @@ async def test_start_does_not_disclose_another_branch_station_or_tariff(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_hourly_ps5_remains_compatible_when_tenant_has_no_tariff(
+@pytest.mark.parametrize("station_type", ["ps5", "simulator", "vr"])
+async def test_fixed_tariff_types_fail_closed_when_tenant_has_no_catalog(
     client,
     session,
     seed_owner,
+    station_type: str,
 ) -> None:
-    station = _station(seed_owner, "ps5", 1)
+    station = _station(seed_owner, station_type, 1)
     session.add(station)
     await session.commit()
     token = await _login(
@@ -1255,6 +1623,5 @@ async def test_hourly_ps5_remains_compatible_when_tenant_has_no_tariff(
         headers=_headers(seed_owner, token, key=f"legacy-hourly:{uuid4()}"),
     )
 
-    assert response.status_code == 201, response.text
-    assert response.json()["billing_mode"] == "hourly"
-    assert response.json()["package_id"] is None
+    assert response.status_code == 422, response.text
+    assert "requires a fixed-price tariff package" in response.json()["error"]["message"]
