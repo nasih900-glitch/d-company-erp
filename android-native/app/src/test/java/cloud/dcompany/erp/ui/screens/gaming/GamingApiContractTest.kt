@@ -17,6 +17,29 @@ import retrofit2.http.POST
 class GamingApiContractTest {
 
     @Test
+    fun `queued start keeps old JSON unchanged when optional customer name is absent`() {
+        val legacy = SessionStartBody(
+            stationId = "station-1",
+            shiftId = "shift-1",
+            customerPhone = "+91 98765 43210",
+            timerMinutes = 60,
+            startedAt = "2026-09-13T12:00:00Z",
+            expectedRatePerHourMinor = 15_000,
+        )
+        val legacyBody = ApiClient.json.parseToJsonElement(
+            ApiClient.json.encodeToString(legacy),
+        ).jsonObject
+        assertFalse(legacyBody.containsKey("customer_name"))
+        assertEquals(JsonPrimitive("+91 98765 43210"), legacyBody["customer_phone"])
+
+        val namedBody = ApiClient.json.parseToJsonElement(
+            ApiClient.json.encodeToString(legacy.copy(customerName = "Booking guest")),
+        ).jsonObject
+        assertEquals(JsonPrimitive("Booking guest"), namedBody["customer_name"])
+        assertEquals(legacyBody.keys + "customer_name", namedBody.keys)
+    }
+
+    @Test
     fun `cross-terminal handoff contract keeps the explicit target and provenance receipt`() {
         val encoded = ApiClient.json.encodeToString(
             SessionPosHandoffBody(targetShiftId = "target-shift"),

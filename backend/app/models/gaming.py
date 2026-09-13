@@ -61,6 +61,12 @@ class GamingSession(Base, TimestampMixin, TenantMixin):
             "package_pricing_tier_snapshot IN ('standard', 'premium')",
             name="ck_gaming_sessions_package_pricing_tier_snapshot",
         ),
+        CheckConstraint(
+            "customer_identity_provenance = 'historical' OR "
+            "(customer_identity_provenance = 'start_linked' AND customer_id IS NOT NULL) OR "
+            "(customer_identity_provenance = 'start_unlinked' AND customer_id IS NULL)",
+            name="ck_gaming_sessions_customer_identity_provenance",
+        ),
     )
 
     id: Mapped[UUID] = _uuid_pk()
@@ -72,6 +78,19 @@ class GamingSession(Base, TimestampMixin, TenantMixin):
     )
     order_id: Mapped[UUID | None] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("orders.id", ondelete="SET NULL")
+    )
+    # Stable booking contact captured at Start. Phone/name remain immutable
+    # receipt snapshots; customer edits must not move historical playtime.
+    customer_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("customers.id", ondelete="RESTRICT"),
+        index=True,
+    )
+    # Existing rows may trust their finalized Order.customer_id. Every new
+    # Start records whether identity resolution succeeded, so a rejected phone
+    # can never be reattributed by a later legacy POS phone lookup.
+    customer_identity_provenance: Mapped[str] = mapped_column(
+        String(20), default="historical", server_default="historical", nullable=False
     )
     opened_by: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False

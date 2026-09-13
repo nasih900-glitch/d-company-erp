@@ -746,9 +746,9 @@ fun GamingScreen(
                 station = station,
                 packages = state.packages.filter { it.stationType == station.type && it.kind == "base" },
                 onDismiss = { starting = null },
-                onConfirm = { phone, minutes, packageId, extraControllers ->
+                onConfirm = { name, phone, minutes, packageId, extraControllers ->
                     starting = null
-                    vm.start(station, phone, minutes, packageId, extraControllers)
+                    vm.start(station, name, phone, minutes, packageId, extraControllers)
                 },
             )
         }
@@ -4351,11 +4351,12 @@ internal fun StartSessionDialog(
     station: Station,
     packages: List<GamingPackage> = emptyList(),
     onDismiss: () -> Unit,
-    onConfirm: (String?, Int?, String?, Int) -> Unit,
+    onConfirm: (String?, String?, Int?, String?, Int) -> Unit,
 ) {
     val contentMaxHeight = gamingDialogBodyMaxHeight(
         LocalConfiguration.current.screenHeightDp,
     )
+    var name by remember { mutableStateOf("") }
     var phone by remember { mutableStateOf("") }
     var minutes by remember { mutableStateOf<Int?>(60) }
     val basePackages = remember(packages) {
@@ -4558,10 +4559,21 @@ internal fun StartSessionDialog(
                     }
                 }
                 OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it.take(200) },
+                    label = { Text("Customer name (optional)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().semantics {
+                        contentDescription = "Customer name (optional)"
+                    },
+                )
+                OutlinedTextField(
                     value = phone,
-                    onValueChange = { phone = it.filter(Char::isDigit).take(15) },
+                    onValueChange = { phone = it.take(20) },
                     label = { Text("Customer phone (optional)") },
-                    supportingText = { Text("Used to attach the session to an existing customer when found.") },
+                    supportingText = {
+                        Text("A valid phone is required to track this named customer's play hours.")
+                    },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
                     modifier = Modifier.fillMaxWidth().semantics {
@@ -4588,6 +4600,7 @@ internal fun StartSessionDialog(
                 text = selectedPackageTotalMinor?.let { "Start · ${it.asRupees()}" } ?: "Start session",
                 onClick = {
                     onConfirm(
+                        name.takeIf(String::isNotBlank),
                         phone.takeIf(String::isNotBlank),
                         if (selectedPackage == null) minutes else null,
                         selectedPackage?.id,

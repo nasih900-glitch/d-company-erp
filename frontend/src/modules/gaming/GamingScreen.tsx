@@ -477,8 +477,10 @@ export default function GamingScreen() {
   const [, setTick] = useState(0); // force overtime/countdown recompute every second
   const [pendingDuration, setPendingDuration] = useState<Record<string, number | null>>({});
   const [customDurationFor, setCustomDurationFor] = useState<string | null>(null);
-  // Customer phone attached at session start — carried through to the order
-  // created at send-to-pos so the cashier does not re-enter it at checkout.
+  // One optional booking contact is carried through to POS. A valid phone is
+  // required for stable customer playtime tracking; a name alone is a receipt
+  // snapshot and intentionally does not create identity.
+  const [sessionName, setSessionName] = useState<Record<string, string>>({});
   const [sessionPhone, setSessionPhone] = useState<Record<string, string>>({});
   const [packages, setPackages] = useState<GamingPackageDTO[]>([]);
   const [pickerVariant, setPickerVariant] = useState<Record<string, string>>({});
@@ -1277,6 +1279,7 @@ export default function GamingScreen() {
       return next;
     });
     setPickerPlayerCount((p) => ({ ...p, [st.id]: 1 }));
+    setSessionName((p) => ({ ...p, [st.id]: '' }));
     setSessionPhone((p) => ({ ...p, [st.id]: '' }));
     setCustomDurationFor(null);
     notifications.success(`${st.name} session started.`, { title: 'Session running' });
@@ -2815,6 +2818,7 @@ export default function GamingScreen() {
             );
             const legacyBillingAmbiguous = session?.billing_mode === 'legacy_ambiguous';
             const phone = sessionPhone[st.id] ?? '';
+            const customerName = sessionName[st.id] ?? '';
             const elapsedMs = session ? playedSessionMilliseconds(session, Date.now()) : 0;
             const elapsedMin = Math.floor(elapsedMs / 60000);
             // A package session's price is locked in at start (see backend
@@ -3332,11 +3336,21 @@ export default function GamingScreen() {
                   ));
                   return (
                     <>
-                      <input type="tel" placeholder="Customer phone (optional)"
-                        className="input !py-1.5 text-xs w-full mb-2"
-                        disabled={!canManageStations || !canStartOnSelectedTerminal}
-                        value={phone}
-                        onChange={(e) => setSessionPhone((s) => ({ ...s, [st.id]: e.target.value }))}/>
+                      <div className="grid grid-cols-1 gap-2 mb-1.5 sm:grid-cols-2">
+                        <input type="text" placeholder="Customer name (optional)"
+                          className="input !py-1.5 text-xs w-full"
+                          disabled={!canManageStations || !canStartOnSelectedTerminal}
+                          value={customerName}
+                          onChange={(e) => setSessionName((s) => ({ ...s, [st.id]: e.target.value }))}/>
+                        <input type="tel" placeholder="Customer phone (optional)"
+                          className="input !py-1.5 text-xs w-full"
+                          disabled={!canManageStations || !canStartOnSelectedTerminal}
+                          value={phone}
+                          onChange={(e) => setSessionPhone((s) => ({ ...s, [st.id]: e.target.value }))}/>
+                      </div>
+                      <p className="mb-2 text-[11px] text-fg-muted">
+                        Add a valid phone to track this named customer's play hours.
+                      </p>
                       {st.type === 'simulator' && availableVariants.length > 1 && (
                         <div
                           className="flex items-center gap-1.5 mb-2"
@@ -3390,7 +3404,7 @@ export default function GamingScreen() {
                             canManageSessions={canManageStations}
                             key={tariff.id}
                             className="btn btn-ghost !justify-between !py-1.5 text-xs"
-                            onClick={() => startSession(st, '', {
+                            onClick={() => startSession(st, customerName, {
                               packageId: tariff.id,
                               extraControllers,
                               playerCount: supportsPlayerModes ? playerCount : tariff.included_players,
@@ -3433,11 +3447,21 @@ export default function GamingScreen() {
                   </div>
                 ) : (
                   <>
-                    <input type="tel" placeholder="Customer phone (optional)"
-                      className="input !py-1.5 text-xs w-full mb-2"
-                      disabled={!canManageStations || !canStartOnSelectedTerminal}
-                      value={phone}
-                      onChange={(e) => setSessionPhone((s) => ({ ...s, [st.id]: e.target.value }))}/>
+                    <div className="grid grid-cols-1 gap-2 mb-1.5 sm:grid-cols-2">
+                      <input type="text" placeholder="Customer name (optional)"
+                        className="input !py-1.5 text-xs w-full"
+                        disabled={!canManageStations || !canStartOnSelectedTerminal}
+                        value={customerName}
+                        onChange={(e) => setSessionName((s) => ({ ...s, [st.id]: e.target.value }))}/>
+                      <input type="tel" placeholder="Customer phone (optional)"
+                        className="input !py-1.5 text-xs w-full"
+                        disabled={!canManageStations || !canStartOnSelectedTerminal}
+                        value={phone}
+                        onChange={(e) => setSessionPhone((s) => ({ ...s, [st.id]: e.target.value }))}/>
+                    </div>
+                    <p className="mb-2 text-[11px] text-fg-muted">
+                      Add a valid phone to track this named customer's play hours.
+                    </p>
                     <div className="flex items-center gap-1.5 mb-2 flex-wrap">
                       {DURATION_PRESETS.map((p) => (
                         <button key={p.label}
@@ -3469,7 +3493,7 @@ export default function GamingScreen() {
                     <GamingMutationButton
                       canManageSessions={canManageStations}
                       className="btn btn-primary w-full"
-                      onClick={() => startSession(st, '', undefined, phone)}
+                      onClick={() => startSession(st, customerName, undefined, phone)}
                       disabled={!st.is_active || !canStartOnSelectedTerminal || startingSession !== null}
                       title={canStartOnSelectedTerminal
                         ? undefined

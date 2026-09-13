@@ -43,7 +43,7 @@ describe('Gaming Centre web product profile', () => {
   });
 
   it('keeps the normal staff workspace focused on the daily gaming flow', () => {
-    expect(labels(staffAccess)).toEqual(['Gaming', 'POS', 'Shift', 'Refunds', 'Stock', 'Help']);
+    expect(labels(staffAccess)).toEqual(['Gaming', 'POS', 'Shift', 'Customers', 'Refunds', 'Stock', 'Help']);
   });
 
   it('lands each web account on the most useful permitted control surface', () => {
@@ -74,7 +74,7 @@ describe('Gaming Centre web product profile', () => {
     });
 
     expect(owner).toEqual([
-      'Gaming', 'POS', 'Shift', 'Refunds', 'Stock', 'Help',
+      'Gaming', 'POS', 'Shift', 'Customers', 'Refunds', 'Stock', 'Help',
       'Dashboard', 'Finance', 'Reports', 'Staff', 'Settings', 'Products',
     ]);
     expect(owner).not.toContain('Audit Log');
@@ -107,14 +107,16 @@ describe('Gaming Centre web product profile', () => {
 
   it('still honours module access for non-owner operational tabs', () => {
     expect(labels({ ...staffAccess, accessibleModules: ['gaming', 'pos'] }))
-      .toEqual(['Gaming', 'POS', 'Shift', 'Refunds', 'Help']);
+      .toEqual(['Gaming', 'POS', 'Shift', 'Customers', 'Refunds', 'Help']);
     expect(labels({ ...staffAccess, accessibleModules: ['pos'] }))
-      .toEqual(['POS', 'Shift', 'Refunds', 'Help']);
+      .toEqual(['POS', 'Shift', 'Customers', 'Refunds', 'Help']);
+    expect(labels({ ...staffAccess, accessibleModules: ['gaming'] }))
+      .toEqual(['Gaming', 'Refunds', 'Help']);
   });
 
   it('hides cafe, membership, and deferred workspaces without deleting their route registration', () => {
     const hiddenRoutes = [
-      '/tables', '/kitchen', '/reservations', '/customers', '/memberships',
+      '/tables', '/kitchen', '/reservations', '/memberships',
       '/public/menu', '/events', '/ocr', '/insights',
     ];
     for (const route of hiddenRoutes) {
@@ -122,6 +124,7 @@ describe('Gaming Centre web product profile', () => {
       expect(isProfileRouteEnabled(route)).toBe(false);
     }
 
+    expect(isProfileRouteEnabled('/customers')).toBe(true);
     expect(isProfileRouteEnabled('/menu')).toBe(true);
     expect(isProfileRouteEnabled('/refunds')).toBe(true);
     expect(WEB_PRODUCT_PROFILE.defaultRoute).toBe('/gaming');

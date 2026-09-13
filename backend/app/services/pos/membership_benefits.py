@@ -59,11 +59,17 @@ async def _candidate_membership(
     session: AsyncSession,
     *,
     company_id: UUID,
+    customer_id: UUID | None,
     customer_phone: str | None,
     at: datetime,
 ) -> tuple[CustomerMembership, MembershipTier] | None:
-    if not customer_phone:
+    if customer_id is None and not customer_phone:
         return None
+    customer_identity = (
+        Customer.id == customer_id
+        if customer_id is not None
+        else Customer.phone == customer_phone
+    )
     rows = (
         await session.execute(
             select(CustomerMembership, MembershipTier)
@@ -71,7 +77,7 @@ async def _candidate_membership(
             .join(Customer, Customer.id == CustomerMembership.customer_id)
             .where(
                 Customer.company_id == company_id,
-                Customer.phone == customer_phone,
+                customer_identity,
                 Customer.deleted_at.is_(None),
                 CustomerMembership.starts_at <= at,
                 CustomerMembership.expires_at > at,
@@ -180,6 +186,7 @@ async def reserve_membership_benefits(
     candidate = await _candidate_membership(
         session,
         company_id=company_id,
+        customer_id=order.customer_id,
         customer_phone=order.customer_phone,
         at=now,
     )

@@ -125,6 +125,38 @@ data class CustomerOrderHistory(
     @SerialName("invoice_issued_at") val invoiceIssuedAt: String? = null,
 )
 
+/** Read-only projection from GET /customers/playtime/leaderboard. */
+@Serializable
+data class PlaytimeProgramDraft(
+    val status: String = "draft",
+    @SerialName("rewards_enabled") val rewardsEnabled: Boolean = false,
+    @SerialName("messaging_enabled") val messagingEnabled: Boolean = false,
+    @SerialName("threshold_paid_minutes") val thresholdPaidMinutes: Int,
+    @SerialName("reward_minutes") val rewardMinutes: Int,
+    @SerialName("company_whatsapp_phone") val companyWhatsappPhone: String? = null,
+    @SerialName("message_template_preview") val messageTemplatePreview: String,
+)
+
+@Serializable
+data class PlaytimeLeaderboardItem(
+    val rank: Int,
+    @SerialName("customer_id") val customerId: String,
+    val name: String? = null,
+    @SerialName("masked_phone") val maskedPhone: String,
+    @SerialName("total_played_minutes") val totalPlayedMinutes: Int,
+    @SerialName("qualifying_paid_minutes") val qualifyingPaidMinutes: Int,
+    @SerialName("draft_estimated_reward_minutes") val draftEstimatedRewardMinutes: Int,
+)
+
+@Serializable
+data class PlaytimeLeaderboard(
+    val items: List<PlaytimeLeaderboardItem>,
+    val total: Int,
+    val page: Int,
+    val limit: Int,
+    val program: PlaytimeProgramDraft,
+)
+
 // ------------------------------------------------------------------ dates
 
 private val DAY_FORMAT: DateTimeFormatter =

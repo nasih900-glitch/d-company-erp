@@ -378,7 +378,8 @@ interface GamingDao {
 
     @Query(
         "UPDATE local_gaming_sessions SET state = :state, stationId = :stationId, " +
-            "shiftId = COALESCE(:shiftId, shiftId), customerPhone = :customerPhone, timerMinutes = :timerMinutes, " +
+            "shiftId = COALESCE(:shiftId, shiftId), customerName = :customerName, " +
+            "customerPhone = :customerPhone, timerMinutes = :timerMinutes, " +
             "startedAtMillis = :startedAtMillis, status = :status, endAtMillis = :endAtMillis, " +
             "timerEndsAtMillis = :timerEndsAtMillis, billableMinutes = :billableMinutes, " +
             "amountMinor = :amountMinor, ratePerHourMinor = :ratePerHourMinor, " +
@@ -396,6 +397,7 @@ interface GamingDao {
         state: String,
         stationId: String,
         shiftId: String?,
+        customerName: String?,
         customerPhone: String?,
         timerMinutes: Int?,
         startedAtMillis: Long,
@@ -466,6 +468,7 @@ interface GamingDao {
                 state = state,
                 stationId = server.stationId,
                 shiftId = server.shiftId,
+                customerName = server.customerName,
                 customerPhone = server.customerPhone,
                 timerMinutes = server.timerMinutes,
                 startedAtMillis = server.startAtMillis,

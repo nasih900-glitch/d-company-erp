@@ -2490,6 +2490,35 @@ class MigrationTest {
     }
 
     @Test
+    fun migrate45To46PreservesQueuedStartAndAddsOptionalCustomerName() {
+        helper.createDatabase(dbName, 45).apply {
+            execSQL(
+                "INSERT INTO local_gaming_sessions " +
+                    "(localId, stationId, shiftId, customerPhone, timerMinutes, startedAtMillis, " +
+                    "state, status, extraControllers) VALUES " +
+                    "('queued-start', 'station-1', 'shift-1', '+91 98765 43210', 60, 1000, " +
+                    "'start_pending', 'active', 0)",
+            )
+            close()
+        }
+
+        val migrated = helper.runMigrationsAndValidate(dbName, 46, true, MIGRATION_45_46)
+        migrated.query(
+            "SELECT stationId, shiftId, customerPhone, timerMinutes, state, customerName " +
+                "FROM local_gaming_sessions WHERE localId = 'queued-start'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("station-1", cursor.getString(0))
+            assertEquals("shift-1", cursor.getString(1))
+            assertEquals("+91 98765 43210", cursor.getString(2))
+            assertEquals(60, cursor.getInt(3))
+            assertEquals("start_pending", cursor.getString(4))
+            assertTrue(cursor.isNull(5))
+        }
+        migrated.close()
+    }
+
+    @Test
     fun migrate44To45PreservesPendingCategoryWritesAndAddsClassificationIntent() {
         helper.createDatabase(dbName, 44).apply {
             execSQL(

@@ -43,6 +43,7 @@ from app.models import (
     AuditLog,
     Branch,
     Company,
+    Customer,
     GamingBooking,
     GamingPackage,
     GamingSession,
@@ -63,6 +64,7 @@ from app.models import (
     Terminal,
     User,
 )
+from app.services.customers.identity import resolve_gaming_customer
 from app.services.gaming.billing_mode import (
     has_complete_package_snapshot,
     has_partial_package_snapshot,
@@ -262,6 +264,7 @@ class SessionRead(BaseModel):
     amount_minor: int | None
     customer_name: str | None = None
     customer_phone: str | None = None
+    customer_id: UUID | None = None
     rate_per_hour_minor: int | None = None
     order_id: UUID | None = None
     cancel_reason: str | None = None
@@ -683,6 +686,7 @@ def session_read(gs: GamingSession) -> SessionRead:
         amount_minor=gs.amount_minor,
         customer_name=gs.customer_name,
         customer_phone=gs.customer_phone,
+        customer_id=gs.customer_id,
         rate_per_hour_minor=gs.rate_per_hour_minor,
         order_id=gs.order_id,
         cancel_reason=gs.cancel_reason,
@@ -2520,6 +2524,12 @@ async def start_session(
     elif payload.extra_controllers or payload.player_count is not None:
         raise BusinessRuleError("player_count and extra_controllers require a package_id")
 
+    customer = await resolve_gaming_customer(
+        session,
+        company_id=tenant.company_id,
+        phone=payload.customer_phone,
+        name=payload.customer_name,
+    )
     gs = GamingSession(
         id=uuid4(),
         company_id=tenant.company_id,
@@ -2542,6 +2552,10 @@ async def start_session(
         status="active",
         customer_name=payload.customer_name,
         customer_phone=payload.customer_phone,
+        customer_id=customer.id if customer is not None else None,
+        customer_identity_provenance=(
+            "start_linked" if customer is not None else "start_unlinked"
+        ),
         timer_minutes=timer_minutes,
         tax_rate=station.tax_rate,
         sac_code=station.sac_code,
@@ -3689,6 +3703,7 @@ async def add_session_addon(
                 ),
             )
         ],
+        customer_id=getattr(gs, "customer_id", None),
         customer_phone=gs.customer_phone,
     )
     priced_line = priced_order.lines[0]
@@ -5257,12 +5272,14 @@ async def _create_session_pos_order(
         else station.rate_includes_tax
     )
     amount_minor = _require_repaired_ended_amount(gaming_session)
+    stable_customer_id = gaming_session.customer_id
     priced = await OrderPricingService(session).price_time_based_line(
         company_id=company_id,
         branch_id=target_shift.branch_id,
         amount_minor=amount_minor,
         tax_rate=tax_rate,
         rate_includes_tax=rate_includes_tax,
+        customer_id=stable_customer_id,
         customer_phone=gaming_session.customer_phone,
         item_type=_MENU_TYPE_FOR_STATION.get(station.type, "gaming"),
     )
@@ -5270,6 +5287,23 @@ async def _create_session_pos_order(
 
     now = datetime.now(timezone.utc)
     note = await _session_pos_description(session, gaming_session)
+    customer_id: UUID | None = None
+    if stable_customer_id is not None:
+        linked_customer = (
+            await session.execute(
+                select(Customer).where(
+                    Customer.id == stable_customer_id,
+                    Customer.company_id == company_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if linked_customer is None:
+            raise BusinessRuleError(
+                "The session's customer link is outside this company or missing. "
+                "A protected owner must repair it before POS handoff."
+            )
+        customer_id = linked_customer.id
+
     order = Order(
         id=uuid4(),
         company_id=company_id,
@@ -5293,6 +5327,7 @@ async def _create_session_pos_order(
         total_minor=order_total_minor,
         customer_name=gaming_session.customer_name,
         customer_phone=gaming_session.customer_phone,
+        customer_id=customer_id,
         notes=f"{station.name} — {note}",
     )
     session.add(order)

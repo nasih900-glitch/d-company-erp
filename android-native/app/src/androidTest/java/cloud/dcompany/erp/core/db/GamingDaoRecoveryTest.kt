@@ -233,6 +233,7 @@ class GamingDaoRecoveryTest {
                 .copy(
                     stationId = "station-old",
                     shiftId = "shift-old",
+                    customerName = "Local booking name",
                     customerPhone = "1111111111",
                     timerMinutes = 30,
                     startedAtMillis = 1_000,
@@ -258,6 +259,7 @@ class GamingDaoRecoveryTest {
                     ratePerHourMinor = 15_000,
                     packageId = "package-new",
                     extraControllers = 2,
+                    customerName = "Confirmed server name",
                     customerPhone = "2222222222",
                     endAtMillis = null,
                     billableMinutes = null,
@@ -269,6 +271,7 @@ class GamingDaoRecoveryTest {
         assertEquals(GamingSessionState.STOP_PENDING, refreshed.state)
         assertEquals("station-new", refreshed.stationId)
         assertEquals("shift-new", refreshed.shiftId)
+        assertEquals("Confirmed server name", refreshed.customerName)
         assertEquals("2222222222", refreshed.customerPhone)
         assertEquals(60, refreshed.timerMinutes)
         assertEquals(2_000L, refreshed.startedAtMillis)
@@ -282,6 +285,31 @@ class GamingDaoRecoveryTest {
         assertEquals("package-new", refreshed.packageId)
         assertEquals(2, refreshed.extraControllers)
         assertEquals("keep pending-leg evidence", refreshed.lastError)
+    }
+
+    @Test
+    fun authoritativePullCannotRewriteAnUnsentNamedStart() = runBlocking {
+        dao.insertLocalSession(
+            localRow("offline-name", serverId = null, state = GamingSessionState.START_PENDING)
+                .copy(
+                    customerName = "Captured offline name",
+                    customerPhone = "9876543210",
+                ),
+        )
+
+        dao.replaceSessionCache(
+            listOf(
+                serverRow("different-session", status = "active", amountMinor = 0).copy(
+                    customerName = "Different server customer",
+                    customerPhone = "9000000000",
+                ),
+            ),
+        )
+
+        val pending = dao.localSessionById("offline-name")!!
+        assertEquals(GamingSessionState.START_PENDING, pending.state)
+        assertEquals("Captured offline name", pending.customerName)
+        assertEquals("9876543210", pending.customerPhone)
     }
 
     @Test

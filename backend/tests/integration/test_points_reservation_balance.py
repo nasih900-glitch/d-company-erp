@@ -7,8 +7,17 @@ from uuid import uuid4
 
 import pytest
 
-from app.models import Customer, Order, PointsRedemption, Shift
+from app.models import (
+    Customer,
+    CustomerMembership,
+    MembershipTier,
+    Order,
+    PointsRedemption,
+    Shift,
+)
+from app.services.pos.membership_benefits import reserve_membership_benefits
 from app.services.pos.points import reserve_points_redemption
+from app.services.pos.pricing import OrderPricingService
 
 
 @pytest.mark.integration
@@ -28,7 +37,6 @@ async def test_consumed_redemption_is_not_subtracted_from_already_net_balance(
     terminal = seed_owner["terminal"]
     owner = seed_owner["owner"]
     now = datetime.now(UTC)
-
     customer = Customer(
         id=uuid4(),
         company_id=company.id,
@@ -106,3 +114,85 @@ async def test_consumed_redemption_is_not_subtracted_from_already_net_balance(
 
     assert result.points_spent == 10
     assert result.amount_minor == 100
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_stable_order_customer_controls_membership_after_phone_reuse(
+    session,
+    seed_owner,
+) -> None:
+    company = seed_owner["company"]
+    branch = seed_owner["branch"]
+    terminal = seed_owner["terminal"]
+    owner = seed_owner["owner"]
+    now = datetime.now(UTC)
+    branch.state_code = "32"
+    company.gst_registration_type = "unregistered"
+    company.is_composition = False
+    old_phone = f"7{uuid4().int % 10**9:09d}"
+    booked = Customer(
+        id=uuid4(), company_id=company.id, name="Booked customer",
+        phone=f"8{uuid4().int % 10**9:09d}",
+    )
+    replacement = Customer(
+        id=uuid4(), company_id=company.id, name="Phone replacement", phone=old_phone,
+    )
+    booked_tier = MembershipTier(
+        id=uuid4(), company_id=company.id, code=f"booked-{uuid4().hex[:8]}",
+        name="Booked tier", monthly_price_minor=1_000,
+        gaming_discount_pct=0.10, free_gaming_minutes_per_week=60,
+    )
+    replacement_tier = MembershipTier(
+        id=uuid4(), company_id=company.id, code=f"replacement-{uuid4().hex[:8]}",
+        name="Replacement tier", monthly_price_minor=1_000,
+        gaming_discount_pct=0.50, free_gaming_minutes_per_week=240,
+    )
+    shift = Shift(
+        id=uuid4(), company_id=company.id, branch_id=branch.id,
+        terminal_id=terminal.id, opened_by=owner.id,
+        opened_at=now - timedelta(hours=1), opening_float_minor=0, status="open",
+    )
+    session.add_all([booked, replacement, booked_tier, replacement_tier, shift])
+    await session.flush()
+    session.add_all([
+        CustomerMembership(
+            id=uuid4(), customer_id=booked.id, tier_id=booked_tier.id,
+            billing_cycle="monthly", starts_at=now - timedelta(days=1),
+            expires_at=now + timedelta(days=10), amount_paid_minor=1_000,
+        ),
+        CustomerMembership(
+            id=uuid4(), customer_id=replacement.id, tier_id=replacement_tier.id,
+            billing_cycle="monthly", starts_at=now - timedelta(days=1),
+            expires_at=now + timedelta(days=10), amount_paid_minor=1_000,
+        ),
+    ])
+    order = Order(
+        id=uuid4(), company_id=company.id, branch_id=branch.id,
+        terminal_id=terminal.id, shift_id=shift.id, opened_by=owner.id,
+        customer_id=booked.id, customer_phone=old_phone, type="session", status="held",
+        subtotal_minor=10_000, total_minor=10_000, opened_at=now,
+    )
+    session.add(order)
+    await session.flush()
+
+    priced = await OrderPricingService(session).price_time_based_line(
+        company_id=company.id,
+        branch_id=branch.id,
+        amount_minor=10_000,
+        tax_rate=0,
+        rate_includes_tax=True,
+        customer_id=order.customer_id,
+        customer_phone=order.customer_phone,
+        item_type="gaming",
+    )
+    benefits = await reserve_membership_benefits(
+        session,
+        order=order,
+        company_id=company.id,
+        requested_gaming_minutes=100,
+        at=now,
+    )
+
+    assert priced.total_minor == 9_000
+    assert benefits.gaming_minutes == 60

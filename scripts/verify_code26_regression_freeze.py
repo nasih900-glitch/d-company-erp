@@ -8,8 +8,8 @@ expiry repair. Code 28 hardens the release scanner path. Original Code 29
 carries the reviewed image-format and Android quantity corrections; corrected
 Code 29 adds coordinated identity and the reviewed installer lock path. Current
 Code 29 adds only the reviewed POS-notice, inventory-layout, Web session,
-refresh-lock, owner-approved pricing-card, and Code 29.1 packaging-label
-corrections. None may delete, disable, reorder, or rewrite an existing test
+refresh-lock, owner-approved pricing-card, Code 29.1 packaging-label, and the
+reviewed Code29.2 customer-playtime draft. None may delete, disable, reorder, or rewrite an existing test
 outside the exact fixture-only normalization or exact reviewed-test hashes below.
 The sole reviewed audit-reader locator migration below preserves every
 credential-cleanup assertion while following the corrected UTF-8 reader.
@@ -75,6 +75,13 @@ REVIEWED_PACKAGING_TEST_SHA256 = {
         "0c6e16e7c782ef96463685ea8509b7f0a61070a5e4305c1540188dc7ac7d2724"
     ),
 }
+REVIEWED_CODE29_2_TEST_SHA256 = {
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingDialogUiTest.kt": "92f604eeeac4ebf0c39d9c8a13778764b2611d2ecd8b740e458d486d3b94bff1",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/GamingCentreFeatureProfileTest.kt": "e26fdac9a83f152af8ab7dae5b80014516f88f47f93a0e78978524ea9270c9f0",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/finance/FinancePresentationPolicyTest.kt": "6754029ae8b59b5c9a0c1b273f8f9e735a3be243b88f8ee527be2e36af537535",
+    "backend/tests/integration/test_points_reservation_balance.py": "ef4bd05349fde10b2e1c14bc2b968e388f9a76318bceaad8e471f6a9912118a1",
+    "frontend/src/lib/product-profile.test.ts": "c6f6a2e6a53967c85abda6ab9c6ff343b4cb2922e4258b4b5a97f1b64a2ba6b1",
+}
 
 RELEASE_IDENTITY_TESTS = {
     "android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt",
@@ -110,6 +117,44 @@ REVIEWED_PACKAGING_UI_PATHS = frozenset({
     "frontend/src/modules/remote-assistance/DeviceDetailPanel.tsx",
 })
 
+REVIEWED_CODE29_2_PRODUCTION_PATHS = frozenset({
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/db/Dao.kt",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/db/GamingDao.kt",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/db/GamingEntities.kt",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/db/Migrations.kt",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/sync/SyncEngine.kt",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/FeatureProfile.kt",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/customers/CustomerPlaytimeViewModel.kt",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/customers/CustomersApi.kt",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/customers/CustomersModels.kt",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/customers/CustomersScreen.kt",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/finance/FinanceModels.kt",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingApi.kt",
+    "backend/app/api/v1/customers/router.py",
+    "backend/app/api/v1/pos/router.py",
+    "backend/app/models/__init__.py",
+    "backend/app/models/customer.py",
+    "backend/app/models/gaming.py",
+    "backend/app/services/audit/recorder.py",
+    "backend/app/services/customers/__init__.py",
+    "backend/app/services/customers/identity.py",
+    "backend/app/services/customers/playtime.py",
+    "backend/app/services/pos/customer_identity.py",
+    "backend/app/services/pos/membership_benefits.py",
+    "backend/app/services/pos/points.py",
+    "backend/app/services/pos/pricing.py",
+    "frontend/src/app/App.tsx",
+    "frontend/src/lib/erp-api.ts",
+    "frontend/src/lib/product-profile.test.ts",
+    "frontend/src/lib/product-profile.ts",
+    "frontend/src/modules/customers/CustomerPlaytimePanel.tsx",
+    "frontend/src/modules/customers/CustomersScreen.tsx",
+    "frontend/src/modules/customers/customer-access.test.ts",
+    "frontend/src/modules/customers/customer-access.ts",
+    "frontend/src/modules/customers/customer-playtime.test.ts",
+    "frontend/src/modules/customers/customer-playtime.ts",
+})
+
 ALLOWED_PRODUCTION_PATHS = {
     "backend/app/__init__.py",
     "backend/app/services/auth/refresh_sessions.py",
@@ -135,7 +180,7 @@ ALLOWED_PRODUCTION_PATHS = {
     "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingViewModel.kt",
     "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/inventory/InventoryScreen.kt",
     "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/settings/BugReportOutbox.kt",
-} | REVIEWED_WEB_AUTH_PATHS | REVIEWED_PRICING_PRODUCTION_PATHS | REVIEWED_PACKAGING_UI_PATHS
+} | REVIEWED_WEB_AUTH_PATHS | REVIEWED_PRICING_PRODUCTION_PATHS | REVIEWED_PACKAGING_UI_PATHS | REVIEWED_CODE29_2_PRODUCTION_PATHS
 
 PRODUCTION_PREFIXES = (
     "backend/app/",
@@ -198,6 +243,7 @@ def _normalise_release_identity(path: str, text: str) -> str:
         return text
     normalised = text
     for current, baseline in (
+        ("3.1.23", "3.1.14"),
         ("3.1.22", "3.1.14"),
         ("3.1.21", "3.1.14"),
         ("3.1.20", "3.1.14"),
@@ -225,10 +271,10 @@ def _normalise_release_identity(path: str, text: str) -> str:
     ):
         normalised = normalised.replace(current, baseline)
     normalised = re.sub(
-        r"version_code\s*=\s*(?:26|27|28|29|30)\b", "version_code=25", normalised
+        r"version_code\s*=\s*(?:26|27|28|29|30|31)\b", "version_code=25", normalised
     )
     normalised = re.sub(
-        r"assertEquals\((?:26|27|28|29|30),\s*BuildConfig\.VERSION_CODE\)",
+        r"assertEquals\((?:26|27|28|29|30|31),\s*BuildConfig\.VERSION_CODE\)",
         "assertEquals(25, BuildConfig.VERSION_CODE)",
         normalised,
     )
@@ -374,7 +420,8 @@ def verify_repository(root: Path, baseline: str = CODE25_BASE) -> RegressionFree
             path, candidate_normalised
         )
         reviewed_test_sha256 = (
-            REVIEWED_PRICING_TEST_SHA256.get(path)
+            REVIEWED_CODE29_2_TEST_SHA256.get(path)
+            or REVIEWED_PRICING_TEST_SHA256.get(path)
             or REVIEWED_PACKAGING_TEST_SHA256.get(path)
         )
         reviewed_test_bytes_match = reviewed_test_sha256 is not None and (

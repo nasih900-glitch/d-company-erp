@@ -107,6 +107,7 @@ from app.services.pos.membership_benefits import (
     reserve_membership_benefits,
 )
 from app.services.pos.order_validation import require_operational_order
+from app.services.pos.customer_identity import resolve_order_customer
 from app.services.pos.points import (
     apply_refund_loyalty_adjustment,
     consume_points_redemption,
@@ -1518,7 +1519,7 @@ async def _upsert_and_attach_customer(
     order: Order,
     at: datetime,
     order_lines: list[OrderLine] | None = None,
-) -> Customer:
+) -> Customer | None:
     """Find or create customer by phone, bump visit_count + total_spent,
     award loyalty points (1× food, 2× gaming/hookah/streaming/events, × membership tier).
     """
@@ -1528,15 +1529,31 @@ async def _upsert_and_attach_customer(
     # query here can flush a paid invoice without its customer linkage and a
     # second UPDATE would correctly be rejected by the paid-source DB guard.
     with session.no_autoflush:
-        existing = (
-            await session.execute(
-                select(Customer).where(
-                    Customer.company_id == company_id,
-                    Customer.phone == phone,
-                    Customer.deleted_at.is_(None),
-                ).with_for_update()
-            )
-        ).scalar_one_or_none()
+        if order.customer_id is not None:
+            existing = (
+                await session.execute(
+                    select(Customer).where(
+                        Customer.id == order.customer_id,
+                        Customer.company_id == company_id,
+                        Customer.deleted_at.is_(None),
+                    ).with_for_update()
+                )
+            ).scalar_one_or_none()
+            # A deleted booking identity must not be replaced by whoever now
+            # owns the same phone snapshot. Keep billing valid but skip all
+            # customer/points mutation for this sale.
+            if existing is None:
+                return None
+        else:
+            existing = (
+                await session.execute(
+                    select(Customer).where(
+                        Customer.company_id == company_id,
+                        Customer.phone == phone,
+                        Customer.deleted_at.is_(None),
+                    ).with_for_update()
+                )
+            ).scalar_one_or_none()
         # Use the authoritative checkout timestamp throughout this transaction.
         # In particular, the immutable loyalty settlement must match the invoice
         # issue time exactly rather than a second wall-clock sample.
@@ -2227,6 +2244,7 @@ async def _reprice_unpaid_order_for_customer(
             amount_minor=gross_amount,
             tax_rate=tax_rate,
             rate_includes_tax=price_includes_tax,
+            customer_id=order.customer_id,
             customer_phone=order.customer_phone,
             item_type=item_type,
             place_of_supply_state_code=order.place_of_supply_state_code,
@@ -2272,16 +2290,12 @@ async def _reprice_unpaid_order_for_customer(
         )
     ).scalar_one_or_none()
     if existing_redemption is not None:
-        current_customer_id = (
-            await session.execute(
-                select(Customer.id).where(
-                    Customer.company_id == company_id,
-                    Customer.phone == order.customer_phone,
-                    Customer.deleted_at.is_(None),
-                )
-            )
-        ).scalar_one_or_none()
-        if current_customer_id == existing_redemption.customer_id:
+        current_customer = await resolve_order_customer(
+            session,
+            order=order,
+            company_id=company_id,
+        )
+        if current_customer is not None and current_customer.id == existing_redemption.customer_id:
             previously_redeemed_points = existing_redemption.points_spent
     order.manual_discount_minor, discount_after_manual, total_after_manual = apply_manual_discount(
         line_discount_total_minor=line_discount_total,
@@ -3316,6 +3330,7 @@ async def add_order_lines(
     priced = await pricing.price_order(
         company_id=tenant.company_id,
         branch_id=order.branch_id,
+        customer_id=order.customer_id,
         customer_phone=order.customer_phone,
         place_of_supply_state_code=order.place_of_supply_state_code,
         delivery_via=order.delivery_via,
@@ -3660,7 +3675,7 @@ async def redeem_points(
     Points convert to playtime value at a fixed rate (see
     app/services/pos/points.py) and come straight off the total, same as the
     manual discount above. Requires a customer already attached to the order
-    — points belong to a specific phone number's balance, never anonymous.
+    — points belong to the order's attached customer, never an anonymous bill.
     """
     idempotency_key, request_hash = _require_idempotency(request)
     existing_response = await check_or_reserve(
@@ -3704,7 +3719,7 @@ async def redeem_points(
         order=order,
         operation="change points redemption on this order",
     )
-    if not order.customer_phone:
+    if order.customer_id is None and not order.customer_phone:
         raise BusinessRuleError("attach a customer to this order before redeeming points")
     shift = (
         await session.execute(
@@ -3824,7 +3839,7 @@ async def redeem_reward(
         order=order,
         operation="change reward redemption on this order",
     )
-    if not order.customer_phone:
+    if order.customer_id is None and not order.customer_phone:
         raise BusinessRuleError("attach a customer to this order before redeeming a reward")
     shift = (
         await session.execute(

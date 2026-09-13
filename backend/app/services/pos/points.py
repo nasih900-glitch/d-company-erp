@@ -25,6 +25,7 @@ from app.models import (
     PointsRedemption,
     RefundLoyaltyAdjustment,
 )
+from app.services.pos.customer_identity import resolve_order_customer
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -280,23 +281,18 @@ async def reserve_points_redemption(
     if existing is not None and existing.consumed_at is not None:
         raise BusinessRuleError("cannot change points redemption after settlement")
 
-    if not order.customer_phone or requested_points <= 0:
+    if (order.customer_id is None and not order.customer_phone) or requested_points <= 0:
         if existing is not None:
             await session.delete(existing)
             await session.flush()
         return PointsRedemptionResult()
 
-    customer = (
-        await session.execute(
-            select(Customer)
-            .where(
-                Customer.company_id == company_id,
-                Customer.phone == order.customer_phone,
-                Customer.deleted_at.is_(None),
-            )
-            .with_for_update()
-        )
-    ).scalar_one_or_none()
+    customer = await resolve_order_customer(
+        session,
+        order=order,
+        company_id=company_id,
+        for_update=True,
+    )
     if customer is None:
         if existing is not None:
             await session.delete(existing)
@@ -354,20 +350,15 @@ async def reserve_catalog_reward_redemption(
     if existing is not None and existing.consumed_at is not None:
         raise BusinessRuleError("cannot change points redemption after settlement")
 
-    if not order.customer_phone:
+    if order.customer_id is None and not order.customer_phone:
         raise BusinessRuleError("attach a customer to this order before redeeming a reward")
 
-    customer = (
-        await session.execute(
-            select(Customer)
-            .where(
-                Customer.company_id == company_id,
-                Customer.phone == order.customer_phone,
-                Customer.deleted_at.is_(None),
-            )
-            .with_for_update()
-        )
-    ).scalar_one_or_none()
+    customer = await resolve_order_customer(
+        session,
+        order=order,
+        company_id=company_id,
+        for_update=True,
+    )
     if customer is None:
         raise BusinessRuleError("attach a customer to this order before redeeming a reward")
 

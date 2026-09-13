@@ -2829,6 +2829,7 @@ class SyncEngine(
                     // validates this against the matching provenance header
                     // below before accepting the backdated start.
                     startedAt = Instant.ofEpochMilli(row.startedAtMillis).toString(),
+                    customerName = row.customerName,
                     customerPhone = row.customerPhone,
                     timerMinutes = row.timerMinutes,
                     packageId = row.packageId,

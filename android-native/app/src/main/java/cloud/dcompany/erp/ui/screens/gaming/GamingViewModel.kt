@@ -1260,6 +1260,7 @@ class GamingViewModel : ViewModel() {
 
     fun start(
         station: Station,
+        name: String?,
         phone: String?,
         timerMinutes: Int?,
         packageId: String? = null,
@@ -1379,6 +1380,7 @@ class GamingViewModel : ViewModel() {
                                 localId = UUID.randomUUID().toString(),
                                 stationId = station.id,
                                 shiftId = shift,
+                                customerName = name?.trim()?.takeIf { it.isNotEmpty() },
                                 customerPhone = phone?.trim()?.takeIf { it.isNotEmpty() },
                                 timerMinutes = capturedTimerMinutes,
                                 ratePerHourMinor = station.ratePerHourMinor,
@@ -1502,6 +1504,7 @@ class GamingViewModel : ViewModel() {
                                     // fallback only for a server-known session
                                     // and server-confirmed current shift.
                                     shiftId = resolvedStopShiftId,
+                                    customerName = session.customerName,
                                     customerPhone = session.customerPhone,
                                     ratePerHourMinor = session.ratePerHourMinor,
                                     packageId = session.packageId,
@@ -2251,6 +2254,7 @@ class GamingViewModel : ViewModel() {
                                     localId = UUID.randomUUID().toString(),
                                     serverId = session.id,
                                     stationId = session.stationId,
+                                    customerName = session.customerName,
                                     customerPhone = session.customerPhone,
                                     startedAtMillis = runCatching { Instant.parse(session.startAt).toEpochMilli() }
                                         .getOrDefault(System.currentTimeMillis()),
@@ -3338,7 +3342,7 @@ private fun LocalGamingSessionEntity.toGameSession() = GameSession(
     packageStationTypeSnapshot = packageStationTypeSnapshot,
     packagePricingTierSnapshot = packagePricingTierSnapshot,
     extraControllers = extraControllers,
-    customerName = null,
+    customerName = customerName,
     customerPhone = customerPhone,
     orderId = orderId,
     localState = state,

@@ -13,10 +13,11 @@ Endpoints:
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Literal
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, status
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, Query, status
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 
@@ -24,7 +25,23 @@ from app.core.db import SessionDep
 from app.core.errors import ConflictError, NotFoundError
 from app.core.permissions import requires
 from app.core.tenant import TenantContext
-from app.models import Customer, GamingSession, Order, OrderLine, Payment, Refund, Station, Table
+from app.models import (
+    Company,
+    Customer,
+    GamingPlaytimeProgramSettings,
+    GamingSession,
+    Order,
+    OrderLine,
+    Payment,
+    Refund,
+    Station,
+    Table,
+)
+from app.services.customers.playtime import (
+    PlaytimeProgram,
+    customer_playtime,
+    leaderboard,
+)
 from app.services.pos.points import gaming_rank, rank_progress, rewards_available_to
 
 router = APIRouter()
@@ -100,6 +117,78 @@ class CustomerOrderHistoryRead(BaseModel):
     invoice_issued_at: datetime | None
 
 
+class PlaytimeProgramRead(BaseModel):
+    status: Literal["draft"] = "draft"
+    rewards_enabled: Literal[False] = False
+    messaging_enabled: Literal[False] = False
+    threshold_paid_minutes: int
+    reward_minutes: int
+    company_whatsapp_phone: str | None
+    message_template_preview: str
+
+
+class PlaytimeProgramUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    threshold_paid_minutes: int = Field(ge=1, le=525_600)
+    reward_minutes: int = Field(ge=1, le=10_080)
+    company_whatsapp_phone: str | None = Field(default=None, max_length=20)
+
+    @field_validator("company_whatsapp_phone")
+    @classmethod
+    def normalize_optional_phone(cls, value: str | None) -> str | None:
+        clean = value.strip() if value else ""
+        return clean or None
+
+
+class PlaytimeLeaderboardItemRead(BaseModel):
+    rank: int
+    customer_id: UUID
+    name: str | None
+    masked_phone: str
+    total_played_minutes: int
+    qualifying_paid_minutes: int
+    draft_estimated_reward_minutes: int
+
+
+class PlaytimeLeaderboardRead(BaseModel):
+    items: list[PlaytimeLeaderboardItemRead]
+    total: int
+    page: int
+    limit: int
+    program: PlaytimeProgramRead
+
+
+class PlaytimeHistoryRead(BaseModel):
+    session_id: UUID
+    station_name: str
+    ended_at: datetime | None
+    played_minutes: int
+    qualifying_paid_minutes: int
+    qualification_status: Literal[
+        "eligible",
+        "customer_mismatch",
+        "unpaid",
+        "refunded",
+        "no_paid_gaming_amount",
+        "legacy_billing_unverified",
+        "unproven_package_duration",
+        "discounted_or_free",
+        "not_qualifying",
+    ]
+
+
+class CustomerPlaytimeRead(BaseModel):
+    customer_id: UUID
+    customer_name: str | None
+    total_sessions: int
+    total_played_minutes: int
+    qualifying_paid_minutes: int
+    draft_estimated_reward_minutes: int
+    program: PlaytimeProgramRead
+    history: list[PlaytimeHistoryRead]
+
+
 # ---------------------------------------------------------------- helpers
 def _to_read(c: Customer) -> CustomerRead:
     progress = rank_progress(c.lifetime_gaming_points_earned)
@@ -114,6 +203,41 @@ def _to_read(c: Customer) -> CustomerRead:
         next_gaming_rank_floor=progress.next_rank_floor,
         points_to_next_gaming_rank=progress.points_to_next_rank,
         last_visit_at=c.last_visit_at, notes=c.notes,
+    )
+
+
+_DEFAULT_PLAYTIME_PROGRAM = PlaytimeProgram(600, 60)
+
+
+def _program_read(row: GamingPlaytimeProgramSettings | None) -> PlaytimeProgramRead:
+    return PlaytimeProgramRead(
+        threshold_paid_minutes=int(row.threshold_paid_minutes) if row else 600,
+        reward_minutes=int(row.reward_minutes) if row else 60,
+        company_whatsapp_phone=row.company_whatsapp_phone if row else None,
+        message_template_preview=(
+            "Hi {customer_name}, you have {recorded_playtime}. Draft estimate: "
+            "{estimated_reward} under the proposed paid-hours program. Preview only; "
+            "no reward has been issued and no message has been sent."
+        ),
+    )
+
+
+async def _program_row(session, company_id: UUID):
+    return (
+        await session.execute(
+            select(GamingPlaytimeProgramSettings).where(
+                GamingPlaytimeProgramSettings.company_id == company_id
+            )
+        )
+    ).scalar_one_or_none()
+
+
+def _program(row: GamingPlaytimeProgramSettings | None) -> PlaytimeProgram:
+    if row is None:
+        return _DEFAULT_PLAYTIME_PROGRAM
+    return PlaytimeProgram(
+        int(row.threshold_paid_minutes),
+        int(row.reward_minutes),
     )
 
 
@@ -136,6 +260,121 @@ async def list_customers(
         stmt = stmt.where(or_(Customer.phone.ilike(like), Customer.name.ilike(like)))
     rows = (await session.execute(stmt)).scalars().all()
     return [_to_read(c) for c in rows]
+
+
+@router.get("/playtime/program-draft", response_model=PlaytimeProgramRead)
+async def get_playtime_program_draft(
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("pos.read")),
+) -> PlaytimeProgramRead:
+    return _program_read(await _program_row(session, tenant.company_id))
+
+
+@router.put("/playtime/program-draft", response_model=PlaytimeProgramRead)
+async def save_playtime_program_draft(
+    payload: PlaytimeProgramUpdate,
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("settings.manage")),
+) -> PlaytimeProgramRead:
+    company = (
+        await session.execute(
+            select(Company)
+            .where(Company.id == tenant.company_id)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if company is None:
+        raise NotFoundError("company not found")
+    row = (
+        await session.execute(
+            select(GamingPlaytimeProgramSettings)
+            .where(GamingPlaytimeProgramSettings.company_id == tenant.company_id)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        row = GamingPlaytimeProgramSettings(
+            id=uuid4(),
+            company_id=tenant.company_id,
+            threshold_paid_minutes=payload.threshold_paid_minutes,
+            reward_minutes=payload.reward_minutes,
+            company_whatsapp_phone=payload.company_whatsapp_phone,
+        )
+        session.add(row)
+    else:
+        row.threshold_paid_minutes = payload.threshold_paid_minutes
+        row.reward_minutes = payload.reward_minutes
+        row.company_whatsapp_phone = payload.company_whatsapp_phone
+        # Defense in depth: persisted state remains disabled even if a row was
+        # created outside this endpoint before its database checks ran.
+        row.status = "draft"
+        row.rewards_enabled = False
+        row.messaging_enabled = False
+    await session.flush()
+    return _program_read(row)
+
+
+@router.get("/playtime/leaderboard", response_model=PlaytimeLeaderboardRead)
+async def get_playtime_leaderboard(
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("pos.read")),
+    q: str | None = None,
+    page: int = Query(default=1, ge=1, le=100_000),
+    limit: int = Query(default=25, ge=1, le=100),
+) -> PlaytimeLeaderboardRead:
+    program_row = await _program_row(session, tenant.company_id)
+    program = _program(program_row)
+    items, total = await leaderboard(
+        session,
+        company_id=tenant.company_id,
+        program=program,
+        q=q,
+        page=page,
+        limit=limit,
+    )
+    return PlaytimeLeaderboardRead(
+        items=items,
+        total=total,
+        page=page,
+        limit=limit,
+        program=_program_read(program_row),
+    )
+
+
+@router.get("/{customer_id}/playtime", response_model=CustomerPlaytimeRead)
+async def get_customer_playtime(
+    customer_id: UUID,
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("pos.read")),
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0, le=1_000_000),
+) -> CustomerPlaytimeRead:
+    customer = (
+        await session.execute(
+            select(Customer).where(
+                Customer.id == customer_id,
+                Customer.company_id == tenant.company_id,
+                Customer.deleted_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if customer is None:
+        raise NotFoundError("customer not found")
+    program_row = await _program_row(session, tenant.company_id)
+    result = await customer_playtime(
+        session,
+        company_id=tenant.company_id,
+        customer_id=customer_id,
+        program=_program(program_row),
+        limit=limit,
+        offset=offset,
+    )
+    return CustomerPlaytimeRead(
+        customer_id=customer.id,
+        customer_name=customer.name,
+        program=_program_read(program_row),
+        **result,
+    )
 
 
 @router.get("/by-phone/{phone}", response_model=CustomerRead | None)

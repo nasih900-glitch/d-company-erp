@@ -1628,6 +1628,52 @@ export interface CustomerDTO {
   notes: string | null;
 }
 
+export interface PlaytimeProgramDTO {
+  status: 'draft';
+  rewards_enabled: false;
+  messaging_enabled: false;
+  threshold_paid_minutes: number;
+  reward_minutes: number;
+  company_whatsapp_phone: string | null;
+  message_template_preview: string;
+}
+
+export interface PlaytimeLeaderboardItemDTO {
+  rank: number;
+  customer_id: string;
+  name: string | null;
+  masked_phone: string;
+  total_played_minutes: number;
+  qualifying_paid_minutes: number;
+  draft_estimated_reward_minutes: number;
+}
+
+export interface PlaytimeLeaderboardDTO {
+  items: PlaytimeLeaderboardItemDTO[];
+  total: number;
+  page: number;
+  limit: number;
+  program: PlaytimeProgramDTO;
+}
+
+export interface CustomerPlaytimeDTO {
+  customer_id: string;
+  customer_name: string | null;
+  total_sessions: number;
+  total_played_minutes: number;
+  qualifying_paid_minutes: number;
+  draft_estimated_reward_minutes: number;
+  program: PlaytimeProgramDTO;
+  history: Array<{
+    session_id: string;
+    station_name: string;
+    ended_at: string | null;
+    played_minutes: number;
+    qualifying_paid_minutes: number;
+    qualification_status: string;
+  }>;
+}
+
 // =============================================================================
 // MEMBERSHIPS — D Club tiers + subscriptions
 // =============================================================================
@@ -2120,6 +2166,25 @@ export const customers = {
   remove: (id: string) => api.delete<void>(`/customers/${id}`).then(() => undefined),
   rewardsByPhone: (phone: string) =>
     api.get<RewardDTO[]>(`/customers/by-phone/${encodeURIComponent(phone)}/rewards`).then((r) => r.data),
+  playtimeProgram: () =>
+    api.get<PlaytimeProgramDTO>('/customers/playtime/program-draft').then((r) => r.data),
+  savePlaytimeProgram: (body: Pick<
+    PlaytimeProgramDTO,
+    'threshold_paid_minutes' | 'reward_minutes' | 'company_whatsapp_phone'
+  >) => api.put<PlaytimeProgramDTO>('/customers/playtime/program-draft', body)
+    .then((r) => r.data),
+  playtimeLeaderboard: (
+    params: { q?: string; page?: number; limit?: number } = {},
+    signal?: AbortSignal,
+  ) =>
+    api.get<PlaytimeLeaderboardDTO>('/customers/playtime/leaderboard', { params, signal })
+      .then((r) => r.data),
+  playtime: (
+    id: string,
+    params: { limit?: number; offset?: number } = {},
+    signal?: AbortSignal,
+  ) => api.get<CustomerPlaytimeDTO>(`/customers/${id}/playtime`, { params, signal })
+    .then((r) => r.data),
 };
 
 // =============================================================================
@@ -2923,6 +2988,9 @@ export interface GameSessionDTO {
   timer_alarm_version?: number;
   billable_minutes: number | null;
   amount_minor: number | null;
+  customer_id?: string | null;
+  customer_name?: string | null;
+  customer_phone?: string | null;
   rate_per_hour_minor: number | null;
   order_id: string | null;
   cancel_reason: string | null;

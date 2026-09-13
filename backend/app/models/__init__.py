@@ -15,6 +15,7 @@ from app.models.client_diagnostic import ClientDiagnosticEvent
 from app.models.client_update import AndroidRelease, ClientInstallation, ClientUpdateEvent
 from app.models.customer import (
     Customer,
+    GamingPlaytimeProgramSettings,
     OrderLoyaltySettlement,
     PointsRedemption,
     RefundLoyaltyAdjustment,
@@ -149,6 +150,7 @@ __all__ = [
     "Floor",
     "GamingBooking",
     "GamingPackage",
+    "GamingPlaytimeProgramSettings",
     "GamingSession",
     "GamingSessionAddon",
     "GamingSessionExtension",

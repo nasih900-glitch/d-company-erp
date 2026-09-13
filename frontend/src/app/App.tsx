@@ -224,7 +224,7 @@ export default function App() {
           <FeatureOnly feature="staffAdmin"><ProfileOwnerOnly><Screen><StaffScreen /></Screen></ProfileOwnerOnly></FeatureOnly>
         } />
         <Route path="/customers" element={
-          <FeatureOnly feature="customers"><Screen><CustomersScreen /></Screen></FeatureOnly>
+          <FeatureOnly feature="customers"><ModuleAccessOnly module="pos"><Screen><CustomersScreen /></Screen></ModuleAccessOnly></FeatureOnly>
         } />
         <Route
           path="/memberships"

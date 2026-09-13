@@ -125,6 +125,7 @@ fun CustomersScreen(access: CustomersAccess = CustomersAccess()) {
         )
         if (!access.canManageCustomers) ViewOnlyNotice()
         Totals(state)
+        CustomerPlaytimeSummary()
 
         state.notice?.let {
             NoticeBanner(it, vm::dismissNotice)
@@ -257,6 +258,105 @@ fun CustomersScreen(access: CustomersAccess = CustomersAccess()) {
             onCancel = vm::cancelEdit,
             onSave = vm::save,
         )
+    }
+}
+
+@Composable
+private fun CustomerPlaytimeSummary() {
+    val vm: CustomerPlaytimeViewModel = viewModel()
+    val state by vm.state.collectAsStateWithLifecycle()
+    val board = state.leaderboard
+    SectionCard(
+        title = "Play hours · draft proposal",
+        subtitle = "Recorded completed sessions; no free time has been issued",
+        icon = Icons.Default.EventRepeat,
+        tone = UiTone.Information,
+        action = {
+            TextButton(onClick = vm::refresh, enabled = !state.loading) {
+                Text("Refresh")
+            }
+        },
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(
+            horizontal = Spacing.lg,
+            vertical = Spacing.sm,
+        ),
+    ) {
+        when {
+            state.loading && board == null -> LoadingSkeleton(lines = 2)
+            state.error != null && board == null -> Text(
+                state.error.orEmpty(),
+                color = Brand.ForegroundMuted,
+                style = MaterialTheme.typography.bodySmall,
+            )
+            board == null || board.items.isEmpty() -> Text(
+                "No completed customer sessions are recorded yet.",
+                color = Brand.ForegroundMuted,
+                style = MaterialTheme.typography.bodySmall,
+            )
+            else -> {
+                Text(
+                    "Draft estimate: every ${formatPlayMinutes(board.program.thresholdPaidMinutes)} " +
+                        "of qualifying paid play would equal ${formatPlayMinutes(board.program.rewardMinutes)}. " +
+                        "Rewards and WhatsApp messages are off.",
+                    color = Brand.ForegroundMuted,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                board.items.take(3).forEach { row ->
+                    Row(
+                        Modifier.fillMaxWidth().padding(top = Spacing.sm),
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            "#${row.rank}",
+                            fontWeight = FontWeight.Bold,
+                            color = Brand.Gold,
+                            modifier = Modifier.widthIn(min = 28.dp),
+                        )
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                row.name?.takeIf(String::isNotBlank) ?: "Unnamed customer",
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                row.maskedPhone,
+                                color = Brand.ForegroundMuted,
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                        }
+                        Text(
+                            formatPlayMinutes(row.totalPlayedMinutes),
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            "Draft estimate ${formatPlayMinutes(row.draftEstimatedRewardMinutes)}",
+                            color = Brand.ForegroundMuted,
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
+                }
+                if (board.total > board.items.take(3).size) {
+                    Text(
+                        "Showing the leading 3 of ${board.total} customers. Use Web ERP for the full searchable leaderboard and draft settings.",
+                        modifier = Modifier.padding(top = Spacing.sm),
+                        color = Brand.ForegroundMuted,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun formatPlayMinutes(minutes: Int): String {
+    val safe = minutes.coerceAtLeast(0)
+    val hours = safe / 60
+    val remainder = safe % 60
+    return when {
+        hours == 0 -> "${remainder}m"
+        remainder == 0 -> "${hours}h"
+        else -> "${hours}h ${remainder}m"
     }
 }
 

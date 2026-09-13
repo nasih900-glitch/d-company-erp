@@ -907,6 +907,7 @@ def _gaming_session(tenant: TenantContext, station_id: UUID, shift_id: UUID, **o
         "cancel_reason": None,
         "customer_name": "Cafe Guest",
         "customer_phone": "9000000000",
+        "customer_id": None,
         "tax_rate": 0.18,
         "sac_code": "999692",
         "rate_includes_tax": True,
@@ -1369,7 +1370,9 @@ async def test_customer_repricing_updates_existing_lines_and_canonical_order_tot
     item_id = uuid4()
     order = SimpleNamespace(
         id=uuid4(),
+        company_id=company_id,
         branch_id=branch_id,
+        customer_id=None,
         customer_phone="9000000000",
         place_of_supply_state_code="32",
         delivery_via=None,
@@ -1459,7 +1462,9 @@ async def test_deleted_package_session_cannot_receive_hourly_membership_waiver(
     item_id = uuid4()
     order = SimpleNamespace(
         id=uuid4(),
+        company_id=company_id,
         branch_id=branch_id,
+        customer_id=None,
         customer_phone="9000000000",
         place_of_supply_state_code="32",
         delivery_via=None,

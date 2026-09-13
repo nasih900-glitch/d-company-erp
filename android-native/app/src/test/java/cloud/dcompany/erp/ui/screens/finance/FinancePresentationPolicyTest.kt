@@ -11,7 +11,7 @@ import org.junit.Test
 class FinancePresentationPolicyTest {
 
     @Test
-    fun `gaming centre business metrics contain no membership or customer workspace copy`() {
+    fun `gaming centre business metrics keep dormant membership copy hidden`() {
         val metrics = BusinessMetrics(
             periodStart = "2026-08-01",
             periodEnd = "2026-08-29",
@@ -35,7 +35,7 @@ class FinancePresentationPolicyTest {
 
         assertEquals(4, presented.size)
         assertFalse(copy.contains("membership", ignoreCase = true))
-        assertFalse(copy.contains("customer", ignoreCase = true))
+        assertTrue(copy.contains("customer", ignoreCase = true))
         assertTrue(copy.contains("gaming", ignoreCase = true))
         assertTrue(presented.any { it.value == "₹125.00" })
     }

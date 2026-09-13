@@ -257,6 +257,7 @@ data class LocalGamingSessionEntity(
     val serverId: String? = null,
     val stationId: String,
     val shiftId: String? = null,
+    val customerName: String? = null,
     val customerPhone: String? = null,
     val timerMinutes: Int? = null,
     val startedAtMillis: Long,

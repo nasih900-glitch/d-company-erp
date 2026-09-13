@@ -102,7 +102,7 @@ d-company-erp/
 ## Release status
 
 The current local candidate is documented in
-[`docs/CODE26_RELEASE_CANDIDATE.md`](docs/CODE26_RELEASE_CANDIDATE.md). That file
+[`docs/CODE29_2_RELEASE_CANDIDATE.md`](docs/CODE29_2_RELEASE_CANDIDATE.md). That file
 separates source/test evidence from signing, hosted-update, physical-device, and
 production-deployment approval.
 
@@ -127,9 +127,13 @@ separately identified prototype, not another supported ERP app.
   links only to the live web ERP and verified artifacts from the official GitHub repository.
 
 Tagging a release that exactly matches the Android `versionName` triggers
-`.github/workflows/release.yml`. The current local release candidate is the
-**unsigned** `3.1.16` (code `26`) corrective candidate; Android code `8` remains the
-minimum-compatible floor. The signed
+`.github/workflows/release.yml`. The current local candidate is Code29.2,
+technical version `3.1.23` with Android installation build `31`; Android code
+`8` remains the minimum-compatible floor. Its customer-playtime and leaderboard
+scope is described in [`docs/CUSTOMER_PLAYTIME_DRAFT.md`](docs/CUSTOMER_PLAYTIME_DRAFT.md),
+with reward activation and WhatsApp messaging disabled. It is not signed,
+deployed, staged, activated, offered, installed, or approved by this source change.
+The signed
 `3.1.3` (`14`) direct-release APK is a historical manually distributed,
 update-capable baseline; Code `21` (`3.1.10`) is the current signed
 direct-channel predecessor for Code 26. Code 14 must not be uploaded to the
@@ -152,17 +156,16 @@ candidates and must not be approved, staged, advertised, or activated. Code
 Code `25` (`3.1.14`) is immutable rejected audit history and must not be rebuilt
 or offered. The `v3.1.15` attempt failed before build/signing and produced no
 authorised or distributed Code 26 artifact; its tag and evidence remain
-immutable. Code `26` (`3.1.16`) is the current unsigned corrective candidate
-under that narrow never-issued-identity exception; it is not signed, deployed,
-staged, activated, approved, or partner-installable. Candidate database
-migrations currently run through `0071`. The production compatibility defaults
+immutable. Code `26` (`3.1.16`) is immutable superseded candidate history under
+that narrow never-issued-identity exception. Candidate database migrations
+currently run through `0072`. The production compatibility defaults
 remain pinned until a rollout is explicitly reviewed. Any eventual artifact
 must be newly built and signed, verified against its exact SHA-256, byte size,
 package, version and expected signer, and pass a same-lineage Code 21 to Code 26
 upgrade proof. Android still requires the employee to approve installation.
 Emulator or cloud-device evidence is not physical Redmi Pad 2 proof.
 
-See [`docs/CODE26_RELEASE_CANDIDATE.md`](docs/CODE26_RELEASE_CANDIDATE.md) for
+See [`docs/CODE29_2_RELEASE_CANDIDATE.md`](docs/CODE29_2_RELEASE_CANDIDATE.md) for
 the complete candidate scope, evidence boundaries, and remaining delivery gates.
 
 ## License

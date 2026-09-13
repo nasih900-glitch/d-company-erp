@@ -405,7 +405,7 @@ internal data class PresentedBusinessMetric(
 internal fun BusinessMetrics.presentedMetrics(
     presentation: WorkspacePresentationPolicy,
 ): List<PresentedBusinessMetric> {
-    if (presentation.showsMemberships || presentation.showsCustomers) {
+    if (presentation.showsMemberships) {
         return listOf(
             PresentedBusinessMetric(
                 "Avg order value (this period)",
@@ -416,6 +416,34 @@ internal fun BusinessMetrics.presentedMetrics(
                 "Active memberships",
                 activeMembersCount.toString(),
                 "unexpired, non-revoked terms active right now",
+            ),
+            PresentedBusinessMetric(
+                "Customer LTV (all-time)",
+                ltvMinor.asRupees(),
+                "avg across ${countLabel(customersCount, "customer")}, all-time",
+            ),
+            PresentedBusinessMetric(
+                "CAC",
+                cacMinor?.asRupees() ?: "—",
+                if (cacMinor == null) {
+                    "no new customers this period"
+                } else {
+                    "${marketingSpendMinor.asRupees()} marketing ÷ $newCustomersCount new"
+                },
+            ),
+        )
+    }
+    if (presentation.showsCustomers) {
+        return listOf(
+            PresentedBusinessMetric(
+                "Avg POS and gaming order value (this period)",
+                aovMinor.asRupees(),
+                "${countLabel(ordersCount, "order")} this period",
+            ),
+            PresentedBusinessMetric(
+                "Customers",
+                customersCount.toString(),
+                "live customer profiles, all-time",
             ),
             PresentedBusinessMetric(
                 "Customer LTV (all-time)",

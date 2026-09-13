@@ -105,6 +105,7 @@ data class SessionStartBody(
     @SerialName("shift_id") val shiftId: String,
     /** Exact durable-capture timestamp; must match the offline provenance header. */
     @SerialName("started_at") val startedAt: String,
+    @SerialName("customer_name") val customerName: String? = null,
     @SerialName("customer_phone") val customerPhone: String? = null,
     @SerialName("timer_minutes") val timerMinutes: Int? = null,
     @SerialName("package_id") val packageId: String? = null,

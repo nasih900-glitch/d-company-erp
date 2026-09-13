@@ -21,6 +21,7 @@ class GamingCentreFeatureProfileTest {
                 Destination.Pos,
                 Destination.Refunds,
                 Destination.Shift,
+                Destination.Customers,
                 Destination.Inventory,
                 Destination.Help,
             ),
@@ -41,6 +42,7 @@ class GamingCentreFeatureProfileTest {
                 Destination.Pos,
                 Destination.Refunds,
                 Destination.Shift,
+                Destination.Customers,
                 Destination.Inventory,
                 Destination.Menu,
                 Destination.Help,
@@ -66,6 +68,7 @@ class GamingCentreFeatureProfileTest {
                 Destination.Pos,
                 Destination.Refunds,
                 Destination.Shift,
+                Destination.Customers,
                 Destination.Inventory,
                 Destination.Menu,
                 Destination.Finance,
@@ -94,7 +97,6 @@ class GamingCentreFeatureProfileTest {
             Destination.Tables,
             Destination.Reservations,
             Destination.Kitchen,
-            Destination.Customers,
             Destination.Events,
             Destination.Memberships,
         ).forEach { assertFalse(it in focused) }
@@ -125,7 +127,7 @@ class GamingCentreFeatureProfileTest {
 
         assertFalse(focused.showsMemberships)
         assertFalse(focused.showsRestaurantOperations)
-        assertFalse(focused.showsCustomers)
+        assertTrue(focused.showsCustomers)
         assertFalse(focused.showsEvents)
         assertTrue(focused.singleHybridTerminalOnly)
         assertEquals("Legacy/other prepaid revenue", focused.prepaidRevenueLabel)

@@ -1603,6 +1603,7 @@ class GamingDialogUiTest {
 
     @Test
     fun startSession_phoneInputAndPrimaryActionRemainReachable() {
+        var submittedName: String? = null
         var submittedPhone: String? = null
         var submittedMinutes: Int? = null
 
@@ -1619,13 +1620,19 @@ class GamingDialogUiTest {
                         type = "streaming",
                     ),
                     onDismiss = {},
-                    onConfirm = { phone, minutes, _, _ ->
+                    onConfirm = { name, phone, minutes, _, _ ->
+                        submittedName = name
                         submittedPhone = phone
                         submittedMinutes = minutes
                     },
                 )
             }
         }
+
+        compose.onNodeWithContentDescription("Customer name (optional)")
+            .bringIntoViewIfNeeded()
+            .performClick()
+            .performTextReplacement("Booking guest")
 
         compose.onNodeWithContentDescription("Customer phone (optional)")
             .bringIntoViewIfNeeded()
@@ -1640,7 +1647,8 @@ class GamingDialogUiTest {
             .performClick()
 
         compose.runOnIdle {
-            assertEquals("919876543210", submittedPhone)
+            assertEquals("Booking guest", submittedName)
+            assertEquals("+91 98765 43210", submittedPhone)
             assertEquals(60, submittedMinutes)
         }
     }
@@ -1684,7 +1692,7 @@ class GamingDialogUiTest {
                         ),
                     ),
                     onDismiss = {},
-                    onConfirm = { _, minutes, packageId, controllers ->
+                    onConfirm = { _, _, minutes, packageId, controllers ->
                         submittedMinutes = minutes
                         submittedPackage = packageId
                         submittedControllers = controllers
@@ -1726,7 +1734,7 @@ class GamingDialogUiTest {
                         GamingPackage("premium-stale", "premium-single-session-60m", "simulator", "premium", "simdrive", 1, 1, "base", "Premium stale", 60, 15_000),
                     ),
                     onDismiss = {},
-                    onConfirm = { _, _, packageId, _ -> submittedPackage = packageId },
+                    onConfirm = { _, _, _, packageId, _ -> submittedPackage = packageId },
                 )
             }
         }
