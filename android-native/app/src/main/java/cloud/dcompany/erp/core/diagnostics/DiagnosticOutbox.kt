@@ -23,6 +23,8 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import cloud.dcompany.erp.DCompanyApp
+import cloud.dcompany.erp.PersistedStartupStateResult
+import cloud.dcompany.erp.retryFailedPersistedStartupForWorkAttempt
 import cloud.dcompany.erp.core.auth.AccessTokenIdentityParser
 import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.ApiException
@@ -363,6 +365,13 @@ class DiagnosticSyncWorker(
 ) : CoroutineWorker(appContext, params) {
     override suspend fun doWork(): Result {
         val app = applicationContext as? DCompanyApp ?: return Result.retry()
+        if (
+            app.awaitPersistedStartupState(
+                retryFailed = retryFailedPersistedStartupForWorkAttempt(runAttemptCount),
+            ) !is PersistedStartupStateResult.Ready
+        ) {
+            return Result.retry()
+        }
         val token = app.tokens.accessToken() ?: return Result.success()
         val identity = AccessTokenIdentityParser.parse(token) ?: return Result.success()
         val scopeHash = diagnosticScopeHash(identity.companyId, identity.userId, identity.branchId)

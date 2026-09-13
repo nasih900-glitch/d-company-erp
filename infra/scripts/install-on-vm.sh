@@ -115,8 +115,10 @@ if ! [[ "${DCOMPANY_PRODUCTION_INSTALL_LOCK_ID:-}" =~ ^[0-9]+:[0-9]+$ ]]; then
   echo "Production lock descriptor identity is missing." >&2
   exit 1
 fi
-lock_fd_metadata=$(stat -Lc '%u:%g:%a:%h:%F:%d:%i' "/proc/$$/fd/9")
-expected_lock_fd_metadata="0:0:600:1:regular file:${DCOMPANY_PRODUCTION_INSTALL_LOCK_ID}"
+# GNU stat's raw mode is independent of file contents and localized type names;
+# 8180 is the exact Linux mode for a regular file with permissions 0600.
+lock_fd_metadata=$(stat -Lc '%u:%g:%a:%h:%f:%d:%i' "/proc/$$/fd/9")
+expected_lock_fd_metadata="0:0:600:1:8180:${DCOMPANY_PRODUCTION_INSTALL_LOCK_ID}"
 if [ "$lock_fd_metadata" != "$expected_lock_fd_metadata" ]; then
   echo "Production lock descriptor failed ownership/type validation." >&2
   exit 1
@@ -175,9 +177,10 @@ RELEASE_COMPOSE_FILE="$CANDIDATE_BUILD_ROOT/docker-compose.prod.yml"
 CANDIDATE_PARITY_TOOL="$CANDIDATE_BUILD_ROOT/ops/runtime_release_parity.py"
 PREPARE_ENV_TOOL="$CANDIDATE_BUILD_ROOT/infra/scripts/prepare-production-env.sh"
 CAPACITY_CHECK_TOOL="$CANDIDATE_BUILD_ROOT/infra/scripts/check-upgrade-capacity.sh"
+HARDENED_SCANNER_TOOL="$CANDIDATE_BUILD_ROOT/infra/scripts/run-hardened-image-scanners.sh"
 for release_input in \
   "$RELEASE_COMPOSE_FILE" "$CANDIDATE_PARITY_TOOL" \
-  "$PREPARE_ENV_TOOL" "$CAPACITY_CHECK_TOOL"; do
+  "$PREPARE_ENV_TOOL" "$CAPACITY_CHECK_TOOL" "$HARDENED_SCANNER_TOOL"; do
   if [ ! -f "$release_input" ] || [ -L "$release_input" ]; then
     echo "Frozen production release snapshot is incomplete or linked." >&2
     exit 1
@@ -924,7 +927,7 @@ handle_post_ingress_failure() {
 trap handle_install_failure EXIT
 MAINTENANCE_ACTIVE=false
 if [ -f .env ]; then
-  SOURCE_ENV=.env
+  SOURCE_ENV="$REPO_DIR/.env"
 else
   SOURCE_ENV=-
 fi
@@ -991,6 +994,13 @@ CANDIDATE_IMAGE_ATTESTATION=$(python3 "$CANDIDATE_PARITY_TOOL" candidate \
 echo "==> Candidate Caddy/PostgreSQL/backend/frontend identities verified."
 echo "==> Immutable candidate source archive: $CANDIDATE_SOURCE_ARCHIVE_SHA256"
 
+# Fetch the exact scanner images before entering the helper's bounded Docker
+# create lifecycle. A cold registry transfer must not consume that deadline.
+timeout --foreground --signal TERM --kill-after=30s 600s \
+  docker pull "$SYFT_IMAGE" >/dev/null
+timeout --foreground --signal TERM --kill-after=30s 600s \
+  docker pull "$GRYPE_IMAGE" >/dev/null
+
 # Scan the exact locally built image IDs before maintenance begins. CI scans
 # the same reviewed source and every digest-pinned infrastructure image, while
 # this gate closes the remaining build-host parity boundary for the four images
@@ -1008,6 +1018,15 @@ printf 'source_git_sha=%s\ncandidate_source_archive_sha256=%s\napp_version=%s\ns
 printf 'redis_image_ref=%s\nredis_image_id=%s\n' \
   "$CANDIDATE_REDIS_IMAGE_REF" "$CANDIDATE_REDIS_IMAGE_ID" \
   >> "$SECURITY_EVIDENCE_DIR/scan-metadata.txt"
+SCANNER_WORK_ROOT="$SECURITY_EVIDENCE_DIR/scanner-work"
+mkdir "$SCANNER_WORK_ROOT"
+chmod 700 "$SCANNER_WORK_ROOT"
+SCANNER_ARGUMENTS=()
+CANDIDATE_SCAN_SERVICES=()
+CANDIDATE_SCAN_IMAGE_REFS=()
+CANDIDATE_SCAN_IMAGE_IDS=()
+CANDIDATE_SCAN_ARCHIVES=()
+CANDIDATE_SCANNER_PROBE_IMAGE_ID=""
 for candidate_service in caddy postgres backend frontend; do
   candidate_image_ref=$(python3 -c \
     'import json,sys; print(json.loads(sys.argv[1])["services"][sys.argv[2]]["image_ref"])' \
@@ -1030,66 +1049,43 @@ for candidate_service in caddy postgres backend frontend; do
     "$candidate_service" "$candidate_image_id" \
     "$candidate_service" "$image_archive_sha256" \
     >> "$SECURITY_EVIDENCE_DIR/scan-metadata.txt"
-  docker run --rm \
-    --network none --read-only --cap-drop ALL \
-    --security-opt no-new-privileges \
-    --tmpfs /tmp:rw,noexec,nosuid,nodev,size=128m \
-    --user 65532:65532 \
-    -e SYFT_CHECK_FOR_APP_UPDATE=false \
-    -v "$image_archive:/scan/image.tar:ro" \
-    "$SYFT_IMAGE" "/scan/image.tar" --from docker-archive --output syft-json \
-    > "$SECURITY_EVIDENCE_DIR/$candidate_service.syft.json"
-  test -s "$SECURITY_EVIDENCE_DIR/$candidate_service.syft.json"
-  chmod 0444 "$SECURITY_EVIDENCE_DIR/$candidate_service.syft.json"
-  docker run --rm \
-    --read-only --cap-drop ALL \
-    --security-opt no-new-privileges \
-    --tmpfs /tmp:rw,noexec,nosuid,nodev,size=512m \
-    --user 65532:65532 \
-    -e GRYPE_CHECK_FOR_APP_UPDATE=false \
-    -e GRYPE_DB_CACHE_DIR=/tmp/grype-db \
-    -v "$image_archive:/scan/image.tar:ro" \
-    "$GRYPE_IMAGE" "docker-archive:/scan/image.tar" \
-    --fail-on high --output json \
-    > "$SECURITY_EVIDENCE_DIR/$candidate_service-grype.json"
-  rm -f "$image_archive"
-  test -s "$SECURITY_EVIDENCE_DIR/$candidate_service-grype.json"
-  # A successful process without an identified, valid vulnerability database
-  # is not acceptable release evidence. Preserve the exact scanner and DB
-  # identity alongside the report so an owner can audit what passed later.
-  python3 - "$SECURITY_EVIDENCE_DIR/$candidate_service-grype.json" \
-    "$candidate_service" <<'PY' \
-    >> "$SECURITY_EVIDENCE_DIR/scan-metadata.txt"
-import json
-import sys
-from pathlib import Path
-
-report_path = Path(sys.argv[1])
-service = sys.argv[2]
-try:
-    report = json.loads(report_path.read_text(encoding="utf-8"))
-except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-    raise SystemExit(f"Invalid Grype JSON report for {service}: {exc}") from exc
-
-descriptor = report.get("descriptor")
-if not isinstance(descriptor, dict):
-    raise SystemExit(f"Grype report for {service} has no descriptor")
-version = descriptor.get("version")
-database = descriptor.get("db")
-status = database.get("status") if isinstance(database, dict) else None
-built = status.get("built") if isinstance(status, dict) else None
-if not isinstance(version, str) or not version.strip():
-    raise SystemExit(f"Grype report for {service} has no scanner version")
-if not isinstance(built, str) or not built.strip():
-    raise SystemExit(f"Grype report for {service} has no vulnerability DB build identity")
-print(f"{service}_grype_version={version}")
-print(f"{service}_grype_db_built={built}")
-PY
+  CANDIDATE_SCAN_SERVICES+=("$candidate_service")
+  CANDIDATE_SCAN_IMAGE_REFS+=("$candidate_image_ref")
+  CANDIDATE_SCAN_IMAGE_IDS+=("$candidate_image_id")
+  CANDIDATE_SCAN_ARCHIVES+=("$image_archive")
+  SCANNER_ARGUMENTS+=(
+    "$candidate_service" "$candidate_image_id" "$image_archive"
+    "$SECURITY_EVIDENCE_DIR/$candidate_service.syft.json"
+    "$SECURITY_EVIDENCE_DIR/$candidate_service-grype.json"
+  )
+  if [ "$candidate_service" = backend ]; then
+    CANDIDATE_SCANNER_PROBE_IMAGE_ID=$candidate_image_id
+  fi
+done
+if [ -z "$CANDIDATE_SCANNER_PROBE_IMAGE_ID" ]; then
+  echo "Candidate backend image is unavailable for scanner mount verification." >&2
+  exit 1
+fi
+bash "$HARDENED_SCANNER_TOOL" \
+  "$SCANNER_WORK_ROOT" "$SECURITY_EVIDENCE_DIR/scan-metadata.txt" \
+  "$SYFT_IMAGE" "$GRYPE_IMAGE" "$CANDIDATE_SCANNER_PROBE_IMAGE_ID" \
+  "${SCANNER_ARGUMENTS[@]}"
+for index in "${!CANDIDATE_SCAN_SERVICES[@]}"; do
+  candidate_service=${CANDIDATE_SCAN_SERVICES[$index]}
+  candidate_image_ref=${CANDIDATE_SCAN_IMAGE_REFS[$index]}
+  candidate_image_id=${CANDIDATE_SCAN_IMAGE_IDS[$index]}
+  image_archive=${CANDIDATE_SCAN_ARCHIVES[$index]}
   if [ "$(docker image inspect --format '{{.Id}}' "$candidate_image_ref")" != "$candidate_image_id" ]; then
     echo "Candidate $candidate_service tag changed during security scanning." >&2
     exit 1
   fi
+  rm -f "$image_archive"
 done
+if [ -n "$(find "$SCANNER_WORK_ROOT" -mindepth 1 -print -quit)" ]; then
+  echo "Scanner runtime cleanup left unexpected private state." >&2
+  exit 1
+fi
+rmdir "$SCANNER_WORK_ROOT"
 chmod 600 "$SECURITY_EVIDENCE_DIR"/*
 echo "==> Exact candidate image SBOM/CVE gate passed: $SECURITY_EVIDENCE_DIR"
 if [ -n "$EXISTING_POSTGRES_CONTAINER" ]; then

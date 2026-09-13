@@ -347,6 +347,18 @@ class GamingStationPresentationTest {
     }
 
     @Test
+    fun `expired workspace feedback says what remained unchanged and how to recover`() {
+        val startMessage = gamingStartWorkspaceUnavailableMessage("PS5 Station 2")
+
+        assertTrue(startMessage.contains("PS5 Station 2"))
+        assertTrue(startMessage.contains("Sign in online again"))
+        assertTrue(startMessage.contains("No session was started"))
+        assertTrue(GAMING_STOP_WORKSPACE_UNAVAILABLE_MESSAGE.contains("Sign in online again"))
+        assertTrue(GAMING_STOP_WORKSPACE_UNAVAILABLE_MESSAGE.contains("still running"))
+        assertTrue(GAMING_STOP_WORKSPACE_UNAVAILABLE_MESSAGE.contains("time continues"))
+    }
+
+    @Test
     fun `structural clock projection keeps active state stable but observes overtime boundary`() {
         val running = session(status = "active", timerEndsAt = "2026-08-26T18:00:00Z")
         val clock = mutableLongStateOf(now - 1_000)

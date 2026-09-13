@@ -505,7 +505,7 @@ fun PosScreen(
     state.heldOrderReview
         ?.takeIf { access.canCreateAndCollect && voidTarget == null }
         ?.let { review ->
-            key(review.orderId, review.checkoutVersion) {
+            key(review.orderId) {
                 HeldOrderReviewDialog(
                     review = review,
                     online = state.online,
@@ -1939,13 +1939,18 @@ internal fun ProductConfigurationDialog(
                                         style = MaterialTheme.typography.labelSmall,
                                     )
                                 }
-                                QtyButton("−", enabled = qty > 0) {
+                                QtyButton(
+                                    label = "−",
+                                    accessibilityLabel = "Decrease ${option.name} quantity from $qty",
+                                    enabled = qty > 0,
+                                ) {
                                     selectedQuantities = selectedQuantities +
                                         (option.id to (qty - 1).coerceAtLeast(0))
                                 }
                                 Text("$qty", fontWeight = FontWeight.Bold)
                                 QtyButton(
-                                    "+",
+                                    label = "+",
+                                    accessibilityLabel = "Increase ${option.name} quantity from $qty",
                                     enabled = qty < option.maxQuantity && selectedCount < group.maxSelect,
                                 ) {
                                     selectedQuantities = selectedQuantities + (option.id to qty + 1)
@@ -2492,7 +2497,15 @@ private fun CartPanel(
                                 color = Brand.ForegroundFaint,
                             )
                         }
-                        QtyButton("−", enabled = canWrite && state.draftEditable) {
+                        QtyButton(
+                            label = "−",
+                            accessibilityLabel = if (line.qty == 1) {
+                                "Remove ${line.item.name} from the current order"
+                            } else {
+                                "Decrease ${line.item.name} quantity from ${line.qty}"
+                            },
+                            enabled = canWrite && state.draftEditable,
+                        ) {
                             onDecrementLine(line.lineId)
                         }
                         AnimatedContent(
@@ -2507,7 +2520,11 @@ private fun CartPanel(
                                 fontWeight = FontWeight.Bold,
                             )
                         }
-                        QtyButton("+", enabled = canWrite && state.draftEditable) {
+                        QtyButton(
+                            label = "+",
+                            accessibilityLabel = "Increase ${line.item.name} quantity from ${line.qty}",
+                            enabled = canWrite && state.draftEditable,
+                        ) {
                             onIncrementLine(line.lineId)
                         }
                     }
@@ -3696,7 +3713,12 @@ private fun ZeroTotalCompletionDialog(
 }
 
 @Composable
-private fun QtyButton(label: String, enabled: Boolean, onClick: () -> Unit) {
+private fun QtyButton(
+    label: String,
+    accessibilityLabel: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val scale by animateFloatAsState(if (pressed) 0.88f else 1f, tween(Motion.fast), label = "qtyBtnScale")
@@ -3706,6 +3728,10 @@ private fun QtyButton(label: String, enabled: Boolean, onClick: () -> Unit) {
             .size(48.dp)
             .clip(Radius.shapeMd)
             .background(Brand.SurfaceRaised)
+            .semantics {
+                role = Role.Button
+                contentDescription = accessibilityLabel
+            }
             .clickable(
                 enabled = enabled,
                 interactionSource = interaction,

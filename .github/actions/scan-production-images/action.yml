@@ -23,11 +23,34 @@ inputs:
   source-git-sha:
     description: Full source commit used to build the four local release images.
     required: true
+  docker-host:
+    description: Exact Unix socket URI returned by the pinned setup-Docker action.
+    required: true
+  docker-store:
+    description: Expected disposable daemon image store (classic or containerd).
+    required: true
+  docker-root:
+    description: Exact disposable daemon data root for this image lane.
+    required: true
 
 runs:
   using: composite
   steps:
+    - name: Fail closed on runner/root Docker connection drift
+      id: docker-connection
+      shell: bash
+      env:
+        EXPECTED_DOCKER_HOST: ${{ inputs.docker-host }}
+        EXPECTED_DOCKER_STORE: ${{ inputs.docker-store }}
+        EXPECTED_DOCKER_ROOT: ${{ inputs.docker-root }}
+      run: |
+        set -euo pipefail
+        bash "$GITHUB_ACTION_PATH/../../../infra/scripts/run-ci-docker-connection-check.sh" \
+          "$EXPECTED_DOCKER_HOST" "$EXPECTED_DOCKER_STORE" "$EXPECTED_DOCKER_ROOT" \
+          "$RUNNER_TEMP/container-security/docker-connection-pre-scan.json"
+
     - name: Record exact image identities
+      if: ${{ !cancelled() && steps.docker-connection.outcome == 'success' }}
       shell: bash
       env:
         BACKEND_IMAGE: ${{ inputs.backend-image }}
@@ -56,7 +79,7 @@ runs:
         } > "$evidence_dir/image-identities.txt"
 
     - name: Generate backend image SBOM
-      if: ${{ !cancelled() }}
+      if: ${{ !cancelled() && steps.docker-connection.outcome == 'success' }}
       uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
       with:
         image: ${{ inputs.backend-image }}
@@ -68,7 +91,7 @@ runs:
         dependency-snapshot: false
 
     - name: Generate frontend image SBOM
-      if: ${{ !cancelled() }}
+      if: ${{ !cancelled() && steps.docker-connection.outcome == 'success' }}
       uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
       with:
         image: ${{ inputs.frontend-image }}
@@ -80,7 +103,7 @@ runs:
         dependency-snapshot: false
 
     - name: Generate Caddy image SBOM
-      if: ${{ !cancelled() }}
+      if: ${{ !cancelled() && steps.docker-connection.outcome == 'success' }}
       uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
       with:
         image: ${{ inputs.caddy-image }}
@@ -92,7 +115,7 @@ runs:
         dependency-snapshot: false
 
     - name: Generate PostgreSQL image SBOM
-      if: ${{ !cancelled() }}
+      if: ${{ !cancelled() && steps.docker-connection.outcome == 'success' }}
       uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
       with:
         image: ${{ inputs.postgres-image }}
@@ -104,7 +127,7 @@ runs:
         dependency-snapshot: false
 
     - name: Generate Redis image SBOM
-      if: ${{ !cancelled() }}
+      if: ${{ !cancelled() && steps.docker-connection.outcome == 'success' }}
       uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
       with:
         image: ${{ inputs.redis-image }}
@@ -119,7 +142,7 @@ runs:
     # SPDX cannot preserve all of Syft's Go-binary metadata, which can make a
     # later Grype scan less precise than cataloguing the exact image itself.
     - name: Scan backend image
-      if: ${{ !cancelled() }}
+      if: ${{ !cancelled() && steps.docker-connection.outcome == 'success' }}
       uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
       with:
         image: ${{ inputs.backend-image }}
@@ -131,7 +154,7 @@ runs:
         output-file: ${{ runner.temp }}/container-security/backend-grype.json
 
     - name: Scan frontend image
-      if: ${{ !cancelled() }}
+      if: ${{ !cancelled() && steps.docker-connection.outcome == 'success' }}
       uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
       with:
         image: ${{ inputs.frontend-image }}
@@ -143,7 +166,7 @@ runs:
         output-file: ${{ runner.temp }}/container-security/frontend-grype.json
 
     - name: Scan Caddy image
-      if: ${{ !cancelled() }}
+      if: ${{ !cancelled() && steps.docker-connection.outcome == 'success' }}
       uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
       with:
         image: ${{ inputs.caddy-image }}
@@ -155,7 +178,7 @@ runs:
         output-file: ${{ runner.temp }}/container-security/caddy-grype.json
 
     - name: Scan PostgreSQL image
-      if: ${{ !cancelled() }}
+      if: ${{ !cancelled() && steps.docker-connection.outcome == 'success' }}
       uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
       with:
         image: ${{ inputs.postgres-image }}
@@ -166,8 +189,185 @@ runs:
         output-format: json
         output-file: ${{ runner.temp }}/container-security/postgres-grype.json
 
+    # The four locally built images additionally run through the exact
+    # hardened archive scanner used by the production installer. Its Syft JSON
+    # preserves source image IDs and its bounded mounts exercise the VM path.
+    - name: Exercise hardened archive scanner on all candidate images
+      if: ${{ !cancelled() && steps.docker-connection.outcome == 'success' }}
+      shell: bash
+      env:
+        BACKEND_IMAGE: ${{ inputs.backend-image }}
+        FRONTEND_IMAGE: ${{ inputs.frontend-image }}
+        CADDY_IMAGE: ${{ inputs.caddy-image }}
+        POSTGRES_IMAGE: ${{ inputs.postgres-image }}
+        SOURCE_GIT_SHA: ${{ inputs.source-git-sha }}
+        EXPECTED_DOCKER_HOST: ${{ inputs.docker-host }}
+        EXPECTED_DOCKER_STORE: ${{ inputs.docker-store }}
+        EXPECTED_DOCKER_ROOT: ${{ inputs.docker-root }}
+      run: |
+        set -euo pipefail
+        evidence_dir="$RUNNER_TEMP/container-security"
+        # Keep retained root-private scanner state outside the recursively
+        # uploaded evidence directory. Safe reports are copied below.
+        scanner_evidence="$RUNNER_TEMP/dcompany-hardened-scanner-private"
+        scanner_work="$scanner_evidence/scanner-work"
+        scanner_tool="$GITHUB_ACTION_PATH/../../../infra/scripts/run-hardened-image-scanners.sh"
+        syft_image='anchore/syft:v1.42.3@sha256:5999d209a342e55e9edf70bf8930fb5b86d8f2a783fa401178372c50e21b1d36'
+        grype_image='anchore/grype:v0.118.0@sha256:8a93fc48da96bd6ec5981279d099b69de11541dc68fdf222fb9161f8ff284af7'
+        # Pull before the helper's bounded docker-create calls so a cold
+        # registry transfer cannot consume the container-creation deadline.
+        timeout --foreground --signal TERM --kill-after=30s 600s docker pull "$syft_image"
+        timeout --foreground --signal TERM --kill-after=30s 600s docker pull "$grype_image"
+        runner_uid=$(id -u)
+        runner_gid=$(id -g)
+        mkdir "$scanner_evidence"
+        chmod 700 "$scanner_evidence"
+        mkdir "$scanner_work"
+        chmod 700 "$scanner_work"
+        metadata="$scanner_evidence/hardened-scan-metadata.txt"
+        printf 'source_git_sha=%s\nscanned_at_utc=%s\n' \
+          "$SOURCE_GIT_SHA" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$metadata"
+        chmod 600 "$metadata"
+        connection_check="$GITHUB_ACTION_PATH/../../../infra/scripts/run-ci-docker-connection-check.sh"
+        bash "$connection_check" \
+          "$EXPECTED_DOCKER_HOST" "$EXPECTED_DOCKER_STORE" "$EXPECTED_DOCKER_ROOT" \
+          "$evidence_dir/docker-connection-before-hardened.json"
+        services=(backend frontend caddy postgres)
+        images=("$BACKEND_IMAGE" "$FRONTEND_IMAGE" "$CADDY_IMAGE" "$POSTGRES_IMAGE")
+        image_ids=()
+        archives=()
+        scanner_arguments=()
+        for index in "${!services[@]}"; do
+          service=${services[$index]}
+          image=${images[$index]}
+          image_id=$(docker image inspect --format '{{.Id}}' "$image")
+          if ! [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Candidate $service image has no immutable ID." >&2
+            exit 1
+          fi
+          archive="$scanner_evidence/$service-image.tar"
+          docker image save "$image_id" --output "$archive"
+          test -s "$archive"
+          chmod 0444 "$archive"
+          printf '%s_image_ref=%s\n%s_image_id=%s\n%s_archive_sha256=%s\n' \
+            "$service" "$image" "$service" "$image_id" "$service" \
+            "$(sha256sum "$archive" | awk '{print $1}')" >> "$metadata"
+          image_ids+=("$image_id")
+          archives+=("$archive")
+          scanner_arguments+=(
+            "$service" "$image_id" "$archive"
+            "$scanner_evidence/$service.syft.json"
+            "$scanner_evidence/$service-hardened-grype.json"
+          )
+        done
+        sudo chown -R root:root "$scanner_evidence"
+        scan_status=0
+        docker_cli=$(realpath "$(command -v docker)")
+        docker_cli_dir=$(dirname "$docker_cli")
+        sudo /usr/bin/env -i \
+          "PATH=$docker_cli_dir:/usr/sbin:/usr/bin:/sbin:/bin" \
+          "DOCKER_HOST=$EXPECTED_DOCKER_HOST" \
+          HOME=/root LC_ALL=C \
+          /bin/bash "$scanner_tool" \
+            "$scanner_work" "$metadata" "$syft_image" "$grype_image" \
+            "${image_ids[0]}" "${scanner_arguments[@]}" || scan_status=$?
+        if [ "$scan_status" -eq 0 ]; then
+          if ! sudo /usr/bin/env -i \
+            PATH=/usr/sbin:/usr/bin:/sbin:/bin LC_ALL=C \
+            /usr/bin/python3 - "$metadata" "$EXPECTED_DOCKER_STORE" \
+            "${services[@]}" > "$evidence_dir/archive-shape-summary.txt" <<'PY'
+        import re
+        import sys
+        from pathlib import Path
+
+        metadata = Path(sys.argv[1]).read_text(encoding="utf-8").splitlines()
+        store = sys.argv[2]
+        services = sys.argv[3:]
+        values: dict[str, list[str]] = {}
+        for line in metadata:
+            if "=" in line:
+                key, value = line.split("=", 1)
+                values.setdefault(key, []).append(value)
+
+        def one(key: str) -> str:
+            observed = values.get(key, [])
+            if len(observed) != 1:
+                raise SystemExit(f"archive shape evidence requires one {key}")
+            return observed[0]
+
+        digest = re.compile(r"sha256:[0-9a-f]{64}").fullmatch
+        for service in services:
+            runtime = one(f"{service}_runtime_image_id")
+            runtime_type = one(f"{service}_runtime_image_id_type")
+            manifest = one(f"{service}_runnable_manifest_digest")
+            config = one(f"{service}_scanner_config_image_id")
+            archive_digest = one(f"{service}_verified_archive_digest")
+            platform = one(f"{service}_archive_platform")
+            if not digest(runtime) or not digest(config) or not digest(archive_digest):
+                raise SystemExit(f"invalid digest evidence for {service}")
+            if platform != "linux/amd64":
+                raise SystemExit(f"invalid archive platform for {service}")
+            if store == "classic":
+                if runtime_type != "config" or runtime != config:
+                    raise SystemExit(f"classic archive identity mismatch for {service}")
+            elif store == "containerd":
+                if runtime_type != "oci-index" or runtime == config or not digest(manifest):
+                    raise SystemExit(f"containerd archive identity/attestation shape mismatch for {service}")
+            else:
+                raise SystemExit("invalid expected Docker store")
+            print(f"{service}_runtime_image_id_type={runtime_type}")
+            print(f"{service}_runtime_image_id={runtime}")
+            print(f"{service}_runnable_manifest_digest={manifest}")
+            print(f"{service}_scanner_config_image_id={config}")
+            print(f"{service}_verified_archive_digest={archive_digest}")
+            print(f"{service}_archive_platform={platform}")
+        PY
+          then
+            scan_status=1
+          fi
+        fi
+        for index in "${!services[@]}"; do
+          service=${services[$index]}
+          if [ "$(docker image inspect --format '{{.Id}}' "${images[$index]}")" \
+            != "${image_ids[$index]}" ]; then
+            echo "Candidate $service tag changed during hardened scanning." >&2
+            scan_status=1
+          fi
+        done
+        if ! bash "$connection_check" \
+          "$EXPECTED_DOCKER_HOST" "$EXPECTED_DOCKER_STORE" "$EXPECTED_DOCKER_ROOT" \
+          "$evidence_dir/docker-connection-after-hardened.json"; then
+          scan_status=1
+        fi
+        for evidence in hardened-scan-metadata.txt \
+          backend.syft.json backend-hardened-grype.json \
+          frontend.syft.json frontend-hardened-grype.json \
+          caddy.syft.json caddy-hardened-grype.json \
+          postgres.syft.json postgres-hardened-grype.json; do
+          if sudo test -f "$scanner_evidence/$evidence"; then
+            sudo install -o "$runner_uid" -g "$runner_gid" -m 0600 \
+              "$scanner_evidence/$evidence" "$evidence_dir/$evidence"
+          fi
+        done
+        if [ "$scan_status" -ne 0 ]; then
+          echo "Hardened candidate archive scanning failed; archives remain in its private runtime." >&2
+          exit "$scan_status"
+        fi
+        for archive in "${archives[@]}"; do
+          sudo rm -f "$archive"
+        done
+        for evidence in hardened-scan-metadata.txt \
+          backend.syft.json backend-hardened-grype.json \
+          frontend.syft.json frontend-hardened-grype.json \
+          caddy.syft.json caddy-hardened-grype.json \
+          postgres.syft.json postgres-hardened-grype.json; do
+          sudo rm -f "$scanner_evidence/$evidence"
+        done
+        sudo rmdir "$scanner_work"
+        sudo rmdir "$scanner_evidence"
+
     - name: Scan Redis image
-      if: ${{ !cancelled() }}
+      if: ${{ !cancelled() && steps.docker-connection.outcome == 'success' }}
       uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
       with:
         image: ${{ inputs.redis-image }}

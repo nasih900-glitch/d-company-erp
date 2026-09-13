@@ -63,6 +63,156 @@ class AndroidReleaseVersionTest(unittest.TestCase):
 
         self.assertEqual(AndroidVersion(code=7, name="3.1.0"), version)
 
+    def test_code26_corrective_identity_accepts_v3_1_16(self) -> None:
+        version = read_gradle_version(
+            self.write_build_file(version_code="26", version_name='"3.1.16"')
+        )
+
+        validate_tag("v3.1.16", version)
+        validate_built_metadata(
+            self.write_metadata(version_code=26, version_name="3.1.16"), version
+        )
+
+        self.assertEqual(AndroidVersion(code=26, name="3.1.16"), version)
+
+    def test_code26_corrective_identity_rejects_old_tag_and_built_name(self) -> None:
+        version = read_gradle_version(
+            self.write_build_file(version_code="26", version_name='"3.1.16"')
+        )
+
+        with self.assertRaisesRegex(ReleaseVersionError, "expected 'v3.1.16'"):
+            validate_tag("v3.1.15", version)
+        with self.assertRaisesRegex(ReleaseVersionError, "does not match"):
+            validate_built_metadata(
+                self.write_metadata(version_code=26, version_name="3.1.15"),
+                version,
+            )
+
+    def test_code27_deployment_correction_accepts_v3_1_17(self) -> None:
+        version = read_gradle_version(
+            self.write_build_file(version_code="27", version_name='"3.1.17"')
+        )
+
+        validate_tag("v3.1.17", version)
+        validate_built_metadata(
+            self.write_metadata(version_code=27, version_name="3.1.17"), version
+        )
+
+        self.assertEqual(AndroidVersion(code=27, name="3.1.17"), version)
+
+    def test_code27_deployment_correction_rejects_code26_tag_and_metadata(self) -> None:
+        version = read_gradle_version(
+            self.write_build_file(version_code="27", version_name='"3.1.17"')
+        )
+
+        with self.assertRaisesRegex(ReleaseVersionError, "expected 'v3.1.17'"):
+            validate_tag("v3.1.16", version)
+        with self.assertRaisesRegex(ReleaseVersionError, "does not match"):
+            validate_built_metadata(
+                self.write_metadata(version_code=26, version_name="3.1.16"),
+                version,
+            )
+
+    def test_code28_scanner_hardening_accepts_v3_1_18(self) -> None:
+        version = read_gradle_version(
+            self.write_build_file(version_code="28", version_name='"3.1.18"')
+        )
+
+        validate_tag("v3.1.18", version)
+        validate_built_metadata(
+            self.write_metadata(version_code=28, version_name="3.1.18"), version
+        )
+
+        self.assertEqual(AndroidVersion(code=28, name="3.1.18"), version)
+
+    def test_code28_scanner_hardening_rejects_code27_tag_and_metadata(self) -> None:
+        version = read_gradle_version(
+            self.write_build_file(version_code="28", version_name='"3.1.18"')
+        )
+
+        with self.assertRaisesRegex(ReleaseVersionError, "expected 'v3.1.18'"):
+            validate_tag("v3.1.17", version)
+        with self.assertRaisesRegex(ReleaseVersionError, "does not match"):
+            validate_built_metadata(
+                self.write_metadata(version_code=27, version_name="3.1.17"),
+                version,
+            )
+
+    def test_code29_image_identity_correction_accepts_v3_1_19(self) -> None:
+        version = read_gradle_version(
+            self.write_build_file(version_code="29", version_name='"3.1.19"')
+        )
+
+        validate_tag("v3.1.19", version)
+        validate_built_metadata(
+            self.write_metadata(version_code=29, version_name="3.1.19"), version
+        )
+
+        self.assertEqual(AndroidVersion(code=29, name="3.1.19"), version)
+
+    def test_code29_image_identity_correction_rejects_code28_identity(self) -> None:
+        version = read_gradle_version(
+            self.write_build_file(version_code="29", version_name='"3.1.19"')
+        )
+
+        with self.assertRaisesRegex(ReleaseVersionError, "expected 'v3.1.19'"):
+            validate_tag("v3.1.18", version)
+        with self.assertRaisesRegex(ReleaseVersionError, "does not match"):
+            validate_built_metadata(
+                self.write_metadata(version_code=28, version_name="3.1.18"),
+                version,
+            )
+
+    def test_code29_installer_correction_accepts_v3_1_20(self) -> None:
+        version = read_gradle_version(
+            self.write_build_file(version_code="29", version_name='"3.1.20"')
+        )
+
+        validate_tag("v3.1.20", version)
+        validate_built_metadata(
+            self.write_metadata(version_code=29, version_name="3.1.20"), version
+        )
+
+        self.assertEqual(AndroidVersion(code=29, name="3.1.20"), version)
+
+    def test_code29_installer_correction_rejects_original_package_identity(self) -> None:
+        version = read_gradle_version(
+            self.write_build_file(version_code="29", version_name='"3.1.20"')
+        )
+
+        with self.assertRaisesRegex(ReleaseVersionError, "expected 'v3.1.20'"):
+            validate_tag("v3.1.19", version)
+        with self.assertRaisesRegex(ReleaseVersionError, "does not match"):
+            validate_built_metadata(
+                self.write_metadata(version_code=29, version_name="3.1.19"),
+                version,
+            )
+
+    def test_code29_ui_patch_accepts_v3_1_21(self) -> None:
+        version = read_gradle_version(
+            self.write_build_file(version_code="29", version_name='"3.1.21"')
+        )
+
+        validate_tag("v3.1.21", version)
+        validate_built_metadata(
+            self.write_metadata(version_code=29, version_name="3.1.21"), version
+        )
+
+        self.assertEqual(AndroidVersion(code=29, name="3.1.21"), version)
+
+    def test_code29_ui_patch_rejects_prior_package_identity(self) -> None:
+        version = read_gradle_version(
+            self.write_build_file(version_code="29", version_name='"3.1.21"')
+        )
+
+        with self.assertRaisesRegex(ReleaseVersionError, "expected 'v3.1.21'"):
+            validate_tag("v3.1.20", version)
+        with self.assertRaisesRegex(ReleaseVersionError, "does not match"):
+            validate_built_metadata(
+                self.write_metadata(version_code=29, version_name="3.1.20"),
+                version,
+            )
+
     def test_tag_must_match_version_name_exactly(self) -> None:
         version = read_gradle_version(self.write_build_file())
 

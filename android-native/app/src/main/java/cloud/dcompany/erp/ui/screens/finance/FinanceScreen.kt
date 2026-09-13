@@ -144,37 +144,7 @@ private fun FinanceContent(
                     onSelect = { selected -> tab = selected.toIntOrNull() ?: 0 },
                     modifier = Modifier.padding(horizontal = Spacing.lg),
                 )
-                if (!state.online) {
-                    FinanceOfflineBanner(state.lastUpdatedAtMillis)
-                }
-                // A refresh that failed on top of good data: keep the figures,
-                // but never let the failure pass unmentioned.
-                if (state.error != null && state.online) {
-                    ErrorBanner(state.error, vm::load)
-                }
-                state.pendingOnlineWrite?.let { pending ->
-                    Box(Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.sm)) {
-                        PendingOnlineFinanceWriteBanner(
-                            pending = pending,
-                            online = state.online,
-                            canRetry = access.canRecordExpenses,
-                            busy = state.busy,
-                            onRetry = vm::retryPendingOnlineWrite,
-                        )
-                    }
-                }
-                if (state.notice != null) {
-                    Box(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
-                        NoticeBanner(state.notice, vm::dismissNotice)
-                    }
-                }
-                if (state.pendingExpenses.isNotEmpty() || state.pendingAssets.isNotEmpty() ||
-                    state.pendingCapitalEntries.isNotEmpty()
-                ) {
-                    Box(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
-                        PendingFinanceChangesPanel(state, vm, access)
-                    }
-                }
+                FinanceStatusRegion(state = state, vm = vm, access = access)
                 when (tab) {
                     0 -> OverviewTab(state, presentation)
                     1 -> ExpensesTab(state, vm, access.canRecordExpenses)
@@ -249,15 +219,70 @@ private fun Header(state: FinanceUiState, onRefresh: () -> Unit) {
                 )
             },
         )
-        if (state.loading && state.loaded) {
-            LinearProgressIndicator(
-                modifier = Modifier.fillMaxWidth(),
-                color = Brand.Information,
-                trackColor = Brand.Surface,
-            )
+        // Reserve the progress rail so a background refresh never pushes the
+        // tabs and report viewport down by one indicator height.
+        Box(Modifier.fillMaxWidth().height(4.dp)) {
+            if (state.loading && state.loaded) {
+                LinearProgressIndicator(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = Brand.Information,
+                    trackColor = Brand.Surface,
+                )
+            }
         }
     }
 }
+
+@Composable
+private fun FinanceStatusRegion(
+    state: FinanceUiState,
+    vm: FinanceViewModel,
+    access: FinanceAccess,
+) {
+    val hasPendingChanges = state.pendingExpenses.isNotEmpty() ||
+        state.pendingAssets.isNotEmpty() || state.pendingCapitalEntries.isNotEmpty()
+    val hasStatus = !state.online || (state.error != null && state.online) ||
+        state.pendingOnlineWrite != null || state.notice != null || hasPendingChanges
+
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .height(FINANCE_STATUS_REGION_HEIGHT)
+            .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
+    ) {
+        if (!hasStatus) {
+            Text(
+                "Finance records are online · no saved finance actions need attention",
+                color = Brand.ForegroundMuted,
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.align(Alignment.CenterStart),
+            )
+        } else {
+            Column(
+                Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+            ) {
+                if (!state.online) FinanceOfflineBanner(state.lastUpdatedAtMillis)
+                // A refresh that failed on top of good data: keep the figures,
+                // but never let the failure pass unmentioned.
+                if (state.error != null && state.online) ErrorBanner(state.error, vm::load)
+                state.pendingOnlineWrite?.let { pending ->
+                    PendingOnlineFinanceWriteBanner(
+                        pending = pending,
+                        online = state.online,
+                        canRetry = access.canRecordExpenses,
+                        busy = state.busy,
+                        onRetry = vm::retryPendingOnlineWrite,
+                    )
+                }
+                state.notice?.let { NoticeBanner(it, vm::dismissNotice) }
+                if (hasPendingChanges) PendingFinanceChangesPanel(state, vm, access)
+            }
+        }
+    }
+}
+
+private val FINANCE_STATUS_REGION_HEIGHT = 132.dp
 
 // ============================================================================
 // OVERVIEW
@@ -1690,6 +1715,30 @@ private fun PendingOnlineFinanceWriteBanner(
 // CREATE DIALOGS
 // ============================================================================
 @Composable
+internal fun FinanceFormDialog(
+    title: String,
+    confirmLabel: String,
+    busy: Boolean,
+    error: String?,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+    confirmEnabled: Boolean = true,
+    content: @Composable (formEnabled: Boolean) -> Unit,
+) {
+    FormDialog(
+        title = title,
+        confirmLabel = confirmLabel,
+        busy = busy,
+        error = error,
+        onDismiss = onDismiss,
+        onConfirm = onConfirm,
+        confirmEnabled = confirmEnabled,
+    ) {
+        content(!busy)
+    }
+}
+
+@Composable
 private fun ManualCollectionCreateDialog(
     state: FinanceUiState,
     vm: FinanceViewModel,
@@ -1721,7 +1770,7 @@ private fun ManualCollectionCreateDialog(
         }
     }
 
-    FormDialog(
+    FinanceFormDialog(
         title = "Add manual collection",
         confirmLabel = "Record collection",
         busy = state.busy,
@@ -1747,7 +1796,7 @@ private fun ManualCollectionCreateDialog(
                 }
             }
         },
-    ) {
+    ) { formEnabled ->
         OperationalBanner(
             title = "Unitemized revenue only",
             detail = if (presentation.showsRestaurantOperations) {
@@ -1758,11 +1807,12 @@ private fun ManualCollectionCreateDialog(
             tone = UiTone.Warning,
             icon = Icons.Default.Payments,
         )
-        BusinessDatePickerField(businessDate, ::changeDate)
+        BusinessDatePickerField(businessDate, ::changeDate, enabled = formEnabled)
         PickerField(
             "Shop",
             state.branches.firstOrNull { it.id == branchId }?.name ?: "Select…",
             state.branches.map { it.id to it.name },
+            enabled = formEnabled,
         ) { branchId = it }
         PickerField(
             "Payment method",
@@ -1773,11 +1823,13 @@ private fun ManualCollectionCreateDialog(
                 "card" to "Card",
                 "bank" to "Bank transfer",
             ),
+            enabled = formEnabled,
         ) { changeMethod(it) }
-        DecimalField(amountRupees, { amountRupees = it }, "Amount (₹)")
+        DecimalField(amountRupees, { amountRupees = it }, "Amount (₹)", enabled = formEnabled)
         OutlinedTextField(
             value = sourceRef,
             onValueChange = { sourceRef = it.take(160) },
+            enabled = formEnabled,
             label = { Text("Evidence reference") },
             supportingText = { Text("Daily sheet row, settlement reference, or bank evidence") },
             singleLine = true,
@@ -1786,6 +1838,7 @@ private fun ManualCollectionCreateDialog(
         OutlinedTextField(
             value = note,
             onValueChange = { note = it.take(500) },
+            enabled = formEnabled,
             label = { Text("Note (optional)") },
             modifier = Modifier.fillMaxWidth(),
         )
@@ -1803,7 +1856,7 @@ private fun TipPayoutCreateDialog(state: FinanceUiState, vm: FinanceViewModel) {
     val owed = state.tipsPayableMinor
     val exceedsOwed = amountMinor != null && owed != null && amountMinor > owed
 
-    FormDialog(
+    FinanceFormDialog(
         title = "Pay out tips",
         confirmLabel = "Record payout",
         busy = state.busy,
@@ -1833,7 +1886,7 @@ private fun TipPayoutCreateDialog(state: FinanceUiState, vm: FinanceViewModel) {
                 }
             }
         },
-    ) {
+    ) { formEnabled ->
         OperationalBanner(
             title = "Owed to staff: ${owed?.asRupees() ?: "Unavailable"}",
             detail =
@@ -1845,6 +1898,7 @@ private fun TipPayoutCreateDialog(state: FinanceUiState, vm: FinanceViewModel) {
             "Shop",
             state.branches.firstOrNull { it.id == branchId }?.name ?: "Select…",
             state.branches.map { it.id to it.name },
+            enabled = formEnabled,
         ) { branchId = it }
         PickerField(
             "Paid via",
@@ -1855,8 +1909,9 @@ private fun TipPayoutCreateDialog(state: FinanceUiState, vm: FinanceViewModel) {
                 "card" to "Card",
                 "bank" to "Bank transfer",
             ),
+            enabled = formEnabled,
         ) { method = it }
-        DecimalField(amountRupees, { amountRupees = it }, "Amount (₹)")
+        DecimalField(amountRupees, { amountRupees = it }, "Amount (₹)", enabled = formEnabled)
         if (exceedsOwed) {
             Text(
                 "This is more than the ${owed?.asRupees()} currently owed to staff.",
@@ -1867,6 +1922,7 @@ private fun TipPayoutCreateDialog(state: FinanceUiState, vm: FinanceViewModel) {
         OutlinedTextField(
             value = note,
             onValueChange = { note = it.take(500) },
+            enabled = formEnabled,
             label = { Text("Staff split / payout note") },
             supportingText = { Text("For example: split among Anu, Basil and Reji on shift") },
             minLines = 2,
@@ -1884,7 +1940,7 @@ private fun VoidManualCollectionDialog(
 ) {
     var reason by remember { mutableStateOf("") }
     var localError by remember { mutableStateOf<String?>(null) }
-    FormDialog(
+    FinanceFormDialog(
         title = "Void manual collection",
         confirmLabel = "Void collection",
         busy = state.busy,
@@ -1899,7 +1955,7 @@ private fun VoidManualCollectionDialog(
                 vm.voidManualCollection(row, reason)
             }
         },
-    ) {
+    ) { formEnabled ->
         OperationalBanner(
             title = "Void ${row.amountMinor.asRupees()} · ${paidViaLabel(row.method)}?",
             detail =
@@ -1910,6 +1966,7 @@ private fun VoidManualCollectionDialog(
         OutlinedTextField(
             value = reason,
             onValueChange = { reason = it.take(500) },
+            enabled = formEnabled,
             label = { Text("Void reason") },
             minLines = 2,
             modifier = Modifier.fillMaxWidth(),
@@ -1921,7 +1978,7 @@ private fun VoidManualCollectionDialog(
 private fun VoidTipPayoutDialog(row: TipPayout, state: FinanceUiState, vm: FinanceViewModel) {
     var reason by remember { mutableStateOf("") }
     var localError by remember { mutableStateOf<String?>(null) }
-    FormDialog(
+    FinanceFormDialog(
         title = "Void tip payout",
         confirmLabel = "Void payout",
         busy = state.busy,
@@ -1936,7 +1993,7 @@ private fun VoidTipPayoutDialog(row: TipPayout, state: FinanceUiState, vm: Finan
                 vm.voidTipPayout(row, reason)
             }
         },
-    ) {
+    ) { formEnabled ->
         OperationalBanner(
             title = "Void ${row.amountMinor.asRupees()} · ${paidViaLabel(row.method)}?",
             detail =
@@ -1947,6 +2004,7 @@ private fun VoidTipPayoutDialog(row: TipPayout, state: FinanceUiState, vm: Finan
         OutlinedTextField(
             value = reason,
             onValueChange = { reason = it.take(500) },
+            enabled = formEnabled,
             label = { Text("Void reason") },
             minLines = 2,
             modifier = Modifier.fillMaxWidth(),
@@ -1955,7 +2013,11 @@ private fun VoidTipPayoutDialog(row: TipPayout, state: FinanceUiState, vm: Finan
 }
 
 @Composable
-private fun BusinessDatePickerField(value: String, onValueChange: (String) -> Unit) {
+private fun BusinessDatePickerField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    enabled: Boolean = true,
+) {
     val context = LocalContext.current
     val current = runCatching { LocalDate.parse(value) }.getOrDefault(financeBusinessToday())
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -1978,6 +2040,7 @@ private fun BusinessDatePickerField(value: String, onValueChange: (String) -> Un
             },
             modifier = Modifier.fillMaxWidth(),
             intent = ActionIntent.Secondary,
+            enabled = enabled,
         )
     }
 }
@@ -1993,7 +2056,7 @@ private fun ExpenseCreateDialog(state: FinanceUiState, vm: FinanceViewModel) {
     var note by remember { mutableStateOf("") }
     var localError by remember { mutableStateOf<String?>(null) }
 
-    FormDialog(
+    FinanceFormDialog(
         title = "Add expense",
         confirmLabel = "Queue expense",
         busy = state.busy,
@@ -2020,22 +2083,25 @@ private fun ExpenseCreateDialog(state: FinanceUiState, vm: FinanceViewModel) {
                 invoiceNo = invoiceNo, note = note,
             )
         },
-    ) {
+    ) { formEnabled ->
         PickerField(
             "Branch",
             state.branches.firstOrNull { it.id == branchId }?.name ?: "Select…",
             state.branches.map { it.id to it.name },
+            enabled = formEnabled,
         ) { branchId = it }
         PickerField(
             "Category",
             state.categoryNames[categoryId] ?: "Select…",
             state.categoryNames.entries.map { it.key to it.value },
+            enabled = formEnabled,
         ) { categoryId = it }
-        DecimalField(amountRupees, { amountRupees = it }, "Amount (₹)")
+        DecimalField(amountRupees, { amountRupees = it }, "Amount (₹)", enabled = formEnabled)
         PickerField(
             "Paid via",
             paidViaLabel(paidVia),
             ExpensePaymentPolicy.Options.map { it.value to it.label },
+            enabled = formEnabled,
         ) { paidVia = it }
         Text(
             ExpensePaymentPolicy.CashDrawerGuidance + " UPI and business debit-card " +
@@ -2046,14 +2112,17 @@ private fun ExpenseCreateDialog(state: FinanceUiState, vm: FinanceViewModel) {
         )
         OutlinedTextField(
             value = vendorName, onValueChange = { vendorName = it },
+            enabled = formEnabled,
             label = { Text("Vendor (optional)") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
         )
         OutlinedTextField(
             value = invoiceNo, onValueChange = { invoiceNo = it },
+            enabled = formEnabled,
             label = { Text("Invoice no. (optional)") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
         )
         OutlinedTextField(
             value = note, onValueChange = { note = it },
+            enabled = formEnabled,
             label = { Text("Note (optional)") }, modifier = Modifier.fillMaxWidth(),
         )
     }
@@ -2076,7 +2145,7 @@ private fun AssetCreateDialog(
     var notesText by remember { mutableStateOf("") }
     var localError by remember { mutableStateOf<String?>(null) }
 
-    FormDialog(
+    FinanceFormDialog(
         title = "Register asset",
         confirmLabel = "Queue asset",
         busy = state.busy,
@@ -2106,15 +2175,17 @@ private fun AssetCreateDialog(
                 }
             }
         },
-    ) {
+    ) { formEnabled ->
         OutlinedTextField(
             value = name, onValueChange = { name = it },
+            enabled = formEnabled,
             label = { Text("Name") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
         )
         PickerField(
             "Branch",
             state.branches.firstOrNull { it.id == branchId }?.name ?: "Select…",
             state.branches.map { it.id to it.name },
+            enabled = formEnabled,
         ) { branchId = it }
         PickerField(
             "Category",
@@ -2128,19 +2199,32 @@ private fun AssetCreateDialog(
                 add("electronics" to "Electronics")
                 add("other" to "Other")
             },
+            enabled = formEnabled,
         ) { type = it }
-        DecimalField(purchaseRupees, { purchaseRupees = it }, "Purchase cost (₹)")
+        DecimalField(
+            purchaseRupees,
+            { purchaseRupees = it },
+            "Purchase cost (₹)",
+            enabled = formEnabled,
+        )
         OutlinedTextField(
             value = usefulLifeMonths,
             onValueChange = { usefulLifeMonths = it.filter(Char::isDigit) },
+            enabled = formEnabled,
             label = { Text("Useful life (months)") },
             singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
             modifier = Modifier.fillMaxWidth(),
         )
-        DecimalField(salvageRupees, { salvageRupees = it }, "Salvage value (₹)")
+        DecimalField(
+            salvageRupees,
+            { salvageRupees = it },
+            "Salvage value (₹)",
+            enabled = formEnabled,
+        )
         OutlinedTextField(
             value = notesText, onValueChange = { notesText = it },
+            enabled = formEnabled,
             label = { Text("Notes (optional)") }, modifier = Modifier.fillMaxWidth(),
         )
     }
@@ -2155,7 +2239,7 @@ private fun CapitalEntryCreateDialog(partner: Partner, state: FinanceUiState, vm
     var note by remember { mutableStateOf("") }
     var localError by remember { mutableStateOf<String?>(null) }
 
-    FormDialog(
+    FinanceFormDialog(
         title = "Capital movement — ${partner.name}",
         confirmLabel = "Queue entry",
         busy = state.busy,
@@ -2180,18 +2264,21 @@ private fun CapitalEntryCreateDialog(partner: Partner, state: FinanceUiState, vm
                 }
             }
         },
-    ) {
+    ) { formEnabled ->
         PickerField(
             "Type", if (type == "invest") "Investment" else "Capital repayment",
             listOf("invest" to "Investment", "withdraw" to "Capital repayment"),
+            enabled = formEnabled,
         ) { type = it }
-        DecimalField(amountRupees, { amountRupees = it }, "Amount (₹)")
+        DecimalField(amountRupees, { amountRupees = it }, "Amount (₹)", enabled = formEnabled)
         PickerField(
             "Settlement account", paidViaLabel(settlementAccount).let { if (it == "Bank transfer") "Bank" else it },
             listOf("cash" to "Cash", "bank" to "Bank", "upi" to "UPI"),
+            enabled = formEnabled,
         ) { settlementAccount = it }
         OutlinedTextField(
             value = sourceRef, onValueChange = { sourceRef = it },
+            enabled = formEnabled,
             label = { Text("Bank UTR / UPI id / voucher no.") }, singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
@@ -2201,6 +2288,7 @@ private fun CapitalEntryCreateDialog(partner: Partner, state: FinanceUiState, vm
         )
         OutlinedTextField(
             value = note, onValueChange = { note = it },
+            enabled = formEnabled,
             label = { Text("Note (optional)") }, modifier = Modifier.fillMaxWidth(),
         )
     }

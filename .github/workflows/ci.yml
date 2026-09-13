@@ -34,6 +34,11 @@ jobs:
           --health-retries 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # Code 26's regression-freeze test compares every inherited test to
+          # the immutable Code 25 commit and must not degrade into a shallow-
+          # checkout skip or false pass.
+          fetch-depth: 0
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.13'
@@ -48,6 +53,21 @@ jobs:
       - run: |
           pip install --only-binary=:all: --require-hashes -r backend/requirements-ci.lock
           pip install --only-binary=:all: --require-hashes -r ops/backup-requirements.lock
+      - name: Verify production installer lock metadata
+        run: |
+          set -euo pipefail
+          test -n "$pythonLocation"
+          configured_python="$pythonLocation/bin/python"
+          test "${configured_python#/}" != "$configured_python"
+          test -x "$configured_python"
+          sudo -n -- "$configured_python" \
+            tests/verify_production_installer_lock_metadata.py
+      - name: Install physical-audit contract prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends ripgrep
+      - name: Install pinned CI Redis prerequisite
+        run: bash infra/scripts/install-ci-redis.sh
       - name: Run complete repository contract suite
         run: python -m pytest tests
       - name: Test operational monitoring contracts
@@ -144,6 +164,7 @@ jobs:
           ./gradlew --no-daemon --max-workers=1 --stacktrace
           '-Dorg.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8'
           -Pkotlin.compiler.execution.strategy=in-process
+          :audit-driver:testDebugUnitTest
           :audit-driver:assembleDebug :audit-driver:assembleDebugAndroidTest
       # GitHub's Linux runner exposes /dev/kvm, but the runner user is not
       # consistently granted access. Without KVM the API-35 emulator can take
@@ -187,37 +208,79 @@ jobs:
             android-native/app/build/test-results/
             android-native/app/build/outputs/androidTest-results/
             android-native/app/build/outputs/ci-diagnostics/
+            android-native/audit-driver/build/reports/tests/
+            android-native/audit-driver/build/test-results/
 
   docker:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [backend, frontend]
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - store: classic
+            containerd: false
+            provenance: --provenance=false
+          - store: containerd
+            containerd: true
+            provenance: --provenance=mode=min
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
-      - name: Build backend image
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - name: Set up isolated Docker 29 image store
+        id: setup-docker
+        uses: docker/setup-docker-action@77e84dbf09b47d1e29270283c22f16145aa85ca1
+        with:
+          version: v29.6.1
+          set-host: true
+          rootless: false
+          context: dcompany-${{ matrix.store }}
+          runtime-basedir: ${{ runner.temp }}/dcompany-docker-${{ matrix.store }}
+          daemon-config: |
+            {
+              "features": {
+                "containerd-snapshotter": ${{ matrix.containerd }}
+              }
+            }
+      - name: Verify local Docker tooling and runner/root connection before build
+        id: docker-boundary
+        run: |
+          set -euo pipefail
+          docker_host='${{ steps.setup-docker.outputs.sock }}'
+          case "$docker_host" in unix:///*) ;; *) exit 1 ;; esac
+          docker_socket=$(realpath "${docker_host#unix://}")
+          test -S "$docker_socket"
+          docker_root=$(realpath "$(dirname "$docker_socket")/data")
+          test -d "$docker_root"
+          printf 'docker-root=%s\n' "$docker_root" >> "$GITHUB_OUTPUT"
+          # Buildx and Compose are hosted-runner plugins, not downloads made or
+          # version-pinned by setup-Docker. Missing/incompatible plugins fail here.
+          bash infra/scripts/run-ci-docker-connection-check.sh \
+            '${{ steps.setup-docker.outputs.sock }}' '${{ matrix.store }}' \
+            "$docker_root" \
+            "$RUNNER_TEMP/container-security/docker-connection-pre-build.json"
+      - name: Build all exact production images in the selected store
         env:
           APP_REVISION: ${{ github.sha }}
         run: |
+          set -euo pipefail
           APP_VERSION=$(node -p "require('./frontend/package.json').version")
-          docker build -f infra/docker/backend.Dockerfile -t erp-backend:ci \
+          docker buildx build --load --platform linux/amd64 --sbom=false \
+            ${{ matrix.provenance }} -f infra/docker/backend.Dockerfile -t erp-backend:ci \
             --build-arg APP_VERSION="$APP_VERSION" --build-arg APP_REVISION="$APP_REVISION" .
-      - name: Build frontend image
-        env:
-          APP_REVISION: ${{ github.sha }}
-        run: |
-          APP_VERSION=$(node -p "require('./frontend/package.json').version")
-          docker build -f infra/docker/frontend.Dockerfile -t erp-frontend:ci \
+          docker buildx build --load --platform linux/amd64 --sbom=false \
+            ${{ matrix.provenance }} -f infra/docker/frontend.Dockerfile -t erp-frontend:ci \
             --build-arg VITE_API_URL=https://dcompany.duckdns.org/api/v1 \
             --build-arg VITE_APP_VERSION="$APP_VERSION" \
             --build-arg APP_VERSION="$APP_VERSION" --build-arg APP_REVISION="$APP_REVISION" .
-      - name: Build hardened Caddy and PostgreSQL images
-        env:
-          APP_REVISION: ${{ github.sha }}
-        run: |
-          APP_VERSION=$(node -p "require('./frontend/package.json').version")
-          docker build --platform linux/amd64 -f infra/docker/caddy.Dockerfile -t erp-caddy:ci \
+          docker buildx build --load --platform linux/amd64 --sbom=false \
+            ${{ matrix.provenance }} -f infra/docker/caddy.Dockerfile -t erp-caddy:ci \
             --build-arg APP_VERSION="$APP_VERSION" --build-arg APP_REVISION="$APP_REVISION" .
-          docker build --platform linux/amd64 -f infra/docker/postgres.Dockerfile -t erp-postgres:ci \
+          docker buildx build --load --platform linux/amd64 --sbom=false \
+            ${{ matrix.provenance }} -f infra/docker/postgres.Dockerfile -t erp-postgres:ci \
             --build-arg APP_VERSION="$APP_VERSION" --build-arg APP_REVISION="$APP_REVISION" .
       - name: Validate hardened production Caddy routing
         run: >-
@@ -231,7 +294,7 @@ jobs:
         run: >-
           docker run --rm --entrypoint sh erp-caddy:ci -ceu
           'test "$(sha256sum /usr/bin/caddy | cut -d" " -f1)" =
-          73c0169f0b72b465e2ae20bdb67a3e017044b2ab3d267816398b9d6ece243fb0;
+          951a0136950bb9edf60ff5cec6ca2df0a041b27ded9e610f0aab49b168739dac;
           caddy version | grep -F v2.11.4-dcompany.1;
           getcap /usr/bin/caddy | grep -F cap_net_bind_service'
       - name: Prove PostgreSQL 16 volume and rollback compatibility
@@ -251,6 +314,8 @@ jobs:
       - name: Pull exact production Redis image
         run: |
           docker pull redis:7-alpine@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf
+      - name: Exercise parser malformed-archive contracts on system Python 3.12
+        run: /usr/bin/python3 scripts/verify_image_archive_parser_python312.py
       - name: Generate SBOMs and scan exact production images
         uses: ./.github/actions/scan-production-images
         with:
@@ -259,5 +324,19 @@ jobs:
           caddy-image: erp-caddy:ci
           postgres-image: erp-postgres:ci
           redis-image: redis:7-alpine@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf
-          artifact-prefix: ci-${{ github.run_id }}-${{ github.run_attempt }}
+          artifact-prefix: ci-${{ matrix.store }}-${{ github.run_id }}-${{ github.run_attempt }}
           source-git-sha: ${{ github.sha }}
+          docker-host: ${{ steps.setup-docker.outputs.sock }}
+          docker-store: ${{ matrix.store }}
+          docker-root: ${{ steps.docker-boundary.outputs.docker-root }}
+      - name: Retain bounded Docker connection evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ci-docker-connection-${{ matrix.store }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/container-security/docker-connection-pre-build.json
+            ${{ runner.temp }}/container-security/docker-connection-pre-build.json.runner
+            ${{ runner.temp }}/container-security/docker-connection-pre-build.json.root
+          if-no-files-found: warn
+          retention-days: 7
