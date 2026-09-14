@@ -141,6 +141,22 @@ object GamingSessionState {
     const val LEGACY_RESOLVED = "legacy_resolved"
 }
 
+/**
+ * Exact definitive refusal emitted by the current backend when the captured
+ * Stop is more than five minutes ahead of server time. Matching the complete
+ * message deliberately fails closed if the server contract changes: other
+ * business-rule failures must continue replaying the employee's original tap.
+ */
+const val GAMING_STOP_FUTURE_TIME_REJECTION =
+    "Session stop time is in the future. Correct the tablet clock and try again."
+
+internal fun isCorrectableGamingStopClockRejection(
+    state: String?,
+    lastError: String?,
+): Boolean =
+    state == GamingSessionState.STOP_REJECTED &&
+        lastError == GAMING_STOP_FUTURE_TIME_REJECTION
+
 object GamingLegacyResolution {
     const val MANUAL_BILL_RECORDED = "manual_bill_recorded"
     const val CONFIRMED_NO_PLAY = "confirmed_no_play"
@@ -287,11 +303,11 @@ data class LocalGamingSessionEntity(
     val orderId: String? = null,
     val lastError: String? = null,
     /**
-     * Immutable v27 capture evidence. A recovered server Start can have a
-     * later authoritative receipt-time start, and its queued Stop may need to
-     * be clamped to that instant before replay. Keep both original tablet
-     * timestamps separately so the operational overlay can use authoritative
-     * chronology without rewriting the protected-owner audit evidence.
+     * Immutable capture evidence. A recovered server Start can have a later
+     * authoritative receipt-time start, and a definitively rejected future
+     * Stop can be recaptured after the tablet clock is corrected. Keep both
+     * original tablet timestamps separately so the operational overlay can
+     * use valid chronology without rewriting the first captured evidence.
      */
     val legacyOriginalCapturedStartAtMillis: Long? = null,
     val legacyOriginalCapturedStopAtMillis: Long? = null,

@@ -42,6 +42,7 @@ import cloud.dcompany.erp.core.db.RecoveredLegacyServerDisposition
 import cloud.dcompany.erp.core.db.ResolvedOpenShift
 import cloud.dcompany.erp.core.db.ShiftState
 import cloud.dcompany.erp.core.db.observeResolvedOpenShift
+import cloud.dcompany.erp.core.db.isCorrectableGamingStopClockRejection
 import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.ApiException
 import cloud.dcompany.erp.core.net.ErpApi
@@ -128,6 +129,15 @@ data class GamingUiState(
     val needsCancellation: List<GameSession>
         get() = sessions.filter {
             it.canCancelUnbilled() && it.amountMinor == 0L && !hasActiveAddons(it)
+        }
+
+    /** Start/Stop refusals remain station work; Send refusals already belong to the POS queue. */
+    val rejectedSessionsForReview: List<GameSession>
+        get() = sessions.filter {
+            it.localState in setOf(
+                GamingSessionState.START_REJECTED,
+                GamingSessionState.STOP_REJECTED,
+            )
         }
 
     fun packageExtensionFor(serverSessionId: String): PackageExtensionActionUi? =
@@ -1553,6 +1563,11 @@ class GamingViewModel : ViewModel() {
                                 existing.localId,
                                 stoppedAtMillis,
                                 resolvedStopShiftId,
+                                correctFutureClockRejection =
+                                    isCorrectableGamingStopClockRejection(
+                                        session.localState,
+                                        session.lastError,
+                                    ),
                             ) != 0
                         } else {
                             // A session this device only ever saw via the cache (started

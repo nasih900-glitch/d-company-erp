@@ -414,6 +414,7 @@ fun GamingScreen(
         focusRequested = focusSessionId != null && focusStationId != null,
         hasRefreshError = state.refreshError != null,
         orphanedExtensionCount = orphanedExtensionActions.size,
+        rejectedSessionCount = state.rejectedSessionsForReview.size,
         needsCancellation = state.needsCancellation.isNotEmpty(),
         awaitingPayment = state.readyForPos.isNotEmpty(),
         busy = state.busyStationId != null,
@@ -717,7 +718,8 @@ fun GamingScreen(
 
     if (attentionCenterOpen) {
         RemoteSensitiveContent(
-            enabled = state.needsCancellation.isNotEmpty() || state.readyForPos.isNotEmpty(),
+            enabled = state.rejectedSessionsForReview.isNotEmpty() ||
+                state.needsCancellation.isNotEmpty() || state.readyForPos.isNotEmpty(),
         ) {
             GamingCommandAttentionDialog(
                 state = state,
@@ -733,6 +735,17 @@ fun GamingScreen(
                 onReviewOrphan = { action ->
                     attentionCenterOpen = false
                     discardingPackageExtension = PackageExtensionDiscardRequest(action)
+                },
+                onReviewRejectedSession = { session ->
+                    val stationId = rejectedSessionReviewStationId(
+                        session = session,
+                        stationIds = state.stations.map(Station::id),
+                    )
+                    if (stationId != null) {
+                        attentionCenterOpen = false
+                        selectedFilter = "all"
+                        selectedCommandStationId = stationId
+                    }
                 },
                 onReviewCancellations = {
                     attentionCenterOpen = false
@@ -1371,6 +1384,7 @@ internal fun gamingCommandAttentionCount(
     focusRequested: Boolean,
     hasRefreshError: Boolean,
     orphanedExtensionCount: Int,
+    rejectedSessionCount: Int,
     needsCancellation: Boolean,
     awaitingPayment: Boolean,
     // Saving is deliberately local progress on the affected station/button.
@@ -1385,7 +1399,17 @@ internal fun gamingCommandAttentionCount(
         hasRefreshError,
         needsCancellation,
         awaitingPayment,
-    ).count { it } + orphanedExtensionCount
+    ).count { it } + orphanedExtensionCount + rejectedSessionCount
+
+internal fun rejectedSessionReviewStationId(
+    session: GameSession,
+    stationIds: List<String>,
+): String? = session.stationId.takeIf {
+    session.localState in setOf(
+        GamingSessionState.START_REJECTED,
+        GamingSessionState.STOP_REJECTED,
+    ) && it in stationIds
+}
 
 @Composable
 private fun GamingCommandWorkspace(
@@ -1724,7 +1748,7 @@ private fun GamingCommandMetrics(state: GamingUiState) {
 }
 
 @Composable
-private fun GamingCommandAttentionBar(
+internal fun GamingCommandAttentionBar(
     state: GamingUiState,
     access: GamingAccess,
     terminalBlocked: Boolean,
@@ -1735,6 +1759,7 @@ private fun GamingCommandAttentionBar(
     onRefresh: () -> Unit,
 ) {
     val danger = state.needsCancellation.isNotEmpty() ||
+        state.rejectedSessionsForReview.isNotEmpty() ||
         state.orphanedPackageExtensionActions().any {
             it.state == GamingPackageExtensionState.REJECTED
         }
@@ -1747,6 +1772,9 @@ private fun GamingCommandAttentionBar(
     }
     val accent = statusColor(tone)
     val details = buildList {
+        if (state.rejectedSessionsForReview.isNotEmpty()) {
+            add("${state.rejectedSessionsForReview.size} rejected ${sessionWord(state.rejectedSessionsForReview.size)}")
+        }
         if (state.needsCancellation.isNotEmpty()) add("${state.needsCancellation.size} need resolution")
         if (state.readyForPos.isNotEmpty()) add("${state.readyForPos.size} payment due")
         if (orphanedExtensionCount > 0) add("$orphanedExtensionCount retained sync")
@@ -1999,7 +2027,7 @@ internal fun GamingStationTile(
 }
 
 @Composable
-private fun GamingCommandAttentionDialog(
+internal fun GamingCommandAttentionDialog(
     state: GamingUiState,
     access: GamingAccess,
     activeTerminalPurpose: String?,
@@ -2011,6 +2039,7 @@ private fun GamingCommandAttentionDialog(
     onDismissFocus: () -> Unit,
     onRefresh: () -> Unit,
     onReviewOrphan: (PackageExtensionActionUi) -> Unit,
+    onReviewRejectedSession: (GameSession) -> Unit,
     onReviewCancellations: () -> Unit,
     onReviewPayments: () -> Unit,
 ) {
@@ -2083,6 +2112,28 @@ private fun GamingCommandAttentionDialog(
                         busy = state.busyStationId != null,
                         onReview = { onReviewOrphan(action) },
                     )
+                }
+                state.rejectedSessionsForReview.forEach { session ->
+                    val stationName = state.stations.firstOrNull { it.id == session.stationId }?.name
+                        ?: "Unknown station"
+                    OperationalBanner(
+                        title = if (session.localState == GamingSessionState.START_REJECTED) {
+                            "Start rejected on $stationName"
+                        } else {
+                            "Stop rejected on $stationName"
+                        },
+                        detail = session.lastError?.takeIf(String::isNotBlank)
+                            ?: "The saved session action needs review on its station.",
+                        tone = UiTone.Danger,
+                        icon = Icons.Filled.Error,
+                    ) {
+                        ErpButton(
+                            text = "Review station",
+                            onClick = { onReviewRejectedSession(session) },
+                            intent = ActionIntent.Warning,
+                            leadingIcon = Icons.Filled.Visibility,
+                        )
+                    }
                 }
                 if (state.needsCancellation.isNotEmpty()) {
                     OperationalBanner(

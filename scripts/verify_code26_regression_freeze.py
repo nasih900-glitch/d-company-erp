@@ -10,7 +10,8 @@ Code 29 adds coordinated identity and the reviewed installer lock path. Current
 Code 29 adds only the reviewed POS-notice, inventory-layout, Web session,
 refresh-lock, owner-approved pricing-card, Code 29.1 packaging-label, and the
 reviewed Code29.2 customer-playtime draft. Code30 adds the reviewed saved-customer
-lookup. None may delete, disable, reorder, or rewrite an existing test
+lookup. Code30.1 adds only the independently reviewed future-clock Stop recovery
+and rejected-session attention correction. None may delete, disable, reorder, or rewrite an existing test
 outside the exact fixture-only normalization or exact reviewed-test hashes below.
 The sole reviewed audit-reader locator migration below preserves every
 credential-cleanup assertion while following the corrected UTF-8 reader.
@@ -87,6 +88,17 @@ REVIEWED_CODE30_TEST_SHA256 = {
     "android-native/app/src/androidTest/java/cloud/dcompany/erp/core/db/MigrationTest.kt": "898d83ae44d48ba617a0b62eb8536a00239ddf8759b9605e08a9976c5bf59abe",
     "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingDialogUiTest.kt": "3663476bd9d05f4ad077e1660a446dcdbb6dcf73fa4451b10e6164a696c77220",
     "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/gaming/GamingApiContractTest.kt": "a91358fff7ea9c147c346dd2a20941f6cac156c91f012a6bb2e1cd745fd1b3a1",
+}
+REVIEWED_CODE30_1_FEATURE_SHA256 = {
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/core/db/GamingDaoRecoveryTest.kt": "67be6534b8c2406417b80e7318fd513ce9df3f1b9b06ca095aae7dba96cb8c09",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingRejectedSessionAttentionUiTest.kt": "c38975352ac4cb969768e08f51991ae7d367636c4d762882e04f6aae33c5cd11",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/db/GamingDao.kt": "e1eb103fdbc7a5d81a692866ebb43301a8d060226631b0d54f6fcf672c98b392",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/db/GamingEntities.kt": "fff2bcae008980284f10fb716360a5e5e4bfe5858761c410c1bdd7b861188272",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingScreen.kt": "32f179c36c70e30eca5e18f715da49124313a320f018f73e8f74f9cdbebad7eb",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingViewModel.kt": "c49ccecb37b5fec8c91068621f6b05b809a9ef95c331fb014f81916491d51f6b",
+    "android-native/app/src/test/java/cloud/dcompany/erp/core/db/GamingStopClockRecoveryPolicyTest.kt": "a191996d165e5cdb610f8a591aba585136a611a444e74c0e7603b791bc5c5fc6",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/gaming/GamingRejectedSessionAttentionTest.kt": "501cd87284160a359803d5000fb77ab0c9aeaab8ea8dc6d485350b44df8b3800",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/gaming/GamingStationPresentationTest.kt": "7f8a5d364aed38b56799338b07737a34aa9e76eed0b2607092815fcfc2723acd",
 }
 
 RELEASE_IDENTITY_TESTS = {
@@ -166,6 +178,11 @@ REVIEWED_CODE30_PRODUCTION_PATHS = frozenset({
     "frontend/src/modules/gaming/GamingCustomerPicker.test.ts",
     "frontend/src/modules/gaming/GamingCustomerPicker.tsx",
 })
+REVIEWED_CODE30_1_PRODUCTION_PATHS = frozenset({
+    path
+    for path in REVIEWED_CODE30_1_FEATURE_SHA256
+    if path.startswith("android-native/app/src/main/")
+})
 
 ALLOWED_PRODUCTION_PATHS = {
     "backend/app/__init__.py",
@@ -192,7 +209,7 @@ ALLOWED_PRODUCTION_PATHS = {
     "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingViewModel.kt",
     "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/inventory/InventoryScreen.kt",
     "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/settings/BugReportOutbox.kt",
-} | REVIEWED_WEB_AUTH_PATHS | REVIEWED_PRICING_PRODUCTION_PATHS | REVIEWED_PACKAGING_UI_PATHS | REVIEWED_CODE29_2_PRODUCTION_PATHS | REVIEWED_CODE30_PRODUCTION_PATHS
+} | REVIEWED_WEB_AUTH_PATHS | REVIEWED_PRICING_PRODUCTION_PATHS | REVIEWED_PACKAGING_UI_PATHS | REVIEWED_CODE29_2_PRODUCTION_PATHS | REVIEWED_CODE30_PRODUCTION_PATHS | REVIEWED_CODE30_1_PRODUCTION_PATHS
 
 PRODUCTION_PREFIXES = (
     "backend/app/",
@@ -255,6 +272,7 @@ def _normalise_release_identity(path: str, text: str) -> str:
         return text
     normalised = text
     for current, baseline in (
+        ("3.1.26", "3.1.14"),
         ("3.1.25", "3.1.14"),
         ("3.1.24", "3.1.14"),
         ("3.1.23", "3.1.14"),
@@ -266,6 +284,14 @@ def _normalise_release_identity(path: str, text: str) -> str:
         ("3.1.17", "3.1.14"),
         ("3.1.16", "3.1.14"),
         ("3.1.15", "3.1.14"),
+        ("Code 30.1", "Code 25"),
+        ("code 30.1", "code 25"),
+        ("CODE30.1", "CODE25"),
+        ("code30.1", "code25"),
+        ("Code 30 point 1", "Code 25"),
+        ("code 30 point 1", "code 25"),
+        ("CODE30_POINT_1", "CODE25"),
+        ("code30_point_1", "code25"),
         ("Code 30", "Code 25"),
         ("code 30", "code 25"),
         ("CODE30", "CODE25"),
@@ -289,10 +315,10 @@ def _normalise_release_identity(path: str, text: str) -> str:
     ):
         normalised = normalised.replace(current, baseline)
     normalised = re.sub(
-        r"version_code\s*=\s*(?:26|27|28|29|30|31|32|33)\b", "version_code=25", normalised
+        r"version_code\s*=\s*(?:26|27|28|29|30|31|32|33|34)\b", "version_code=25", normalised
     )
     normalised = re.sub(
-        r"assertEquals\((?:26|27|28|29|30|31|32|33),\s*BuildConfig\.VERSION_CODE\)",
+        r"assertEquals\((?:26|27|28|29|30|31|32|33|34),\s*BuildConfig\.VERSION_CODE\)",
         "assertEquals(25, BuildConfig.VERSION_CODE)",
         normalised,
     )
@@ -438,7 +464,8 @@ def verify_repository(root: Path, baseline: str = CODE25_BASE) -> RegressionFree
             path, candidate_normalised
         )
         reviewed_test_sha256 = (
-            REVIEWED_CODE30_TEST_SHA256.get(path)
+            REVIEWED_CODE30_1_FEATURE_SHA256.get(path)
+            or REVIEWED_CODE30_TEST_SHA256.get(path)
             or REVIEWED_CODE29_2_TEST_SHA256.get(path)
             or REVIEWED_PRICING_TEST_SHA256.get(path)
             or REVIEWED_PACKAGING_TEST_SHA256.get(path)
@@ -457,6 +484,13 @@ def verify_repository(root: Path, baseline: str = CODE25_BASE) -> RegressionFree
         candidate_disables = _disable_counts(candidate_text)
         if any(after > before for before, after in zip(baseline_disables, candidate_disables)):
             errors.append(f"baseline test gained a skip/xfail/ignore path: {path}")
+
+    for path, expected_sha256 in REVIEWED_CODE30_1_FEATURE_SHA256.items():
+        candidate_path = root / path
+        if not candidate_path.is_file():
+            errors.append(f"reviewed Code30.1 file was removed: {path}")
+        elif hashlib.sha256(candidate_path.read_bytes()).hexdigest() != expected_sha256:
+            errors.append(f"reviewed Code30.1 file differs from its approved bytes: {path}")
 
     refresh_locking_test = root / REFRESH_LOCKING_TEST_PATH
     if not refresh_locking_test.is_file():
