@@ -18,7 +18,7 @@ from app.models import ExpenseCategory, IdempotencyKey, Order
 
 
 def test_fastapi_metadata_uses_the_package_release_version() -> None:
-    assert create_app().version == __version__ == "3.1.25"
+    assert create_app().version == __version__ == "3.1.27"
 
 
 def _order_payload(**overrides):

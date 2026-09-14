@@ -213,6 +213,10 @@ REVIEWED_CODE30_1_FEATURE_SHA256 = {
     "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/gaming/GamingRejectedSessionAttentionTest.kt": "501cd87284160a359803d5000fb77ab0c9aeaab8ea8dc6d485350b44df8b3800",
     "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/gaming/GamingStationPresentationTest.kt": "7f8a5d364aed38b56799338b07737a34aa9e76eed0b2607092815fcfc2723acd",
 }
+REVIEWED_CODE30_1_RELEASE_TEST_SHA256 = {
+    "backend/tests/unit/test_release_contracts.py": "be3895b1832adc5ece154682107195ba96bb39008f38faabcf9bd9541f18af10",
+    "backend/tests/unit/test_remote_assistance_contract.py": "6158e31cbbb74455e247ad161c9c97da844081152fd9da79dd7e8a19a2113216",
+}
 CODE30_1_RELEASE_METADATA_PATHS = {
     "docs/CODE30_1_PATCH_CANDIDATE.md",
 }
@@ -352,9 +356,9 @@ def _identity_expected(path: str) -> str:
         "frontend/.env.example": 1,
         "docker-compose.prod.yml": 6,
     }
-    replacements = [("3.1.19", "3.1.26", counts[path])]
+    replacements = [("3.1.19", "3.1.27", counts[path])]
     if path == "android-native/app/build.gradle.kts":
-        replacements.append(("versionCode = 29", "versionCode = 34", 1))
+        replacements.append(("versionCode = 29", "versionCode = 35", 1))
     return _replace_exact(_original(path), tuple(replacements))
 
 
@@ -435,7 +439,7 @@ def test_live_delta_is_exactly_the_reviewed_code29_correction() -> None:
     }
 
 
-def test_live_coordinated_identity_is_version_name_3_1_26_with_build_34() -> None:
+def test_live_coordinated_identity_is_version_name_3_1_27_with_build_35() -> None:
     for path in (
         "android-native/app/build.gradle.kts",
         "backend/pyproject.toml",
@@ -448,11 +452,11 @@ def test_live_coordinated_identity_is_version_name_3_1_26_with_build_34() -> Non
         _assert_exact_text(path, _current(path), _identity_expected(path))
 
     build = _current("android-native/app/build.gradle.kts")
-    assert build.count("versionCode = 34") == 1
-    assert build.count('versionName = "3.1.26"') == 1
+    assert build.count("versionCode = 35") == 1
+    assert build.count('versionName = "3.1.27"') == 1
 
     env_replacements = (
-        ("APP_VERSION=3.1.19", "APP_VERSION=3.1.26", 1),
+        ("APP_VERSION=3.1.19", "APP_VERSION=3.1.27", 1),
         (
             "# immutable history. Signed Code 28 (3.1.18) failed its production image-identity\n"
             "# gate before maintenance or cutover and was never staged or offered. Code 29\n"
@@ -478,14 +482,14 @@ def test_live_coordinated_identity_is_version_name_3_1_26_with_build_34() -> Non
 def test_live_identity_fixtures_are_exact_counted_transformations() -> None:
     replacements = {
         "android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt": (
-            ("3.1.19", "3.1.26", 2),
-            ("assertEquals(29, BuildConfig.VERSION_CODE)", "assertEquals(34, BuildConfig.VERSION_CODE)", 1),
+            ("3.1.19", "3.1.27", 2),
+            ("assertEquals(29, BuildConfig.VERSION_CODE)", "assertEquals(35, BuildConfig.VERSION_CODE)", 1),
             ("code 29 artifact", "code 30 point 1 artifact", 1),
         ),
         "backend/tests/unit/test_client_compatibility.py": (("3.1.19", "3.1.25", 1),),
         "backend/tests/unit/test_release_audit_fixes.py": (("3.1.19", "3.1.25", 1),),
-        "backend/tests/unit/test_release_contracts.py": (("3.1.19", "3.1.25", 1),),
-        "backend/tests/unit/test_remote_assistance_contract.py": (("3.1.19", "3.1.25", 4),),
+        "backend/tests/unit/test_release_contracts.py": (("3.1.19", "3.1.27", 1),),
+        "backend/tests/unit/test_remote_assistance_contract.py": (("3.1.19", "3.1.27", 4),),
         "backend/tests/unit/test_runtime_release_parity.py": (
             ("3.1.19", "3.1.25", 6),
             ("version_code=29,", "version_code=33,", 1),
@@ -1209,6 +1213,66 @@ def test_freeze_extensions_and_historical_guards_are_exact() -> None:
             ),
         ),
     )
+    code30_1_release_test_hashes = "REVIEWED_CODE30_1_RELEASE_TEST_SHA256 = {\n" + "".join(
+        f'    "{path}": "{expected_sha256}",\n'
+        for path, expected_sha256 in REVIEWED_CODE30_1_RELEASE_TEST_SHA256.items()
+    ) + "}\n"
+    code30_1_release_test_exact_loop = (
+        "    for path, expected_sha256 in REVIEWED_CODE30_1_RELEASE_TEST_SHA256.items():\n"
+        "        candidate_path = root / path\n"
+        "        if not candidate_path.is_file():\n"
+        '            errors.append(f"reviewed Code30.1 release test was removed: {path}")\n'
+        "        elif hashlib.sha256(candidate_path.read_bytes()).hexdigest() != expected_sha256:\n"
+        "            errors.append(\n"
+        '                f"reviewed Code30.1 release test differs from its approved bytes: {path}"\n'
+        "            )\n"
+        "\n"
+    )
+    expected_script = _replace_exact(
+        expected_script,
+        (
+            (
+                "and rejected-session attention correction. None may delete, disable, reorder, or rewrite an existing test\n",
+                "and rejected-session attention correction. Its build-35 retry changes only coordinated\n"
+                "identity and two exact stale release-test fixtures. None may delete, disable, reorder, or rewrite an existing test\n",
+                1,
+            ),
+            (
+                code30_1_feature_hashes,
+                code30_1_feature_hashes + code30_1_release_test_hashes,
+                1,
+            ),
+            (
+                '        ("3.1.26", "3.1.14"),\n',
+                '        ("3.1.27", "3.1.14"),\n'
+                '        ("3.1.26", "3.1.14"),\n',
+                1,
+            ),
+            (
+                'r"version_code\\s*=\\s*(?:26|27|28|29|30|31|32|33|34)\\b"',
+                'r"version_code\\s*=\\s*(?:26|27|28|29|30|31|32|33|34|35)\\b"',
+                1,
+            ),
+            (
+                'r"assertEquals\\((?:26|27|28|29|30|31|32|33|34),\\s*BuildConfig\\.VERSION_CODE\\)"',
+                'r"assertEquals\\((?:26|27|28|29|30|31|32|33|34|35),\\s*BuildConfig\\.VERSION_CODE\\)"',
+                1,
+            ),
+            (
+                "        reviewed_test_sha256 = (\n"
+                "            REVIEWED_CODE30_1_FEATURE_SHA256.get(path)\n",
+                "        reviewed_test_sha256 = (\n"
+                "            REVIEWED_CODE30_1_RELEASE_TEST_SHA256.get(path)\n"
+                "            or REVIEWED_CODE30_1_FEATURE_SHA256.get(path)\n",
+                1,
+            ),
+            (
+                code30_1_exact_loop,
+                code30_1_exact_loop + code30_1_release_test_exact_loop,
+                1,
+            ),
+        ),
+    )
     _assert_exact_text(
         "scripts/verify_code26_regression_freeze.py",
         _current("scripts/verify_code26_regression_freeze.py"),
@@ -1551,6 +1615,53 @@ def test_freeze_extensions_and_historical_guards_are_exact() -> None:
             ),
         ),
     )
+    code30_1_retry_identity_test = (
+        "def test_code30_point1_retry_build35_identity_normalises_to_inherited_code25_baseline() -> None:\n"
+        '    path = "android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt"\n'
+        "    current = 'assertEquals(35, BuildConfig.VERSION_CODE)\\n\"3.1.27\"\\ncode 30.1 artifact\\n'\n"
+        "    assert _normalise_release_identity(path, current) == (\n"
+        "        'assertEquals(25, BuildConfig.VERSION_CODE)\\n\"3.1.14\"\\ncode 25 artifact\\n'\n"
+        "    )\n\n\n"
+    )
+    code30_1_release_test_guard = (
+        "@pytest.mark.parametrize(\n"
+        '    ("path", "expected_sha256"), REVIEWED_CODE30_1_RELEASE_TEST_SHA256.items()\n'
+        ")\n"
+        "def test_code30_point1_release_tests_require_exact_reviewed_bytes(\n"
+        "    path: str,\n"
+        "    expected_sha256: str,\n"
+        ") -> None:\n"
+        "    current = (ROOT / path).read_bytes()\n"
+        "    assert hashlib.sha256(current).hexdigest() == expected_sha256\n"
+        '    assert hashlib.sha256(current + b"\\n").hexdigest() != expected_sha256\n\n\n'
+    )
+    expected_test = _replace_exact(
+        expected_test,
+        (
+            (
+                "    REVIEWED_CODE30_1_FEATURE_SHA256,\n",
+                "    REVIEWED_CODE30_1_FEATURE_SHA256,\n"
+                "    REVIEWED_CODE30_1_RELEASE_TEST_SHA256,\n",
+                1,
+            ),
+            (
+                code30_1_identity_test
+                + "def test_pos_notice_dynamic_state_host_normalises_only_the_approved_bytes() -> None:\n",
+                code30_1_identity_test
+                + code30_1_retry_identity_test
+                + "def test_pos_notice_dynamic_state_host_normalises_only_the_approved_bytes() -> None:\n",
+                1,
+            ),
+            (
+                code30_1_guard_test
+                + "def test_audit_reader_migration_only_normalises_one_locator() -> None:\n",
+                code30_1_guard_test
+                + code30_1_release_test_guard
+                + "def test_audit_reader_migration_only_normalises_one_locator() -> None:\n",
+                1,
+            ),
+        ),
+    )
     _assert_exact_text(freeze_test_path, _current(freeze_test_path), expected_test)
 
     assert hashlib.sha256(
@@ -1648,6 +1759,11 @@ def test_reviewed_code30_point1_feature_files_are_exact() -> None:
         _assert_sha256(path, (ROOT / path).read_bytes(), expected_sha256)
 
 
+def test_reviewed_code30_point1_release_tests_are_exact() -> None:
+    for path, expected_sha256 in REVIEWED_CODE30_1_RELEASE_TEST_SHA256.items():
+        _assert_sha256(path, (ROOT / path).read_bytes(), expected_sha256)
+
+
 @pytest.mark.parametrize("path", REVIEWED_BACKEND_REFRESH_LOCK_SHA256)
 def test_reviewed_backend_refresh_lock_hash_guards_reject_mutations(path: str) -> None:
     with pytest.raises(AssertionError, match="unexpected corrected Code 29 content"):
@@ -1730,6 +1846,18 @@ def test_reviewed_code30_point1_feature_hash_guards_reject_mutations(path: str) 
         )
 
 
+@pytest.mark.parametrize("path", REVIEWED_CODE30_1_RELEASE_TEST_SHA256)
+def test_reviewed_code30_point1_release_test_hash_guards_reject_mutations(
+    path: str,
+) -> None:
+    with pytest.raises(AssertionError, match="unexpected corrected Code 29 content"):
+        _assert_sha256(
+            path,
+            (ROOT / path).read_bytes() + b"\n",
+            REVIEWED_CODE30_1_RELEASE_TEST_SHA256[path],
+        )
+
+
 def test_operator_records_are_frozen_and_trial_precedes_production() -> None:
     for path, expected_sha256 in OPERATOR_RECORD_SHA256.items():
         assert hashlib.sha256((ROOT / path).read_bytes()).hexdigest() == expected_sha256
@@ -1767,7 +1895,7 @@ def test_operator_records_are_frozen_and_trial_precedes_production() -> None:
     [
         ("infra/scripts/install-on-vm.sh", "%f:%d:%i", "%F:%d:%i"),
         (".github/workflows/ci.yml", "sudo -n --", "sudo --"),
-        ("backend/app/__init__.py", '"3.1.26"', '"3.1.26-mutated"'),
+        ("backend/app/__init__.py", '"3.1.27"', '"3.1.27-mutated"'),
     ],
 )
 def test_live_exact_guards_reject_working_tree_mutations(

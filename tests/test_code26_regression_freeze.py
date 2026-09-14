@@ -10,6 +10,7 @@ from scripts.verify_code26_regression_freeze import (
     REVIEWED_CODE29_2_PRODUCTION_PATHS,
     REVIEWED_CODE29_2_TEST_SHA256,
     REVIEWED_CODE30_1_FEATURE_SHA256,
+    REVIEWED_CODE30_1_RELEASE_TEST_SHA256,
     REVIEWED_CODE30_1_PRODUCTION_PATHS,
     REVIEWED_CODE30_PRODUCTION_PATHS,
     REVIEWED_CODE30_TEST_SHA256,
@@ -113,6 +114,14 @@ def test_code30_build33_identity_normalises_to_inherited_code25_baseline() -> No
 def test_code30_point1_build34_identity_normalises_to_inherited_code25_baseline() -> None:
     path = "android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt"
     current = 'assertEquals(34, BuildConfig.VERSION_CODE)\n"3.1.26"\ncode 30.1 artifact\n'
+    assert _normalise_release_identity(path, current) == (
+        'assertEquals(25, BuildConfig.VERSION_CODE)\n"3.1.14"\ncode 25 artifact\n'
+    )
+
+
+def test_code30_point1_retry_build35_identity_normalises_to_inherited_code25_baseline() -> None:
+    path = "android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt"
+    current = 'assertEquals(35, BuildConfig.VERSION_CODE)\n"3.1.27"\ncode 30.1 artifact\n'
     assert _normalise_release_identity(path, current) == (
         'assertEquals(25, BuildConfig.VERSION_CODE)\n"3.1.14"\ncode 25 artifact\n'
     )
@@ -224,6 +233,18 @@ def test_code30_test_rewrites_require_exact_reviewed_bytes(
 
 @pytest.mark.parametrize(("path", "expected_sha256"), REVIEWED_CODE30_1_FEATURE_SHA256.items())
 def test_code30_point1_reviewed_files_require_exact_bytes(
+    path: str,
+    expected_sha256: str,
+) -> None:
+    current = (ROOT / path).read_bytes()
+    assert hashlib.sha256(current).hexdigest() == expected_sha256
+    assert hashlib.sha256(current + b"\n").hexdigest() != expected_sha256
+
+
+@pytest.mark.parametrize(
+    ("path", "expected_sha256"), REVIEWED_CODE30_1_RELEASE_TEST_SHA256.items()
+)
+def test_code30_point1_release_tests_require_exact_reviewed_bytes(
     path: str,
     expected_sha256: str,
 ) -> None:

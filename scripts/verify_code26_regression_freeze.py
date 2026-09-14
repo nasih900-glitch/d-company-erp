@@ -11,7 +11,8 @@ Code 29 adds only the reviewed POS-notice, inventory-layout, Web session,
 refresh-lock, owner-approved pricing-card, Code 29.1 packaging-label, and the
 reviewed Code29.2 customer-playtime draft. Code30 adds the reviewed saved-customer
 lookup. Code30.1 adds only the independently reviewed future-clock Stop recovery
-and rejected-session attention correction. None may delete, disable, reorder, or rewrite an existing test
+and rejected-session attention correction. Its build-35 retry changes only coordinated
+identity and two exact stale release-test fixtures. None may delete, disable, reorder, or rewrite an existing test
 outside the exact fixture-only normalization or exact reviewed-test hashes below.
 The sole reviewed audit-reader locator migration below preserves every
 credential-cleanup assertion while following the corrected UTF-8 reader.
@@ -99,6 +100,10 @@ REVIEWED_CODE30_1_FEATURE_SHA256 = {
     "android-native/app/src/test/java/cloud/dcompany/erp/core/db/GamingStopClockRecoveryPolicyTest.kt": "a191996d165e5cdb610f8a591aba585136a611a444e74c0e7603b791bc5c5fc6",
     "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/gaming/GamingRejectedSessionAttentionTest.kt": "501cd87284160a359803d5000fb77ab0c9aeaab8ea8dc6d485350b44df8b3800",
     "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/gaming/GamingStationPresentationTest.kt": "7f8a5d364aed38b56799338b07737a34aa9e76eed0b2607092815fcfc2723acd",
+}
+REVIEWED_CODE30_1_RELEASE_TEST_SHA256 = {
+    "backend/tests/unit/test_release_contracts.py": "be3895b1832adc5ece154682107195ba96bb39008f38faabcf9bd9541f18af10",
+    "backend/tests/unit/test_remote_assistance_contract.py": "6158e31cbbb74455e247ad161c9c97da844081152fd9da79dd7e8a19a2113216",
 }
 
 RELEASE_IDENTITY_TESTS = {
@@ -272,6 +277,7 @@ def _normalise_release_identity(path: str, text: str) -> str:
         return text
     normalised = text
     for current, baseline in (
+        ("3.1.27", "3.1.14"),
         ("3.1.26", "3.1.14"),
         ("3.1.25", "3.1.14"),
         ("3.1.24", "3.1.14"),
@@ -315,10 +321,10 @@ def _normalise_release_identity(path: str, text: str) -> str:
     ):
         normalised = normalised.replace(current, baseline)
     normalised = re.sub(
-        r"version_code\s*=\s*(?:26|27|28|29|30|31|32|33|34)\b", "version_code=25", normalised
+        r"version_code\s*=\s*(?:26|27|28|29|30|31|32|33|34|35)\b", "version_code=25", normalised
     )
     normalised = re.sub(
-        r"assertEquals\((?:26|27|28|29|30|31|32|33|34),\s*BuildConfig\.VERSION_CODE\)",
+        r"assertEquals\((?:26|27|28|29|30|31|32|33|34|35),\s*BuildConfig\.VERSION_CODE\)",
         "assertEquals(25, BuildConfig.VERSION_CODE)",
         normalised,
     )
@@ -464,7 +470,8 @@ def verify_repository(root: Path, baseline: str = CODE25_BASE) -> RegressionFree
             path, candidate_normalised
         )
         reviewed_test_sha256 = (
-            REVIEWED_CODE30_1_FEATURE_SHA256.get(path)
+            REVIEWED_CODE30_1_RELEASE_TEST_SHA256.get(path)
+            or REVIEWED_CODE30_1_FEATURE_SHA256.get(path)
             or REVIEWED_CODE30_TEST_SHA256.get(path)
             or REVIEWED_CODE29_2_TEST_SHA256.get(path)
             or REVIEWED_PRICING_TEST_SHA256.get(path)
@@ -491,6 +498,15 @@ def verify_repository(root: Path, baseline: str = CODE25_BASE) -> RegressionFree
             errors.append(f"reviewed Code30.1 file was removed: {path}")
         elif hashlib.sha256(candidate_path.read_bytes()).hexdigest() != expected_sha256:
             errors.append(f"reviewed Code30.1 file differs from its approved bytes: {path}")
+
+    for path, expected_sha256 in REVIEWED_CODE30_1_RELEASE_TEST_SHA256.items():
+        candidate_path = root / path
+        if not candidate_path.is_file():
+            errors.append(f"reviewed Code30.1 release test was removed: {path}")
+        elif hashlib.sha256(candidate_path.read_bytes()).hexdigest() != expected_sha256:
+            errors.append(
+                f"reviewed Code30.1 release test differs from its approved bytes: {path}"
+            )
 
     refresh_locking_test = root / REFRESH_LOCKING_TEST_PATH
     if not refresh_locking_test.is_file():
