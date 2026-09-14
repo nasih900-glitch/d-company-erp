@@ -522,6 +522,7 @@ interface SyncMetaDao {
         LocalRefundEntity::class,
         ReportSnapshotEntity::class,
         CustomerCacheEntity::class,
+        CustomerDirectoryStateEntity::class,
         CustomerOrderHistoryEntity::class,
         LocalCustomerEntity::class,
         LocalMenuCategoryEntity::class,
@@ -578,7 +579,7 @@ interface SyncMetaDao {
         LocalBugReportEntity::class,
         LocalBugReportAttachmentEntity::class,
     ],
-    version = 47,
+    version = 48,
     exportSchema = true,
 )
 @TypeConverters(

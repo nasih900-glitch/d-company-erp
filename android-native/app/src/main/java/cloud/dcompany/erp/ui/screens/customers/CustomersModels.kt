@@ -90,6 +90,8 @@ data class CustomerUpsertBody(
     val email: String? = null,
     val birthday: String? = null,
     val notes: String? = null,
+    @SerialName("customer_directory_revision") val customerDirectoryRevision: Long? = null,
+    @SerialName("customer_directory_company_id") val customerDirectoryCompanyId: String? = null,
 )
 
 /**

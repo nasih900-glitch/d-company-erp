@@ -62,7 +62,10 @@ async def test_delete_customer_anonymises_and_frees_the_phone(client, session, s
     assert (await client.get(
         f"/api/v1/customers/by-phone/{phone}", headers=_auth(token),
     )).json() is None
-    listed = (await client.get("/api/v1/customers", params={"q": "Test Person"}, headers=_auth(token))).json()
+    listed_response = await client.get(
+        "/api/v1/customers", params={"q": "Test Person"}, headers=_auth(token)
+    )
+    listed = listed_response.json()
     assert created["id"] not in {c["id"] for c in listed}
 
     # PII scrubbed at the row level (not just filtered out of the API).
@@ -76,7 +79,16 @@ async def test_delete_customer_anonymises_and_frees_the_phone(client, session, s
     # The freed phone number can immediately be used by a new, unrelated customer.
     recreated = await client.post(
         "/api/v1/customers",
-        json={"phone": phone, "name": "A Different Person"},
+        json={
+            "phone": phone,
+            "name": "A Different Person",
+            "customer_directory_revision": int(
+                listed_response.headers["X-Customer-Directory-Revision"]
+            ),
+            "customer_directory_company_id": listed_response.headers[
+                "X-Customer-Directory-Company-Id"
+            ],
+        },
         headers=_auth(token),
     )
     assert recreated.status_code == 201, recreated.text

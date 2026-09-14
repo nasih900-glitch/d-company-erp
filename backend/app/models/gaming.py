@@ -92,6 +92,8 @@ class GamingSession(Base, TimestampMixin, TenantMixin):
     customer_identity_provenance: Mapped[str] = mapped_column(
         String(20), default="historical", server_default="historical", nullable=False
     )
+    # Immutable server-issued deletion generation captured by Start.
+    customer_directory_revision: Mapped[int | None] = mapped_column(BigInteger)
     opened_by: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )

@@ -7,6 +7,29 @@ import retrofit2.http.PATCH
 import retrofit2.http.POST
 import retrofit2.http.Path
 import retrofit2.http.Query
+import retrofit2.Response
+
+data class CustomerDirectorySnapshot(
+    val customers: List<Customer>,
+    val companyId: String,
+    val deletionRevision: Long,
+)
+
+fun Response<List<Customer>>.requireCustomerDirectorySnapshot(
+    expectedCompanyId: String,
+): CustomerDirectorySnapshot {
+    check(isSuccessful) { "Customer directory refresh failed (${code()})." }
+    val customers = requireNotNull(body()) { "Customer directory response was empty." }
+    val companyId = headers()["X-Customer-Directory-Company-Id"]
+    check(companyId == expectedCompanyId) { "Customer directory response belongs to another company." }
+    val revisionText = headers()["X-Customer-Directory-Revision"]
+    check(revisionText != null && revisionText.matches(Regex("0|[1-9][0-9]*"))) {
+        "Customer directory response has no valid revision."
+    }
+    val revision = revisionText.toLongOrNull()
+    check(revision != null && revision >= 0L) { "Customer directory revision is out of range." }
+    return CustomerDirectorySnapshot(customers, companyId, revision)
+}
 
 /**
  * Endpoints from backend/app/api/v1/customers/router.py.
@@ -24,7 +47,7 @@ interface CustomersApi {
     suspend fun list(
         @Query("q") q: String? = null,
         @Query("limit") limit: Int = 200,
-    ): List<Customer>
+    ): Response<List<Customer>>
 
     @POST("customers")
     suspend fun upsert(

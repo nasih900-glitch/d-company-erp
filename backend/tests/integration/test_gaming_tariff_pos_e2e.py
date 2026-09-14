@@ -42,7 +42,9 @@ from app.services.gaming.tariff_catalog import (
 
 
 def _require_isolated_gaming_database(database_name: str, *, in_ci: bool) -> None:
-    if database_name.startswith("dcompany_pricing_patch_") or database_name in {
+    if database_name.startswith(
+        ("dcompany_pricing_patch_", "dcompany_physical_audit_code30_crossuser_")
+    ) or database_name in {
         "dcompany_code22_audit_20260903",
         "dcompany_audit_test",
         # Both GitHub workflows create this disposable PostgreSQL service DB.
@@ -1300,6 +1302,174 @@ async def test_other_co_owner_can_finish_cash_upi_and_close_without_audit_access
     assert [int(order.total_minor) for order in orders] == [10_000, 25_000]
     assert [payment.method for payment in payments] == ["cash", "upi"]
     assert all(payment.recorded_by == co_owner.id for payment in payments)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_non_protected_manager_finishes_another_users_session_bill_and_shift(
+    client,
+    session,
+    seed_owner,
+) -> None:
+    """Routine operations follow permissions while preserving every actor."""
+    seed_owner["company"].gstin = "32AAAAA0000A1Z5"
+    seed_owner["branch"].state_code = "32"
+    await session.commit()
+    packages = await _install_tariff(session, seed_owner)
+    owner_token = await _login(
+        client,
+        email=seed_owner["owner"].email,
+        password=seed_owner["password"],
+    )
+    owner_shift_id = await _open_shift(
+        client,
+        seed_owner,
+        owner_token,
+        opening_float=50_000,
+    )
+    manager, manager_password = await _create_role_user(
+        session,
+        seed_owner,
+        role_code="manager",
+        name="Cross-user operations manager",
+    )
+    manager_token = await _login(
+        client,
+        email=manager.email,
+        password=manager_password,
+    )
+    identity = await client.get(
+        "/api/v1/auth/me",
+        headers=_headers(seed_owner, manager_token),
+    )
+    assert identity.status_code == 200, identity.text
+    assert identity.json()["roles"] == ["manager"]
+    assert identity.json()["protected_access"] is False
+    assert {
+        "gaming.write",
+        "pos.write",
+        "pos.shift.open",
+        "pos.shift.close",
+    }.issubset(identity.json()["effective_permissions"])
+
+    station = _station(seed_owner, "ps5", 91)
+    session.add(station)
+    await session.commit()
+    base = packages["standard-single-session-30m"]
+    extension = packages["standard-single-extension-30m"]
+
+    started = await client.post(
+        "/api/v1/gaming/sessions/start",
+        json=_start_payload(
+            station_id=station.id,
+            shift_id=owner_shift_id,
+            package=base,
+            player_count=1,
+        ),
+        headers=_headers(seed_owner, owner_token, key=f"cross-user-start:{uuid4()}"),
+    )
+    assert started.status_code == 201, started.text
+    assert started.json()["amount_minor"] == 8_000
+    assert started.json()["timer_minutes"] == 30
+
+    extension_key = f"cross-user-extension:{uuid4()}"
+    extension_payload = {
+        "package_id": str(extension.id),
+        "expected_timer_minutes": 30,
+        "expected_amount_minor": 8_000,
+        "expected_package_price_minor": 6_000,
+        "expected_package_duration_minutes": 30,
+        "expected_package_variant": "single",
+    }
+    extended = await client.post(
+        f"/api/v1/gaming/sessions/{started.json()['id']}/extend",
+        json=extension_payload,
+        headers=_headers(seed_owner, manager_token, key=extension_key),
+    )
+    assert extended.status_code == 200, extended.text
+    assert extended.json()["timer_minutes"] == 60
+    assert extended.json()["amount_minor"] == 14_000
+    extension_replay = await client.post(
+        f"/api/v1/gaming/sessions/{started.json()['id']}/extend",
+        json=extension_payload,
+        headers=_headers(seed_owner, manager_token, key=extension_key),
+    )
+    assert extension_replay.status_code == 200, extension_replay.text
+    assert extension_replay.json() == extended.json()
+
+    stopped = await client.post(
+        f"/api/v1/gaming/sessions/{started.json()['id']}/stop",
+        json={},
+        headers=_headers(seed_owner, manager_token, key=f"cross-user-stop:{uuid4()}"),
+    )
+    assert stopped.status_code == 200, stopped.text
+    assert stopped.json()["status"] == "ended"
+    assert stopped.json()["amount_minor"] == 14_000
+    sent = await client.post(
+        f"/api/v1/gaming/sessions/{started.json()['id']}/send-to-pos",
+        headers=_headers(seed_owner, manager_token, key=f"cross-user-send:{uuid4()}"),
+    )
+    assert sent.status_code == 201, sent.text
+
+    _claim, payment = await _claim_and_pay(
+        client,
+        seed_owner,
+        token=manager_token,
+        order_id=sent.json()["order_id"],
+        method="cash",
+        amount_minor=14_000,
+        tendered_minor=15_000,
+    )
+    assert payment["change_minor"] == 1_000
+
+    closed = await client.post(
+        f"/api/v1/pos/shifts/{owner_shift_id}/close",
+        json={"counted_minor": 64_000},
+        headers=_headers(seed_owner, manager_token),
+    )
+    assert closed.status_code == 200, closed.text
+    assert closed.json()["opened_by"] == str(seed_owner["owner"].id)
+    assert closed.json()["closed_by"] == str(manager.id)
+    assert closed.json()["closed_by_was_opener"] is False
+
+    # Prove the direction is reversible: the manager may open the next shift,
+    # and another authorised user may close it without rewriting attribution.
+    manager_shift_id = await _open_shift(client, seed_owner, manager_token)
+    owner_closed = await client.post(
+        f"/api/v1/pos/shifts/{manager_shift_id}/close",
+        json={"counted_minor": 0},
+        headers=_headers(seed_owner, owner_token),
+    )
+    assert owner_closed.status_code == 200, owner_closed.text
+    assert owner_closed.json()["opened_by"] == str(manager.id)
+    assert owner_closed.json()["closed_by"] == str(seed_owner["owner"].id)
+
+    stored_session = (
+        await session.execute(
+            select(GamingSession)
+            .where(GamingSession.id == UUID(started.json()["id"]))
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one()
+    stored_extension = (
+        await session.execute(
+            select(GamingSessionExtension)
+            .where(GamingSessionExtension.gaming_session_id == stored_session.id)
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one()
+    stored_payment = (
+        await session.execute(
+            select(Payment)
+            .where(Payment.order_id == UUID(sent.json()["order_id"]))
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one()
+    assert stored_session.opened_by == seed_owner["owner"].id
+    assert stored_session.stopped_by == manager.id
+    assert stored_session.sent_to_pos_by == manager.id
+    assert stored_extension.created_by == manager.id
+    assert stored_payment.recorded_by == manager.id
 
 
 @pytest.mark.integration

@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from typing import Literal
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query, Response, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
@@ -36,6 +36,14 @@ from app.models import (
     Refund,
     Station,
     Table,
+)
+from app.services.customers.deletion_fence import (
+    CUSTOMER_DIRECTORY_COMPANY_HEADER,
+    CUSTOMER_DIRECTORY_REVISION_HEADER,
+    MAX_DIRECTORY_REVISION,
+    lock_customer_directory,
+    read_customer_directory_revision,
+    require_current_customer_directory,
 )
 from app.services.customers.playtime import (
     PlaytimeProgram,
@@ -83,6 +91,10 @@ class CustomerUpsert(BaseModel):
     email: str | None = Field(default=None, max_length=254)
     birthday: datetime | None = None
     notes: str | None = Field(default=None, max_length=500)
+    customer_directory_revision: int | None = Field(
+        default=None, ge=0, le=MAX_DIRECTORY_REVISION, strict=True
+    )
+    customer_directory_company_id: UUID | None = None
 
 
 class CustomerUpdate(BaseModel):
@@ -244,11 +256,17 @@ def _program(row: GamingPlaytimeProgramSettings | None) -> PlaytimeProgram:
 # ---------------------------------------------------------------- endpoints
 @router.get("", response_model=list[CustomerRead])
 async def list_customers(
+    response: Response,
     session: SessionDep,
     tenant: TenantContext = Depends(requires("pos.read")),
     q: str | None = None,
     limit: int = 100,
 ) -> list[CustomerRead]:
+    revision = await read_customer_directory_revision(
+        session, company_id=tenant.company_id
+    )
+    response.headers[CUSTOMER_DIRECTORY_REVISION_HEADER] = str(revision)
+    response.headers[CUSTOMER_DIRECTORY_COMPANY_HEADER] = str(tenant.company_id)
     stmt = (
         select(Customer)
         .where(Customer.company_id == tenant.company_id, Customer.deleted_at.is_(None))
@@ -380,11 +398,18 @@ async def get_customer_playtime(
 @router.get("/by-phone/{phone}", response_model=CustomerRead | None)
 async def get_by_phone(
     phone: str,
+    response: Response,
     session: SessionDep,
     tenant: TenantContext = Depends(requires("pos.read")),
 ) -> CustomerRead | None:
     """Quick POS lookup — returns the customer or null. Used during checkout
     to auto-fill a returning customer's name."""
+    directory_revision = await read_customer_directory_revision(
+        session,
+        company_id=tenant.company_id,
+    )
+    response.headers[CUSTOMER_DIRECTORY_REVISION_HEADER] = str(directory_revision)
+    response.headers[CUSTOMER_DIRECTORY_COMPANY_HEADER] = str(tenant.company_id)
     c = (
         await session.execute(
             select(Customer).where(
@@ -566,6 +591,13 @@ async def upsert_customer(
     """Upsert by phone — creates if new, returns existing if phone seen before.
     Lets POS just call this without worrying about whether the customer exists.
     """
+    _, fence = await lock_customer_directory(
+        session,
+        company_id=tenant.company_id,
+        captured_revision=payload.customer_directory_revision,
+        captured_company_id=payload.customer_directory_company_id,
+    )
+    require_current_customer_directory(fence)
     existing = (
         await session.execute(
             select(Customer).where(
@@ -636,8 +668,21 @@ async def update_customer(
     session: SessionDep,
     tenant: TenantContext = Depends(requires("pos.write")),
 ) -> CustomerRead:
-    c = await session.get(Customer, customer_id)
-    if not c or c.company_id != tenant.company_id or c.deleted_at:
+    await lock_customer_directory(
+        session, company_id=tenant.company_id, captured_revision=None
+    )
+    c = (
+        await session.execute(
+            select(Customer)
+            .where(
+                Customer.id == customer_id,
+                Customer.company_id == tenant.company_id,
+                Customer.deleted_at.is_(None),
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if not c:
         raise NotFoundError("customer not found")
     if payload.phone is not None and payload.phone != c.phone:
         # Updated in place, by ID — never by the upsert-by-phone POST route
@@ -684,8 +729,24 @@ async def delete_customer(
     it immediately frees up for a new customer — see the partial unique
     index in the customers migration.
     """
-    c = await session.get(Customer, customer_id)
-    if not c or c.company_id != tenant.company_id or c.deleted_at:
+    state, _ = await lock_customer_directory(
+        session,
+        company_id=tenant.company_id,
+        captured_revision=None,
+        shared=False,
+    )
+    c = (
+        await session.execute(
+            select(Customer)
+            .where(
+                Customer.id == customer_id,
+                Customer.company_id == tenant.company_id,
+                Customer.deleted_at.is_(None),
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if not c:
         raise NotFoundError("customer not found")
     c.deleted_at = datetime.now(timezone.utc)
     c.name = None
@@ -694,3 +755,4 @@ async def delete_customer(
     c.notes = None
     # phone is String(20) — "deleted-" (8) + 12 hex chars fits exactly.
     c.phone = f"deleted-{uuid4().hex[:12]}"
+    state.deletion_revision += 1

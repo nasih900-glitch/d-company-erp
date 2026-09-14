@@ -34,6 +34,10 @@ export interface PosCheckoutSnapshot {
   deliveryStateCode: string;
   customerName: string;
   customerPhone: string;
+  /** True even when a legacy action deliberately captured no revision. */
+  customerDirectoryEvidenceCaptured: true;
+  customerDirectoryRevision?: number;
+  customerDirectoryCompanyId?: string;
 }
 
 export interface PosCheckoutRetry {
@@ -294,6 +298,16 @@ function normalizeSnapshot(value: unknown): PosCheckoutSnapshot | undefined {
   }
   if (value.customerName !== undefined && typeof value.customerName !== 'string') return undefined;
   if (value.customerPhone !== undefined && typeof value.customerPhone !== 'string') return undefined;
+  const revision = value.customerDirectoryRevision;
+  const companyId = nonEmptyString(value.customerDirectoryCompanyId);
+  if (revision !== undefined && (!Number.isSafeInteger(revision) || (revision as number) < 0)) {
+    return undefined;
+  }
+  if ((revision === undefined) !== (companyId === undefined)) return undefined;
+  if (
+    value.customerDirectoryEvidenceCaptured !== undefined
+    && value.customerDirectoryEvidenceCaptured !== true
+  ) return undefined;
   return {
     shiftId,
     cart,
@@ -302,6 +316,11 @@ function normalizeSnapshot(value: unknown): PosCheckoutSnapshot | undefined {
     deliveryStateCode: typeof value.deliveryStateCode === 'string' ? value.deliveryStateCode : '32',
     customerName: typeof value.customerName === 'string' ? value.customerName : '',
     customerPhone: typeof value.customerPhone === 'string' ? value.customerPhone : '',
+    // Older persisted retries have no evidence. Preserve that absence so an
+    // upgrade cannot relabel an old action with today's revision.
+    customerDirectoryEvidenceCaptured: true,
+    ...(revision !== undefined ? { customerDirectoryRevision: revision as number } : {}),
+    ...(companyId ? { customerDirectoryCompanyId: companyId } : {}),
   };
 }
 

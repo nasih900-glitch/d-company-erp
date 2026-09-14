@@ -26,6 +26,13 @@ import java.util.UUID
 /** Prefix marking a [Customer.id] as a still-unsynced local create, not a real server id. */
 private const val LOCAL_PREFIX = "local:"
 
+internal fun newCustomerActionToken(): String = UUID.randomUUID().toString()
+
+internal fun LocalCustomerEntity.rearmedForRetry(): LocalCustomerEntity = copy(
+    state = CustomerWriteState.PENDING,
+    lastError = null,
+)
+
 /** Draft of the add/edit form. `id == null` means "new customer". */
 data class CustomerEditor(
     val id: String? = null,
@@ -313,13 +320,7 @@ class CustomersViewModel : ViewModel() {
             var queued = false
             if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
                     db.customerDao().getLocal(localId)?.let { row ->
-                        db.customerDao().upsertLocal(
-                            row.copy(
-                                state = CustomerWriteState.PENDING,
-                                lastError = null,
-                                version = row.version + 1,
-                            ),
-                        )
+                        db.customerDao().upsertLocal(row.rearmedForRetry())
                         queued = true
                     }
                 }
@@ -386,6 +387,7 @@ class CustomersViewModel : ViewModel() {
                 var selectedAfterSave: String? = null
                 var missingDraft = false
                 if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                        val directoryState = dao.directoryState(scopeLease.scope.companyId)
                         when {
                             ed.isNew -> {
                                 val local = LocalCustomerEntity(
@@ -397,6 +399,9 @@ class CustomersViewModel : ViewModel() {
                                     birthday = ed.birthday?.asUtcInstantString(),
                                     notes = ed.notes.trim().ifBlank { null },
                                     createdAtMillis = now,
+                                    clientActionToken = newCustomerActionToken(),
+                                    customerDirectoryRevision = directoryState?.deletionRevision,
+                                    customerDirectoryCompanyId = directoryState?.companyId,
                                 )
                                 dao.upsertLocal(local)
                                 selectedAfterSave = local.phone
@@ -416,6 +421,7 @@ class CustomersViewModel : ViewModel() {
                                         state = CustomerWriteState.PENDING,
                                         lastError = null,
                                         version = existing.version + 1,
+                                        clientActionToken = newCustomerActionToken(),
                                     )
                                     dao.upsertLocal(amended)
                                     selectedAfterSave = amended.phone
@@ -440,6 +446,7 @@ class CustomersViewModel : ViewModel() {
                                     state = CustomerWriteState.PENDING,
                                     lastError = null,
                                     version = (existingPending?.version ?: -1) + 1,
+                                    clientActionToken = newCustomerActionToken(),
                                 )
                                 dao.upsertLocal(local)
                                 selectedAfterSave = phoneToSend ?: ed.originalPhone

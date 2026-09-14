@@ -62,6 +62,27 @@ class Customer(Base, TimestampMixin, SoftDeleteMixin, TenantMixin):
     notes: Mapped[str | None] = mapped_column(String(500))
 
 
+class CustomerDirectoryState(Base):
+    """PII-free tenant generation advanced by every customer deletion."""
+
+    __tablename__ = "customer_directory_state"
+    __table_args__ = (
+        CheckConstraint(
+            "deletion_revision >= 0",
+            name="ck_customer_directory_state_nonnegative_revision",
+        ),
+    )
+
+    company_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("companies.id", ondelete="RESTRICT"),
+        primary_key=True,
+    )
+    deletion_revision: Mapped[int] = mapped_column(
+        BigInteger, default=0, server_default="0", nullable=False
+    )
+
+
 class GamingPlaytimeProgramSettings(Base, TimestampMixin, TenantMixin):
     """Company-scoped proposal; it cannot activate rewards or messaging."""
 

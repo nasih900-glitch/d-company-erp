@@ -61,6 +61,108 @@ class MigrationTest {
     }
 
     @Test
+    fun migrate47To48PreservesQueuesAndAddsTenantDirectoryEvidence() {
+        helper.createDatabase(dbName, 47).apply {
+            execSQL(
+                "INSERT INTO local_customers " +
+                    "(localId, phone, name, createdAtMillis, state, version) VALUES " +
+                    "('customer-action', '9876543210', 'Amina', 1000, 'pending', 7)",
+            )
+            execSQL(
+                "INSERT INTO local_gaming_sessions " +
+                    "(localId, stationId, shiftId, customerName, customerPhone, startedAtMillis, " +
+                    "state, status, extraControllers) VALUES " +
+                    "('gaming-action', 'station-1', 'shift-1', 'Amina', '9876543210', 1000, " +
+                    "'start_pending', 'starting', 0)",
+            )
+            execSQL(
+                "INSERT INTO local_orders " +
+                    "(localId, shiftId, type, customerName, customerPhone, estimateMinor, " +
+                    "paymentMethod, tenderedMinor, tipMinor, createdAtMillis, syncState) VALUES " +
+                    "('order-action', 'shift-1', 'takeaway', 'Amina', '9876543210', 1000, " +
+                    "'cash', 1000, 0, 1000, 'pending')",
+            )
+            close()
+        }
+
+        val migrated = helper.runMigrationsAndValidate(dbName, 48, true, MIGRATION_47_48)
+        for ((table, id) in listOf(
+            "local_customers" to "customer-action",
+            "local_gaming_sessions" to "gaming-action",
+            "local_orders" to "order-action",
+        )) {
+            migrated.query(
+                "SELECT customerDirectoryRevision, customerDirectoryCompanyId FROM $table " +
+                    "WHERE localId = '$id'",
+            ).use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertTrue(cursor.isNull(0))
+                assertTrue(cursor.isNull(1))
+            }
+        }
+        migrated.query(
+            "SELECT localId, phone, name, createdAtMillis, state, version, clientActionToken, " +
+                "customerDirectoryRevision, customerDirectoryCompanyId FROM local_customers " +
+                "WHERE localId = 'customer-action'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("customer-action", cursor.getString(0))
+            assertEquals("9876543210", cursor.getString(1))
+            assertEquals("Amina", cursor.getString(2))
+            assertEquals(1000L, cursor.getLong(3))
+            assertEquals("pending", cursor.getString(4))
+            assertEquals(7L, cursor.getLong(5))
+            assertTrue(cursor.isNull(6))
+            assertTrue(cursor.isNull(7))
+            assertTrue(cursor.isNull(8))
+        }
+        migrated.query(
+            "SELECT localId, stationId, shiftId, customerName, customerPhone, startedAtMillis, " +
+                "state, status, extraControllers FROM local_gaming_sessions " +
+                "WHERE localId = 'gaming-action'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("gaming-action", cursor.getString(0))
+            assertEquals("station-1", cursor.getString(1))
+            assertEquals("shift-1", cursor.getString(2))
+            assertEquals("Amina", cursor.getString(3))
+            assertEquals("9876543210", cursor.getString(4))
+            assertEquals(1000L, cursor.getLong(5))
+            assertEquals("start_pending", cursor.getString(6))
+            assertEquals("starting", cursor.getString(7))
+            assertEquals(0, cursor.getInt(8))
+        }
+        migrated.query(
+            "SELECT localId, shiftId, type, customerName, customerPhone, estimateMinor, " +
+                "paymentMethod, tenderedMinor, tipMinor, createdAtMillis, syncState " +
+                "FROM local_orders WHERE localId = 'order-action'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("order-action", cursor.getString(0))
+            assertEquals("shift-1", cursor.getString(1))
+            assertEquals("takeaway", cursor.getString(2))
+            assertEquals("Amina", cursor.getString(3))
+            assertEquals("9876543210", cursor.getString(4))
+            assertEquals(1000L, cursor.getLong(5))
+            assertEquals("cash", cursor.getString(6))
+            assertEquals(1000L, cursor.getLong(7))
+            assertEquals(0L, cursor.getLong(8))
+            assertEquals(1000L, cursor.getLong(9))
+            assertEquals("pending", cursor.getString(10))
+        }
+        migrated.execSQL(
+            "INSERT INTO customer_directory_state (companyId, deletionRevision) VALUES ('company-1', 503)",
+        )
+        migrated.query(
+            "SELECT deletionRevision FROM customer_directory_state WHERE companyId = 'company-1'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(503L, cursor.getLong(0))
+        }
+        migrated.close()
+    }
+
+    @Test
     fun migrate1To2_preservesExistingDataAndAddsLocalShifts() {
         // Seed a v1 database with real rows — the migration is additive-only
         // (CREATE TABLE, no ALTER against menu_items/local_orders/etc), but

@@ -37,7 +37,7 @@ Live at: <https://dcompany.duckdns.org>
 | **Frontend** | React 18, TypeScript strict, Vite, TailwindCSS, React Router (Hash router), axios, React Query, Recharts |
 | **Deploy** | Docker Compose · Caddy reverse proxy (auto-HTTPS via Let's Encrypt) · DigitalOcean or any VM |
 | **Domain** | `dcompany.duckdns.org` (DuckDNS, free) |
-| **DB migrations** | Alembic — current production-candidate head `0072` |
+| **DB migrations** | Alembic — current production-candidate head `0073` |
 | **Tax engine** | India GST · Kerala intra-state CGST+SGST · Section 9(5) for delivery aggregators · FY April→March |
 
 ---
@@ -109,7 +109,7 @@ backend/
       email/mailer.py                SMTP mailer (env-driven)
     workers/
       daily_pnl.py                   Cron-target for 8am IST P&L email
-  alembic/versions/                  migrations chained through current head 0072
+  alembic/versions/                  migrations chained through current head 0073
   scripts/seed.py                    Idempotent seed (company, accounts, ingredients, tiers)
   tests/                             full pytest unit + integration suite
   entrypoint.sh                      Runs alembic + seed + uvicorn

@@ -64,6 +64,10 @@ from app.models import (
     Terminal,
     User,
 )
+from app.services.customers.deletion_fence import (
+    MAX_DIRECTORY_REVISION,
+    lock_customer_directory,
+)
 from app.services.customers.identity import (
     get_selected_gaming_customer,
     resolve_gaming_customer,
@@ -148,6 +152,10 @@ class SessionStart(BaseModel):
     started_at: datetime | None = None
     customer_name: str | None = Field(default=None, max_length=200)
     customer_phone: str | None = Field(default=None, max_length=20)
+    customer_directory_revision: int | None = Field(
+        default=None, ge=0, le=MAX_DIRECTORY_REVISION, strict=True
+    )
+    customer_directory_company_id: UUID | None = None
     # A fixed-price base package (see GET /gaming/packages) — locks in the
     # price immediately and sets timer_minutes from the package's duration.
     # Omit for the legacy open-ended flow (billed by elapsed time at the
@@ -2528,6 +2536,13 @@ async def start_session(
     elif payload.extra_controllers or payload.player_count is not None:
         raise BusinessRuleError("player_count and extra_controllers require a package_id")
 
+    _, directory_fence = await lock_customer_directory(
+        session,
+        company_id=tenant.company_id,
+        captured_revision=payload.customer_directory_revision,
+        captured_company_id=payload.customer_directory_company_id,
+    )
+    directory_revision: int | None = directory_fence.revision_to_persist
     if payload.customer_id is not None:
         customer = await get_selected_gaming_customer(
             session,
@@ -2540,11 +2555,15 @@ async def start_session(
         customer_name = customer.name
         customer_phone = customer.phone
     else:
-        customer = await resolve_gaming_customer(
-            session,
-            company_id=tenant.company_id,
-            phone=payload.customer_phone,
-            name=payload.customer_name,
+        customer = (
+            await resolve_gaming_customer(
+                session,
+                company_id=tenant.company_id,
+                phone=payload.customer_phone,
+                name=payload.customer_name,
+            )
+            if directory_fence.allows_identity_mutation
+            else None
         )
         customer_name = payload.customer_name
         customer_phone = payload.customer_phone
@@ -2574,6 +2593,7 @@ async def start_session(
         customer_identity_provenance=(
             "start_linked" if customer is not None else "start_unlinked"
         ),
+        customer_directory_revision=directory_revision,
         timer_minutes=timer_minutes,
         tax_rate=station.tax_rate,
         sac_code=station.sac_code,
@@ -5346,6 +5366,7 @@ async def _create_session_pos_order(
         customer_name=gaming_session.customer_name,
         customer_phone=gaming_session.customer_phone,
         customer_id=customer_id,
+        customer_directory_revision=gaming_session.customer_directory_revision,
         notes=f"{station.name} — {note}",
     )
     session.add(order)

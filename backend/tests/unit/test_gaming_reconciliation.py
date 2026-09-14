@@ -147,6 +147,7 @@ def _gaming_session(tenant: TenantContext, station, source_shift, **overrides):
         "customer_name": "Cafe Guest",
         "customer_phone": None,
         "customer_id": None,
+        "customer_directory_revision": None,
         "tax_rate": 0.18,
         "sac_code": "999692",
         "rate_includes_tax": True,

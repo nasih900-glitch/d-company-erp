@@ -56,6 +56,8 @@ import cloud.dcompany.erp.ui.screens.configuredUnitPriceMinor
 import cloud.dcompany.erp.ui.WorkspaceFeatureProfiles
 import cloud.dcompany.erp.ui.screens.customers.Customer
 import cloud.dcompany.erp.ui.screens.customers.CustomersApi
+import cloud.dcompany.erp.ui.screens.customers.requireCustomerDirectorySnapshot
+import cloud.dcompany.erp.core.db.CustomerDirectoryStateEntity
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -1207,7 +1209,8 @@ class GamingViewModel : ViewModel() {
                             write = {},
                         )
                     ) return@withLock
-                    val rows = customersApi.list(q = query, limit = 50)
+                    val snapshot = customersApi.list(q = query, limit = 50)
+                        .requireCustomerDirectorySnapshot(lease.scope.companyId)
                     if (!isCurrentGamingCustomerSearch(generation, customerSearchGeneration)) return@withLock
                     appCtx.cacheIsolation.commitIfCurrentOrNotifyStale(
                         lease = lease,
@@ -1218,7 +1221,17 @@ class GamingViewModel : ViewModel() {
                         }
                         // A query subset augments the scoped offline cache. It must
                         // never wholesale-replace the first-page cache.
-                        db.customerDao().upsertCache(rows.map { it.toGamingCacheEntity() })
+                        db.withTransaction {
+                            db.customerDao().upsertCache(
+                                snapshot.customers.map { it.toGamingCacheEntity() },
+                            )
+                            db.customerDao().upsertDirectoryState(
+                                CustomerDirectoryStateEntity(
+                                    snapshot.companyId,
+                                    snapshot.deletionRevision,
+                                ),
+                            )
+                        }
                     }
                 }
             } catch (cancelled: CancellationException) {
@@ -1441,6 +1454,11 @@ class GamingViewModel : ViewModel() {
                     onStale = { error.value = gamingStartWorkspaceUnavailableMessage(station.name) },
                 ) {
                     db.withTransaction {
+                        val directoryState = if (customerId == null && !phone.isNullOrBlank()) {
+                            db.customerDao().directoryState(scopeLease.scope.companyId)
+                        } else {
+                            null
+                        }
                         if (currentState.activeShiftAllowsQueuedStart) {
                             val pendingShift = db.shiftDao().byLocalId(shift)
                             if (pendingShift == null || pendingShift.state !in setOf(
@@ -1467,6 +1485,8 @@ class GamingViewModel : ViewModel() {
                                 customerId = customerId,
                                 customerName = name?.trim()?.takeIf { it.isNotEmpty() },
                                 customerPhone = phone?.trim()?.takeIf { it.isNotEmpty() },
+                                customerDirectoryRevision = directoryState?.deletionRevision,
+                                customerDirectoryCompanyId = directoryState?.companyId,
                                 timerMinutes = capturedTimerMinutes,
                                 ratePerHourMinor = station.ratePerHourMinor,
                                 packageId = selectedPackage?.id,

@@ -13,6 +13,7 @@ from sqlalchemy import select
 from app.api.v1.pos.router import _upsert_and_attach_customer
 from app.core.db import AsyncSessionLocal
 from app.models import Company, Customer, GamingSession, Order, Payment, Shift, Station
+from app.services.customers.deletion_fence import CustomerDirectoryFence
 from app.services.customers.identity import resolve_gaming_customer
 
 
@@ -76,6 +77,10 @@ async def test_resolver_reuses_formatted_phone_and_never_reuses_deleted_identity
         name="New owner of phone",
         order=SimpleNamespace(customer_id=original.id),
         at=datetime.now(UTC),
+        directory_fence=CustomerDirectoryFence(
+            current_revision=0,
+            captured_revision=0,
+        ),
     )
     assert settled is None
     assert replacement.visit_count == 0

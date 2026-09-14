@@ -20,6 +20,7 @@ import cloud.dcompany.erp.core.auth.authorizeAction
 import cloud.dcompany.erp.core.auth.commitIfCurrentOrNotifyStale
 import cloud.dcompany.erp.core.db.HeldOrderCacheEntity
 import cloud.dcompany.erp.core.db.CustomerCacheEntity
+import cloud.dcompany.erp.core.db.CustomerDirectoryStateEntity
 import cloud.dcompany.erp.core.db.CanonicalReceiptSyncStateEntity
 import cloud.dcompany.erp.core.db.HeldOrderPaymentState
 import cloud.dcompany.erp.core.db.LocalHeldOrderPaymentEntity
@@ -82,6 +83,28 @@ import java.util.UUID
 
 /** Direct tablet carts are counter sales; table and gaming workflows retain their own server types. */
 internal const val DIRECT_COUNTER_SALE_ORDER_TYPE = "takeaway"
+
+internal data class DraftCustomerDirectoryEvidence(
+    val revision: Long?,
+    val companyId: String?,
+)
+
+internal fun LocalOrderEntity.customerDirectoryEvidenceForUpdate(
+    updatedCustomerName: String?,
+    updatedCustomerPhone: String?,
+    freshDirectoryState: CustomerDirectoryStateEntity?,
+): DraftCustomerDirectoryEvidence = when {
+    updatedCustomerPhone == null -> DraftCustomerDirectoryEvidence(null, null)
+    updatedCustomerName == customerName && updatedCustomerPhone == customerPhone ->
+        DraftCustomerDirectoryEvidence(
+            customerDirectoryRevision,
+            customerDirectoryCompanyId,
+        )
+    else -> DraftCustomerDirectoryEvidence(
+        freshDirectoryState?.deletionRevision,
+        freshDirectoryState?.companyId,
+    )
+}
 
 data class PreparedHeldCheckout(
     val orderId: String,
@@ -436,9 +459,9 @@ data class PosUiState(
      * say "close", not whenever the network happens to confirm it.
      */
     val activeShiftId: String? = null,
-    /** Direct collection is opener-owned; protected owners may override. */
+    /** Routine billing is shared by verified users who hold current POS write access. */
     val canCollectPayment: Boolean = false,
-    /** Non-null when a server/local shift exists but this profile cannot collect it. */
+    /** Non-null when a server/local shift exists but this profile cannot be verified. */
     val shiftAccessMessage: String? = null,
     /**
      * Orders waiting to be paid at this till — a table's "Send to POS", or
@@ -766,8 +789,8 @@ class PosViewModel : ViewModel() {
             online = net.first,
             syncing = net.second,
             activeShiftId = resolved?.shiftId,
-            canCollectPayment = resolved?.canManageMoney(actor) == true,
-            shiftAccessMessage = resolved?.moneyAccessMessage(actor),
+            canCollectPayment = resolved?.canBill(actor) == true,
+            shiftAccessMessage = resolved?.billingAccessMessage(actor),
             pendingCount = queue.pendingCount + pendingHeldPayments,
             rejectedCount = queue.rejected.size + rejectedHeldPayments,
             rejectedDirectSales = queue.rejected.map { row ->
@@ -1151,10 +1174,24 @@ class PosViewModel : ViewModel() {
                     lease = scopeLease,
                     onStale = { notice.value = POS_CART_WORKSPACE_UNAVAILABLE_MESSAGE },
                 ) {
+                    val normalizedName = customerName?.trim()?.takeIf(String::isNotEmpty)
+                    val normalizedPhone = customerPhone?.filter(Char::isDigit)?.takeIf(String::isNotEmpty)
+                    val customerIdentityChanged = normalizedName != current.order.customerName ||
+                        normalizedPhone != current.order.customerPhone
+                    val directoryState = normalizedPhone
+                        ?.takeIf { customerIdentityChanged }
+                        ?.let { db.customerDao().directoryState(scopeLease.scope.companyId) }
+                    val directoryEvidence = current.order.customerDirectoryEvidenceForUpdate(
+                        updatedCustomerName = normalizedName,
+                        updatedCustomerPhone = normalizedPhone,
+                        freshDirectoryState = directoryState,
+                    )
                     db.orderDao().saveDraft(
                         current.order.copy(
-                            customerName = customerName?.trim()?.takeIf(String::isNotEmpty),
-                            customerPhone = customerPhone?.filter(Char::isDigit)?.takeIf(String::isNotEmpty),
+                            customerName = normalizedName,
+                            customerPhone = normalizedPhone,
+                            customerDirectoryRevision = directoryEvidence.revision,
+                            customerDirectoryCompanyId = directoryEvidence.companyId,
                             orderNote = orderNote?.trim()?.takeIf(String::isNotEmpty),
                             manualDiscountMinor = manualDiscountMinor,
                             revision = current.order.revision + 1,
@@ -1349,6 +1386,8 @@ class PosViewModel : ViewModel() {
                                 },
                                 customerName = local.customerName,
                                 customerPhone = local.customerPhone,
+                                customerDirectoryRevision = local.customerDirectoryRevision,
+                                customerDirectoryCompanyId = local.customerDirectoryCompanyId,
                                 notes = local.orderNote,
                             ),
                             idempotencyKey = "order:${local.localId}",
@@ -3044,9 +3083,9 @@ class PosViewModel : ViewModel() {
         val actor = app.shiftCache.profile.value?.let {
             ShiftActor(it.userId, it.protectedAccess)
         }
-        if (!resolved.canManageMoney(actor)) {
-            notice.value = resolved.moneyAccessMessage(actor)
-                ?: "Only the shift opener or a protected owner can collect POS payment."
+        if (!resolved.canBill(actor)) {
+            notice.value = resolved.billingAccessMessage(actor)
+                ?: "The signed-in employee could not be verified for POS billing."
             return null
         }
         return resolved.shiftId

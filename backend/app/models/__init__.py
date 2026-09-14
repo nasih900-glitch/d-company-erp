@@ -15,6 +15,7 @@ from app.models.client_diagnostic import ClientDiagnosticEvent
 from app.models.client_update import AndroidRelease, ClientInstallation, ClientUpdateEvent
 from app.models.customer import (
     Customer,
+    CustomerDirectoryState,
     GamingPlaytimeProgramSettings,
     OrderLoyaltySettlement,
     PointsRedemption,
@@ -138,6 +139,7 @@ __all__ = [
     "CapitalEntry",
     "Company",
     "Customer",
+    "CustomerDirectoryState",
     "CustomerSpendReconciliation",
     "ClientInstallation",
     "ClientDiagnosticEvent",

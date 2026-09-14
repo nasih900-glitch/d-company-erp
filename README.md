@@ -102,7 +102,7 @@ d-company-erp/
 ## Release status
 
 The current local candidate is documented in
-[`docs/CODE30_RELEASE_CANDIDATE.md`](docs/CODE30_RELEASE_CANDIDATE.md). That file
+[`docs/CODE30_1_PATCH_CANDIDATE.md`](docs/CODE30_1_PATCH_CANDIDATE.md). That file
 separates source/test evidence from signing, hosted-update, physical-device, and
 production-deployment approval.
 
@@ -127,12 +127,13 @@ separately identified prototype, not another supported ERP app.
   links only to the live web ERP and verified artifacts from the official GitHub repository.
 
 Tagging a release that exactly matches the Android `versionName` triggers
-`.github/workflows/release.yml`. The current local candidate is cumulative Code30,
-technical version `3.1.25` with Android installation build `33`; Android code
-`8` remains the minimum-compatible floor. It includes the Code29.1 pricing work,
-the Code29.2 customer-playtime draft, and saved-customer lookup when starting a
-gaming session. Reward activation and WhatsApp messaging remain disabled. It is not signed,
-deployed, staged, activated, offered, installed, or approved by this source change.
+`.github/workflows/release.yml`. The current local candidate is the cumulative
+Code30.1 patch, technical version `3.1.28` with Android installation build `36`;
+Android code `8` remains the minimum-compatible floor. It contains Code30 plus
+the targeted gaming recovery, attention, customer-deletion replay and shared
+routine-operation corrections recorded in `PROJECT_STATE.md`. Reward activation
+and WhatsApp messaging remain disabled. It is not signed, deployed, staged,
+activated, offered, installed, or approved by this source change.
 The signed
 `3.1.3` (`14`) direct-release APK is a historical manually distributed,
 update-capable baseline; Code `21` (`3.1.10`) is the current signed
@@ -158,14 +159,15 @@ or offered. The `v3.1.15` attempt failed before build/signing and produced no
 authorised or distributed Code 26 artifact; its tag and evidence remain
 immutable. Code `26` (`3.1.16`) is immutable superseded candidate history under
 that narrow never-issued-identity exception. Candidate database migrations
-currently run through `0072`. The production compatibility defaults
+currently run through `0073`. The production compatibility defaults
 remain pinned until a rollout is explicitly reviewed. Any eventual artifact
 must be newly built and signed, verified against its exact SHA-256, byte size,
-package, version and expected signer, and pass a same-lineage Code 21 to Code 26
-upgrade proof. Android still requires the employee to approve installation.
+package, version and expected signer, and pass a same-lineage in-place upgrade
+from the signed Code 21 predecessor to the current candidate. Android still
+requires the employee to approve installation.
 Emulator or cloud-device evidence is not physical Redmi Pad 2 proof.
 
-See [`docs/CODE30_RELEASE_CANDIDATE.md`](docs/CODE30_RELEASE_CANDIDATE.md) for
+See [`docs/CODE30_1_PATCH_CANDIDATE.md`](docs/CODE30_1_PATCH_CANDIDATE.md) for
 the complete candidate scope, evidence boundaries, and remaining delivery gates.
 
 ## License

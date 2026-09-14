@@ -89,6 +89,11 @@ from app.models import (
     User,
 )
 from app.schemas.pos import OrderModifierSnapshotRead, OrderVariantSnapshotRead
+from app.services.customers.deletion_fence import (
+    CustomerDirectoryFence,
+    MAX_DIRECTORY_REVISION,
+    lock_customer_directory,
+)
 from app.services.gaming.billing_mode import is_package_billed
 from app.services.inventory.deduction import deduct_for_order
 from app.services.pos.shift_capture import read_opening_capture
@@ -189,6 +194,10 @@ class OrderCreate(BaseModel):
     delivery_via: Literal["inhouse", "zomato", "swiggy", "ubereats", "other_aggregator"] | None = None
     customer_name: str | None = Field(default=None, max_length=200)
     customer_phone: str | None = Field(default=None, max_length=20)
+    customer_directory_revision: int | None = Field(
+        default=None, ge=0, le=MAX_DIRECTORY_REVISION, strict=True
+    )
+    customer_directory_company_id: UUID | None = None
     customer_gstin: str | None = Field(default=None, max_length=15)
     customer_address: str | None = Field(default=None, max_length=500)
     customer_state_code: str | None = Field(default=None, pattern=r"^\d{2}$")
@@ -1042,6 +1051,10 @@ class OrderCustomerUpdate(BaseModel):
     customer_name: str | None = Field(default=None, max_length=200)
     customer_phone: str | None = Field(default=None, max_length=20)
     expected_checkout_version: int | None = Field(default=None, ge=1)
+    customer_directory_revision: int | None = Field(
+        default=None, ge=0, le=MAX_DIRECTORY_REVISION, strict=True
+    )
+    customer_directory_company_id: UUID | None = None
 
     @field_validator("customer_name", "customer_phone")
     @classmethod
@@ -1518,6 +1531,7 @@ async def _upsert_and_attach_customer(
     name: str | None,
     order: Order,
     at: datetime,
+    directory_fence: CustomerDirectoryFence,
     order_lines: list[OrderLine] | None = None,
 ) -> Customer | None:
     """Find or create customer by phone, bump visit_count + total_spent,
@@ -1545,6 +1559,8 @@ async def _upsert_and_attach_customer(
             if existing is None:
                 return None
         else:
+            if not directory_fence.allows_identity_mutation:
+                return None
             existing = (
                 await session.execute(
                     select(Customer).where(
@@ -1603,7 +1619,7 @@ async def _upsert_and_attach_customer(
         # crediting it here would let a bonus cascade into unlocking the next
         # rank too.
         existing.lifetime_gaming_points_earned = new_lifetime
-        if name and not existing.name:
+        if name and not existing.name and directory_fence.allows_identity_mutation:
             existing.name = name
         order.customer_id = existing.id
         await record_order_loyalty_settlement(
@@ -2780,6 +2796,16 @@ async def _finalize_order(
     branch = await session.get(Branch, order.branch_id)
     if not branch or branch.company_id != company_id or branch.deleted_at:
         raise NotFoundError("branch not found")
+    directory_fence: CustomerDirectoryFence | None = None
+    if order.customer_phone:
+        _, directory_fence = await lock_customer_directory(
+            session,
+            company_id=company_id,
+            captured_revision=order.customer_directory_revision,
+            captured_company_id=(
+                company_id if order.customer_directory_revision is not None else None
+            ),
+        )
     timezone_name = branch.timezone or await company_timezone(session, company_id)
     if not order.invoice_no:
         order.invoice_no, order.fiscal_year = await InvoiceNumberService(session).allocate(
@@ -2851,6 +2877,7 @@ async def _finalize_order(
         created_by=actor_user_id,
     )
     if order.customer_phone:
+        assert directory_fence is not None
         await _upsert_and_attach_customer(
             session,
             company_id=company_id,
@@ -2859,6 +2886,7 @@ async def _finalize_order(
             order=order,
             order_lines=list(order_lines),
             at=at,
+            directory_fence=directory_fence,
         )
 
 
@@ -3095,21 +3123,25 @@ async def create_order(
         terminal_id=tenant.terminal_id,
         operation="creating an order",
     )
-    if payload.table_id is None:
-        # A direct POS bill is recovered only on this cashier's device, so only
-        # the accountable shift opener may prepare it. Table-originated work is
-        # deliberately collaborative and is later selected/billed by cashier.
-        require_shift_opener(
-            shift,
-            user_id=tenant.user_id,
-            protected_access=tenant.protected_access,
-            operation="create a direct POS order on this shift",
-        )
+    # The shift opener is retained for drawer attribution, not as an exclusive
+    # lease on sales. Any actor who passed ``pos.write`` may create their own
+    # bill on this exact open branch/terminal shift. An unpublished direct draft
+    # remains creator-only below so another login cannot guess or alter a
+    # partially captured device cart.
 
     branch_state = branch.state_code or "32"
     delivery_via = payload.delivery_via if payload.type == "delivery" else None
     if payload.type == "delivery" and delivery_via is None:
         delivery_via = "inhouse"
+    customer_directory_revision: int | None = None
+    if payload.customer_phone:
+        _, directory_fence = await lock_customer_directory(
+            session,
+            company_id=tenant.company_id,
+            captured_revision=payload.customer_directory_revision,
+            captured_company_id=payload.customer_directory_company_id,
+        )
+        customer_directory_revision = directory_fence.revision_to_persist
     place_of_supply = (
         payload.place_of_supply_state_code
         or (payload.customer_state_code if payload.type == "delivery" else None)
@@ -3163,6 +3195,7 @@ async def create_order(
         place_of_supply_state_code=place_of_supply,
         customer_name=payload.customer_name,
         customer_phone=payload.customer_phone,
+        customer_directory_revision=customer_directory_revision,
         customer_gstin=payload.customer_gstin.upper() if payload.customer_gstin else None,
         customer_address=payload.customer_address,
         customer_state_code=payload.customer_state_code,
@@ -3439,8 +3472,8 @@ async def attach_order_customer(
     """Attach a customer/member and deterministically reprice an unpaid bill.
 
     This is the POS handoff step for Tables and Gaming/Shisha orders, whose
-    operational originator may not know the final paying customer. Only the
-    accountable shift opener (or protected owner) may change the bill here.
+    operational originator may not know the final paying customer. Any actor
+    with ``pos.write`` may complete that shared handoff on the exact open shift.
     """
     idempotency_key, request_hash = _require_idempotency(request)
     existing_response = await check_or_reserve(
@@ -3496,12 +3529,6 @@ async def attach_order_customer(
         terminal_id=tenant.terminal_id,
         operation="attaching a customer to an order",
     )
-    require_shift_opener(
-        shift,
-        user_id=tenant.user_id,
-        protected_access=tenant.protected_access,
-        operation="attach a customer or membership to this bill",
-    )
     if await _paid_total(session, order.id):
         raise BusinessRuleError("cannot change the customer after a payment was recorded")
 
@@ -3509,17 +3536,29 @@ async def attach_order_customer(
     order.customer_name = payload.customer_name
     order.customer_phone = payload.customer_phone
     if payload.customer_phone:
+        _, directory_fence = await lock_customer_directory(
+            session,
+            company_id=tenant.company_id,
+            captured_revision=payload.customer_directory_revision,
+            captured_company_id=payload.customer_directory_company_id,
+        )
+        order.customer_directory_revision = directory_fence.revision_to_persist
         order.customer_id = (
-            await session.execute(
-                select(Customer.id).where(
-                    Customer.company_id == tenant.company_id,
-                    Customer.phone == payload.customer_phone,
-                    Customer.deleted_at.is_(None),
+            (
+                await session.execute(
+                    select(Customer.id).where(
+                        Customer.company_id == tenant.company_id,
+                        Customer.phone == payload.customer_phone,
+                        Customer.deleted_at.is_(None),
+                    )
                 )
-            )
-        ).scalar_one_or_none()
+            ).scalar_one_or_none()
+            if directory_fence.allows_identity_mutation
+            else None
+        )
     else:
         order.customer_id = None
+        order.customer_directory_revision = None
     if order.customer_phone != previous_phone:
         await _reprice_unpaid_order_for_customer(
             session,
@@ -3614,12 +3653,6 @@ async def apply_order_discount(
         branch_id=tenant.branch_id,
         terminal_id=tenant.terminal_id,
         operation="applying a discount to an order",
-    )
-    require_shift_opener(
-        shift,
-        user_id=tenant.user_id,
-        protected_access=tenant.protected_access,
-        operation="apply a discount to this bill",
     )
     if await _paid_total(session, order.id):
         raise BusinessRuleError("cannot change the discount after a payment was recorded")
@@ -3732,12 +3765,6 @@ async def redeem_points(
         branch_id=tenant.branch_id,
         terminal_id=tenant.terminal_id,
         operation="redeeming points on an order",
-    )
-    require_shift_opener(
-        shift,
-        user_id=tenant.user_id,
-        protected_access=tenant.protected_access,
-        operation="redeem points on this bill",
     )
     if await _paid_total(session, order.id):
         raise BusinessRuleError("cannot change points redemption after a payment was recorded")
@@ -3852,12 +3879,6 @@ async def redeem_reward(
         branch_id=tenant.branch_id,
         terminal_id=tenant.terminal_id,
         operation="redeeming a reward on an order",
-    )
-    require_shift_opener(
-        shift,
-        user_id=tenant.user_id,
-        protected_access=tenant.protected_access,
-        operation="redeem a reward on this bill",
     )
     if await _paid_total(session, order.id):
         raise BusinessRuleError("cannot change reward redemption after a payment was recorded")
@@ -4228,12 +4249,6 @@ async def publish_direct_order_checkout_claim(
         terminal_id=tenant.terminal_id,
         operation="publishing a direct order for checkout",
     )
-    require_shift_opener(
-        shift,
-        user_id=tenant.user_id,
-        protected_access=tenant.protected_access,
-        operation="publish a direct order for checkout on this shift",
-    )
     paid_minor = await _paid_total(session, order.id)
     if (
         paid_minor != 0
@@ -4503,12 +4518,6 @@ async def claim_order_for_checkout(
         terminal_id=tenant.terminal_id,
         operation="claiming an order for checkout",
     )
-    require_shift_opener(
-        shift,
-        user_id=tenant.user_id,
-        protected_access=tenant.protected_access,
-        operation="claim an order for checkout on this shift",
-    )
     paid_minor = await _paid_total(session, order.id)
     grant = await acquire_checkout_claim(
         session,
@@ -4564,12 +4573,6 @@ async def unclaim_order_checkout(
         branch_id=tenant.branch_id,
         terminal_id=tenant.terminal_id,
         operation="releasing an order checkout claim",
-    )
-    require_shift_opener(
-        shift,
-        user_id=tenant.user_id,
-        protected_access=tenant.protected_access,
-        operation="release an order checkout claim on this shift",
     )
     await release_checkout_claim(
         session,
@@ -5257,8 +5260,8 @@ async def finalize_zero_total_order(
     """Settle an exact-zero bill without inventing a zero-value payment.
 
     This is primarily for a PS5/Shisha bill fully covered by a reserved member
-    allowance. It remains a high-trust money action: only the shift opener or a
-    protected owner may finalize it, and an Idempotency-Key is mandatory.
+    allowance. It remains an authenticated ``pos.write`` action with an
+    exclusive checkout claim and mandatory Idempotency-Key.
     """
     if tenant.terminal_id is None:
         raise BusinessRuleError("X-Terminal-Id header required for POS writes")
@@ -5315,12 +5318,6 @@ async def finalize_zero_total_order(
             terminal_id=tenant.terminal_id,
             operation="finalizing a zero-total order",
         )
-    require_shift_opener(
-        shift,
-        user_id=tenant.user_id,
-        protected_access=tenant.protected_access,
-        operation="finalize a zero-total order on this shift",
-    )
     if order.branch_id != shift.branch_id or order.terminal_id != shift.terminal_id:
         raise BusinessRuleError("Order branch or terminal does not match its shift.")
 
@@ -5494,12 +5491,6 @@ async def record_payment(
         branch_id=tenant.branch_id,
         terminal_id=tenant.terminal_id,
         operation="recording a payment",
-    )
-    require_shift_opener(
-        shift,
-        user_id=tenant.user_id,
-        protected_access=tenant.protected_access,
-        operation="bill an order on this shift",
     )
     if order.branch_id != shift.branch_id or order.terminal_id != shift.terminal_id:
         raise BusinessRuleError("Order branch or terminal does not match its shift.")

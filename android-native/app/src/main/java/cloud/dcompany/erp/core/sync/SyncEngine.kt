@@ -20,6 +20,7 @@ import cloud.dcompany.erp.core.db.ErpDatabase
 import cloud.dcompany.erp.core.db.CafeTableEntity
 import cloud.dcompany.erp.core.db.CanonicalReceiptSyncStateEntity
 import cloud.dcompany.erp.core.db.CustomerCacheEntity
+import cloud.dcompany.erp.core.db.CustomerDirectoryStateEntity
 import cloud.dcompany.erp.core.db.EventCacheEntity
 import cloud.dcompany.erp.core.db.EventTicketCacheEntity
 import cloud.dcompany.erp.core.db.FloorEntity
@@ -120,6 +121,7 @@ import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.core.net.outboxProvenanceHeaders
 import cloud.dcompany.erp.ui.screens.customers.CustomerUpdateBody
 import cloud.dcompany.erp.ui.screens.customers.CustomerUpsertBody
+import cloud.dcompany.erp.ui.screens.customers.requireCustomerDirectorySnapshot
 import cloud.dcompany.erp.ui.screens.customers.CustomersApi
 import cloud.dcompany.erp.ui.screens.events.EventsApi
 import cloud.dcompany.erp.ui.screens.events.TicketSell
@@ -222,6 +224,15 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicReference
 
 private const val REFRESH_LOG_TAG = "DCompanySync"
+
+internal fun LocalCustomerEntity.customerWriteActionId(): String {
+    val base = if (serverId == null) {
+        "customer-upsert:$localId"
+    } else {
+        "customer-update:$localId"
+    }
+    return clientActionToken?.let { "$base:$it" } ?: base
+}
 
 private class FinanceReferenceRefreshException(labels: List<String>) : Exception(
     "Finance totals refreshed, but ${labels.joinToString(" and ")} could not be refreshed",
@@ -2832,6 +2843,8 @@ class SyncEngine(
                     customerId = row.customerId,
                     customerName = row.customerName,
                     customerPhone = row.customerPhone,
+                    customerDirectoryRevision = row.customerDirectoryRevision,
+                    customerDirectoryCompanyId = row.customerDirectoryCompanyId,
                     timerMinutes = row.timerMinutes,
                     packageId = row.packageId,
                     extraControllers = row.extraControllers,
@@ -4478,8 +4491,13 @@ class SyncEngine(
                     email = row.email,
                     birthday = row.birthday,
                     notes = row.notes,
+                    customerDirectoryRevision = row.customerDirectoryRevision,
+                    customerDirectoryCompanyId = row.customerDirectoryCompanyId,
                 ),
-                outboxProvenanceHeaders(row.createdAtMillis, "customer-upsert:${row.localId}"),
+                outboxProvenanceHeaders(
+                    row.createdAtMillis,
+                    row.customerWriteActionId(),
+                ),
             )
         } else {
             customersApi.update(
@@ -4491,7 +4509,10 @@ class SyncEngine(
                     birthday = row.birthday,
                     notes = row.notes,
                 ),
-                outboxProvenanceHeaders(row.createdAtMillis, "customer-update:${row.localId}"),
+                outboxProvenanceHeaders(
+                    row.createdAtMillis,
+                    row.customerWriteActionId(),
+                ),
             )
         }
         dao.setServerId(row.localId, server.id)
@@ -4507,12 +4528,13 @@ class SyncEngine(
      * pushCustomerOne) triggers it, not every sync().
      */
     private suspend fun pullCustomers() {
-        cacheIsolation.fetchAndCommitScoped(
-            fetch = { customersApi.list(limit = 500) },
-            store = { customers ->
-                db.withTransaction {
-                    db.customerDao().replaceCache(
-                        customers.map {
+        val lease = cacheIsolation.currentLease() ?: return
+        val snapshot = customersApi.list(limit = 500)
+            .requireCustomerDirectorySnapshot(lease.scope.companyId)
+        cacheIsolation.commitIfCurrent(lease) {
+            db.withTransaction {
+                db.customerDao().replaceCache(
+                    snapshot.customers.map {
                             CustomerCacheEntity(
                                 id = it.id,
                                 name = it.name,
@@ -4531,12 +4553,14 @@ class SyncEngine(
                                 lastVisitAt = it.lastVisitAt,
                                 notes = it.notes,
                             )
-                        },
-                    )
-                    db.syncMetaDao().put(SyncMetaEntity("customers", System.currentTimeMillis()))
-                }
-            },
-        )
+                    },
+                )
+                db.customerDao().upsertDirectoryState(
+                    CustomerDirectoryStateEntity(snapshot.companyId, snapshot.deletionRevision),
+                )
+                db.syncMetaDao().put(SyncMetaEntity("customers", System.currentTimeMillis()))
+            }
+        }
     }
 
     private suspend fun pushStaff() {
@@ -7208,6 +7232,8 @@ class SyncEngine(
                 },
                 customerName = order.customerName,
                 customerPhone = order.customerPhone,
+                customerDirectoryRevision = order.customerDirectoryRevision,
+                customerDirectoryCompanyId = order.customerDirectoryCompanyId,
                 notes = order.orderNote,
             ),
             idempotencyKey = "order:${order.localId}",

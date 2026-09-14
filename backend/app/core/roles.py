@@ -6,11 +6,11 @@ from collections.abc import Iterable
 
 PROTECTED_OWNER_ROLE = "super_owner"
 # A second, narrower owner tier: bypasses the same operational RBAC gates as
-# super_owner (shift-opener-only billing, force-stop, membership overrides —
+# super_owner (protected recovery, force-stop, membership/refund overrides —
 # see has_full_access), but deliberately does NOT get admin.audit.read or the
-# Access Control panel (see permissions.py's _has_permission). For co-owners
-# who should never be blocked from billing on a colleague's device/shift but
-# aren't the one designated to read the audit trail.
+# Access Control panel (see permissions.py's _has_permission). Routine shift,
+# Gaming and POS work instead follows its explicit action permission and keeps
+# actor attribution; it does not require an owner bypass.
 CO_OWNER_ROLE = "co_owner"
 PUBLIC_OWNER_ROLE = "owner"
 

@@ -732,6 +732,37 @@ def test_private_direct_draft_mutations_are_creator_only() -> None:
     )
 
 
+def test_routine_pos_billing_is_permission_scoped_not_shift_opener_scoped() -> None:
+    """Opening the drawer must not give one login an exclusive lease on sales.
+
+    Route-level RBAC, exact company/branch/terminal/shift validation, private
+    draft ownership and checkout claims remain independent guards.
+    """
+    billing_endpoints = (
+        pos_router.create_order,
+        pos_router.attach_order_customer,
+        pos_router.apply_order_discount,
+        pos_router.redeem_points,
+        pos_router.redeem_reward,
+        pos_router.publish_direct_order_checkout_claim,
+        pos_router.claim_order_for_checkout,
+        pos_router.unclaim_order_checkout,
+        pos_router.finalize_zero_total_order,
+        pos_router.record_payment,
+    )
+    for endpoint in billing_endpoints:
+        assert "require_shift_opener" not in endpoint.__code__.co_names
+        assert (
+            "require_open_operational_shift" in endpoint.__code__.co_names
+            or "require_operational_shift_scope" in endpoint.__code__.co_names
+        )
+
+    # Charge-erasing and payout workflows keep their independent high-trust
+    # permission plus the existing opener/protected-owner accountability rule.
+    assert "require_shift_opener" in pos_router.void_held_order.__code__.co_names
+    assert "require_shift_opener" in pos_router.create_pos_refund_request.__code__.co_names
+
+
 def test_create_batch_rejects_duplicate_client_line_identity() -> None:
     client_line_id = uuid4()
     lines = [
@@ -908,6 +939,7 @@ def _gaming_session(tenant: TenantContext, station_id: UUID, shift_id: UUID, **o
         "customer_name": "Cafe Guest",
         "customer_phone": "9000000000",
         "customer_id": None,
+        "customer_directory_revision": None,
         "tax_rate": 0.18,
         "sac_code": "999692",
         "rate_includes_tax": True,

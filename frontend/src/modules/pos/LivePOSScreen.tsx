@@ -36,12 +36,14 @@ import {
 import { parseRupeesToMinor } from '@/lib/money-input';
 import {
   customers,
+  captureCustomerDirectoryEvidence,
   memberships,
   menu,
   orders,
   pos,
   shifts,
   type CustomerDTO,
+  type CustomerDirectoryEvidence,
   type MembershipTierDTO,
   type MenuItemDTO,
   type OrderDTO,
@@ -1901,6 +1903,18 @@ export default function LivePOSScreen() {
         deliveryStateCode,
         customerName,
         customerPhone,
+        customerDirectoryEvidenceCaptured: true,
+        ...(customerPhone.trim() ? (() => {
+          const evidence = captureCustomerDirectoryEvidence();
+          return {
+            ...(evidence.customer_directory_revision !== undefined
+              ? { customerDirectoryRevision: evidence.customer_directory_revision }
+              : {}),
+            ...(evidence.customer_directory_company_id
+              ? { customerDirectoryCompanyId: evidence.customer_directory_company_id }
+              : {}),
+          };
+        })() : {}),
       },
     };
     if (retry.phase === 'recording_payment' || retry.phase === 'finalizing_zero') {
@@ -1935,6 +1949,14 @@ export default function LivePOSScreen() {
           return;
         }
       } else {
+        const capturedCustomerDirectoryEvidence: CustomerDirectoryEvidence | null =
+          retry.snapshot.customerDirectoryRevision !== undefined
+          && retry.snapshot.customerDirectoryCompanyId
+            ? {
+              customer_directory_revision: retry.snapshot.customerDirectoryRevision,
+              customer_directory_company_id: retry.snapshot.customerDirectoryCompanyId,
+            }
+            : null;
         const checkoutSource = profilePosCheckoutSource(
           retry.resumingOrderId,
           retry.snapshot.orderType,
@@ -1960,6 +1982,7 @@ export default function LivePOSScreen() {
               },
               `order-customer:${retry.key}`,
               order.checkout_version,
+              capturedCustomerDirectoryEvidence,
             );
           }
         } else {
@@ -1981,6 +2004,7 @@ export default function LivePOSScreen() {
               customer_phone: retry.snapshot.customerPhone.trim() || undefined,
             },
             `order:${retry.key}`,
+            capturedCustomerDirectoryEvidence,
           );
         }
       }

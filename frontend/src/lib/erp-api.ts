@@ -6,7 +6,7 @@
  *
  * All methods raise a normalized Error with .code (see /lib/api.ts).
  */
-import { api } from './api';
+import { api, readAccessToken } from './api';
 import { checkoutClientInstance } from './checkout-client-instance';
 import {
   buildRemoteAssistanceCommand,
@@ -255,6 +255,86 @@ export interface CreateOrderRequest {
   place_of_supply_state_code?: string;
 }
 
+const CUSTOMER_DIRECTORY_REVISION_HEADER = 'x-customer-directory-revision';
+const CUSTOMER_DIRECTORY_COMPANY_HEADER = 'x-customer-directory-company-id';
+const customerDirectoryRevisions = new Map<string, number>();
+
+function authenticatedCompanyId(): string | null {
+  const token = readAccessToken();
+  const payload = token?.split('.')[1];
+  if (!payload) return null;
+  try {
+    const padded = payload.replace(/-/g, '+').replace(/_/g, '/')
+      .padEnd(Math.ceil(payload.length / 4) * 4, '=');
+    const decoded = JSON.parse(atob(padded)) as { company_id?: unknown };
+    return typeof decoded.company_id === 'string' ? decoded.company_id : null;
+  } catch {
+    return null;
+  }
+}
+
+function captureCustomerDirectoryRevision(headers: Record<string, unknown> | undefined): void {
+  const authenticatedCompany = authenticatedCompanyId();
+  const headerCompany = headers?.[CUSTOMER_DIRECTORY_COMPANY_HEADER];
+  const rawRevision = headers?.[CUSTOMER_DIRECTORY_REVISION_HEADER];
+  if (typeof headerCompany !== 'string' || headerCompany !== authenticatedCompany) return;
+  if (typeof rawRevision !== 'string' || !/^(0|[1-9][0-9]*)$/.test(rawRevision)) return;
+  const revision = Number(rawRevision);
+  if (!Number.isSafeInteger(revision) || revision < 0) return;
+  customerDirectoryRevisions.set(headerCompany, revision);
+}
+
+export interface CustomerDirectoryEvidence {
+  customer_directory_revision?: number;
+  customer_directory_company_id?: string;
+}
+
+export function captureCustomerDirectoryEvidence(): CustomerDirectoryEvidence {
+  const companyId = authenticatedCompanyId();
+  if (!companyId) return {};
+  const revision = customerDirectoryRevisions.get(companyId);
+  return revision === undefined ? {} : {
+    customer_directory_revision: revision,
+    customer_directory_company_id: companyId,
+  };
+}
+
+function customerDirectoryEvidenceForAction(actionId: string): CustomerDirectoryEvidence {
+  const companyId = authenticatedCompanyId();
+  if (!companyId) return {};
+  const key = `customer-directory-action:${companyId}:${actionId}`;
+  try {
+    const stored = localStorage.getItem(key);
+    if (stored !== null) {
+      const parsed = JSON.parse(stored) as unknown;
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+        throw new Error('Saved customer directory action evidence is invalid.');
+      }
+      const evidence = parsed as CustomerDirectoryEvidence;
+      const keys = Object.keys(evidence);
+      if (keys.length === 0) return {};
+      if (
+        keys.some((key) => !['customer_directory_revision', 'customer_directory_company_id'].includes(key))
+        || evidence.customer_directory_company_id !== companyId
+        || !Number.isSafeInteger(evidence.customer_directory_revision)
+        || (evidence.customer_directory_revision ?? -1) < 0
+      ) throw new Error('Saved customer directory action evidence is invalid.');
+      return evidence;
+    }
+    const captured = captureCustomerDirectoryEvidence();
+    localStorage.setItem(key, JSON.stringify(captured));
+    return captured;
+  } catch (cause) {
+    throw new Error('Customer directory action evidence could not be stored safely.', { cause });
+  }
+}
+
+function clearCustomerDirectoryActionEvidence(actionId: string): void {
+  const companyId = authenticatedCompanyId();
+  if (!companyId) return;
+  try { localStorage.removeItem(`customer-directory-action:${companyId}:${actionId}`); } catch { /* no-op */ }
+}
+
 // ----- Auth -----
 export const auth = {
   login: (email: string, password: string) =>
@@ -293,12 +373,29 @@ export const menu = {
 export const pos = {
   receiptBusiness: () =>
     api.get<ReceiptBusinessDTO>('/pos/receipt-business').then((r) => r.data),
-  createOrder: (req: CreateOrderRequest, idempotencyKey: string) =>
-    api
-      .post<OrderDTO>('/pos/orders', req, {
+  createOrder: (
+    req: CreateOrderRequest,
+    idempotencyKey: string,
+    capturedEvidence?: CustomerDirectoryEvidence | null,
+  ) => {
+    const actionId = `pos-order:${idempotencyKey}`;
+    const evidence = req.customer_phone
+      ? capturedEvidence === undefined
+        ? customerDirectoryEvidenceForAction(actionId)
+        : capturedEvidence ?? {}
+      : {};
+    return api
+      .post<OrderDTO>('/pos/orders', {
+        ...req,
+        ...(req.customer_phone ? evidence : {}),
+      }, {
         headers: { 'Idempotency-Key': idempotencyKey },
       })
-      .then((r) => r.data),
+      .then((r) => {
+        if (capturedEvidence === undefined) clearCustomerDirectoryActionEvidence(actionId);
+        return r.data;
+      });
+  },
   getOrder: (orderId: string) =>
     api.get<OrderDTO>(`/pos/orders/${orderId}`).then((r) => r.data),
   addLines: (
@@ -316,15 +413,27 @@ export const pos = {
     body: { customer_name?: string; customer_phone?: string },
     idempotencyKey: string,
     expectedCheckoutVersion: number,
-  ) =>
-    api
+    capturedEvidence?: CustomerDirectoryEvidence | null,
+  ) => {
+    const actionId = `pos-customer:${orderId}:${idempotencyKey}`;
+    const evidence = body.customer_phone
+      ? capturedEvidence === undefined
+        ? customerDirectoryEvidenceForAction(actionId)
+        : capturedEvidence ?? {}
+      : {};
+    return api
       .patch<OrderDTO>(`/pos/orders/${orderId}/customer`, {
         ...body,
+        ...(body.customer_phone ? evidence : {}),
         expected_checkout_version: expectedCheckoutVersion,
       }, {
         headers: { 'Idempotency-Key': idempotencyKey },
       })
-      .then((r) => r.data),
+      .then((r) => {
+        if (capturedEvidence === undefined) clearCustomerDirectoryActionEvidence(actionId);
+        return r.data;
+      });
+  },
   sendToPos: (orderId: string) =>
     api.patch<OrderDTO>(`/pos/orders/${orderId}/send-to-pos`).then((r) => r.data),
   applyDiscount: (
@@ -2155,12 +2264,18 @@ export interface RewardDTO {
 
 export const customers = {
   list: (q?: string, signal?: AbortSignal) =>
-    api.get<CustomerDTO[]>('/customers', { params: q ? { q } : {}, signal }).then((r) => r.data),
+    api.get<CustomerDTO[]>('/customers', { params: q ? { q } : {}, signal }).then((r) => {
+      captureCustomerDirectoryRevision(r.headers as Record<string, unknown>);
+      return r.data;
+    }),
   byPhone: (phone: string) =>
-    api.get<CustomerDTO | null>(`/customers/by-phone/${encodeURIComponent(phone)}`).then((r) => r.data),
+    api.get<CustomerDTO | null>(`/customers/by-phone/${encodeURIComponent(phone)}`).then((r) => {
+      captureCustomerDirectoryRevision(r.headers as Record<string, unknown>);
+      return r.data;
+    }),
   get: (id: string) => api.get<CustomerDTO>(`/customers/${id}`).then((r) => r.data),
   upsert: (body: { phone: string; name?: string; email?: string; birthday?: string; notes?: string }) =>
-    api.post<CustomerDTO>('/customers', body).then((r) => r.data),
+    api.post<CustomerDTO>('/customers', { ...body, ...captureCustomerDirectoryEvidence() }).then((r) => r.data),
   update: (id: string, body: Partial<{ name: string; phone: string; email: string; birthday: string; notes: string }>) =>
     api.patch<CustomerDTO>(`/customers/${id}`, body).then((r) => r.data),
   remove: (id: string) => api.delete<void>(`/customers/${id}`).then(() => undefined),
@@ -3185,9 +3300,21 @@ export const gaming = {
     expected_package_price_minor?: number;
     expected_package_duration_minutes?: number;
     expected_package_variant?: string;
-  }, idempotencyKey: string) => api.post<GameSessionDTO>('/gaming/sessions/start', body, {
-    headers: { 'Idempotency-Key': idempotencyKey },
-  }).then((r) => r.data),
+  }, idempotencyKey: string) => {
+    const actionId = `gaming-start:${idempotencyKey}`;
+    const hasPhoneOnlyIdentity = !body.customer_id && Boolean(body.customer_phone);
+    return api.post<GameSessionDTO>('/gaming/sessions/start', {
+      ...body,
+      ...(hasPhoneOnlyIdentity
+        ? customerDirectoryEvidenceForAction(actionId)
+        : {}),
+    }, {
+      headers: { 'Idempotency-Key': idempotencyKey },
+    }).then((r) => {
+      if (hasPhoneOnlyIdentity) clearCustomerDirectoryActionEvidence(actionId);
+      return r.data;
+    });
+  },
   setSessionTimer: (id: string, timer_minutes: number | null) =>
     api.patch<GameSessionDTO>(`/gaming/sessions/${id}/timer`, { timer_minutes }).then((r) => r.data),
   pauseSession: (id: string, body: { reason: string; expected_pause_version: number }, idempotencyKey: string) =>

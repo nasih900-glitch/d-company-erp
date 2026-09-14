@@ -38,6 +38,7 @@ internal val SERVER_DERIVED_CACHE_TABLES = listOf(
     "refund_order_cache",
     "report_snapshots",
     "customer_cache",
+    "customer_directory_state",
     "customer_order_history_cache",
     "staff_cache",
     "on_shift_cache",

@@ -122,6 +122,8 @@ data class CreateOrderRequest(
     @SerialName("table_id") val tableId: String? = null,
     @SerialName("customer_name") val customerName: String? = null,
     @SerialName("customer_phone") val customerPhone: String? = null,
+    @SerialName("customer_directory_revision") val customerDirectoryRevision: Long? = null,
+    @SerialName("customer_directory_company_id") val customerDirectoryCompanyId: String? = null,
     val notes: String? = null,
 )
 
@@ -141,6 +143,8 @@ data class OrderCustomerUpdateRequest(
     @SerialName("customer_name") val customerName: String? = null,
     @SerialName("customer_phone") val customerPhone: String? = null,
     @SerialName("expected_checkout_version") val expectedCheckoutVersion: Long,
+    @SerialName("customer_directory_revision") val customerDirectoryRevision: Long? = null,
+    @SerialName("customer_directory_company_id") val customerDirectoryCompanyId: String? = null,
 )
 
 @Serializable

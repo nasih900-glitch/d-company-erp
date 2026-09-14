@@ -277,6 +277,9 @@ data class LocalGamingSessionEntity(
     val customerId: String? = null,
     val customerName: String? = null,
     val customerPhone: String? = null,
+    /** Immutable customer-directory evidence captured with this start action. */
+    val customerDirectoryRevision: Long? = null,
+    val customerDirectoryCompanyId: String? = null,
     val timerMinutes: Int? = null,
     val startedAtMillis: Long,
     val state: String,

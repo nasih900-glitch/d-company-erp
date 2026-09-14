@@ -109,6 +109,8 @@ data class SessionStartBody(
     @SerialName("customer_id") val customerId: String? = null,
     @SerialName("customer_name") val customerName: String? = null,
     @SerialName("customer_phone") val customerPhone: String? = null,
+    @SerialName("customer_directory_revision") val customerDirectoryRevision: Long? = null,
+    @SerialName("customer_directory_company_id") val customerDirectoryCompanyId: String? = null,
     @SerialName("timer_minutes") val timerMinutes: Int? = null,
     @SerialName("package_id") val packageId: String? = null,
     @SerialName("extra_controllers") val extraControllers: Int = 0,
