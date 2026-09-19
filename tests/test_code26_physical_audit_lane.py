@@ -642,6 +642,21 @@ def test_addon_flow_proves_immediate_feedback_and_durable_detail_rows() -> None:
     assert handoff["index"] == 1
     assert handoff["then"] == {"text": "Send to POS?"}
 
+    open_pos_steps = [step for step in _steps() if step["name"] == "Open POS"]
+    assert len(open_pos_steps) == 17
+    for open_pos in open_pos_steps:
+        assert open_pos["reveal"] == {
+            "scrollable": True,
+            "index": 0,
+            "direction": "UP",
+            "amount": 0.9,
+            "speedPxPerSecond": 500,
+            "repeats": 3,
+        }
+        assert open_pos["action"] == "click"
+        assert open_pos["descriptionContains"] == "POS. Take"
+        assert open_pos["then"]["text"] in {"Held (1)", "Receipts (16)"}
+
 
 def test_fixture_and_runner_are_fail_closed_and_disposable() -> None:
     fixture = FIXTURE_PATH.read_text(encoding="utf-8")
