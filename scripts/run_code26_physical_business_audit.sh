@@ -489,7 +489,10 @@ if [[ ! "$TUNNEL_URL" =~ ^https://[A-Za-z0-9-]+\.trycloudflare\.com$ ]]; then
   printf '%s\n' 'Temporary HTTPS tunnel did not become available.' >&2
   exit 70
 fi
-for _ in $(seq 1 120); do
+# Quick Tunnel hostnames can take longer than the tunnel connection itself to
+# reach recursive DNS caches. Keep the audit fail-closed, but allow up to five
+# minutes for that external propagation before rejecting the evidence run.
+for _ in $(seq 1 600); do
   if curl --fail --silent --show-error "$TUNNEL_URL/readyz" \
     > "$RUNTIME_DIR/tunnel-ready.json" 2>/dev/null; then
     break

@@ -26,13 +26,13 @@ HISTORICAL_CADDY_GUARD_SHA256 = (
     "2395767f4fc278a45822bc2cc45f476c8a44e9211fc9db7b747196462579c881"
 )
 CODE30_2_FREEZE_CONSTANTS_SHA256 = (
-    "0522a1ac1f543880040be926a96edfaa238466b9ea9e58ac47a5872e4323f3cb"
+    "39f8c9252259d98b91a61ba563cd24e5302e6406919a06162b4cad9f3bcdad8d"
 )
 CODE30_2_FREEZE_HELPERS_SHA256 = (
     "32ff9182f1c5c6cb3715851af0b70b6313d1ac43a0efc598debf680f6e27f901"
 )
 CODE30_2_FREEZE_SCRIPT_SHA256 = (
-    "82f4b9ddc52fda3008aa4810ac132bd42edc68a50102875a917c8a2e9d490d2a"
+    "c1947de1fcf2f90dc825cd5c5a8865d44ee4f56e5e20827ba88750a97b8fa60f"
 )
 CODE30_2_FREEZE_TEST_SHA256 = (
     "303c44945334417d810b27c07982a8582220f08642183b4107dcda8e67568a14"
@@ -578,7 +578,22 @@ def _workflow_expected(path: str) -> str:
         ),
     }
     anchor = anchors[path]
-    return _replace_exact(_original(path), ((anchor, anchor + _workflow_step(), 1),))
+    android_setup = (
+        "      - uses: android-actions/setup-android@"
+        "40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1\n"
+    )
+    configured_android_setup = (
+        android_setup
+        + "        with:\n"
+        + "          packages: platform-tools\n"
+    )
+    return _replace_exact(
+        _original(path),
+        (
+            (anchor, anchor + _workflow_step(), 1),
+            (android_setup, configured_android_setup, 1),
+        ),
+    )
 
 
 def test_live_delta_is_exactly_the_reviewed_code29_correction() -> None:
