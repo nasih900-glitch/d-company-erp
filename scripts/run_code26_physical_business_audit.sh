@@ -490,16 +490,21 @@ if [[ ! "$TUNNEL_URL" =~ ^https://[A-Za-z0-9-]+\.trycloudflare\.com$ ]]; then
   exit 70
 fi
 # Quick Tunnel hostnames can take longer than the tunnel connection itself to
-# reach recursive DNS caches. Keep the audit fail-closed, but allow up to five
-# minutes for that external propagation before rejecting the evidence run.
+# reach recursive DNS caches. macOS may then retain that first negative answer
+# after Cloudflare's authoritative record appears. Resolve only this readiness
+# probe through Cloudflare DoH so stale host-cache state cannot falsely reject
+# a healthy TLS tunnel. The app/device still exercises ordinary DNS and HTTPS.
+TUNNEL_DOH_URL="https://cloudflare-dns.com/dns-query"
 for _ in $(seq 1 600); do
-  if curl --fail --silent --show-error "$TUNNEL_URL/readyz" \
+  if curl --doh-url "$TUNNEL_DOH_URL" --fail --silent --show-error \
+    "$TUNNEL_URL/readyz" \
     > "$RUNTIME_DIR/tunnel-ready.json" 2>/dev/null; then
     break
   fi
   sleep 0.5
 done
-curl --fail --silent --show-error "$TUNNEL_URL/readyz" \
+curl --doh-url "$TUNNEL_DOH_URL" --fail --silent --show-error \
+  "$TUNNEL_URL/readyz" \
   > "$RUNTIME_DIR/tunnel-ready.json"
 
 (

@@ -333,7 +333,7 @@ REVIEWED_CODE30_2_SHA256 = {
     'integrations/google-sheets/Code.gs': 'cbf401b2b7612b049d338a38ab4e53f0e78d7afda2d92782c3477f7b94d1f6d0',
     'releases/android/README.md': '790179dffcf20aa3834b85f0cf26dd0953bdeecfb19a4bb93be3fc8a4356e786',
     'scripts/analyze_code26_physical_evidence.py': '26c94d9abf88cd5211fccdcf3dddd3fe16edc8a653f8c18d0f0d1ff921e20e57',
-    'scripts/run_code26_physical_business_audit.sh': '5da4a370e2736040946b1a2f5e2ea54585ff5cdf2961d7d0e3c8c35026af89f4',
+    'scripts/run_code26_physical_business_audit.sh': '1c4c36989064e74399fd716091f909968fd01b63a6e913dcfdf9c2782333dc98',
     'tests/test_android_release_version.py': 'c3b15d5ef03e2dac384dd9ab2801d9166ac3439cae0607a9d621b84ea8c380fb',
     'tests/test_code26_physical_audit_lane.py': 'dc41c08ccd7aeed7c925c280a2f78c48588807d1d28819b6537c165cc7b39f3d',
     'tests/test_production_installer_safety.py': '218a18d355de99986638ca9e1907e64ad9c67fd53b8b6607f852031dda1d8d90',
