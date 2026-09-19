@@ -1573,7 +1573,7 @@
     {
       "name": "VR Games 60m transfer: select VR Pod 2",
       "action": "click",
-      "text": "VR Pod 2 · ₹200.00/hour",
+      "text": "VR Pod 2 · Fixed packages from ₹80.00",
       "timeoutMs": 60000
     },
     {

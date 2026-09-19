@@ -8,10 +8,13 @@ import hashlib
 import importlib.util
 import json
 import struct
+import subprocess
 import sys
 import zlib
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 PLAN_PATH = (
@@ -34,6 +37,130 @@ _SPEC.loader.exec_module(_ANALYZER)
 
 def _steps() -> list[dict]:
     return json.loads(PLAN_PATH.read_text(encoding="utf-8"))["steps"]
+
+
+def _run_instrumentation_output_validator(tmp_path: Path, output: str) -> int:
+    runner = RUNNER_PATH.read_text(encoding="utf-8")
+    start = runner.index("instrumentation_output_passed() {")
+    end = runner.index("\n}\n", start) + len("\n}\n")
+    validator = runner[start:end]
+    output_path = tmp_path / "instrumentation.txt"
+    output_path.write_text(output, encoding="utf-8", newline="")
+    completed = subprocess.run(
+        [
+            "bash",
+            "-c",
+            validator + '\ninstrumentation_output_passed "$1"\n',
+            "instrumentation-validator",
+            str(output_path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return completed.returncode
+
+
+_SUCCESSFUL_INSTRUMENTATION_OUTPUT = """\
+INSTRUMENTATION_STATUS: class=cloud.dcompany.erp.auditdriver.BusinessWorkflowDeviceTest
+INSTRUMENTATION_STATUS: current=1
+INSTRUMENTATION_STATUS: numtests=1
+INSTRUMENTATION_STATUS: test=completeBusinessWorkflow
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=completeBusinessWorkflow
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_RESULT: stream=
+
+Time: 42.0
+
+OK (1 test)
+
+
+INSTRUMENTATION_CODE: -1
+"""
+
+
+@pytest.mark.parametrize(
+    "output",
+    (
+        _SUCCESSFUL_INSTRUMENTATION_OUTPUT,
+        _SUCCESSFUL_INSTRUMENTATION_OUTPUT.replace("\n", "\r\n"),
+    ),
+)
+def test_instrumentation_output_validator_accepts_only_complete_success(
+    tmp_path: Path,
+    output: str,
+) -> None:
+    assert _run_instrumentation_output_validator(tmp_path, output) == 0
+
+
+@pytest.mark.parametrize(
+    "output",
+    (
+        """\
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: stack=java.lang.AssertionError: workflow failed
+INSTRUMENTATION_STATUS_CODE: -2
+INSTRUMENTATION_RESULT: stream=
+FAILURES!!!
+Tests run: 1, Failures: 1
+INSTRUMENTATION_CODE: -1
+""",
+        """\
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS_CODE: -4
+OK (1 test)
+INSTRUMENTATION_CODE: -1
+""",
+        """\
+INSTRUMENTATION_STATUS_CODE: 0
+OK (1 test)
+""",
+        """\
+INSTRUMENTATION_STATUS_CODE: 0
+OK (1 test)
+OK (1 test)
+INSTRUMENTATION_CODE: -1
+""",
+        """\
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_RESULT: stream=log text containing OK (1 test)
+INSTRUMENTATION_CODE: -1
+""",
+        """\
+INSTRUMENTATION_FAILED: cloud.dcompany.erp.auditdriver.test
+INSTRUMENTATION_STATUS_CODE: 0
+OK (1 test)
+INSTRUMENTATION_CODE: -1
+""",
+        """\
+INSTRUMENTATION_STATUS_CODE: 0
+OK (1 test)
+INSTRUMENTATION_CODE: -1
+unexpected trailing output
+""",
+    ),
+)
+def test_instrumentation_output_validator_rejects_failed_or_incomplete_runs(
+    tmp_path: Path,
+    output: str,
+) -> None:
+    assert _run_instrumentation_output_validator(tmp_path, output) != 0
+
+
+def test_emulator_runner_promotes_false_zero_instrumentation_status() -> None:
+    runner = RUNNER_PATH.read_text(encoding="utf-8")
+    pipeline_status = "TEST_RC=${PIPESTATUS[0]}"
+    output_check = (
+        '! instrumentation_output_passed "$RUNTIME_DIR/instrumentation.txt"'
+    )
+
+    assert pipeline_status in runner
+    assert output_check in runner
+    assert runner.index(pipeline_status) < runner.index(output_check)
+    failure_block = runner[runner.index(output_check) :]
+    assert "TEST_RC=1" in failure_block.split("fi", 1)[0]
 
 
 def _load_fixture_function(name: str):
@@ -479,6 +606,14 @@ def test_discount_apply_uses_bounded_human_speed_reveal() -> None:
 def test_transfer_reselects_destination_and_cash_count_is_revealed() -> None:
     steps = _steps()
     by_name = {step["name"]: (index, step) for index, step in enumerate(steps)}
+
+    select_target = by_name["VR Games 60m transfer: select VR Pod 2"][1]
+    assert select_target == {
+        "name": "VR Games 60m transfer: select VR Pod 2",
+        "action": "click",
+        "text": "VR Pod 2 · Fixed packages from ₹80.00",
+        "timeoutMs": 60_000,
+    }
 
     transfer_names = [
         "VR Games 60m transfer: confirm transfer",

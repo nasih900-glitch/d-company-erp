@@ -77,6 +77,36 @@ require_command() {
   }
 }
 
+# `adb shell am instrument` can exit zero even when AndroidJUnitRunner reports
+# a failed test. Accept this one-test lane only when its complete terminal
+# protocol is present and contains no failure, skip or runner-abort marker.
+instrumentation_output_passed() {
+  local output_file="$1"
+  [[ -s "$output_file" ]] || return 1
+  awk '
+    {
+      sub(/\r$/, "")
+      if ($0 != "") {
+        last_nonblank = $0
+      }
+    }
+    $0 == "INSTRUMENTATION_STATUS_CODE: 0" { successful_tests += 1 }
+    $0 == "OK (1 test)" { ok_lines += 1 }
+    $0 == "INSTRUMENTATION_CODE: -1" { terminal_codes += 1 }
+    $0 ~ /^INSTRUMENTATION_STATUS_CODE: -[0-9]+$/ { failed = 1 }
+    $0 == "FAILURES!!!" { failed = 1 }
+    $0 ~ /^INSTRUMENTATION_(FAILED|ABORTED):/ { failed = 1 }
+    END {
+      valid = successful_tests == 1
+      valid = valid && ok_lines == 1
+      valid = valid && terminal_codes == 1
+      valid = valid && last_nonblank == "INSTRUMENTATION_CODE: -1"
+      valid = valid && failed != 1
+      exit(valid ? 0 : 1)
+    }
+  ' "$output_file"
+}
+
 find_android_build_tool() {
   local tool="$1"
   local sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Library/Android/sdk}}"
@@ -602,6 +632,12 @@ if [[ "$DEVICE" == "emulator" ]]; then
     2>&1 | tee "$RUNTIME_DIR/instrumentation.txt"
   TEST_RC=${PIPESTATUS[0]}
   set -e
+  if [[ "$TEST_RC" -eq 0 ]] && \
+     ! instrumentation_output_passed "$RUNTIME_DIR/instrumentation.txt"; then
+    printf '%s\n' \
+      'Android instrumentation output did not contain one complete successful test.' >&2
+    TEST_RC=1
+  fi
   adb logcat -d -v threadtime > "$ARTIFACT_DIR/logcat.txt"
   mkdir -p "$ARTIFACT_DIR/device-pull"
   adb pull "/sdcard/Android/data/cloud.dcompany.erp.auditdriver/files/business-audit/$RUN_ID" \
