@@ -227,7 +227,7 @@ REVIEWED_CODE30_2_SHA256 = {
     'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/finance/FinancePresentationPolicyTest.kt': '1acba44fca0131c0f64a236474ef1cfc29ab266b2923f1ab02acd9ac7faac75b',
     'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/finance/FinanceRefreshArchitectureTest.kt': '312c7a28dac459ae58c0af624b0791c3210ab5aa80c1b3d3aa3e3654b29f5e85',
     'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/finance/FinanceWireContractTest.kt': 'b79a1edf5e81321b48b2a58975fdb5e0d0fe3637bf1cbb9a03e7b068f7954f97',
-    'android-native/audit-driver/plans/code26-gaming-finance-physical.json': '4b7108f95bdc0c74a29f129462dcc52c32b4217f265e59f1dd63d4b2aa65cea4',
+    'android-native/audit-driver/plans/code26-gaming-finance-physical.json': 'c5657ca804eb994724d0a216c3cdf789e4aef074a2cd3a1c203003c8d71b7bce',
     'backend/alembic/versions/0074_expense_receipt_evidence.py': '7809ee7ce3bf3b417e6315a0818aa1ea491265fb9d347f5bb48053a182b72835',
     'backend/alembic/versions/0075_google_sheets_delivery_outbox.py': '5afb8a1ca5b0f4e01cbcc195455b1dbebd7099f47c428e62ff81f506b7e2254a',
     'backend/alembic/versions/0076_google_sheets_mirror_config.py': '0d997527fa19142f3a22196f9ba0c5d3a47041e14d7de99f93f50b0034ba2772',
@@ -333,9 +333,9 @@ REVIEWED_CODE30_2_SHA256 = {
     'integrations/google-sheets/Code.gs': 'cbf401b2b7612b049d338a38ab4e53f0e78d7afda2d92782c3477f7b94d1f6d0',
     'releases/android/README.md': '790179dffcf20aa3834b85f0cf26dd0953bdeecfb19a4bb93be3fc8a4356e786',
     'scripts/analyze_code26_physical_evidence.py': '26c94d9abf88cd5211fccdcf3dddd3fe16edc8a653f8c18d0f0d1ff921e20e57',
-    'scripts/run_code26_physical_business_audit.sh': '4367df67b6cd2e0ad271707aa8ab9b4952691cd6af58dfe1ba839711deb60c92',
+    'scripts/run_code26_physical_business_audit.sh': 'a778888fde9676de966363f6574f733e214c5d8052f26b31dd55e733bfb17986',
     'tests/test_android_release_version.py': 'c3b15d5ef03e2dac384dd9ab2801d9166ac3439cae0607a9d621b84ea8c380fb',
-    'tests/test_code26_physical_audit_lane.py': '35776f7ad37d6d4a13cbbf322c94e6c2c074e414e98f89655d3fe7932c2b9266',
+    'tests/test_code26_physical_audit_lane.py': 'eaa3104cbe3faca655dcf866b05008e1a8acde3d2f456c8cb3a9b99d638befed',
     'tests/test_production_installer_safety.py': '218a18d355de99986638ca9e1907e64ad9c67fd53b8b6607f852031dda1d8d90',
 }
 
@@ -719,8 +719,8 @@ def _verify_code30_2_audit_plan(root: Path, errors: list[str]) -> None:
         "Code30.2 3.1.29 current-tariff Gaming and Finance emulator acceptance"
     ):
         errors.append("Code30.2 business audit plan identity changed")
-    if len(steps) != 389 or plan.get("expected_sessions") != 16:
-        errors.append("Code30.2 business audit plan must retain 389 steps and 16 sessions")
+    if len(steps) != 390 or plan.get("expected_sessions") != 16:
+        errors.append("Code30.2 business audit plan must retain 390 steps and 16 sessions")
 
     rendered = json.dumps(steps, sort_keys=True, ensure_ascii=False)
     category_markers = {

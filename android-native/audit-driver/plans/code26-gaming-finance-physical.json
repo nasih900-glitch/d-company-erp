@@ -2006,6 +2006,15 @@
       "timeoutMs": 60000
     },
     {
+      "name": "Open Gaming",
+      "action": "click",
+      "descriptionContains": "Gaming. Manage",
+      "timeoutMs": 60000,
+      "then": {
+        "text": "Station floor"
+      }
+    },
+    {
       "name": "Simdrive: show Racing stations",
       "action": "click",
       "text": "Racing",

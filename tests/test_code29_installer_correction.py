@@ -26,13 +26,13 @@ HISTORICAL_CADDY_GUARD_SHA256 = (
     "2395767f4fc278a45822bc2cc45f476c8a44e9211fc9db7b747196462579c881"
 )
 CODE30_2_FREEZE_CONSTANTS_SHA256 = (
-    "fff674084e6d23812bb8f88e0278d34b3eca7c1df1eef0c1ad5467ea2f46202d"
+    "940125f81c0664691321ce271879c4bb1e8a9a0f8783a6973ecdb35420d0cb02"
 )
 CODE30_2_FREEZE_HELPERS_SHA256 = (
-    "32ff9182f1c5c6cb3715851af0b70b6313d1ac43a0efc598debf680f6e27f901"
+    "8c14d5c117c742caaae23319d97a84c1b5e9718b34f758fd2c4b91a72200864c"
 )
 CODE30_2_FREEZE_SCRIPT_SHA256 = (
-    "045f42e40e2fdf32143936279d0ad9b1cb8559ebe56041c0646287cd53723109"
+    "182c4c73d79f9873840198b31435603452f442f52b4c37136a1f64b0db0c6d9c"
 )
 CODE30_2_FREEZE_TEST_SHA256 = (
     "303c44945334417d810b27c07982a8582220f08642183b4107dcda8e67568a14"
@@ -931,13 +931,13 @@ def test_installer_verifier_and_live_workflows_are_exact() -> None:
     )
 
 
-def test_physical_lane_accepts_only_the_exact_389_step_code30_point2_plan() -> None:
+def test_physical_lane_accepts_only_the_exact_390_step_code30_point2_plan() -> None:
     plan_path = "android-native/audit-driver/plans/code26-gaming-finance-physical.json"
     corrected_plan = json.loads(_current(plan_path))
     assert hashlib.sha256((ROOT / plan_path).read_bytes()).hexdigest() == (
         REVIEWED_CODE30_2_SHA256[plan_path]
     )
-    assert len(corrected_plan["steps"]) == 389
+    assert len(corrected_plan["steps"]) == 390
     assert corrected_plan["expected_sessions"] == 16
     assert corrected_plan["name"] == (
         "Code30.2 3.1.29 current-tariff Gaming and Finance emulator acceptance"

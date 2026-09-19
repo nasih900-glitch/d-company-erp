@@ -192,7 +192,7 @@ def test_physical_plan_is_bounded_and_contains_no_embedded_authority() -> None:
     steps = _steps()
     rendered = json.dumps(steps, sort_keys=True, ensure_ascii=False)
 
-    assert len(steps) == 389
+    assert len(steps) == 390
     assert {step["action"] for step in steps} <= {
         "launch",
         "restart",
@@ -652,6 +652,7 @@ def test_return_to_gaming_respects_the_persisted_service_filter() -> None:
         "VR Games 60m transfer: show VR stations",
         "VR Racing 15m: show Racing stations",
         "VR Racing 30m: show Racing stations",
+        "Simdrive: show Racing stations",
         "Simdrive 30m: show Racing stations",
         "Simdrive 60m: show Racing stations",
         "VR Racing 60m: show Racing stations",
