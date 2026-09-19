@@ -103,6 +103,7 @@ fi
 jwt_secret=$(require_secret JWT_SECRET 32)
 pairing_secret=$(require_secret REMOTE_ASSISTANCE_PAIRING_SECRET 32)
 relay_secret=$(require_secret REMOTE_ASSISTANCE_RELAY_SECRET 44)
+sheets_encryption_key=$(require_secret GOOGLE_SHEETS_SECRET_ENCRYPTION_KEY 44)
 redis_password=$(require_secret REDIS_PASSWORD 64)
 postgres_password=$(require_secret POSTGRES_PASSWORD 20)
 database_url=$(require_secret DATABASE_URL 40)
@@ -132,15 +133,33 @@ if [ "$relay_canonical" != "$relay_secret" ]; then
   exit 1
 fi
 
+if ! [[ "$sheets_encryption_key" =~ ^[A-Za-z0-9+/]{43}=$ ]]; then
+  echo "GOOGLE_SHEETS_SECRET_ENCRYPTION_KEY must be canonical standard base64." >&2
+  exit 1
+fi
+if ! sheets_key_bytes=$(printf '%s' "$sheets_encryption_key" | openssl base64 -d -A 2>/dev/null | wc -c | tr -d ' '); then
+  echo "GOOGLE_SHEETS_SECRET_ENCRYPTION_KEY is not valid standard base64." >&2
+  exit 1
+fi
+if [ "$sheets_key_bytes" != 32 ]; then
+  echo "GOOGLE_SHEETS_SECRET_ENCRYPTION_KEY must encode exactly 32 bytes." >&2
+  exit 1
+fi
+sheets_key_canonical=$(printf '%s' "$sheets_encryption_key" | openssl base64 -d -A | openssl base64 -A)
+if [ "$sheets_key_canonical" != "$sheets_encryption_key" ]; then
+  echo "GOOGLE_SHEETS_SECRET_ENCRYPTION_KEY must use canonical standard base64." >&2
+  exit 1
+fi
+
 expected_database_url="postgresql+psycopg://erp:${postgres_password}@postgres:5432/erp"
 if [ "$database_url" != "$expected_database_url" ]; then
   echo "DATABASE_URL must use the configured POSTGRES_PASSWORD for the Compose postgres service." >&2
   exit 1
 fi
 
-secret_names=(JWT pairing relay Redis Postgres MinIO owner)
+secret_names=(JWT pairing relay Sheets Redis Postgres MinIO owner)
 secret_values=(
-  "$jwt_secret" "$pairing_secret" "$relay_secret" "$redis_password"
+  "$jwt_secret" "$pairing_secret" "$relay_secret" "$sheets_encryption_key" "$redis_password"
   "$postgres_password" "$s3_secret" "$owner_password"
 )
 for ((left = 0; left < ${#secret_values[@]}; left++)); do

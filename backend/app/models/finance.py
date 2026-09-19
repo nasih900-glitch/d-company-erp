@@ -12,6 +12,8 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    Integer,
+    LargeBinary,
     Numeric,
     SmallInteger,
     String,
@@ -392,14 +394,14 @@ class Expense(Base, TimestampMixin, SoftDeleteMixin, TenantMixin):
         ),
         CheckConstraint(
             "source_integrity_revision IS NULL "
-            "OR source_integrity_revision IN (50, 51)",
+            "OR source_integrity_revision IN (50, 51, 52)",
             name="ck_expense_source_integrity_revision",
         ),
         CheckConstraint(
-            "(source_integrity_revision IS DISTINCT FROM 51 "
+            "((source_integrity_revision IS NULL OR source_integrity_revision = 50) "
             "AND shift_id IS NULL AND idempotency_key IS NULL "
             "AND request_hash IS NULL AND created_by IS NULL) OR "
-            "(source_integrity_revision = 51 AND paid_via = 'cash' "
+            "(source_integrity_revision IN (51, 52) AND paid_via = 'cash' "
             "AND shift_id IS NOT NULL AND idempotency_key IS NOT NULL "
             "AND idempotency_key LIKE 'expense:%' "
             "AND request_hash ~ '^[0-9a-f]{64}$' "
@@ -418,11 +420,11 @@ class Expense(Base, TimestampMixin, SoftDeleteMixin, TenantMixin):
     branch_id: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("branches.id", ondelete="RESTRICT"), nullable=False, index=True
     )
-    # Revision-51 rows are the narrow compatibility receipt for cash expenses
-    # captured by the signed Code 21 Android outbox.  Older/non-cash expenses
-    # keep every field below NULL.  The linked shift makes the drawer movement
-    # accountable; action/hash/actor keep the receipt durable after the generic
-    # idempotency cache expires.
+    # Revision 51 is the narrow signed Code 21 recovery receipt; revision 52 is
+    # the modern explicit-shift cash paid-out contract. Older and ordinary
+    # non-cash expenses keep every field below NULL. The linked shift makes the
+    # drawer movement accountable; action/hash/actor keep the receipt durable
+    # after the generic idempotency cache expires.
     shift_id: Mapped[UUID | None] = mapped_column(
         PG_UUID(as_uuid=True),
         ForeignKey("shifts.id", ondelete="RESTRICT"),
@@ -518,14 +520,292 @@ def _guard_expense_delete(_mapper, _connection, _row: Expense) -> None:
     raise ValueError("expenses are immutable; void the expense instead")
 
 
+class FinanceSourceCorrection(Base, TenantMixin):
+    """One-way full reversal for a cash source whose original shift is closed.
+
+    The original source and shift remain untouched.  The database validates the
+    source, locks the selected current drawer, and applies its opposite cash
+    movement in the same transaction as this immutable correction receipt.
+    """
+
+    __tablename__ = "finance_source_corrections"
+    __table_args__ = (
+        CheckConstraint(
+            "source_type IN ('expense', 'manual_collection', 'tip_payout', "
+            "'supplier_payment')",
+            name="ck_finance_source_correction_type",
+        ),
+        CheckConstraint(
+            "(source_type = 'expense' AND expense_id IS NOT NULL "
+            "AND manual_collection_id IS NULL AND tip_payout_id IS NULL "
+            "AND supplier_payment_id IS NULL) OR "
+            "(source_type = 'manual_collection' AND manual_collection_id IS NOT NULL "
+            "AND expense_id IS NULL AND tip_payout_id IS NULL "
+            "AND supplier_payment_id IS NULL) OR "
+            "(source_type = 'tip_payout' AND tip_payout_id IS NOT NULL "
+            "AND expense_id IS NULL AND manual_collection_id IS NULL "
+            "AND supplier_payment_id IS NULL) OR "
+            "(source_type = 'supplier_payment' AND supplier_payment_id IS NOT NULL "
+            "AND expense_id IS NULL AND manual_collection_id IS NULL "
+            "AND tip_payout_id IS NULL)",
+            name="ck_finance_source_correction_exact_source",
+        ),
+        CheckConstraint(
+            "amount_minor > 0",
+            name="ck_finance_source_correction_positive_amount",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 3",
+            name="ck_finance_source_correction_reason",
+        ),
+        CheckConstraint(
+            "request_hash ~ '^[0-9a-f]{64}$'",
+            name="ck_finance_source_correction_request_hash",
+        ),
+        CheckConstraint(
+            "(source_type = 'expense' AND idempotency_key ~ "
+            "'^expense-correction:[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$') OR "
+            "(source_type = 'manual_collection' AND idempotency_key ~ "
+            "'^manual-collection-correction:[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$') OR "
+            "(source_type = 'tip_payout' AND idempotency_key ~ "
+            "'^tip-payout-correction:[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$') OR "
+            "(source_type = 'supplier_payment' AND idempotency_key ~ "
+            "'^supplier-payment-correction:[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$')",
+            name="ck_finance_source_correction_action_identity",
+        ),
+        UniqueConstraint(
+            "company_id",
+            "idempotency_key",
+            name="uq_finance_source_correction_idempotency",
+        ),
+        UniqueConstraint(
+            "expense_id",
+            name="uq_finance_source_correction_expense",
+        ),
+        UniqueConstraint(
+            "manual_collection_id",
+            name="uq_finance_source_correction_manual_collection",
+        ),
+        UniqueConstraint(
+            "tip_payout_id",
+            name="uq_finance_source_correction_tip_payout",
+        ),
+        UniqueConstraint(
+            "supplier_payment_id",
+            name="uq_finance_source_correction_supplier_payment",
+        ),
+    )
+
+    id: Mapped[UUID] = _uuid_pk()
+    branch_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("branches.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    source_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    expense_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("expenses.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
+    manual_collection_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("manual_collections.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
+    tip_payout_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("tip_payouts.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
+    supplier_payment_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("supplier_payments.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
+    original_shift_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("shifts.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    settlement_shift_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("shifts.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    amount_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    corrected_by: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    reason: Mapped[str] = mapped_column(String(500), nullable=False)
+    corrected_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
+    )
+
+
+@event.listens_for(FinanceSourceCorrection, "before_update")
+def _guard_finance_source_correction_update(
+    _mapper, _connection, _row: FinanceSourceCorrection
+) -> None:
+    raise ValueError("finance source corrections are append-only")
+
+
+@event.listens_for(FinanceSourceCorrection, "before_delete")
+def _guard_finance_source_correction_delete(
+    _mapper, _connection, _row: FinanceSourceCorrection
+) -> None:
+    raise ValueError("finance source corrections are append-only")
+
+
+class ExpenseReceipt(Base, TenantMixin):
+    """Private source evidence attached to one posted expense.
+
+    Receipt bytes and their identifying metadata are immutable. Review decisions
+    live in the append-only ``ExpenseReceiptReview`` stream so rejecting a bill
+    can never remove or replace the evidence that was inspected.
+    """
+
+    __tablename__ = "expense_receipts"
+    __table_args__ = (
+        CheckConstraint(
+            "content_type IN ('image/jpeg', 'image/png', 'image/webp', "
+            "'application/pdf')",
+            name="ck_expense_receipts_content_type",
+        ),
+        CheckConstraint(
+            "source IN ('camera', 'gallery', 'file')",
+            name="ck_expense_receipts_source",
+        ),
+        CheckConstraint(
+            "size_bytes BETWEEN 1 AND 10485760",
+            name="ck_expense_receipts_size",
+        ),
+        CheckConstraint(
+            "sha256 ~ '^[0-9a-f]{64}$'",
+            name="ck_expense_receipts_sha256",
+        ),
+        CheckConstraint(
+            "octet_length(payload) = size_bytes "
+            "AND octet_length(payload) <= 10485760 "
+            "AND sha256 = encode(digest(payload, 'sha256'), 'hex')",
+            name="ck_expense_receipts_payload_integrity",
+        ),
+        UniqueConstraint(
+            "company_id",
+            "expense_id",
+            "sha256",
+            name="uq_expense_receipts_expense_sha256",
+        ),
+        Index(
+            "ix_expense_receipts_company_expense_created",
+            "company_id",
+            "expense_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[UUID] = _uuid_pk()
+    expense_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("expenses.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    uploader_user_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    original_filename: Mapped[str] = mapped_column(String(200), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    source: Mapped[str] = mapped_column(String(20), nullable=False)
+    # Deferred so expense lists and receipt metadata reads never pull private
+    # bill bytes from PostgreSQL. Only the authenticated download endpoint
+    # explicitly undefer()s the payload.
+    payload: Mapped[bytes] = mapped_column(LargeBinary, nullable=False, deferred=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+@event.listens_for(ExpenseReceipt, "before_update")
+@event.listens_for(ExpenseReceipt, "before_delete")
+def _guard_expense_receipt_mutation(
+    _mapper, _connection, _row: ExpenseReceipt
+) -> None:
+    raise ValueError("expense receipt evidence is immutable")
+
+
+class ExpenseReceiptReview(Base, TenantMixin):
+    """One immutable event in an expense's receipt-review history."""
+
+    __tablename__ = "expense_receipt_reviews"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'verified', 'not_required', 'rejected')",
+            name="ck_expense_receipt_reviews_status",
+        ),
+        CheckConstraint(
+            "(status IN ('rejected', 'not_required') "
+            "AND review_note IS NOT NULL AND length(trim(review_note)) >= 3) "
+            "OR status IN ('pending', 'verified')",
+            name="ck_expense_receipt_reviews_note",
+        ),
+        Index(
+            "ix_expense_receipt_reviews_company_expense_created",
+            "company_id",
+            "expense_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[UUID] = _uuid_pk()
+    expense_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("expenses.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    review_note: Mapped[str | None] = mapped_column(String(500))
+    reviewed_by: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+@event.listens_for(ExpenseReceiptReview, "before_update")
+@event.listens_for(ExpenseReceiptReview, "before_delete")
+def _guard_expense_receipt_review_mutation(
+    _mapper, _connection, _row: ExpenseReceiptReview
+) -> None:
+    raise ValueError("expense receipt review history is append-only")
+
+
 class ManualCollection(Base, TenantMixin):
     """Auditable revenue received outside the itemized POS workflow.
 
-    These rows deliberately do not reference a shift, order, invoice,
-    customer, inventory movement, or loyalty record.  They exist for legacy
-    daily totals and exceptional collections where only the payment-method
-    total is known.  Corrections are represented by a void plus a replacement
-    row; the original amount and provenance are never overwritten.
+    New cash rows carry an explicit shift receipt and move that drawer in the
+    same transaction.  Historical rows that predate this contract remain
+    drawer-neutral.  The original amount and provenance are never overwritten.
     """
 
     __tablename__ = "manual_collections"
@@ -555,6 +835,20 @@ class ManualCollection(Base, TenantMixin):
             "OR (voided_at IS NOT NULL AND voided_by IS NOT NULL "
             "AND length(trim(void_reason)) >= 3)",
             name="ck_manual_collection_void_state",
+        ),
+        CheckConstraint(
+            "source_integrity_revision IS NULL OR source_integrity_revision = 1",
+            name="ck_manual_collection_source_integrity_revision",
+        ),
+        CheckConstraint(
+            "(source_integrity_revision IS NULL AND shift_id IS NULL "
+            "AND request_hash IS NULL) OR "
+            "(source_integrity_revision = 1 AND request_hash ~ '^[0-9a-f]{64}$' "
+            "AND idempotency_key ~ "
+            "'^manual-collection:[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$' "
+            "AND ((method = 'cash' AND shift_id IS NOT NULL) "
+            "OR (method <> 'cash' AND shift_id IS NULL)))",
+            name="ck_manual_collection_drawer_receipt",
         ),
         UniqueConstraint(
             "company_id",
@@ -588,6 +882,12 @@ class ManualCollection(Base, TenantMixin):
         nullable=False,
         index=True,
     )
+    shift_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("shifts.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
     business_date: Mapped[date] = mapped_column(Date, nullable=False)
     method: Mapped[str] = mapped_column(String(20), nullable=False)
     amount_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
@@ -597,6 +897,7 @@ class ManualCollection(Base, TenantMixin):
     source_ref: Mapped[str] = mapped_column(String(160), nullable=False)
     note: Mapped[str | None] = mapped_column(String(500))
     idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    request_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_by: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="RESTRICT"),
@@ -613,6 +914,12 @@ class ManualCollection(Base, TenantMixin):
         index=True,
     )
     void_reason: Mapped[str | None] = mapped_column(String(500))
+    source_integrity_revision: Mapped[int | None] = mapped_column(
+        SmallInteger,
+        nullable=True,
+        default=1,
+        server_default="1",
+    )
 
 
 @event.listens_for(ManualCollection, "before_update")
@@ -622,6 +929,7 @@ def _guard_manual_collection_update(_mapper, _connection, row: ManualCollection)
     immutable_fields = {
         "company_id",
         "branch_id",
+        "shift_id",
         "business_date",
         "method",
         "amount_minor",
@@ -629,8 +937,10 @@ def _guard_manual_collection_update(_mapper, _connection, row: ManualCollection)
         "source_ref",
         "note",
         "idempotency_key",
+        "request_hash",
         "created_by",
         "created_at",
+        "source_integrity_revision",
     }
     changed_immutable = sorted(
         field
@@ -705,6 +1015,20 @@ class TipPayout(Base, TenantMixin):
             "AND length(trim(void_reason)) >= 3)",
             name="ck_tip_payout_void_state",
         ),
+        CheckConstraint(
+            "source_integrity_revision IS NULL OR source_integrity_revision = 1",
+            name="ck_tip_payout_source_integrity_revision",
+        ),
+        CheckConstraint(
+            "(source_integrity_revision IS NULL AND shift_id IS NULL "
+            "AND request_hash IS NULL) OR "
+            "(source_integrity_revision = 1 AND request_hash ~ '^[0-9a-f]{64}$' "
+            "AND idempotency_key ~ "
+            "'^tip-payout:[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$' "
+            "AND ((method = 'cash' AND shift_id IS NOT NULL) "
+            "OR (method <> 'cash' AND shift_id IS NULL)))",
+            name="ck_tip_payout_drawer_receipt",
+        ),
         UniqueConstraint(
             "company_id",
             "idempotency_key",
@@ -724,11 +1048,18 @@ class TipPayout(Base, TenantMixin):
         nullable=False,
         index=True,
     )
+    shift_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("shifts.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
     amount_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
     method: Mapped[str] = mapped_column(String(20), nullable=False)  # cash|upi|card|bank
     paid_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     note: Mapped[str] = mapped_column(String(500), nullable=False)
     idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    request_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_by: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="RESTRICT"),
@@ -745,6 +1076,12 @@ class TipPayout(Base, TenantMixin):
         index=True,
     )
     void_reason: Mapped[str | None] = mapped_column(String(500))
+    source_integrity_revision: Mapped[int | None] = mapped_column(
+        SmallInteger,
+        nullable=True,
+        default=1,
+        server_default="1",
+    )
 
 
 @event.listens_for(TipPayout, "before_update")
@@ -754,13 +1091,16 @@ def _guard_tip_payout_update(_mapper, _connection, row: TipPayout) -> None:
     immutable_fields = {
         "company_id",
         "branch_id",
+        "shift_id",
         "amount_minor",
         "method",
         "paid_at",
         "note",
         "idempotency_key",
+        "request_hash",
         "created_by",
         "created_at",
+        "source_integrity_revision",
     }
     changed_immutable = sorted(
         field
@@ -832,6 +1172,19 @@ class SupplierPayment(Base, TenantMixin):
             "AND void_reason IS NOT NULL AND length(trim(void_reason)) >= 3)",
             name="ck_supplier_payment_void_state",
         ),
+        CheckConstraint(
+            "source_integrity_revision IS NULL OR source_integrity_revision = 1",
+            name="ck_supplier_payment_source_integrity_revision",
+        ),
+        CheckConstraint(
+            "(source_integrity_revision IS NULL AND shift_id IS NULL) OR "
+            "(source_integrity_revision = 1 AND request_hash ~ '^[0-9a-f]{64}$' "
+            "AND idempotency_key ~ "
+            "'^supplier-payment:[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$' "
+            "AND ((method = 'cash' AND shift_id IS NOT NULL) "
+            "OR (method <> 'cash' AND shift_id IS NULL)))",
+            name="ck_supplier_payment_drawer_receipt",
+        ),
         UniqueConstraint(
             "company_id",
             "idempotency_key",
@@ -858,6 +1211,12 @@ class SupplierPayment(Base, TenantMixin):
         PG_UUID(as_uuid=True),
         ForeignKey("branches.id", ondelete="RESTRICT"),
         nullable=False,
+        index=True,
+    )
+    shift_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("shifts.id", ondelete="RESTRICT"),
+        nullable=True,
         index=True,
     )
     supplier_id: Mapped[UUID] = mapped_column(
@@ -901,6 +1260,12 @@ class SupplierPayment(Base, TenantMixin):
         index=True,
     )
     void_reason: Mapped[str | None] = mapped_column(String(500))
+    source_integrity_revision: Mapped[int | None] = mapped_column(
+        SmallInteger,
+        nullable=True,
+        default=1,
+        server_default="1",
+    )
 
 
 @event.listens_for(SupplierPayment, "before_update")
@@ -909,6 +1274,7 @@ def _guard_supplier_payment_update(_mapper, _connection, row: SupplierPayment) -
     immutable_fields = {
         "company_id",
         "branch_id",
+        "shift_id",
         "supplier_id",
         "grn_id",
         "journal_entry_id",
@@ -921,6 +1287,7 @@ def _guard_supplier_payment_update(_mapper, _connection, row: SupplierPayment) -
         "request_hash",
         "created_by",
         "created_at",
+        "source_integrity_revision",
     }
     changed_immutable = sorted(
         field

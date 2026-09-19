@@ -288,6 +288,31 @@ class AndroidReleaseVersionTest(unittest.TestCase):
                 version,
             )
 
+    def test_code30_point2_finance_patch_accepts_v3_1_29_build37(self) -> None:
+        version = read_gradle_version(
+            self.write_build_file(version_code="37", version_name='"3.1.29"')
+        )
+
+        validate_tag("v3.1.29", version)
+        validate_built_metadata(
+            self.write_metadata(version_code=37, version_name="3.1.29"), version
+        )
+
+        self.assertEqual(AndroidVersion(code=37, name="3.1.29"), version)
+
+    def test_code30_point2_finance_patch_rejects_code30_point1_identity(self) -> None:
+        version = read_gradle_version(
+            self.write_build_file(version_code="37", version_name='"3.1.29"')
+        )
+
+        with self.assertRaisesRegex(ReleaseVersionError, "expected 'v3.1.29'"):
+            validate_tag("v3.1.28", version)
+        with self.assertRaisesRegex(ReleaseVersionError, "does not match"):
+            validate_built_metadata(
+                self.write_metadata(version_code=36, version_name="3.1.28"),
+                version,
+            )
+
     def test_tag_must_match_version_name_exactly(self) -> None:
         version = read_gradle_version(self.write_build_file())
 

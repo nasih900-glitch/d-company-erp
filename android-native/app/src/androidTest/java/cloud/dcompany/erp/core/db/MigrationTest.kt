@@ -163,6 +163,284 @@ class MigrationTest {
     }
 
     @Test
+    fun migrate48To49PreservesExpensesAndAddsDurableReceiptOutbox() {
+        helper.createDatabase(dbName, 48).apply {
+            execSQL(
+                "INSERT INTO expense_cache " +
+                    "(id, branchId, categoryId, amountMinor, paidVia, paidAt) VALUES " +
+                    "('server-expense', 'branch-1', 'category-1', 12500, 'cash', " +
+                    "'2026-09-19T12:00:00Z')",
+            )
+            execSQL(
+                "INSERT INTO local_expenses " +
+                    "(localId, branchId, categoryId, amountMinor, paidVia, paidAt, " +
+                    "createdAtMillis, syncState) VALUES " +
+                    "('local-expense', 'branch-1', 'category-1', 12500, 'cash', " +
+                    "'2026-09-19T12:00:00Z', 1000, 'pending')",
+            )
+            close()
+        }
+
+        val migrated = helper.runMigrationsAndValidate(dbName, 49, true, MIGRATION_48_49)
+        migrated.query(
+            "SELECT receiptCount, receiptStatus FROM expense_cache " +
+                "WHERE id = 'server-expense'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(0, cursor.getInt(0))
+            assertEquals("pending", cursor.getString(1))
+        }
+        migrated.query(
+            "SELECT amountMinor, syncState, serverId FROM local_expenses " +
+                "WHERE localId = 'local-expense'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(12_500L, cursor.getLong(0))
+            assertEquals("pending", cursor.getString(1))
+            assertTrue(cursor.isNull(2))
+        }
+        migrated.execSQL(
+            "INSERT INTO local_expense_receipts " +
+                "(localId, expenseLocalId, filename, contentType, source, byteSize, " +
+                "contentSha256, createdAtMillis, syncState) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            arrayOf(
+                "receipt-local", "local-expense", "bill.pdf", "application/pdf", "file",
+                14, "sha-1", 1001, "pending",
+            ),
+        )
+        migrated.execSQL(
+            "INSERT INTO local_expense_receipt_chunks " +
+                "(receiptLocalId, chunkIndex, content) VALUES (?, ?, ?)",
+            arrayOf("receipt-local", 0, "%PDF-1.7\n%%EOF".encodeToByteArray()),
+        )
+        migrated.query(
+            "SELECT expenseLocalId, byteSize, syncState FROM local_expense_receipts " +
+                "WHERE localId = 'receipt-local'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("local-expense", cursor.getString(0))
+            assertEquals(14, cursor.getInt(1))
+            assertEquals("pending", cursor.getString(2))
+        }
+        migrated.query(
+            "SELECT chunkIndex, length(content) FROM local_expense_receipt_chunks " +
+                "WHERE receiptLocalId = 'receipt-local'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(0, cursor.getInt(0))
+            assertEquals(14, cursor.getInt(1))
+        }
+        migrated.close()
+    }
+
+    @Test
+    fun migrate49To50PreservesReceiptOutboxAndAddsExactCashShiftIdentity() {
+        helper.createDatabase(dbName, 49).apply {
+            execSQL(
+                "INSERT INTO local_expenses " +
+                    "(localId, branchId, categoryId, amountMinor, paidVia, paidAt, " +
+                    "createdAtMillis, syncState) VALUES " +
+                    "('cash-expense', 'branch-1', 'category-1', 1500, 'cash', " +
+                    "'2026-09-19T12:00:00Z', 1000, 'pending')",
+            )
+            execSQL(
+                "INSERT INTO local_expenses " +
+                    "(localId, branchId, categoryId, amountMinor, paidVia, paidAt, " +
+                    "createdAtMillis, syncState) VALUES " +
+                    "('rejected-cash-expense', 'branch-1', 'category-1', 1600, 'cash', " +
+                    "'2026-09-19T12:01:00Z', 1001, 'rejected'), " +
+                    "('pending-upi-expense', 'branch-1', 'category-1', 1700, 'upi', " +
+                    "'2026-09-19T12:02:00Z', 1002, 'pending'), " +
+                    "('synced-cash-expense', 'branch-1', 'category-1', 1800, 'cash', " +
+                    "'2026-09-19T12:03:00Z', 1003, 'synced')",
+            )
+            execSQL(
+                "INSERT INTO local_expense_receipts " +
+                    "(localId, expenseLocalId, filename, contentType, source, byteSize, " +
+                    "contentSha256, createdAtMillis, syncState) VALUES " +
+                    "('cash-receipt', 'cash-expense', 'bill.pdf', 'application/pdf', " +
+                    "'file', 14, 'sha-1', 1001, 'pending')",
+            )
+            execSQL(
+                "INSERT INTO local_expense_receipt_chunks " +
+                    "(receiptLocalId, chunkIndex, content) VALUES (?, ?, ?)",
+                arrayOf("cash-receipt", 0, "%PDF-1.7\n%%EOF".encodeToByteArray()),
+            )
+            execSQL(
+                "INSERT INTO server_open_shift_cache " +
+                    "(terminalId, serverShiftId, branchId, status, openingFloatMinor, " +
+                    "expectedMinor, openedAtMillis, verifiedAtMillis) VALUES " +
+                    "('terminal-1', 'shift-1', 'branch-1', 'open', 10000, 10000, 900, 950)",
+            )
+            close()
+        }
+
+        val migrated = helper.runMigrationsAndValidate(dbName, 50, true, MIGRATION_49_50)
+        migrated.query(
+            "SELECT amountMinor, paidVia, shiftId, syncState, legacyOriginVersionCode " +
+                "FROM local_expenses " +
+                "WHERE localId = 'cash-expense'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(1_500L, cursor.getLong(0))
+            assertEquals("cash", cursor.getString(1))
+            assertTrue(cursor.isNull(2))
+            assertEquals("pending", cursor.getString(3))
+            assertEquals(21, cursor.getInt(4))
+        }
+        migrated.query(
+            "SELECT localId, legacyOriginVersionCode FROM local_expenses " +
+                "WHERE localId IN ('rejected-cash-expense', 'pending-upi-expense', " +
+                "'synced-cash-expense') ORDER BY localId",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("pending-upi-expense", cursor.getString(0))
+            assertTrue(cursor.isNull(1))
+            assertTrue(cursor.moveToNext())
+            assertEquals("rejected-cash-expense", cursor.getString(0))
+            assertEquals(21, cursor.getInt(1))
+            assertTrue(cursor.moveToNext())
+            assertEquals("synced-cash-expense", cursor.getString(0))
+            assertTrue(cursor.isNull(1))
+        }
+        migrated.query(
+            "SELECT length(content) FROM local_expense_receipt_chunks " +
+                "WHERE receiptLocalId = 'cash-receipt'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(14, cursor.getInt(0))
+        }
+        migrated.query(
+            "SELECT openingClientPlatform, openingClientInstallationId " +
+                "FROM server_open_shift_cache WHERE terminalId = 'terminal-1'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertTrue(cursor.isNull(0))
+            assertTrue(cursor.isNull(1))
+        }
+        migrated.execSQL(
+            "UPDATE local_expenses SET shiftId = ? WHERE localId = 'cash-expense'",
+            arrayOf("6d330c0a-d038-40d8-befb-b9fd21898fec"),
+        )
+        migrated.query(
+            "SELECT shiftId FROM local_expenses WHERE localId = 'cash-expense'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("6d330c0a-d038-40d8-befb-b9fd21898fec", cursor.getString(0))
+        }
+        migrated.close()
+    }
+
+    @Test
+    fun migrate50To51PreservesExpenseCacheAndAddsCorrectionState() {
+        helper.createDatabase(dbName, 50).apply {
+            execSQL(
+                "INSERT INTO expense_cache " +
+                    "(id, branchId, categoryId, amountMinor, paidVia, paidAt, vendorName, " +
+                    "receiptCount, receiptStatus) VALUES " +
+                    "('expense-1', 'branch-1', 'category-1', 12500, 'cash', " +
+                    "'2026-09-19T12:00:00Z', 'Vendor', 1, 'verified')",
+            )
+            close()
+        }
+
+        val migrated = helper.runMigrationsAndValidate(dbName, 51, true, MIGRATION_50_51)
+        migrated.query(
+            "SELECT amountMinor, vendorName, receiptCount, receiptStatus, shiftId, createdBy, " +
+                "isVoided, sourceShiftStatus, isCorrected, correctionReason, correctionAt " +
+                "FROM expense_cache WHERE id = 'expense-1'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(12_500L, cursor.getLong(0))
+            assertEquals("Vendor", cursor.getString(1))
+            assertEquals(1, cursor.getInt(2))
+            assertEquals("verified", cursor.getString(3))
+            assertTrue(cursor.isNull(4))
+            assertTrue(cursor.isNull(5))
+            assertEquals(0, cursor.getInt(6))
+            assertTrue(cursor.isNull(7))
+            assertEquals(0, cursor.getInt(8))
+            assertTrue(cursor.isNull(9))
+            assertTrue(cursor.isNull(10))
+        }
+        migrated.close()
+    }
+
+    @Test
+    fun migrate48Through50PreservesLegacyExpensesAndIntermediateReceiptChunks() {
+        helper.createDatabase(dbName, 48).apply {
+            execSQL(
+                "INSERT INTO local_expenses " +
+                    "(localId, branchId, categoryId, amountMinor, paidVia, paidAt, " +
+                    "createdAtMillis, syncState) VALUES " +
+                    "('pending-cash', 'branch-1', 'category-1', 1500, 'cash', " +
+                    "'2026-09-19T12:00:00Z', 1000, 'pending'), " +
+                    "('rejected-cash', 'branch-1', 'category-1', 1600, 'cash', " +
+                    "'2026-09-19T12:01:00Z', 1001, 'rejected'), " +
+                    "('pending-upi', 'branch-1', 'category-1', 1700, 'upi', " +
+                    "'2026-09-19T12:02:00Z', 1002, 'pending')",
+            )
+            close()
+        }
+
+        // v49 introduced the receipt outbox. Seed one captured receipt there,
+        // then continue the same on-disk database to v50, matching an install
+        // that crossed both release schemas without ever losing local work.
+        helper.runMigrationsAndValidate(dbName, 49, true, MIGRATION_48_49).apply {
+            execSQL(
+                "INSERT INTO local_expense_receipts " +
+                    "(localId, expenseLocalId, filename, contentType, source, byteSize, " +
+                    "contentSha256, createdAtMillis, syncState) VALUES " +
+                    "('receipt-between-upgrades', 'pending-cash', 'bill.pdf', " +
+                    "'application/pdf', 'file', 14, 'sha-1', 1003, 'pending')",
+            )
+            execSQL(
+                "INSERT INTO local_expense_receipt_chunks " +
+                    "(receiptLocalId, chunkIndex, content) VALUES (?, ?, ?)",
+                arrayOf(
+                    "receipt-between-upgrades",
+                    0,
+                    "%PDF-1.7\n%%EOF".encodeToByteArray(),
+                ),
+            )
+            close()
+        }
+
+        val migrated = helper.runMigrationsAndValidate(dbName, 50, true, MIGRATION_49_50)
+        migrated.query(
+            "SELECT localId, shiftId, legacyOriginVersionCode FROM local_expenses " +
+                "ORDER BY localId",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("pending-cash", cursor.getString(0))
+            assertTrue(cursor.isNull(1))
+            assertEquals(21, cursor.getInt(2))
+            assertTrue(cursor.moveToNext())
+            assertEquals("pending-upi", cursor.getString(0))
+            assertTrue(cursor.isNull(1))
+            assertTrue(cursor.isNull(2))
+            assertTrue(cursor.moveToNext())
+            assertEquals("rejected-cash", cursor.getString(0))
+            assertTrue(cursor.isNull(1))
+            assertEquals(21, cursor.getInt(2))
+            assertTrue(!cursor.moveToNext())
+        }
+        migrated.query(
+            "SELECT r.expenseLocalId, r.syncState, c.chunkIndex, length(c.content) " +
+                "FROM local_expense_receipts r JOIN local_expense_receipt_chunks c " +
+                "ON c.receiptLocalId = r.localId " +
+                "WHERE r.localId = 'receipt-between-upgrades'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("pending-cash", cursor.getString(0))
+            assertEquals("pending", cursor.getString(1))
+            assertEquals(0, cursor.getInt(2))
+            assertEquals(14, cursor.getInt(3))
+        }
+        migrated.close()
+    }
+
+    @Test
     fun migrate1To2_preservesExistingDataAndAddsLocalShifts() {
         // Seed a v1 database with real rows — the migration is additive-only
         // (CREATE TABLE, no ALTER against menu_items/local_orders/etc), but

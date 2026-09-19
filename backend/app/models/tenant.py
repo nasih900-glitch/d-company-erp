@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime
-from uuid import UUID
+from datetime import datetime  # noqa: TC003 - SQLAlchemy resolves mapped types at runtime
+from uuid import UUID  # noqa: TC003 - SQLAlchemy resolves mapped types at runtime
 
 from sqlalchemy import (
     BigInteger,
@@ -48,9 +48,31 @@ class Company(Base, TimestampMixin, SoftDeleteMixin):
     # Indian financial year starts 1 April. Stored as integer (4 = April).
     fiscal_year_start_month: Mapped[int] = mapped_column(default=4, nullable=False)
     # ----- Integrations -----
-    # If set, every paid order pings this URL (Google Apps Script web app).
-    # See docs/GOOGLE_SHEETS.md and integrations/google-sheets/Code.gs.
+    # Destination used only by the authenticated server-side outbox dispatcher.
+    # Clients cannot write this through the generic company settings endpoint.
     google_sheets_webhook_url: Mapped[str | None] = mapped_column(String(500))
+    # The Apps Script secret is read only by the dispatcher and the one-time
+    # owner configuration response. It is never included in ordinary company
+    # settings or mirror event payloads.
+    google_sheets_mirror_enabled: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=text("false"),
+    )
+    google_sheets_signing_secret_ciphertext: Mapped[str | None] = mapped_column(
+        String(256)
+    )
+    google_sheets_configured_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    # Identifies one immutable delivery generation. A verified, drained
+    # generation gets a new value when its destination or secret changes.
+    # Corrections made before first verification retain the value so already
+    # held facts are not abandoned; configured_at invalidates earlier tests.
+    google_sheets_configuration_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True)
+    )
 
     # Merchant UPI VPA (e.g. "Q530001220@ybl") used to build the dynamic
     # UPI pay QR shown at checkout. Public payment address, not a secret.
@@ -63,7 +85,20 @@ class Company(Base, TimestampMixin, SoftDeleteMixin):
     payment_key_id: Mapped[str | None] = mapped_column(String(255))
     payment_key_secret: Mapped[str | None] = mapped_column(String(512))
 
-    branches: Mapped[list["Branch"]] = relationship(
+    __table_args__ = (
+        CheckConstraint(
+            "(google_sheets_mirror_enabled = false) OR "
+            "(google_sheets_webhook_url IS NOT NULL "
+            "AND length(trim(google_sheets_webhook_url)) > 0 "
+            "AND google_sheets_signing_secret_ciphertext IS NOT NULL "
+            "AND length(google_sheets_signing_secret_ciphertext) > 0 "
+            "AND google_sheets_configured_at IS NOT NULL "
+            "AND google_sheets_configuration_id IS NOT NULL)",
+            name="ck_company_google_sheets_mirror_config",
+        ),
+    )
+
+    branches: Mapped[list[Branch]] = relationship(
         back_populates="company", cascade="all, delete-orphan"
     )
 
@@ -103,7 +138,7 @@ class Branch(Base, TimestampMixin, SoftDeleteMixin):
     branch_gstin: Mapped[str | None] = mapped_column(String(15))
 
     company: Mapped[Company] = relationship(back_populates="branches")
-    terminals: Mapped[list["Terminal"]] = relationship(
+    terminals: Mapped[list[Terminal]] = relationship(
         back_populates="branch", cascade="all, delete-orphan"
     )
 

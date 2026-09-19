@@ -11,12 +11,12 @@ from sqlalchemy import func, select
 
 from app.api.v1.finance import router as finance_router
 from app.core.security import issue_access_token
-from app.models import Order, Payment, Shift, TipPayout
+from app.models import Branch, Order, Payment, Shift, TipPayout
 
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_parallel_tip_payouts_share_one_company_balance(
+async def test_parallel_noncash_tip_payouts_across_branches_share_one_company_balance(
     client, session, seed_owner, monkeypatch,
 ) -> None:
     now = datetime.now(UTC)
@@ -24,13 +24,21 @@ async def test_parallel_tip_payouts_share_one_company_balance(
     branch = seed_owner["branch"]
     terminal = seed_owner["terminal"]
     owner = seed_owner["owner"]
+    other_branch = Branch(
+        id=uuid4(),
+        company_id=company.id,
+        name=f"Tip payout branch {uuid4().hex[:8]}",
+        code=f"T{uuid4().hex[:8].upper()}",
+        invoice_series_code="TP",
+        state_code="32",
+    )
     shift = Shift(
         id=uuid4(), company_id=company.id, branch_id=branch.id,
         terminal_id=terminal.id, opened_by=owner.id,
         opened_at=now - timedelta(hours=1), opening_float_minor=0,
         expected_minor=2_000, status="open",
     )
-    session.add(shift)
+    session.add_all([shift, other_branch])
     await session.flush()
     order = Order(
         id=uuid4(), company_id=company.id, branch_id=branch.id,
@@ -71,27 +79,31 @@ async def test_parallel_tip_payouts_share_one_company_balance(
         pause_first_payout_after_balance_read,
     )
     token = issue_access_token(
-        user_id=owner.id, company_id=company.id, branch_id=branch.id,
+        user_id=owner.id, company_id=company.id, branch_id=None,
         roles=["owner"], auth_version=owner.auth_version,
     )
-    payload = {
-        "branch_id": str(branch.id), "amount_minor": 1_000, "method": "cash",
-        "paid_at": now.isoformat(), "note": "Distribute earned staff tips",
-    }
 
-    async def payout():
+    async def payout(payout_branch: Branch):
         return await client.post(
-            "/api/v1/finance/tip-payouts", json=payload,
+            "/api/v1/finance/tip-payouts",
+            json={
+                "branch_id": str(payout_branch.id),
+                "amount_minor": 1_000,
+                "method": "upi",
+                "paid_at": now.isoformat(),
+                "note": "Distribute earned staff tips",
+            },
             headers={"Authorization": f"Bearer {token}",
-                     "Idempotency-Key": f"tip-race-{uuid4()}"},
+                     "Idempotency-Key": f"tip-payout:{uuid4()}"},
         )
 
-    first = asyncio.create_task(payout())
+    first = asyncio.create_task(payout(branch))
     await asyncio.wait_for(first_balance_read.wait(), timeout=10)
-    second = asyncio.create_task(payout())
+    second = asyncio.create_task(payout(other_branch))
     # The first transaction still holds its accepted balance. A competing
     # request must wait at the common company lock before reading that balance.
     await asyncio.sleep(0.2)
+    assert reads == 1
     finish_first.set()
     responses = await asyncio.wait_for(asyncio.gather(first, second), timeout=15)
     assert sum(response.status_code == 201 for response in responses) == 1, [
@@ -129,7 +141,7 @@ async def test_tip_payout_rejects_future_and_ambiguous_times(client, seed_owner)
                 "note": "Invalid payout time regression",
             },
             headers={"Authorization": f"Bearer {token}",
-                     "Idempotency-Key": f"invalid-tip-time-{uuid4()}"},
+                     "Idempotency-Key": f"tip-payout:{uuid4()}"},
         )
         assert response.status_code == 422, response.text
         assert "future" in response.text or "timezone" in response.text

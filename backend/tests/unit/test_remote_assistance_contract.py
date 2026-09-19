@@ -37,6 +37,8 @@ from app.services.realtime import resource_for_path, resources_for_path
 from app.services.remote_assistance import device_auth, relay
 from app.services.remote_assistance.relay import ValidatedJpeg, validate_and_sanitize_jpeg
 
+_TEST_SHEETS_ENCRYPTION_KEY = "Z2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2c="
+
 
 def _jpeg(width: int, height: int, *, with_exif: bool = False) -> bytes:
     output = io.BytesIO()
@@ -142,6 +144,7 @@ def test_production_rejects_default_remote_pairing_secret() -> None:
             jwt_secret="j" * 48,
             remote_assistance_pairing_secret="p" * 48,
             remote_assistance_relay_secret=("cnJycnJycnJycnJycnJycnJycnJycnJycnJycnJycnI="),
+            google_sheets_secret_encryption_key=_TEST_SHEETS_ENCRYPTION_KEY,
             redis_url="redis://redis:6379/0",
         )
 
@@ -170,11 +173,16 @@ def test_production_compose_isolates_and_authenticates_backend_data_plane() -> N
     assert "REDISCLI_AUTH=$$REDIS_PASSWORD redis-cli --user erp_backend ping" in compose
     assert "backend_data:\n    internal: true" in compose
     assert "REMOTE_ASSISTANCE_RELAY_SECRET: ${REMOTE_ASSISTANCE_RELAY_SECRET}" in compose
+    assert (
+        "GOOGLE_SHEETS_SECRET_ENCRYPTION_KEY: "
+        "${GOOGLE_SHEETS_SECRET_ENCRYPTION_KEY}" in compose
+    )
     assert "infra/scripts/install-on-vm.sh <domain> --maintenance-confirmed" in compose
     assert "docker compose -f docker-compose.prod.yml --env-file .env up -d --build" not in compose
     for placeholder in (
         "CHANGE_ME_48_char_dedicated_pairing_secret",
         "CHANGE_ME_32_byte_base64_relay_key",
+        "CHANGE_ME_32_byte_base64_sheets_key",
         "CHANGE_ME_64_hex_redis_password",
     ):
         assert placeholder in generator
@@ -205,14 +213,18 @@ def test_secret_generator_is_independent_and_truthful_on_rerun(tmp_path) -> None
     assert "SEED_OWNER_PASSWORD=" not in first.stdout
     assert env_file.stat().st_mode & 0o777 == 0o600
     assert len(base64.b64decode(values["REMOTE_ASSISTANCE_RELAY_SECRET"], validate=True)) == 32
+    assert len(
+        base64.b64decode(values["GOOGLE_SHEETS_SECRET_ENCRYPTION_KEY"], validate=True)
+    ) == 32
     assert re.fullmatch(r"[0-9a-f]{64}", values["REDIS_PASSWORD"])
     independent = {
         values["JWT_SECRET"],
         values["REMOTE_ASSISTANCE_PAIRING_SECRET"],
         values["REMOTE_ASSISTANCE_RELAY_SECRET"],
+        values["GOOGLE_SHEETS_SECRET_ENCRYPTION_KEY"],
         values["REDIS_PASSWORD"],
     }
-    assert len(independent) == 4
+    assert len(independent) == 5
 
     second = subprocess.run(  # noqa: S603 - repository-owned fixed script
         [str(script), str(env_file)],
@@ -253,6 +265,7 @@ def test_secret_generator_backfills_upgrade_without_rotating_existing_values(
                 "REDIS_PASSWORD=",
                 "REMOTE_ASSISTANCE_PAIRING_SECRET=",
                 "REMOTE_ASSISTANCE_RELAY_SECRET=",
+                "GOOGLE_SHEETS_SECRET_ENCRYPTION_KEY=",
                 "DATABASE_URL=",
             )
         )
@@ -283,6 +296,9 @@ def test_secret_generator_backfills_upgrade_without_rotating_existing_values(
     assert re.fullmatch(r"[0-9a-f]{64}", values["REDIS_PASSWORD"])
     assert len(values["REMOTE_ASSISTANCE_PAIRING_SECRET"]) >= 32
     assert len(base64.b64decode(values["REMOTE_ASSISTANCE_RELAY_SECRET"], validate=True)) == 32
+    assert len(
+        base64.b64decode(values["GOOGLE_SHEETS_SECRET_ENCRYPTION_KEY"], validate=True)
+    ) == 32
     assert original_owner not in result.stdout
     assert env_file.stat().st_mode & 0o777 == 0o600
 
@@ -418,7 +434,7 @@ def test_production_installer_preflights_before_stack_mutation_and_hides_credent
         "\n".join(
             (
                 "ENV=prod",
-                "APP_VERSION=3.1.28",
+                "APP_VERSION=3.1.29",
                 "APP_REVISION=" + "a" * 40,
                 "DOMAIN=erp.example.com",
                 'CORS_ORIGINS=["https://erp.example.com"]',
@@ -426,7 +442,8 @@ def test_production_installer_preflights_before_stack_mutation_and_hides_credent
                 "ANDROID_UPDATE_ALLOWED_ORIGIN=https://erp.example.com",
                 "JWT_SECRET=" + "j" * 48,
                 "REMOTE_ASSISTANCE_PAIRING_SECRET=" + "p" * 48,
-                "REMOTE_ASSISTANCE_RELAY_SECRET=not-base64" + "x" * 34,
+                    "REMOTE_ASSISTANCE_RELAY_SECRET=not-base64" + "x" * 34,
+                    "GOOGLE_SHEETS_SECRET_ENCRYPTION_KEY=" + _TEST_SHEETS_ENCRYPTION_KEY,
                 "REDIS_PASSWORD=" + "z" * 64,
                 "POSTGRES_PASSWORD=" + "q" * 32,
                 "DATABASE_URL=postgresql+psycopg://erp:" + "q" * 32 + "@postgres:5432/erp",
@@ -487,7 +504,7 @@ def test_candidate_environment_labels_fresh_and_upgrade_as_current_source(
             f"APP_REVISION={current_revision}",
             f"APP_REVISION={prior_revision}",
         )
-        .replace("APP_VERSION=3.1.28", "APP_VERSION=3.1.3"),
+        .replace("APP_VERSION=3.1.29", "APP_VERSION=3.1.3"),
         encoding="utf-8",
     )
     upgrade_candidate = tmp_path / "upgrade.env"
@@ -511,7 +528,7 @@ def test_candidate_environment_labels_fresh_and_upgrade_as_current_source(
     }
     assert prior_revision != current_revision
     assert upgrade_values["APP_REVISION"] == current_revision
-    assert upgrade_values["APP_VERSION"] == "3.1.28"
+    assert upgrade_values["APP_VERSION"] == "3.1.29"
     for retained in (
         "JWT_SECRET",
         "POSTGRES_PASSWORD",
@@ -520,6 +537,7 @@ def test_candidate_environment_labels_fresh_and_upgrade_as_current_source(
         "REDIS_PASSWORD",
         "REMOTE_ASSISTANCE_PAIRING_SECRET",
         "REMOTE_ASSISTANCE_RELAY_SECRET",
+        "GOOGLE_SHEETS_SECRET_ENCRYPTION_KEY",
     ):
         assert upgrade_values[retained] == fresh_values[retained]
         assert upgrade_values[retained] not in upgrade.stdout
@@ -543,7 +561,7 @@ def test_candidate_environment_labels_fresh_and_upgrade_as_current_source(
     stale_version = tmp_path / "stale-version.env"
     stale_version.write_text(
         upgrade_candidate.read_text(encoding="utf-8").replace(
-            "APP_VERSION=3.1.28", "APP_VERSION=3.1.3"
+            "APP_VERSION=3.1.29", "APP_VERSION=3.1.3"
         ),
         encoding="utf-8",
     )

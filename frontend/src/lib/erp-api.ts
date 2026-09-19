@@ -773,11 +773,40 @@ export const recipes = {
 // FINANCE — expenses + partners + capital + assets
 // =============================================================================
 export type ExpensePaymentRail = 'cash' | 'card' | 'bank' | 'upi';
-export type ExpenseCreatePaymentRail = Exclude<ExpensePaymentRail, 'cash'>;
+export type ExpenseCreatePaymentRail = ExpensePaymentRail;
+export type ExpenseReceiptSource = 'camera' | 'gallery' | 'file';
+export type ExpenseReceiptStatus = 'pending' | 'verified' | 'not_required' | 'rejected';
+
+export interface ExpenseReceiptDTO {
+  id: string;
+  expense_id: string;
+  original_filename: string;
+  content_type: string;
+  size_bytes: number;
+  /** Compatibility alias accepted during a rolling backend update. */
+  byte_size?: number;
+  /** Present on Code30.2 responses; optional for rolling-update replay compatibility. */
+  sha256?: string | null;
+  source: ExpenseReceiptSource;
+  status: ExpenseReceiptStatus;
+  review_note: string | null;
+  created_at: string;
+}
+
+export interface ExpenseReceiptReviewDTO {
+  id: string;
+  expense_id: string;
+  status: ExpenseReceiptStatus;
+  review_note: string | null;
+  reviewed_by: string;
+  created_at: string;
+}
 
 export interface ExpenseDTO {
   id: string;
   branch_id: string;
+  /** Present for a cash paid-out linked to a specific open shift drawer. */
+  shift_id?: string | null;
   category_id: string;
   supplier_id: string | null;
   amount_minor: number;
@@ -786,6 +815,25 @@ export interface ExpenseDTO {
   vendor_name: string | null;
   invoice_no: string | null;
   note: string | null;
+  /** Optional only while web and API instances roll through the Code30.2 update. */
+  receipt_count?: number;
+  receipt_status?: ExpenseReceiptStatus;
+  is_voided?: boolean;
+  source_shift_status?: string | null;
+  is_corrected?: boolean;
+  correction?: FinanceSourceCorrectionDTO | null;
+}
+
+export interface FinanceSourceCorrectionDTO {
+  id: string;
+  source_type: 'expense' | 'manual_collection' | 'tip_payout' | 'supplier_payment';
+  source_id: string;
+  original_shift_id: string;
+  settlement_shift_id: string;
+  amount_minor: number;
+  corrected_by: string;
+  reason: string;
+  corrected_at: string;
 }
 
 export interface PartnerDTO {
@@ -823,6 +871,7 @@ export interface ManualCollectionDTO {
   id: string;
   company_id: string;
   branch_id: string;
+  shift_id?: string | null;
   business_date: string;
   method: ManualCollectionMethod;
   amount_minor: number;
@@ -838,6 +887,9 @@ export interface ManualCollectionDTO {
   voided_by_name: string | null;
   void_reason: string | null;
   is_voided: boolean;
+  source_shift_status?: string | null;
+  is_corrected?: boolean;
+  correction?: FinanceSourceCorrectionDTO | null;
 }
 
 export type TipPayoutMethod = 'cash' | 'upi' | 'card' | 'bank';
@@ -846,6 +898,7 @@ export interface TipPayoutDTO {
   id: string;
   company_id: string;
   branch_id: string;
+  shift_id?: string | null;
   amount_minor: number;
   method: TipPayoutMethod;
   paid_at: string;
@@ -859,6 +912,9 @@ export interface TipPayoutDTO {
   voided_by_name: string | null;
   void_reason: string | null;
   is_voided: boolean;
+  source_shift_status?: string | null;
+  is_corrected?: boolean;
+  correction?: FinanceSourceCorrectionDTO | null;
 }
 
 export interface PartnerProfitShareDTO {
@@ -975,11 +1031,49 @@ export const finance = {
     branch_id: string; category_id: string; supplier_id?: string;
     amount_minor: number; paid_via: ExpenseCreatePaymentRail;
     paid_at: string; vendor_name?: string; invoice_no?: string; note?: string;
+    shift_id?: string;
   }, idempotencyKey: string) =>
     api.post<ExpenseDTO>('/finance/expenses', body, {
       headers: { 'Idempotency-Key': idempotencyKey },
     }).then((r) => r.data),
-  deleteExpense: (id: string) => api.delete(`/finance/expenses/${id}`),
+  voidExpense: (id: string, reason: string) =>
+    api.post<ExpenseDTO>(`/finance/expenses/${id}/void`, { reason }).then((r) => r.data),
+  correctExpense: (
+    id: string,
+    body: { settlement_shift_id: string; reason: string },
+    idempotencyKey: string,
+  ) => api.post<FinanceSourceCorrectionDTO>(`/finance/expenses/${id}/corrections`, body, {
+    headers: { 'Idempotency-Key': idempotencyKey },
+  }).then((r) => r.data),
+  listExpenseReceipts: (expenseId: string) =>
+    api.get<ExpenseReceiptDTO[]>(`/finance/expenses/${expenseId}/receipts`)
+      .then((r) => r.data),
+  uploadExpenseReceipt: (
+    expenseId: string,
+    file: File,
+    source: ExpenseReceiptSource,
+    idempotencyKey: string,
+  ) => {
+    const body = new FormData();
+    body.append('file', file);
+    body.append('source', source);
+    return api.post<ExpenseReceiptDTO>(`/finance/expenses/${expenseId}/receipts`, body, {
+      headers: { 'Idempotency-Key': idempotencyKey },
+    })
+      .then((r) => r.data);
+  },
+  getExpenseReceiptContent: (receiptId: string) =>
+    api.get<Blob>(`/finance/expense-receipts/${receiptId}/content`, {
+      responseType: 'blob',
+    }).then((r) => r.data),
+  reviewExpenseReceipts: (
+    expenseId: string,
+    body: { status: ExpenseReceiptStatus; review_note?: string },
+    idempotencyKey: string,
+  ) => api.post<ExpenseReceiptReviewDTO>(`/finance/expenses/${expenseId}/receipt-review`, body, {
+    headers: { 'Idempotency-Key': idempotencyKey },
+  })
+    .then((r) => r.data),
 
   listPartners: () => api.get<PartnerDTO[]>('/finance/partners').then((r) => r.data),
   createPartner: (body: {
@@ -1028,6 +1122,7 @@ export const finance = {
   }) => api.get<ManualCollectionDTO[]>('/finance/manual-collections', { params }).then((r) => r.data),
   createManualCollection: (body: {
     branch_id: string;
+    shift_id?: string;
     business_date: string;
     method: ManualCollectionMethod;
     amount_minor: number;
@@ -1040,6 +1135,13 @@ export const finance = {
   voidManualCollection: (id: string, reason: string) =>
     api.post<ManualCollectionDTO>(`/finance/manual-collections/${id}/void`, { reason })
       .then((r) => r.data),
+  correctManualCollection: (
+    id: string,
+    body: { settlement_shift_id: string; reason: string },
+    idempotencyKey: string,
+  ) => api.post<ManualCollectionDTO>(`/finance/manual-collections/${id}/corrections`, body, {
+    headers: { 'Idempotency-Key': idempotencyKey },
+  }).then((r) => r.data),
 
   listTipPayouts: (params?: {
     branch_id?: string;
@@ -1048,6 +1150,7 @@ export const finance = {
   }) => api.get<TipPayoutDTO[]>('/finance/tip-payouts', { params }).then((r) => r.data),
   createTipPayout: (body: {
     branch_id: string;
+    shift_id?: string;
     amount_minor: number;
     method: TipPayoutMethod;
     paid_at: string;
@@ -1059,6 +1162,13 @@ export const finance = {
   voidTipPayout: (id: string, reason: string) =>
     api.post<TipPayoutDTO>(`/finance/tip-payouts/${id}/void`, { reason })
       .then((r) => r.data),
+  correctTipPayout: (
+    id: string,
+    body: { settlement_shift_id: string; reason: string },
+    idempotencyKey: string,
+  ) => api.post<TipPayoutDTO>(`/finance/tip-payouts/${id}/corrections`, body, {
+    headers: { 'Idempotency-Key': idempotencyKey },
+  }).then((r) => r.data),
 
   listAssets: () => api.get<AssetDTO[]>('/finance/assets').then((r) => r.data),
   // Idempotency-Key is required server-side — Asset has no unique
@@ -1095,6 +1205,30 @@ export interface CompanyDTO {
   payment_provider: string | null;
   payment_key_id: string | null;
   payment_secret_set: boolean;
+}
+
+export interface GoogleSheetsMirrorStatusDTO {
+  enabled: boolean;
+  connection_verified: boolean;
+  webhook_url: string | null;
+  configured_at: string | null;
+  secret_configured: boolean;
+  pending_count: number;
+  held_count: number;
+  quarantined_count: number;
+  delivered_count: number;
+  last_delivered_at: string | null;
+  last_error: string | null;
+}
+
+export interface GoogleSheetsMirrorConfigureResultDTO extends GoogleSheetsMirrorStatusDTO {
+  signing_secret: string | null;
+}
+
+export interface GoogleSheetsMirrorTestResultDTO {
+  event_id: string;
+  status: string;
+  message: string;
 }
 
 /** Narrow branch identity returned by operational modules without admin access. */
@@ -3783,6 +3917,19 @@ export const settings = {
   getCompany: () => api.get<CompanyDTO>('/settings/company').then((r) => r.data),
   updateCompany: (body: Partial<CompanyDTO>) =>
     api.patch<CompanyDTO>('/settings/company', body).then((r) => r.data),
+  getGoogleSheetsMirror: () =>
+    api.get<GoogleSheetsMirrorStatusDTO>('/settings/google-sheets').then((r) => r.data),
+  configureGoogleSheetsMirror: (body: { webhook_url: string; rotate_secret?: boolean }) =>
+    api.post<GoogleSheetsMirrorConfigureResultDTO>('/settings/google-sheets/configure', body)
+      .then((r) => r.data),
+  testGoogleSheetsMirror: () =>
+    api.post<GoogleSheetsMirrorTestResultDTO>('/settings/google-sheets/test')
+      .then((r) => r.data),
+  retryGoogleSheetsMirror: () =>
+    api.post<GoogleSheetsMirrorStatusDTO>('/settings/google-sheets/retry-quarantined')
+      .then((r) => r.data),
+  disconnectGoogleSheetsMirror: () =>
+    api.delete<GoogleSheetsMirrorStatusDTO>('/settings/google-sheets').then((r) => r.data),
 
   listBranches: () => api.get<BranchDTO[]>('/settings/branches').then((r) => r.data),
   createBranch: (body: Partial<BranchDTO>, idempotencyKey: string) =>

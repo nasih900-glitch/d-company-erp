@@ -13,6 +13,8 @@ from app.core.config import Settings, get_settings
 from app.core.middleware import ClientCompatibilityMiddleware
 from app.core.release_identity import ReleaseIdentity
 
+_TEST_SHEETS_ENCRYPTION_KEY = "Z2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2c="
+
 
 class _ScalarResult:
     def __init__(self, value) -> None:
@@ -191,6 +193,7 @@ def test_production_native_update_url_requires_https() -> None:
             jwt_secret="production-secret-that-is-longer-than-thirty-two-characters",
             remote_assistance_pairing_secret="independent-pairing-secret-longer-than-32-characters",
             remote_assistance_relay_secret="cnJycnJycnJycnJycnJycnJycnJycnJycnJycnJycnI=",
+            google_sheets_secret_encryption_key=_TEST_SHEETS_ENCRYPTION_KEY,
             redis_url=(
                 "redis://erp_backend:0123456789abcdef0123456789abcdef"
                 "0123456789abcdef0123456789abcdef@redis:6379/0"
@@ -215,6 +218,7 @@ def test_production_required_floor_needs_recovery_url_but_optional_registry_does
         "remote_assistance_relay_secret": (
             "cnJycnJycnJycnJycnJycnJycnJycnJycnJycnJycnI="
         ),
+        "google_sheets_secret_encryption_key": _TEST_SHEETS_ENCRYPTION_KEY,
         "redis_url": (
             "redis://erp_backend:0123456789abcdef0123456789abcdef"
             "0123456789abcdef0123456789abcdef@redis:6379/0"

@@ -516,8 +516,8 @@ async def test_production_lifespan_warms_before_serving_and_cancels_supervisor(
     monkeypatch.setattr(application_main, "install_audit_listeners", MagicMock())
     monkeypatch.setattr(
         application_main,
-        "get_event_bus",
-        lambda: SimpleNamespace(subscribe=MagicMock()),
+        "maintain_google_sheets_mirror",
+        AsyncMock(return_value=None),
     )
     monkeypatch.setattr(application_main, "refresh_active_public_runtime_parity", warm)
     monkeypatch.setattr(application_main, "maintain_public_runtime_parity", maintain)
@@ -554,8 +554,8 @@ async def test_production_lifespan_keeps_api_available_after_failed_warmup(
     monkeypatch.setattr(application_main, "install_audit_listeners", MagicMock())
     monkeypatch.setattr(
         application_main,
-        "get_event_bus",
-        lambda: SimpleNamespace(subscribe=MagicMock()),
+        "maintain_google_sheets_mirror",
+        AsyncMock(return_value=None),
     )
     monkeypatch.setattr(application_main, "refresh_active_public_runtime_parity", fail_warm)
     monkeypatch.setattr(application_main, "maintain_public_runtime_parity", maintain)
@@ -857,6 +857,7 @@ def _production(**overrides):
         "jwt_secret": "j" * 48,
         "remote_assistance_pairing_secret": "p" * 48,
         "remote_assistance_relay_secret": "cnJycnJycnJycnJycnJycnJycnJycnJycnJycnJycnI=",
+        "google_sheets_secret_encryption_key": "Z2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2c=",
         "redis_url": f"redis://erp_backend:{'d' * 64}@redis:6379/0",
         **overrides,
     }

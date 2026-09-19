@@ -69,12 +69,14 @@ async def test_only_paid_pos_event_lines_contribute_event_revenue() -> None:
             _Result(scalar=1),  # one operational EventTicket
             _Result(rows=[]),  # COGS
             _Result(rows=[]),  # manual collections
+            _Result(scalar=0),  # manual collection corrections
             _Result(rows=[]),  # membership payments
             _Result(rows=[SimpleNamespace(method="cash", amount=11_800)]),
             _Result(rows=[]),  # refunds
             _Result(scalar=0),  # membership refund settlements
             _Result(rows=[]),  # assets
             _Result(rows=[]),  # expenses
+            _Result(rows=[]),  # expense corrections
         ]
     )
 

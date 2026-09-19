@@ -1,6 +1,8 @@
 package cloud.dcompany.erp.core.db
 
 import androidx.room.Entity
+import androidx.room.Embedded
+import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
 
@@ -30,6 +32,15 @@ data class ExpenseCacheEntity(
     val vendorName: String?,
     val invoiceNo: String?,
     val note: String?,
+    val receiptCount: Int = 0,
+    val receiptStatus: String = "pending",
+    val shiftId: String? = null,
+    val createdBy: String? = null,
+    val isVoided: Boolean = false,
+    val sourceShiftStatus: String? = null,
+    val isCorrected: Boolean = false,
+    val correctionReason: String? = null,
+    val correctionAt: String? = null,
 )
 
 @Entity(tableName = "local_expenses")
@@ -45,8 +56,84 @@ data class LocalExpenseEntity(
     val invoiceNo: String?,
     val note: String?,
     val createdAtMillis: Long,
+    /** Exact server shift selected for a cash paid-out. Null for every non-cash rail. */
+    val shiftId: String? = null,
+    /**
+     * Origin of an unresolved cash row captured by the signed Code21 app before
+     * cash expenses carried an explicit shift id. Migration 49 -> 50 sets this
+     * only on preserved pending/rejected legacy rows. New writes leave it null
+     * and use [shiftId].
+     */
+    val legacyOriginVersionCode: Int? = null,
+    val serverId: String? = null,
     val syncState: String = SyncState.PENDING,
     val lastError: String? = null,
+)
+
+/**
+ * Private receipt evidence captured with an expense. The bytes live in bounded
+ * child rows in Room so process death, an app update, and a network outage
+ * cannot detach the receipt from the immutable local expense action. The sync
+ * worker clears those bytes after the server acknowledges the upload.
+ */
+@Entity(
+    tableName = "local_expense_receipts",
+    foreignKeys = [
+        ForeignKey(
+            entity = LocalExpenseEntity::class,
+            parentColumns = ["localId"],
+            childColumns = ["expenseLocalId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
+    indices = [
+        Index("expenseLocalId"),
+        Index(value = ["expenseLocalId", "contentSha256"], unique = true),
+        Index("syncState"),
+    ],
+)
+data class LocalExpenseReceiptEntity(
+    @PrimaryKey val localId: String,
+    val expenseLocalId: String,
+    val filename: String,
+    val contentType: String,
+    val source: String,
+    val byteSize: Int,
+    val contentSha256: String,
+    val createdAtMillis: Long,
+    val syncState: String = SyncState.PENDING,
+    val serverReceiptId: String? = null,
+    val lastError: String? = null,
+)
+
+/** Bounded payload rows avoid Android's CursorWindow per-row BLOB ceiling for
+ * valid receipts near the 10 MiB API limit. They are inserted and removed in
+ * the same Room transactions as their receipt metadata. */
+@Entity(
+    tableName = "local_expense_receipt_chunks",
+    primaryKeys = ["receiptLocalId", "chunkIndex"],
+    foreignKeys = [
+        ForeignKey(
+            entity = LocalExpenseReceiptEntity::class,
+            parentColumns = ["localId"],
+            childColumns = ["receiptLocalId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
+    indices = [Index("receiptLocalId")],
+)
+data class LocalExpenseReceiptChunkEntity(
+    val receiptLocalId: String,
+    val chunkIndex: Int,
+    val content: ByteArray,
+)
+
+/** Receipt plus the immutable branch/accounting parent fields needed to keep
+ * the pending UI branch-scoped even after the expense header has synced. */
+data class LocalExpenseReceiptWithExpense(
+    @Embedded val receipt: LocalExpenseReceiptEntity,
+    val expenseBranchId: String,
+    val expenseServerId: String?,
 )
 
 // --------------------------------------------------------------------- assets

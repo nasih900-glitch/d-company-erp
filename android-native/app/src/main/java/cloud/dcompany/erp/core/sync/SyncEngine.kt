@@ -30,6 +30,7 @@ import cloud.dcompany.erp.core.db.LocalCheckInEntity
 import cloud.dcompany.erp.core.db.CustomerMembershipCacheEntity
 import cloud.dcompany.erp.core.db.CustomerMembershipHistoryCacheEntity
 import cloud.dcompany.erp.core.db.LocalExpenseEntity
+import cloud.dcompany.erp.core.db.LocalExpenseReceiptEntity
 import cloud.dcompany.erp.core.db.LocalMembershipCancellationEntity
 import cloud.dcompany.erp.core.db.LocalMembershipRefundEntity
 import cloud.dcompany.erp.core.db.LocalMembershipPaymentActionEntity
@@ -127,13 +128,17 @@ import cloud.dcompany.erp.ui.screens.events.EventsApi
 import cloud.dcompany.erp.ui.screens.events.TicketSell
 import cloud.dcompany.erp.ui.screens.finance.AssetCreate
 import cloud.dcompany.erp.ui.screens.finance.CapitalEntryCreate
-import cloud.dcompany.erp.ui.screens.finance.ExpenseCreate
 import cloud.dcompany.erp.ui.screens.finance.FinanceApi
 import cloud.dcompany.erp.ui.screens.finance.FinanceCacheScope
 import cloud.dcompany.erp.ui.screens.finance.FinanceSnapshotKeys
 import cloud.dcompany.erp.ui.screens.finance.fetchFinanceAllocation
 import cloud.dcompany.erp.ui.screens.finance.financeCacheScopeForLease
+import cloud.dcompany.erp.ui.screens.finance.expenseReceiptIdempotencyKey
+import cloud.dcompany.erp.ui.screens.finance.expenseIdempotencyKey
+import cloud.dcompany.erp.ui.screens.finance.legacyCashExpenseRecoveryHeaders
+import cloud.dcompany.erp.ui.screens.finance.reassembleExpenseReceiptContent
 import cloud.dcompany.erp.ui.screens.finance.toFinanceCache
+import cloud.dcompany.erp.ui.screens.finance.toExpenseCreate
 import cloud.dcompany.erp.ui.screens.gaming.GameSession
 import cloud.dcompany.erp.ui.screens.gaming.GamingApi
 import cloud.dcompany.erp.ui.screens.gaming.SessionAddonVoidBody
@@ -218,6 +223,9 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
+import okhttp3.RequestBody.Companion.toRequestBody
 import java.time.Instant
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
@@ -1044,9 +1052,12 @@ class SyncEngine(
                 // combine's own remaining slots.
                 combine(
                     db.financeDao().observeRejectedExpenseCount(),
+                    db.financeDao().observeRejectedExpenseReceiptCount(),
                     db.financeDao().observeRejectedAssetCount(),
                     db.financeDao().observeRejectedCapitalEntryCount(),
-                ) { expenses, assets, capitalEntries -> expenses + assets + capitalEntries },
+                ) { expenses, receipts, assets, capitalEntries ->
+                    expenses + receipts + assets + capitalEntries
+                },
                 // Fifth application: 2 Events sources (ticket sale/check-in)
                 // filled level 3's last remaining slot — so the 2 new
                 // Memberships sources (subscribe/cancel) nest one level
@@ -2228,9 +2239,11 @@ class SyncEngine(
             withSessionResourceSerialisation(sessionLease, "finance") {
                 val hadFinanceWork =
                     db.financeDao().pushableExpenses().isNotEmpty() ||
+                        db.financeDao().pendingExpenseReceiptCount() > 0 ||
                         db.financeDao().pushableAssets().isNotEmpty() ||
                         db.financeDao().pushableCapitalEntries().isNotEmpty()
                 pushExpenses()
+                pushExpenseReceipts()
                 pushAssets()
                 pushCapitalEntries()
                 if ((hadFinanceWork || refreshPostedRefundEffects) && resourceAccess.canPull("finance")) {
@@ -5122,14 +5135,12 @@ class SyncEngine(
      * amend this row out from under an in-flight push. */
     private suspend fun pushExpenseOne(row: LocalExpenseEntity) {
         val lease = cacheIsolation.currentLease() ?: return
+        val actionKey = expenseIdempotencyKey(row.localId)
         val created = financeApi.createExpense(
-            ExpenseCreate(
-                branchId = row.branchId, categoryId = row.categoryId, supplierId = row.supplierId,
-                amountMinor = row.amountMinor, paidVia = row.paidVia, paidAt = row.paidAt,
-                vendorName = row.vendorName, invoiceNo = row.invoiceNo, note = row.note,
-            ),
-            key = "expense:${row.localId}",
-            provenance = outboxProvenanceHeaders(row.createdAtMillis, "expense:${row.localId}"),
+            row.toExpenseCreate(),
+            key = actionKey,
+            provenance = outboxProvenanceHeaders(row.createdAtMillis, actionKey) +
+                row.legacyCashExpenseRecoveryHeaders(),
         )
         if (!commitToCurrentScope(lease) {
                 db.financeDao().confirmExpense(row.localId, created.toFinanceCache())
@@ -5150,6 +5161,47 @@ class SyncEngine(
                 }
             },
         )
+    }
+
+    private suspend fun pushExpenseReceipts() {
+        val dao = db.financeDao()
+        drainOutbox(
+            rows = dao.pushableExpenseReceipts(),
+            markRejected = { row, msg -> dao.markExpenseReceiptRejected(row.localId, msg) },
+            push = ::pushExpenseReceiptOne,
+            retainUnconfirmedWrite = { row, msg ->
+                dao.notePendingExpenseReceiptError(row.localId, msg)
+            },
+        )
+    }
+
+    private suspend fun pushExpenseReceiptOne(row: LocalExpenseReceiptEntity) {
+        val lease = cacheIsolation.currentLease() ?: return
+        val parent = db.financeDao().expenseByLocalId(row.expenseLocalId)
+            ?: error("The saved expense for this receipt is missing.")
+        val expenseId = parent.serverId
+            ?: error("The expense must sync before its receipt can upload.")
+        val chunks = db.financeDao().expenseReceiptChunks(row.localId)
+        check(chunks.map { it.chunkIndex } == chunks.indices.toList()) {
+            "The saved receipt chunks are incomplete."
+        }
+        val content = reassembleExpenseReceiptContent(
+            chunks = chunks.map { it.content },
+            expectedSize = row.byteSize,
+            expectedSha256 = row.contentSha256,
+        )
+        val body = content.toRequestBody(row.contentType.toMediaType())
+        val part = MultipartBody.Part.createFormData("file", row.filename, body)
+        val receipt = financeApi.uploadExpenseReceipt(
+            expenseId = expenseId,
+            file = part,
+            source = row.source.toRequestBody("text/plain".toMediaType()),
+            key = expenseReceiptIdempotencyKey(row.localId),
+        )
+        if (!commitToCurrentScope(lease) {
+                db.financeDao().confirmExpenseReceipt(row.localId, receipt.id)
+            }
+        ) return
     }
 
     // ------------------------------------------------------------------- assets

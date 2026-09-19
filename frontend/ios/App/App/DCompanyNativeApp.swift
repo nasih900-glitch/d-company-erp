@@ -7,6 +7,8 @@ import VisionKit
 import AudioToolbox
 import CoreImage
 import PhotosUI
+import QuickLook
+import UniformTypeIdentifiers
 import UserNotifications
 
 private enum Brand {
@@ -206,18 +208,18 @@ private struct APIClient {
         try await sendNoContent(request)
     }
 
-    // multipart/form-data upload — only /ocr/uploads needs this; every other
-    // write endpoint in this app is JSON. Builds the body by hand since
-    // URLSession has no multipart encoder.
+    // Multipart upload for OCR input and retained expense-receipt evidence.
+    // Builds the body by hand since URLSession has no multipart encoder.
     func upload<T: Decodable>(
         _ path: String,
         fileData: Data,
         fileName: String,
         mimeType: String,
         formFields: [String: String],
-        token: String? = nil
+        token: String? = nil,
+        headers: [String: String] = [:]
     ) async throws -> T {
-        var request = try makeRequest(path: path, token: token)
+        var request = try makeRequest(path: path, token: token, headers: headers)
         request.httpMethod = "POST"
         let boundary = "DCompanyERP-\(UUID().uuidString)"
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
@@ -908,29 +910,6 @@ private struct ExpenseLineDTO: Codable, Identifiable {
     var id: String { category }
 }
 
-// Matches the flat payload shape ReportsScreen.tsx's pushToSheets() posts —
-// the Apps Script "ERP Entries" sink expects exactly these keys.
-private struct ReportSheetPayload: Encodable {
-    let date: String
-    let time: String
-    let period_id: String
-    let label: String
-    let orders_count: Int
-    let food_minor: Int
-    let gaming_minor: Int
-    let hookah_minor: Int
-    let event_tickets_minor: Int
-    let delivery_minor: Int
-    let gross_revenue_minor: Int
-    let net_revenue_minor: Int
-    let manual_collections_minor: Int
-    let cgst_minor: Int
-    let sgst_minor: Int
-    let igst_minor: Int
-    let expense_total_minor: Int
-    let net_profit_minor: Int
-}
-
 private struct ReportDTO: Codable {
     let period: String
     let label: String
@@ -953,6 +932,17 @@ private struct ReportDTO: Codable {
     let net_revenue_minor: Int
     let gross_profit_minor: Int
     let net_profit_minor: Int
+}
+
+private struct GoogleSheetsMirrorStatusDTO: Decodable {
+    let enabled: Bool
+    let configured_at: Date?
+    let secret_configured: Bool
+    let pending_count: Int
+    let quarantined_count: Int
+    let delivered_count: Int
+    let last_delivered_at: Date?
+    let last_error: String?
 }
 
 private struct BusinessMetricsDTO: Codable {
@@ -1177,10 +1167,19 @@ private struct ExpenseDTO: Decodable, Identifiable {
     let vendor_name: String?
     let invoice_no: String?
     let note: String?
+    let shift_id: String?
+    let created_by: String?
+    let voided_at: Date?
+    let voided_by: String?
+    let void_reason: String?
+    let is_voided: Bool
+    let receipt_count: Int
+    let receipt_status: String
 }
 
 private struct ExpenseCreateRequest: Encodable {
     let branch_id: String
+    let shift_id: String?
     let category_id: String
     let supplier_id: String?
     let amount_minor: Int
@@ -1189,6 +1188,34 @@ private struct ExpenseCreateRequest: Encodable {
     let vendor_name: String?
     let invoice_no: String?
     let note: String?
+}
+
+private struct ExpenseVoidRequest: Encodable {
+    let reason: String
+}
+
+private struct ExpenseReceiptDTO: Decodable, Identifiable {
+    let id: String
+    let expense_id: String
+    let original_filename: String
+    let content_type: String
+    let size_bytes: Int
+    let source: String
+    let status: String
+    let review_note: String?
+    let created_at: Date
+}
+
+private struct ExpenseReceiptDraft: Sendable {
+    let data: Data
+    let fileName: String
+    let mimeType: String
+    let source: String
+}
+
+private struct ExpenseReceiptPreviewFile: Identifiable {
+    let id = UUID()
+    let url: URL
 }
 
 private struct PartnerDTO: Decodable, Identifiable {
@@ -2648,8 +2675,7 @@ private enum CSVExporter {
 }
 
 // Wraps UIActivityViewController (the standard iOS share sheet) for
-// SwiftUI's `.sheet(item:)` — presented the same way GSheetsWebhookSheet
-// and other sheets on this screen are.
+// SwiftUI wrapper for the system share sheet used by report exports.
 private struct ActivityShareSheet: UIViewControllerRepresentable {
     let activityItems: [Any]
 
@@ -2872,355 +2898,6 @@ private enum TerminalStore {
 
     static func clear() {
         UserDefaults.standard.removeObject(forKey: key)
-    }
-}
-
-// Mirrors frontend/src/modules/settings/apps-script.txt exactly — the Apps
-// Script the user pastes into Extensions → Apps Script to receive webhook
-// pushes. Embedded here so the setup wizard can copy it without a network
-// round-trip to the web app.
-private let dCompanyAppsScript = """
-/**
- * D Company ERP — Google Sheets sink (single-tab mode).
- *
- * INSTALLATION (only needed once):
- *   1. Open the Google Sheet you want to use.
- *   2. Extensions → Apps Script. A new tab opens.
- *   3. Replace the empty Code.gs content with EVERYTHING in this file.
- *   4. Click the disk icon (save).
- *   5. Click Deploy → New deployment → Type: Web app.
- *        • Description:     "D Company ERP webhook"
- *        • Execute as:      Me
- *        • Who has access:  Anyone with the link
- *   6. Click Deploy. Authorize when prompted (the "this app isn't verified"
- *      warning is normal for personal scripts — click Advanced → Go to ...
- *      (unsafe), then Allow).
- *   7. Copy the Web app URL it gives you.
- *   8. In D Company ERP open Settings → Google Sheets and paste the URL.
- *
- * BEHAVIOR
- *   • Every order, ticket, event, and report is appended as ONE row in the
- *     single tab named "Operations" (the name is configurable below).
- *   • Your existing tabs in this Sheet are NEVER touched.
- *   • Rows are idempotent on the unique id column: if the same invoice/ticket
- *     id arrives twice, the existing row is overwritten in place — no dupes.
- *
- * COLUMN LAYOUT (one row per ERP entry)
- *   Date | Time | Type | ID | Description | Customer | Qty | Taxable | CGST |
- *   SGST | IGST | Round-off | Total | Method | Cashier | GSTIN | Place of supply
- *
- *   "Type" is one of: Order, Ticket, Event, Daily Report, Monthly Report,
- *   Quarterly Report, Yearly Report.
- */
-
-const TAB_NAME = "Operations";
-
-const HEADERS = [
-  "Date", "Time", "Type", "ID", "Description", "Customer",
-  "Qty", "Taxable (₹)", "CGST (₹)", "SGST (₹)", "IGST (₹)",
-  "Round-off (₹)", "Total (₹)", "Method", "Cashier",
-  "GSTIN", "Place of supply",
-];
-
-const TYPE_LABEL = {
-  order:             "Order",
-  ticket:            "Ticket",
-  event:             "Event",
-  daily_report:      "Daily Report",
-  monthly_report:    "Monthly Report",
-  quarterly_report:  "Quarterly Report",
-  yearly_report:     "Yearly Report",
-  ping:              "Ping",
-};
-
-// =============================================================================
-// Entrypoints
-// =============================================================================
-function doPost(e) {
-  try {
-    const body = JSON.parse(e.postData.contents);
-    const { kind, payload } = body;
-    if (kind === "ping") {
-      return json({ ok: true, kind: "ping", tab: TAB_NAME });
-    }
-    if (!(kind in TYPE_LABEL)) {
-      return json({ ok: false, error: "unknown kind: " + kind }, 400);
-    }
-    const sheet = ensureSheet(TAB_NAME, HEADERS);
-    const row = projectRow(kind, payload);
-    upsertRow(sheet, /* idColumn = */ 4, row);  // column D = ID
-    return json({ ok: true, kind, id: row[3] });
-  } catch (err) {
-    return json({ ok: false, error: String(err) }, 500);
-  }
-}
-
-function doGet() {
-  return json({
-    ok: true,
-    service: "D Company ERP webhook",
-    mode: "single-tab",
-    tab: TAB_NAME,
-  });
-}
-
-// =============================================================================
-// Row projection — keep every row the same width so SUM/QUERY/AVERAGE work.
-// =============================================================================
-function projectRow(kind, p) {
-  const date  = p.date  || "";
-  const time  = p.time  || "";
-  const label = TYPE_LABEL[kind];
-
-  // Orders, tickets, events all share most columns
-  if (kind === "order") {
-    return [
-      date, time, label, p.invoice_no || "",
-      p.items_text || "", p.customer_name || "",
-      p.items_count || 0,
-      money(p.taxable_minor), money(p.cgst_minor), money(p.sgst_minor),
-      money(p.igst_minor || 0), money(p.round_off_minor || 0),
-      money(p.total_minor),
-      p.method || "", p.cashier || "",
-      p.gstin || "", p.place_of_supply || "",
-    ];
-  }
-
-  if (kind === "ticket") {
-    return [
-      date, time, label, p.ticket_no || "",
-      p.event_name || "", p.customer_name || "",
-      1,
-      money(p.taxable_minor), money(p.cgst_minor), money(p.sgst_minor),
-      money(0), money(0), money(p.price_paid_minor),
-      "", "", "", "",
-    ];
-  }
-
-  if (kind === "event") {
-    return [
-      date, time, label, p.id || "",
-      p.name || "", "",
-      p.capacity || 0,
-      money(0), money(0), money(0),
-      money(0), money(0), money(p.base_ticket_price_minor),
-      "", "", "", "",
-    ];
-  }
-
-  // Reports use the Description column for the period summary and the
-  // money columns for revenue / GST / total.
-  if (kind === "daily_report" || kind === "monthly_report" ||
-      kind === "quarterly_report" || kind === "yearly_report") {
-    const sub = subRevenueText(p);
-    return [
-      date, time, label, p.period_id || p.label || "",
-      sub,
-      "",                                  // customer
-      p.orders_count || 0,                 // qty = order count
-      money(p.net_revenue_minor || 0),     // taxable = net revenue
-      money(p.cgst_minor),
-      money(p.sgst_minor),
-      money(p.igst_minor || 0),
-      money(0),
-      money(p.gross_revenue_minor),
-      p.expense_label || ("Expenses: " + money(p.expense_total_minor || 0)),
-      "",                                  // cashier (n/a)
-      "",                                  // gstin
-      "",                                  // place of supply
-    ];
-  }
-
-  throw new Error("unknown kind: " + kind);
-}
-
-function subRevenueText(p) {
-  const parts = [];
-  if (p.food_minor)              parts.push("Food " + money(p.food_minor));
-  if (p.gaming_minor)            parts.push("Gaming " + money(p.gaming_minor));
-  if (p.event_tickets_minor)     parts.push("Events " + money(p.event_tickets_minor));
-  if (p.delivery_minor)          parts.push("Delivery " + money(p.delivery_minor));
-  const profit = p.net_profit_minor;
-  if (profit !== undefined && profit !== null) parts.push("Net " + money(profit));
-  return parts.join(" · ");
-}
-
-// =============================================================================
-// Sheet helpers
-// =============================================================================
-function ensureSheet(name, headers) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  let sheet = ss.getSheetByName(name);
-
-  if (!sheet) {
-    // Tab doesn't exist — create with full ERP headers
-    sheet = ss.insertSheet(name);
-    writeHeaderRow(sheet, headers);
-    return sheet;
-  }
-
-  // Tab exists — make sure row 1 matches our headers. If the first cell is
-  // empty, OR holds a placeholder (e.g. "OPERATIONS COST"), OR the row has
-  // fewer columns than we need, we (re)write the header row.
-  const firstCell = sheet.getRange(1, 1).getValue();
-  const isPlaceholder =
-    !firstCell ||
-    String(firstCell).trim().toUpperCase() === "OPERATIONS COST" ||
-    sheet.getLastColumn() < headers.length;
-
-  if (isPlaceholder && headers[0] && String(firstCell) !== headers[0]) {
-    writeHeaderRow(sheet, headers);
-  }
-  return sheet;
-}
-
-function writeHeaderRow(sheet, headers) {
-  sheet.getRange(1, 1, 1, headers.length).setValues([headers])
-    .setFontWeight("bold").setBackground("#1e2a4d").setFontColor("#ffffff");
-  sheet.setFrozenRows(1);
-  sheet.setColumnWidth(3, 90);    // Type
-  sheet.setColumnWidth(4, 170);   // ID
-  sheet.setColumnWidth(5, 240);   // Description
-}
-
-function upsertRow(sheet, idColumn, row) {
-  const id = row[idColumn - 1];
-  if (!id) {
-    sheet.appendRow(row);
-    return;
-  }
-  const lastRow = sheet.getLastRow();
-  if (lastRow > 1) {
-    const ids = sheet.getRange(2, idColumn, lastRow - 1, 1).getValues();
-    for (let i = 0; i < ids.length; i++) {
-      if (String(ids[i][0]) === String(id)) {
-        sheet.getRange(i + 2, 1, 1, row.length).setValues([row]);
-        return;
-      }
-    }
-  }
-  sheet.appendRow(row);
-}
-
-function money(minor) {
-  return ((minor || 0) / 100);
-}
-
-function json(obj, code) {
-  const out = ContentService.createTextOutput(JSON.stringify(obj));
-  out.setMimeType(ContentService.MimeType.JSON);
-  return out;
-}
-"""
-
-private enum GSheetsStore {
-    private static let urlKey = "dcompany.erp.gsheets_webhook_url"
-    private static let lastSyncKey = "dcompany.erp.gsheets_last_sync_at"
-    private static let lastErrorKey = "dcompany.erp.gsheets_last_error"
-
-    static func readURL() -> String? {
-        UserDefaults.standard.string(forKey: urlKey)
-    }
-
-    static func save(url: String) {
-        UserDefaults.standard.set(url, forKey: urlKey)
-    }
-
-    static func clear() {
-        UserDefaults.standard.removeObject(forKey: urlKey)
-        UserDefaults.standard.removeObject(forKey: lastSyncKey)
-        UserDefaults.standard.removeObject(forKey: lastErrorKey)
-    }
-
-    static var lastSyncAt: String? {
-        UserDefaults.standard.string(forKey: lastSyncKey)
-    }
-
-    static var lastError: String? {
-        UserDefaults.standard.string(forKey: lastErrorKey)
-    }
-
-    static func markSync(error: String?) {
-        UserDefaults.standard.set(ISO8601DateFormatter().string(from: Date()), forKey: lastSyncKey)
-        if let error {
-            UserDefaults.standard.set(error, forKey: lastErrorKey)
-        } else {
-            UserDefaults.standard.removeObject(forKey: lastErrorKey)
-        }
-    }
-}
-
-// POSTs to the Google Apps Script webhook as text/plain — Apps Script parses
-// the JSON body itself, which sidesteps the CORS preflight browsers/URLSession
-// would otherwise block. Matches frontend/src/lib/google-sheets.ts exactly.
-private enum GSheetsPusher {
-    struct PushEnvelope<Payload: Encodable>: Encodable {
-        let kind: String
-        let payload: Payload
-    }
-
-    static func push<Payload: Encodable>(kind: String, payload: Payload) async -> Bool {
-        guard let urlString = GSheetsStore.readURL(), let url = URL(string: urlString) else { return false }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("text/plain;charset=utf-8", forHTTPHeaderField: "Content-Type")
-        do {
-            let encoder = JSONEncoder()
-            request.httpBody = try encoder.encode(PushEnvelope(kind: kind, payload: payload))
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse else {
-                GSheetsStore.markSync(error: "No response")
-                return false
-            }
-            guard (200...299).contains(http.statusCode) else {
-                GSheetsStore.markSync(error: "HTTP \(http.statusCode)")
-                return false
-            }
-            if let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                let ok = (object["ok"] as? Bool) ?? true
-                if ok {
-                    GSheetsStore.markSync(error: nil)
-                } else {
-                    GSheetsStore.markSync(error: (object["error"] as? String) ?? "unknown error")
-                }
-                return ok
-            }
-            GSheetsStore.markSync(error: nil)
-            return true
-        } catch {
-            GSheetsStore.markSync(error: error.localizedDescription)
-            return false
-        }
-    }
-
-    static func testConnection(url urlString: String) async -> (ok: Bool, message: String) {
-        guard urlString.hasPrefix("https://script.google.com/") else {
-            return (false, "URL must start with https://script.google.com/macros/s/ — make sure you copied the WEB APP URL, not the editor URL.")
-        }
-        guard let url = URL(string: urlString) else {
-            return (false, "That doesn't look like a valid URL.")
-        }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("text/plain;charset=utf-8", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try? JSONSerialization.data(withJSONObject: ["kind": "ping", "payload": [String: String]()])
-        do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse else {
-                return (false, "No response from the server.")
-            }
-            guard (200...299).contains(http.statusCode) else {
-                return (false, "Server returned HTTP \(http.statusCode). Re-deploy the Apps Script.")
-            }
-            let object = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
-            if (object["ok"] as? Bool) == true {
-                GSheetsStore.markSync(error: nil)
-                return (true, (object["message"] as? String) ?? "Connected.")
-            }
-            return (false, (object["error"] as? String) ?? "Unknown error from the Apps Script.")
-        } catch {
-            return (false, error.localizedDescription)
-        }
     }
 }
 
@@ -9416,10 +9093,6 @@ private struct ReportsNativeView: View {
     @State private var period: ReportPeriodScope = .daily
     @State private var isLoading = true
     @State private var error: String?
-    @State private var isPushing = false
-    @State private var pushMessage: String?
-    @State private var pushSucceeded = false
-    @State private var showWebhookConfig = false
     @State private var isExportingGstr1 = false
     @State private var isExportingGstr3b = false
     @State private var exportError: String?
@@ -9449,10 +9122,6 @@ private struct ReportsNativeView: View {
 
                     if let error {
                         ErrorBanner(message: error)
-                    }
-
-                    if let pushMessage {
-                        pushSucceeded ? AnyView(SuccessBanner(message: pushMessage)) : AnyView(ErrorBanner(message: pushMessage))
                     }
 
                     if let exportError {
@@ -9598,23 +9267,6 @@ private struct ReportsNativeView: View {
                         }
                         .disabled(report == nil)
 
-                        Button {
-                            Haptics.selection()
-                            Task { await pushToSheets() }
-                        } label: {
-                            Label("Push to Sheets", systemImage: "tray.and.arrow.up")
-                        }
-                        .disabled(report == nil || isPushing)
-
-                        Button {
-                            showWebhookConfig = true
-                        } label: {
-                            Label(
-                                GSheetsStore.readURL() == nil ? "Configure Sheets webhook" : "Sheets webhook settings",
-                                systemImage: "link"
-                            )
-                        }
-
                         // GST filing exports — same analytics.export permission as
                         // the report itself; gated the same way canSeeInsights
                         // gates the Insights/Analytics tabs elsewhere in the app.
@@ -9651,44 +9303,6 @@ private struct ReportsNativeView: View {
         .onChange(of: period) { _ in
             Task { await load() }
         }
-        .sheet(isPresented: $showWebhookConfig) {
-            GSheetsWebhookSheet()
-        }
-    }
-
-    private func pushToSheets() async {
-        guard let report else { return }
-        guard GSheetsStore.readURL() != nil else {
-            showWebhookConfig = true
-            return
-        }
-        isPushing = true
-        pushMessage = nil
-        defer { isPushing = false }
-        let payload = ReportSheetPayload(
-            date: DateFormatters.apiDateOnly.string(from: report.period_start),
-            time: DateFormatters.timeOnly.string(from: Date()),
-            period_id: report.label,
-            label: report.label,
-            orders_count: report.orders_count,
-            food_minor: report.revenue.food_minor,
-            gaming_minor: report.revenue.gaming_minor,
-            hookah_minor: report.revenue.hookah_minor,
-            event_tickets_minor: report.revenue.event_tickets_minor,
-            delivery_minor: report.revenue.delivery_aggregator_minor,
-            gross_revenue_minor: report.gross_revenue_minor,
-            net_revenue_minor: report.net_revenue_minor,
-            manual_collections_minor: report.manual_collections_minor ?? 0,
-            cgst_minor: report.tax_collected.cgst_minor,
-            sgst_minor: report.tax_collected.sgst_minor,
-            igst_minor: report.tax_collected.igst_minor,
-            expense_total_minor: report.expense_total_minor,
-            net_profit_minor: report.net_profit_minor
-        )
-        let ok = await GSheetsPusher.push(kind: "\(period.rawValue)_report", payload: payload)
-        pushSucceeded = ok
-        pushMessage = ok ? "Report pushed to Google Sheets (ERP Entries tab)." : "Failed to push to Google Sheets. Check the webhook settings."
-        if ok { Haptics.success() }
     }
 
     // GSTR-1/GSTR-3B are always a full calendar month (yyyy_mm), independent
@@ -9811,187 +9425,6 @@ private struct ReportsNativeView: View {
                 URLQueryItem(name: "to_date", value: DateFormatters.apiDateOnly.string(from: end))
             ]
         )
-    }
-}
-
-private struct GSheetsWebhookSheet: View {
-    @Environment(\.dismiss) private var dismiss
-    @State private var url: String = GSheetsStore.readURL() ?? ""
-    @State private var isTesting = false
-    @State private var testResult: (ok: Bool, message: String)?
-    @State private var copied = false
-
-    var body: some View {
-        NavigationView {
-            ZStack {
-                Brand.background.ignoresSafeArea()
-                ScrollView {
-                    VStack(spacing: 16) {
-                        BrandedCard {
-                            VStack(alignment: .leading, spacing: 12) {
-                                Text("Google Sheets").font(.headline).foregroundColor(.white)
-                                Text("Every order, ticket, event, and P&L report automatically appears as a row in your sheet's Operations tab. Your other tabs stay untouched.")
-                                    .font(.caption)
-                                    .foregroundColor(Brand.muted)
-                                TextField("https://script.google.com/macros/s/…", text: $url)
-                                    .keyboardType(.URL)
-                                    .textInputAutocapitalization(.never)
-                                    .autocorrectionDisabled()
-                                    .nativeField()
-                            }
-                        }
-
-                        if GSheetsStore.readURL() == nil {
-                            GSheetsSetupWizard(copied: copied, onCopy: copyScript)
-                        }
-
-                        if let testResult {
-                            testResult.ok ? AnyView(SuccessBanner(message: testResult.message)) : AnyView(ErrorBanner(message: testResult.message))
-                        }
-
-                        if let lastSync = GSheetsStore.lastSyncAt {
-                            Text("Last synced: \(lastSync)")
-                                .font(.caption2)
-                                .foregroundColor(Brand.muted)
-                        }
-
-                        Button {
-                            Haptics.selection()
-                            Task { await testConnection() }
-                        } label: {
-                            HStack {
-                                if isTesting { ProgressView() }
-                                Text("Test connection")
-                            }
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundColor(.white)
-                        .background(Brand.surface)
-                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                        .disabled(url.trimmingCharacters(in: .whitespaces).isEmpty || isTesting)
-
-                        if GSheetsStore.readURL() != nil {
-                            Button(role: .destructive) {
-                                Haptics.selection()
-                                GSheetsStore.clear()
-                                url = ""
-                                testResult = nil
-                            } label: {
-                                Text("Remove webhook")
-                                    .frame(maxWidth: .infinity)
-                                    .padding(.vertical, 12)
-                            }
-                            .buttonStyle(.plain)
-                            .foregroundColor(Brand.danger)
-                            .background(Brand.danger.opacity(0.12))
-                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                        }
-
-                        BrandedCard {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("What appears in your sheet").font(.headline).foregroundColor(.white)
-                                Text("All entries land in a single tab called Operations with 17 columns: Date, Time, Type, ID, Description, Customer, Qty, Taxable, CGST, SGST, IGST, Round-off, Total, Method, Cashier, GSTIN, Place of supply.\n\nThe Type column tells you what each row is: Order, Ticket, Event, Daily Report, Monthly Report, Quarterly Report, Yearly Report. Rows are idempotent on the ID column — if the same invoice arrives twice, the existing row is overwritten in place.")
-                                    .font(.caption2)
-                                    .foregroundColor(Brand.muted)
-                            }
-                        }
-                    }
-                    .padding(16)
-                }
-            }
-            .navigationTitle("Sheets Webhook")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
-                        let trimmed = url.trimmingCharacters(in: .whitespaces)
-                        if trimmed.isEmpty {
-                            GSheetsStore.clear()
-                        } else {
-                            GSheetsStore.save(url: trimmed)
-                        }
-                        Haptics.success()
-                        dismiss()
-                    }
-                }
-            }
-        }
-        .navigationViewStyle(.stack)
-    }
-
-    private func testConnection() async {
-        isTesting = true
-        defer { isTesting = false }
-        testResult = await GSheetsPusher.testConnection(url: url.trimmingCharacters(in: .whitespaces))
-    }
-
-    private func copyScript() {
-        UIPasteboard.general.string = dCompanyAppsScript
-        copied = true
-        Haptics.success()
-        Task {
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
-            copied = false
-        }
-    }
-}
-
-private struct GSheetsSetupWizard: View {
-    let copied: Bool
-    let onCopy: () -> Void
-
-    var body: some View {
-        BrandedCard {
-            VStack(alignment: .leading, spacing: 14) {
-                WizardStep(number: 1, title: "Open your Google Sheet") {
-                    Text("Use an existing sheet, or create a new one at sheets.new. A tab called Operations is added automatically — your other tabs stay untouched.")
-                }
-                WizardStep(number: 2, title: "Open the script editor") {
-                    Text("In the menu bar: Extensions → Apps Script. A new tab opens with an empty Code.gs.")
-                }
-                WizardStep(number: 3, title: "Copy and paste this script") {
-                    Button(action: onCopy) {
-                        Label(copied ? "Copied!" : "Copy the Apps Script", systemImage: copied ? "checkmark" : "doc.on.doc")
-                            .font(.caption.weight(.semibold))
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundColor(copied ? Brand.success : Brand.softGold)
-                    Text("Paste over the empty Code.gs content, then click the disk icon (Save).")
-                }
-                WizardStep(number: 4, title: "Deploy as a Web app") {
-                    Text("Deploy → New deployment. Type: Web app. Execute as: Me. Who has access: Anyone with the link. Click Deploy, then authorize when prompted.")
-                }
-                WizardStep(number: 5, title: "Copy the Web app URL") {
-                    Text("Paste it into the box above and tap Test connection.")
-                }
-            }
-        }
-    }
-}
-
-private struct WizardStep<Content: View>: View {
-    let number: Int
-    let title: String
-    @ViewBuilder let content: Content
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Text("\(number)")
-                .font(.caption.weight(.bold))
-                .foregroundColor(.black)
-                .frame(width: 22, height: 22)
-                .background(Brand.gold)
-                .clipShape(Circle())
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title).font(.subheadline.weight(.semibold)).foregroundColor(.white)
-                content
-                    .font(.caption2)
-                    .foregroundColor(Brand.muted)
-            }
-        }
     }
 }
 
@@ -11076,14 +10509,107 @@ private struct FinanceOverviewTab: View {
     }
 }
 
+private let expenseReceiptMaxBytes = 10 * 1024 * 1024
+
+private let expenseReceiptAllowedFileTypes: [UTType] = {
+    var types: [UTType] = [.jpeg, .png, .pdf]
+    for fileExtension in ["webp"] {
+        if let type = UTType(filenameExtension: fileExtension) {
+            types.append(type)
+        }
+    }
+    return types
+}()
+
+private enum ExpenseReceiptSelectionError: LocalizedError {
+    case empty
+    case tooLarge
+    case unsupported
+
+    var errorDescription: String? {
+        switch self {
+        case .empty:
+            return "The selected receipt is empty."
+        case .tooLarge:
+            return "The selected receipt exceeds the 10 MB limit."
+        case .unsupported:
+            return "Choose a JPEG, PNG, WebP, or PDF receipt."
+        }
+    }
+}
+
+private func expenseReceiptDraft(from url: URL) throws -> ExpenseReceiptDraft {
+    let gainedAccess = url.startAccessingSecurityScopedResource()
+    defer {
+        if gainedAccess { url.stopAccessingSecurityScopedResource() }
+    }
+
+    if let fileSize = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+       fileSize > expenseReceiptMaxBytes {
+        throw ExpenseReceiptSelectionError.tooLarge
+    }
+    let data = try Data(contentsOf: url, options: .mappedIfSafe)
+    guard !data.isEmpty else { throw ExpenseReceiptSelectionError.empty }
+    guard data.count <= expenseReceiptMaxBytes else {
+        throw ExpenseReceiptSelectionError.tooLarge
+    }
+
+    let fileExtension = url.pathExtension.lowercased()
+    let mimeType: String
+    switch fileExtension {
+    case "jpg", "jpeg": mimeType = "image/jpeg"
+    case "png": mimeType = "image/png"
+    case "webp": mimeType = "image/webp"
+    case "pdf": mimeType = "application/pdf"
+    default: throw ExpenseReceiptSelectionError.unsupported
+    }
+
+    let unsafeFilename = url.lastPathComponent
+    let forbidden = CharacterSet.controlCharacters.union(
+        CharacterSet(charactersIn: "\"\\/")
+    )
+    let cleanedFilename = unsafeFilename
+        .components(separatedBy: forbidden)
+        .joined()
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    let fallbackFilename = "receipt.\(fileExtension)"
+    let safeFilename = String((cleanedFilename.nilIfBlank ?? fallbackFilename).prefix(200))
+    return ExpenseReceiptDraft(
+        data: data,
+        fileName: safeFilename,
+        mimeType: mimeType,
+        source: "file"
+    )
+}
+
+private func expenseReceiptStatusLabel(_ status: String) -> String {
+    switch status {
+    case "verified": return "Verified"
+    case "not_required": return "Not required"
+    case "rejected": return "Rejected"
+    default: return "Pending review"
+    }
+}
+
+private func expenseReceiptStatusColor(_ status: String) -> Color {
+    switch status {
+    case "verified", "not_required": return Brand.success
+    case "rejected": return Brand.danger
+    default: return Brand.gold
+    }
+}
+
 private struct FinanceExpensesTab: View {
     @EnvironmentObject private var session: AppSession
     @State private var expenses: [ExpenseDTO] = []
     @State private var categories: [ExpenseCategoryDTO] = []
     @State private var branches: [BranchDTO] = []
+    @State private var openShifts: [ShiftDTO] = []
     @State private var isLoading = true
     @State private var error: String?
     @State private var showAdd = false
+    @State private var expenseToVoid: ExpenseDTO?
+    @State private var receiptExpense: ExpenseDTO?
 
     private var total: Int { expenses.reduce(0) { $0 + $1.amount_minor } }
 
@@ -11114,7 +10640,7 @@ private struct FinanceExpensesTab: View {
                 .buttonStyle(.plain)
 
                 if categories.isEmpty || branches.isEmpty {
-                    ErrorBanner(message: "Add at least one branch and expense category in Settings before recording expenses.")
+                    ErrorBanner(message: "Add at least one branch and expense category before recording expenses.")
                 }
 
                 if expenses.isEmpty {
@@ -11127,31 +10653,59 @@ private struct FinanceExpensesTab: View {
                     BrandedCard {
                         VStack(alignment: .leading, spacing: 4) {
                             ForEach(expenses) { expense in
-                                HStack(alignment: .top) {
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(categoryName(expense.category_id)).font(.subheadline.weight(.semibold)).foregroundColor(.white)
+                                HStack(alignment: .top, spacing: 12) {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(categoryName(expense.category_id))
+                                            .font(.subheadline.weight(.semibold))
+                                            .foregroundColor(.white)
                                         Text("\(DateFormatters.shortDateTime.string(from: expense.paid_at)) · \(expense.vendor_name?.nilIfBlank ?? "No vendor")")
                                             .font(.caption2)
                                             .foregroundColor(Brand.muted)
                                         if let invoice = expense.invoice_no?.nilIfBlank {
-                                            Text("Invoice \(invoice)").font(.caption2).foregroundColor(Brand.muted)
+                                            Text("Invoice \(invoice)")
+                                                .font(.caption2)
+                                                .foregroundColor(Brand.muted)
                                         }
-                                    }
-                                    Spacer()
-                                    VStack(alignment: .trailing, spacing: 4) {
-                                        Text(inr(expense.amount_minor)).font(.subheadline.weight(.semibold)).foregroundColor(Brand.softGold)
-                                        Text(expense.paid_via.uppercased()).font(.caption2.weight(.semibold)).foregroundColor(Brand.muted)
+                                        if expense.paid_via == "cash", let shiftID = expense.shift_id {
+                                            Text("Paid out from shift …\(shiftID.suffix(8))")
+                                                .font(.caption2)
+                                                .foregroundColor(Brand.muted)
+                                        }
                                         Button {
                                             Haptics.selection()
-                                            Task { await delete(expense) }
+                                            receiptExpense = expense
                                         } label: {
-                                            Image(systemName: "trash")
+                                            Label(
+                                                expense.receipt_count == 0
+                                                    ? "No receipt"
+                                                    : "\(expense.receipt_count) receipt\(expense.receipt_count == 1 ? "" : "s") · \(expenseReceiptStatusLabel(expense.receipt_status))",
+                                                systemImage: expense.receipt_count == 0 ? "doc.badge.plus" : "doc.text"
+                                            )
+                                            .font(.caption2.weight(.semibold))
+                                            .foregroundColor(expenseReceiptStatusColor(expense.receipt_status))
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                    Spacer()
+                                    VStack(alignment: .trailing, spacing: 6) {
+                                        Text(inr(expense.amount_minor))
+                                            .font(.subheadline.weight(.semibold))
+                                            .foregroundColor(Brand.softGold)
+                                        Text(expense.paid_via == "cash" ? "CASH PAID-OUT" : expense.paid_via.uppercased())
+                                            .font(.caption2.weight(.semibold))
+                                            .foregroundColor(Brand.muted)
+                                        Button {
+                                            Haptics.selection()
+                                            expenseToVoid = expense
+                                        } label: {
+                                            Label("Void", systemImage: "xmark.circle")
+                                                .font(.caption2.weight(.semibold))
                                                 .foregroundColor(Brand.danger)
                                         }
                                         .buttonStyle(.plain)
                                     }
                                 }
-                                .padding(.vertical, 6)
+                                .padding(.vertical, 7)
                                 if expense.id != expenses.last?.id {
                                     Divider().background(Brand.hairline)
                                 }
@@ -11164,9 +10718,21 @@ private struct FinanceExpensesTab: View {
         }
         .task { await load() }
         .sheet(isPresented: $showAdd) {
-            AddExpenseSheet(categories: categories, branches: branches) {
+            AddExpenseSheet(
+                categories: categories,
+                branches: branches,
+                openShifts: openShifts
+            ) {
                 Task { await load() }
             }
+        }
+        .sheet(item: $expenseToVoid) { expense in
+            VoidExpenseSheet(expense: expense) {
+                Task { await load() }
+            }
+        }
+        .sheet(item: $receiptExpense) { expense in
+            ExpenseReceiptsSheet(expense: expense)
         }
     }
 
@@ -11175,33 +10741,123 @@ private struct FinanceExpensesTab: View {
         defer { isLoading = false }
         error = nil
         do {
-            async let e: [ExpenseDTO] = session.authorized { token in
+            async let loadedExpenses: [ExpenseDTO] = session.authorized { token in
                 try await APIClient.shared.get("finance/expenses", token: token)
             }
-            async let c: [ExpenseCategoryDTO] = session.authorized { token in
+            async let loadedCategories: [ExpenseCategoryDTO] = session.authorized { token in
                 try await APIClient.shared.get("settings/expense-categories", token: token)
             }
-            async let b: [BranchDTO] = session.authorized { token in
-                try await APIClient.shared.get("settings/branches", token: token)
+            async let loadedBranches: [BranchDTO] = session.authorized { token in
+                try await APIClient.shared.get("finance/branches", token: token)
             }
-            let (freshExpenses, freshCategories, freshBranches) = try await (e, c, b)
+            async let loadedShifts: [ShiftDTO] = session.authorized { token in
+                try await APIClient.shared.get(
+                    "pos/shifts",
+                    token: token,
+                    queryItems: [
+                        URLQueryItem(name: "only_open", value: "true"),
+                        URLQueryItem(name: "limit", value: "100")
+                    ]
+                )
+            }
+            let (freshExpenses, freshCategories, freshBranches, freshShifts) = try await (
+                loadedExpenses, loadedCategories, loadedBranches, loadedShifts
+            )
             withAnimation(.easeOut(duration: 0.18)) {
                 expenses = freshExpenses
                 categories = freshCategories
                 branches = freshBranches
+                openShifts = freshShifts.filter { $0.status == "open" }
             }
         } catch is CancellationError {
         } catch {
             self.error = readable(error)
         }
     }
+}
 
-    private func delete(_ expense: ExpenseDTO) async {
-        do {
-            try await session.authorized { token in
-                try await APIClient.shared.delete("finance/expenses/\(expense.id)", token: token)
+private struct VoidExpenseSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var session: AppSession
+    let expense: ExpenseDTO
+    let onDone: () -> Void
+
+    @State private var reason = ""
+    @State private var isBusy = false
+    @State private var error: String?
+
+    private var normalizedReason: String {
+        reason.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var canSubmit: Bool {
+        (3...500).contains(normalizedReason.count) && !isBusy
+    }
+
+    var body: some View {
+        NavigationView {
+            ZStack {
+                Brand.background.ignoresSafeArea()
+                ScrollView {
+                    VStack(spacing: 16) {
+                        if let error { ErrorBanner(message: error) }
+                        BrandedCard {
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text("Void \(inr(expense.amount_minor)) expense")
+                                    .font(.headline)
+                                    .foregroundColor(.white)
+                                Text("The original financial fact remains in the audit trail. Enter why this expense is being reversed.")
+                                    .font(.caption)
+                                    .foregroundColor(Brand.muted)
+                                TextEditor(text: $reason)
+                                    .frame(minHeight: 120)
+                                    .padding(8)
+                                    .nativeTextEditorChrome()
+                                    .foregroundColor(.white)
+                                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                                    .onChange(of: reason) { value in
+                                        if value.count > 500 { reason = String(value.prefix(500)) }
+                                    }
+                                Text("\(normalizedReason.count)/500 · minimum 3 characters")
+                                    .font(.caption2)
+                                    .foregroundColor(normalizedReason.count >= 3 ? Brand.muted : Brand.danger)
+                            }
+                        }
+                    }
+                    .padding(16)
+                }
             }
-            await load()
+            .navigationTitle("Void Expense")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Void") { Task { await submit() } }
+                        .disabled(!canSubmit)
+                }
+            }
+        }
+        .navigationViewStyle(.stack)
+    }
+
+    private func submit() async {
+        guard canSubmit else { return }
+        isBusy = true
+        defer { isBusy = false }
+        error = nil
+        do {
+            let _: ExpenseDTO = try await session.authorized { token in
+                try await APIClient.shared.post(
+                    "finance/expenses/\(expense.id)/void",
+                    body: ExpenseVoidRequest(reason: normalizedReason),
+                    token: token
+                )
+            }
+            Haptics.success()
+            onDone()
+            dismiss()
         } catch is CancellationError {
         } catch {
             self.error = readable(error)
@@ -11214,43 +10870,84 @@ private struct AddExpenseSheet: View {
     @EnvironmentObject private var session: AppSession
     let categories: [ExpenseCategoryDTO]
     let branches: [BranchDTO]
+    let openShifts: [ShiftDTO]
     let onDone: () -> Void
 
     @State private var branchId: String
     @State private var categoryId: String
+    @State private var selectedShiftId = ""
     @State private var amountText = ""
-    @State private var paidVia = "cash"
+    @State private var paidVia = "upi"
     @State private var vendorName = ""
     @State private var invoiceNo = ""
     @State private var note = ""
+    @State private var receiptDraft: ExpenseReceiptDraft?
+    @State private var createdExpense: ExpenseDTO?
+    @State private var showScanner = false
+    @State private var showPhotoPicker = false
+    @State private var showFilePicker = false
     @State private var isBusy = false
     @State private var error: String?
 
-    // Frozen once when the sheet opens (not recomputed per submit() call) so
-    // that a retry after a client-side timeout resends byte-identical
-    // request contents — the backend's idempotency replay is keyed on both
-    // the key and a hash of the request body, so a `paid_at` that moved
-    // between the first attempt and a retry would 409 instead of replaying.
-    @State private var idempotencyKey = UUID().uuidString
+    // Both identities remain frozen across uncertain network outcomes. The
+    // lowercase UUID is the backend's canonical expense:<uuid> action format.
+    @State private var idempotencyKey = "expense:\(UUID().uuidString.lowercased())"
+    @State private var receiptIdempotencyKey = "expense-receipt:\(UUID().uuidString.lowercased())"
     @State private var paidAt = Date()
 
     private let paidViaOptions = ["cash", "upi", "card", "bank"]
 
-    init(categories: [ExpenseCategoryDTO], branches: [BranchDTO], onDone: @escaping () -> Void) {
+    init(
+        categories: [ExpenseCategoryDTO],
+        branches: [BranchDTO],
+        openShifts: [ShiftDTO],
+        onDone: @escaping () -> Void
+    ) {
         self.categories = categories
         self.branches = branches
+        self.openShifts = openShifts
         self.onDone = onDone
         _branchId = State(initialValue: branches.first?.id ?? "")
         _categoryId = State(initialValue: categories.first?.id ?? "")
     }
 
+    private var eligibleCashShifts: [ShiftDTO] {
+        openShifts.filter { $0.status == "open" && $0.branch_id == branchId }
+    }
+
+    private var selectedCashShift: ShiftDTO? {
+        eligibleCashShifts.first { $0.id == selectedShiftId }
+    }
+
     private var amountMinor: Int? {
-        guard let value = Double(amountText), value > 0 else { return nil }
-        return Int((value * 100).rounded())
+        guard let value = Decimal(string: amountText), value > 0 else { return nil }
+        let minor = value * 100
+        var rounded = Decimal()
+        var source = minor
+        NSDecimalRound(&rounded, &source, 0, .plain)
+        guard rounded == minor else { return nil }
+        let number = NSDecimalNumber(decimal: rounded)
+        guard number.compare(NSDecimalNumber(value: 0)) == .orderedDescending,
+              number.compare(NSDecimalNumber(value: Int.max)) != .orderedDescending else {
+            return nil
+        }
+        return number.intValue
     }
 
     private var canSubmit: Bool {
-        amountMinor != nil && !branchId.isEmpty && !categoryId.isEmpty
+        if createdExpense != nil {
+            return receiptDraft != nil && !isBusy
+        }
+        guard amountMinor != nil, !branchId.isEmpty, !categoryId.isEmpty, !isBusy else {
+            return false
+        }
+        return paidVia != "cash" || selectedCashShift != nil
+    }
+
+    private var saveButtonTitle: String {
+        if isBusy { return "Saving…" }
+        if createdExpense != nil { return "Retry Receipt" }
+        return receiptDraft == nil ? "Save" : "Save & Upload"
     }
 
     var body: some View {
@@ -11260,18 +10957,25 @@ private struct AddExpenseSheet: View {
                 ScrollView {
                     VStack(spacing: 16) {
                         if let error { ErrorBanner(message: error) }
+                        if createdExpense != nil {
+                            SuccessBanner(message: "Expense saved. Retry the selected receipt without creating another expense.")
+                        }
 
                         BrandedCard {
                             VStack(alignment: .leading, spacing: 12) {
                                 field("Branch") {
                                     Picker("", selection: $branchId) {
-                                        ForEach(branches) { b in Text(b.name).tag(b.id) }
+                                        ForEach(branches) { branch in
+                                            Text(branch.name).tag(branch.id)
+                                        }
                                     }
                                     .pickerStyle(.menu)
                                 }
                                 field("Category") {
                                     Picker("", selection: $categoryId) {
-                                        ForEach(categories) { c in Text(c.name).tag(c.id) }
+                                        ForEach(categories) { category in
+                                            Text(category.name).tag(category.id)
+                                        }
                                     }
                                     .pickerStyle(.menu)
                                 }
@@ -11279,12 +10983,41 @@ private struct AddExpenseSheet: View {
                                     TextField("0.00", text: $amountText)
                                         .keyboardType(.decimalPad)
                                         .nativeField()
+                                    if !amountText.isEmpty && amountMinor == nil {
+                                        Text("Enter a positive amount with no more than two decimal places.")
+                                            .font(.caption2)
+                                            .foregroundColor(Brand.danger)
+                                    }
                                 }
                                 field("Paid via") {
                                     Picker("", selection: $paidVia) {
-                                        ForEach(paidViaOptions, id: \.self) { Text($0.uppercased()).tag($0) }
+                                        ForEach(paidViaOptions, id: \.self) { method in
+                                            Text(method == "cash" ? "Cash paid-out" : method.uppercased())
+                                                .tag(method)
+                                        }
                                     }
-                                    .pickerStyle(.segmented)
+                                    .pickerStyle(.menu)
+                                }
+                                if paidVia == "cash" {
+                                    field("Open shift drawer") {
+                                        Picker("", selection: $selectedShiftId) {
+                                            Text("Select an open shift").tag("")
+                                            ForEach(eligibleCashShifts) { shift in
+                                                Text("Opened \(DateFormatters.shortDateTime.string(from: shift.opened_at)) · \(inr(shift.expected_minor ?? 0)) expected")
+                                                    .tag(shift.id)
+                                            }
+                                        }
+                                        .pickerStyle(.menu)
+                                    }
+                                    if eligibleCashShifts.isEmpty {
+                                        Text("Cash paid-outs require an open shift in the selected branch. The shift opener does not need to record the expense.")
+                                            .font(.caption2)
+                                            .foregroundColor(Brand.danger)
+                                    } else if selectedCashShift == nil {
+                                        Text("Select the same-branch drawer that paid this expense.")
+                                            .font(.caption2)
+                                            .foregroundColor(Brand.gold)
+                                    }
                                 }
                                 field("Vendor") {
                                     TextField("Optional", text: $vendorName).nativeField()
@@ -11296,43 +11029,207 @@ private struct AddExpenseSheet: View {
                                     TextField("Optional", text: $note).nativeField()
                                 }
                             }
+                            .disabled(createdExpense != nil)
+                            .opacity(createdExpense == nil ? 1 : 0.6)
+                        }
+
+                        BrandedCard {
+                            VStack(alignment: .leading, spacing: 12) {
+                                Text("Bill receipt (optional)")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundColor(.white)
+                                Text("Attach one original bill now. The expense is saved first; an upload retry never creates the expense again.")
+                                    .font(.caption)
+                                    .foregroundColor(Brand.muted)
+                                Text("JPEG, PNG, WebP, or PDF · maximum 10 MB")
+                                    .font(.caption2)
+                                    .foregroundColor(Brand.muted)
+
+                                if let receiptDraft {
+                                    HStack(spacing: 10) {
+                                        Image(systemName: "doc.text.fill")
+                                            .foregroundColor(Brand.gold)
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(receiptDraft.fileName)
+                                                .font(.caption.weight(.semibold))
+                                                .foregroundColor(.white)
+                                                .lineLimit(1)
+                                            Text("\(ByteCountFormatter.string(fromByteCount: Int64(receiptDraft.data.count), countStyle: .file)) · \(receiptDraft.source.capitalized)")
+                                                .font(.caption2)
+                                                .foregroundColor(Brand.muted)
+                                        }
+                                        Spacer()
+                                        if createdExpense == nil {
+                                            Button {
+                                                self.receiptDraft = nil
+                                            } label: {
+                                                Image(systemName: "xmark.circle.fill")
+                                                    .foregroundColor(Brand.muted)
+                                            }
+                                            .buttonStyle(.plain)
+                                        }
+                                    }
+                                }
+
+                                HStack(spacing: 8) {
+                                    receiptButton("Scan", icon: "camera") { showScanner = true }
+                                    receiptButton("Photos", icon: "photo") { showPhotoPicker = true }
+                                    receiptButton("Files", icon: "folder") { showFilePicker = true }
+                                }
+                                .disabled(createdExpense != nil || isBusy)
+                                .opacity(createdExpense == nil ? 1 : 0.5)
+                            }
                         }
                     }
                     .padding(16)
                 }
             }
-            .navigationTitle("Add Expense")
+            .navigationTitle(createdExpense == nil ? "Add Expense" : "Receipt Retry")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(createdExpense == nil ? "Cancel" : "Close") { dismiss() }
+                }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { Task { await submit() } }
-                        .disabled(!canSubmit || isBusy)
+                    Button(saveButtonTitle) { Task { await submit() } }
+                        .disabled(!canSubmit)
                 }
             }
         }
         .navigationViewStyle(.stack)
+        .onChange(of: branchId) { _ in
+            selectedShiftId = ""
+        }
+        .fullScreenCover(isPresented: $showScanner) {
+            DocumentOCRScanner(
+                onComplete: { _, imageData in
+                    showScanner = false
+                    guard let imageData else {
+                        error = ExpenseReceiptSelectionError.empty.localizedDescription
+                        return
+                    }
+                    selectReceipt(
+                        ExpenseReceiptDraft(
+                            data: imageData,
+                            fileName: "receipt.jpg",
+                            mimeType: "image/jpeg",
+                            source: "camera"
+                        )
+                    )
+                },
+                onFailure: { message in
+                    error = message
+                    showScanner = false
+                },
+                onCancel: { showScanner = false }
+            )
+            .ignoresSafeArea()
+        }
+        .sheet(isPresented: $showPhotoPicker) {
+            PhotoLibraryPicker(
+                onComplete: { data in
+                    showPhotoPicker = false
+                    selectReceipt(
+                        ExpenseReceiptDraft(
+                            data: data,
+                            fileName: "receipt.jpg",
+                            mimeType: "image/jpeg",
+                            source: "gallery"
+                        )
+                    )
+                },
+                onCancel: { showPhotoPicker = false }
+            )
+            .ignoresSafeArea()
+        }
+        .fileImporter(
+            isPresented: $showFilePicker,
+            allowedContentTypes: expenseReceiptAllowedFileTypes
+        ) { result in
+            Task { await selectFile(result) }
+        }
     }
 
     @ViewBuilder
-    private func field<Content: View>(_ label: String, @ViewBuilder content: () -> Content) -> some View {
+    private func field<Content: View>(
+        _ label: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(label).font(.caption).foregroundColor(Brand.muted)
             content()
         }
     }
 
+    private func receiptButton(
+        _ title: String,
+        icon: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button {
+            Haptics.selection()
+            action()
+        } label: {
+            Label(title, systemImage: icon)
+                .font(.caption.weight(.semibold))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
+                .background(Brand.elevated)
+                .foregroundColor(.white)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func selectReceipt(_ draft: ExpenseReceiptDraft) {
+        guard !draft.data.isEmpty else {
+            error = ExpenseReceiptSelectionError.empty.localizedDescription
+            return
+        }
+        guard draft.data.count <= expenseReceiptMaxBytes else {
+            error = ExpenseReceiptSelectionError.tooLarge.localizedDescription
+            return
+        }
+        receiptDraft = draft
+        receiptIdempotencyKey = "expense-receipt:\(UUID().uuidString.lowercased())"
+        error = nil
+    }
+
+    private func selectFile(_ result: Result<URL, Error>) async {
+        do {
+            let url = try result.get()
+            let draft = try await Task.detached(priority: .userInitiated) {
+                try expenseReceiptDraft(from: url)
+            }.value
+            selectReceipt(draft)
+        } catch is CancellationError {
+        } catch {
+            self.error = readable(error)
+        }
+    }
+
     private func submit() async {
+        if let createdExpense {
+            await retryReceiptUpload(for: createdExpense)
+            return
+        }
         guard let amountMinor else { return }
+        let shiftID = paidVia == "cash" ? selectedCashShift?.id : nil
+        if paidVia == "cash" && shiftID == nil {
+            error = "Select an open shift in the same branch for this cash paid-out."
+            return
+        }
+
         isBusy = true
         defer { isBusy = false }
         error = nil
         do {
-            let _: ExpenseDTO = try await session.authorized { token in
+            let savedExpense: ExpenseDTO = try await session.authorized { token in
                 try await APIClient.shared.post(
                     "finance/expenses",
                     body: ExpenseCreateRequest(
                         branch_id: branchId,
+                        shift_id: shiftID,
                         category_id: categoryId,
                         supplier_id: nil,
                         amount_minor: amountMinor,
@@ -11346,12 +11243,227 @@ private struct AddExpenseSheet: View {
                     headers: ["Idempotency-Key": idempotencyKey]
                 )
             }
-            Haptics.success()
+            createdExpense = savedExpense
             onDone()
+
+            if receiptDraft != nil {
+                do {
+                    try await uploadSelectedReceipt(for: savedExpense)
+                } catch {
+                    self.error = "Expense saved. The receipt was not uploaded: \(readable(error)) Retry keeps the saved expense and cannot duplicate it."
+                    return
+                }
+            }
+            Haptics.success()
             dismiss()
         } catch is CancellationError {
         } catch {
             self.error = readable(error)
+        }
+    }
+
+    private func retryReceiptUpload(for expense: ExpenseDTO) async {
+        guard receiptDraft != nil else { return }
+        isBusy = true
+        defer { isBusy = false }
+        error = nil
+        do {
+            try await uploadSelectedReceipt(for: expense)
+            Haptics.success()
+            dismiss()
+        } catch is CancellationError {
+        } catch {
+            self.error = "Expense saved. The receipt is still pending upload: \(readable(error))"
+        }
+    }
+
+    private func uploadSelectedReceipt(for expense: ExpenseDTO) async throws {
+        guard let receiptDraft else { return }
+        let _: ExpenseReceiptDTO = try await session.authorized { token in
+            try await APIClient.shared.upload(
+                "finance/expenses/\(expense.id)/receipts",
+                fileData: receiptDraft.data,
+                fileName: receiptDraft.fileName,
+                mimeType: receiptDraft.mimeType,
+                formFields: ["source": receiptDraft.source],
+                token: token,
+                headers: ["Idempotency-Key": receiptIdempotencyKey]
+            )
+        }
+        onDone()
+    }
+}
+
+private struct ExpenseReceiptsSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var session: AppSession
+    let expense: ExpenseDTO
+
+    @State private var receipts: [ExpenseReceiptDTO] = []
+    @State private var isLoading = true
+    @State private var openingReceiptID: String?
+    @State private var previewFile: ExpenseReceiptPreviewFile?
+    @State private var error: String?
+
+    var body: some View {
+        NavigationView {
+            ZStack {
+                Brand.background.ignoresSafeArea()
+                ScrollView {
+                    VStack(spacing: 14) {
+                        if let error { ErrorBanner(message: error) }
+                        if receipts.isEmpty {
+                            if isLoading {
+                                LoadingBlock(title: "Loading receipts")
+                            } else {
+                                InlineEmptyCard(
+                                    icon: "doc.badge.plus",
+                                    title: "No receipt attached",
+                                    subtitle: "Attach a bill when recording the expense."
+                                )
+                            }
+                        } else {
+                            ForEach(receipts) { receipt in
+                                BrandedCard {
+                                    HStack(alignment: .top, spacing: 12) {
+                                        Image(systemName: receipt.content_type == "application/pdf" ? "doc.richtext" : "photo")
+                                            .foregroundColor(Brand.gold)
+                                            .frame(width: 28)
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text(receipt.original_filename)
+                                                .font(.subheadline.weight(.semibold))
+                                                .foregroundColor(.white)
+                                                .lineLimit(2)
+                                            Text("\(ByteCountFormatter.string(fromByteCount: Int64(receipt.size_bytes), countStyle: .file)) · \(receipt.source.capitalized) · \(DateFormatters.shortDateTime.string(from: receipt.created_at))")
+                                                .font(.caption2)
+                                                .foregroundColor(Brand.muted)
+                                            Text(expenseReceiptStatusLabel(receipt.status))
+                                                .font(.caption2.weight(.semibold))
+                                                .foregroundColor(expenseReceiptStatusColor(receipt.status))
+                                            if let reviewNote = receipt.review_note?.nilIfBlank {
+                                                Text(reviewNote)
+                                                    .font(.caption2)
+                                                    .foregroundColor(Brand.muted)
+                                            }
+                                        }
+                                        Spacer()
+                                        Button {
+                                            Task { await open(receipt) }
+                                        } label: {
+                                            if openingReceiptID == receipt.id {
+                                                ProgressView().tint(Brand.gold)
+                                            } else {
+                                                Label("View", systemImage: "eye")
+                                                    .font(.caption.weight(.semibold))
+                                            }
+                                        }
+                                        .buttonStyle(.plain)
+                                        .foregroundColor(Brand.softGold)
+                                        .disabled(openingReceiptID != nil)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    .padding(16)
+                }
+            }
+            .navigationTitle("Expense Receipts")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") { dismiss() }
+                }
+            }
+        }
+        .navigationViewStyle(.stack)
+        .task { await load() }
+        .sheet(item: $previewFile) { file in
+            ExpenseReceiptQuickLook(url: file.url)
+                .ignoresSafeArea()
+                .onDisappear { try? FileManager.default.removeItem(at: file.url) }
+        }
+    }
+
+    private func load() async {
+        isLoading = receipts.isEmpty
+        defer { isLoading = false }
+        error = nil
+        do {
+            receipts = try await session.authorized { token in
+                try await APIClient.shared.get(
+                    "finance/expenses/\(expense.id)/receipts",
+                    token: token
+                )
+            }
+        } catch is CancellationError {
+        } catch {
+            self.error = readable(error)
+        }
+    }
+
+    private func open(_ receipt: ExpenseReceiptDTO) async {
+        openingReceiptID = receipt.id
+        defer { openingReceiptID = nil }
+        error = nil
+        do {
+            let data = try await session.authorized { token in
+                try await APIClient.shared.getData(
+                    "finance/expenses/\(expense.id)/receipts/\(receipt.id)",
+                    token: token
+                )
+            }
+            let fileExtension: String
+            switch receipt.content_type {
+            case "application/pdf": fileExtension = "pdf"
+            case "image/png": fileExtension = "png"
+            case "image/webp": fileExtension = "webp"
+            default: fileExtension = "jpg"
+            }
+            let url = FileManager.default.temporaryDirectory
+                .appendingPathComponent("expense-receipt-\(receipt.id).\(fileExtension)")
+            try data.write(to: url, options: .atomic)
+            try? FileManager.default.setAttributes(
+                [.protectionKey: FileProtectionType.complete],
+                ofItemAtPath: url.path
+            )
+            previewFile = ExpenseReceiptPreviewFile(url: url)
+        } catch is CancellationError {
+        } catch {
+            self.error = readable(error)
+        }
+    }
+}
+
+private struct ExpenseReceiptQuickLook: UIViewControllerRepresentable {
+    let url: URL
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(url: url)
+    }
+
+    func makeUIViewController(context: Context) -> QLPreviewController {
+        let controller = QLPreviewController()
+        controller.dataSource = context.coordinator
+        return controller
+    }
+
+    func updateUIViewController(_ uiViewController: QLPreviewController, context: Context) {}
+
+    final class Coordinator: NSObject, QLPreviewControllerDataSource {
+        let url: URL
+
+        init(url: URL) {
+            self.url = url
+        }
+
+        func numberOfPreviewItems(in controller: QLPreviewController) -> Int { 1 }
+
+        func previewController(
+            _ controller: QLPreviewController,
+            previewItemAt index: Int
+        ) -> QLPreviewItem {
+            url as NSURL
         }
     }
 }
@@ -16055,11 +16167,13 @@ private struct StationEditorSheet: View {
 }
 
 private struct DeviceIntegrationsNativeView: View {
+    @EnvironmentObject private var session: AppSession
     @EnvironmentObject private var cache: AppCache
     @State private var showScanner = false
     @State private var scannedText = ""
     @State private var scanError: String?
-    @State private var showSheetsConfig = false
+    @State private var sheetsStatus: GoogleSheetsMirrorStatusDTO?
+    @State private var sheetsStatusError: String?
 
     var body: some View {
         RefreshableScrollView(refresh: refresh) {
@@ -16130,31 +16244,20 @@ private struct DeviceIntegrationsNativeView: View {
 
                 BrandedCard {
                     VStack(alignment: .leading, spacing: 14) {
-                        Text("Google Sheets Sync")
+                        Text("Google Sheets Mirror")
                             .font(.headline)
                             .foregroundColor(.white)
                         IntegrationStatusRow(
-                            title: "Sheets webhook",
-                            value: GSheetsStore.readURL() != nil ? "Connected" : "Not connected",
-                            detail: GSheetsStore.readURL() != nil
-                                ? "Orders, tickets, events, and reports push to your Operations tab."
-                                : "Connect a Google Apps Script webhook to sync every bill to a sheet.",
-                            isReady: GSheetsStore.readURL() != nil,
+                            title: "ERP Mirror v1",
+                            value: sheetsMirrorValue,
+                            detail: sheetsMirrorDetail,
+                            isReady: sheetsMirrorIsReady,
                             icon: "tablecells"
                         )
-                        Button {
-                            Haptics.selection()
-                            showSheetsConfig = true
-                        } label: {
-                            Label(GSheetsStore.readURL() != nil ? "Manage Sheets connection" : "Connect Google Sheets", systemImage: "link")
-                                .font(.subheadline.weight(.semibold))
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 12)
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundColor(.black)
-                        .background(Brand.gold)
-                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        Text("Configuration, signing keys, retries, and quarantined events are managed in Web ERP Settings. This app never stores or posts to an Apps Script URL.")
+                            .font(.caption)
+                            .foregroundColor(Brand.muted)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
 
@@ -16206,6 +16309,7 @@ private struct DeviceIntegrationsNativeView: View {
         }
         .navigationTitle("Integrations")
         .background(Brand.background)
+        .task { await refresh() }
         .sheet(isPresented: $showScanner) {
             DocumentOCRScanner(
                 onComplete: { text, _ in
@@ -16222,12 +16326,55 @@ private struct DeviceIntegrationsNativeView: View {
             )
             .ignoresSafeArea()
         }
-        .sheet(isPresented: $showSheetsConfig) {
-            GSheetsWebhookSheet()
-        }
     }
 
-    private func refresh() async {}
+    private var sheetsMirrorIsReady: Bool {
+        guard let status = sheetsStatus else { return false }
+        return status.enabled
+            && status.secret_configured
+            && status.configured_at != nil
+            && status.quarantined_count == 0
+    }
+
+    private var sheetsMirrorValue: String {
+        if sheetsStatusError != nil { return "Unavailable" }
+        guard let status = sheetsStatus else { return "Loading" }
+        if !status.enabled || !status.secret_configured || status.configured_at == nil {
+            return "Disabled"
+        }
+        return status.quarantined_count > 0 ? "Needs review" : "Enabled"
+    }
+
+    private var sheetsMirrorDetail: String {
+        if let sheetsStatusError {
+            return "Server status could not be loaded: \(sheetsStatusError)"
+        }
+        guard let status = sheetsStatus else {
+            return "Loading the server-managed mirror status."
+        }
+        guard status.enabled, status.secret_configured, status.configured_at != nil else {
+            return "The server-managed mirror is disabled. Configure it in Web ERP Settings."
+        }
+        if status.quarantined_count > 0 {
+            return "\(status.quarantined_count) event(s) need owner review; \(status.pending_count) remain queued."
+        }
+        let lastDelivery = status.last_delivered_at.map(DateFormatters.shortDateTime.string(from:)) ?? "none yet"
+        return "\(status.delivered_count) delivered; \(status.pending_count) queued. Last delivery: \(lastDelivery)."
+    }
+
+    private func refresh() async {
+        do {
+            let status: GoogleSheetsMirrorStatusDTO = try await session.authorized { token in
+                try await APIClient.shared.get("settings/google-sheets", token: token)
+            }
+            sheetsStatus = status
+            sheetsStatusError = nil
+        } catch is CancellationError {
+        } catch {
+            sheetsStatus = nil
+            sheetsStatusError = readable(error)
+        }
+    }
 }
 
 private struct IntegrationStatusRow: View {
@@ -19895,6 +20042,17 @@ private struct NativeFieldModifier: ViewModifier {
 private extension View {
     func nativeField() -> some View {
         modifier(NativeFieldModifier())
+    }
+
+    @ViewBuilder
+    func nativeTextEditorChrome() -> some View {
+        if #available(iOS 16.0, *) {
+            self
+                .scrollContentBackground(.hidden)
+                .background(Brand.elevated)
+        } else {
+            self.background(Brand.elevated)
+        }
     }
 
     @ViewBuilder

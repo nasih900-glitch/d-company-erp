@@ -28,6 +28,8 @@ import java.util.Locale
 data class Expense(
     val id: String,
     @SerialName("branch_id") val branchId: String,
+    @SerialName("shift_id") val shiftId: String? = null,
+    @SerialName("created_by") val createdBy: String? = null,
     @SerialName("category_id") val categoryId: String,
     @SerialName("supplier_id") val supplierId: String? = null,
     @SerialName("amount_minor") val amountMinor: Long,
@@ -36,6 +38,48 @@ data class Expense(
     @SerialName("vendor_name") val vendorName: String? = null,
     @SerialName("invoice_no") val invoiceNo: String? = null,
     val note: String? = null,
+    @SerialName("receipt_count") val receiptCount: Int = 0,
+    @SerialName("receipt_status") val receiptStatus: String = "pending",
+    @SerialName("is_voided") val isVoided: Boolean = false,
+    @SerialName("source_shift_status") val sourceShiftStatus: String? = null,
+    @SerialName("is_corrected") val isCorrected: Boolean = false,
+    val correction: FinanceSourceCorrection? = null,
+)
+
+@Serializable
+data class FinanceSourceCorrection(
+    val id: String = "",
+    @SerialName("source_type") val sourceType: String = "expense",
+    @SerialName("source_id") val sourceId: String = "",
+    @SerialName("original_shift_id") val originalShiftId: String = "",
+    @SerialName("settlement_shift_id") val settlementShiftId: String = "",
+    @SerialName("amount_minor") val amountMinor: Long = 0,
+    @SerialName("corrected_by") val correctedBy: String = "",
+    val reason: String,
+    @SerialName("corrected_at") val correctedAt: String,
+)
+
+@Serializable
+data class ExpenseActionReconciliation(
+    val state: String,
+    @SerialName("idempotency_key") val idempotencyKey: String,
+    val expense: Expense? = null,
+)
+
+@Serializable
+data class ExpenseReceipt(
+    val id: String,
+    @SerialName("expense_id") val expenseId: String,
+    @SerialName("original_filename") val originalFilename: String,
+    @SerialName("content_type") val contentType: String,
+    @SerialName("size_bytes") val sizeBytes: Int,
+    /** Optional only for compatibility with a server that predates Code30.2.
+     * Recovery refuses deletion unless the refreshed list supplies hashes. */
+    val sha256: String? = null,
+    val source: String,
+    val status: String,
+    @SerialName("review_note") val reviewNote: String? = null,
+    @SerialName("created_at") val createdAt: String,
 )
 
 @Serializable
@@ -43,6 +87,7 @@ data class ManualCollection(
     val id: String,
     @SerialName("company_id") val companyId: String,
     @SerialName("branch_id") val branchId: String,
+    @SerialName("shift_id") val shiftId: String? = null,
     @SerialName("business_date") val businessDate: String,
     val method: String,
     @SerialName("amount_minor") val amountMinor: Long,
@@ -58,6 +103,9 @@ data class ManualCollection(
     @SerialName("voided_by_name") val voidedByName: String? = null,
     @SerialName("void_reason") val voidReason: String? = null,
     @SerialName("is_voided") val isVoided: Boolean = false,
+    @SerialName("source_shift_status") val sourceShiftStatus: String? = null,
+    @SerialName("is_corrected") val isCorrected: Boolean = false,
+    val correction: FinanceSourceCorrection? = null,
 )
 
 @Serializable
@@ -65,6 +113,7 @@ data class TipPayout(
     val id: String,
     @SerialName("company_id") val companyId: String,
     @SerialName("branch_id") val branchId: String,
+    @SerialName("shift_id") val shiftId: String? = null,
     @SerialName("amount_minor") val amountMinor: Long,
     val method: String,
     @SerialName("paid_at") val paidAt: String,
@@ -78,6 +127,9 @@ data class TipPayout(
     @SerialName("voided_by_name") val voidedByName: String? = null,
     @SerialName("void_reason") val voidReason: String? = null,
     @SerialName("is_voided") val isVoided: Boolean = false,
+    @SerialName("source_shift_status") val sourceShiftStatus: String? = null,
+    @SerialName("is_corrected") val isCorrected: Boolean = false,
+    val correction: FinanceSourceCorrection? = null,
 )
 
 @Serializable
@@ -166,6 +218,7 @@ data class Asset(
 @Serializable
 data class ExpenseCreate(
     @SerialName("branch_id") val branchId: String,
+    @SerialName("shift_id") val shiftId: String? = null,
     @SerialName("category_id") val categoryId: String,
     @SerialName("supplier_id") val supplierId: String? = null,
     @SerialName("amount_minor") val amountMinor: Long,
@@ -179,6 +232,7 @@ data class ExpenseCreate(
 @Serializable
 data class ManualCollectionCreate(
     @SerialName("branch_id") val branchId: String,
+    @SerialName("shift_id") val shiftId: String? = null,
     @SerialName("business_date") val businessDate: String,
     val method: String,
     @SerialName("amount_minor") val amountMinor: Long,
@@ -190,6 +244,7 @@ data class ManualCollectionCreate(
 @Serializable
 data class TipPayoutCreate(
     @SerialName("branch_id") val branchId: String,
+    @SerialName("shift_id") val shiftId: String? = null,
     @SerialName("amount_minor") val amountMinor: Long,
     val method: String,
     @SerialName("paid_at") val paidAt: String,
@@ -543,6 +598,7 @@ data class ManualCollectionTotals(
     val totalMinor: Long = 0,
     val activeCount: Int = 0,
     val voidedCount: Int = 0,
+    val correctedCount: Int = 0,
 )
 
 internal fun manualCollectionTotals(rows: List<ManualCollection>): ManualCollectionTotals {
@@ -550,6 +606,8 @@ internal fun manualCollectionTotals(rows: List<ManualCollection>): ManualCollect
     rows.forEach { row ->
         if (row.isVoided) {
             totals = totals.copy(voidedCount = totals.voidedCount + 1)
+        } else if (row.isCorrected) {
+            totals = totals.copy(correctedCount = totals.correctedCount + 1)
         } else {
             totals = totals.copy(
                 cashMinor = totals.cashMinor + if (row.method == "cash") row.amountMinor else 0,
@@ -565,7 +623,7 @@ internal fun manualCollectionTotals(rows: List<ManualCollection>): ManualCollect
 }
 
 internal fun tipPayoutTotal(rows: List<TipPayout>): Long =
-    rows.filterNot(TipPayout::isVoided).sumOf(TipPayout::amountMinor)
+    rows.filterNot { it.isVoided || it.isCorrected }.sumOf(TipPayout::amountMinor)
 
 internal fun defaultManualCollectionReference(businessDate: String, method: String): String =
     "Daily collection $businessDate ${paidViaLabel(method)}"

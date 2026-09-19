@@ -128,6 +128,9 @@ def _production_env(database_url: str, *, email: str, password: str) -> dict[str
         "JWT_SECRET": "j" * 48,
         "REMOTE_ASSISTANCE_PAIRING_SECRET": "p" * 48,
         "REMOTE_ASSISTANCE_RELAY_SECRET": base64.b64encode(b"r" * 32).decode("ascii"),
+        "GOOGLE_SHEETS_SECRET_ENCRYPTION_KEY": base64.b64encode(b"g" * 32).decode(
+            "ascii"
+        ),
         "REDIS_URL": f"redis://erp_backend:{'d' * 64}@redis:6379/0",
         "S3_SECRET_KEY": "s" * 48,
         "SEED_OWNER_EMAIL": email,

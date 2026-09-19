@@ -30,19 +30,33 @@ OTHER_BRANCH_ID = UUID("33333333-3333-3333-3333-333333333333")
 USER_ID = UUID("44444444-4444-4444-4444-444444444444")
 
 
+@pytest.fixture(autouse=True)
+def _isolate_finance_source_mirror(monkeypatch) -> None:
+    async def no_mirror(*_args, **_kwargs) -> None:
+        return None
+
+    monkeypatch.setattr(finance_router, "_enqueue_finance_source_mirror", no_mirror)
+
+
 def _tenant(
-    *, company_id: UUID = COMPANY_ID, branch_id: UUID | None = None,
+    *,
+    company_id: UUID = COMPANY_ID,
+    branch_id: UUID | None = None,
     roles: tuple[str, ...] = ("owner",),
 ) -> TenantContext:
     return TenantContext(
-        user_id=USER_ID, company_id=company_id, branch_id=branch_id,
-        terminal_id=None, roles=roles,
+        user_id=USER_ID,
+        company_id=company_id,
+        branch_id=branch_id,
+        terminal_id=None,
+        roles=roles,
     )
 
 
 def _branch(*, company_id: UUID = COMPANY_ID, deleted: bool = False) -> SimpleNamespace:
     return SimpleNamespace(
-        id=BRANCH_ID, company_id=company_id,
+        id=BRANCH_ID,
+        company_id=company_id,
         deleted_at=datetime(2026, 1, 1, tzinfo=UTC) if deleted else None,
     )
 
@@ -226,6 +240,7 @@ async def test_create_asset_rejects_a_branch_outside_a_branch_scoped_tenant(monk
     """A tenant pinned to one branch (branch_id set, not company-wide) cannot
     create an asset in a different branch — checked via tenant.in_branch()
     before the branch is even looked up (no session.get call expected)."""
+
     async def reserve(*_args, **_kwargs):
         return None
 
@@ -285,7 +300,10 @@ async def test_create_asset_is_idempotent_on_exact_replay(monkeypatch) -> None:
             raise AssertionError(f"Replay attempted database mutation via {name}")
 
     response = await create_asset(
-        _asset_payload(), _NoMutationSession(), _request(), _tenant(),
+        _asset_payload(),
+        _NoMutationSession(),
+        _request(),
+        _tenant(),
     )
     assert response == existing
 

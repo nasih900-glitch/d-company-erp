@@ -709,6 +709,14 @@ async def verify() -> None:
                 select(UserRole.branch_id).where(UserRole.user_id == fixture_user.id)
             )
         ).scalar_one()
+        vr_transfer_target_id = (
+            await session.execute(
+                select(Station.id).where(
+                    Station.company_id == company_id,
+                    Station.code == "VR-02",
+                )
+            )
+        ).scalar_one()
         cola_stock = (
             await session.execute(
                 select(Ingredient).where(
@@ -896,7 +904,7 @@ async def verify() -> None:
             or paused_session_extension_codes != ["standard-single-extension-60m"]
         ):
             failures.append(
-                "the paused Standard Single session did not preserve its locked ₹80 "
+                "the paused PS5 Single session did not preserve its locked ₹80 "
                 "package, stable pause interval and billed ₹100 extension"
             )
         expected_pause_responses = [
@@ -992,14 +1000,15 @@ async def verify() -> None:
                 ("standard-dual-session-30m", 0, 10_000): 1,
                 ("standard-dual-session-60m", 1, 28_000): 1,
                 ("standard-dual-session-60m", 2, 40_000): 1,
-                ("premium-single-session-60m", 0, 22_000): 1,
-                ("premium-single-session-60m", 0, 27_000): 1,
-                ("premium-dual-session-60m", 0, 34_000): 1,
-                ("premium-dual-session-60m", 1, 40_000): 1,
-                ("premium-dual-session-60m", 2, 40_000): 1,
+                ("vr-games-session-15m", 0, 8_000): 1,
+                ("vr-games-session-30m", 0, 12_000): 1,
+                ("vr-games-session-60m", 0, 20_000): 1,
+                ("vr-racing-session-15m", 0, 10_000): 1,
+                ("vr-racing-session-30m", 0, 14_000): 1,
                 ("standard-simdrive-session-15m", 0, 7_000): 1,
                 ("standard-simdrive-session-30m", 0, 10_000): 1,
                 ("standard-simdrive-session-60m", 0, 18_000): 1,
+                ("vr-racing-session-60m", 0, 25_000): 1,
             }
         )
         observed_package_sessions = Counter(
@@ -1012,7 +1021,7 @@ async def verify() -> None:
         )
         if observed_package_sessions != expected_package_sessions:
             failures.append(
-                "package/player/amount matrix differs from the 16-session physical plan: "
+                "package/player/amount matrix differs from the current 16-session plan: "
                 f"{dict(observed_package_sessions)}"
             )
 
@@ -1022,11 +1031,6 @@ async def verify() -> None:
                 ("standard-single-extension-30m", 0, 60, 90, 6_000, 0, 6_000): 1,
                 ("standard-dual-extension-30m", 1, 60, 90, 7_000, 3_000, 10_000): 1,
                 ("standard-dual-extension-60m", 2, 60, 120, 13_000, 6_000, 19_000): 1,
-                ("premium-single-extension-30m", 0, 60, 90, 7_000, 0, 7_000): 1,
-                ("premium-single-extension-60m", 0, 60, 120, 12_000, 0, 12_000): 1,
-                ("premium-dual-extension-60m", 0, 60, 120, 15_000, 0, 15_000): 1,
-                ("premium-dual-extension-60m", 1, 60, 120, 15_000, 3_000, 18_000): 1,
-                ("premium-dual-extension-30m", 2, 60, 90, 9_000, 6_000, 15_000): 1,
             }
         )
         observed_extensions = Counter(
@@ -1060,9 +1064,9 @@ async def verify() -> None:
         hourly_station_types = Counter(
             station.type for _gaming_session, station in hourly_session_details
         )
-        if hourly_station_types != Counter({"vr": 1, "streaming": 1, "hookah": 1}):
+        if hourly_station_types != Counter({"streaming": 1, "hookah": 1}):
             failures.append(
-                "hourly station coverage must be exactly VR, Streaming and Shisha: "
+                "hourly station coverage must be exactly Streaming and Shisha: "
                 f"{dict(hourly_station_types)}"
             )
         for hourly_session, station in hourly_session_details:
@@ -1079,9 +1083,14 @@ async def verify() -> None:
                     f"ceiling-minute billing for station {station.code}"
                 )
         if not any(
-            station.code == "VR-02" for _gaming_session, station in hourly_session_details
+            row.station_id == vr_transfer_target_id
+            and code == "vr-games-session-60m"
+            for row, code in package_sessions
         ):
-            failures.append("the visible VR Pod 1 to VR Pod 2 transfer was not persisted")
+            failures.append(
+                "the fixed-price VR Games transfer from VR Pod 1 to VR Pod 2 "
+                "was not persisted"
+            )
 
         lines_by_order: dict[UUID, list[OrderLine]] = {}
         for line in order_lines:

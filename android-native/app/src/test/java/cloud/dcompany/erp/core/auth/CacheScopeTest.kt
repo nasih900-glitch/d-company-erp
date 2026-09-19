@@ -526,10 +526,10 @@ class CacheScopeTest {
     @Test
     fun `cache inventory is exhaustive unique and all tables are scope bound`() {
         assertEquals(43, SERVER_DERIVED_CACHE_TABLES.size)
-        assertEquals(38, LOCAL_DURABLE_TABLES.size)
+        assertEquals(40, LOCAL_DURABLE_TABLES.size)
         assertEquals(SERVER_DERIVED_CACHE_TABLES.size, SERVER_DERIVED_CACHE_TABLES.toSet().size)
         assertEquals(LOCAL_DURABLE_TABLES.size, LOCAL_DURABLE_TABLES.toSet().size)
-        assertEquals(81, ALL_SCOPE_TABLES.size)
+        assertEquals(83, ALL_SCOPE_TABLES.size)
         assertTrue(SERVER_DERIVED_CACHE_TABLES.toSet().intersect(LOCAL_DURABLE_TABLES).isEmpty())
         assertTrue("menu_variants" in SERVER_DERIVED_CACHE_TABLES)
         assertTrue("menu_modifier_groups" in SERVER_DERIVED_CACHE_TABLES)
@@ -553,6 +553,16 @@ class CacheScopeTest {
         assertTrue("local_held_order_payments" in LOCAL_DURABLE_TABLES)
         assertTrue("local_membership_payment_actions" in LOCAL_DURABLE_TABLES)
         assertTrue("local_membership_refund_actions" in LOCAL_DURABLE_TABLES)
+        assertTrue("local_expense_receipts" in LOCAL_DURABLE_TABLES)
+        assertTrue("local_expense_receipt_chunks" in LOCAL_DURABLE_TABLES)
+        assertTrue(
+            LOCAL_DURABLE_TABLES.indexOf("local_expense_receipt_chunks") <
+                LOCAL_DURABLE_TABLES.indexOf("local_expense_receipts"),
+        )
+        assertTrue(
+            LOCAL_DURABLE_TABLES.indexOf("local_expense_receipts") <
+                LOCAL_DURABLE_TABLES.indexOf("local_expenses"),
+        )
         assertTrue("local_cafe_bills" in LOCAL_DURABLE_TABLES)
         assertTrue("local_cafe_actions" in LOCAL_DURABLE_TABLES)
         assertTrue("local_kitchen_cancellation_acks" in LOCAL_DURABLE_TABLES)

@@ -445,6 +445,36 @@ internal object DiagnosticsRuntime {
         }
     }
 
+    /**
+     * Privacy-safe audit breadcrumb for the explicit recovery that removes a
+     * permanently rejected local receipt after a fresh authoritative hash
+     * reconciliation. No expense, receipt, staff, vendor, or payment identity
+     * is recorded in diagnostics.
+     */
+    suspend fun recordRejectedExpenseReceiptDiscardAuthorised(): Boolean {
+        val target = outbox ?: return false
+        val localScope = currentVerifiedScopeHash()
+        val event = DiagnosticEvent(
+            eventType = DiagnosticEventType.API_FAILURE,
+            severity = DiagnosticSeverity.WARNING,
+            occurredAtMillis = System.currentTimeMillis(),
+            component = DiagnosticComponent.FINANCE,
+            reasonCode = "rejected_receipt_discard_authorised",
+            failureFingerprint = sha256Hex(
+                "finance|rejected_receipt_discard_authorised",
+            ),
+            connectivity = DiagnosticConnectivity.ONLINE,
+        )
+        return try {
+            target.capture(event, localScope)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            reportDiagnosticFailure(failure)
+            false
+        }
+    }
+
     /** Called only after cache ownership and authenticated outbox ownership agree. */
     fun onVerifiedScopeAvailable() {
         isolateDiagnosticFailure(::reportDiagnosticFailure) {

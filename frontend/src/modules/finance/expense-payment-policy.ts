@@ -8,12 +8,13 @@ export interface ExpensePaymentOption {
 export const DEFAULT_EXPENSE_PAYMENT_RAIL: ExpenseCreatePaymentRail = 'upi';
 
 export const EXPENSE_PAYMENT_OPTIONS: readonly ExpensePaymentOption[] = [
+  { value: 'cash', label: 'Cash from open shift drawer' },
   { value: 'upi', label: 'UPI (business account)' },
   { value: 'card', label: 'Business debit card' },
   { value: 'bank', label: 'Bank transfer' },
 ];
 
 export const EXPENSE_CASH_DRAWER_GUIDANCE =
-  'Cash is unavailable here because ordinary expenses are not linked to the open shift drawer. ' +
-  'Use UPI, business debit card or bank transfer. Cash paid-outs will be available only through ' +
-  'the future shift-linked drawer workflow.';
+  'Cash paid-outs must be linked to the open shift drawer that supplied the money. ' +
+  'The amount is deducted from that drawer immediately and restored only if an authorised user ' +
+  'voids the expense while the same shift is still open.';

@@ -11,33 +11,20 @@ Current direct-channel release candidate:
 | --- | --- |
 | App name | `D Company` |
 | Package name | `cloud.dcompany.erp` |
-| Version name | `3.1.16` |
-| Version code | `26` |
+| Version name | `3.1.29` |
+| Version code | `37` |
 | Minimum compatible client code | `8` |
 | Production API | `https://dcompany.duckdns.org/api/v1/` |
 
-The signed `3.1.3` code-`14` direct-release APK is historical manual-partner
-baseline evidence; it is not the current upgrade predecessor. Code `15`
-(`3.1.4`) is immutable held audit history and the first
-server-registry-eligible identity; it is not the current activation target.
-Codes `16` (`3.1.5`) and `17` (`3.1.6`) are immutable predecessors. Tag
-`v3.1.7` / code `18`, `v3.1.8` / code `19`, and `v3.1.9` / code `20` failed before
-signing and must not be reused. Code `21` (`3.1.10`) is immutable signed
-predecessor history. Code `22` (`3.1.11`) was superseded before signing and
-must not be approved or activated. Code `23` (`3.1.12`) was also superseded
-without an authorised signed artifact. Code `24` (`3.1.13`) failed before
-signing and its tag remains immutable. Code `25` (`3.1.14`) was rejected by its
-physical-tablet audit and must remain immutable, unadvertised history. The
-`v3.1.15` attempt failed before build/signing and never produced a signed,
-distributed, registered, or production-installed direct Code 26 artifact;
-isolated debug installations are test evidence only. Its tag and evidence
-remain immutable. Code `26` (`3.1.16`) is the current **unsigned** corrective
-direct-channel candidate under that narrow never-issued-identity exception.
-Do not upload it to Play
-or register, stage, advertise, or activate it without the green tagged workflow
-and reviewed rollout procedure. Code `21` (`3.1.10`) is its signed
-same-channel upgrade predecessor. Physical Redmi Pad 2 acceptance remains a
-separate gate. Candidate database migrations currently run through `0071`.
+Code30.1 `v3.1.28` / build `36` is the current immutable signed direct-channel
+predecessor. Code30.2 `v3.1.29` / build `37`, Room schema `51`, and Alembic head
+`0078` is still a source candidate: there is no signed build-37 artifact,
+same-signer build-36-to-37 upgrade proof, production cutover, Apps Script live
+acceptance, active update offer, or physical Redmi Pad 2 acceptance yet. Do not
+upload, stage or activate a local build. Earlier codes `14` through `29`, their
+failed or superseded attempts and any signed artifacts remain immutable
+historical records in their candidate ledgers; none may be rebuilt or used as
+Code30.2 evidence.
 
 The rest of this document is a future Play-channel playbook; it is not an
 instruction to upload the current direct candidate. Do not mix direct delivery
@@ -71,9 +58,9 @@ repository release workflow and verify all of the following:
 API-35 emulator installation and a signed same-channel in-place upgrade are
 required, but they are not physical Redmi Pad proof.
 Uploading to an internal track also does not deploy the backend or web ERP to
-production. Keep client code `8` as the compatibility floor. The current
-signed direct-channel predecessor is Code `21`; historical code `14` remains a
-manual-install record and must never be advertised as a server update. A Play
+production. Keep client code `8` as the compatibility floor. The current signed
+direct-channel predecessor is Code30.1 build `36`; historical code `14` remains
+a manual-install record and must never be advertised as a server update. A Play
 rollout uses Play delivery rather than the direct APK URL; do not configure both
 channels for one active fleet. GST validation is outside the current Android
 acceptance scope.
@@ -152,14 +139,14 @@ Console requests before wider release. Use these known facts:
 | Category | Business |
 | Content rating | Complete the live business/utility questionnaire truthfully |
 | Target audience | Staff / adults; not designed for children |
-| Data handling | Staff identity, role/activity, customer/order/payment and operational records are processed on D Company's server; no advertising or sale of data |
+| Data handling | Staff identity, role/activity, customer/order/payment and operational records, including user-captured or selected private expense-receipt evidence, are processed on D Company's server; no advertising or sale of data |
 | Government app | No |
 
 Never commit review credentials or real customer data. Internal-test artifacts
 may receive lighter listing treatment, but privacy and access answers must still
 be accurate before any broader rollout.
 
-## 5. Upload a future Play build (not the current direct Code 26 candidate)
+## 5. Upload a future Play build (not the current direct Code30.2 candidate)
 
 Do not perform this section for the current direct-channel candidate. First
 choose Play as the fleet's deliberate future delivery channel, assign a version code
@@ -174,10 +161,11 @@ the full same-channel upgrade gate.
 4. Confirm Play reads package `cloud.dcompany.erp` and the exact newly assigned
    version name/code from the bundle. It must be greater than every code already
    used by direct or Play delivery; for the current history, that means greater
-   than code `26`.
+   than code `37`.
 5. Use a release name that exactly records that version name and code.
-6. Add concise notes such as: `Gaming Centre command workspace, canonical
-   receipt history, reliable real-time refresh, and offline recovery.`
+6. Add concise notes that describe the exact future Play release. Do not reuse
+   Code30.2 notes or claim private receipt capture, offline recovery, or finance
+   correction acceptance unless those behaviors passed on that exact artifact.
 7. Review all warnings, then start the rollout to **Internal testing only**.
 
 If Play reports that the version code was already used, increment `versionCode`

@@ -94,6 +94,29 @@ class ShiftCloseSafetyDaoTest {
     }
 
     @Test
+    fun cashPaidOutDrainsBeforeCloseAndRejectedPaidOutBlocksRecovery() = runBlocking {
+        db.shiftDao().insert(openShift("shift-cash"))
+        val expense = cashExpense("cash-expense", SERVER_SHIFT)
+        db.financeDao().insertLocalExpense(expense)
+
+        val pending = safety.blockersForExactShift("shift-cash", SERVER_SHIFT, TERMINAL)
+        assertEquals(1, pending.pendingLocalCount)
+        assertNull(pending.captureMessage())
+        assertNotNull(pending.serverPostMessage())
+        assertEquals(
+            ShiftCloseCaptureStatus.CAPTURED,
+            safety.captureExistingClose("shift-cash", TERMINAL, 3_500, 2_000).status,
+        )
+
+        db.financeDao().markExpenseRejected(expense.localId, "Drawer changed")
+        val rejected = safety.blockersForExactShift("shift-cash", SERVER_SHIFT, TERMINAL)
+        assertEquals(0, rejected.pendingLocalCount)
+        assertEquals(1, rejected.attentionLocalCount)
+        assertNotNull(rejected.captureMessage())
+        assertNotNull(rejected.serverPostMessage())
+    }
+
+    @Test
     fun cacheOnlyCrossDeviceGamingWorkBlocksExactShiftCloseCapture() = runBlocking {
         db.shiftDao().insert(openShift("shift-cache-gaming"))
         db.gamingDao().upsertSessionCache(
@@ -437,6 +460,13 @@ class ShiftCloseSafetyDaoTest {
             }
         }
         assertTrue(extensionFailure.message.orEmpty().contains(SHIFT_CLOSING_WRITE_GUARD))
+
+        val expenseFailure = assertThrows(SQLiteConstraintException::class.java) {
+            runBlocking {
+                db.financeDao().insertLocalExpense(cashExpense("late-cash", SERVER_SHIFT))
+            }
+        }
+        assertTrue(expenseFailure.message.orEmpty().contains(SHIFT_CLOSING_WRITE_GUARD))
     }
 
     @Test
@@ -550,6 +580,21 @@ class ShiftCloseSafetyDaoTest {
         tenderedMinor = 1_000,
         createdAtMillis = 1_500,
         syncState = state,
+    )
+
+    private fun cashExpense(localId: String, shiftId: String) = LocalExpenseEntity(
+        localId = localId,
+        branchId = "branch-a",
+        categoryId = "category-a",
+        supplierId = null,
+        amountMinor = 1_500,
+        paidVia = "cash",
+        paidAt = "2026-09-19T12:00:00Z",
+        vendorName = "Vendor",
+        invoiceNo = "CASH-1",
+        note = "Cash paid-out",
+        createdAtMillis = 1_500,
+        shiftId = shiftId,
     )
 
     private fun heldPayment(localId: String, shiftId: String?, terminalId: String?) =

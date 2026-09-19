@@ -65,7 +65,7 @@ def test_physical_plan_is_bounded_and_contains_no_embedded_authority() -> None:
     steps = _steps()
     rendered = json.dumps(steps, sort_keys=True, ensure_ascii=False)
 
-    assert len(steps) == 413
+    assert len(steps) == 389
     assert {step["action"] for step in steps} <= {
         "launch",
         "restart",
@@ -119,20 +119,20 @@ def test_physical_plan_submits_all_sixteen_supported_sessions() -> None:
     ]
 
     required_prefixes = {
-        "Offline Standard Single",
-        "Standard Single 60m + 30m extension",
-        "Standard Dual 2-player",
-        "Standard Dual 3-player",
-        "Standard Dual 4-player",
-        "Premium Single",
-        "Premium Single 60m extension coverage",
-        "Premium Dual 2-player",
-        "Premium Dual 3-player",
-        "Premium Dual 4-player",
+        "Offline PS5 Single",
+        "PS5 Single 60m + 30m extension",
+        "PS5 Dual 2-player",
+        "PS5 Dual 3-player",
+        "PS5 Dual 4-player",
+        "VR Games 15m",
+        "VR Games 30m",
+        "VR Games 60m transfer",
+        "VR Racing 15m",
+        "VR Racing 30m",
         "Simdrive",
         "Simdrive 30m",
         "Simdrive 60m",
-        "VR open-ended transfer",
+        "VR Racing 60m",
         "Streaming open-ended",
         "Shisha open-ended",
     }
@@ -155,11 +155,11 @@ def test_physical_plan_proves_pause_resume_and_every_extension_option() -> None:
     by_name = {step["name"]: (index, step) for index, step in enumerate(steps)}
 
     pause_names = [
-        "Standard Single: open pause reason",
-        "Standard Single: enter physical pause reason",
-        "Standard Single: pause with reason",
+        "PS5 Single: open pause reason",
+        "PS5 Single: enter physical pause reason",
+        "PS5 Single: pause with reason",
         "Measure paused session layout stability",
-        "Standard Single: resume after stable pause",
+        "PS5 Single: resume after stable pause",
     ]
     assert [by_name[name][0] for name in pause_names] == sorted(
         by_name[name][0] for name in pause_names
@@ -189,7 +189,7 @@ def test_physical_plan_proves_pause_resume_and_every_extension_option() -> None:
                 "ancestor": {
                     "attribute": "content-desc",
                     "fullmatch": (
-                        "PS5 Station 1\\. Paused\\. Standard · Single · "
+                        "PS5 Station 1\\. Paused\\. Single · "
                         "₹80\\.00 fixed total\\."
                     ),
                 },
@@ -213,18 +213,18 @@ def test_physical_plan_proves_pause_resume_and_every_extension_option() -> None:
         "standard-simdrive-session-15m",
         "standard-simdrive-session-30m",
         "standard-simdrive-session-60m",
-        "premium-single-session-60m",
-        "premium-dual-session-60m",
+        "vr-games-session-15m",
+        "vr-games-session-30m",
+        "vr-games-session-60m",
+        "vr-racing-session-15m",
+        "vr-racing-session-30m",
+        "vr-racing-session-60m",
     }
     expected_extension_codes = {
         "standard-single-extension-30m",
         "standard-single-extension-60m",
         "standard-dual-extension-30m",
         "standard-dual-extension-60m",
-        "premium-single-extension-30m",
-        "premium-single-extension-60m",
-        "premium-dual-extension-30m",
-        "premium-dual-extension-60m",
     }
     base_submits = [
         step
@@ -236,8 +236,8 @@ def test_physical_plan_proves_pause_resume_and_every_extension_option() -> None:
         for step in steps
         if "-extension-" in step.get("packageCode", "")
     ]
-    assert len(base_submits) == 13
-    assert len(extension_submits) == 9
+    assert len(base_submits) == 14
+    assert len(extension_submits) == 4
     assert {step["packageCode"] for step in base_submits} == expected_base_codes
     assert {step["packageCode"] for step in extension_submits} == expected_extension_codes
     assert all(
@@ -257,7 +257,7 @@ def test_physical_plan_proves_pause_resume_and_every_extension_option() -> None:
         and "packageCode" not in step
         and "extension ·" in step.get("text", "")
     ]
-    assert len(extension_choices) == 9
+    assert len(extension_choices) == 4
     assert all("textContains" not in step for step in extension_choices)
     assert all("₹" in step["text"] for step in extension_choices)
 
@@ -392,12 +392,12 @@ def test_pause_feedback_finishes_before_unoccluded_stability_measurement() -> No
     steps = _steps()
     index = next(index for index, step in enumerate(steps) if step["name"] == "Measure paused session layout stability")
     assert steps[index - 1] == {
-        "name": "Standard Single: wait for pause confirmation to finish",
+        "name": "PS5 Single: wait for pause confirmation to finish",
         "action": "absent",
         "text": "Session paused on the server. Connected devices will receive the paused clock and alarm state.",
         "timeoutMs": 30000,
     }
-    assert steps[index - 2]["name"] == "Standard Single: pause with reason"
+    assert steps[index - 2]["name"] == "PS5 Single: pause with reason"
 
 
 def test_finance_evidence_reveals_the_pnl_rows_with_bounded_touch_scroll() -> None:
@@ -435,7 +435,7 @@ def test_physical_plan_covers_recovery_finance_receipts_and_cleanup() -> None:
         "Audit Crisps",
         "Cancellation reason: Entered by mistake",
         "Physical audit pause stability",
-        "Standard Single: resume after stable pause",
+        "PS5 Single: resume after stable pause",
         "Apply discount",
         "Receipts (16)",
         "Financial controls",
@@ -449,7 +449,7 @@ def test_physical_plan_covers_recovery_finance_receipts_and_cleanup() -> None:
 
 def test_discount_apply_uses_bounded_human_speed_reveal() -> None:
     steps = {step["name"]: step for step in _steps()}
-    apply_discount = steps["Standard Single + Cola: apply exact discount"]
+    apply_discount = steps["PS5 Single + Cola: apply exact discount"]
 
     assert apply_discount["text"] == "Apply discount"
     assert apply_discount["then"] == {
@@ -466,9 +466,9 @@ def test_discount_apply_uses_bounded_human_speed_reveal() -> None:
         "repeats": 3,
     }
 
-    acknowledge = steps["Standard Single + Cola: acknowledge discount feedback"]
+    acknowledge = steps["PS5 Single + Cola: acknowledge discount feedback"]
     assert acknowledge == {
-        "name": "Standard Single + Cola: acknowledge discount feedback",
+        "name": "PS5 Single + Cola: acknowledge discount feedback",
         "action": "click",
         "text": "OK",
         "timeoutMs": 60_000,
@@ -481,10 +481,10 @@ def test_transfer_reselects_destination_and_cash_count_is_revealed() -> None:
     by_name = {step["name"]: (index, step) for index, step in enumerate(steps)}
 
     transfer_names = [
-        "VR open-ended transfer: confirm transfer",
-        "VR open-ended transfer: select destination station",
-        "VR open-ended transfer: observe timer frames",
-        "VR open-ended transfer: request stop",
+        "VR Games 60m transfer: confirm transfer",
+        "VR Games 60m transfer: select destination station",
+        "VR Games 60m transfer: observe timer frames",
+        "VR Games 60m transfer: request stop",
     ]
     assert [by_name[name][0] for name in transfer_names] == sorted(
         by_name[name][0] for name in transfer_names
@@ -513,9 +513,13 @@ def test_transfer_reselects_destination_and_cash_count_is_revealed() -> None:
 def test_return_to_gaming_respects_the_persisted_service_filter() -> None:
     steps = _steps()
     service_switches = {
+        "VR Games 30m: show VR stations",
+        "VR Games 60m transfer: show VR stations",
+        "VR Racing 15m: show Racing stations",
+        "VR Racing 30m: show Racing stations",
         "Simdrive 30m: show Racing stations",
         "Simdrive 60m: show Racing stations",
-        "VR open-ended transfer: show VR",
+        "VR Racing 60m: show Racing stations",
         "Streaming open-ended: show Streaming",
         "Shisha open-ended: show Shisha",
     }
@@ -527,6 +531,21 @@ def test_return_to_gaming_respects_the_persisted_service_filter() -> None:
             assert navigation["then"] == {"text": "Station floor"}
             checked.add(step["name"])
     assert checked == service_switches
+
+    # The first service change starts from the initially persisted PS5 filter,
+    # so reopening Gaming restores that station list before selecting VR.
+    first_vr_index = next(
+        index
+        for index, step in enumerate(steps)
+        if step["name"] == "VR Games 15m: show VR stations"
+    )
+    assert steps[first_vr_index - 1] == {
+        "name": "Open Gaming",
+        "action": "click",
+        "descriptionContains": "Gaming. Manage",
+        "timeoutMs": 60_000,
+        "then": {"text": "PS5 Station 1"},
+    }
 
 
 def test_receipt_selection_includes_the_rendered_source_date_separator() -> None:
@@ -550,7 +569,7 @@ def test_addon_flow_proves_immediate_feedback_and_durable_detail_rows() -> None:
     steps = {step["name"]: step for step in _steps()}
 
     for index, item in enumerate(("Audit Cola", "Audit Crisps")):
-        add = steps[f"Standard Single: add {item}"]
+        add = steps[f"PS5 Single: add {item}"]
         assert add["then"] == {
             "text": (
                 f"{item} ×1 saved. It will join this session's single POS bill "
@@ -558,7 +577,7 @@ def test_addon_flow_proves_immediate_feedback_and_durable_detail_rows() -> None:
             )
         }
 
-        receipt = steps[f"Standard Single: {item.removeprefix('Audit ')} server receipt confirmed"]
+        receipt = steps[f"PS5 Single: {item.removeprefix('Audit ')} server receipt confirmed"]
         assert receipt == {
             "name": receipt["name"],
             "action": "scroll",
@@ -609,7 +628,7 @@ def test_addon_flow_proves_immediate_feedback_and_durable_detail_rows() -> None:
         "then": {"text": "Close shift"},
     }
 
-    handoff = steps["Standard Single: request POS handoff"]
+    handoff = steps["PS5 Single: request POS handoff"]
     assert handoff["reveal"] == {
         "scrollable": True,
         "index": 2,
@@ -657,16 +676,16 @@ def test_fixture_and_runner_are_fail_closed_and_disposable() -> None:
         "standard-simdrive-session-15m",
         "standard-simdrive-session-30m",
         "standard-simdrive-session-60m",
-        "premium-single-session-60m",
-        "premium-dual-session-60m",
+        "vr-games-session-15m",
+        "vr-games-session-30m",
+        "vr-games-session-60m",
+        "vr-racing-session-15m",
+        "vr-racing-session-30m",
+        "vr-racing-session-60m",
         "standard-single-extension-30m",
         "standard-single-extension-60m",
         "standard-dual-extension-30m",
         "standard-dual-extension-60m",
-        "premium-single-extension-30m",
-        "premium-single-extension-60m",
-        "premium-dual-extension-30m",
-        "premium-dual-extension-60m",
     ):
         assert tariff_code in fixture
     for runner_guard in (
@@ -954,7 +973,7 @@ def _synthetic_evidence(root: Path) -> tuple[list[dict], dict[str, Path]]:
                     "ancestor": {
                         "attribute": "content-desc",
                         "fullmatch": (
-                            "PS5 Station 1\\. Paused\\. Standard · Single · "
+                            "PS5 Station 1\\. Paused\\. Single · "
                             "₹80\\.00 fixed total\\."
                         ),
                     },
@@ -993,7 +1012,7 @@ def _synthetic_evidence(root: Path) -> tuple[list[dict], dict[str, Path]]:
                 pulled / f"idle-{idle_base}-{phase}.xml",
                 timer="00:10:00" if step["action"] == "idleSemanticStability" else timer,
                 timer_ancestor_description=(
-                    "PS5 Station 1. Paused. Standard · Single · ₹80.00 fixed total."
+                    "PS5 Station 1. Paused. Single · ₹80.00 fixed total."
                     if step["action"] == "idleSemanticStability"
                     else None
                 ),
@@ -1137,8 +1156,8 @@ def _synthetic_evidence(root: Path) -> tuple[list[dict], dict[str, Path]]:
                 "commit": commit,
                 "tree": tree,
                 "clean": True,
-                "version_code": 29,
-                "version_name": "3.1.21",
+                "version_code": 37,
+                "version_name": "3.1.29",
             }
         ),
         encoding="utf-8",
@@ -1161,8 +1180,8 @@ def _synthetic_evidence(root: Path) -> tuple[list[dict], dict[str, Path]]:
         (
             "app-physicalAudit.apk",
             "cloud.dcompany.erp.physicalaudit",
-            "29",
-            "3.1.21-physical-audit",
+            "37",
+            "3.1.29-physical-audit",
         ),
         ("audit-driver-debug.apk", "cloud.dcompany.erp.auditdriver", "1", "1-test-only"),
         (
@@ -1240,7 +1259,7 @@ def test_evidence_analyzer_rejects_changed_paused_timer_semantic(
         tmp_path / "device-pull" / f"idle-{paused_base}-mid.xml",
         timer="00:10:01",
         timer_ancestor_description=(
-            "PS5 Station 1. Paused. Standard · Single · ₹80.00 fixed total."
+            "PS5 Station 1. Paused. Single · ₹80.00 fixed total."
         ),
     )
     result = _analyze(tmp_path, plan)
@@ -1261,7 +1280,7 @@ def test_evidence_analyzer_rejects_missing_paused_timer_semantic(
         tmp_path / "device-pull" / f"idle-{paused_base}-mid.xml",
         timer="Timer paused",
         timer_ancestor_description=(
-            "PS5 Station 1. Paused. Standard · Single · ₹80.00 fixed total."
+            "PS5 Station 1. Paused. Single · ₹80.00 fixed total."
         ),
     )
     result = _analyze(tmp_path, plan)
@@ -1282,7 +1301,7 @@ def test_evidence_analyzer_rejects_duplicate_paused_timer_semantic(
         timer="00:10:00",
         timer_copies=2,
         timer_ancestor_description=(
-            "PS5 Station 1. Paused. Standard · Single · ₹80.00 fixed total."
+            "PS5 Station 1. Paused. Single · ₹80.00 fixed total."
         ),
     )
     result = _analyze(tmp_path, plan)
@@ -1316,7 +1335,7 @@ def test_evidence_analyzer_rejects_unrelated_timer_outside_paused_station(
         tmp_path / "device-pull" / f"idle-{paused_base}-mid.xml",
         timer="Timer paused",
         timer_ancestor_description=(
-            "PS5 Station 1. Paused. Standard · Single · ₹80.00 fixed total."
+            "PS5 Station 1. Paused. Single · ₹80.00 fixed total."
         ),
         unrelated_timer="00:10:00",
     )

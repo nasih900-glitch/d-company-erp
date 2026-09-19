@@ -13,7 +13,8 @@ candidate document, Git status, and live CI/deployment evidence.
 It runs:
 - **POS** (food, drinks, hookah, gaming sessions, event tickets)
 - **Inventory** (recipe-driven auto-deduction, FIFO batches, suppliers, GRN)
-- **Finance** (expenses, partner capital, P&L, GST reports)
+- **Finance** (manual expenses/collections, private receipt evidence, partner
+  capital, P&L, GST reports)
 - **Customer loyalty + memberships** (D Club Silver/Gold/Platinum)
 - **Kitchen Display System** (real-time tickets to kitchen iPad)
 - **Reports** (daily/monthly/quarterly/yearly P&L, GSTR-1, GSTR-3B CSV exports)
@@ -21,7 +22,9 @@ It runs:
 - **Insights** (inventory valuation, recipe margins, growth, losses, heatmap)
 - **Full audit log** of every create/update/delete
 - **Public menu page** at `/menu` (for QR table ordering)
-- **Google Sheets sync** to `Operations` tab in the user's existing sheet
+- **Google Sheets backup** through the optional append-only `ERP Mirror v1` tab;
+  PostgreSQL remains authoritative and existing finance/archive tabs are not
+  changed by the integration
 
 Live at: <https://dcompany.duckdns.org>
 
@@ -37,7 +40,8 @@ Live at: <https://dcompany.duckdns.org>
 | **Frontend** | React 18, TypeScript strict, Vite, TailwindCSS, React Router (Hash router), axios, React Query, Recharts |
 | **Deploy** | Docker Compose · Caddy reverse proxy (auto-HTTPS via Let's Encrypt) · DigitalOcean or any VM |
 | **Domain** | `dcompany.duckdns.org` (DuckDNS, free) |
-| **DB migrations** | Alembic — current production-candidate head `0073` |
+| **DB migrations** | Alembic — current Code30.2 candidate head `0078` |
+| **Android DB** | Room — current Code30.2 candidate schema `51` |
 | **Tax engine** | India GST · Kerala intra-state CGST+SGST · Section 9(5) for delivery aggregators · FY April→March |
 
 ---
@@ -109,7 +113,7 @@ backend/
       email/mailer.py                SMTP mailer (env-driven)
     workers/
       daily_pnl.py                   Cron-target for 8am IST P&L email
-  alembic/versions/                  migrations chained through current head 0073
+  alembic/versions/                  migrations chained through current head 0078
   scripts/seed.py                    Idempotent seed (company, accounts, ingredients, tiers)
   tests/                             full pytest unit + integration suite
   entrypoint.sh                      Runs alembic + seed + uvicorn
@@ -138,7 +142,7 @@ infra/
 
 docker-compose.prod.yml              Postgres + backend + frontend + caddy
 integrations/
-  google-sheets/Code.gs              Apps Script — writes to "Operations" tab
+  google-sheets/Code.gs              authenticated Apps Script — appends to "ERP Mirror v1"
 docs/                                17 markdown docs, all useful
 ```
 
@@ -190,7 +194,22 @@ D Company is a real café and gaming-lounge operation in Kerala. Ownership, inve
 The user manages:
 - An existing Google Sheet configured privately by the owner. Do not commit spreadsheet URLs or Apps Script web-app URLs.
 - Their bills in a Drive folder
-- A separate Apps Script that matches OCR'd receipts to their Transactions tab (the **`Operations` tab** is where ERP push goes — don't touch other tabs)
+- A separate Apps Script that matches OCR'd receipts in the owner's existing
+  workbook. Code30.2 appends only to **`ERP Mirror v1`**; do not write to, rename,
+  import, or reclassify the other workbook tabs.
+
+Code30.2 finance evidence is private ERP data. Each manual expense may have at
+most five verified JPEG, PNG, WebP or PDF attachments of at most 10 MiB each.
+Never send receipt bytes, private review notes, customer identity or secrets to
+Google Sheets. Android must retain pending expense and receipt writes through
+restart/offline recovery and replay each one idempotently.
+
+The Sheet connection is generation-bound. New business events are written to
+the durable PostgreSQL outbox even before verification and remain held until a
+connection test for that exact configuration succeeds. Do not retarget old
+events to a new URL or secret. A verified connection may be changed or
+disconnected only after its current pending, leased and quarantined business
+events have drained; retry quarantined events through the owner control.
 
 Treat this as **production**. Real money flows through it once they open.
 

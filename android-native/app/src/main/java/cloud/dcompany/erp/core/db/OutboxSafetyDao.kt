@@ -109,6 +109,11 @@ interface OutboxSafetyDao {
             SELECT 'expenses', syncState
               FROM local_expenses WHERE syncState != 'synced'
             UNION ALL
+            -- The expense can be confirmed while its evidence is still
+            -- waiting or rejected. Keep that child action account-bound too.
+            SELECT 'expense_receipts', syncState
+              FROM local_expense_receipts WHERE syncState != 'synced'
+            UNION ALL
             SELECT 'assets', syncState
               FROM local_assets WHERE syncState != 'synced'
             UNION ALL

@@ -5,11 +5,9 @@
  * Demo data when demo mode is on (in-memory fixtures from demo-data).
  *
  * Print-friendly: Cmd+P → clean A4 P&L with only the report content visible.
- * Also "Push to Google Sheets" button — fires this report into the ERP Entries
- * tab in your sheet.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { AlertTriangle, Calendar, Download, FileSpreadsheet, Loader2, Printer, ShieldCheck } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
+import { AlertTriangle, Calendar, Download, Loader2, Printer, ShieldCheck } from 'lucide-react';
 
 import { api } from '@/lib/api';
 import { COMPANY, HOURLY_REVENUE, TODAY_KPI } from '@/lib/demo-data';
@@ -30,9 +28,7 @@ import {
   type CostingCoverageDTO,
   type ReceiptBusinessDTO,
 } from '@/lib/erp-api';
-import { getSettings as getSheetSettings, pushToSheet, type ReportSinkKind } from '@/lib/google-sheets';
 import { useAuth } from '@/modules/auth/AuthContext';
-import { useNotifications } from '@/components/ui/Notifications';
 import { useRealtimeRefresh } from '@/hooks/useRealtimeRefresh';
 import { useLatestRequest } from '@/hooks/useLatestRequest';
 import { optionalCostingCoverage } from '@/modules/finance/partner-allocation';
@@ -140,7 +136,6 @@ interface TaxComplianceData {
 
 export default function ReportsScreen() {
   const requests = useLatestRequest();
-  const notifications = useNotifications();
   const { me, demo } = useAuth();
   // Same gating shape as the sidebar's insights_reports nav items (see
   // AppShell.tsx isVisible): protected owners bypass, everyone else needs
@@ -157,8 +152,6 @@ export default function ReportsScreen() {
   const [taxError, setTaxError] = useState<string | null>(null);
   const [loading, setLoading] = useState(LIVE_MODE);
   const [refreshing, setRefreshing] = useState(false);
-  const [pushing, setPushing] = useState(false);
-  const pushInFlight = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [receiptIdentity, setReceiptIdentity] = useState<ReceiptBusinessDTO | null>(null);
   const [timezoneReady, setTimezoneReady] = useState(!LIVE_MODE);
@@ -249,48 +242,6 @@ export default function ReportsScreen() {
       });
     return () => { cancelled = true; };
   }, []);
-
-  async function pushToSheets() {
-    if (!report || loading || refreshing || error || pushInFlight.current) return;
-    pushInFlight.current = true;
-    setPushing(true);
-    try {
-    const ok = await pushToSheet(`${reportPeriod}_report` as ReportSinkKind, {
-      date: report.period_start,
-      time: new Date().toTimeString().slice(0, 5),
-      period_id: report.label,
-      label: report.label,
-      orders_count: report.orders_count,
-      food_minor: report.revenue.food_minor,
-      gaming_minor: report.revenue.gaming_minor,
-      hookah_minor: isAppStoreAllowedType('hookah') ? report.revenue.hookah_minor : 0,
-      event_tickets_minor: report.revenue.event_tickets_minor,
-      delivery_minor: report.revenue.delivery_aggregator_minor,
-      gross_revenue_minor: report.gross_revenue_minor,
-      net_revenue_minor: report.net_revenue_minor,
-      manual_collections_minor: report.manual_collections_minor,
-      cgst_minor: report.tax_collected.cgst_minor,
-      sgst_minor: report.tax_collected.sgst_minor,
-      igst_minor: report.tax_collected.igst_minor,
-      expense_total_minor: report.expense_total_minor,
-      net_profit_minor: report.net_profit_minor,
-    });
-    if (ok) {
-      notifications.success('The configured Google Sheets webhook confirmed this report was saved.', {
-        title: 'Google Sheets updated',
-      });
-    } else {
-      const issue = getSheetSettings().last_error;
-      notifications.error(issue?.includes('unknown kind')
-        ? 'The connected Google Sheets script does not support this report period. Redeploy the current script from Settings → Google Sheets, or use Export CSV. Your ERP report is still saved.'
-        : 'Check the Google Sheets connection in Settings and try again. Your ERP report is still saved; Export CSV is also available.', {
-        title: 'Could not push report',
-      });
-    }
-    } catch {
-      notifications.error('The Google Sheets request could not be confirmed. Check Settings → Google Sheets before retrying. Your ERP report is still saved; Export CSV is available.', { title: 'Could not push report' });
-    } finally { pushInFlight.current = false; setPushing(false); }
-  }
 
   async function exportPeriodCsv() {
     if (!report || exportingPeriod) return;
@@ -387,9 +338,6 @@ export default function ReportsScreen() {
               Export CSV
             </button>
           )}
-          <button onClick={() => void pushToSheets()} className="btn btn-primary" disabled={!report || loading || refreshing || Boolean(error) || pushing}>
-            {pushing ? <Loader2 size={14} className="animate-spin"/> : <FileSpreadsheet size={14}/>} {pushing ? 'Sending…' : 'Push to Sheets'}
-          </button>
         </div>
       </header>
 

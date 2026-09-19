@@ -75,11 +75,12 @@ describe('manual collection dates and references', () => {
 });
 
 describe('manual collection totals', () => {
-  it('totals active collections by method and excludes voided rows', () => {
+  it('totals active collections by method and excludes voided and corrected rows', () => {
     const totals = manualCollectionTotals([
       collection(),
       collection({ id: 'collection-2', method: 'upi', amount_minor: 162_000 }),
       collection({ id: 'collection-3', method: 'cash', amount_minor: 50_000, is_voided: true }),
+      collection({ id: 'collection-4', method: 'bank', amount_minor: 75_000, is_corrected: true }),
     ]);
 
     expect(totals).toEqual({
@@ -90,6 +91,7 @@ describe('manual collection totals', () => {
       total_minor: 183_000,
       active_count: 2,
       voided_count: 1,
+      corrected_count: 1,
     });
   });
 });

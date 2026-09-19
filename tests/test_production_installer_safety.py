@@ -518,6 +518,9 @@ def test_existing_environment_crosses_the_frozen_source_boundary_by_absolute_pat
         "REMOTE_ASSISTANCE_RELAY_SECRET": (
             "QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE="
         ),
+        "GOOGLE_SHEETS_SECRET_ENCRYPTION_KEY": (
+            "R0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0c="
+        ),
         "S3_SECRET_KEY": "m" * 48,
         "SEED_OWNER_PASSWORD": "source-only-secret-must-not-enter-snapshot",
     }
@@ -536,6 +539,10 @@ def test_existing_environment_crosses_the_frozen_source_boundary_by_absolute_pat
         .replace(
             "CHANGE_ME_32_byte_base64_relay_key",
             credentials["REMOTE_ASSISTANCE_RELAY_SECRET"],
+        )
+        .replace(
+            "CHANGE_ME_32_byte_base64_sheets_key",
+            credentials["GOOGLE_SHEETS_SECRET_ENCRYPTION_KEY"],
         )
         .replace("CHANGE_ME_minio_password", credentials["S3_SECRET_KEY"])
         .replace(

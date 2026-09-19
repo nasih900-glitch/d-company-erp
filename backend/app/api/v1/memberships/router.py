@@ -35,10 +35,10 @@ from app.models import (
     MembershipCustomerSpendApplication,
     MembershipEvidenceReconciliation,
     MembershipPayment,
+    MembershipPaymentAttemptResolution,
     MembershipPaymentCashCollection,
     MembershipPaymentCompletion,
     MembershipPaymentProviderAction,
-    MembershipPaymentAttemptResolution,
     MembershipPaymentRequest,
     MembershipPaymentRequestResolution,
     MembershipRefund,
@@ -57,6 +57,9 @@ from app.models import (
     Shift,
     User,
 )
+from app.services.integrations.google_sheets_mirror import (
+    enqueue_google_sheets_event_if_enabled,
+)
 from app.services.pos.pricing import InvoiceNumberService
 from app.services.pos.shift_validation import (
     require_open_operational_shift,
@@ -64,6 +67,61 @@ from app.services.pos.shift_validation import (
 )
 
 router = APIRouter()
+
+
+async def _enqueue_membership_accounting_mirror(
+    session: SessionDep,
+    *,
+    company_id: UUID,
+    branch_id: UUID,
+    actor_user_id: UUID,
+    event_type: Literal["membership.payment.settled", "membership.refund.settled"],
+    source_type: Literal["membership_payment", "membership_refund_settlement"],
+    source_id: UUID,
+    source_revision: str,
+    occurred_at: datetime,
+    receipt_no: str | None,
+    tier_name: str,
+    amount_minor: int,
+    payment_method: str,
+    status_label: str,
+    identifiers: dict[str, str],
+) -> None:
+    """Queue one privacy-minimized membership accounting fact.
+
+    Customer names, phone numbers, notes, payout reasons and provider references
+    stay in the access-controlled ERP. The Sheet receives only the financial
+    evidence needed to reconcile the ledger.
+    """
+
+    company = await session.get(Company, company_id)
+    if company is None or company.deleted_at is not None:
+        return
+    branch = await session.get(Branch, branch_id)
+    actor = await session.get(User, actor_user_id)
+    await enqueue_google_sheets_event_if_enabled(
+        session,
+        company_id=company_id,
+        event_type=event_type,
+        source_type=source_type,
+        source_id=str(source_id),
+        source_revision=source_revision,
+        occurred_at=occurred_at,
+        payload={
+            "branch": branch.name if branch else str(branch_id),
+            "reference": receipt_no or str(source_id),
+            "description": tier_name,
+            "customer": "",
+            "quantity": 1,
+            "amount_minor": int(amount_minor),
+            "payment_method": payment_method,
+            "actor": actor.name if actor else "",
+            "status": status_label,
+            "currency": company.currency,
+            "branch_id": str(branch_id),
+            **identifiers,
+        },
+    )
 
 
 # ---------------------------------------------------------------- DTOs
@@ -2426,6 +2484,27 @@ async def finalize_membership_payment(
     )
     session.add(application)
     await session.flush()
+    await _enqueue_membership_accounting_mirror(
+        session,
+        company_id=tenant.company_id,
+        branch_id=payment.branch_id,
+        actor_user_id=payment.created_by,
+        event_type="membership.payment.settled",
+        source_type="membership_payment",
+        source_id=payment.id,
+        source_revision="settled-v1",
+        occurred_at=payment.paid_at,
+        receipt_no=payment.receipt_no,
+        tier_name=f"Membership · {payment_request.tier_name_snapshot}",
+        amount_minor=int(payment.amount_minor),
+        payment_method=payment.method,
+        status_label="settled",
+        identifiers={
+            "membership_payment_id": str(payment.id),
+            "membership_id": str(subscription.id),
+            "shift_id": str(payment.shift_id),
+        },
+    )
     response = await _membership_payment_request_to_read(session, payment_request)
     await store_response(
         session,
@@ -5232,6 +5311,28 @@ async def finalize_membership_refund(
                 )
             )
         await session.flush()
+        await _enqueue_membership_accounting_mirror(
+            session,
+            company_id=tenant.company_id,
+            branch_id=existing.branch_id,
+            actor_user_id=existing.settled_by,
+            event_type="membership.refund.settled",
+            source_type="membership_refund_settlement",
+            source_id=existing.id,
+            source_revision="settled-v1",
+            occurred_at=existing.settled_at,
+            receipt_no=existing.receipt_no,
+            tier_name=f"Membership refund · {tier.name}",
+            amount_minor=-int(existing.amount_minor),
+            payment_method=existing.method,
+            status_label="settled",
+            identifiers={
+                "membership_refund_settlement_id": str(existing.id),
+                "membership_refund_id": str(refund.id),
+                "membership_payment_id": str(payment.id),
+                "shift_id": str(existing.shift_id),
+            },
+        )
     elif (
         existing.completion_id != completion.id
         or existing.amount_minor != payload.expected_amount_minor

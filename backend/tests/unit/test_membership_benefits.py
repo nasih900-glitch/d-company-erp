@@ -638,11 +638,7 @@ async def test_zero_total_finalization_is_replay_safe_and_uses_shared_finalizer(
 
     assert len(finalized) == 1
     assert finalized[0]["actor_user_id"] == tenant.user_id
-    assert len(background_tasks.tasks) == 1, (
-        "finalize-zero must schedule the same OrderPaid mirror event as "
-        "record_payment, or membership-covered visits never reach the "
-        "owner's Google Sheets reconciliation mirror"
-    )
+    assert len(background_tasks.tasks) == 0
     assert response == {
         "order_id": str(order.id),
         "amount_minor": 0,

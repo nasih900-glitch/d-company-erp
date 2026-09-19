@@ -40,6 +40,7 @@ from app.models import (
     EventTicket,
     Expense,
     ExpenseCategory,
+    FinanceSourceCorrection,
     GamingSession,
     ManualCollection,
     MenuItem,
@@ -886,6 +887,29 @@ class ReportsAggregator:
         )
         manual_rows = (await self.session.execute(manual_q)).scalars().all()
         manual_by_method = _manual_collection_totals(manual_rows)
+        manual_correction_minor = int(
+            (
+                await self.session.execute(
+                    select(
+                        func.coalesce(
+                            func.sum(FinanceSourceCorrection.amount_minor), 0
+                        )
+                    )
+                    .where(
+                        FinanceSourceCorrection.company_id == company_id,
+                        *branch_filter(FinanceSourceCorrection.branch_id),
+                        FinanceSourceCorrection.source_type == "manual_collection",
+                        FinanceSourceCorrection.corrected_at >= start_at,
+                        FinanceSourceCorrection.corrected_at < end_at,
+                    )
+                )
+            ).scalar_one()
+            or 0
+        )
+        if manual_correction_minor:
+            manual_by_method["cash"] = (
+                manual_by_method.get("cash", 0) - manual_correction_minor
+            )
         manual_total = sum(manual_by_method.values())
         revenue = RevenueBreakdown(
             food_minor=revenue.food_minor,
@@ -1174,10 +1198,41 @@ class ReportsAggregator:
         )
         expense_lines: list[ExpenseLine] = []
         expense_total = 0
-        for row in (await self.session.execute(exp_q)).all():
-            amt = int(row.amount)
-            expense_lines.append(ExpenseLine(category=row.name, amount_minor=amt))
-            expense_total += amt
+        expense_by_category = {
+            str(row.name): int(row.amount)
+            for row in (await self.session.execute(exp_q)).all()
+        }
+        correction_q = (
+            select(
+                ExpenseCategory.name,
+                func.coalesce(func.sum(FinanceSourceCorrection.amount_minor), 0).label(
+                    "amount"
+                ),
+            )
+            .join(Expense, Expense.id == FinanceSourceCorrection.expense_id)
+            .join(ExpenseCategory, ExpenseCategory.id == Expense.category_id)
+            .where(
+                FinanceSourceCorrection.company_id == company_id,
+                *branch_filter(FinanceSourceCorrection.branch_id),
+                FinanceSourceCorrection.source_type == "expense",
+                FinanceSourceCorrection.corrected_at >= start_at,
+                FinanceSourceCorrection.corrected_at < end_at,
+            )
+            .group_by(ExpenseCategory.name)
+        )
+        for row in (await self.session.execute(correction_q)).all():
+            category = str(row.name)
+            expense_by_category[category] = (
+                expense_by_category.get(category, 0) - int(row.amount)
+            )
+        for category, amount in sorted(
+            expense_by_category.items(), key=lambda item: item[1], reverse=True
+        ):
+            if amount:
+                expense_lines.append(
+                    ExpenseLine(category=category, amount_minor=amount)
+                )
+                expense_total += amount
         if inventory_variance_minor:
             expense_lines.append(
                 ExpenseLine(

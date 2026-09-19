@@ -59,6 +59,8 @@ async def test_captured_shift_drives_offline_session_chain_and_durable_replay(
     assert listed.status_code == 200, listed.text
     assert listed.json()[0]["opening_receipt_recorded"] is True
     assert listed.json()[0]["opening_protocol_revision"] == 1
+    assert listed.json()[0]["opening_client_platform"] == "android"
+    assert listed.json()[0]["opening_client_installation_id"] == h["X-Installation-Id"]
     station = Station(
         id=uuid4(),
         company_id=seed_owner["company"].id,
@@ -217,6 +219,8 @@ async def test_unkeyed_web_open_is_new_protocol_not_legacy(client, session, seed
     assert listed.status_code == 200, listed.text
     assert listed.json()[0]["opening_receipt_recorded"] is False
     assert listed.json()[0]["opening_protocol_revision"] == 1
+    assert listed.json()[0]["opening_client_platform"] == "web"
+    assert listed.json()[0]["opening_client_installation_id"] is None
 
 
 @pytest.mark.asyncio

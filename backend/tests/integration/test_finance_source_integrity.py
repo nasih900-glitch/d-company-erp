@@ -11,7 +11,16 @@ import pytest
 from psycopg import errors
 from sqlalchemy import select
 
-from app.models import Branch, CapitalEntry, ManualCollection, Partner, Role, UserRole
+from app.models import (
+    Branch,
+    CapitalEntry,
+    ManualCollection,
+    Partner,
+    Role,
+    Shift,
+    Terminal,
+    UserRole,
+)
 from tests.integration.test_cafe_workflow_migration import (
     _disposable_database,
     _run_alembic,
@@ -629,7 +638,18 @@ async def test_distributable_api_never_treats_provider_clearing_as_spendable(
         share_pct=100,
         joined_at=now,
     )
-    session.add(partner)
+    shift = Shift(
+        id=uuid4(),
+        company_id=company.id,
+        branch_id=branch.id,
+        terminal_id=seed_owner["terminal"].id,
+        opened_by=owner.id,
+        opened_at=now,
+        opening_float_minor=0,
+        expected_minor=0,
+        status="open",
+    )
+    session.add_all([partner, shift])
     await session.flush()
     session.add(
         CapitalEntry(
@@ -649,13 +669,15 @@ async def test_distributable_api_never_treats_provider_clearing_as_spendable(
                 id=uuid4(),
                 company_id=company.id,
                 branch_id=branch.id,
+                shift_id=shift.id if method == "cash" else None,
                 business_date=business_date,
                 method=method,
                 amount_minor=amount,
                 source_kind="manual_daily",
                 source_ref=f"cash-contract-{method}-{uuid4()}",
                 note="Phase 10 cash-position integration proof",
-                idempotency_key=f"cash-contract-idem-{uuid4()}",
+                idempotency_key=f"manual-collection:{uuid4()}",
+                request_hash=uuid4().hex * 2,
                 created_by=owner.id,
             )
         )
@@ -819,6 +841,40 @@ async def test_branch_bound_finance_scopes_operations_and_hides_partner_facts(
     )
     session.add(branch_b)
     await session.flush()
+    terminal_b = Terminal(
+        id=uuid4(),
+        branch_id=branch_b.id,
+        name="Finance scope B till",
+        device_id=f"finance-scope-b-{uuid4()}",
+    )
+    session.add(terminal_b)
+    await session.flush()
+    shifts = {
+        branch_a.id: Shift(
+            id=uuid4(),
+            company_id=company.id,
+            branch_id=branch_a.id,
+            terminal_id=seed_owner["terminal"].id,
+            opened_by=owner.id,
+            opened_at=now,
+            opening_float_minor=0,
+            expected_minor=0,
+            status="open",
+        ),
+        branch_b.id: Shift(
+            id=uuid4(),
+            company_id=company.id,
+            branch_id=branch_b.id,
+            terminal_id=terminal_b.id,
+            opened_by=owner.id,
+            opened_at=now,
+            opening_float_minor=0,
+            expected_minor=0,
+            status="open",
+        ),
+    }
+    session.add_all(shifts.values())
+    await session.flush()
     manager_role = Role(
         id=uuid4(),
         company_id=company.id,
@@ -834,13 +890,15 @@ async def test_branch_bound_finance_scopes_operations_and_hides_partner_facts(
                 id=uuid4(),
                 company_id=company.id,
                 branch_id=branch.id,
+                shift_id=shifts[branch.id].id,
                 business_date=business_date,
                 method="cash",
                 amount_minor=amount,
                 source_kind="manual_daily",
                 source_ref=f"finance-scope-{branch.id}-{uuid4()}",
                 note="Branch finance isolation proof",
-                idempotency_key=f"finance-scope-{uuid4()}",
+                idempotency_key=f"manual-collection:{uuid4()}",
+                request_hash=uuid4().hex * 2,
                 created_by=owner.id,
             )
         )

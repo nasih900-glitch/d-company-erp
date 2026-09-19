@@ -86,6 +86,7 @@ async def test_full_refund_of_tipped_order_debits_tips_payable_not_sales_returns
             _Result(rows=[(refund, order)]),  # refunds
             _Result(rows=[]),  # tip payouts
             _Result(rows=[]),  # expenses
+            _Result(rows=[]),  # finance source corrections
             _Result(rows=[]),  # capital entries
             _Result(rows=[]),  # assets (depreciation)
             _Result(rows=[]),  # approved posted journals
@@ -153,6 +154,7 @@ async def test_partial_refund_below_taxable_total_does_not_touch_tip() -> None:
             _Result(rows=[(refund, order)]),
             _Result(rows=[]),
             _Result(rows=[]),
+            _Result(rows=[]),  # finance source corrections
             _Result(rows=[]),
             _Result(rows=[]),
             _Result(rows=[]),

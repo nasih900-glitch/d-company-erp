@@ -90,6 +90,9 @@ internal val LOCAL_DURABLE_TABLES = listOf(
     "local_grn_lines",
     "local_grns",
     "local_adjustments",
+    // Receipt chunks precede their metadata and expense parent for FK-safe scope purging.
+    "local_expense_receipt_chunks",
+    "local_expense_receipts",
     "local_expenses",
     "local_assets",
     "local_capital_entries",

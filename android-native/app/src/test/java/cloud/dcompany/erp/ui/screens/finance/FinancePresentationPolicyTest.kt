@@ -129,7 +129,13 @@ class FinancePresentationPolicyTest {
 
     @Test
     fun collectionAndTipTotalsExcludeVoidedEvidence() {
-        fun collection(id: String, method: String, amount: Long, voided: Boolean) =
+        fun collection(
+            id: String,
+            method: String,
+            amount: Long,
+            voided: Boolean,
+            corrected: Boolean = false,
+        ) =
             ManualCollection(
                 id = id,
                 companyId = "company",
@@ -143,12 +149,14 @@ class FinancePresentationPolicyTest {
                 createdBy = "user",
                 createdAt = "2026-08-28T12:00:00Z",
                 isVoided = voided,
+                isCorrected = corrected,
             )
         val totals = manualCollectionTotals(
             listOf(
                 collection("cash", "cash", 21_000, false),
                 collection("upi", "upi", 162_000, false),
                 collection("void", "cash", 99_000, true),
+                collection("corrected", "bank", 75_000, false, corrected = true),
             ),
         )
 
@@ -157,6 +165,7 @@ class FinancePresentationPolicyTest {
         assertTrue(totals.upiMinor == 162_000L)
         assertTrue(totals.activeCount == 2)
         assertTrue(totals.voidedCount == 1)
+        assertTrue(totals.correctedCount == 1)
         assertTrue(
             defaultManualCollectionReference("2026-08-28", "upi") ==
                 "Daily collection 2026-08-28 UPI",

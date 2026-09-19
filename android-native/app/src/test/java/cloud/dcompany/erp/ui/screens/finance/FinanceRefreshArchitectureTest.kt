@@ -3,6 +3,7 @@ package cloud.dcompany.erp.ui.screens.finance
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -15,9 +16,15 @@ class FinanceRefreshArchitectureTest {
             mainSourceRoot().resolve("cloud/dcompany/erp/ui/screens/finance/FinanceViewModel.kt"),
         )
 
-        assertFalse(
-            "FinanceViewModel must not bypass SyncEngine with direct Finance API reads",
-            "ApiClient.create<FinanceApi>()" in source,
+        assertTrue(
+            "Rejected receipt removal must use a fresh server list rather than a stale Room snapshot",
+            "ApiClient.create<FinanceApi>()" in source &&
+                "financeApi.expenseReceipts(expenseServerId)" in source,
+        )
+        assertEquals(
+            "The direct Finance API must remain limited to destructive expense and receipt reconciliation",
+            2,
+            Regex("financeApi\\.[A-Za-z]+\\(").findAll(source).count(),
         )
         assertTrue("Finance snapshots are not Room-observed", "observeSnapshot<ProfitAndLoss>" in source)
         assertTrue(

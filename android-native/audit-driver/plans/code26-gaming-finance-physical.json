@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "name": "Code 29 3.1.21 full-route Gaming and Finance physical acceptance",
+  "name": "Code30.2 3.1.29 current-tariff Gaming and Finance emulator acceptance",
   "fixture": "backend/scripts/physical_audit_fixture.py",
   "expected_sessions": 16,
   "maximum_steps": 500,
@@ -118,7 +118,7 @@
       }
     },
     {
-      "name": "Offline Standard Single: open choices",
+      "name": "Offline PS5 Single: open choices",
       "action": "click",
       "text": "Start session",
       "index": 0,
@@ -128,31 +128,25 @@
       }
     },
     {
-      "name": "Offline Standard Single: select Standard",
-      "action": "click",
-      "text": "Standard",
-      "timeoutMs": 60000
-    },
-    {
-      "name": "Offline Standard Single: select Single",
+      "name": "Offline PS5 Single: select Single",
       "action": "click",
       "text": "Single",
       "timeoutMs": 60000
     },
     {
-      "name": "Offline Standard Single: prove 60 minute option",
+      "name": "Offline PS5 Single: prove 60 minute option",
       "action": "click",
       "text": "60 min · ₹120.00 total",
       "timeoutMs": 60000
     },
     {
-      "name": "Offline Standard Single: return to 30 minute option",
+      "name": "Offline PS5 Single: return to 30 minute option",
       "action": "click",
       "text": "30 min · ₹80.00 total",
       "timeoutMs": 60000
     },
     {
-      "name": "Offline Standard Single: capture ₹80 start",
+      "name": "Offline PS5 Single: capture ₹80 start",
       "action": "click",
       "text": "Start · ₹80.00",
       "packageCode": "standard-single-session-30m",
@@ -215,7 +209,7 @@
       "durationMs": 10000
     },
     {
-      "name": "Standard Single: open pause reason",
+      "name": "PS5 Single: open pause reason",
       "action": "click",
       "text": "Pause",
       "timeoutMs": 60000,
@@ -224,7 +218,7 @@
       }
     },
     {
-      "name": "Standard Single: enter physical pause reason",
+      "name": "PS5 Single: enter physical pause reason",
       "action": "fill",
       "class": "android.widget.EditText",
       "index": 0,
@@ -232,7 +226,7 @@
       "timeoutMs": 60000
     },
     {
-      "name": "Standard Single: pause with reason",
+      "name": "PS5 Single: pause with reason",
       "action": "click",
       "text": "Pause session",
       "index": 1,
@@ -242,7 +236,7 @@
       }
     },
     {
-      "name": "Standard Single: wait for pause confirmation to finish",
+      "name": "PS5 Single: wait for pause confirmation to finish",
       "action": "absent",
       "text": "Session paused on the server. Connected devices will receive the paused clock and alarm state.",
       "timeoutMs": 30000
@@ -259,13 +253,13 @@
           "expectedCount": 1,
           "ancestor": {
             "attribute": "content-desc",
-            "fullmatch": "PS5 Station 1\\. Paused\\. Standard · Single · ₹80\\.00 fixed total\\."
+            "fullmatch": "PS5 Station 1\\. Paused\\. Single · ₹80\\.00 fixed total\\."
           }
         }
       ]
     },
     {
-      "name": "Standard Single: resume after stable pause",
+      "name": "PS5 Single: resume after stable pause",
       "action": "click",
       "text": "Resume",
       "timeoutMs": 60000,
@@ -274,7 +268,7 @@
       }
     },
     {
-      "name": "Standard Single: open paid extension",
+      "name": "PS5 Single: open paid extension",
       "action": "click",
       "text": "Extend",
       "timeoutMs": 60000,
@@ -283,13 +277,13 @@
       }
     },
     {
-      "name": "Standard Single: choose 60 minute extension",
+      "name": "PS5 Single: choose 60 minute extension",
       "action": "click",
       "text": "Single Mode · 1 hour extension · 60 min · ₹100.00 total",
       "timeoutMs": 60000
     },
     {
-      "name": "Standard Single: add extension once",
+      "name": "PS5 Single: add extension once",
       "action": "click",
       "text": "Add · ₹100.00",
       "packageCode": "standard-single-extension-60m",
@@ -299,7 +293,7 @@
       }
     },
     {
-      "name": "Standard Single: open add-on picker",
+      "name": "PS5 Single: open add-on picker",
       "action": "click",
       "text": "Add drinks & snacks",
       "timeoutMs": 60000,
@@ -308,7 +302,7 @@
       }
     },
     {
-      "name": "Standard Single: choose Audit Cola",
+      "name": "PS5 Single: choose Audit Cola",
       "action": "click",
       "text": "Choose",
       "index": 0,
@@ -318,7 +312,7 @@
       }
     },
     {
-      "name": "Standard Single: add Audit Cola",
+      "name": "PS5 Single: add Audit Cola",
       "action": "click",
       "text": "ADD · ₹50.00",
       "timeoutMs": 60000,
@@ -327,7 +321,7 @@
       }
     },
     {
-      "name": "Standard Single: Cola server receipt confirmed",
+      "name": "PS5 Single: Cola server receipt confirmed",
       "action": "scroll",
       "scrollable": true,
       "index": 2,
@@ -342,7 +336,7 @@
       }
     },
     {
-      "name": "Standard Single: reopen add-on picker",
+      "name": "PS5 Single: reopen add-on picker",
       "action": "click",
       "text": "Add drinks & snacks",
       "timeoutMs": 60000,
@@ -351,7 +345,7 @@
       }
     },
     {
-      "name": "Standard Single: choose Audit Crisps",
+      "name": "PS5 Single: choose Audit Crisps",
       "action": "click",
       "text": "Choose",
       "index": 1,
@@ -361,7 +355,7 @@
       }
     },
     {
-      "name": "Standard Single: add Audit Crisps",
+      "name": "PS5 Single: add Audit Crisps",
       "action": "click",
       "text": "ADD · ₹30.00",
       "timeoutMs": 60000,
@@ -370,7 +364,7 @@
       }
     },
     {
-      "name": "Standard Single: Crisps server receipt confirmed",
+      "name": "PS5 Single: Crisps server receipt confirmed",
       "action": "scroll",
       "scrollable": true,
       "index": 2,
@@ -385,7 +379,7 @@
       }
     },
     {
-      "name": "Standard Single: request Crisps void",
+      "name": "PS5 Single: request Crisps void",
       "action": "click",
       "text": "Void",
       "index": 1,
@@ -395,13 +389,13 @@
       }
     },
     {
-      "name": "Standard Single: choose reason",
+      "name": "PS5 Single: choose reason",
       "action": "click",
       "description": "Cancellation reason: Entered by mistake",
       "timeoutMs": 60000
     },
     {
-      "name": "Standard Single: confirm reasoned void",
+      "name": "PS5 Single: confirm reasoned void",
       "action": "click",
       "text": "Void item",
       "timeoutMs": 60000,
@@ -410,7 +404,7 @@
       }
     },
     {
-      "name": "Standard Single: request stop",
+      "name": "PS5 Single: request stop",
       "action": "click",
       "text": "Stop & calculate",
       "timeoutMs": 60000,
@@ -419,7 +413,7 @@
       }
     },
     {
-      "name": "Standard Single: confirm stop",
+      "name": "PS5 Single: confirm stop",
       "action": "click",
       "text": "Stop & calculate",
       "timeoutMs": 60000,
@@ -428,7 +422,7 @@
       }
     },
     {
-      "name": "Standard Single: request POS handoff",
+      "name": "PS5 Single: request POS handoff",
       "action": "click",
       "text": "Send to POS",
       "index": 1,
@@ -446,7 +440,7 @@
       }
     },
     {
-      "name": "Standard Single: confirm POS handoff",
+      "name": "PS5 Single: confirm POS handoff",
       "action": "click",
       "text": "Send to POS",
       "timeoutMs": 60000
@@ -461,7 +455,7 @@
       }
     },
     {
-      "name": "Standard Single + Cola: open one held bill",
+      "name": "PS5 Single + Cola: open one held bill",
       "action": "click",
       "text": "Held (1)",
       "timeoutMs": 60000,
@@ -470,20 +464,20 @@
       }
     },
     {
-      "name": "Standard Single + Cola: review PS5 Station 1 bill",
+      "name": "PS5 Single + Cola: review PS5 Station 1 bill",
       "action": "click",
       "text": "PS5 Station 1",
       "timeoutMs": 60000
     },
     {
-      "name": "Standard Single + Cola: enter ₹20 manual discount",
+      "name": "PS5 Single + Cola: enter ₹20 manual discount",
       "action": "fill",
       "class": "android.widget.EditText",
       "index": 0,
       "value": "20"
     },
     {
-      "name": "Standard Single + Cola: apply exact discount",
+      "name": "PS5 Single + Cola: apply exact discount",
       "action": "click",
       "text": "Apply discount",
       "reveal": {
@@ -499,7 +493,7 @@
       }
     },
     {
-      "name": "Standard Single + Cola: acknowledge discount feedback",
+      "name": "PS5 Single + Cola: acknowledge discount feedback",
       "action": "click",
       "text": "OK",
       "timeoutMs": 60000,
@@ -508,19 +502,19 @@
       }
     },
     {
-      "name": "Standard Single + Cola: continue verified bill",
+      "name": "PS5 Single + Cola: continue verified bill",
       "action": "click",
       "text": "CONTINUE TO PAYMENT · ₹210.00",
       "timeoutMs": 60000
     },
     {
-      "name": "Standard Single + Cola: set cash tender ₹500.00",
+      "name": "PS5 Single + Cola: set cash tender ₹500.00",
       "action": "click",
       "description": "Set Cash received (₹) to ₹500.00",
       "timeoutMs": 60000
     },
     {
-      "name": "Standard Single + Cola: submit cash once",
+      "name": "PS5 Single + Cola: submit cash once",
       "action": "click",
       "text": "CONFIRM CASH · ₹210.00",
       "timeoutMs": 60000,
@@ -529,13 +523,13 @@
       }
     },
     {
-      "name": "Standard Single + Cola: finish receipt",
+      "name": "PS5 Single + Cola: finish receipt",
       "action": "click",
       "text": "DONE",
       "timeoutMs": 60000
     },
     {
-      "name": "Standard Single + Cola: acknowledge result",
+      "name": "PS5 Single + Cola: acknowledge result",
       "action": "click",
       "text": "OK",
       "timeoutMs": 60000
@@ -550,13 +544,13 @@
       }
     },
     {
-      "name": "Standard Single 60m + 30m extension: show PS5 stations",
+      "name": "PS5 Single 60m + 30m extension: show PS5 stations",
       "action": "click",
       "text": "PS5",
       "timeoutMs": 20000
     },
     {
-      "name": "Standard Single 60m + 30m extension: open session choices",
+      "name": "PS5 Single 60m + 30m extension: open session choices",
       "action": "click",
       "text": "Start session",
       "index": 0,
@@ -566,25 +560,19 @@
       }
     },
     {
-      "name": "Standard Single 60m + 30m extension: choose Standard",
-      "action": "click",
-      "text": "Standard",
-      "timeoutMs": 60000
-    },
-    {
-      "name": "Standard Single 60m + 30m extension: choose Single",
+      "name": "PS5 Single 60m + 30m extension: choose Single",
       "action": "click",
       "text": "Single",
       "timeoutMs": 60000
     },
     {
-      "name": "Standard Single 60m + 30m extension: choose 60 min · ₹120.00 total",
+      "name": "PS5 Single 60m + 30m extension: choose 60 min · ₹120.00 total",
       "action": "click",
       "text": "60 min · ₹120.00 total",
       "timeoutMs": 60000
     },
     {
-      "name": "Standard Single 60m + 30m extension: confirm ₹120.00",
+      "name": "PS5 Single 60m + 30m extension: confirm ₹120.00",
       "action": "click",
       "text": "Start · ₹120.00",
       "packageCode": "standard-single-session-60m",
@@ -594,13 +582,13 @@
       }
     },
     {
-      "name": "Standard Single 60m + 30m extension: exact active total ₹120.00",
+      "name": "PS5 Single 60m + 30m extension: exact active total ₹120.00",
       "action": "wait",
       "descriptionContains": "₹120.00 fixed total",
       "timeoutMs": 60000
     },
     {
-      "name": "Standard Single 60m + 30m extension: open paid extension",
+      "name": "PS5 Single 60m + 30m extension: open paid extension",
       "action": "click",
       "text": "Extend",
       "timeoutMs": 60000,
@@ -609,13 +597,13 @@
       }
     },
     {
-      "name": "Standard Single 60m + 30m extension: choose 30 minute extension",
+      "name": "PS5 Single 60m + 30m extension: choose 30 minute extension",
       "action": "click",
       "text": "Single Mode · 30 min extension · 30 min · ₹60.00 total",
       "timeoutMs": 60000
     },
     {
-      "name": "Standard Single 60m + 30m extension: confirm extension ₹60.00",
+      "name": "PS5 Single 60m + 30m extension: confirm extension ₹60.00",
       "action": "click",
       "text": "Add · ₹60.00",
       "packageCode": "standard-single-extension-30m",
@@ -625,7 +613,7 @@
       }
     },
     {
-      "name": "Standard Single 60m + 30m extension: request stop",
+      "name": "PS5 Single 60m + 30m extension: request stop",
       "action": "click",
       "text": "Stop & calculate",
       "timeoutMs": 60000,
@@ -634,7 +622,7 @@
       }
     },
     {
-      "name": "Standard Single 60m + 30m extension: confirm stop",
+      "name": "PS5 Single 60m + 30m extension: confirm stop",
       "action": "click",
       "text": "Stop & calculate",
       "timeoutMs": 60000,
@@ -643,7 +631,7 @@
       }
     },
     {
-      "name": "Standard Single 60m + 30m extension: request POS handoff",
+      "name": "PS5 Single 60m + 30m extension: request POS handoff",
       "action": "click",
       "text": "Send to POS",
       "index": 1,
@@ -653,7 +641,7 @@
       }
     },
     {
-      "name": "Standard Single 60m + 30m extension: confirm POS handoff",
+      "name": "PS5 Single 60m + 30m extension: confirm POS handoff",
       "action": "click",
       "text": "Send to POS",
       "timeoutMs": 60000
@@ -668,7 +656,7 @@
       }
     },
     {
-      "name": "Standard Single 60m + 30m extension: open one held bill",
+      "name": "PS5 Single 60m + 30m extension: open one held bill",
       "action": "click",
       "text": "Held (1)",
       "timeoutMs": 60000,
@@ -677,25 +665,25 @@
       }
     },
     {
-      "name": "Standard Single 60m + 30m extension: review PS5 Station 1 bill",
+      "name": "PS5 Single 60m + 30m extension: review PS5 Station 1 bill",
       "action": "click",
       "text": "PS5 Station 1",
       "timeoutMs": 60000
     },
     {
-      "name": "Standard Single 60m + 30m extension: continue verified bill",
+      "name": "PS5 Single 60m + 30m extension: continue verified bill",
       "action": "click",
       "text": "CONTINUE TO PAYMENT · ₹180.00",
       "timeoutMs": 60000
     },
     {
-      "name": "Standard Single 60m + 30m extension: choose UPI",
+      "name": "PS5 Single 60m + 30m extension: choose UPI",
       "action": "click",
       "text": "UPI",
       "timeoutMs": 60000
     },
     {
-      "name": "Standard Single 60m + 30m extension: submit UPI once",
+      "name": "PS5 Single 60m + 30m extension: submit UPI once",
       "action": "click",
       "text": "CONFIRM UPI · ₹180.00",
       "timeoutMs": 60000,
@@ -704,13 +692,13 @@
       }
     },
     {
-      "name": "Standard Single 60m + 30m extension: finish receipt",
+      "name": "PS5 Single 60m + 30m extension: finish receipt",
       "action": "click",
       "text": "DONE",
       "timeoutMs": 60000
     },
     {
-      "name": "Standard Single 60m + 30m extension: acknowledge result",
+      "name": "PS5 Single 60m + 30m extension: acknowledge result",
       "action": "click",
       "text": "OK",
       "timeoutMs": 60000
@@ -725,13 +713,13 @@
       }
     },
     {
-      "name": "Standard Dual 2-player: show PS5 stations",
+      "name": "PS5 Dual 2-player: show PS5 stations",
       "action": "click",
       "text": "PS5",
       "timeoutMs": 20000
     },
     {
-      "name": "Standard Dual 2-player: open session choices",
+      "name": "PS5 Dual 2-player: open session choices",
       "action": "click",
       "text": "Start session",
       "index": 0,
@@ -741,25 +729,19 @@
       }
     },
     {
-      "name": "Standard Dual 2-player: choose Standard",
-      "action": "click",
-      "text": "Standard",
-      "timeoutMs": 60000
-    },
-    {
-      "name": "Standard Dual 2-player: choose Two players",
+      "name": "PS5 Dual 2-player: choose Two players",
       "action": "click",
       "text": "Two players",
       "timeoutMs": 60000
     },
     {
-      "name": "Standard Dual 2-player: choose 30 min · ₹100.00 total",
+      "name": "PS5 Dual 2-player: choose 30 min · ₹100.00 total",
       "action": "click",
       "text": "30 min · ₹100.00 total",
       "timeoutMs": 60000
     },
     {
-      "name": "Standard Dual 2-player: confirm ₹100.00",
+      "name": "PS5 Dual 2-player: confirm ₹100.00",
       "action": "click",
       "text": "Start · ₹100.00",
       "packageCode": "standard-dual-session-30m",
@@ -769,13 +751,13 @@
       }
     },
     {
-      "name": "Standard Dual 2-player: exact active total ₹100.00",
+      "name": "PS5 Dual 2-player: exact active total ₹100.00",
       "action": "wait",
       "descriptionContains": "₹100.00 fixed total",
       "timeoutMs": 60000
     },
     {
-      "name": "Standard Dual 2-player: request stop",
+      "name": "PS5 Dual 2-player: request stop",
       "action": "click",
       "text": "Stop & calculate",
       "timeoutMs": 60000,
@@ -784,7 +766,7 @@
       }
     },
     {
-      "name": "Standard Dual 2-player: confirm stop",
+      "name": "PS5 Dual 2-player: confirm stop",
       "action": "click",
       "text": "Stop & calculate",
       "timeoutMs": 60000,
@@ -793,7 +775,7 @@
       }
     },
     {
-      "name": "Standard Dual 2-player: request POS handoff",
+      "name": "PS5 Dual 2-player: request POS handoff",
       "action": "click",
       "text": "Send to POS",
       "index": 1,
@@ -803,7 +785,7 @@
       }
     },
     {
-      "name": "Standard Dual 2-player: confirm POS handoff",
+      "name": "PS5 Dual 2-player: confirm POS handoff",
       "action": "click",
       "text": "Send to POS",
       "timeoutMs": 60000
@@ -818,7 +800,7 @@
       }
     },
     {
-      "name": "Standard Dual 2-player: open one held bill",
+      "name": "PS5 Dual 2-player: open one held bill",
       "action": "click",
       "text": "Held (1)",
       "timeoutMs": 60000,
@@ -827,25 +809,25 @@
       }
     },
     {
-      "name": "Standard Dual 2-player: review PS5 Station 1 bill",
+      "name": "PS5 Dual 2-player: review PS5 Station 1 bill",
       "action": "click",
       "text": "PS5 Station 1",
       "timeoutMs": 60000
     },
     {
-      "name": "Standard Dual 2-player: continue verified bill",
+      "name": "PS5 Dual 2-player: continue verified bill",
       "action": "click",
       "text": "CONTINUE TO PAYMENT · ₹100.00",
       "timeoutMs": 60000
     },
     {
-      "name": "Standard Dual 2-player: choose UPI",
+      "name": "PS5 Dual 2-player: choose UPI",
       "action": "click",
       "text": "UPI",
       "timeoutMs": 60000
     },
     {
-      "name": "Standard Dual 2-player: submit UPI once",
+      "name": "PS5 Dual 2-player: submit UPI once",
       "action": "click",
       "text": "CONFIRM UPI · ₹100.00",
       "timeoutMs": 60000,
@@ -854,13 +836,13 @@
       }
     },
     {
-      "name": "Standard Dual 2-player: finish receipt",
+      "name": "PS5 Dual 2-player: finish receipt",
       "action": "click",
       "text": "DONE",
       "timeoutMs": 60000
     },
     {
-      "name": "Standard Dual 2-player: acknowledge result",
+      "name": "PS5 Dual 2-player: acknowledge result",
       "action": "click",
       "text": "OK",
       "timeoutMs": 60000
@@ -875,13 +857,13 @@
       }
     },
     {
-      "name": "Standard Dual 3-player: show PS5 stations",
+      "name": "PS5 Dual 3-player: show PS5 stations",
       "action": "click",
       "text": "PS5",
       "timeoutMs": 20000
     },
     {
-      "name": "Standard Dual 3-player: open session choices",
+      "name": "PS5 Dual 3-player: open session choices",
       "action": "click",
       "text": "Start session",
       "index": 0,
@@ -891,25 +873,19 @@
       }
     },
     {
-      "name": "Standard Dual 3-player: choose Standard",
-      "action": "click",
-      "text": "Standard",
-      "timeoutMs": 60000
-    },
-    {
-      "name": "Standard Dual 3-player: choose 3 players",
+      "name": "PS5 Dual 3-player: choose 3 players",
       "action": "click",
       "text": "3 players",
       "timeoutMs": 60000
     },
     {
-      "name": "Standard Dual 3-player: choose 60 min · ₹180.00 total",
+      "name": "PS5 Dual 3-player: choose 60 min · ₹180.00 total",
       "action": "click",
       "text": "60 min · ₹180.00 total",
       "timeoutMs": 60000
     },
     {
-      "name": "Standard Dual 3-player: confirm ₹180.00",
+      "name": "PS5 Dual 3-player: confirm ₹180.00",
       "action": "click",
       "text": "Start · ₹180.00",
       "packageCode": "standard-dual-session-60m",
@@ -919,7 +895,7 @@
       }
     },
     {
-      "name": "Standard Dual 3-player: open paid extension",
+      "name": "PS5 Dual 3-player: open paid extension",
       "action": "click",
       "text": "Extend",
       "timeoutMs": 60000,
@@ -928,13 +904,13 @@
       }
     },
     {
-      "name": "Standard Dual 3-player: choose extension Dual Mode · 30 min extension · 30 min · ₹100.00 total",
+      "name": "PS5 Dual 3-player: choose extension Dual Mode · 30 min extension · 30 min · ₹100.00 total",
       "action": "click",
       "text": "Dual Mode · 30 min extension · 30 min · ₹100.00 total",
       "timeoutMs": 60000
     },
     {
-      "name": "Standard Dual 3-player: confirm extension ₹100.00",
+      "name": "PS5 Dual 3-player: confirm extension ₹100.00",
       "action": "click",
       "text": "Add · ₹100.00",
       "packageCode": "standard-dual-extension-30m",
@@ -944,7 +920,7 @@
       }
     },
     {
-      "name": "Standard Dual 3-player: request stop",
+      "name": "PS5 Dual 3-player: request stop",
       "action": "click",
       "text": "Stop & calculate",
       "timeoutMs": 60000,
@@ -953,7 +929,7 @@
       }
     },
     {
-      "name": "Standard Dual 3-player: confirm stop",
+      "name": "PS5 Dual 3-player: confirm stop",
       "action": "click",
       "text": "Stop & calculate",
       "timeoutMs": 60000,
@@ -962,7 +938,7 @@
       }
     },
     {
-      "name": "Standard Dual 3-player: request POS handoff",
+      "name": "PS5 Dual 3-player: request POS handoff",
       "action": "click",
       "text": "Send to POS",
       "index": 1,
@@ -972,7 +948,7 @@
       }
     },
     {
-      "name": "Standard Dual 3-player: confirm POS handoff",
+      "name": "PS5 Dual 3-player: confirm POS handoff",
       "action": "click",
       "text": "Send to POS",
       "timeoutMs": 60000
@@ -987,7 +963,7 @@
       }
     },
     {
-      "name": "Standard Dual 3-player: open one held bill",
+      "name": "PS5 Dual 3-player: open one held bill",
       "action": "click",
       "text": "Held (1)",
       "timeoutMs": 60000,
@@ -996,25 +972,25 @@
       }
     },
     {
-      "name": "Standard Dual 3-player: review PS5 Station 1 bill",
+      "name": "PS5 Dual 3-player: review PS5 Station 1 bill",
       "action": "click",
       "text": "PS5 Station 1",
       "timeoutMs": 60000
     },
     {
-      "name": "Standard Dual 3-player: continue verified bill",
+      "name": "PS5 Dual 3-player: continue verified bill",
       "action": "click",
       "text": "CONTINUE TO PAYMENT · ₹280.00",
       "timeoutMs": 60000
     },
     {
-      "name": "Standard Dual 3-player: choose UPI",
+      "name": "PS5 Dual 3-player: choose UPI",
       "action": "click",
       "text": "UPI",
       "timeoutMs": 60000
     },
     {
-      "name": "Standard Dual 3-player: submit UPI once",
+      "name": "PS5 Dual 3-player: submit UPI once",
       "action": "click",
       "text": "CONFIRM UPI · ₹280.00",
       "timeoutMs": 60000,
@@ -1023,13 +999,13 @@
       }
     },
     {
-      "name": "Standard Dual 3-player: finish receipt",
+      "name": "PS5 Dual 3-player: finish receipt",
       "action": "click",
       "text": "DONE",
       "timeoutMs": 60000
     },
     {
-      "name": "Standard Dual 3-player: acknowledge result",
+      "name": "PS5 Dual 3-player: acknowledge result",
       "action": "click",
       "text": "OK",
       "timeoutMs": 60000
@@ -1044,13 +1020,13 @@
       }
     },
     {
-      "name": "Standard Dual 4-player: show PS5 stations",
+      "name": "PS5 Dual 4-player: show PS5 stations",
       "action": "click",
       "text": "PS5",
       "timeoutMs": 20000
     },
     {
-      "name": "Standard Dual 4-player: open session choices",
+      "name": "PS5 Dual 4-player: open session choices",
       "action": "click",
       "text": "Start session",
       "index": 0,
@@ -1060,25 +1036,19 @@
       }
     },
     {
-      "name": "Standard Dual 4-player: choose Standard",
-      "action": "click",
-      "text": "Standard",
-      "timeoutMs": 60000
-    },
-    {
-      "name": "Standard Dual 4-player: choose 4 players",
+      "name": "PS5 Dual 4-player: choose 4 players",
       "action": "click",
       "text": "4 players",
       "timeoutMs": 60000
     },
     {
-      "name": "Standard Dual 4-player: choose 60 min · ₹210.00 total",
+      "name": "PS5 Dual 4-player: choose 60 min · ₹210.00 total",
       "action": "click",
       "text": "60 min · ₹210.00 total",
       "timeoutMs": 60000
     },
     {
-      "name": "Standard Dual 4-player: confirm ₹210.00",
+      "name": "PS5 Dual 4-player: confirm ₹210.00",
       "action": "click",
       "text": "Start · ₹210.00",
       "packageCode": "standard-dual-session-60m",
@@ -1088,7 +1058,7 @@
       }
     },
     {
-      "name": "Standard Dual 4-player: open paid extension",
+      "name": "PS5 Dual 4-player: open paid extension",
       "action": "click",
       "text": "Extend",
       "timeoutMs": 60000,
@@ -1097,13 +1067,13 @@
       }
     },
     {
-      "name": "Standard Dual 4-player: choose extension Dual Mode · 1 hour extension · 60 min · ₹190.00 total",
+      "name": "PS5 Dual 4-player: choose extension Dual Mode · 1 hour extension · 60 min · ₹190.00 total",
       "action": "click",
       "text": "Dual Mode · 1 hour extension · 60 min · ₹190.00 total",
       "timeoutMs": 60000
     },
     {
-      "name": "Standard Dual 4-player: confirm extension ₹190.00",
+      "name": "PS5 Dual 4-player: confirm extension ₹190.00",
       "action": "click",
       "text": "Add · ₹190.00",
       "packageCode": "standard-dual-extension-60m",
@@ -1113,7 +1083,7 @@
       }
     },
     {
-      "name": "Standard Dual 4-player: request stop",
+      "name": "PS5 Dual 4-player: request stop",
       "action": "click",
       "text": "Stop & calculate",
       "timeoutMs": 60000,
@@ -1122,7 +1092,7 @@
       }
     },
     {
-      "name": "Standard Dual 4-player: confirm stop",
+      "name": "PS5 Dual 4-player: confirm stop",
       "action": "click",
       "text": "Stop & calculate",
       "timeoutMs": 60000,
@@ -1131,7 +1101,7 @@
       }
     },
     {
-      "name": "Standard Dual 4-player: request POS handoff",
+      "name": "PS5 Dual 4-player: request POS handoff",
       "action": "click",
       "text": "Send to POS",
       "index": 1,
@@ -1141,7 +1111,7 @@
       }
     },
     {
-      "name": "Standard Dual 4-player: confirm POS handoff",
+      "name": "PS5 Dual 4-player: confirm POS handoff",
       "action": "click",
       "text": "Send to POS",
       "timeoutMs": 60000
@@ -1156,7 +1126,7 @@
       }
     },
     {
-      "name": "Standard Dual 4-player: open one held bill",
+      "name": "PS5 Dual 4-player: open one held bill",
       "action": "click",
       "text": "Held (1)",
       "timeoutMs": 60000,
@@ -1165,25 +1135,25 @@
       }
     },
     {
-      "name": "Standard Dual 4-player: review PS5 Station 1 bill",
+      "name": "PS5 Dual 4-player: review PS5 Station 1 bill",
       "action": "click",
       "text": "PS5 Station 1",
       "timeoutMs": 60000
     },
     {
-      "name": "Standard Dual 4-player: continue verified bill",
+      "name": "PS5 Dual 4-player: continue verified bill",
       "action": "click",
       "text": "CONTINUE TO PAYMENT · ₹400.00",
       "timeoutMs": 60000
     },
     {
-      "name": "Standard Dual 4-player: choose UPI",
+      "name": "PS5 Dual 4-player: choose UPI",
       "action": "click",
       "text": "UPI",
       "timeoutMs": 60000
     },
     {
-      "name": "Standard Dual 4-player: submit UPI once",
+      "name": "PS5 Dual 4-player: submit UPI once",
       "action": "click",
       "text": "CONFIRM UPI · ₹400.00",
       "timeoutMs": 60000,
@@ -1192,13 +1162,13 @@
       }
     },
     {
-      "name": "Standard Dual 4-player: finish receipt",
+      "name": "PS5 Dual 4-player: finish receipt",
       "action": "click",
       "text": "DONE",
       "timeoutMs": 60000
     },
     {
-      "name": "Standard Dual 4-player: acknowledge result",
+      "name": "PS5 Dual 4-player: acknowledge result",
       "action": "click",
       "text": "OK",
       "timeoutMs": 60000
@@ -1213,269 +1183,66 @@
       }
     },
     {
-      "name": "Premium Single: show PS5 stations",
+      "name": "VR Games 15m: show VR stations",
       "action": "click",
-      "text": "PS5",
-      "timeoutMs": 20000
+      "text": "VR",
+      "timeoutMs": 60000,
+      "then": {
+        "text": "VR Pod 1"
+      }
     },
     {
-      "name": "Premium Single: open session choices",
+      "name": "VR Games 15m: open session choices",
       "action": "click",
       "text": "Start session",
       "index": 0,
       "timeoutMs": 60000,
       "then": {
-        "text": "Start · PS5 Station 1"
+        "text": "Start · VR Pod 1"
       }
     },
     {
-      "name": "Premium Single: choose Premium",
+      "name": "VR Games 15m: choose 15 minute option",
       "action": "click",
-      "text": "Premium",
+      "text": "15 min · ₹80.00 total",
       "timeoutMs": 60000
     },
     {
-      "name": "Premium Single: choose Single",
+      "name": "VR Games 15m: confirm ₹80.00",
       "action": "click",
-      "text": "Single",
-      "timeoutMs": 60000
-    },
-    {
-      "name": "Premium Single: choose 60 min · ₹150.00 total",
-      "action": "click",
-      "text": "60 min · ₹150.00 total",
-      "timeoutMs": 60000
-    },
-    {
-      "name": "Premium Single: confirm ₹150.00",
-      "action": "click",
-      "text": "Start · ₹150.00",
-      "packageCode": "premium-single-session-60m",
+      "text": "Start · ₹80.00",
+      "packageCode": "vr-games-session-15m",
       "timeoutMs": 60000,
       "then": {
-        "descriptionContains": "PS5 Station 1. Active"
+        "descriptionContains": "VR Pod 1. Active"
       }
     },
     {
-      "name": "Premium Single: open paid extension",
-      "action": "click",
-      "text": "Extend",
-      "timeoutMs": 60000,
-      "then": {
-        "text": "Add paid time"
-      }
-    },
-    {
-      "name": "Premium Single: choose extension Premium Single Mode · 30 min extension · 30 min · ₹70.00 total",
-      "action": "click",
-      "text": "Premium Single Mode · 30 min extension · 30 min · ₹70.00 total",
-      "timeoutMs": 60000
-    },
-    {
-      "name": "Premium Single: confirm extension ₹70.00",
-      "action": "click",
-      "text": "Add · ₹70.00",
-      "packageCode": "premium-single-extension-30m",
-      "timeoutMs": 60000,
-      "then": {
-        "descriptionContains": "₹220.00 fixed total"
-      }
-    },
-    {
-      "name": "Premium Single: request stop",
-      "action": "click",
-      "text": "Stop & calculate",
-      "timeoutMs": 60000,
-      "then": {
-        "text": "Stop PS5 Station 1?"
-      }
-    },
-    {
-      "name": "Premium Single: confirm stop",
-      "action": "click",
-      "text": "Stop & calculate",
-      "timeoutMs": 60000,
-      "then": {
-        "descriptionContains": "PS5 Station 1. Payment due."
-      }
-    },
-    {
-      "name": "Premium Single: request POS handoff",
-      "action": "click",
-      "text": "Send to POS",
-      "index": 1,
-      "timeoutMs": 60000,
-      "then": {
-        "text": "Send to POS?"
-      }
-    },
-    {
-      "name": "Premium Single: confirm POS handoff",
-      "action": "click",
-      "text": "Send to POS",
-      "timeoutMs": 60000
-    },
-    {
-      "name": "Open POS",
-      "action": "click",
-      "descriptionContains": "POS. Take",
-      "timeoutMs": 60000,
-      "then": {
-        "text": "Held (1)"
-      }
-    },
-    {
-      "name": "Premium Single: open one held bill",
-      "action": "click",
-      "text": "Held (1)",
-      "timeoutMs": 60000,
-      "then": {
-        "text": "PS5 Station 1"
-      }
-    },
-    {
-      "name": "Premium Single: review PS5 Station 1 bill",
-      "action": "click",
-      "text": "PS5 Station 1",
-      "timeoutMs": 60000
-    },
-    {
-      "name": "Premium Single: continue verified bill",
-      "action": "click",
-      "text": "CONTINUE TO PAYMENT · ₹220.00",
-      "timeoutMs": 60000
-    },
-    {
-      "name": "Premium Single: choose UPI",
-      "action": "click",
-      "text": "UPI",
-      "timeoutMs": 60000
-    },
-    {
-      "name": "Premium Single: submit UPI once",
-      "action": "click",
-      "text": "CONFIRM UPI · ₹220.00",
-      "timeoutMs": 60000,
-      "then": {
-        "text": "Payment confirmed"
-      }
-    },
-    {
-      "name": "Premium Single: finish receipt",
-      "action": "click",
-      "text": "DONE",
-      "timeoutMs": 60000
-    },
-    {
-      "name": "Premium Single: acknowledge result",
-      "action": "click",
-      "text": "OK",
-      "timeoutMs": 60000
-    },
-    {
-      "name": "Open Gaming",
-      "action": "click",
-      "descriptionContains": "Gaming. Manage",
-      "timeoutMs": 60000,
-      "then": {
-        "text": "PS5 Station 1"
-      }
-    },
-    {
-      "name": "Premium Single 60m extension coverage: show PS5 stations",
-      "action": "click",
-      "text": "PS5",
-      "timeoutMs": 20000
-    },
-    {
-      "name": "Premium Single 60m extension coverage: open session choices",
-      "action": "click",
-      "text": "Start session",
-      "index": 0,
-      "timeoutMs": 60000,
-      "then": {
-        "text": "Start · PS5 Station 1"
-      }
-    },
-    {
-      "name": "Premium Single 60m extension coverage: choose Premium",
-      "action": "click",
-      "text": "Premium",
-      "timeoutMs": 60000
-    },
-    {
-      "name": "Premium Single 60m extension coverage: choose Single",
-      "action": "click",
-      "text": "Single",
-      "timeoutMs": 60000
-    },
-    {
-      "name": "Premium Single 60m extension coverage: choose 60 min · ₹150.00 total",
-      "action": "click",
-      "text": "60 min · ₹150.00 total",
-      "timeoutMs": 60000
-    },
-    {
-      "name": "Premium Single 60m extension coverage: confirm ₹150.00",
-      "action": "click",
-      "text": "Start · ₹150.00",
-      "packageCode": "premium-single-session-60m",
-      "timeoutMs": 60000,
-      "then": {
-        "descriptionContains": "PS5 Station 1. Active"
-      }
-    },
-    {
-      "name": "Premium Single 60m extension coverage: exact active total ₹150.00",
+      "name": "VR Games 15m: exact active total",
       "action": "wait",
-      "descriptionContains": "₹150.00 fixed total",
+      "descriptionContains": "₹80.00 fixed total",
       "timeoutMs": 60000
     },
     {
-      "name": "Premium Single 60m extension coverage: open paid extension",
-      "action": "click",
-      "text": "Extend",
-      "timeoutMs": 60000,
-      "then": {
-        "text": "Add paid time"
-      }
-    },
-    {
-      "name": "Premium Single 60m extension coverage: choose 60 minute extension",
-      "action": "click",
-      "text": "Premium Single Mode · 1 hour extension · 60 min · ₹120.00 total",
-      "timeoutMs": 60000
-    },
-    {
-      "name": "Premium Single 60m extension coverage: confirm extension ₹120.00",
-      "action": "click",
-      "text": "Add · ₹120.00",
-      "packageCode": "premium-single-extension-60m",
-      "timeoutMs": 60000,
-      "then": {
-        "descriptionContains": "₹270.00 fixed total"
-      }
-    },
-    {
-      "name": "Premium Single 60m extension coverage: request stop",
+      "name": "VR Games 15m: request stop",
       "action": "click",
       "text": "Stop & calculate",
       "timeoutMs": 60000,
       "then": {
-        "text": "Stop PS5 Station 1?"
+        "text": "Stop VR Pod 1?"
       }
     },
     {
-      "name": "Premium Single 60m extension coverage: confirm stop",
+      "name": "VR Games 15m: confirm stop",
       "action": "click",
       "text": "Stop & calculate",
       "timeoutMs": 60000,
       "then": {
-        "descriptionContains": "PS5 Station 1. Payment due."
+        "descriptionContains": "VR Pod 1. Payment due."
       }
     },
     {
-      "name": "Premium Single 60m extension coverage: request POS handoff",
+      "name": "VR Games 15m: request POS handoff",
       "action": "click",
       "text": "Send to POS",
       "index": 1,
@@ -1485,7 +1252,7 @@
       }
     },
     {
-      "name": "Premium Single 60m extension coverage: confirm POS handoff",
+      "name": "VR Games 15m: confirm POS handoff",
       "action": "click",
       "text": "Send to POS",
       "timeoutMs": 60000
@@ -1500,49 +1267,49 @@
       }
     },
     {
-      "name": "Premium Single 60m extension coverage: open one held bill",
+      "name": "VR Games 15m: open one held bill",
       "action": "click",
       "text": "Held (1)",
       "timeoutMs": 60000,
       "then": {
-        "text": "PS5 Station 1"
+        "text": "VR Pod 1"
       }
     },
     {
-      "name": "Premium Single 60m extension coverage: review PS5 Station 1 bill",
+      "name": "VR Games 15m: review VR Pod 1 bill",
       "action": "click",
-      "text": "PS5 Station 1",
+      "text": "VR Pod 1",
       "timeoutMs": 60000
     },
     {
-      "name": "Premium Single 60m extension coverage: continue verified bill",
+      "name": "VR Games 15m: continue verified bill",
       "action": "click",
-      "text": "CONTINUE TO PAYMENT · ₹270.00",
+      "text": "CONTINUE TO PAYMENT · ₹80.00",
       "timeoutMs": 60000
     },
     {
-      "name": "Premium Single 60m extension coverage: choose UPI",
+      "name": "VR Games 15m: choose UPI",
       "action": "click",
       "text": "UPI",
       "timeoutMs": 60000
     },
     {
-      "name": "Premium Single 60m extension coverage: submit UPI once",
+      "name": "VR Games 15m: submit UPI once",
       "action": "click",
-      "text": "CONFIRM UPI · ₹270.00",
+      "text": "CONFIRM UPI · ₹80.00",
       "timeoutMs": 60000,
       "then": {
         "text": "Payment confirmed"
       }
     },
     {
-      "name": "Premium Single 60m extension coverage: finish receipt",
+      "name": "VR Games 15m: finish receipt",
       "action": "click",
       "text": "DONE",
       "timeoutMs": 60000
     },
     {
-      "name": "Premium Single 60m extension coverage: acknowledge result",
+      "name": "VR Games 15m: acknowledge result",
       "action": "click",
       "text": "OK",
       "timeoutMs": 60000
@@ -1553,442 +1320,70 @@
       "descriptionContains": "Gaming. Manage",
       "timeoutMs": 60000,
       "then": {
-        "text": "PS5 Station 1"
+        "text": "Station floor"
       }
     },
     {
-      "name": "Premium Dual 2-player: show PS5 stations",
+      "name": "VR Games 30m: show VR stations",
       "action": "click",
-      "text": "PS5",
-      "timeoutMs": 20000
+      "text": "VR",
+      "timeoutMs": 60000,
+      "then": {
+        "text": "VR Pod 1"
+      }
     },
     {
-      "name": "Premium Dual 2-player: open session choices",
+      "name": "VR Games 30m: open session choices",
       "action": "click",
       "text": "Start session",
       "index": 0,
       "timeoutMs": 60000,
       "then": {
-        "text": "Start · PS5 Station 1"
+        "text": "Start · VR Pod 1"
       }
     },
     {
-      "name": "Premium Dual 2-player: choose Premium",
+      "name": "VR Games 30m: choose 30 minute option",
       "action": "click",
-      "text": "Premium",
+      "text": "30 min · ₹120.00 total",
       "timeoutMs": 60000
     },
     {
-      "name": "Premium Dual 2-player: choose Two players",
+      "name": "VR Games 30m: confirm ₹120.00",
       "action": "click",
-      "text": "Two players",
-      "timeoutMs": 60000
-    },
-    {
-      "name": "Premium Dual 2-player: choose 60 min · ₹190.00 total",
-      "action": "click",
-      "text": "60 min · ₹190.00 total",
-      "timeoutMs": 60000
-    },
-    {
-      "name": "Premium Dual 2-player: confirm ₹190.00",
-      "action": "click",
-      "text": "Start · ₹190.00",
-      "packageCode": "premium-dual-session-60m",
+      "text": "Start · ₹120.00",
+      "packageCode": "vr-games-session-30m",
       "timeoutMs": 60000,
       "then": {
-        "descriptionContains": "PS5 Station 1. Active"
+        "descriptionContains": "VR Pod 1. Active"
       }
     },
     {
-      "name": "Premium Dual 2-player: open paid extension",
-      "action": "click",
-      "text": "Extend",
-      "timeoutMs": 60000,
-      "then": {
-        "text": "Add paid time"
-      }
-    },
-    {
-      "name": "Premium Dual 2-player: choose extension Premium Dual Mode · 1 hour extension · 60 min · ₹150.00 total",
-      "action": "click",
-      "text": "Premium Dual Mode · 1 hour extension · 60 min · ₹150.00 total",
-      "timeoutMs": 60000
-    },
-    {
-      "name": "Premium Dual 2-player: confirm extension ₹150.00",
-      "action": "click",
-      "text": "Add · ₹150.00",
-      "packageCode": "premium-dual-extension-60m",
-      "timeoutMs": 60000,
-      "then": {
-        "descriptionContains": "₹340.00 fixed total"
-      }
-    },
-    {
-      "name": "Premium Dual 2-player: request stop",
-      "action": "click",
-      "text": "Stop & calculate",
-      "timeoutMs": 60000,
-      "then": {
-        "text": "Stop PS5 Station 1?"
-      }
-    },
-    {
-      "name": "Premium Dual 2-player: confirm stop",
-      "action": "click",
-      "text": "Stop & calculate",
-      "timeoutMs": 60000,
-      "then": {
-        "descriptionContains": "PS5 Station 1. Payment due."
-      }
-    },
-    {
-      "name": "Premium Dual 2-player: request POS handoff",
-      "action": "click",
-      "text": "Send to POS",
-      "index": 1,
-      "timeoutMs": 60000,
-      "then": {
-        "text": "Send to POS?"
-      }
-    },
-    {
-      "name": "Premium Dual 2-player: confirm POS handoff",
-      "action": "click",
-      "text": "Send to POS",
-      "timeoutMs": 60000
-    },
-    {
-      "name": "Open POS",
-      "action": "click",
-      "descriptionContains": "POS. Take",
-      "timeoutMs": 60000,
-      "then": {
-        "text": "Held (1)"
-      }
-    },
-    {
-      "name": "Premium Dual 2-player: open one held bill",
-      "action": "click",
-      "text": "Held (1)",
-      "timeoutMs": 60000,
-      "then": {
-        "text": "PS5 Station 1"
-      }
-    },
-    {
-      "name": "Premium Dual 2-player: review PS5 Station 1 bill",
-      "action": "click",
-      "text": "PS5 Station 1",
-      "timeoutMs": 60000
-    },
-    {
-      "name": "Premium Dual 2-player: continue verified bill",
-      "action": "click",
-      "text": "CONTINUE TO PAYMENT · ₹340.00",
-      "timeoutMs": 60000
-    },
-    {
-      "name": "Premium Dual 2-player: choose UPI",
-      "action": "click",
-      "text": "UPI",
-      "timeoutMs": 60000
-    },
-    {
-      "name": "Premium Dual 2-player: submit UPI once",
-      "action": "click",
-      "text": "CONFIRM UPI · ₹340.00",
-      "timeoutMs": 60000,
-      "then": {
-        "text": "Payment confirmed"
-      }
-    },
-    {
-      "name": "Premium Dual 2-player: finish receipt",
-      "action": "click",
-      "text": "DONE",
-      "timeoutMs": 60000
-    },
-    {
-      "name": "Premium Dual 2-player: acknowledge result",
-      "action": "click",
-      "text": "OK",
-      "timeoutMs": 60000
-    },
-    {
-      "name": "Open Gaming",
-      "action": "click",
-      "descriptionContains": "Gaming. Manage",
-      "timeoutMs": 60000,
-      "then": {
-        "text": "PS5 Station 1"
-      }
-    },
-    {
-      "name": "Premium Dual 3-player: show PS5 stations",
-      "action": "click",
-      "text": "PS5",
-      "timeoutMs": 20000
-    },
-    {
-      "name": "Premium Dual 3-player: open session choices",
-      "action": "click",
-      "text": "Start session",
-      "index": 0,
-      "timeoutMs": 60000,
-      "then": {
-        "text": "Start · PS5 Station 1"
-      }
-    },
-    {
-      "name": "Premium Dual 3-player: choose Premium",
-      "action": "click",
-      "text": "Premium",
-      "timeoutMs": 60000
-    },
-    {
-      "name": "Premium Dual 3-player: choose 3 players",
-      "action": "click",
-      "text": "3 players",
-      "timeoutMs": 60000
-    },
-    {
-      "name": "Premium Dual 3-player: choose 60 min · ₹220.00 total",
-      "action": "click",
-      "text": "60 min · ₹220.00 total",
-      "timeoutMs": 60000
-    },
-    {
-      "name": "Premium Dual 3-player: confirm ₹220.00",
-      "action": "click",
-      "text": "Start · ₹220.00",
-      "packageCode": "premium-dual-session-60m",
-      "timeoutMs": 60000,
-      "then": {
-        "descriptionContains": "PS5 Station 1. Active"
-      }
-    },
-    {
-      "name": "Premium Dual 3-player: open paid extension",
-      "action": "click",
-      "text": "Extend",
-      "timeoutMs": 60000,
-      "then": {
-        "text": "Add paid time"
-      }
-    },
-    {
-      "name": "Premium Dual 3-player: choose extension Premium Dual Mode · 1 hour extension · 60 min · ₹180.00 total",
-      "action": "click",
-      "text": "Premium Dual Mode · 1 hour extension · 60 min · ₹180.00 total",
-      "timeoutMs": 60000
-    },
-    {
-      "name": "Premium Dual 3-player: confirm extension ₹180.00",
-      "action": "click",
-      "text": "Add · ₹180.00",
-      "packageCode": "premium-dual-extension-60m",
-      "timeoutMs": 60000,
-      "then": {
-        "descriptionContains": "₹400.00 fixed total"
-      }
-    },
-    {
-      "name": "Premium Dual 3-player: request stop",
-      "action": "click",
-      "text": "Stop & calculate",
-      "timeoutMs": 60000,
-      "then": {
-        "text": "Stop PS5 Station 1?"
-      }
-    },
-    {
-      "name": "Premium Dual 3-player: confirm stop",
-      "action": "click",
-      "text": "Stop & calculate",
-      "timeoutMs": 60000,
-      "then": {
-        "descriptionContains": "PS5 Station 1. Payment due."
-      }
-    },
-    {
-      "name": "Premium Dual 3-player: request POS handoff",
-      "action": "click",
-      "text": "Send to POS",
-      "index": 1,
-      "timeoutMs": 60000,
-      "then": {
-        "text": "Send to POS?"
-      }
-    },
-    {
-      "name": "Premium Dual 3-player: confirm POS handoff",
-      "action": "click",
-      "text": "Send to POS",
-      "timeoutMs": 60000
-    },
-    {
-      "name": "Open POS",
-      "action": "click",
-      "descriptionContains": "POS. Take",
-      "timeoutMs": 60000,
-      "then": {
-        "text": "Held (1)"
-      }
-    },
-    {
-      "name": "Premium Dual 3-player: open one held bill",
-      "action": "click",
-      "text": "Held (1)",
-      "timeoutMs": 60000,
-      "then": {
-        "text": "PS5 Station 1"
-      }
-    },
-    {
-      "name": "Premium Dual 3-player: review PS5 Station 1 bill",
-      "action": "click",
-      "text": "PS5 Station 1",
-      "timeoutMs": 60000
-    },
-    {
-      "name": "Premium Dual 3-player: continue verified bill",
-      "action": "click",
-      "text": "CONTINUE TO PAYMENT · ₹400.00",
-      "timeoutMs": 60000
-    },
-    {
-      "name": "Premium Dual 3-player: choose UPI",
-      "action": "click",
-      "text": "UPI",
-      "timeoutMs": 60000
-    },
-    {
-      "name": "Premium Dual 3-player: submit UPI once",
-      "action": "click",
-      "text": "CONFIRM UPI · ₹400.00",
-      "timeoutMs": 60000,
-      "then": {
-        "text": "Payment confirmed"
-      }
-    },
-    {
-      "name": "Premium Dual 3-player: finish receipt",
-      "action": "click",
-      "text": "DONE",
-      "timeoutMs": 60000
-    },
-    {
-      "name": "Premium Dual 3-player: acknowledge result",
-      "action": "click",
-      "text": "OK",
-      "timeoutMs": 60000
-    },
-    {
-      "name": "Open Gaming",
-      "action": "click",
-      "descriptionContains": "Gaming. Manage",
-      "timeoutMs": 60000,
-      "then": {
-        "text": "PS5 Station 1"
-      }
-    },
-    {
-      "name": "Premium Dual 4-player: show PS5 stations",
-      "action": "click",
-      "text": "PS5",
-      "timeoutMs": 20000
-    },
-    {
-      "name": "Premium Dual 4-player: open session choices",
-      "action": "click",
-      "text": "Start session",
-      "index": 0,
-      "timeoutMs": 60000,
-      "then": {
-        "text": "Start · PS5 Station 1"
-      }
-    },
-    {
-      "name": "Premium Dual 4-player: choose Premium",
-      "action": "click",
-      "text": "Premium",
-      "timeoutMs": 60000
-    },
-    {
-      "name": "Premium Dual 4-player: choose 4 players",
-      "action": "click",
-      "text": "4 players",
-      "timeoutMs": 60000
-    },
-    {
-      "name": "Premium Dual 4-player: choose 60 min · ₹250.00 total",
-      "action": "click",
-      "text": "60 min · ₹250.00 total",
-      "timeoutMs": 60000
-    },
-    {
-      "name": "Premium Dual 4-player: confirm ₹250.00",
-      "action": "click",
-      "text": "Start · ₹250.00",
-      "packageCode": "premium-dual-session-60m",
-      "timeoutMs": 60000,
-      "then": {
-        "descriptionContains": "PS5 Station 1. Active"
-      }
-    },
-    {
-      "name": "Premium Dual 4-player: exact active total ₹250.00",
+      "name": "VR Games 30m: exact active total",
       "action": "wait",
-      "descriptionContains": "₹250.00 fixed total",
+      "descriptionContains": "₹120.00 fixed total",
       "timeoutMs": 60000
     },
     {
-      "name": "Premium Dual 4-player: open paid extension",
-      "action": "click",
-      "text": "Extend",
-      "timeoutMs": 60000,
-      "then": {
-        "text": "Add paid time"
-      }
-    },
-    {
-      "name": "Premium Dual 4-player: choose 30 minute extension",
-      "action": "click",
-      "text": "Premium Dual Mode · 30 min extension · 30 min · ₹150.00 total",
-      "timeoutMs": 60000
-    },
-    {
-      "name": "Premium Dual 4-player: confirm extension ₹150.00",
-      "action": "click",
-      "text": "Add · ₹150.00",
-      "packageCode": "premium-dual-extension-30m",
-      "timeoutMs": 60000,
-      "then": {
-        "descriptionContains": "₹400.00 fixed total"
-      }
-    },
-    {
-      "name": "Premium Dual 4-player: request stop",
+      "name": "VR Games 30m: request stop",
       "action": "click",
       "text": "Stop & calculate",
       "timeoutMs": 60000,
       "then": {
-        "text": "Stop PS5 Station 1?"
+        "text": "Stop VR Pod 1?"
       }
     },
     {
-      "name": "Premium Dual 4-player: confirm stop",
+      "name": "VR Games 30m: confirm stop",
       "action": "click",
       "text": "Stop & calculate",
       "timeoutMs": 60000,
       "then": {
-        "descriptionContains": "PS5 Station 1. Payment due."
+        "descriptionContains": "VR Pod 1. Payment due."
       }
     },
     {
-      "name": "Premium Dual 4-player: request POS handoff",
+      "name": "VR Games 30m: request POS handoff",
       "action": "click",
       "text": "Send to POS",
       "index": 1,
@@ -1998,7 +1393,7 @@
       }
     },
     {
-      "name": "Premium Dual 4-player: confirm POS handoff",
+      "name": "VR Games 30m: confirm POS handoff",
       "action": "click",
       "text": "Send to POS",
       "timeoutMs": 60000
@@ -2013,49 +1408,49 @@
       }
     },
     {
-      "name": "Premium Dual 4-player: open one held bill",
+      "name": "VR Games 30m: open one held bill",
       "action": "click",
       "text": "Held (1)",
       "timeoutMs": 60000,
       "then": {
-        "text": "PS5 Station 1"
+        "text": "VR Pod 1"
       }
     },
     {
-      "name": "Premium Dual 4-player: review PS5 Station 1 bill",
+      "name": "VR Games 30m: review VR Pod 1 bill",
       "action": "click",
-      "text": "PS5 Station 1",
+      "text": "VR Pod 1",
       "timeoutMs": 60000
     },
     {
-      "name": "Premium Dual 4-player: continue verified bill",
+      "name": "VR Games 30m: continue verified bill",
       "action": "click",
-      "text": "CONTINUE TO PAYMENT · ₹400.00",
+      "text": "CONTINUE TO PAYMENT · ₹120.00",
       "timeoutMs": 60000
     },
     {
-      "name": "Premium Dual 4-player: choose UPI",
+      "name": "VR Games 30m: choose UPI",
       "action": "click",
       "text": "UPI",
       "timeoutMs": 60000
     },
     {
-      "name": "Premium Dual 4-player: submit UPI once",
+      "name": "VR Games 30m: submit UPI once",
       "action": "click",
-      "text": "CONFIRM UPI · ₹400.00",
+      "text": "CONFIRM UPI · ₹120.00",
       "timeoutMs": 60000,
       "then": {
         "text": "Payment confirmed"
       }
     },
     {
-      "name": "Premium Dual 4-player: finish receipt",
+      "name": "VR Games 30m: finish receipt",
       "action": "click",
       "text": "DONE",
       "timeoutMs": 60000
     },
     {
-      "name": "Premium Dual 4-player: acknowledge result",
+      "name": "VR Games 30m: acknowledge result",
       "action": "click",
       "text": "OK",
       "timeoutMs": 60000
@@ -2066,8 +1461,469 @@
       "descriptionContains": "Gaming. Manage",
       "timeoutMs": 60000,
       "then": {
-        "text": "PS5 Station 1"
+        "text": "Station floor"
       }
+    },
+    {
+      "name": "VR Games 60m transfer: show VR stations",
+      "action": "click",
+      "text": "VR",
+      "timeoutMs": 60000,
+      "then": {
+        "text": "VR Pod 1"
+      }
+    },
+    {
+      "name": "VR Games 60m transfer: open session choices",
+      "action": "click",
+      "text": "Start session",
+      "index": 0,
+      "timeoutMs": 60000,
+      "then": {
+        "text": "Start · VR Pod 1"
+      }
+    },
+    {
+      "name": "VR Games 60m transfer: choose 60 minute option",
+      "action": "click",
+      "text": "60 min · ₹200.00 total",
+      "timeoutMs": 60000
+    },
+    {
+      "name": "VR Games 60m transfer: confirm ₹200.00",
+      "action": "click",
+      "text": "Start · ₹200.00",
+      "packageCode": "vr-games-session-60m",
+      "timeoutMs": 60000,
+      "then": {
+        "descriptionContains": "VR Pod 1. Active"
+      }
+    },
+    {
+      "name": "VR Games 60m transfer: exact active total",
+      "action": "wait",
+      "descriptionContains": "₹200.00 fixed total",
+      "timeoutMs": 60000
+    },
+    {
+      "name": "VR Games 60m transfer: open transfer",
+      "action": "click",
+      "text": "Transfer",
+      "timeoutMs": 60000,
+      "then": {
+        "text": "Transfer · VR Pod 1"
+      }
+    },
+    {
+      "name": "VR Games 60m transfer: select VR Pod 2",
+      "action": "click",
+      "text": "VR Pod 2 · ₹200.00/hour",
+      "timeoutMs": 60000
+    },
+    {
+      "name": "VR Games 60m transfer: confirm transfer",
+      "action": "click",
+      "text": "Transfer session",
+      "timeoutMs": 60000
+    },
+    {
+      "name": "VR Games 60m transfer: select destination station",
+      "action": "click",
+      "text": "VR Pod 2",
+      "timeoutMs": 60000,
+      "then": {
+        "text": "Stop & calculate"
+      }
+    },
+    {
+      "name": "VR Games 60m transfer: observe timer frames",
+      "action": "idleFrames",
+      "durationMs": 10000
+    },
+    {
+      "name": "VR Games 60m transfer: request stop",
+      "action": "click",
+      "text": "Stop & calculate",
+      "timeoutMs": 60000,
+      "then": {
+        "text": "Stop VR Pod 2?"
+      }
+    },
+    {
+      "name": "VR Games 60m transfer: confirm stop",
+      "action": "click",
+      "text": "Stop & calculate",
+      "timeoutMs": 60000,
+      "then": {
+        "descriptionContains": "VR Pod 2. Payment due."
+      }
+    },
+    {
+      "name": "VR Games 60m transfer: request POS handoff",
+      "action": "click",
+      "text": "Send to POS",
+      "index": 1,
+      "timeoutMs": 60000,
+      "then": {
+        "text": "Send to POS?"
+      }
+    },
+    {
+      "name": "VR Games 60m transfer: confirm POS handoff",
+      "action": "click",
+      "text": "Send to POS",
+      "timeoutMs": 60000
+    },
+    {
+      "name": "Open POS",
+      "action": "click",
+      "descriptionContains": "POS. Take",
+      "timeoutMs": 60000,
+      "then": {
+        "text": "Held (1)"
+      }
+    },
+    {
+      "name": "VR Games 60m transfer: open one held bill",
+      "action": "click",
+      "text": "Held (1)",
+      "timeoutMs": 60000,
+      "then": {
+        "text": "VR Pod 2"
+      }
+    },
+    {
+      "name": "VR Games 60m transfer: review VR Pod 2 bill",
+      "action": "click",
+      "text": "VR Pod 2",
+      "timeoutMs": 60000
+    },
+    {
+      "name": "VR Games 60m transfer: continue verified bill",
+      "action": "click",
+      "text": "CONTINUE TO PAYMENT · ₹200.00",
+      "timeoutMs": 60000
+    },
+    {
+      "name": "VR Games 60m transfer: choose UPI",
+      "action": "click",
+      "text": "UPI",
+      "timeoutMs": 60000
+    },
+    {
+      "name": "VR Games 60m transfer: submit UPI once",
+      "action": "click",
+      "text": "CONFIRM UPI · ₹200.00",
+      "timeoutMs": 60000,
+      "then": {
+        "text": "Payment confirmed"
+      }
+    },
+    {
+      "name": "VR Games 60m transfer: finish receipt",
+      "action": "click",
+      "text": "DONE",
+      "timeoutMs": 60000
+    },
+    {
+      "name": "VR Games 60m transfer: acknowledge result",
+      "action": "click",
+      "text": "OK",
+      "timeoutMs": 60000
+    },
+    {
+      "name": "Open Gaming",
+      "action": "click",
+      "descriptionContains": "Gaming. Manage",
+      "timeoutMs": 60000,
+      "then": {
+        "text": "Station floor"
+      }
+    },
+    {
+      "name": "VR Racing 15m: show Racing stations",
+      "action": "click",
+      "text": "Racing",
+      "timeoutMs": 60000,
+      "then": {
+        "text": "Racing Simulator 1"
+      }
+    },
+    {
+      "name": "VR Racing 15m: open session choices",
+      "action": "click",
+      "text": "Start session",
+      "index": 0,
+      "timeoutMs": 60000,
+      "then": {
+        "text": "Start · Racing Simulator 1"
+      }
+    },
+    {
+      "name": "VR Racing 15m: choose VR Racing Sim mode",
+      "action": "click",
+      "text": "VR Racing Sim",
+      "timeoutMs": 60000
+    },
+    {
+      "name": "VR Racing 15m: choose 15 minute option",
+      "action": "click",
+      "text": "15 min · ₹100.00 total",
+      "timeoutMs": 60000
+    },
+    {
+      "name": "VR Racing 15m: confirm ₹100.00",
+      "action": "click",
+      "text": "Start · ₹100.00",
+      "packageCode": "vr-racing-session-15m",
+      "timeoutMs": 60000,
+      "then": {
+        "descriptionContains": "Racing Simulator 1. Active"
+      }
+    },
+    {
+      "name": "VR Racing 15m: exact active total",
+      "action": "wait",
+      "descriptionContains": "₹100.00 fixed total",
+      "timeoutMs": 60000
+    },
+    {
+      "name": "VR Racing 15m: request stop",
+      "action": "click",
+      "text": "Stop & calculate",
+      "timeoutMs": 60000,
+      "then": {
+        "text": "Stop Racing Simulator 1?"
+      }
+    },
+    {
+      "name": "VR Racing 15m: confirm stop",
+      "action": "click",
+      "text": "Stop & calculate",
+      "timeoutMs": 60000,
+      "then": {
+        "descriptionContains": "Racing Simulator 1. Payment due."
+      }
+    },
+    {
+      "name": "VR Racing 15m: request POS handoff",
+      "action": "click",
+      "text": "Send to POS",
+      "index": 1,
+      "timeoutMs": 60000,
+      "then": {
+        "text": "Send to POS?"
+      }
+    },
+    {
+      "name": "VR Racing 15m: confirm POS handoff",
+      "action": "click",
+      "text": "Send to POS",
+      "timeoutMs": 60000
+    },
+    {
+      "name": "Open POS",
+      "action": "click",
+      "descriptionContains": "POS. Take",
+      "timeoutMs": 60000,
+      "then": {
+        "text": "Held (1)"
+      }
+    },
+    {
+      "name": "VR Racing 15m: open one held bill",
+      "action": "click",
+      "text": "Held (1)",
+      "timeoutMs": 60000,
+      "then": {
+        "text": "Racing Simulator 1"
+      }
+    },
+    {
+      "name": "VR Racing 15m: review Racing Simulator 1 bill",
+      "action": "click",
+      "text": "Racing Simulator 1",
+      "timeoutMs": 60000
+    },
+    {
+      "name": "VR Racing 15m: continue verified bill",
+      "action": "click",
+      "text": "CONTINUE TO PAYMENT · ₹100.00",
+      "timeoutMs": 60000
+    },
+    {
+      "name": "VR Racing 15m: choose UPI",
+      "action": "click",
+      "text": "UPI",
+      "timeoutMs": 60000
+    },
+    {
+      "name": "VR Racing 15m: submit UPI once",
+      "action": "click",
+      "text": "CONFIRM UPI · ₹100.00",
+      "timeoutMs": 60000,
+      "then": {
+        "text": "Payment confirmed"
+      }
+    },
+    {
+      "name": "VR Racing 15m: finish receipt",
+      "action": "click",
+      "text": "DONE",
+      "timeoutMs": 60000
+    },
+    {
+      "name": "VR Racing 15m: acknowledge result",
+      "action": "click",
+      "text": "OK",
+      "timeoutMs": 60000
+    },
+    {
+      "name": "Open Gaming",
+      "action": "click",
+      "descriptionContains": "Gaming. Manage",
+      "timeoutMs": 60000,
+      "then": {
+        "text": "Station floor"
+      }
+    },
+    {
+      "name": "VR Racing 30m: show Racing stations",
+      "action": "click",
+      "text": "Racing",
+      "timeoutMs": 60000,
+      "then": {
+        "text": "Racing Simulator 1"
+      }
+    },
+    {
+      "name": "VR Racing 30m: open session choices",
+      "action": "click",
+      "text": "Start session",
+      "index": 0,
+      "timeoutMs": 60000,
+      "then": {
+        "text": "Start · Racing Simulator 1"
+      }
+    },
+    {
+      "name": "VR Racing 30m: choose VR Racing Sim mode",
+      "action": "click",
+      "text": "VR Racing Sim",
+      "timeoutMs": 60000
+    },
+    {
+      "name": "VR Racing 30m: choose 30 minute option",
+      "action": "click",
+      "text": "30 min · ₹140.00 total",
+      "timeoutMs": 60000
+    },
+    {
+      "name": "VR Racing 30m: confirm ₹140.00",
+      "action": "click",
+      "text": "Start · ₹140.00",
+      "packageCode": "vr-racing-session-30m",
+      "timeoutMs": 60000,
+      "then": {
+        "descriptionContains": "Racing Simulator 1. Active"
+      }
+    },
+    {
+      "name": "VR Racing 30m: exact active total",
+      "action": "wait",
+      "descriptionContains": "₹140.00 fixed total",
+      "timeoutMs": 60000
+    },
+    {
+      "name": "VR Racing 30m: request stop",
+      "action": "click",
+      "text": "Stop & calculate",
+      "timeoutMs": 60000,
+      "then": {
+        "text": "Stop Racing Simulator 1?"
+      }
+    },
+    {
+      "name": "VR Racing 30m: confirm stop",
+      "action": "click",
+      "text": "Stop & calculate",
+      "timeoutMs": 60000,
+      "then": {
+        "descriptionContains": "Racing Simulator 1. Payment due."
+      }
+    },
+    {
+      "name": "VR Racing 30m: request POS handoff",
+      "action": "click",
+      "text": "Send to POS",
+      "index": 1,
+      "timeoutMs": 60000,
+      "then": {
+        "text": "Send to POS?"
+      }
+    },
+    {
+      "name": "VR Racing 30m: confirm POS handoff",
+      "action": "click",
+      "text": "Send to POS",
+      "timeoutMs": 60000
+    },
+    {
+      "name": "Open POS",
+      "action": "click",
+      "descriptionContains": "POS. Take",
+      "timeoutMs": 60000,
+      "then": {
+        "text": "Held (1)"
+      }
+    },
+    {
+      "name": "VR Racing 30m: open one held bill",
+      "action": "click",
+      "text": "Held (1)",
+      "timeoutMs": 60000,
+      "then": {
+        "text": "Racing Simulator 1"
+      }
+    },
+    {
+      "name": "VR Racing 30m: review Racing Simulator 1 bill",
+      "action": "click",
+      "text": "Racing Simulator 1",
+      "timeoutMs": 60000
+    },
+    {
+      "name": "VR Racing 30m: continue verified bill",
+      "action": "click",
+      "text": "CONTINUE TO PAYMENT · ₹140.00",
+      "timeoutMs": 60000
+    },
+    {
+      "name": "VR Racing 30m: choose UPI",
+      "action": "click",
+      "text": "UPI",
+      "timeoutMs": 60000
+    },
+    {
+      "name": "VR Racing 30m: submit UPI once",
+      "action": "click",
+      "text": "CONFIRM UPI · ₹140.00",
+      "timeoutMs": 60000,
+      "then": {
+        "text": "Payment confirmed"
+      }
+    },
+    {
+      "name": "VR Racing 30m: finish receipt",
+      "action": "click",
+      "text": "DONE",
+      "timeoutMs": 60000
+    },
+    {
+      "name": "VR Racing 30m: acknowledge result",
+      "action": "click",
+      "text": "OK",
+      "timeoutMs": 60000
     },
     {
       "name": "Simdrive: show Racing stations",
@@ -2493,97 +2349,72 @@
       }
     },
     {
-      "name": "VR open-ended transfer: show VR",
+      "name": "VR Racing 60m: show Racing stations",
       "action": "click",
-      "text": "VR",
+      "text": "Racing",
       "timeoutMs": 60000,
       "then": {
-        "text": "VR Pod 1"
+        "text": "Racing Simulator 1"
       }
     },
     {
-      "name": "VR open-ended transfer: open session choices",
+      "name": "VR Racing 60m: open session choices",
       "action": "click",
       "text": "Start session",
       "index": 0,
       "timeoutMs": 60000,
       "then": {
-        "text": "Start · VR Pod 1"
+        "text": "Start · Racing Simulator 1"
       }
     },
     {
-      "name": "VR open-ended transfer: select open-ended",
+      "name": "VR Racing 60m: choose VR Racing Sim mode",
       "action": "click",
-      "text": "Open-ended",
+      "text": "VR Racing Sim",
       "timeoutMs": 60000
     },
     {
-      "name": "VR open-ended transfer: start open-ended",
+      "name": "VR Racing 60m: choose 60 minute option",
       "action": "click",
-      "text": "Start session",
-      "timeoutMs": 60000,
-      "then": {
-        "descriptionContains": "VR Pod 1. Active"
-      }
-    },
-    {
-      "name": "VR open-ended transfer: open transfer",
-      "action": "click",
-      "text": "Transfer",
-      "timeoutMs": 60000,
-      "then": {
-        "text": "Transfer · VR Pod 1"
-      }
-    },
-    {
-      "name": "VR open-ended transfer: select VR Pod 2",
-      "action": "click",
-      "text": "VR Pod 2 · ₹200.00/hour",
+      "text": "60 min · ₹250.00 total",
       "timeoutMs": 60000
     },
     {
-      "name": "VR open-ended transfer: confirm transfer",
+      "name": "VR Racing 60m: confirm ₹250.00",
       "action": "click",
-      "text": "Transfer session",
+      "text": "Start · ₹250.00",
+      "packageCode": "vr-racing-session-60m",
       "timeoutMs": 60000,
       "then": {
-        "descriptionContains": "VR Pod 2. Active"
+        "descriptionContains": "Racing Simulator 1. Active"
       }
     },
     {
-      "name": "VR open-ended transfer: select destination station",
-      "action": "click",
-      "text": "VR Pod 2",
-      "timeoutMs": 60000,
-      "then": {
-        "text": "Stop & calculate"
-      }
+      "name": "VR Racing 60m: exact active total",
+      "action": "wait",
+      "descriptionContains": "₹250.00 fixed total",
+      "timeoutMs": 60000
     },
     {
-      "name": "VR open-ended transfer: observe timer frames",
-      "action": "idleFrames",
-      "durationMs": 5000
-    },
-    {
-      "name": "VR open-ended transfer: request stop",
+      "name": "VR Racing 60m: request stop",
       "action": "click",
       "text": "Stop & calculate",
       "timeoutMs": 60000,
       "then": {
-        "text": "Stop VR Pod 2?"
+        "text": "Stop Racing Simulator 1?"
       }
     },
     {
-      "name": "VR open-ended transfer: confirm stop",
+      "name": "VR Racing 60m: confirm stop",
       "action": "click",
       "text": "Stop & calculate",
       "timeoutMs": 60000,
       "then": {
-        "descriptionContains": "VR Pod 2. Payment due."
+        "descriptionContains": "Racing Simulator 1. Payment due."
       }
     },
     {
-      "name": "VR open-ended transfer: request POS handoff",
+      "name": "VR Racing 60m: request POS handoff",
       "action": "click",
       "text": "Send to POS",
       "index": 1,
@@ -2593,7 +2424,7 @@
       }
     },
     {
-      "name": "VR open-ended transfer: confirm POS handoff",
+      "name": "VR Racing 60m: confirm POS handoff",
       "action": "click",
       "text": "Send to POS",
       "timeoutMs": 60000
@@ -2608,49 +2439,49 @@
       }
     },
     {
-      "name": "VR open-ended transfer: open one held bill",
+      "name": "VR Racing 60m: open one held bill",
       "action": "click",
       "text": "Held (1)",
       "timeoutMs": 60000,
       "then": {
-        "text": "VR Pod 2"
+        "text": "Racing Simulator 1"
       }
     },
     {
-      "name": "VR open-ended transfer: review VR Pod 2 bill",
+      "name": "VR Racing 60m: review Racing Simulator 1 bill",
       "action": "click",
-      "text": "VR Pod 2",
+      "text": "Racing Simulator 1",
       "timeoutMs": 60000
     },
     {
-      "name": "VR open-ended transfer: continue verified bill",
+      "name": "VR Racing 60m: continue verified bill",
       "action": "click",
-      "textRegex": "^CONTINUE TO PAYMENT · ₹[0-9,]+\\.[0-9]{2}$",
+      "text": "CONTINUE TO PAYMENT · ₹250.00",
       "timeoutMs": 60000
     },
     {
-      "name": "VR open-ended transfer: choose UPI",
+      "name": "VR Racing 60m: choose UPI",
       "action": "click",
       "text": "UPI",
       "timeoutMs": 60000
     },
     {
-      "name": "VR open-ended transfer: submit UPI once",
+      "name": "VR Racing 60m: submit UPI once",
       "action": "click",
-      "textRegex": "^CONFIRM UPI · ₹[0-9,]+\\.[0-9]{2}$",
+      "text": "CONFIRM UPI · ₹250.00",
       "timeoutMs": 60000,
       "then": {
         "text": "Payment confirmed"
       }
     },
     {
-      "name": "VR open-ended transfer: finish receipt",
+      "name": "VR Racing 60m: finish receipt",
       "action": "click",
       "text": "DONE",
       "timeoutMs": 60000
     },
     {
-      "name": "VR open-ended transfer: acknowledge result",
+      "name": "VR Racing 60m: acknowledge result",
       "action": "click",
       "text": "OK",
       "timeoutMs": 60000

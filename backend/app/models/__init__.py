@@ -28,6 +28,9 @@ from app.models.finance import (
     CapitalEntry,
     Expense,
     ExpenseCategory,
+    ExpenseReceipt,
+    ExpenseReceiptReview,
+    FinanceSourceCorrection,
     JournalEntry,
     JournalLine,
     ManualCollection,
@@ -44,6 +47,7 @@ from app.models.gaming import (
     Station,
     Tournament,
 )
+from app.models.google_sheets_delivery import GoogleSheetsDelivery
 from app.models.idempotency_key import IdempotencyKey
 from app.models.india import (
     GstRateSlab,
@@ -149,6 +153,9 @@ __all__ = [
     "EventTicket",
     "Expense",
     "ExpenseCategory",
+    "ExpenseReceipt",
+    "ExpenseReceiptReview",
+    "FinanceSourceCorrection",
     "Floor",
     "GamingBooking",
     "GamingPackage",
@@ -156,6 +163,7 @@ __all__ = [
     "GamingSession",
     "GamingSessionAddon",
     "GamingSessionExtension",
+    "GoogleSheetsDelivery",
     "GRN",
     "GRNLine",
     "GstRateSlab",

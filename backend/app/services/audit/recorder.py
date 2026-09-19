@@ -209,8 +209,17 @@ TRACKED: set[type] = {
 }
 
 
-# Fields we redact from the audit record (sensitive)
-_REDACT = {"password_hash", "mfa_secret", "payment_key_secret", "token_hash"}
+# Fields we redact from the audit record (sensitive). Encrypted credentials are
+# still credentials: retaining old ciphertext in append-only audit history
+# would defeat rotation/disconnect erasure if the encryption key were later
+# compromised.
+_REDACT = {
+    "google_sheets_signing_secret_ciphertext",
+    "mfa_secret",
+    "password_hash",
+    "payment_key_secret",
+    "token_hash",
+}
 
 
 def _serialize(obj: Any) -> dict | None:

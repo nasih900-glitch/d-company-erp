@@ -41,74 +41,36 @@ change their identity, or lower the compatibility floor.
 
 ## Current rollout boundary
 
-`3.1.3` (version code `14`) is historical manual-partner baseline evidence. It
-must remain unhosted, unregistered and unadvertised; it is not the current
-rollout target or upgrade predecessor. Code `21` (`3.1.10`) is the signed
-direct-channel predecessor from which the Code 29 upgrade must be tested.
+Code30.1 `v3.1.28` / version code `36` is the immutable signed direct-channel
+predecessor for the current patch. Preserve its exact source, manifest, hashes,
+signer, and APK bytes. All earlier release identities and candidate ledgers also
+remain immutable history.
 
-Code `15` (`3.1.4`) is the first identity accepted by the server-release
-registry. It remains a held audit build and must never be activated as a
-shortcut. Codes `16` (`3.1.5`) and `17` (`3.1.6`) remain immutable upgrade-proof
-predecessors.
+Code30.2 is the `v3.1.29` / version code `37` source candidate at Room schema
+`51` and Alembic head `0078`. A local build, emulator run, version bump, or green
+source suite does not make it signed, deployed, staged, active, offered, or
+partner-installable. Its complete scope and gates are in
+[`CODE30_2_PATCH_CANDIDATE.md`](CODE30_2_PATCH_CANDIDATE.md); immutable Code30.1
+evidence remains in
+[`CODE30_1_PATCH_CANDIDATE.md`](CODE30_1_PATCH_CANDIDATE.md).
 
-Tags `v3.1.7` (version code `18`), `v3.1.8` (version code `19`), and `v3.1.9`
-(version code `20`) failed before signing and produced no authorised APK. The
-tags are immutable and must never be moved, rebuilt, or reused. Code `21`
-(`3.1.10`) is immutable signed predecessor history. Code `22` (`3.1.11`) was
-superseded before signing and its waiting signing job must not be approved.
-Code `23` (`3.1.12`) was also superseded without an authorised signed artifact.
-Code `24` (`3.1.13`) failed before signing; its tag must not be moved or reused.
-Code `25` (`3.1.14`) was rejected by its physical-tablet audit; its tag and any
-artifact remain immutable and must not be staged or activated. The `v3.1.15`
-attempt failed before build/signing and produced no authorised or distributed
-Code 26 artifact; its tag and evidence remain immutable. Code `26` (`3.1.16`)
-was subsequently signed under that narrow never-issued-identity exception, but
-its production installer stopped before image builds or cutover. Its source,
-tag, and signed artifacts are immutable, superseded history. Code `27`
-(`3.1.17`) was signed but its Syft scanner gate failed before production
-deployment or cutover; its source, tag, and artifacts are also immutable
-superseded history. Code `28` (`3.1.18`) was subsequently signed, but its exact
-production images failed the image-identity gate after owner maintenance
-authorization and an isolated signed-28 upgrade test, but before the installer
-entered maintenance/cutover and before production or partner installation,
-staging, or offer. Its source, tag, manifest,
-and artifacts are immutable superseded history and must not be relabelled as
-Code 29 evidence. Original signed Code 29 (`3.1.19`) failed when its production
-installer rejected the normally empty root-owned lock before builds or
-maintenance. Its tag, source, manifest, signatures, and artifacts are
-immutable. The `v3.1.20` release run was cancelled before build or signing
-after the POS notice defect was confirmed. The current server-delivery
-candidate is Code 29 at the **unsigned** `3.1.21` (version code `29`) source at
-migration `0071`. The final clean source must first pass the synthetic Android
-and Web business trial and the separate preserved-cache landscape check. Only
-an exact signed artifact and release manifest produced together by a future
-green `v3.1.21` GitHub Actions workflow may be used for post-signing offline
-continuity. A local Gradle build or local evidence bundle is not release
-authority, even when its package and signer are correct. Code `21`
-(`3.1.10`) remains the signed same-channel predecessor for in-place upgrade
-proof. Current Code 29 is not yet signed, deployed, staged, activated, offered,
-or partner-installable. Its complete gates are recorded in
-[`CODE29_RELEASE_CANDIDATE.md`](CODE29_RELEASE_CANDIDATE.md).
+The candidate includes manual expenses/collections, up to five private
+camera/file receipt attachments per expense, Android offline retry, exact
+drawer selection, and append-only current-period corrections after a source
+shift closes. Its optional Sheet mirror holds new events until the exact
+configuration generation passes a connection test and refuses rotation or
+disconnect until current pending, leased and quarantined business work drains.
+Receipt bytes, customer identity and private review notes are never mirrored.
 
-Full CI and independently audited recovery evidence at commit
-`0c072b8ce9bb69776525ea5fb6a9c799d64a66ff` remain valid for that source and
-the unchanged recovery mechanism; they were not executed against `3.1.21`.
-The focused stock trial completed all 87 checks at 22:18:55 UTC on that clean
-source using the debug `3.1.20` build and synthetic API on port `55905`; its
-recipe checks used the recorded portrait workaround, and cleanup was verified
-at 22:21 UTC. It remains prior-source evidence. Final `3.1.21` CI, final-source
-trials, signing, signed-byte continuity, production deployment, staging,
-activation, and offer remain pending.
+Only the exact APK and release manifest produced together by a green protected
+`v3.1.29` workflow may advance. Verify the package, version, build, source,
+SHA-256, size and independently preserved signer, then prove a same-signer
+in-place upgrade from exact signed build `36` to build `37` without uninstalling
+or clearing data. Production backend/Web migration, inactive staging, owner
+activation, installation, and physical-tablet acceptance remain separate gates.
 
-The final source must pass the synthetic operational trial before tagging; the
-exact signed package must then pass the separate offline continuity check before
-production deployment, inactive staging, activation, or offer. The current user
-direction authorizes those later actions in sequence after their preceding gates
-pass; no additional generic permission loop is required.
-
-Keep the minimum-compatible floor at code `8` during the initial rollout. A
-new build, a green workflow, a hosted APK, or a staged registry row is not
-authority to change that floor.
+Keep the minimum-compatible floor at code `8`. A new build, hosted APK, staged
+registry row, or active optional offer is not authority to change that floor.
 
 ## Release record
 
@@ -162,86 +124,65 @@ responses and network uncertainty remain blocked. The APK itself must return:
 - `Cache-Control: public, immutable, no-transform, max-age=31536000` (or longer)
 - no redirect from its same-origin versioned URL
 
-## Code 29 staging procedure
+## Code30.2 staging procedure
 
-1. Retain the anonymous offline fixture proof: signed code `21` `3.1.10`
-   upgraded to original signed code `29` `3.1.19`, with IPv4 and IPv6 blocked
-   throughout. This is historical chain evidence, not execution of `3.1.21`, a
-   direct code-`21` to `3.1.21` upgrade, or the authenticated synthetic trial.
-   No signed or installed `3.1.20` link exists. The independently audited
-   recovery run at `0c072b8` likewise proves the unchanged mechanism, not the
-   current package.
-2. From the final clean `3.1.21` source, run the canonical authenticated
-   synthetic Android and Web business trial using its `physicalAudit` APK.
-   Separately run the preserved-cache landscape acceptance with the final debug
-   APK. These test variants are not the production-signed release bytes. While
-   Redmi is unavailable, use the authenticated emulator and Web route and
-   preserve prior Lenovo physical evidence separately.
-3. Coordinate the application at `3.1.21` / code `29`, with database migrations
-   through `0071`. Run the complete protected release workflow and obtain its
-   newly signed direct APK and
-   `release-manifest.json` from the same workflow run.
-4. Download both files without renaming or modifying either one and run a
-   verification-only plan locally. On the isolated emulator `5574`, perform the
-   anonymous offline same-code replacement from original signed code `29`
-   `3.1.19` using those exact verified bytes, without uninstalling or clearing
-   data. This signed-byte continuity check is separate from the synthetic
-   business trial and does not establish direct code-`21` to `3.1.21` proof.
-   Continue only after it succeeds; the current user direction already
-   authorizes the remaining gated sequence.
+1. Complete the frozen-source suites and business trial recorded in
+   `CODE30_2_PATCH_CANDIDATE.md`, including receipts, manual finance, offline
+   replay, exact drawer effects, Sheet-event deduplication, and the inherited
+   shift/Gaming/POS regression flows.
+2. Coordinate the source at `3.1.29` / code `37`, Room `51`, and migration
+   `0078`. Build and sign only through the protected tagged release workflow.
+3. Download the direct APK and `release-manifest.json` from the same workflow
+   without renaming or modifying them. Run a verification-only plan:
 
    ```bash
    python3 ops/stage_android_release.py \
-     --manifest /secure/release-3.1.21/release-manifest.json \
-     --apk /secure/release-3.1.21/d-company-erp-v3.1.21-direct.apk \
+     --manifest /secure/release-3.1.29/release-manifest.json \
+     --apk /secure/release-3.1.29/d-company-erp-v3.1.29-direct.apk \
      --expected-signer-sha256 <trusted-release-certificate-sha256> \
      --release-notes \
-       "Code 29 installer-lock and focused UI corrections; see the Code 29 candidate ledger"
+       "Code30.2 finance evidence, manual entries, and optional ERP Mirror v1"
    ```
 
-   This checks the manifest, byte size, SHA-256, package
-   `cloud.dcompany.erp`, version code/name, and signing certificate using
-   `apkanalyzer` and `apksigner`. It does not contact or change production.
-
-5. After the final-source trials, signed-byte continuity, and runtime gates pass,
-   complete production preparation under the existing authority. The user
-   has already confirmed the real staff tablet was synced and paused; perform
-   fresh read-only outbox and paused-state checks before production work, without
-   clearing app data. Complete deployment and production verification, then
-   review the printed staging plan and stage the exact same inputs:
+   This verifies the manifest, byte size, SHA-256, package
+   `cloud.dcompany.erp`, build `37`, version `3.1.29`, and signing certificate.
+   It does not contact or change production.
+4. On an isolated emulator, install exact signed Code30.1 `v3.1.28` / build `36`,
+   preserve representative Room and pending-outbox state, then install the exact
+   verified build `37` as an update. Do not uninstall or clear data. Confirm
+   migration to Room `51`, one-time replay, manual finance, receipt
+   parent/attachment recovery, corrections, shifts, Gaming and POS.
+5. Deploy the matching backend/Web source with the guarded installer, a fresh
+   quiesced backup, restore proof, migration through `0078`, rollback readiness,
+   and authenticated production smoke checks. Confirm all tablets are paused and
+   their outboxes are empty immediately before maintenance.
+6. If the optional Sheet mirror is part of this cutover, deploy and authorize
+   the bound Apps Script, enter the one-time secret, deliver a connection test
+   for the current configuration generation, and reconcile an actual
+   `ERP Mirror v1` row. Do not rotate or disconnect while its current generation
+   has undelivered business events; retry quarantined entries and let it drain.
+   This Sheet acceptance is separate from Android signing and staging.
+7. Review the staging plan and stage the exact same inputs inactive:
 
    ```bash
    python3 ops/stage_android_release.py \
-     --manifest /secure/release-3.1.21/release-manifest.json \
-     --apk /secure/release-3.1.21/d-company-erp-v3.1.21-direct.apk \
+     --manifest /secure/release-3.1.29/release-manifest.json \
+     --apk /secure/release-3.1.29/d-company-erp-v3.1.29-direct.apk \
      --expected-signer-sha256 <trusted-release-certificate-sha256> \
      --release-notes \
-       "Code 29 installer-lock and focused UI corrections; see the Code 29 candidate ledger" \
+       "Code30.2 finance evidence, manual entries, and optional ERP Mirror v1" \
      --ssh-key ~/.ssh/dcompany_do \
      --apply
    ```
 
-   The tool uploads to a random temporary name, verifies it on the VPS, uses a
-   no-replace atomic rename, downloads and verifies every public byte, registers
-   only a staged row through the backend's internal CLI, and writes an
-   append-only attestation. A failure before registration can leave safe,
-   unadvertised immutable bytes; it must never cause a release offer.
-
-6. In the owner ERP release screen, compare version, release notes, SHA-256,
-   size, signer and source evidence, but leave the staged code-`29` row inactive.
-   Staging does not advertise an offer and must never trigger automatic
-   activation.
-7. After all preparation phases in `CODE29_RELEASE_CANDIDATE.md`, the bound
-   owner release-controller may activate the exact staged candidate under the
-   current authorized sequence. Every eligible direct-channel client can see
-   the offer. There is no
-   per-device allowlist; a pilot on the intended code-`21` tablet requires staff
-   coordination, not an enforced targeted offer. The backend performs a second no-redirect public byte
-   verification before the atomic status transition and records the owner
-   action in the Audit Log. Refresh the update check, download, approve Android's
-   installer, and reopen code `29`. The owner may ask other partners to install
-   only after the earlier trial and production gates pass; the public update
-   endpoint does not enforce that operational restriction.
+   The tool uploads immutable bytes, verifies the public copy, registers only a
+   staged row, and writes an append-only attestation. Staging must not advertise
+   an offer.
+8. In the owner ERP, compare version, release notes, SHA-256, size, signer and
+   source evidence. The bound owner release-controller may activate the exact
+   staged candidate only after every earlier gate passes. The offer is visible
+   to all eligible direct-channel clients; there is no per-device allowlist.
+   Android still requires each user to approve installation.
 
 Do not activate an intermediate held build as its own update. Do not stage from an arbitrary
 local Gradle build, a renamed APK, a different workflow run, or a candidate

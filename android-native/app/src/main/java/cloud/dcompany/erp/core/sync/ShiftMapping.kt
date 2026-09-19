@@ -37,6 +37,8 @@ internal fun ShiftDetail.toServerOpenShiftCache(
     openedByUserId = openedByUserId,
     openedByName = openedByName,
     openedByEmail = openedByEmail,
+    openingClientPlatform = openingClientPlatform,
+    openingClientInstallationId = openingClientInstallationId,
     verifiedAtMillis = verifiedAtMillis,
 )
 

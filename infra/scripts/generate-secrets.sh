@@ -46,6 +46,7 @@ rand_pw()  { openssl rand -hex 24 | tr -d '\n'; }
 JWT_SECRET=$(rand_b64 48)
 PAIRING_SECRET=$(rand_b64 48)
 RELAY_SECRET=$(rand_std_b64 32)
+SHEETS_ENCRYPTION_KEY=$(rand_std_b64 32)
 REDIS_PW=$(rand_hex 32)
 POSTGRES_PW=$(rand_pw)
 MINIO_PW=$(rand_pw)
@@ -54,6 +55,7 @@ OWNER_PW=$(rand_pw)
 managed_keys=(
   POSTGRES_PASSWORD DATABASE_URL JWT_SECRET REDIS_PASSWORD
   REMOTE_ASSISTANCE_PAIRING_SECRET REMOTE_ASSISTANCE_RELAY_SECRET
+  GOOGLE_SHEETS_SECRET_ENCRYPTION_KEY
   S3_SECRET_KEY SEED_OWNER_PASSWORD
 )
 for key in "${managed_keys[@]}"; do
@@ -111,6 +113,8 @@ replace_or_append REMOTE_ASSISTANCE_PAIRING_SECRET \
   CHANGE_ME_48_char_dedicated_pairing_secret "$PAIRING_SECRET" || true
 replace_or_append REMOTE_ASSISTANCE_RELAY_SECRET \
   CHANGE_ME_32_byte_base64_relay_key "$RELAY_SECRET" || true
+replace_or_append GOOGLE_SHEETS_SECRET_ENCRYPTION_KEY \
+  CHANGE_ME_32_byte_base64_sheets_key "$SHEETS_ENCRYPTION_KEY" || true
 replace_or_append S3_SECRET_KEY CHANGE_ME_minio_password "$MINIO_PW" || true
 
 OWNER_PASSWORD_GENERATED=false

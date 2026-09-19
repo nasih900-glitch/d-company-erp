@@ -540,6 +540,8 @@ interface SyncMetaDao {
         LocalAdjustmentEntity::class,
         ExpenseCacheEntity::class,
         LocalExpenseEntity::class,
+        LocalExpenseReceiptEntity::class,
+        LocalExpenseReceiptChunkEntity::class,
         AssetCacheEntity::class,
         LocalAssetEntity::class,
         CapitalEntryCacheEntity::class,
@@ -579,7 +581,7 @@ interface SyncMetaDao {
         LocalBugReportEntity::class,
         LocalBugReportAttachmentEntity::class,
     ],
-    version = 48,
+    version = 51,
     exportSchema = true,
 )
 @TypeConverters(

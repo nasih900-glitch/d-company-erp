@@ -53,7 +53,7 @@ class FinanceFormBusyContractTest {
         dialogs.forEach { (start, end) ->
             val dialog = source.between(start, end)
             val editableControls = Regex(
-                "\\n\\s+(?:BusinessDatePickerField|PickerField|DecimalField|OutlinedTextField)\\(",
+                "\\n\\s+(?:BusinessDatePickerField|PickerField|DecimalField|OutlinedTextField|ErpButton)\\(",
             ).findAll(dialog).count()
 
             assertTrue("$start must use the busy-aware FinanceFormDialog", "FinanceFormDialog(" in dialog)

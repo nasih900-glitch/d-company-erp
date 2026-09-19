@@ -270,6 +270,7 @@ def _empty_ledger_session(*, asset_rows: list) -> _QueuedSession:
             _Result(rows=[]),  # refunds
             _Result(rows=[]),  # tip payouts
             _Result(rows=[]),  # expenses
+            _Result(rows=[]),  # finance source corrections
             _Result(rows=[]),  # capital entries
             _Result(rows=asset_rows),  # assets (depreciation)
             _Result(rows=[]),  # approved posted journals
@@ -341,12 +342,14 @@ async def test_reports_aggregator_subtracts_depreciation_from_net_profit() -> No
             _Result(scalar=0),  # operational event ticket count
             _Result(rows=[]),  # COGS movements
             _Result(rows=[]),  # manual collections
+            _Result(scalar=0),  # manual collection corrections
             _Result(rows=[]),  # membership payments
             _Result(rows=[]),  # payments
             _Result(rows=[]),  # refunds
             _Result(scalar=0),  # membership refund settlements
             _Result(rows=[asset]),  # assets (depreciation)
             _Result(rows=[]),  # expenses
+            _Result(rows=[]),  # expense corrections
         ]
     )
 

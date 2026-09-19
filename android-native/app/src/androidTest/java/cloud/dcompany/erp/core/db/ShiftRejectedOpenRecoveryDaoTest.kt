@@ -30,6 +30,21 @@ class ShiftRejectedOpenRecoveryDaoTest {
     }
 
     @Test
+    fun serverCachePersistsOpeningInstallationForOfflineDrawerPolicy() = runBlocking {
+        val openingInstallation = "b7ee1c68-77e2-48e8-82ac-0d4623606ec1"
+        db.shiftDao().upsertServerOpen(
+            serverShift("server-origin", openedAtMillis = 1_000).copy(
+                openingClientPlatform = "android",
+                openingClientInstallationId = openingInstallation,
+            ),
+        )
+
+        val cached = db.shiftDao().serverOpen(TERMINAL)
+        assertEquals("android", cached?.openingClientPlatform)
+        assertEquals(openingInstallation, cached?.openingClientInstallationId)
+    }
+
+    @Test
     fun retryReusesExactLocalIdentityAndCapturedFacts() = runBlocking {
         db.shiftDao().insert(rejectedShift())
 

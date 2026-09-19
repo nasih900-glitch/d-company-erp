@@ -126,6 +126,7 @@ async def test_report_reconciles_mixed_rounding_and_partial_refund_to_payments()
             _Result(scalar=0),  # event ticket count
             _Result(rows=[]),  # COGS
             _Result(rows=[]),  # manual collections
+            _Result(scalar=0),  # manual collection corrections
             _Result(rows=[SimpleNamespace(method="upi", amount=199_900)]),
             _Result(rows=[SimpleNamespace(method="upi", amount=83_600)]),
             _Result(rows=[(refund, refunded_order)]),
@@ -133,6 +134,7 @@ async def test_report_reconciles_mixed_rounding_and_partial_refund_to_payments()
             _Result(scalar=0),  # membership refund settlements
             _Result(rows=[]),  # assets
             _Result(rows=[]),  # expenses
+            _Result(rows=[]),  # expense corrections
         ]
     )
 
@@ -217,6 +219,7 @@ async def test_prior_invoice_refund_changes_net_revenue_but_not_current_aov() ->
             _Result(scalar=0),
             _Result(rows=[]),
             _Result(rows=[]),
+            _Result(scalar=0),  # manual collection corrections
             _Result(rows=[]),  # membership payments
             _Result(rows=[SimpleNamespace(method="cash", amount=10_000)]),
             _Result(rows=[(refund, old_order)]),
@@ -224,6 +227,7 @@ async def test_prior_invoice_refund_changes_net_revenue_but_not_current_aov() ->
             _Result(scalar=0),  # membership refund settlements
             _Result(rows=[]),
             _Result(rows=[]),
+            _Result(rows=[]),  # expense corrections
         ]
     )
 
@@ -285,6 +289,7 @@ async def test_ledger_keeps_both_rounding_accounts_and_settles_net_refund() -> N
             _Result(rows=[(refund, round_down)]),
             _Result(rows=[]),  # tip payouts
             _Result(rows=[]),  # expenses
+            _Result(rows=[]),  # finance source corrections
             _Result(rows=[]),  # capital entries
             _Result(rows=[]),  # assets / depreciation
             _Result(rows=[]),  # posted journal entries

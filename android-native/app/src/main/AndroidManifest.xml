@@ -61,5 +61,15 @@
             android:name=".core.remote.RemoteAssistanceStopReceiver"
             android:exported="false" />
 
+        <provider
+            android:name=".ui.screens.finance.ExpenseReceiptFileProvider"
+            android:authorities="${applicationId}.expense-receipts"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/expense_receipt_file_paths" />
+        </provider>
+
     </application>
 </manifest>

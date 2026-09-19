@@ -149,6 +149,9 @@ interface ShiftCloseSafetyDao {
             (SELECT COUNT(*) FROM local_held_order_payments
               WHERE syncState = 'pending' AND terminalId = :terminalId AND
                 (shiftId = :localShiftId OR (:serverShiftId IS NOT NULL AND shiftId = :serverShiftId))) +
+            (SELECT COUNT(*) FROM local_expenses
+              WHERE syncState = 'pending' AND paidVia = 'cash' AND
+                (shiftId = :localShiftId OR (:serverShiftId IS NOT NULL AND shiftId = :serverShiftId))) +
             (SELECT COUNT(*) FROM local_gaming_sessions
               WHERE state IN ('start_pending', 'stop_pending', 'send_pending') AND shiftId IS NULL)
           ) AS pendingLocalCount,
@@ -193,6 +196,9 @@ interface ShiftCloseSafetyDao {
                 (shiftId = :localShiftId OR (:serverShiftId IS NOT NULL AND shiftId = :serverShiftId))) +
             (SELECT COUNT(*) FROM local_held_order_payments
               WHERE syncState NOT IN ('pending', 'synced') AND terminalId = :terminalId AND
+                (shiftId = :localShiftId OR (:serverShiftId IS NOT NULL AND shiftId = :serverShiftId))) +
+            (SELECT COUNT(*) FROM local_expenses
+              WHERE syncState NOT IN ('pending', 'synced') AND paidVia = 'cash' AND
                 (shiftId = :localShiftId OR (:serverShiftId IS NOT NULL AND shiftId = :serverShiftId))) +
             (SELECT COUNT(*) FROM local_gaming_sessions
               WHERE state NOT IN ('start_pending', 'stop_pending', 'send_pending', 'sent', 'cancelled', 'legacy_resolved') AND
@@ -239,6 +245,9 @@ interface ShiftCloseSafetyDao {
               WHERE state <> 'synced' AND trim(shiftId) = '') +
             (SELECT COUNT(*) FROM local_held_order_payments
               WHERE syncState <> 'synced' AND (shiftId IS NULL OR terminalId IS NULL)) +
+            (SELECT COUNT(*) FROM local_expenses
+              WHERE syncState <> 'synced' AND paidVia = 'cash' AND
+                (shiftId IS NULL OR trim(shiftId) = '')) +
             (SELECT COUNT(*) FROM local_gaming_package_extensions
               WHERE state NOT IN ('confirmed', 'discarded') AND
                 (shiftId IS NULL OR trim(shiftId) = '')) +
@@ -438,6 +447,7 @@ internal fun installShiftClosingWriteGuards(db: SupportSQLiteDatabase) {
         val table: String,
         val shiftExpression: String,
         val pendingCondition: String,
+        val requiredColumns: Set<String> = emptySet(),
     )
 
     val guardedTables = listOf(
@@ -488,8 +498,14 @@ internal fun installShiftClosingWriteGuards(db: SupportSQLiteDatabase) {
             "NEW.shiftId",
             "NEW.syncState = 'pending'",
         ),
+        GuardedTable(
+            "local_expenses",
+            "NEW.shiftId",
+            "NEW.paidVia = 'cash' AND NEW.syncState = 'pending'",
+            requiredColumns = setOf("shiftId"),
+        ),
     )
-    for ((table, shiftExpression, pendingCondition) in guardedTables) {
+    for ((table, shiftExpression, pendingCondition, requiredColumns) in guardedTables) {
         // This installer also runs from older stepwise migrations. Newer
         // guarded outbox tables may not exist until a later migration.
         val tableExists = db.query(
@@ -497,6 +513,15 @@ internal fun installShiftClosingWriteGuards(db: SupportSQLiteDatabase) {
             arrayOf(table),
         ).use { it.moveToFirst() }
         if (!tableExists) continue
+        if (requiredColumns.isNotEmpty()) {
+            val availableColumns = buildSet {
+                db.query("PRAGMA table_info(`$table`)").use { cursor ->
+                    val nameIndex = cursor.getColumnIndex("name")
+                    while (cursor.moveToNext()) add(cursor.getString(nameIndex))
+                }
+            }
+            if (!availableColumns.containsAll(requiredColumns)) continue
+        }
         db.execSQL(
             """
             CREATE TRIGGER IF NOT EXISTS `guard_${table}_while_shift_closing`

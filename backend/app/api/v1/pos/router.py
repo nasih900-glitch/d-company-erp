@@ -49,8 +49,6 @@ from app.core.logging import get_logger
 from app.core.permissions import require_permission, requires
 from app.core.tenant import TenantContext
 from app.core.timezone import company_timezone, local_date_bounds_utc, local_today
-from app.events.bus import get_event_bus
-from app.events.events import OrderPaid
 from app.models import (
     AuditLog,
     Branch,
@@ -90,13 +88,15 @@ from app.models import (
 )
 from app.schemas.pos import OrderModifierSnapshotRead, OrderVariantSnapshotRead
 from app.services.customers.deletion_fence import (
-    CustomerDirectoryFence,
     MAX_DIRECTORY_REVISION,
+    CustomerDirectoryFence,
     lock_customer_directory,
 )
 from app.services.gaming.billing_mode import is_package_billed
+from app.services.integrations.google_sheets_mirror import (
+    enqueue_google_sheets_event_if_enabled,
+)
 from app.services.inventory.deduction import deduct_for_order
-from app.services.pos.shift_capture import read_opening_capture
 from app.services.pos.checkout_claims import (
     CheckoutClaimGrant,
     acquire_checkout_claim,
@@ -106,13 +106,13 @@ from app.services.pos.checkout_claims import (
     release_checkout_claim,
     validate_checkout_claim,
 )
+from app.services.pos.customer_identity import resolve_order_customer
 from app.services.pos.membership_benefits import (
     applied_benefits_for_order,
     consume_membership_benefits,
     reserve_membership_benefits,
 )
 from app.services.pos.order_validation import require_operational_order
-from app.services.pos.customer_identity import resolve_order_customer
 from app.services.pos.points import (
     apply_refund_loyalty_adjustment,
     consume_points_redemption,
@@ -133,6 +133,7 @@ from app.services.pos.pricing import (
     apply_points_redemption,
     gaming_minutes_allowance_minor,
 )
+from app.services.pos.shift_capture import read_opening_capture
 from app.services.pos.shift_validation import (
     require_open_operational_shift,
     require_operational_shift_scope,
@@ -191,7 +192,9 @@ class OrderCreate(BaseModel):
     table_id: UUID | None = None
     shift_id: UUID
     lines: list[OrderLineCreate] = Field(min_length=1, max_length=100)
-    delivery_via: Literal["inhouse", "zomato", "swiggy", "ubereats", "other_aggregator"] | None = None
+    delivery_via: Literal["inhouse", "zomato", "swiggy", "ubereats", "other_aggregator"] | None = (
+        None
+    )
     customer_name: str | None = Field(default=None, max_length=200)
     customer_phone: str | None = Field(default=None, max_length=20)
     customer_directory_revision: int | None = Field(
@@ -626,31 +629,43 @@ async def _receipt_history_reads(
 
     order_ids = [order.id for order in orders]
     line_rows = (
-        await session.execute(
-            select(OrderLine)
-            .where(OrderLine.order_id.in_(order_ids))
-            .order_by(OrderLine.order_id, OrderLine.created_at, OrderLine.id)
-        )
-    ).scalars().all()
-    payment_rows = (
-        await session.execute(
-            select(Payment)
-            .where(Payment.order_id.in_(order_ids))
-            .order_by(Payment.order_id, Payment.paid_at, Payment.id)
-        )
-    ).scalars().all()
-    refund_rows = (
-        await session.execute(
-            select(Refund)
-            .where(Refund.order_id.in_(order_ids))
-            .order_by(
-                Refund.order_id,
-                Refund.settled_at.nulls_last(),
-                Refund.created_at,
-                Refund.id,
+        (
+            await session.execute(
+                select(OrderLine)
+                .where(OrderLine.order_id.in_(order_ids))
+                .order_by(OrderLine.order_id, OrderLine.created_at, OrderLine.id)
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
+    payment_rows = (
+        (
+            await session.execute(
+                select(Payment)
+                .where(Payment.order_id.in_(order_ids))
+                .order_by(Payment.order_id, Payment.paid_at, Payment.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    refund_rows = (
+        (
+            await session.execute(
+                select(Refund)
+                .where(Refund.order_id.in_(order_ids))
+                .order_by(
+                    Refund.order_id,
+                    Refund.settled_at.nulls_last(),
+                    Refund.created_at,
+                    Refund.id,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
     gaming_rows = (
         await session.execute(
             select(GamingSession, Station)
@@ -666,23 +681,25 @@ async def _receipt_history_reads(
     ).all()
     shift_ids = {order.shift_id for order in orders}
     shifts = (
-        await session.execute(
-            select(Shift).where(
-                Shift.id.in_(shift_ids),
-                Shift.company_id == company_id,
-                Shift.branch_id == branch_id,
+        (
+            await session.execute(
+                select(Shift).where(
+                    Shift.id.in_(shift_ids),
+                    Shift.company_id == company_id,
+                    Shift.branch_id == branch_id,
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     shifts_by_id = {shift.id: shift for shift in shifts}
 
     actor_ids: set[UUID] = {order.opened_by for order in orders}
     actor_ids.update(shift.opened_by for shift in shifts)
     actor_ids.update(line.voided_by for line in line_rows if line.voided_by is not None)
     actor_ids.update(
-        payment.recorded_by
-        for payment in payment_rows
-        if payment.recorded_by is not None
+        payment.recorded_by for payment in payment_rows if payment.recorded_by is not None
     )
     actor_ids.update(refund.approved_by for refund in refund_rows)
     actor_ids.update(
@@ -690,9 +707,7 @@ async def _receipt_history_reads(
         for refund in refund_rows
         if refund.manager_override_user_id is not None
     )
-    actor_ids.update(
-        refund.settled_by for refund in refund_rows if refund.settled_by is not None
-    )
+    actor_ids.update(refund.settled_by for refund in refund_rows if refund.settled_by is not None)
     for gaming_session, _station in gaming_rows:
         actor_ids.add(gaming_session.opened_by)
         if gaming_session.stopped_by is not None:
@@ -722,9 +737,7 @@ async def _receipt_history_reads(
     gaming_by_order: dict[UUID, list[tuple[GamingSession, Station]]] = {}
     for gaming_session, station in gaming_rows:
         assert gaming_session.order_id is not None
-        gaming_by_order.setdefault(gaming_session.order_id, []).append(
-            (gaming_session, station)
-        )
+        gaming_by_order.setdefault(gaming_session.order_id, []).append((gaming_session, station))
 
     results: list[ReceiptHistoryRead] = []
     for order in orders:
@@ -753,9 +766,7 @@ async def _receipt_history_reads(
                 terminal_id=order.terminal_id,
                 shift_id=order.shift_id,
                 shift_opened_by=shift.opened_by if shift else None,
-                shift_opened_by_name=(
-                    actor_names.get(shift.opened_by) if shift else None
-                ),
+                shift_opened_by_name=(actor_names.get(shift.opened_by) if shift else None),
                 shift_opened_at=shift.opened_at if shift else None,
                 shift_closed_at=shift.closed_at if shift else None,
                 opened_by=order.opened_by,
@@ -822,9 +833,7 @@ async def _receipt_history_reads(
                         voided_at=line.voided_at,
                         voided_by=line.voided_by,
                         voided_by_name=(
-                            actor_names.get(line.voided_by)
-                            if line.voided_by is not None
-                            else None
+                            actor_names.get(line.voided_by) if line.voided_by is not None else None
                         ),
                         void_reason=line.void_reason,
                         created_at=line.created_at,
@@ -844,9 +853,7 @@ async def _receipt_history_reads(
                             else None
                         ),
                         change_minor=(
-                            int(payment.change_minor)
-                            if payment.change_minor is not None
-                            else None
+                            int(payment.change_minor) if payment.change_minor is not None else None
                         ),
                         reference=payment.ref_external,
                         paid_at=payment.paid_at,
@@ -891,19 +898,13 @@ async def _receipt_history_reads(
                         provider_settled_at=refund.provider_settled_at,
                         client_occurred_at=refund.client_occurred_at,
                         captured_time_reconciled=refund.captured_time_reconciled,
-                        provider_evidence_reconciled=(
-                            refund.provider_evidence_reconciled
-                        ),
-                        settlement_idempotency_key=(
-                            refund.settlement_idempotency_key
-                        ),
+                        provider_evidence_reconciled=(refund.provider_evidence_reconciled),
+                        settlement_idempotency_key=(refund.settlement_idempotency_key),
                         receipt_no=refund.receipt_no,
                         receipt_fiscal_year=refund.receipt_fiscal_year,
                         receipt_issued_at=refund.receipt_issued_at,
                         customer_spend_reconciled=refund.customer_spend_reconciled,
-                        loyalty_reconciliation_state=(
-                            refund.loyalty_reconciliation_state
-                        ),
+                        loyalty_reconciliation_state=(refund.loyalty_reconciliation_state),
                         note=refund.note,
                         created_at=refund.created_at,
                         updated_at=refund.updated_at,
@@ -1159,9 +1160,7 @@ class PosRefundProviderPayoutResolutionRequest(BaseModel):
     shift_id: UUID
     expected_amount_minor: int = Field(gt=0)
     provider_not_completed: bool
-    provider_status: Literal[
-        "no_matching_transaction", "provider_declined", "provider_reversed"
-    ]
+    provider_status: Literal["no_matching_transaction", "provider_declined", "provider_reversed"]
     verification_reference: str = Field(min_length=3, max_length=200)
     provider_checked_at: datetime
     reason: str = Field(min_length=3, max_length=500)
@@ -1230,12 +1229,15 @@ class PosRefundRequestRead(BaseModel):
     refund_id: UUID | None = None
     client_action_id: str
     customer_spend_reconciled: bool | None = None
-    loyalty_reconciliation_state: Literal[
-        "not_applicable",
-        "applied",
-        "legacy_redemption_restored",
-        "legacy_unknown",
-    ] | None = None
+    loyalty_reconciliation_state: (
+        Literal[
+            "not_applicable",
+            "applied",
+            "legacy_redemption_restored",
+            "legacy_unknown",
+        ]
+        | None
+    ) = None
     note: str | None = None
 
 
@@ -1362,14 +1364,11 @@ def _shift_opening_client_platform(
     lifecycle without storing a hardware identifier or trusting a staff name.
     """
     platform = (
-        request.headers.get("X-Client-Platform", "").strip().lower()
-        if request is not None
-        else ""
+        request.headers.get("X-Client-Platform", "").strip().lower() if request is not None else ""
     ) or "web"
     if platform not in {"web", "android", "ios"}:
         raise BusinessRuleError(
-            "The shift-opening client identity is invalid. Reload the app before "
-            "opening a shift."
+            "The shift-opening client identity is invalid. Reload the app before opening a shift."
         )
     if was_offline and platform not in {"android", "ios"}:
         raise BusinessRuleError(
@@ -1394,8 +1393,7 @@ def _shift_opening_installation_id(
     platform: str,
 ) -> UUID | None:
     raw_present = bool(
-        request is not None
-        and request.headers.get(_INSTALLATION_ID_HEADER, "").strip()
+        request is not None and request.headers.get(_INSTALLATION_ID_HEADER, "").strip()
     )
     installation_id = _canonical_installation_id(request)
     if platform != "android":
@@ -1434,10 +1432,7 @@ def _android_shift_close_identity_matches(
             if request is not None
             else ""
         )
-        return (
-            platform == "android"
-            and _canonical_installation_id(request) == installation_id
-        )
+        return platform == "android" and _canonical_installation_id(request) == installation_id
 
     # Code21 rows opened after 0069 have no installation UUID, but do retain
     # the exact causal local suffix. Keep that compatibility path narrow.
@@ -1447,11 +1442,7 @@ def _android_shift_close_identity_matches(
     suffix = opening_key.removeprefix(_ANDROID_SHIFT_OPEN_KEY_PREFIX)
     if not suffix:
         return False
-    close_key = (
-        getattr(request.state, "idempotency_key", None)
-        if request is not None
-        else None
-    )
+    close_key = getattr(request.state, "idempotency_key", None) if request is not None else None
     return close_key == f"{_ANDROID_SHIFT_CLOSE_KEY_PREFIX}{suffix}"
 
 
@@ -1490,17 +1481,15 @@ async def _compute_points_with_multiplier(
     gets pulled toward 1.0 by the tip and over-awards points on the
     discounted/redeemed portion of the bill.
     """
-    order_lines = [
-        line for line in order_lines if getattr(line, "voided_at", None) is None
-    ]
+    order_lines = [line for line in order_lines if getattr(line, "voided_at", None) is None]
     if not order_lines:
         return 0  # no lines to attribute to gaming — nothing earned
 
     # Pull each line's menu item type in one query
     item_ids = [ol.menu_item_id for ol in order_lines]
     items = (
-        await session.execute(select(MenuItem).where(MenuItem.id.in_(item_ids)))
-    ).scalars().all()
+        (await session.execute(select(MenuItem).where(MenuItem.id.in_(item_ids)))).scalars().all()
+    )
     type_by_id = {i.id: i.type for i in items}
 
     GAMING_POINTS_PER_10_RUPEES = 2.0
@@ -1546,11 +1535,13 @@ async def _upsert_and_attach_customer(
         if order.customer_id is not None:
             existing = (
                 await session.execute(
-                    select(Customer).where(
+                    select(Customer)
+                    .where(
                         Customer.id == order.customer_id,
                         Customer.company_id == company_id,
                         Customer.deleted_at.is_(None),
-                    ).with_for_update()
+                    )
+                    .with_for_update()
                 )
             ).scalar_one_or_none()
             # A deleted booking identity must not be replaced by whoever now
@@ -1563,11 +1554,13 @@ async def _upsert_and_attach_customer(
                 return None
             existing = (
                 await session.execute(
-                    select(Customer).where(
+                    select(Customer)
+                    .where(
                         Customer.company_id == company_id,
                         Customer.phone == phone,
                         Customer.deleted_at.is_(None),
-                    ).with_for_update()
+                    )
+                    .with_for_update()
                 )
             ).scalar_one_or_none()
         # Use the authoritative checkout timestamp throughout this transaction.
@@ -1696,6 +1689,82 @@ async def _paid_total(session, order_id: UUID) -> int:
     )
 
 
+def _empty_pos_payment_breakdown() -> dict[str, int]:
+    return dict.fromkeys(_POS_PAYMENT_METHOD_ORDER, 0)
+
+
+def _canonical_pos_payment_breakdown(
+    breakdown: dict[str, int],
+    *,
+    expected_total_minor: int,
+) -> dict[str, int]:
+    """Return the fixed five-rail settlement shape used by the Sheets mirror.
+
+    The paid order remains the one revenue event. These values only explain
+    how that amount was collected, so their sum must match the order exactly.
+    """
+
+    expected_keys = set(_POS_PAYMENT_METHOD_ORDER)
+    if set(breakdown) != expected_keys:
+        raise BusinessRuleError("POS payment breakdown has unsupported rails")
+    canonical: dict[str, int] = {}
+    for rail in _POS_PAYMENT_METHOD_ORDER:
+        amount = breakdown[rail]
+        if isinstance(amount, bool) or not isinstance(amount, int) or amount < 0:
+            raise BusinessRuleError("POS payment breakdown has an invalid amount")
+        canonical[rail] = amount
+    if sum(canonical.values()) != expected_total_minor:
+        raise BusinessRuleError("POS payment breakdown does not match the finalized order total")
+    return canonical
+
+
+async def _final_payment_breakdown(
+    session,
+    *,
+    order_id: UUID,
+    already_paid_minor: int,
+    current_method: PosPaymentMethod,
+    current_amount_minor: int,
+    expected_total_minor: int,
+) -> dict[str, int]:
+    """Build an exact per-rail total at the final payment boundary.
+
+    Existing payments are read only for a true split settlement. The current
+    unflushed payment is supplied explicitly, avoiding any dependency on ORM
+    autoflush timing.
+    """
+
+    breakdown = _empty_pos_payment_breakdown()
+    if already_paid_minor:
+        existing_rows = (
+            await session.execute(
+                select(
+                    Payment.method,
+                    func.coalesce(func.sum(Payment.amount_minor), 0),
+                )
+                .where(Payment.order_id == order_id)
+                .group_by(Payment.method)
+            )
+        ).all()
+        existing_total = 0
+        for method, amount in existing_rows:
+            if method not in breakdown:
+                raise BusinessRuleError("POS payment uses an unsupported rail")
+            rail_amount = int(amount or 0)
+            if rail_amount < 0:
+                raise BusinessRuleError("POS payment rail total cannot be negative")
+            breakdown[method] += rail_amount
+            existing_total += rail_amount
+        if existing_total != already_paid_minor:
+            raise BusinessRuleError("Stored POS payments do not match the order's paid balance")
+
+    breakdown[current_method] += current_amount_minor
+    return _canonical_pos_payment_breakdown(
+        breakdown,
+        expected_total_minor=expected_total_minor,
+    )
+
+
 async def _require_active_order_lines(
     session,
     order_id: UUID,
@@ -1713,9 +1782,7 @@ async def _require_active_order_lines(
         )
     ).scalar_one()
     if not active_line_count:
-        raise BusinessRuleError(
-            f"This direct order has no active items and cannot be {operation}."
-        )
+        raise BusinessRuleError(f"This direct order has no active items and cannot be {operation}.")
 
 
 async def _refunded_total(session, order_id: UUID) -> int:
@@ -1855,7 +1922,9 @@ def _validated_pos_financial_time(
             "owner must reconcile it before another refund is attempted."
         )
     was_offline = request.headers.get("X-Offline-Captured", "").strip().lower() in {
-        "1", "true", "yes",
+        "1",
+        "true",
+        "yes",
     }
     header_time = request.headers.get("X-Client-Occurred-At")
     if was_offline:
@@ -1921,16 +1990,14 @@ def _captured_pos_financial_evidence_after_value_moved(
             reconciled = False
         else:
             try:
-                provenance_time = datetime.fromisoformat(
-                    header_time.strip().replace("Z", "+00:00")
-                )
+                provenance_time = datetime.fromisoformat(header_time.strip().replace("Z", "+00:00"))
                 if provenance_time.tzinfo is None:
                     reconciled = False
                 else:
                     provenance_time = provenance_time.astimezone(timezone.utc)
-                    reconciled = reconciled and abs(
-                        (provenance_time - captured).total_seconds()
-                    ) <= 1
+                    reconciled = (
+                        reconciled and abs((provenance_time - captured).total_seconds()) <= 1
+                    )
             except (TypeError, ValueError):
                 reconciled = False
     return captured, reconciled
@@ -2017,29 +2084,15 @@ def _pos_refund_request_read(
         accepted_by=refund_request.approved_by,
         accepted_by_name=actor_names.get(refund_request.approved_by),
         handoff_started_by=handoff.started_by if handoff else None,
-        handoff_started_by_name=(
-            actor_names.get(handoff.started_by) if handoff else None
-        ),
-        cash_handed_over_at=(
-            cash_completion.handed_over_at if cash_completion else None
-        ),
-        cash_handed_over_recorded_at=(
-            cash_completion.recorded_at if cash_completion else None
-        ),
-        cash_handed_over_by=(
-            cash_completion.recorded_by if cash_completion else None
-        ),
+        handoff_started_by_name=(actor_names.get(handoff.started_by) if handoff else None),
+        cash_handed_over_at=(cash_completion.handed_over_at if cash_completion else None),
+        cash_handed_over_recorded_at=(cash_completion.recorded_at if cash_completion else None),
+        cash_handed_over_by=(cash_completion.recorded_by if cash_completion else None),
         cash_handed_over_by_name=(
-            actor_names.get(cash_completion.recorded_by)
-            if cash_completion
-            else None
+            actor_names.get(cash_completion.recorded_by) if cash_completion else None
         ),
-        provider_payout_started_at=(
-            provider_start.started_at if provider_start else None
-        ),
-        provider_payout_started_by=(
-            provider_start.started_by if provider_start else None
-        ),
+        provider_payout_started_at=(provider_start.started_at if provider_start else None),
+        provider_payout_started_by=(provider_start.started_by if provider_start else None),
         provider_payout_started_by_name=(
             actor_names.get(provider_start.started_by) if provider_start else None
         ),
@@ -2049,13 +2102,9 @@ def _pos_refund_request_read(
         provider_completion_recorded_at=(
             provider_completion.created_at if provider_completion else None
         ),
-        provider_completed_by=(
-            provider_completion.settled_by if provider_completion else None
-        ),
+        provider_completed_by=(provider_completion.settled_by if provider_completion else None),
         provider_completed_by_name=(
-            actor_names.get(provider_completion.settled_by)
-            if provider_completion
-            else None
+            actor_names.get(provider_completion.settled_by) if provider_completion else None
         ),
         settled_by=refund.settled_by if refund else None,
         settled_by_name=(actor_names.get(refund.settled_by) if refund else None),
@@ -2085,22 +2134,12 @@ def _pos_refund_request_read(
             else None
         ),
         withdrawn_by=withdrawal.withdrawn_by if withdrawal else None,
-        withdrawn_by_name=(
-            actor_names.get(withdrawal.withdrawn_by) if withdrawal else None
-        ),
-        provider_verification_status=(
-            withdrawal.verification_status if withdrawal else None
-        ),
-        provider_verification_reference=(
-            withdrawal.verification_reference if withdrawal else None
-        ),
+        withdrawn_by_name=(actor_names.get(withdrawal.withdrawn_by) if withdrawal else None),
+        provider_verification_status=(withdrawal.verification_status if withdrawal else None),
+        provider_verification_reference=(withdrawal.verification_reference if withdrawal else None),
         provider_verified_at=withdrawal.verified_at if withdrawal else None,
-        customer_spend_reconciled=(
-            refund.customer_spend_reconciled if refund else None
-        ),
-        loyalty_reconciliation_state=(
-            refund.loyalty_reconciliation_state if refund else None
-        ),
+        customer_spend_reconciled=(refund.customer_spend_reconciled if refund else None),
+        loyalty_reconciliation_state=(refund.loyalty_reconciliation_state if refund else None),
         note=refund_request.note,
     )
 
@@ -2150,27 +2189,35 @@ async def _reprice_unpaid_order_for_customer(
     later station or catalog edit cannot rewrite the service already consumed.
     """
     lines = (
-        await session.execute(
-            select(OrderLine)
-            .where(
-                OrderLine.order_id == order.id,
-                OrderLine.voided_at.is_(None),
+        (
+            await session.execute(
+                select(OrderLine)
+                .where(
+                    OrderLine.order_id == order.id,
+                    OrderLine.voided_at.is_(None),
+                )
+                .with_for_update()
             )
-            .with_for_update()
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     if not lines:
         raise BusinessRuleError("order has no lines to price")
 
     item_ids = {line.menu_item_id for line in lines}
     items = (
-        await session.execute(
-            select(MenuItem).where(
-                MenuItem.company_id == company_id,
-                MenuItem.id.in_(item_ids),
+        (
+            await session.execute(
+                select(MenuItem).where(
+                    MenuItem.company_id == company_id,
+                    MenuItem.id.in_(item_ids),
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     items_by_id = {item.id: item for item in items}
     if len(items_by_id) != len(item_ids):
         raise BusinessRuleError(
@@ -2195,9 +2242,7 @@ async def _reprice_unpaid_order_for_customer(
         and not is_package_billed(gaming_session)
         else 0
     )
-    requested_hookah_count = (
-        1 if gaming_session and station and station.type == "hookah" else 0
-    )
+    requested_hookah_count = 1 if gaming_session and station and station.type == "hookah" else 0
     benefits = await reserve_membership_benefits(
         session,
         order=order,
@@ -2301,9 +2346,7 @@ async def _reprice_unpaid_order_for_customer(
     # attaching a different customer must never silently spend their points.
     previously_redeemed_points = 0
     existing_redemption = (
-        await session.execute(
-            select(PointsRedemption).where(PointsRedemption.order_id == order.id)
-        )
+        await session.execute(select(PointsRedemption).where(PointsRedemption.order_id == order.id))
     ).scalar_one_or_none()
     if existing_redemption is not None:
         current_customer = await resolve_order_customer(
@@ -2387,11 +2430,7 @@ async def _reject_persisted_client_line_ids(
     inserts serialize with every API append. The partial unique index remains
     the last-resort database invariant for writes outside the API.
     """
-    requested = {
-        line.client_line_id
-        for line in lines
-        if line.client_line_id is not None
-    }
+    requested = {line.client_line_id for line in lines if line.client_line_id is not None}
     if not requested:
         return
     collisions = set(
@@ -2402,7 +2441,9 @@ async def _reject_persisted_client_line_ids(
                     OrderLine.client_line_id.in_(requested),
                 )
             )
-        ).scalars().all()
+        )
+        .scalars()
+        .all()
     )
     if collisions:
         raise ConflictError(
@@ -2428,11 +2469,7 @@ def _require_checkout_version(order: Order, expected: int, *, operation: str) ->
 
 
 def _is_private_direct_open_order(order: Order) -> bool:
-    return (
-        order.status == "open"
-        and order.table_id is None
-        and order.type != "session"
-    )
+    return order.status == "open" and order.table_id is None and order.type != "session"
 
 
 def _require_order_read_visibility(order: Order, tenant: TenantContext) -> None:
@@ -2514,7 +2551,9 @@ async def _kitchen_item_ids(
                     MenuItem.type.in_(_KITCHEN_ITEM_TYPES),
                 )
             )
-        ).scalars().all()
+        )
+        .scalars()
+        .all()
     )
 
 
@@ -2581,16 +2620,20 @@ async def _reaggregate_active_order_lines(
     redemption, receipt, and payment precondition uses the same active cohort.
     """
     active_lines = (
-        await session.execute(
-            select(OrderLine)
-            .where(
-                OrderLine.order_id == order.id,
-                OrderLine.voided_at.is_(None),
+        (
+            await session.execute(
+                select(OrderLine)
+                .where(
+                    OrderLine.order_id == order.id,
+                    OrderLine.voided_at.is_(None),
+                )
+                .order_by(OrderLine.created_at, OrderLine.id)
+                .with_for_update(of=OrderLine)
             )
-            .order_by(OrderLine.created_at, OrderLine.id)
-            .with_for_update(of=OrderLine)
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     if not active_lines:
         raise BusinessRuleError(
             "A live bill must keep at least one active item. Void the whole bill "
@@ -2599,24 +2642,16 @@ async def _reaggregate_active_order_lines(
 
     sub_inclusive = sum(int(line.line_total_minor or 0) for line in active_lines)
     rounded, round_off = _round_to_rupee(sub_inclusive)
-    order.subtotal_minor = sum(
-        int(line.taxable_value_minor or 0) for line in active_lines
-    )
+    order.subtotal_minor = sum(int(line.taxable_value_minor or 0) for line in active_lines)
     order.cgst_minor = sum(int(line.cgst_minor or 0) for line in active_lines)
     order.sgst_minor = sum(int(line.sgst_minor or 0) for line in active_lines)
     order.igst_minor = sum(int(line.igst_minor or 0) for line in active_lines)
     order.cess_minor = sum(int(line.cess_minor or 0) for line in active_lines)
-    line_discount_total = sum(
-        int(line.discount_minor or 0) for line in active_lines
-    )
-    order.tax_minor = (
-        order.cgst_minor + order.sgst_minor + order.igst_minor + order.cess_minor
-    )
+    line_discount_total = sum(int(line.discount_minor or 0) for line in active_lines)
+    order.tax_minor = order.cgst_minor + order.sgst_minor + order.igst_minor + order.cess_minor
     order.round_off_minor = round_off
 
-    previously_redeemed_points = await points_redeemed_for_order(
-        session, order=order
-    )
+    previously_redeemed_points = await points_redeemed_for_order(session, order=order)
     (
         order.manual_discount_minor,
         discount_after_manual,
@@ -2697,12 +2732,8 @@ def _order_line_read(line: OrderLine, item: MenuItem) -> OrderLineRead:
         voided_at=line.voided_at,
         voided_by=line.voided_by,
         void_reason=getattr(line, "void_reason", None),
-        kitchen_void_acknowledged_at=getattr(
-            line, "kitchen_void_acknowledged_at", None
-        ),
-        kitchen_void_acknowledged_by=getattr(
-            line, "kitchen_void_acknowledged_by", None
-        ),
+        kitchen_void_acknowledged_at=getattr(line, "kitchen_void_acknowledged_at", None),
+        kitchen_void_acknowledged_by=getattr(line, "kitchen_void_acknowledged_by", None),
     )
 
 
@@ -2727,12 +2758,8 @@ async def _build_order_read(session, order: Order) -> OrderRead:
     paid_minor = await _paid_total(session, order.id)
     due_minor = max(0, int(order.total_minor or 0) - paid_minor)
     benefits = await applied_benefits_for_order(session, order=order)
-    active_line_rows = [
-        row for row in line_rows if getattr(row[0], "voided_at", None) is None
-    ]
-    voided_line_rows = [
-        row for row in line_rows if getattr(row[0], "voided_at", None) is not None
-    ]
+    active_line_rows = [row for row in line_rows if getattr(row[0], "voided_at", None) is None]
+    voided_line_rows = [row for row in line_rows if getattr(row[0], "voided_at", None) is not None]
     return OrderRead(
         id=order.id,
         invoice_no=order.invoice_no,
@@ -2770,9 +2797,89 @@ async def _build_order_read(session, order: Order) -> OrderRead:
         held_at=order.held_at,
         checkout_version=max(1, int(getattr(order, "checkout_version", 1) or 1)),
         lines=[_order_line_read(line, item) for line, item in active_line_rows],
-        voided_lines=[
-            _order_line_read(line, item) for line, item in voided_line_rows
-        ],
+        voided_lines=[_order_line_read(line, item) for line, item in voided_line_rows],
+    )
+
+
+def _mirror_quantity_text(value: object) -> str:
+    quantity = Decimal(str(value or 0))
+    if quantity < 0 or quantity.as_tuple().exponent < -3:
+        raise BusinessRuleError("Order quantity cannot be mirrored safely")
+    rendered = format(quantity, "f")
+    if "." in rendered:
+        rendered = rendered.rstrip("0").rstrip(".")
+    return rendered or "0"
+
+
+async def _enqueue_paid_order_mirror(
+    session,
+    *,
+    order: Order,
+    company_id: UUID,
+    branch: Branch,
+    actor_user_id: UUID,
+    at: datetime,
+    payment_method: str,
+    payment_breakdown_minor: dict[str, int] | None,
+    line_rows: list[tuple[OrderLine, MenuItem]],
+) -> None:
+    """Add one stable paid-order event to the caller-owned transaction."""
+
+    company = await session.get(Company, company_id)
+    if company is None:
+        return
+    actor = await session.get(User, actor_user_id)
+    quantities = [_mirror_quantity_text(line.qty) for line, _item in line_rows]
+    total_quantity = sum((Decimal(value) for value in quantities), Decimal(0))
+    item_parts = [
+        f"{quantity}× "
+        f"{getattr(line, 'menu_item_name_snapshot', None) or getattr(item, 'name', 'Item')}"
+        for (line, item), quantity in zip(line_rows, quantities, strict=True)
+    ]
+    description = ", ".join(item_parts)
+    if len(description) > 4_000:
+        description = description[:3_999] + "…"
+    payload: dict[str, object] = {
+        "branch": branch.name,
+        "reference": order.invoice_no or str(order.id),
+        "description": description,
+        # Financial backup does not need customer identity. Keep names and
+        # phone numbers in the access-controlled ERP customer directory.
+        "customer": "",
+        "quantity": _mirror_quantity_text(total_quantity),
+        "amount_minor": int(order.total_minor or 0),
+        "payment_method": payment_method,
+        "actor": actor.name if actor else "",
+        "status": "paid",
+        "currency": getattr(company, "currency", ""),
+        "order_id": str(order.id),
+        "branch_id": str(order.branch_id),
+        "fiscal_year": order.fiscal_year or "",
+        "order_type": order.type,
+        "taxable_minor": sum(
+            int(getattr(line, "taxable_value_minor", 0) or 0) for line, _item in line_rows
+        ),
+        "cgst_minor": int(order.cgst_minor or 0),
+        "sgst_minor": int(order.sgst_minor or 0),
+        "igst_minor": int(order.igst_minor or 0),
+        "cess_minor": int(order.cess_minor or 0),
+        "round_off_minor": int(order.round_off_minor or 0),
+        "tip_minor": int(order.tip_minor or 0),
+    }
+    if payment_breakdown_minor is not None:
+        payload["payment_breakdown_minor"] = _canonical_pos_payment_breakdown(
+            payment_breakdown_minor,
+            expected_total_minor=int(order.total_minor or 0),
+        )
+    await enqueue_google_sheets_event_if_enabled(
+        session,
+        company_id=company_id,
+        event_type="pos.order.paid",
+        source_type="pos_order",
+        source_id=str(order.id),
+        source_revision="paid-v2",
+        occurred_at=at,
+        payload=payload,
     )
 
 
@@ -2783,6 +2890,8 @@ async def _finalize_order(
     company_id: UUID,
     actor_user_id: UUID,
     at: datetime,
+    payment_method: str = "unknown",
+    payment_breakdown_minor: dict[str, int] | None = None,
 ) -> None:
     """Issue the invoice and run every sale-finalization side effect once.
 
@@ -2888,6 +2997,17 @@ async def _finalize_order(
             at=at,
             directory_fence=directory_fence,
         )
+    await _enqueue_paid_order_mirror(
+        session,
+        order=order,
+        company_id=company_id,
+        branch=branch,
+        actor_user_id=actor_user_id,
+        at=at,
+        payment_method=payment_method,
+        payment_breakdown_minor=payment_breakdown_minor,
+        line_rows=line_rows,
+    )
 
 
 # ----------- endpoints -----------
@@ -2967,19 +3087,18 @@ async def list_receipt_history(
         stmt = stmt.where(
             or_(
                 Order.invoice_issued_at < cursor_issued_at,
-                (
-                    (Order.invoice_issued_at == cursor_issued_at)
-                    & (Order.id < cursor_order_id)
-                ),
+                ((Order.invoice_issued_at == cursor_issued_at) & (Order.id < cursor_order_id)),
             )
         )
     rows = (
-        await session.execute(
-            stmt.order_by(Order.invoice_issued_at.desc(), Order.id.desc()).limit(
-                limit + 1
+        (
+            await session.execute(
+                stmt.order_by(Order.invoice_issued_at.desc(), Order.id.desc()).limit(limit + 1)
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     has_more = len(rows) > limit
     page_orders = list(rows[:limit])
     items = await _receipt_history_reads(
@@ -3097,12 +3216,14 @@ async def create_order(
             raise NotFoundError("table not found")
         existing_table_order = (
             await session.execute(
-                select(Order.id).where(
+                select(Order.id)
+                .where(
                     Order.company_id == tenant.company_id,
                     Order.branch_id == tenant.branch_id,
                     Order.table_id == payload.table_id,
                     Order.status.in_(("open", "held")),
-                ).limit(1)
+                )
+                .limit(1)
             )
         ).scalar_one_or_none()
         if existing_table_order is not None:
@@ -3110,11 +3231,7 @@ async def create_order(
                 "This table already has an unfinished order. Open that order instead."
             )
     shift = (
-        await session.execute(
-            select(Shift)
-            .where(Shift.id == payload.shift_id)
-            .with_for_update()
-        )
+        await session.execute(select(Shift).where(Shift.id == payload.shift_id).with_for_update())
     ).scalar_one_or_none()
     shift = require_open_operational_shift(
         shift,
@@ -3225,10 +3342,7 @@ async def create_order(
                 if priced_line.variant_snapshot is not None
                 else None
             ),
-            modifiers=(
-                [snapshot.as_dict() for snapshot in priced_line.modifier_snapshots]
-                or None
-            ),
+            modifiers=([snapshot.as_dict() for snapshot in priced_line.modifier_snapshots] or None),
             qty=priced_line.qty,
             unit_price_minor=priced_line.unit_inclusive_minor,
             line_total_minor=priced_line.line_inclusive_minor,
@@ -3248,9 +3362,7 @@ async def create_order(
                 else None
             ),
             kitchen_round_no=(
-                1
-                if is_table_round and priced_line.menu_item_id in kitchen_item_ids
-                else None
+                1 if is_table_round and priced_line.menu_item_id in kitchen_item_ids else None
             ),
             created_at=opened_at,
         )
@@ -3304,9 +3416,7 @@ async def add_order_lines(
     _validate_client_line_ids(payload.lines)
 
     order = (
-        await session.execute(
-            select(Order).where(Order.id == order_id).with_for_update()
-        )
+        await session.execute(select(Order).where(Order.id == order_id).with_for_update())
     ).scalar_one_or_none()
     order = require_operational_order(
         order,
@@ -3348,9 +3458,7 @@ async def add_order_lines(
         lines=payload.lines,
     )
     shift = (
-        await session.execute(
-            select(Shift).where(Shift.id == order.shift_id).with_for_update()
-        )
+        await session.execute(select(Shift).where(Shift.id == order.shift_id).with_for_update())
     ).scalar_one_or_none()
     shift = require_open_operational_shift(
         shift,
@@ -3376,60 +3484,64 @@ async def add_order_lines(
     )
     if kitchen_item_ids:
         await _materialize_legacy_kitchen_line_state(session, order)
-    release_round = int(
-        (
-            await session.execute(
-                select(func.coalesce(func.max(OrderLine.kitchen_round_no), 0)).where(
-                    OrderLine.order_id == order.id
+    release_round = (
+        int(
+            (
+                await session.execute(
+                    select(func.coalesce(func.max(OrderLine.kitchen_round_no), 0)).where(
+                        OrderLine.order_id == order.id
+                    )
                 )
-            )
-        ).scalar_one()
-        or 0
-    ) + 1
+            ).scalar_one()
+            or 0
+        )
+        + 1
+    )
     released_at = datetime.now(timezone.utc)
     for requested_line, priced_line in zip(payload.lines, priced.lines, strict=True):
-        session.add(OrderLine(
-            id=uuid4(),
-            order_id=order.id,
-            client_line_id=requested_line.client_line_id,
-            menu_item_id=priced_line.menu_item_id,
-            menu_item_name_snapshot=priced_line.name,
-            menu_item_type_snapshot=priced_line.item_type,
-            variant_id=(
-                priced_line.variant_snapshot.id
-                if priced_line.variant_snapshot is not None
-                else None
-            ),
-            variant_snapshot=(
-                priced_line.variant_snapshot.as_dict()
-                if priced_line.variant_snapshot is not None
-                else None
-            ),
-            modifiers=(
-                [snapshot.as_dict() for snapshot in priced_line.modifier_snapshots]
-                or None
-            ),
-            qty=priced_line.qty,
-            unit_price_minor=priced_line.unit_inclusive_minor,
-            line_total_minor=priced_line.line_inclusive_minor,
-            discount_minor=priced_line.discount_minor,
-            hsn_or_sac=priced_line.hsn_or_sac,
-            tax_rate=float(priced_line.tax_rate),
-            taxable_value_minor=priced_line.taxable_value_minor,
-            cgst_minor=priced_line.cgst_minor,
-            sgst_minor=priced_line.sgst_minor,
-            igst_minor=priced_line.igst_minor,
-            cess_minor=priced_line.cess_minor,
-            note=requested_line.note,
-            kitchen_status="queued",
-            kitchen_released_at=(
-                released_at if priced_line.menu_item_id in kitchen_item_ids else None
-            ),
-            kitchen_round_no=(
-                release_round if priced_line.menu_item_id in kitchen_item_ids else None
-            ),
-            created_at=released_at,
-        ))
+        session.add(
+            OrderLine(
+                id=uuid4(),
+                order_id=order.id,
+                client_line_id=requested_line.client_line_id,
+                menu_item_id=priced_line.menu_item_id,
+                menu_item_name_snapshot=priced_line.name,
+                menu_item_type_snapshot=priced_line.item_type,
+                variant_id=(
+                    priced_line.variant_snapshot.id
+                    if priced_line.variant_snapshot is not None
+                    else None
+                ),
+                variant_snapshot=(
+                    priced_line.variant_snapshot.as_dict()
+                    if priced_line.variant_snapshot is not None
+                    else None
+                ),
+                modifiers=(
+                    [snapshot.as_dict() for snapshot in priced_line.modifier_snapshots] or None
+                ),
+                qty=priced_line.qty,
+                unit_price_minor=priced_line.unit_inclusive_minor,
+                line_total_minor=priced_line.line_inclusive_minor,
+                discount_minor=priced_line.discount_minor,
+                hsn_or_sac=priced_line.hsn_or_sac,
+                tax_rate=float(priced_line.tax_rate),
+                taxable_value_minor=priced_line.taxable_value_minor,
+                cgst_minor=priced_line.cgst_minor,
+                sgst_minor=priced_line.sgst_minor,
+                igst_minor=priced_line.igst_minor,
+                cess_minor=priced_line.cess_minor,
+                note=requested_line.note,
+                kitchen_status="queued",
+                kitchen_released_at=(
+                    released_at if priced_line.menu_item_id in kitchen_item_ids else None
+                ),
+                kitchen_round_no=(
+                    release_round if priced_line.menu_item_id in kitchen_item_ids else None
+                ),
+                created_at=released_at,
+            )
+        )
 
     if kitchen_item_ids:
         # A late kitchen item must become visible again even if the prior
@@ -3487,9 +3599,7 @@ async def attach_order_customer(
         return OrderRead.model_validate(existing_response["body"])
 
     order = (
-        await session.execute(
-            select(Order).where(Order.id == order_id).with_for_update()
-        )
+        await session.execute(select(Order).where(Order.id == order_id).with_for_update())
     ).scalar_one_or_none()
     order = require_operational_order(
         order,
@@ -3504,9 +3614,7 @@ async def attach_order_customer(
         operation="changed",
     )
     if order.status not in ("open", "held"):
-        raise BusinessRuleError(
-            f"cannot change the customer on an order in status={order.status}"
-        )
+        raise BusinessRuleError(f"cannot change the customer on an order in status={order.status}")
     _require_settlement_metadata_version(
         order,
         payload.expected_checkout_version,
@@ -3518,9 +3626,7 @@ async def attach_order_customer(
         operation="change the customer on this order",
     )
     shift = (
-        await session.execute(
-            select(Shift).where(Shift.id == order.shift_id).with_for_update()
-        )
+        await session.execute(select(Shift).where(Shift.id == order.shift_id).with_for_update())
     ).scalar_one_or_none()
     shift = require_open_operational_shift(
         shift,
@@ -3612,9 +3718,7 @@ async def apply_order_discount(
         return OrderRead.model_validate(existing_response["body"])
 
     order = (
-        await session.execute(
-            select(Order).where(Order.id == order_id).with_for_update()
-        )
+        await session.execute(select(Order).where(Order.id == order_id).with_for_update())
     ).scalar_one_or_none()
     order = require_operational_order(
         order,
@@ -3629,9 +3733,7 @@ async def apply_order_discount(
         operation="discounted",
     )
     if order.status not in ("open", "held"):
-        raise BusinessRuleError(
-            f"cannot change the discount on an order in status={order.status}"
-        )
+        raise BusinessRuleError(f"cannot change the discount on an order in status={order.status}")
     _require_settlement_metadata_version(
         order,
         payload.expected_checkout_version,
@@ -3643,9 +3745,7 @@ async def apply_order_discount(
         operation="change the discount on this order",
     )
     shift = (
-        await session.execute(
-            select(Shift).where(Shift.id == order.shift_id).with_for_update()
-        )
+        await session.execute(select(Shift).where(Shift.id == order.shift_id).with_for_update())
     ).scalar_one_or_none()
     shift = require_open_operational_shift(
         shift,
@@ -3722,9 +3822,7 @@ async def redeem_points(
         return OrderRead.model_validate(existing_response["body"])
 
     order = (
-        await session.execute(
-            select(Order).where(Order.id == order_id).with_for_update()
-        )
+        await session.execute(select(Order).where(Order.id == order_id).with_for_update())
     ).scalar_one_or_none()
     order = require_operational_order(
         order,
@@ -3739,9 +3837,7 @@ async def redeem_points(
         operation="changed",
     )
     if order.status not in ("open", "held"):
-        raise BusinessRuleError(
-            f"cannot change points on an order in status={order.status}"
-        )
+        raise BusinessRuleError(f"cannot change points on an order in status={order.status}")
     _require_settlement_metadata_version(
         order,
         payload.expected_checkout_version,
@@ -3755,9 +3851,7 @@ async def redeem_points(
     if order.customer_id is None and not order.customer_phone:
         raise BusinessRuleError("attach a customer to this order before redeeming points")
     shift = (
-        await session.execute(
-            select(Shift).where(Shift.id == order.shift_id).with_for_update()
-        )
+        await session.execute(select(Shift).where(Shift.id == order.shift_id).with_for_update())
     ).scalar_one_or_none()
     shift = require_open_operational_shift(
         shift,
@@ -3836,9 +3930,7 @@ async def redeem_reward(
         return OrderRead.model_validate(existing_response["body"])
 
     order = (
-        await session.execute(
-            select(Order).where(Order.id == order_id).with_for_update()
-        )
+        await session.execute(select(Order).where(Order.id == order_id).with_for_update())
     ).scalar_one_or_none()
     order = require_operational_order(
         order,
@@ -3853,9 +3945,7 @@ async def redeem_reward(
         operation="changed",
     )
     if order.status not in ("open", "held"):
-        raise BusinessRuleError(
-            f"cannot change a reward on an order in status={order.status}"
-        )
+        raise BusinessRuleError(f"cannot change a reward on an order in status={order.status}")
     _require_settlement_metadata_version(
         order,
         payload.expected_checkout_version,
@@ -3869,9 +3959,7 @@ async def redeem_reward(
     if order.customer_id is None and not order.customer_phone:
         raise BusinessRuleError("attach a customer to this order before redeeming a reward")
     shift = (
-        await session.execute(
-            select(Shift).where(Shift.id == order.shift_id).with_for_update()
-        )
+        await session.execute(select(Shift).where(Shift.id == order.shift_id).with_for_update())
     ).scalar_one_or_none()
     shift = require_open_operational_shift(
         shift,
@@ -3984,9 +4072,7 @@ async def void_order_line(
         return OrderRead.model_validate(existing_response["body"])
 
     order = (
-        await session.execute(
-            select(Order).where(Order.id == order_id).with_for_update()
-        )
+        await session.execute(select(Order).where(Order.id == order_id).with_for_update())
     ).scalar_one_or_none()
     order = require_operational_order(
         order,
@@ -4118,9 +4204,7 @@ async def send_order_to_pos(
         return OrderRead.model_validate(existing_response["body"])
 
     order = (
-        await session.execute(
-            select(Order).where(Order.id == order_id).with_for_update()
-        )
+        await session.execute(select(Order).where(Order.id == order_id).with_for_update())
     ).scalar_one_or_none()
     order = require_operational_order(
         order,
@@ -4148,9 +4232,7 @@ async def send_order_to_pos(
         operation="send this order to POS",
     )
     shift = (
-        await session.execute(
-            select(Shift).where(Shift.id == order.shift_id).with_for_update()
-        )
+        await session.execute(select(Shift).where(Shift.id == order.shift_id).with_for_update())
     ).scalar_one_or_none()
     shift = require_open_operational_shift(
         shift,
@@ -4161,7 +4243,9 @@ async def send_order_to_pos(
     )
     has_lines = (
         await session.execute(
-            select(func.count()).select_from(OrderLine).where(OrderLine.order_id == order.id)
+            select(func.count())
+            .select_from(OrderLine)
+            .where(OrderLine.order_id == order.id)
             .where(OrderLine.voided_at.is_(None))
         )
     ).scalar_one()
@@ -4212,9 +4296,7 @@ async def publish_direct_order_checkout_claim(
     _require_idempotency(request)
 
     order = (
-        await session.execute(
-            select(Order).where(Order.id == order_id).with_for_update()
-        )
+        await session.execute(select(Order).where(Order.id == order_id).with_for_update())
     ).scalar_one_or_none()
     order = require_operational_order(
         order,
@@ -4224,23 +4306,17 @@ async def publish_direct_order_checkout_claim(
         operation="publishing a direct order for checkout",
     )
     if order.table_id is not None or order.type == "session":
-        raise BusinessRuleError(
-            "Only a table-less direct POS order can be published for checkout."
-        )
+        raise BusinessRuleError("Only a table-less direct POS order can be published for checkout.")
     _require_private_direct_draft_creator(
         order,
         tenant,
         operation="published for checkout",
     )
     if order.status not in {"open", "held"}:
-        raise BusinessRuleError(
-            f"cannot publish an order in status={order.status} for checkout"
-        )
+        raise BusinessRuleError(f"cannot publish an order in status={order.status} for checkout")
 
     shift = (
-        await session.execute(
-            select(Shift).where(Shift.id == order.shift_id).with_for_update()
-        )
+        await session.execute(select(Shift).where(Shift.id == order.shift_id).with_for_update())
     ).scalar_one_or_none()
     shift = require_open_operational_shift(
         shift,
@@ -4324,9 +4400,7 @@ async def hold_direct_order_for_checkout(
     Order update and semantic recovery row are append-only audited together.
     """
     if not tenant.protected_access:
-        raise ForbiddenError(
-            "Only a protected owner can recover a direct order into checkout."
-        )
+        raise ForbiddenError("Only a protected owner can recover a direct order into checkout.")
     if tenant.terminal_id is None:
         raise BusinessRuleError("Select this tablet's POS terminal first.")
     if tenant.branch_id is None:
@@ -4344,9 +4418,7 @@ async def hold_direct_order_for_checkout(
         return OrderRead.model_validate(existing_response["body"])
 
     order = (
-        await session.execute(
-            select(Order).where(Order.id == order_id).with_for_update()
-        )
+        await session.execute(select(Order).where(Order.id == order_id).with_for_update())
     ).scalar_one_or_none()
     order = require_operational_order(
         order,
@@ -4356,13 +4428,9 @@ async def hold_direct_order_for_checkout(
         operation="recovering a direct order into checkout",
     )
     if order.table_id is not None or order.type == "session":
-        raise BusinessRuleError(
-            "Only a table-less direct POS order can use checkout recovery."
-        )
+        raise BusinessRuleError("Only a table-less direct POS order can use checkout recovery.")
     if order.status != "open":
-        raise BusinessRuleError(
-            f"cannot recover an order in status={order.status} into checkout"
-        )
+        raise BusinessRuleError(f"cannot recover an order in status={order.status} into checkout")
     _require_checkout_version(
         order,
         payload.expected_checkout_version,
@@ -4370,9 +4438,7 @@ async def hold_direct_order_for_checkout(
     )
 
     shift = (
-        await session.execute(
-            select(Shift).where(Shift.id == order.shift_id).with_for_update()
-        )
+        await session.execute(select(Shift).where(Shift.id == order.shift_id).with_for_update())
     ).scalar_one_or_none()
     require_open_operational_shift(
         shift,
@@ -4454,18 +4520,22 @@ async def list_active_table_orders(
             "Select this tablet's branch and POS terminal before opening Tables."
         )
     orders = (
-        await session.execute(
-            select(Order)
-            .where(
-                Order.company_id == tenant.company_id,
-                Order.branch_id == tenant.branch_id,
-                Order.terminal_id == tenant.terminal_id,
-                Order.table_id.is_not(None),
-                Order.status.in_(("open", "held")),
+        (
+            await session.execute(
+                select(Order)
+                .where(
+                    Order.company_id == tenant.company_id,
+                    Order.branch_id == tenant.branch_id,
+                    Order.terminal_id == tenant.terminal_id,
+                    Order.table_id.is_not(None),
+                    Order.status.in_(("open", "held")),
+                )
+                .order_by(Order.opened_at, Order.id)
             )
-            .order_by(Order.opened_at, Order.id)
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return [await _build_order_read(session, order) for order in orders]
 
 
@@ -4495,9 +4565,7 @@ async def claim_order_for_checkout(
     if tenant.branch_id is None:
         raise BusinessRuleError("token has no branch_id")
     order = (
-        await session.execute(
-            select(Order).where(Order.id == order_id).with_for_update()
-        )
+        await session.execute(select(Order).where(Order.id == order_id).with_for_update())
     ).scalar_one_or_none()
     order = require_operational_order(
         order,
@@ -4507,9 +4575,7 @@ async def claim_order_for_checkout(
         operation="claiming an order for checkout",
     )
     shift = (
-        await session.execute(
-            select(Shift).where(Shift.id == order.shift_id).with_for_update()
-        )
+        await session.execute(select(Shift).where(Shift.id == order.shift_id).with_for_update())
     ).scalar_one_or_none()
     shift = require_open_operational_shift(
         shift,
@@ -4551,9 +4617,7 @@ async def unclaim_order_checkout(
     if tenant.terminal_id is None:
         raise BusinessRuleError("X-Terminal-Id header required for POS checkout")
     order = (
-        await session.execute(
-            select(Order).where(Order.id == order_id).with_for_update()
-        )
+        await session.execute(select(Order).where(Order.id == order_id).with_for_update())
     ).scalar_one_or_none()
     order = require_operational_order(
         order,
@@ -4563,9 +4627,7 @@ async def unclaim_order_checkout(
         operation="releasing an order checkout claim",
     )
     shift = (
-        await session.execute(
-            select(Shift).where(Shift.id == order.shift_id).with_for_update()
-        )
+        await session.execute(select(Shift).where(Shift.id == order.shift_id).with_for_update())
     ).scalar_one_or_none()
     shift = require_operational_shift_scope(
         shift,
@@ -4613,9 +4675,7 @@ async def void_held_order(
     do this — same accountability rule as billing it.
     """
     order = (
-        await session.execute(
-            select(Order).where(Order.id == order_id).with_for_update()
-        )
+        await session.execute(select(Order).where(Order.id == order_id).with_for_update())
     ).scalar_one_or_none()
     order = require_operational_order(
         order,
@@ -4649,7 +4709,9 @@ async def void_held_order(
                         )
                         .distinct()
                     )
-                ).scalars().all()
+                )
+                .scalars()
+                .all()
             )
         if latest_reasons == {payload.reason}:
             return None
@@ -4675,9 +4737,7 @@ async def void_held_order(
         token=checkout_claim_token,
     )
     shift = (
-        await session.execute(
-            select(Shift).where(Shift.id == order.shift_id).with_for_update()
-        )
+        await session.execute(select(Shift).where(Shift.id == order.shift_id).with_for_update())
     ).scalar_one_or_none()
     shift = require_open_operational_shift(
         shift,
@@ -4693,19 +4753,22 @@ async def void_held_order(
         operation="clear an order on this shift",
     )
     active_lines = (
-        await session.execute(
-            select(OrderLine)
-            .where(
-                OrderLine.order_id == order.id,
-                OrderLine.voided_at.is_(None),
+        (
+            await session.execute(
+                select(OrderLine)
+                .where(
+                    OrderLine.order_id == order.id,
+                    OrderLine.voided_at.is_(None),
+                )
+                .order_by(OrderLine.id)
+                .with_for_update()
             )
-            .order_by(OrderLine.id)
-            .with_for_update()
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     if any(
-        line.kitchen_released_at is not None
-        and (line.kitchen_status or "queued") == "served"
+        line.kitchen_released_at is not None and (line.kitchen_status or "queued") == "served"
         for line in active_lines
     ):
         raise BusinessRuleError(
@@ -4748,6 +4811,7 @@ async def get_order(
 
 class OrderListItem(BaseModel):
     """Slim row for the order-history list."""
+
     id: UUID
     invoice_no: str | None
     type: str
@@ -4855,11 +4919,15 @@ async def list_orders(
         ).all()
     )
     table_ids = [o.table_id for o in rows if o.table_id is not None]
-    codes_by_table = dict(
-        (
-            await session.execute(select(Table.id, Table.code).where(Table.id.in_(table_ids)))
-        ).all()
-    ) if table_ids else {}
+    codes_by_table = (
+        dict(
+            (
+                await session.execute(select(Table.id, Table.code).where(Table.id.in_(table_ids)))
+            ).all()
+        )
+        if table_ids
+        else {}
+    )
     station_by_order = dict(
         (
             await session.execute(
@@ -4925,28 +4993,30 @@ async def list_orders(
         paid = int(paid_by_order.get(o.id, 0))
         refunded = int(refunded_by_order.get(o.id, 0))
         reserved = int(reserved_by_order.get(o.id, 0))
-        out.append(OrderListItem(
-            id=o.id,
-            invoice_no=o.invoice_no,
-            type=o.type,
-            status=o.status,
-            table_id=o.table_id,
-            source_label=label,
-            total_minor=o.total_minor,
-            items_count=int(counts_by_order.get(o.id, 0)),
-            customer_name=o.customer_name,
-            created_at=o.created_at,
-            held_at=o.held_at,
-            checkout_version=int(o.checkout_version),
-            paid_minor=paid,
-            refundable_minor=max(0, paid - refunded - reserved),
-            pending_refund_minor=reserved,
-            payment_methods=[
-                method
-                for method in _POS_PAYMENT_METHOD_ORDER
-                if method in methods_by_order.get(o.id, set())
-            ],
-        ))
+        out.append(
+            OrderListItem(
+                id=o.id,
+                invoice_no=o.invoice_no,
+                type=o.type,
+                status=o.status,
+                table_id=o.table_id,
+                source_label=label,
+                total_minor=o.total_minor,
+                items_count=int(counts_by_order.get(o.id, 0)),
+                customer_name=o.customer_name,
+                created_at=o.created_at,
+                held_at=o.held_at,
+                checkout_version=int(o.checkout_version),
+                paid_minor=paid,
+                refundable_minor=max(0, paid - refunded - reserved),
+                pending_refund_minor=reserved,
+                payment_methods=[
+                    method
+                    for method in _POS_PAYMENT_METHOD_ORDER
+                    if method in methods_by_order.get(o.id, set())
+                ],
+            )
+        )
     return out
 
 
@@ -5002,6 +5072,11 @@ class ShiftRead(BaseModel):
     # Web uses this to explain why an Android-origin shift must normally be
     # closed from its retained tablet lifecycle.
     opening_client_platform: Literal["web", "android", "ios"] | None = None
+    # Random app-install discriminator, not an authentication credential or a
+    # hardware identifier. Native clients persist it only to decide whether a
+    # cached shift may safely accept another offline drawer write. All normal
+    # permission, company, branch and terminal checks remain authoritative.
+    opening_client_installation_id: UUID | None = None
     # NULL on open shifts and on historical shifts closed before migration
     # 0066. New closes preserve the first authenticated closer permanently.
     closed_by: UUID | None = None
@@ -5190,18 +5265,19 @@ async def list_shifts(
         card_collections = int(card_collections_value or 0)
         upi_collections = int(upi_collections_value or 0)
         other_collections = (
-            gross_collections
-            - cash_collections
-            - card_collections
-            - upi_collections
+            gross_collections - cash_collections - card_collections - upi_collections
         )
         pos_refunds = int(pos_refunds_value or 0)
         membership_refunds = int(membership_refunds_value or 0)
         total_refunds = pos_refunds + membership_refunds
         result.append(
             ShiftRead(
-                id=s.id, branch_id=s.branch_id, terminal_id=s.terminal_id, status=s.status,
-                opened_at=s.opened_at, closed_at=s.closed_at,
+                id=s.id,
+                branch_id=s.branch_id,
+                terminal_id=s.terminal_id,
+                status=s.status,
+                opened_at=s.opened_at,
+                closed_at=s.closed_at,
                 opening_float_minor=int(s.opening_float_minor or 0),
                 expected_minor=int(s.expected_minor) if s.expected_minor is not None else None,
                 counted_minor=int(s.counted_minor) if s.counted_minor is not None else None,
@@ -5224,6 +5300,7 @@ async def list_shifts(
                 opening_receipt_recorded=s.opening_action_id is not None,
                 opening_protocol_revision=s.opening_protocol_revision,
                 opening_client_platform=s.opening_client_platform,
+                opening_client_installation_id=s.opening_client_installation_id,
                 closed_by=s.closed_by,
                 closed_by_name=closer_name,
                 closed_by_email=closer_email,
@@ -5279,9 +5356,7 @@ async def finalize_zero_total_order(
         return existing_response["body"]
 
     order = (
-        await session.execute(
-            select(Order).where(Order.id == order_id).with_for_update()
-        )
+        await session.execute(select(Order).where(Order.id == order_id).with_for_update())
     ).scalar_one_or_none()
     order = require_operational_order(
         order,
@@ -5296,9 +5371,7 @@ async def finalize_zero_total_order(
         operation="finalized",
     )
     shift = (
-        await session.execute(
-            select(Shift).where(Shift.id == order.shift_id).with_for_update()
-        )
+        await session.execute(select(Shift).where(Shift.id == order.shift_id).with_for_update())
     ).scalar_one_or_none()
     if order.status == "paid":
         # A new idempotency key is still a harmless read of the already-issued
@@ -5342,9 +5415,7 @@ async def finalize_zero_total_order(
             )
     else:
         if order.status not in ("open", "held"):
-            raise BusinessRuleError(
-                f"cannot finalize an order in status={order.status}"
-            )
+            raise BusinessRuleError(f"cannot finalize an order in status={order.status}")
         now = datetime.now(timezone.utc)
         await _finalize_order(
             session,
@@ -5352,15 +5423,8 @@ async def finalize_zero_total_order(
             company_id=tenant.company_id,
             actor_user_id=tenant.user_id,
             at=now,
-        )
-        _schedule_order_paid_event(
-            background_tasks,
-            company_id=tenant.company_id,
-            branch_id=order.branch_id,
-            order_id=order.id,
-            total_minor=0,
-            method="zero_total",
-            occurred_at=now,
+            payment_method="zero_total",
+            payment_breakdown_minor=_empty_pos_payment_breakdown(),
         )
 
     response = _zero_total_finalization_response(order)
@@ -5374,55 +5438,6 @@ async def finalize_zero_total_order(
         body=response,
     )
     return response
-
-
-def _schedule_order_paid_event(
-    background_tasks: BackgroundTasks,
-    *,
-    company_id: UUID,
-    branch_id: UUID,
-    order_id: UUID,
-    total_minor: int,
-    method: str,
-    occurred_at: datetime,
-) -> None:
-    """Fire OrderPaid on the event bus once the response has been sent.
-
-    Scheduled via FastAPI's BackgroundTasks rather than awaited (or even
-    asyncio.create_task'd) inline: Starlette only runs background tasks
-    after the response body has been sent, which is after this request's
-    SessionDep has already committed (see app/core/db.py get_session). That
-    matters here — handlers like the Google Sheets mirror
-    (app/services/integrations/google_sheets.py on_order_paid) open their
-    own DB session and must see the order in its final committed "paid"
-    state, not a pre-commit snapshot that could still roll back.
-
-    Wrapped in its own try/except so a failure constructing or publishing
-    the event can never surface to the client — the payment itself already
-    succeeded by the time this runs. Mirrors how RealtimeBroadcastMiddleware
-    treats its own non-critical side effect (see app/core/middleware.py).
-    """
-
-    async def _publish() -> None:
-        try:
-            await get_event_bus().publish(
-                OrderPaid(
-                    occurred_at=occurred_at,
-                    company_id=company_id,
-                    branch_id=branch_id,
-                    order_id=order_id,
-                    total_minor=total_minor,
-                    method=method,
-                )
-            )
-        except Exception:  # noqa: BLE001
-            log.warning(
-                "pos.order_paid_event.publish_failed",
-                order_id=str(order_id),
-                exc_info=True,
-            )
-
-    background_tasks.add_task(_publish)
 
 
 @router.post(
@@ -5462,9 +5477,7 @@ async def record_payment(
         )
 
     order = (
-        await session.execute(
-            select(Order).where(Order.id == order_id).with_for_update()
-        )
+        await session.execute(select(Order).where(Order.id == order_id).with_for_update())
     ).scalar_one_or_none()
     order = require_operational_order(
         order,
@@ -5481,9 +5494,7 @@ async def record_payment(
     if order.status in {"paid", "void", "refunded"}:
         raise BusinessRuleError(f"cannot pay an order in status={order.status}")
     shift = (
-        await session.execute(
-            select(Shift).where(Shift.id == order.shift_id).with_for_update()
-        )
+        await session.execute(select(Shift).where(Shift.id == order.shift_id).with_for_update())
     ).scalar_one_or_none()
     shift = require_open_operational_shift(
         shift,
@@ -5530,6 +5541,17 @@ async def record_payment(
     if tip_minor:
         order.tip_minor = int(order.tip_minor or 0) + tip_minor
         order.total_minor = int(order.total_minor or 0) + tip_minor
+    finalized = already_paid + collected_minor >= order.total_minor
+    payment_breakdown_minor = None
+    if finalized:
+        payment_breakdown_minor = await _final_payment_breakdown(
+            session,
+            order_id=order_id,
+            already_paid_minor=already_paid,
+            current_method=payload.method,
+            current_amount_minor=collected_minor,
+            expected_total_minor=int(order.total_minor or 0),
+        )
     payment = Payment(
         id=uuid4(),
         order_id=order_id,
@@ -5547,7 +5569,6 @@ async def record_payment(
     session.add(payment)
     if payload.method == "cash":
         shift.expected_minor = int(shift.expected_minor or 0) + collected_minor
-    finalized = already_paid + collected_minor >= order.total_minor
     if finalized:
         await _finalize_order(
             session,
@@ -5555,15 +5576,8 @@ async def record_payment(
             company_id=tenant.company_id,
             actor_user_id=tenant.user_id,
             at=now,
-        )
-        _schedule_order_paid_event(
-            background_tasks,
-            company_id=tenant.company_id,
-            branch_id=order.branch_id,
-            order_id=order.id,
-            total_minor=int(order.total_minor or 0),
-            method=payload.method,
-            occurred_at=now,
+            payment_method="split" if already_paid > 0 else payload.method,
+            payment_breakdown_minor=payment_breakdown_minor,
         )
     response = PaymentRead(
         id=payment.id,
@@ -5631,8 +5645,7 @@ async def _settle_pos_refund(
             )
     elif not external_reference or provider_settled_at is None:
         raise BusinessRuleError(
-            "Provider refund settlement requires its external reference and exact "
-            "completion time."
+            "Provider refund settlement requires its external reference and exact completion time."
         )
 
     receipt_no, receipt_fiscal_year = await _allocate_pos_refund_receipt(
@@ -5715,6 +5728,44 @@ async def _settle_pos_refund(
         order.status = "refunded"
     await session.flush([refund])
 
+    company = await session.get(Company, refund.company_id)
+    if (
+        company is not None
+        and company.deleted_at is None
+        and company.google_sheets_mirror_enabled is True
+        and company.google_sheets_webhook_url
+        and company.google_sheets_signing_secret_ciphertext
+        and company.google_sheets_configured_at is not None
+    ):
+        branch = await session.get(Branch, refund.branch_id)
+        actor = await session.get(User, settled_by)
+        await enqueue_google_sheets_event_if_enabled(
+            session,
+            company_id=refund.company_id,
+            event_type="pos.refund.settled",
+            source_type="pos_refund",
+            source_id=str(refund.id),
+            source_revision="settled-v1",
+            occurred_at=settled_at,
+            payload={
+                "branch": branch.name if branch else str(refund.branch_id),
+                "reference": refund.receipt_no or order.invoice_no or str(refund.id),
+                "description": f"POS refund · {order.invoice_no or order.id}",
+                "customer": "",
+                "quantity": 1,
+                "amount_minor": -amount,
+                "payment_method": refund.settlement_method,
+                "actor": actor.name if actor else "",
+                "status": "settled",
+                "currency": company.currency,
+                "refund_id": str(refund.id),
+                "order_id": str(order.id),
+                "branch_id": str(refund.branch_id),
+                "shift_id": str(refund.settlement_shift_id),
+                "receipt_fiscal_year": refund.receipt_fiscal_year or "",
+            },
+        )
+
     # A monetary refund is not proof that prepared food or consumed gaming
     # inventory returned to stock. Inventory reversal requires a separate,
     # item-level disposition workflow; never inflate stock automatically here.
@@ -5758,9 +5809,7 @@ async def _locked_pos_refund_context(
         operation=operation,
     )
     shift = (
-        await session.execute(
-            select(Shift).where(Shift.id == payload_shift_id).with_for_update()
-        )
+        await session.execute(select(Shift).where(Shift.id == payload_shift_id).with_for_update())
     ).scalar_one_or_none()
     shift = require_open_operational_shift(
         shift,
@@ -5842,9 +5891,7 @@ async def _pos_refund_state_rows(
         )
     ).scalar_one_or_none()
     refund = (
-        await session.execute(
-            select(Refund).where(Refund.request_id == refund_request_id)
-        )
+        await session.execute(select(Refund).where(Refund.request_id == refund_request_id))
     ).scalar_one_or_none()
     withdrawal = (
         await session.execute(
@@ -5908,8 +5955,7 @@ async def create_pos_refund_request(
     clean_reason_code = payload.reason_code.strip()
     if not clean_reason_code:
         raise BusinessRuleError(
-            "Choose a refund reason before authorising the payout. No refund was "
-            "recorded."
+            "Choose a refund reason before authorising the payout. No refund was recorded."
         )
     header_action_id = (request.headers.get("X-Client-Action-Id") or "").strip()
     if not header_action_id:
@@ -5919,12 +5965,9 @@ async def create_pos_refund_request(
         )
     if header_action_id != payload.client_action_id:
         raise BusinessRuleError(
-            "The saved refund action ID does not match its audit provenance. "
-            "Nothing was posted."
+            "The saved refund action ID does not match its audit provenance. Nothing was posted."
         )
-    clean_external_ref = (
-        payload.external_reference.strip() if payload.external_reference else None
-    )
+    clean_external_ref = payload.external_reference.strip() if payload.external_reference else None
     if clean_external_ref is not None or payload.provider_settled_at is not None:
         raise BusinessRuleError(
             "Reserve the refund with the server before moving money. Do not include "
@@ -5943,9 +5986,7 @@ async def create_pos_refund_request(
         return PosRefundRequestRead.model_validate(replay["body"])
 
     order = (
-        await session.execute(
-            select(Order).where(Order.id == payload.order_id).with_for_update()
-        )
+        await session.execute(select(Order).where(Order.id == payload.order_id).with_for_update())
     ).scalar_one_or_none()
     order = require_operational_order(
         order,
@@ -5981,9 +6022,7 @@ async def create_pos_refund_request(
     if existing_action is not None:
         replay_methods = {
             row.method
-            for row in (
-                await session.execute(select(Payment).where(Payment.order_id == order.id))
-            )
+            for row in (await session.execute(select(Payment).where(Payment.order_id == order.id)))
             .scalars()
             .all()
         }
@@ -5999,8 +6038,7 @@ async def create_pos_refund_request(
             or existing_action.mode != payload.mode
             or existing_action.reason_code != clean_reason_code
             or existing_action.settlement_method != replay_settlement_method
-            or int(existing_action.order_paid_snapshot_minor)
-            != payload.expected_paid_minor
+            or int(existing_action.order_paid_snapshot_minor) != payload.expected_paid_minor
             or int(existing_action.order_refundable_snapshot_minor)
             != payload.expected_refundable_minor
             or (existing_action.note or None) != (payload.note or None)
@@ -6016,9 +6054,7 @@ async def create_pos_refund_request(
             provider_completion,
             refund,
             withdrawal,
-        ) = await _pos_refund_state_rows(
-            session, refund_request_id=existing_action.id
-        )
+        ) = await _pos_refund_state_rows(session, refund_request_id=existing_action.id)
         response = _pos_refund_request_read(
             existing_action,
             order=order,
@@ -6038,9 +6074,7 @@ async def create_pos_refund_request(
         return response
 
     shift = (
-        await session.execute(
-            select(Shift).where(Shift.id == payload.shift_id).with_for_update()
-        )
+        await session.execute(select(Shift).where(Shift.id == payload.shift_id).with_for_update())
     ).scalar_one_or_none()
     shift = require_open_operational_shift(
         shift,
@@ -6056,9 +6090,7 @@ async def create_pos_refund_request(
         operation="request this POS refund on the current shift",
     )
     original_shift = (
-        await session.execute(
-            select(Shift).where(Shift.id == order.shift_id).with_for_update()
-        )
+        await session.execute(select(Shift).where(Shift.id == order.shift_id).with_for_update())
     ).scalar_one_or_none()
     original_shift = require_operational_shift_scope(
         original_shift,
@@ -6077,10 +6109,14 @@ async def create_pos_refund_request(
     )
 
     payment_rows = (
-        await session.execute(
-            select(Payment).where(Payment.order_id == order.id).order_by(Payment.paid_at)
+        (
+            await session.execute(
+                select(Payment).where(Payment.order_id == order.id).order_by(Payment.paid_at)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     paid_total = sum(int(row.amount_minor) for row in payment_rows)
     settled_total = await _refunded_total(session, order.id)
     reserved_total = await _unresolved_pos_refund_total(session, order_id=order.id)
@@ -6117,9 +6153,7 @@ async def create_pos_refund_request(
         membership_reserved = await _unresolved_membership_cash_refund_total(
             session, shift_id=shift.id
         )
-        available_drawer = (
-            int(shift.expected_minor or 0) - pos_reserved - membership_reserved
-        )
+        available_drawer = int(shift.expected_minor or 0) - pos_reserved - membership_reserved
         if payload.amount_minor > available_drawer:
             raise BusinessRuleError(
                 "This shift does not have enough expected drawer cash after other "
@@ -6137,15 +6171,11 @@ async def create_pos_refund_request(
         pending_customer_refunds = await _unresolved_pos_refund_total(
             session, customer_id=customer.id
         )
-        pending_membership_refunds = (
-            await _unresolved_membership_refund_total_for_customer(
-                session, customer_id=customer.id
-            )
+        pending_membership_refunds = await _unresolved_membership_refund_total_for_customer(
+            session, customer_id=customer.id
         )
         if int(customer.total_spent_minor or 0) < (
-            pending_customer_refunds
-            + pending_membership_refunds
-            + payload.amount_minor
+            pending_customer_refunds + pending_membership_refunds + payload.amount_minor
         ):
             raise BusinessRuleError(
                 "Customer lifetime spend is inconsistent with pending refunds. A "
@@ -6241,9 +6271,7 @@ async def begin_pos_cash_refund_handoff(
         provider_completion,
         refund,
         withdrawal,
-    ) = await _pos_refund_state_rows(
-        session, refund_request_id=refund_request.id
-    )
+    ) = await _pos_refund_state_rows(session, refund_request_id=refund_request.id)
     if (
         cash_completion is not None
         or provider_completion is not None
@@ -6278,34 +6306,24 @@ async def begin_pos_cash_refund_handoff(
         membership_reserved = await _unresolved_membership_cash_refund_total(
             session, shift_id=shift.id
         )
-        available_drawer = (
-            int(shift.expected_minor or 0) - other_pos_reserved - membership_reserved
-        )
+        available_drawer = int(shift.expected_minor or 0) - other_pos_reserved - membership_reserved
         if int(refund_request.amount_minor) > available_drawer:
             raise BusinessRuleError(
                 "The drawer no longer has enough expected cash. Do not hand over "
                 "money; resolve earlier refund tasks or withdraw this request."
             )
         if order.customer_id is not None:
-            customer = await session.get(
-                Customer, order.customer_id, with_for_update=True
-            )
+            customer = await session.get(Customer, order.customer_id, with_for_update=True)
             if customer is None or customer.company_id != tenant.company_id:
                 raise BusinessRuleError(
                     "The order's linked customer is unavailable. Do not hand over "
                     "cash until a protected owner repairs the customer link."
                 )
-            pending_pos = await _unresolved_pos_refund_total(
+            pending_pos = await _unresolved_pos_refund_total(session, customer_id=customer.id)
+            pending_memberships = await _unresolved_membership_refund_total_for_customer(
                 session, customer_id=customer.id
             )
-            pending_memberships = (
-                await _unresolved_membership_refund_total_for_customer(
-                    session, customer_id=customer.id
-                )
-            )
-            if int(customer.total_spent_minor or 0) < (
-                pending_pos + pending_memberships
-            ):
+            if int(customer.total_spent_minor or 0) < (pending_pos + pending_memberships):
                 raise BusinessRuleError(
                     "Customer lifetime spend no longer covers accepted refund tasks. "
                     "Do not hand over cash; a protected owner must reconcile LTV."
@@ -6324,9 +6342,7 @@ async def begin_pos_cash_refund_handoff(
             )
             session.add(handoff)
             await session.flush()
-        response = _pos_refund_request_read(
-            refund_request, order=order, handoff=handoff
-        )
+        response = _pos_refund_request_read(refund_request, order=order, handoff=handoff)
     await store_response(
         session,
         key=idempotency_key,
@@ -6371,9 +6387,7 @@ async def settle_pos_cash_refund(
         operation="record this completed POS cash handover",
     )
     if refund_request.settlement_method != "cash":
-        raise BusinessRuleError(
-            "This refund used a non-cash rail and cannot change the drawer."
-        )
+        raise BusinessRuleError("This refund used a non-cash rail and cannot change the drawer.")
     if int(refund_request.amount_minor) != payload.expected_amount_minor:
         raise BusinessRuleError(
             "The server-confirmed cash amount differs from this handover screen. "
@@ -6387,9 +6401,7 @@ async def settle_pos_cash_refund(
         provider_completion,
         existing_refund,
         withdrawal,
-    ) = await _pos_refund_state_rows(
-        session, refund_request_id=refund_request.id
-    )
+    ) = await _pos_refund_state_rows(session, refund_request_id=refund_request.id)
     if existing_refund is not None:
         response = _pos_refund_request_read(
             refund_request,
@@ -6508,9 +6520,7 @@ async def finalize_pos_cash_refund(
         provider_completion,
         existing_refund,
         withdrawal,
-    ) = await _pos_refund_state_rows(
-        session, refund_request_id=refund_request.id
-    )
+    ) = await _pos_refund_state_rows(session, refund_request_id=refund_request.id)
     if existing_refund is not None:
         response = _pos_refund_request_read(
             refund_request,
@@ -6532,10 +6542,7 @@ async def finalize_pos_cash_refund(
                 "No durable cash-handover confirmation exists. Record whether the "
                 "customer received cash before finalizing accounting."
             )
-        if (
-            tenant.user_id != cash_completion.recorded_by
-            and not tenant.protected_access
-        ):
+        if tenant.user_id != cash_completion.recorded_by and not tenant.protected_access:
             recorder = await session.get(User, cash_completion.recorded_by)
             recorder_name = recorder.name if recorder is not None else "another employee"
             raise ForbiddenError(
@@ -6590,9 +6597,7 @@ async def withdraw_pos_cash_refund(
     tenant: TenantContext = Depends(requires("pos.refund")),
 ) -> PosRefundRequestRead:
     if not tenant.protected_access:
-        raise ForbiddenError(
-            "Only a protected owner may withdraw an accepted POS cash refund."
-        )
+        raise ForbiddenError("Only a protected owner may withdraw an accepted POS cash refund.")
     if not payload.cash_not_handed_over:
         raise BusinessRuleError(
             "Withdraw only when no cash reached the customer. If cash left the "
@@ -6633,9 +6638,7 @@ async def withdraw_pos_cash_refund(
         provider_completion,
         refund,
         withdrawal,
-    ) = await _pos_refund_state_rows(
-        session, refund_request_id=refund_request.id
-    )
+    ) = await _pos_refund_state_rows(session, refund_request_id=refund_request.id)
     if refund is not None:
         raise BusinessRuleError(
             "This refund is already settled and cannot be withdrawn. No second "
@@ -6750,9 +6753,7 @@ async def resolve_pos_cash_refund_handoff(
         provider_completion,
         refund,
         withdrawal,
-    ) = await _pos_refund_state_rows(
-        session, refund_request_id=refund_request.id
-    )
+    ) = await _pos_refund_state_rows(session, refund_request_id=refund_request.id)
     if handoff is None:
         raise BusinessRuleError(
             "No cash handover was started. Use Withdraw accepted refund instead."
@@ -6868,19 +6869,13 @@ async def begin_pos_provider_refund_payout(
         provider_completion,
         refund,
         withdrawal,
-    ) = await _pos_refund_state_rows(
-        session, refund_request_id=refund_request.id
-    )
+    ) = await _pos_refund_state_rows(session, refund_request_id=refund_request.id)
     if handoff is not None:
         raise BusinessRuleError(
             "This provider refund has inconsistent cash-handover provenance. A "
             "protected owner must review it."
         )
-    if (
-        provider_completion is not None
-        or refund is not None
-        or withdrawal is not None
-    ):
+    if provider_completion is not None or refund is not None or withdrawal is not None:
         response = _pos_refund_request_read(
             refund_request,
             order=order,
@@ -6903,25 +6898,17 @@ async def begin_pos_provider_refund_payout(
         # action. After this point the immutable settlement must be recorded
         # even if an ancillary accumulator drifts.
         if order.customer_id is not None:
-            customer = await session.get(
-                Customer, order.customer_id, with_for_update=True
-            )
+            customer = await session.get(Customer, order.customer_id, with_for_update=True)
             if customer is None or customer.company_id != tenant.company_id:
                 raise BusinessRuleError(
                     "The order's linked customer is unavailable. Do not start the "
                     "provider payout until a protected owner repairs it."
                 )
-            pending_pos = await _unresolved_pos_refund_total(
+            pending_pos = await _unresolved_pos_refund_total(session, customer_id=customer.id)
+            pending_memberships = await _unresolved_membership_refund_total_for_customer(
                 session, customer_id=customer.id
             )
-            pending_memberships = (
-                await _unresolved_membership_refund_total_for_customer(
-                    session, customer_id=customer.id
-                )
-            )
-            if int(customer.total_spent_minor or 0) < (
-                pending_pos + pending_memberships
-            ):
+            if int(customer.total_spent_minor or 0) < (pending_pos + pending_memberships):
                 raise BusinessRuleError(
                     "Customer lifetime spend no longer covers accepted refund tasks. "
                     "Do not start the provider payout; a protected owner must "
@@ -7012,9 +6999,7 @@ async def settle_pos_provider_refund(
         provider_completion,
         existing_refund,
         withdrawal,
-    ) = await _pos_refund_state_rows(
-        session, refund_request_id=refund_request.id
-    )
+    ) = await _pos_refund_state_rows(session, refund_request_id=refund_request.id)
     if handoff is not None:
         raise BusinessRuleError(
             "This provider refund has inconsistent cash-handover provenance. A "
@@ -7075,11 +7060,7 @@ async def settle_pos_provider_refund(
                 f"{refund_request.settlement_method}:{clean_reference}"
             )
             await session.execute(
-                select(
-                    func.pg_advisory_xact_lock(
-                        func.hashtextextended(provider_lock_key, 0)
-                    )
-                )
+                select(func.pg_advisory_xact_lock(func.hashtextextended(provider_lock_key, 0)))
             )
             duplicate_reference_count = int(
                 (
@@ -7088,8 +7069,7 @@ async def settle_pos_provider_refund(
                             PosRefundProviderSettlement.company_id == tenant.company_id,
                             PosRefundProviderSettlement.settlement_method
                             == refund_request.settlement_method,
-                            PosRefundProviderSettlement.external_reference
-                            == clean_reference,
+                            PosRefundProviderSettlement.external_reference == clean_reference,
                         )
                     )
                 ).scalar_one()
@@ -7177,9 +7157,7 @@ async def finalize_pos_provider_refund(
         provider_completion,
         existing_refund,
         withdrawal,
-    ) = await _pos_refund_state_rows(
-        session, refund_request_id=refund_request.id
-    )
+    ) = await _pos_refund_state_rows(session, refund_request_id=refund_request.id)
     if existing_refund is not None:
         response = _pos_refund_request_read(
             refund_request,
@@ -7201,10 +7179,7 @@ async def finalize_pos_provider_refund(
                 "No durable provider-completion fact exists. Record the provider "
                 "outcome first; do not perform another payout."
             )
-        if (
-            tenant.user_id != provider_completion.settled_by
-            and not tenant.protected_access
-        ):
+        if tenant.user_id != provider_completion.settled_by and not tenant.protected_access:
             recorder = await session.get(User, provider_completion.settled_by)
             recorder_name = recorder.name if recorder is not None else "another employee"
             raise ForbiddenError(
@@ -7224,9 +7199,7 @@ async def finalize_pos_provider_refund(
             accounting_finalized_at=finalized_at,
             client_occurred_at=provider_completion.provider_settled_at,
             captured_time_reconciled=provider_completion.captured_time_reconciled,
-            provider_evidence_reconciled=(
-                provider_completion.provider_evidence_reconciled
-            ),
+            provider_evidence_reconciled=(provider_completion.provider_evidence_reconciled),
             settled_by=tenant.user_id,
             idempotency_key=idempotency_key,
             external_reference=provider_completion.external_reference,
@@ -7264,9 +7237,7 @@ async def withdraw_pos_provider_refund(
     tenant: TenantContext = Depends(requires("pos.refund")),
 ) -> PosRefundRequestRead:
     if not tenant.protected_access:
-        raise ForbiddenError(
-            "Only a protected owner may withdraw a provider refund reservation."
-        )
+        raise ForbiddenError("Only a protected owner may withdraw a provider refund reservation.")
     if not payload.provider_not_completed:
         raise BusinessRuleError(
             "Withdraw only after verifying that no provider payout occurred. If the "
@@ -7274,9 +7245,7 @@ async def withdraw_pos_provider_refund(
         )
     clean_reason = payload.reason.strip()
     if len(clean_reason) < 3:
-        raise BusinessRuleError(
-            "Explain how the owner verified that no provider refund completed."
-        )
+        raise BusinessRuleError("Explain how the owner verified that no provider refund completed.")
     idempotency_key, request_hash = _require_idempotency(request)
     replay = await check_or_reserve(
         session,
@@ -7295,9 +7264,7 @@ async def withdraw_pos_provider_refund(
         operation="withdraw this incomplete provider POS refund",
     )
     if refund_request.settlement_method == "cash":
-        raise BusinessRuleError(
-            "This is a cash refund. Use the cash withdrawal decision instead."
-        )
+        raise BusinessRuleError("This is a cash refund. Use the cash withdrawal decision instead.")
     if int(refund_request.amount_minor) != payload.expected_amount_minor:
         raise BusinessRuleError(
             "The reserved amount differs from this withdrawal. Refresh the task."
@@ -7309,9 +7276,7 @@ async def withdraw_pos_provider_refund(
         provider_completion,
         refund,
         withdrawal,
-    ) = await _pos_refund_state_rows(
-        session, refund_request_id=refund_request.id
-    )
+    ) = await _pos_refund_state_rows(session, refund_request_id=refund_request.id)
     if handoff is not None:
         raise BusinessRuleError(
             "This provider refund has inconsistent cash-handover provenance. A "
@@ -7444,18 +7409,14 @@ async def resolve_pos_provider_refund_payout(
         provider_completion,
         refund,
         withdrawal,
-    ) = await _pos_refund_state_rows(
-        session, refund_request_id=refund_request.id
-    )
+    ) = await _pos_refund_state_rows(session, refund_request_id=refund_request.id)
     if handoff is not None:
         raise BusinessRuleError(
             "This provider refund has inconsistent cash-handover provenance. A "
             "protected owner must review it."
         )
     if provider_start is None:
-        raise BusinessRuleError(
-            "No provider payout was started. Use Withdraw reservation instead."
-        )
+        raise BusinessRuleError("No provider payout was started. Use Withdraw reservation instead.")
     if refund is not None:
         raise BusinessRuleError(
             "This provider refund is already settled and cannot be resolved as failed."
@@ -7468,9 +7429,7 @@ async def resolve_pos_provider_refund_payout(
     if withdrawal is None:
         server_now = datetime.now(timezone.utc)
         if payload.provider_checked_at.tzinfo is None:
-            raise BusinessRuleError(
-                "Provider verification time must include a timezone."
-            )
+            raise BusinessRuleError("Provider verification time must include a timezone.")
         provider_checked_at = payload.provider_checked_at.astimezone(timezone.utc)
         if provider_checked_at > server_now + timedelta(minutes=5):
             raise BusinessRuleError(
@@ -7589,9 +7548,7 @@ async def list_pending_pos_refund_evidence(
             .all()
         )
 
-    provider_rows = await _pending_rows(
-        "provider_reference", Refund.provider_evidence_reconciled
-    )
+    provider_rows = await _pending_rows("provider_reference", Refund.provider_evidence_reconciled)
     time_rows = await _pending_rows("captured_time", Refund.captured_time_reconciled)
     pending = [
         PendingPosRefundEvidenceRead(
@@ -7718,17 +7675,13 @@ async def reconcile_pos_refund_evidence(
             select(PosRefundEvidenceReconciliation)
             .where(
                 PosRefundEvidenceReconciliation.refund_id == refund.id,
-                PosRefundEvidenceReconciliation.evidence_kind
-                == payload.evidence_kind,
+                PosRefundEvidenceReconciliation.evidence_kind == payload.evidence_kind,
             )
             .with_for_update()
         )
     ).scalar_one_or_none()
     if existing is not None:
-        if (
-            existing.proof_reference != clean_proof
-            or existing.reason != clean_reason
-        ):
+        if existing.proof_reference != clean_proof or existing.reason != clean_reason:
             raise BusinessRuleError(
                 "This refund evidence was already reconciled with different proof. "
                 "Open the immutable review register; do not overwrite it."
@@ -7817,9 +7770,7 @@ async def _normalized_customer_spend(
     membership_refunds = int(
         (
             await session.execute(
-                select(
-                    func.coalesce(func.sum(MembershipRefundSettlement.amount_minor), 0)
-                )
+                select(func.coalesce(func.sum(MembershipRefundSettlement.amount_minor), 0))
                 .join(
                     MembershipPayment,
                     MembershipPayment.id == MembershipRefundSettlement.payment_id,
@@ -7933,9 +7884,7 @@ async def list_pending_customer_spend_reconciliations(
             amount_minor=int(refund.amount_minor),
             settled_at=refund.settled_at or refund.created_at,
             reconciliation_state=(
-                "legacy_unknown"
-                if refund.customer_spend_reconciled is None
-                else "unreconciled"
+                "legacy_unknown" if refund.customer_spend_reconciled is None else "unreconciled"
             ),
             refund_reason_code=refund.reason_code,
         )
@@ -7969,15 +7918,9 @@ async def reconcile_customer_spend(
 ) -> CustomerSpendReconciliationRead:
     """Append an owner-approved LTV repair without rewriting financial facts."""
     if not tenant.protected_access:
-        raise ForbiddenError(
-            "Only a protected owner can reconcile customer lifetime spend."
-        )
-    if (payload.pos_refund_id is None) == (
-        payload.membership_refund_settlement_id is None
-    ):
-        raise BusinessRuleError(
-            "Choose exactly one pending POS or membership refund settlement."
-        )
+        raise ForbiddenError("Only a protected owner can reconcile customer lifetime spend.")
+    if (payload.pos_refund_id is None) == (payload.membership_refund_settlement_id is None):
+        raise BusinessRuleError("Choose exactly one pending POS or membership refund settlement.")
     clean_reason = payload.reason.strip()
     if len(clean_reason) < 3:
         raise BusinessRuleError("Explain why this customer-spend repair is required.")
@@ -8049,8 +7992,7 @@ async def reconcile_customer_spend(
                     CustomerMembership.id == MembershipPayment.membership_id,
                 )
                 .where(
-                    MembershipRefundSettlement.id
-                    == payload.membership_refund_settlement_id,
+                    MembershipRefundSettlement.id == payload.membership_refund_settlement_id,
                     MembershipRefundSettlement.company_id == tenant.company_id,
                     CustomerMembership.customer_id == customer.id,
                 )
@@ -8060,9 +8002,7 @@ async def reconcile_customer_spend(
     if source_row is None:
         raise NotFoundError("Pending customer-spend reconciliation source not found")
     if source_row.customer_spend_reconciled is True:
-        raise BusinessRuleError(
-            "This settlement is not marked for customer-spend reconciliation."
-        )
+        raise BusinessRuleError("This settlement is not marked for customer-spend reconciliation.")
     source_reconciliation_state = (
         "legacy_unknown"
         if source_type == "pos" and source_row.customer_spend_reconciled is None
@@ -8070,17 +8010,14 @@ async def reconcile_customer_spend(
     )
     if source_type == "membership" and source_row.customer_spend_reconciled is not False:
         raise BusinessRuleError(
-            "This membership settlement is not marked for customer-spend "
-            "reconciliation."
+            "This membership settlement is not marked for customer-spend reconciliation."
         )
 
     if source_type == "pos":
         if source_order is None:
             raise NotFoundError("Pending POS customer-spend source order not found")
         source_approver_company = (
-            await session.execute(
-                select(User.company_id).where(User.id == source_row.approved_by)
-            )
+            await session.execute(select(User.company_id).where(User.id == source_row.approved_by))
         ).scalar_one_or_none()
         paid_total = await _paid_total(session, source_order.id)
         refunded_total = await _refunded_total(session, source_order.id)
@@ -8161,9 +8098,7 @@ async def reconcile_customer_spend(
         company_id=tenant.company_id,
         customer_id=customer.id,
         pos_refund_id=(source_row.id if source_type == "pos" else None),
-        membership_refund_settlement_id=(
-            source_row.id if source_type == "membership" else None
-        ),
+        membership_refund_settlement_id=(source_row.id if source_type == "membership" else None),
         source_reconciliation_state=source_reconciliation_state,
         source_amount_minor=int(source_row.amount_minor),
         before_total_spent_minor=before_total,
@@ -8380,29 +8315,41 @@ async def open_shift(
         platform=opening_client_platform,
     )
     if capture.key:
-        receipt = (await session.execute(select(Shift).where(
-            Shift.company_id == tenant.company_id,
-            Shift.opening_action_id == capture.key,
-        ).with_for_update())).scalar_one_or_none()
+        receipt = (
+            await session.execute(
+                select(Shift)
+                .where(
+                    Shift.company_id == tenant.company_id,
+                    Shift.opening_action_id == capture.key,
+                )
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
         if receipt is not None:
-            if (receipt.opening_request_hash != capture.request_hash
-                    or receipt.opened_by != tenant.user_id
-                    or receipt.terminal_id != tenant.terminal_id
-                    or receipt.branch_id != tenant.branch_id
-                    or receipt.opening_protocol_revision != _SHIFT_OPENING_PROTOCOL_REVISION
-                    or receipt.opening_client_platform != opening_client_platform
-                    # A Code21 request may have committed immediately before
-                    # the app upgraded to Code24. Its exact retained key may
-                    # replay with a newly available installation UUID; accept
-                    # the receipt without mutating its immutable NULL marker.
-                    or (
-                        receipt.opening_client_installation_id is not None
-                        and receipt.opening_client_installation_id
-                        != opening_client_installation_id
-                    )):
-                raise ConflictError("This saved shift identity was already used with different cash, time, employee or workspace. Nothing changed; review the original saved action.")
+            if (
+                receipt.opening_request_hash != capture.request_hash
+                or receipt.opened_by != tenant.user_id
+                or receipt.terminal_id != tenant.terminal_id
+                or receipt.branch_id != tenant.branch_id
+                or receipt.opening_protocol_revision != _SHIFT_OPENING_PROTOCOL_REVISION
+                or receipt.opening_client_platform != opening_client_platform
+                # A Code21 request may have committed immediately before
+                # the app upgraded to Code24. Its exact retained key may
+                # replay with a newly available installation UUID; accept
+                # the receipt without mutating its immutable NULL marker.
+                or (
+                    receipt.opening_client_installation_id is not None
+                    and receipt.opening_client_installation_id != opening_client_installation_id
+                )
+            ):
+                raise ConflictError(
+                    "This saved shift identity was already used with different cash, time, employee or workspace. Nothing changed; review the original saved action."
+                )
             if receipt.status != "open":
-                raise ConflictError("This saved shift has already been closed. Ask an owner to reconcile any saved dependent sessions or bills; do not open another shift for this action.", details={"issue":"saved_shift_already_closed", "shift_id":str(receipt.id)})
+                raise ConflictError(
+                    "This saved shift has already been closed. Ask an owner to reconcile any saved dependent sessions or bills; do not open another shift for this action.",
+                    details={"issue": "saved_shift_already_closed", "shift_id": str(receipt.id)},
+                )
             return {"id": str(receipt.id), "status": "open"}
     capture.require_fresh()
 
@@ -8412,20 +8359,26 @@ async def open_shift(
     # returning a shift that became closed during this request.
     existing = (
         await session.execute(
-            select(Shift).where(
+            select(Shift)
+            .where(
                 Shift.company_id == tenant.company_id,
                 Shift.terminal_id == tenant.terminal_id,
                 Shift.status == "open",
-            ).with_for_update()
+            )
+            .with_for_update()
         )
     ).scalar_one_or_none()
     if existing:
         if capture.offline:
-            raise await _shift_feedback_error(session, existing,
+            raise await _shift_feedback_error(
+                session,
+                existing,
                 issue="saved_shift_conflicts_with_open_shift",
                 message="A different shift was opened while this tablet was offline.",
                 next_action="Keep the saved shift and its sessions for owner reconciliation. Do not move saved cash or sessions automatically into another shift.",
-                known_branch=branch, known_terminal=terminal)
+                known_branch=branch,
+                known_terminal=terminal,
+            )
         if existing.opened_by != tenant.user_id:
             raise await _shift_feedback_error(
                 session,
@@ -8455,18 +8408,29 @@ async def open_shift(
             )
         return {"id": str(existing.id), "status": existing.status}
     if capture.offline:
-        previous = (await session.execute(select(Shift).where(
-            Shift.company_id == tenant.company_id,
-            Shift.terminal_id == tenant.terminal_id,
-            Shift.closed_at.is_not(None),
-            Shift.closed_at > capture.opened_at,
-        ).order_by(Shift.closed_at.desc()).limit(1))).scalar_one_or_none()
+        previous = (
+            await session.execute(
+                select(Shift)
+                .where(
+                    Shift.company_id == tenant.company_id,
+                    Shift.terminal_id == tenant.terminal_id,
+                    Shift.closed_at.is_not(None),
+                    Shift.closed_at > capture.opened_at,
+                )
+                .order_by(Shift.closed_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
         if previous is not None:
-            raise await _shift_feedback_error(session, previous,
+            raise await _shift_feedback_error(
+                session,
+                previous,
                 issue="saved_shift_overlaps_closed_shift",
                 message="The saved opening time overlaps an already closed shift.",
                 next_action="Ask an owner to reconcile the saved shift, sessions and cash. Nothing was discarded or moved to another shift.",
-                known_branch=branch, known_terminal=terminal)
+                known_branch=branch,
+                known_terminal=terminal,
+            )
     shift = Shift(
         id=uuid4(),
         company_id=tenant.company_id,
@@ -8499,9 +8463,7 @@ async def _close_shift_impl(
     recovery: ShiftRecoveryCloseRequest | None = None,
 ) -> dict:
     shift = (
-        await session.execute(
-            select(Shift).where(Shift.id == shift_id).with_for_update()
-        )
+        await session.execute(select(Shift).where(Shift.id == shift_id).with_for_update())
     ).scalar_one_or_none()
     shift = require_operational_shift_scope(
         shift,
@@ -8656,8 +8618,7 @@ async def _close_shift_impl(
                 "kitchen cancellation(s) still need acknowledgement."
             ),
             next_action=(
-                "Open KDS, review and acknowledge every cancelled item, then close "
-                "the shift again."
+                "Open KDS, review and acknowledge every cancelled item, then close the shift again."
             ),
         )
     running_sessions = int(
@@ -8682,8 +8643,7 @@ async def _close_shift_impl(
                 "are still running or paused."
             ),
             next_action=(
-                "Open Gaming, stop each session and finish its billing, then close the "
-                "shift again."
+                "Open Gaming, stop each session and finish its billing, then close the shift again."
             ),
         )
     unbilled_sessions = int(
@@ -8723,8 +8683,7 @@ async def _close_shift_impl(
                 )
                 .outerjoin(
                     MembershipPaymentRequestResolution,
-                    MembershipPaymentRequestResolution.request_id
-                    == MembershipPaymentRequest.id,
+                    MembershipPaymentRequestResolution.request_id == MembershipPaymentRequest.id,
                 )
                 .where(
                     MembershipPaymentRequest.shift_id == shift.id,
@@ -8763,8 +8722,7 @@ async def _close_shift_impl(
                 .where(
                     MembershipRefundAttemptRecovery.company_id == shift.company_id,
                     MembershipRefundAttemptRecovery.source_branch_id == shift.branch_id,
-                    MembershipRefundAttemptRecovery.source_terminal_id
-                    == shift.terminal_id,
+                    MembershipRefundAttemptRecovery.source_terminal_id == shift.terminal_id,
                     MembershipRefundAttemptRecovery.source_shift_id == shift.id,
                     MembershipRefundAttemptResolution.id.is_(None),
                 )

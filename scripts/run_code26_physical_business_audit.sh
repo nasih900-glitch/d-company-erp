@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run the Code 29 business acceptance lane against a disposable local backend.
+# Run the current Code30.2 business acceptance lane against a disposable backend.
 #
 # This script is deliberately explicit: it never defaults to a cloud device,
 # never accepts a non-loopback database, never uses production credentials and
@@ -20,7 +20,7 @@ Optional environment variables:
   CODE26_GCP_PROJECT    Firebase project (default: erp-15f1617a).
 
 The firebase mode is synchronous and may consume paid Test Lab quota. It must
-only be invoked after the Code 29 source-settled release gate has been given.
+only be invoked after the current source-settled release gate has been given.
 EOF
 }
 
@@ -117,8 +117,8 @@ RUNTIME_DIR="$EVIDENCE_DIR/runtime"
 ARTIFACT_DIR="$EVIDENCE_DIR/artifacts"
 
 # Physical evidence may only name an immutable, clean commit. A dirty source
-# tree can otherwise build bytes that are absent from source_commit and make a
-# Code 25 HEAD look like a Code 29 result.
+# tree can otherwise build bytes that are absent from source_commit and make
+# an older HEAD look like a Code30.2 result.
 SOURCE_COMMIT="$(git -C "$REPO_ROOT" rev-parse --verify 'HEAD^{commit}')"
 SOURCE_TREE="$(git -C "$REPO_ROOT" rev-parse --verify 'HEAD^{tree}')"
 SOURCE_BRANCH="$(git -C "$REPO_ROOT" symbolic-ref --quiet --short HEAD || printf 'DETACHED')"
@@ -130,8 +130,8 @@ if [[ -n "$SOURCE_DIRTY" ]]; then
 fi
 VERSION_CODE="$(sed -nE 's/^[[:space:]]*versionCode[[:space:]]*=[[:space:]]*([0-9]+).*/\1/p' "$ANDROID_DIR/app/build.gradle.kts" | head -1)"
 VERSION_NAME="$(sed -nE 's/^[[:space:]]*versionName[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' "$ANDROID_DIR/app/build.gradle.kts" | head -1)"
-if [[ "$VERSION_CODE" != "29" || "$VERSION_NAME" != "3.1.21" ]]; then
-  printf 'Refusing non-Code-29 source identity: versionCode=%s versionName=%s\n' \
+if [[ "$VERSION_CODE" != "37" || "$VERSION_NAME" != "3.1.29" ]]; then
+  printf 'Refusing non-Code30.2 source identity: versionCode=%s versionName=%s\n' \
     "$VERSION_CODE" "$VERSION_NAME" >&2
   exit 65
 fi
@@ -293,14 +293,14 @@ PLAN_STABILITY_WINDOWS="$(jq '[.steps[] | select(
 )] | length' "$PLAN")"
 PLAN_ALARM_CONSTRAINTS="$(jq '[.steps[] | select(.action == "alarmConstraints")] | length' "$PLAN")"
 PLAN_PAUSE_SEQUENCE="$(jq '[.steps[] | select(
-  (.name == "Standard Single: open pause reason" and .action == "click" and .text == "Pause") or
-  (.name == "Standard Single: enter physical pause reason" and .action == "fill" and
+  (.name == "PS5 Single: open pause reason" and .action == "click" and .text == "Pause") or
+  (.name == "PS5 Single: enter physical pause reason" and .action == "fill" and
     .value == "Physical audit pause stability") or
-  (.name == "Standard Single: pause with reason" and .action == "click" and
+  (.name == "PS5 Single: pause with reason" and .action == "click" and
     .text == "Pause session") or
   (.name == "Measure paused session layout stability" and
     .action == "idleSemanticStability") or
-  (.name == "Standard Single: resume after stable pause" and .action == "click" and
+  (.name == "PS5 Single: resume after stable pause" and .action == "click" and
     .text == "Resume")
 )] | length' "$PLAN")"
 PLAN_SEMANTIC_STABILITY="$(jq '[.steps[] | select(
@@ -309,7 +309,7 @@ PLAN_SEMANTIC_STABILITY="$(jq '[.steps[] | select(
   .exactStableSemantics == [{
     id:"ps5_station_1_paused_timer",attribute:"text",
     fullmatch:"[0-9]{2}:[0-9]{2}:[0-9]{2}",expectedCount:1,
-    ancestor:{attribute:"content-desc",fullmatch:"PS5 Station 1\\. Paused\\. Standard · Single · ₹80\\.00 fixed total\\."}
+    ancestor:{attribute:"content-desc",fullmatch:"PS5 Station 1\\. Paused\\. Single · ₹80\\.00 fixed total\\."}
   }]
 )] | length' "$PLAN")"
 PLAN_PACKAGE_STARTS="$(jq '[.steps[] | select(
@@ -326,15 +326,19 @@ PLAN_BASE_CODES_COMPLETE="$(jq '(
     ((.packageCode // "") | contains("-session-"))
   ) | .packageCode] | unique
 ) == [
-  "premium-dual-session-60m",
-  "premium-single-session-60m",
   "standard-dual-session-30m",
   "standard-dual-session-60m",
   "standard-simdrive-session-15m",
   "standard-simdrive-session-30m",
   "standard-simdrive-session-60m",
   "standard-single-session-30m",
-  "standard-single-session-60m"
+  "standard-single-session-60m",
+  "vr-games-session-15m",
+  "vr-games-session-30m",
+  "vr-games-session-60m",
+  "vr-racing-session-15m",
+  "vr-racing-session-30m",
+  "vr-racing-session-60m"
 ]' "$PLAN")"
 PLAN_EXTENSION_CODES_COMPLETE="$(jq '(
   [.steps[] | select(
@@ -342,20 +346,16 @@ PLAN_EXTENSION_CODES_COMPLETE="$(jq '(
     ((.packageCode // "") | contains("-extension-"))
   ) | .packageCode] | unique
 ) == [
-  "premium-dual-extension-30m",
-  "premium-dual-extension-60m",
-  "premium-single-extension-30m",
-  "premium-single-extension-60m",
   "standard-dual-extension-30m",
   "standard-dual-extension-60m",
   "standard-single-extension-30m",
   "standard-single-extension-60m"
 ]' "$PLAN")"
-if [[ "$PLAN_STEPS" -ne 413 || "$PLAN_STARTS" -ne 16 || "$PLAN_PAYMENTS" -ne 16 || \
+if [[ "$PLAN_STEPS" -ne 389 || "$PLAN_STARTS" -ne 16 || "$PLAN_PAYMENTS" -ne 16 || \
       "$PLAN_FRAME_WINDOWS" -ne 4 || "$PLAN_STABILITY_WINDOWS" -ne 9 || \
       "$PLAN_ALARM_CONSTRAINTS" -ne 1 || "$PLAN_PAUSE_SEQUENCE" -ne 5 || \
-      "$PLAN_SEMANTIC_STABILITY" -ne 1 || "$PLAN_PACKAGE_STARTS" -ne 13 || \
-      "$PLAN_EXTENSION_SUBMITS" -ne 9 || "$PLAN_BASE_CODES_COMPLETE" != true || \
+      "$PLAN_SEMANTIC_STABILITY" -ne 1 || "$PLAN_PACKAGE_STARTS" -ne 14 || \
+      "$PLAN_EXTENSION_SUBMITS" -ne 4 || "$PLAN_BASE_CODES_COMPLETE" != true || \
       "$PLAN_EXTENSION_CODES_COMPLETE" != true ]]; then
   printf 'Plan safety gate failed: steps=%s starts=%s payments=%s frame_windows=%s stability_windows=%s alarm_constraints=%s pause_sequence=%s semantic_stability=%s package_starts=%s extension_submits=%s base_codes_complete=%s extension_codes_complete=%s\n' \
     "$PLAN_STEPS" "$PLAN_STARTS" "$PLAN_PAYMENTS" "$PLAN_FRAME_WINDOWS" \
@@ -563,7 +563,7 @@ record_apk_identity() {
       source_commit:$source_commit,signature_verified:true,copied_hash_verified:true}' \
     >> "$APK_IDENTITIES_NDJSON"
 }
-record_apk_identity "$ERP_APK" cloud.dcompany.erp.physicalaudit 29 3.1.21-physical-audit
+record_apk_identity "$ERP_APK" cloud.dcompany.erp.physicalaudit 37 3.1.29-physical-audit
 record_apk_identity "$DRIVER_APK"
 record_apk_identity "$DRIVER_TEST_APK"
 jq -s --arg commit "$SOURCE_COMMIT" --arg tree "$SOURCE_TREE" \

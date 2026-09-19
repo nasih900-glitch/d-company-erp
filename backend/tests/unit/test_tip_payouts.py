@@ -19,7 +19,6 @@ from sqlalchemy.orm.attributes import set_committed_value
 import app.api.v1.finance.router as finance_router
 from app.api.v1.finance.router import (
     TipPayoutCreate,
-    TipPayoutRead,
     TipPayoutVoid,
     create_tip_payout,
     list_tip_payouts,
@@ -29,7 +28,7 @@ from app.core.errors import BusinessRuleError, ForbiddenError, NotFoundError
 from app.core.permissions import ROLE_PERMISSIONS
 from app.core.tenant import TenantContext
 from app.core.timezone import local_date_bounds_utc
-from app.models import Branch, TipPayout
+from app.models import TipPayout, User
 from app.models.finance import _guard_tip_payout_update
 from app.services.accounting.accounts import BANK, CASH, TIPS_PAYABLE
 from app.services.accounting.ledger import build_operational_ledger
@@ -40,23 +39,40 @@ OTHER_COMPANY_ID = UUID("99999999-9999-9999-9999-999999999999")
 BRANCH_ID = UUID("22222222-2222-2222-2222-222222222222")
 OTHER_BRANCH_ID = UUID("33333333-3333-3333-3333-333333333333")
 USER_ID = UUID("44444444-4444-4444-4444-444444444444")
+SHIFT_ID = UUID("55555555-5555-4555-8555-555555555555")
+TIP_ACTION_ID = UUID("66666666-6666-4666-8666-666666666666")
+TIP_ACTION_KEY = f"tip-payout:{TIP_ACTION_ID}"
+REQUEST_HASH = "b" * 64
+
+
+@pytest.fixture(autouse=True)
+def _isolate_finance_source_mirror(monkeypatch) -> None:
+    async def no_mirror(*_args, **_kwargs) -> None:
+        return None
+
+    monkeypatch.setattr(finance_router, "_enqueue_finance_source_mirror", no_mirror)
 
 
 def _tenant(
-    *, company_id: UUID = COMPANY_ID, branch_id: UUID | None = None,
+    *,
+    company_id: UUID = COMPANY_ID,
+    branch_id: UUID | None = None,
     roles: tuple[str, ...] = ("owner",),
 ) -> TenantContext:
     return TenantContext(
-        user_id=USER_ID, company_id=company_id, branch_id=branch_id,
-        terminal_id=None, roles=roles,
+        user_id=USER_ID,
+        company_id=company_id,
+        branch_id=branch_id,
+        terminal_id=None,
+        roles=roles,
     )
 
 
 def _request() -> SimpleNamespace:
     return SimpleNamespace(
         state=SimpleNamespace(
-            idempotency_key="tip-payout-2026-08-09-v1",
-            idempotency_request_hash="request-hash",
+            idempotency_key=TIP_ACTION_KEY,
+            idempotency_request_hash=REQUEST_HASH,
         )
     )
 
@@ -77,18 +93,31 @@ def _payout(
         paid_at=paid_at,
         note="Split among staff on shift",
         idempotency_key=f"tip-payout:{uuid4()}",
+        request_hash=None,
         created_by=USER_ID,
         created_at=datetime(2026, 8, 9, 21, 0, tzinfo=UTC),
         voided_at=datetime(2026, 8, 9, 22, 0, tzinfo=UTC) if voided else None,
         voided_by=USER_ID if voided else None,
         void_reason="Duplicate entry" if voided else None,
+        source_integrity_revision=None,
     )
 
 
 def _branch(*, company_id: UUID = COMPANY_ID, deleted: bool = False) -> SimpleNamespace:
     return SimpleNamespace(
-        id=BRANCH_ID, company_id=company_id,
+        id=BRANCH_ID,
+        company_id=company_id,
         deleted_at=datetime(2026, 1, 1, tzinfo=UTC) if deleted else None,
+    )
+
+
+def _shift(*, expected_minor: int = 100_000) -> SimpleNamespace:
+    return SimpleNamespace(
+        id=SHIFT_ID,
+        company_id=COMPANY_ID,
+        branch_id=BRANCH_ID,
+        status="open",
+        expected_minor=expected_minor,
     )
 
 
@@ -98,6 +127,12 @@ class _Result:
         self.rows = rows or []
 
     def scalar_one_or_none(self):
+        return self.scalar
+
+    def scalar_one(self):
+        return self.scalar
+
+    def one_or_none(self):
         return self.scalar
 
     def scalars(self):
@@ -129,6 +164,7 @@ class _QueuedSession:
 def _create_payload(**overrides) -> TipPayoutCreate:
     fields = {
         "branch_id": BRANCH_ID,
+        "shift_id": SHIFT_ID,
         "amount_minor": 50_000,
         "method": "cash",
         "paid_at": datetime(2026, 8, 9, 20, 0, tzinfo=UTC),
@@ -158,8 +194,18 @@ def test_schema_enforces_amount_note_and_idempotency_provenance() -> None:
 def test_financial_and_provenance_fields_are_immutable_but_first_void_is_allowed() -> None:
     row = _payout(amount_minor=50_000)
     immutable_fields = (
-        "company_id", "branch_id", "amount_minor", "method", "paid_at",
-        "note", "idempotency_key", "created_by", "created_at",
+        "company_id",
+        "branch_id",
+        "shift_id",
+        "amount_minor",
+        "method",
+        "paid_at",
+        "note",
+        "idempotency_key",
+        "request_hash",
+        "created_by",
+        "created_at",
+        "source_integrity_revision",
     )
     for field in immutable_fields:
         set_committed_value(row, field, getattr(row, field))
@@ -231,6 +277,7 @@ async def test_create_tip_payout_persists_correct_fields(monkeypatch) -> None:
     class _CreateSession(_QueuedSession):
         async def get(self, model, key):
             from app.models import User
+
             if model is User:
                 return SimpleNamespace(id=key, name="Owner")
             raise AssertionError(f"unexpected get({model}, {key})")
@@ -242,7 +289,13 @@ async def test_create_tip_payout_persists_correct_fields(monkeypatch) -> None:
             if isinstance(entity, TipPayout) and entity.created_at is None:
                 entity.created_at = datetime(2026, 8, 9, 21, 0, tzinfo=UTC)
 
-    session = _CreateSession([_Result(scalar=branch)])
+    session = _CreateSession(
+        [
+            _Result(scalar=None),  # durable source replay
+            _Result(scalar=branch),
+            _Result(scalar=_shift()),
+        ]
+    )
     payload = _create_payload()
 
     result = await create_tip_payout(payload, session, _request(), _tenant())
@@ -257,7 +310,7 @@ async def test_create_tip_payout_persists_correct_fields(monkeypatch) -> None:
     assert stored.method == "cash"
     assert stored.note == "Split among staff on shift"
     assert stored.created_by == USER_ID
-    assert stored.idempotency_key == "tip-payout-2026-08-09-v1"
+    assert stored.idempotency_key == TIP_ACTION_KEY
 
     assert result.amount_minor == 50_000
     assert result.method == "cash"
@@ -273,6 +326,7 @@ async def test_create_tip_payout_rejects_a_payout_larger_than_the_outstanding_ba
     to pay out more in tips than TIPS_PAYABLE actually owes — that would
     silently overpay real cash out of the till against a liability that
     was never owed, misstating the balance sheet."""
+
     async def reserve(*_args, **_kwargs):
         return None
 
@@ -283,7 +337,13 @@ async def test_create_tip_payout_rejects_a_payout_larger_than_the_outstanding_ba
         _fake_ledger_with_tips_payable_balance(5_000),
     )
 
-    session = _QueuedSession([_Result(scalar=_branch())])
+    session = _QueuedSession(
+        [
+            _Result(scalar=None),
+            _Result(scalar=_branch()),
+            _Result(scalar=_shift()),
+        ]
+    )
     payload = _create_payload(amount_minor=50_000)
 
     with pytest.raises(BusinessRuleError, match="exceeds the"):
@@ -312,6 +372,7 @@ async def test_create_tip_payout_allows_a_payout_exactly_equal_to_the_outstandin
     class _CreateSession(_QueuedSession):
         async def get(self, model, key):
             from app.models import User
+
             if model is User:
                 return SimpleNamespace(id=key, name="Owner")
             raise AssertionError(f"unexpected get({model}, {key})")
@@ -321,7 +382,13 @@ async def test_create_tip_payout_allows_a_payout_exactly_equal_to_the_outstandin
             if isinstance(entity, TipPayout) and entity.created_at is None:
                 entity.created_at = datetime(2026, 8, 9, 21, 0, tzinfo=UTC)
 
-    session = _CreateSession([_Result(scalar=_branch())])
+    session = _CreateSession(
+        [
+            _Result(scalar=None),
+            _Result(scalar=_branch()),
+            _Result(scalar=_shift()),
+        ]
+    )
     payload = _create_payload(amount_minor=50_000)
 
     result = await create_tip_payout(payload, session, _request(), _tenant())
@@ -347,7 +414,7 @@ async def test_create_tip_payout_rejects_blank_note(monkeypatch) -> None:
 
     monkeypatch.setattr(finance_router, "check_or_reserve", reserve)
 
-    session = _QueuedSession([_Result(scalar=_branch())])
+    session = _QueuedSession([_Result(scalar=None)])
 
     # DTO-level validation already enforces min_length=3; construct one that
     # only whitespace-pads down to under 3 chars to hit the router's own
@@ -367,38 +434,51 @@ async def test_create_tip_payout_rejects_blank_note(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_create_is_idempotent_on_exact_replay(monkeypatch) -> None:
-    existing = TipPayoutRead(
+    existing = TipPayout(
         id=uuid4(),
         company_id=COMPANY_ID,
         branch_id=BRANCH_ID,
+        shift_id=SHIFT_ID,
         amount_minor=50_000,
         method="cash",
         paid_at=datetime(2026, 8, 9, 20, 0, tzinfo=UTC),
         note="Split among staff on shift",
-        idempotency_key="tip-payout-2026-08-09-v1",
+        idempotency_key=TIP_ACTION_KEY,
+        request_hash=REQUEST_HASH,
         created_by=USER_ID,
-        created_by_name="Owner",
         created_at=datetime(2026, 8, 9, 21, 0, tzinfo=UTC),
         voided_at=None,
         voided_by=None,
-        voided_by_name=None,
         void_reason=None,
-        is_voided=False,
+        source_integrity_revision=1,
     )
 
-    async def replay(*_args, **_kwargs):
-        return {"status_code": 201, "body": existing.model_dump(mode="json")}
+    async def no_fallback(*_args, **_kwargs):
+        raise AssertionError("durable source replay must precede the response cache")
 
-    monkeypatch.setattr(finance_router, "check_or_reserve", replay)
+    monkeypatch.setattr(finance_router, "check_or_reserve", no_fallback)
 
-    class _NoMutationSession:
+    class _DurableReplaySession:
+        async def execute(self, _statement):
+            return _Result(scalar=existing)
+
+        async def get(self, model, key):
+            assert model is User
+            assert key == USER_ID
+            return SimpleNamespace(id=key, name="Owner")
+
         def __getattr__(self, name):
             raise AssertionError(f"Replay attempted database mutation via {name}")
 
     response = await create_tip_payout(
-        _create_payload(), _NoMutationSession(), _request(), _tenant(),
+        _create_payload(),
+        _DurableReplaySession(),
+        _request(),
+        _tenant(),
     )
-    assert response == existing
+    assert response.id == existing.id
+    assert response.shift_id == SHIFT_ID
+    assert response.created_by_name == "Owner"
 
 
 # ============================================================================
@@ -415,7 +495,7 @@ async def test_create_rejects_a_branch_belonging_to_another_company(monkeypatch)
     # itself (mirrors ManualCollection's pattern), so a real DB simply
     # returns nothing for a branch that belongs to a different company —
     # the fake session mirrors that by returning None here.
-    session = _QueuedSession([_Result(scalar=None)])
+    session = _QueuedSession([_Result(scalar=None), _Result(scalar=None)])
     with pytest.raises(NotFoundError, match="branch not found"):
         await create_tip_payout(_create_payload(), session, _request(), _tenant())
     assert session.added == []
@@ -465,11 +545,14 @@ async def test_void_is_one_way_and_exact_retry_is_safe() -> None:
         def __init__(self) -> None:
             self.flushes = 0
 
-        async def execute(self, _statement):
+        async def execute(self, statement):
+            if "finance_source_corrections" in str(statement):
+                return _Result(scalar=None)
             return _Result(scalar=row)
 
         async def get(self, model, key):
             from app.models import User
+
             assert model is User
             return SimpleNamespace(id=key, name="Owner")
 
@@ -478,21 +561,30 @@ async def test_void_is_one_way_and_exact_retry_is_safe() -> None:
 
     session = _VoidSession()
     first = await void_tip_payout(
-        row.id, TipPayoutVoid(reason="Duplicate payout"), session, _tenant(),
+        row.id,
+        TipPayoutVoid(reason="Duplicate payout"),
+        session,
+        _tenant(),
     )
     assert first.is_voided is True
     assert first.voided_by == USER_ID
     assert session.flushes == 1
 
     replay = await void_tip_payout(
-        row.id, TipPayoutVoid(reason="Duplicate payout"), session, _tenant(),
+        row.id,
+        TipPayoutVoid(reason="Duplicate payout"),
+        session,
+        _tenant(),
     )
     assert replay.voided_at == first.voided_at
     assert session.flushes == 1
 
     with pytest.raises(BusinessRuleError, match="different reason"):
         await void_tip_payout(
-            row.id, TipPayoutVoid(reason="A different correction"), session, _tenant(),
+            row.id,
+            TipPayoutVoid(reason="A different correction"),
+            session,
+            _tenant(),
         )
 
 
@@ -532,6 +624,7 @@ async def test_ledger_debits_tips_payable_and_credits_chosen_method_account() ->
             _Result(rows=[]),  # refunds
             _Result(rows=[payout]),  # tip payouts
             _Result(rows=[]),  # expenses
+            _Result(rows=[]),  # finance source corrections
             _Result(rows=[]),  # capital entries
             _Result(rows=[]),  # assets (depreciation)
             _Result(rows=[]),  # approved posted journals
@@ -542,7 +635,10 @@ async def test_ledger_debits_tips_payable_and_credits_chosen_method_account() ->
     )
 
     lines = await build_operational_ledger(
-        session, company_id=COMPANY_ID, start_at=start_at, end_exclusive=end_exclusive,
+        session,
+        company_id=COMPANY_ID,
+        start_at=start_at,
+        end_exclusive=end_exclusive,
     )
 
     assert not session.results
@@ -576,6 +672,7 @@ async def test_ledger_maps_cash_method_to_cash_account() -> None:
             _Result(rows=[]),  # refunds
             _Result(rows=[payout]),  # tip payouts
             _Result(rows=[]),  # expenses
+            _Result(rows=[]),  # finance source corrections
             _Result(rows=[]),  # capital entries
             _Result(rows=[]),  # assets (depreciation)
             _Result(rows=[]),  # approved posted journals
@@ -586,7 +683,10 @@ async def test_ledger_maps_cash_method_to_cash_account() -> None:
     )
 
     lines = await build_operational_ledger(
-        session, company_id=COMPANY_ID, start_at=start_at, end_exclusive=end_exclusive,
+        session,
+        company_id=COMPANY_ID,
+        start_at=start_at,
+        end_exclusive=end_exclusive,
     )
     payout_lines = [line for line in lines if line.ref_type == "tip_payout"]
     by_code = {line.account_code: line for line in payout_lines}
@@ -610,6 +710,7 @@ async def test_ledger_excludes_voided_tip_payouts() -> None:
             _Result(rows=[]),  # refunds
             _Result(rows=[]),  # tip payouts — the SQL excludes the voided row itself
             _Result(rows=[]),  # expenses
+            _Result(rows=[]),  # finance source corrections
             _Result(rows=[]),  # capital entries
             _Result(rows=[]),  # assets (depreciation)
             _Result(rows=[]),  # approved posted journals
@@ -617,7 +718,9 @@ async def test_ledger_excludes_voided_tip_payouts() -> None:
     )
 
     lines = await build_operational_ledger(
-        session, company_id=COMPANY_ID, end_exclusive=datetime(2026, 8, 10, tzinfo=UTC),
+        session,
+        company_id=COMPANY_ID,
+        end_exclusive=datetime(2026, 8, 10, tzinfo=UTC),
     )
     assert [line for line in lines if line.ref_type == "tip_payout"] == []
 
