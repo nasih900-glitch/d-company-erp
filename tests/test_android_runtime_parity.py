@@ -92,7 +92,7 @@ class RuntimeParityTest(unittest.TestCase):
                     running=True, expected_images={"services": {"backend": {"image_id": "sha256:" + "d" * 64}}})
 
     def test_internal_pre_ingress_subset_is_explicit_and_validated(self):
-        services = ("postgres", "backend", "frontend")
+        services = ("postgres", "redis", "backend", "frontend")
         with patch.object(parity, "_run", side_effect=self.replies()):
             result = parity.inspect_release_pair(
                 "/erp", "/erp/.env", VERSION, REVISION, running=True,
@@ -100,7 +100,7 @@ class RuntimeParityTest(unittest.TestCase):
             )
         self.assertEqual(set(services), set(result["services"]))
 
-        for invalid in ((), ("backend", "backend"), ("redis",)):
+        for invalid in ((), ("backend", "backend"), ("unknown",)):
             with self.subTest(invalid=invalid), patch.object(parity, "_run") as run:
                 with self.assertRaises(parity.RuntimeParityError):
                     parity.inspect_release_pair(
@@ -245,8 +245,7 @@ class RuntimeParityTest(unittest.TestCase):
         ).read_text()
 
         self.assertIn(
-            "REDIS_REF='redis:7-alpine@sha256:"
-            "ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf'",
+            'REDIS_REF="d-company-erp-redis:${APP_REVISION}"',
             source,
         )
         self.assertIn("REDIS_EXPECTED_ID=$(docker image inspect", source)

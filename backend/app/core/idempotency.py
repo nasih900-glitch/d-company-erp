@@ -16,6 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.cleanup_replay_fence import refuse_retired_action_replay
 from app.core.errors import IdempotencyConflict, IdempotencyInProgress
 
 
@@ -33,6 +34,16 @@ async def check_or_reserve(
         dict with `status_code` and `body` if this is a replay; None if first-time.
     """
     from app.models.idempotency_key import IdempotencyKey  # local import to avoid cycles
+
+    # Check before the ordinary receipt so even a mistakenly recreated
+    # idempotency row cannot bypass the permanent cleanup fence.
+    await refuse_retired_action_replay(
+        session,
+        action_key=key,
+        request_hash=request_hash,
+        user_id=user_id,
+        terminal_id=terminal_id,
+    )
 
     stmt = select(IdempotencyKey).where(IdempotencyKey.key == key).with_for_update()
     existing = (await session.execute(stmt)).scalar_one_or_none()

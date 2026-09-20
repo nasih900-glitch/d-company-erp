@@ -749,9 +749,18 @@ class AndroidReleasePipelineTest(unittest.TestCase):
                 self.assertIn("rootless: false", image_job)
                 self.assertIn("--provenance=false", image_job)
                 self.assertIn("--provenance=mode=min", image_job)
-                self.assertEqual(4, image_job.count("docker buildx build --load"))
-                self.assertEqual(4, image_job.count("--platform linux/amd64"))
-                self.assertEqual(4, image_job.count("${{ matrix.provenance }}"))
+                self.assertEqual(5, image_job.count("docker buildx build --load"))
+                self.assertEqual(5, image_job.count("--platform linux/amd64"))
+                self.assertEqual(5, image_job.count("${{ matrix.provenance }}"))
+                for service in ("backend", "frontend", "caddy", "postgres", "redis"):
+                    with self.subTest(workflow=workflow_path.name, service=service):
+                        self.assertEqual(
+                            1,
+                            image_job.count(
+                                f"-f infra/docker/{service}.Dockerfile "
+                                f"-t erp-{service}:{suffix}"
+                            ),
+                        )
                 self.assertIn("verify_image_archive_parser_python312.py", image_job)
                 self.assertIn(f"erp-backend:{suffix}", image_job)
                 self.assertIn("docker-host: ${{ steps.setup-docker.outputs.sock }}", image_job)

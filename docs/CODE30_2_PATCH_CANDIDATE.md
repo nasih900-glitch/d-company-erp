@@ -67,6 +67,45 @@ behavior. Rewards and WhatsApp messaging remain inactive. The archived
 Capacitor clients and native iOS distribution remain outside the supported
 release scope.
 
+## Production image security correction
+
+The first hosted image scan of commit `efb19f45ec27c5c3a4d63698c73bee3a5d9f54b1`
+passed the backend, Web and Android jobs but correctly blocked release on two
+runtime-image findings: Python 3.13.15 `CVE-2026-82049` and Alpine zlib 1.3.2-r0
+`CVE-2026-85091`. The candidate therefore moves the backend runtime and CI to
+exact Python 3.14.7. Redis is now a fifth locally built and attested release
+image rather than an unmodified upstream runtime.
+
+All five Alpine runtime images build zlib 1.3.2 from the official source archive
+SHA-256 `bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16`
+and apply the complete upstream chain
+`e3dc0a85b7032e98380dec011bc8f2c2ee0d8fca`,
+`bbc2ccf3d0de267576b524b875c769a724a513b0`,
+`df84af25dc1942490e1d1c899a07619152a46148`, and
+`7235b0a581227c56a79a43ff828f8ef6794194c8`. Their vendored patch SHA-256
+values are respectively
+`183bc8b9dd078a41a62de5c2d905d9b0196b45bc46f100d7e4147ec228207c74`,
+`7d00ee29be5e636d30da2890961e83e35cee0b152333ecd97a46ae2e71eb5d47`,
+`110ff14375733173d8aa54574473424fbd7dfe4b81f1ca34a759c6fe14b15b14`,
+and `96040ee84d0d187905283912dbd3f7b66ac2033976a2ceefe9b8cca63143d9c2`.
+The patched `gzwrite.c` must be byte-identical to the final upstream commit.
+Each build runs the upstream zlib tests and a final-image runtime probe that
+proves the mapped shared object and its hash.
+
+Alpine package metadata will continue to identify those corrected bytes as
+zlib 1.3.2-r0 until the distribution publishes a replacement package. For that
+single scanner mismatch, the release gate generates one image-specific OpenVEX
+document per exact local image tag and immutable image ID. The disposition is
+limited to `CVE-2026-85091` on the zlib APK PURL. The verifier requires exactly
+one matching ignored result and rejects any other ignored, unfiltered, wrong
+image, wrong tag or unresolved result. Every other High or Critical result
+continues to fail the release.
+
+These source controls are not release proof by themselves. The final commit
+must still build all five images and pass both hosted Docker-store scanner lanes
+with retained SBOM, Grype, VEX, image-identity and runtime evidence before the
+release tag can be created.
+
 ## Evidence required before tagging
 
 The exact final source must pass a fresh migration from the released database
@@ -98,3 +137,33 @@ Apps Script deployment are separate coordinated production steps. None is
 implied by a green source suite or signed APK. Physical Redmi Pad 2 acceptance,
 printer behavior, vendor battery management, and a real shop-day run remain
 separate acceptance evidence whenever the tablet is unavailable.
+
+The production cutover also includes the separately documented one-time trial
+cleanup. It may run only after the verified backup/restore and migration to
+`0078`, while every writer is stopped. The default path performs the complete
+transaction and rolls it back. Apply mode must match the exact audited
+allowlists and fingerprints, a fresh dry-run state fingerprint, a backup file
+that it independently hashes and restores, the canonical tracked 18-AVD
+quarantine evidence JSON that it independently hashes, the stopped backend
+image revision, same-project `postgres` and `backend` Compose service labels,
+no running backend service in that project, and a clean checkout at the exact
+deployed source. The one durable receipt permanently fences the deleted
+idempotency and shift-opening identities against delayed offline replay. See
+[`CODE30_2_PRODUCTION_TRIAL_CLEANUP.md`](CODE30_2_PRODUCTION_TRIAL_CLEANUP.md).
+
+The normal installer rule still requires every tablet outbox to be empty. The
+only exception is the exact retired Code30.1 test-installation heartbeat
+already present in this production database: one pending report on the pinned
+row, from database head `0073`, while installing version `3.1.29`. The installer
+accepts it only after verifying the immutable 18-AVD quarantine evidence at
+SHA-256
+`379c6368936d03223e19482cc840c2a9d2483dc9a96909fba22cd9f59911eec8`.
+It does not change that row before the quiesced backup. The separately guarded
+post-migration cleanup leaves that stale count and every other installation
+field unchanged because the server UUID cannot be tied to an AVD. All 18 local
+AVDs are wiped, and the installation heartbeat plus all 29 expired
+remote-assistance keys remain immutable historical evidence. The cleanup
+receipt records the unchanged snapshot with null sync and offline markers and
+permanently fences the 13 exact known deleted actions. The archived clear Room
+snapshot is ancillary and is not attributed to that server installation
+identity.

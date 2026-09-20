@@ -39,7 +39,7 @@ def test_candidate_build_uses_a_private_immutable_git_archive() -> None:
     assert source.index(reexec) < source.index(docker_step)
     assert '--project-directory "$CANDIDATE_BUILD_ROOT"' in source
     assert '-f "$RELEASE_COMPOSE_FILE"' in source
-    assert 'for candidate_service in caddy postgres backend frontend; do' in source
+    assert 'for candidate_service in caddy postgres redis backend frontend; do' in source
     build_command = (
         'COMPOSE_PARALLEL_LIMIT=1 "${candidate_compose[@]}" '
         + "\\\n"
@@ -62,7 +62,7 @@ def test_exact_candidate_images_are_scanned_before_maintenance() -> None:
     attestation = (
         'CANDIDATE_IMAGE_ATTESTATION=$(python3 "$CANDIDATE_PARITY_TOOL" candidate'
     )
-    immutable_save = 'docker image save "$candidate_image_id" --output "$image_archive"'
+    immutable_save = 'docker image save "$candidate_image_ref" --output "$image_archive"'
     syft = '"$SYFT_IMAGE" "/scan/image.tar" --from docker-archive --output syft-json'
     grype = '"$GRYPE_IMAGE" "docker-archive:/scan/image.tar"'
     maintenance = 'echo "==> Entering scheduled maintenance and draining application writers…"'
@@ -82,6 +82,8 @@ def test_exact_candidate_images_are_scanned_before_maintenance() -> None:
     ) >= 2
     assert "--network none --read-only --cap-drop ALL" in source
     assert source.count("--security-opt no-new-privileges") >= 2
+    assert "--vex /scan/zlib.openvex.json" in source
+    assert 'python3 "$ZLIB_VEX_VERIFIER"' in source
 
 
 def test_git_archive_excludes_ignored_bytes_and_freezes_tracked_bytes(tmp_path: Path) -> None:
@@ -320,14 +322,14 @@ def test_candidate_attestation_tool_and_compose_are_from_the_commit_snapshot() -
     snapshot_root = '--root "$CANDIDATE_BUILD_ROOT" --env-file "$ENV_CANDIDATE"'
     final_parity = 'python3 "$CANDIDATE_PARITY_TOOL" running'
     assert source.index(tool) < source.index(attestation) < source.index(snapshot_root)
-    assert source.count(final_parity) == 2
+    assert source.count(final_parity) == 3
     cleanup = 'rm -rf "$CANDIDATE_BUILD_ROOT"'
     assert source.count(cleanup) == 1
     assert source.index(cleanup) < source.index(
         'exec /bin/bash "$CANDIDATE_BUILD_ROOT/infra/scripts/install-on-vm.sh"'
     )
     assert source.count('"${candidate_compose[@]}"') >= 10
-    assert source.count('--project-name "$DEPLOY_PROJECT_NAME"') == 3
+    assert source.count('--project-name "$DEPLOY_PROJECT_NAME"') == 4
     assert "up -d --no-build --pull never postgres redis backend frontend" in source
     assert "up -d --no-build --pull never caddy" in source
 
@@ -347,21 +349,120 @@ def test_candidate_attestation_tool_and_compose_are_from_the_commit_snapshot() -
     assert '--project-directory "$PRIOR_SOURCE_ROOT"' in operational_source
 
 
-def test_digest_pinned_redis_is_present_and_attested_before_cutover() -> None:
+def test_code30_2_stale_outbox_bridge_completes_cleanup_before_caddy() -> None:
     source = INSTALLER.read_text(encoding="utf-8")
 
-    frozen_config = (
-        '"${candidate_compose[@]}" --env-file "$ENV_CANDIDATE" '
-        "config --format json"
+    bridge_default = "CODE30_2_STALE_OUTBOX_BRIDGE_USED=false"
+    quarantine_acceptance = (
+        'echo "==> Verified one-time Code30.2 emulator quarantine: '
+        '$quarantine_evidence_result"'
     )
-    digest_guard = (
+    bridge_enabled = "CODE30_2_STALE_OUTBOX_BRIDGE_USED=true"
+    migration_guard = 'if [ "$candidate_database_head" != 0078 ]; then'
+    stop_backend = (
+        '"${candidate_compose[@]}" --env-file .env stop -t 60 backend'
+    )
+    post_migration_backup = (
+        'POST_MIGRATION_DATABASE_BACKUP="$UPGRADE_SNAPSHOT/'
+        'database-code30-2-0078.dump"'
+    )
+    dry_run = (
+        'cleanup_dry_run_output=$(bash "$CLEANUP_RUNNER" \\\n'
+        '    --postgres-container "$CANDIDATE_POSTGRES_CONTAINER")'
+    )
+    apply = 'cleanup_apply_output=$(bash "$CLEANUP_RUNNER"'
+    restart_backend = (
+        '"${candidate_compose[@]}" --env-file .env \\\n'
+        '    up -d --no-build --pull never backend'
+    )
+    cleanup_accepted = "CODE30_2_CLEANUP_SUCCEEDED=true"
+    preserve_cleaned_database = "trap handle_post_ingress_failure EXIT"
+    public_caddy = (
+        '"${candidate_compose[@]}" --env-file .env \\\n'
+        '  up -d --no-build --pull never caddy'
+    )
+
+    assert source.index(bridge_default) < source.index(quarantine_acceptance)
+    assert source.index(quarantine_acceptance) < source.index(bridge_enabled)
+    assert source.index(bridge_enabled) < source.index(migration_guard)
+    assert source.index(migration_guard) < source.rindex(stop_backend)
+    assert source.rindex(stop_backend) < source.index(post_migration_backup)
+    assert source.index(post_migration_backup) < source.index(dry_run)
+    assert source.index(dry_run) < source.index(apply)
+    assert source.index(apply) < source.index(restart_backend)
+    assert source.index(restart_backend) < source.index(cleanup_accepted)
+    post_cleanup_trap = source.index(
+        preserve_cleaned_database, source.index(cleanup_accepted)
+    )
+    assert source.index(cleanup_accepted) < post_cleanup_trap
+    assert post_cleanup_trap < source.rindex(public_caddy)
+
+    cleanup_block = source[
+        source.index('if [ "$CODE30_2_STALE_OUTBOX_BRIDGE_USED" = true ]; then',
+                     source.index('echo "==> Gaming Centre tariff accepted."'))
+        : source.index('if [ "$FRESH_INSTALL" = true ]; then',
+                       source.index('echo "==> Gaming Centre tariff accepted."'))
+    ]
+    assert "--format=custom" in cleanup_block
+    assert 'pg_restore --list < "$POST_MIGRATION_DATABASE_BACKUP"' in cleanup_block
+    assert "--confirm APPLY_CODE30_1_VERIFIED_TRIAL_CLEANUP" in cleanup_block
+    assert '--expected-state-fingerprint "$cleanup_state_fingerprint"' in cleanup_block
+    assert '--source-git-sha "$CURRENT_REVISION"' in cleanup_block
+    assert '--executor "install-on-vm:$CURRENT_REVISION"' in cleanup_block
+    assert cleanup_block.count('python3 "$CANDIDATE_PARITY_TOOL" running') == 1
+    assert "up -d --no-build --pull never caddy" not in cleanup_block
+
+
+def test_code30_2_cleanup_failure_keeps_ingress_and_backend_closed() -> None:
+    source = INSTALLER.read_text(encoding="utf-8")
+    failure_handler = source[
+        source.index("handle_install_failure() {")
+        : source.index("handle_post_ingress_failure() {")
+    ]
+
+    fail_closed = failure_handler[
+        failure_handler.index('if [ "$PROMOTION_COMPLETE" = true ] && \\\n')
+        : failure_handler.index(
+            'elif [ "$PROMOTION_COMPLETE" = true ] && '
+            '[ -n "$UPGRADE_SNAPSHOT" ]; then'
+        )
+    ]
+    assert '[ "$CODE30_2_CLEANUP_WINDOW_ACTIVE" = true ]' in fail_closed
+    assert '[ "$CODE30_2_CLEANUP_SUCCEEDED" != true ]' in fail_closed
+    assert "stop -t 30 caddy backend" in fail_closed
+    assert "Caddy and backend remain stopped" in fail_closed
+    assert "No pre-upgrade database restore was attempted" in fail_closed
+    assert "up -d" not in fail_closed
+    assert "pg_restore" not in fail_closed
+
+
+def test_code30_2_cleanup_is_not_run_for_ordinary_install_or_upgrade() -> None:
+    source = INSTALLER.read_text(encoding="utf-8")
+    tariff = source.index('echo "==> Gaming Centre tariff accepted."')
+    owner_acceptance = source.index('if [ "$FRESH_INSTALL" = true ]; then', tariff)
+    cleanup_region = source[tariff:owner_acceptance]
+
+    assert cleanup_region.count(
+        'if [ "$CODE30_2_STALE_OUTBOX_BRIDGE_USED" = true ]; then'
+    ) == 1
+    assert cleanup_region.count('bash "$CLEANUP_RUNNER"') == 2
+    assert "Ordinary clean-outbox upgrades and fresh installs never enter this block." in cleanup_region
+
+
+def test_locally_built_redis_is_attested_and_scanned_before_cutover() -> None:
+    source = INSTALLER.read_text(encoding="utf-8")
+
+    build_loop = "for candidate_service in caddy postgres redis backend frontend; do"
+    attestation = (
+        'CANDIDATE_IMAGE_ATTESTATION=$(python3 "$CANDIDATE_PARITY_TOOL" candidate'
+    )
+    reference = "CANDIDATE_REDIS_IMAGE_REF=$(python3 -c"
+    identity = "CANDIDATE_REDIS_IMAGE_ID=$(python3 -c"
+    reference_guard = (
         '[[ "$CANDIDATE_REDIS_IMAGE_REF" =~ '
-        '^redis:7-alpine@sha256:[0-9a-f]{64}$ ]]'
+        '^d-company-erp-redis:[0-9a-f]{40}$ ]]'
     )
-    pull = 'docker pull "$CANDIDATE_REDIS_IMAGE_REF"'
-    image_id = (
-        "CANDIDATE_REDIS_IMAGE_ID=$(docker image inspect --format '{{.Id}}'"
-    )
+    scan_loop = "for candidate_service in caddy postgres redis backend frontend; do"
     pre_maintenance_recheck = (
         '"$CANDIDATE_REDIS_IMAGE_REF")" != "$CANDIDATE_REDIS_IMAGE_ID"'
     )
@@ -372,16 +473,18 @@ def test_digest_pinned_redis_is_present_and_attested_before_cutover() -> None:
     )
     running_image = "docker inspect --format '{{.Image}}'"
 
-    assert frozen_config in source
-    assert digest_guard in source
-    assert source.index(frozen_config) < source.index(digest_guard)
-    assert source.index(digest_guard) < source.index(pull) < source.index(image_id)
-    assert source.index(image_id) < source.index(pre_maintenance_recheck)
-    assert source.index(pre_maintenance_recheck) < source.index(maintenance)
+    assert source.count(scan_loop) >= 2
+    assert source.index(build_loop) < source.index(attestation)
+    assert source.index(attestation) < source.index(reference) < source.index(identity)
+    assert source.index(identity) < source.index(reference_guard)
+    assert source.index(reference_guard) < source.rindex(scan_loop)
+    assert source.rindex(scan_loop) < source.rindex(pre_maintenance_recheck)
+    assert source.rindex(pre_maintenance_recheck) < source.index(maintenance)
     assert source.index(maintenance) < source.index(cutover)
     assert source.index(cutover) < source.index(running_ids)
     assert source.index(running_ids) < source.rindex(running_image)
     assert r"redis_image_ref=%s\nredis_image_id=%s" in source
+    assert 'docker pull "$CANDIDATE_REDIS_IMAGE_REF"' not in source
 
 
 def test_rollback_keeps_ingress_closed_until_core_services_are_ready_and_attested() -> None:

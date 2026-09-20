@@ -175,12 +175,13 @@ CODE30_2_AUDIT_PLAN_PATH = (
 )
 
 REVIEWED_CODE30_2_SHA256 = {
-    '.github/workflows/ci.yml': '9b02f776402992e8fb16795456cf3b4678c1d02e1bd5ebfc1aaa474faa79c0d5',
-    '.github/workflows/release.yml': 'cc7db7e44a7084fd80ca3fc122f6e2202505969d4350e2d6d01c420b1bead7cf',
     '.env.example': '66fd8cd61ac04567a1dfb62d4c01544703f906891fc389bccee7237112bf5798',
     '.env.production.example': '03f61cec1976d892fcc8811415a1c28d4a2ddb159fb59fc362277a354b7c419c',
+    '.github/actions/scan-production-images/action.yml': 'b53dab26ae6210b989efbec5d51ad2c5943438ab4e22f0bb33f169d7d627a74d',
+    '.github/workflows/ci.yml': '3b2c72c546451f1c5f09d170c0e86fb0febe30e8239b2a682ded2e8c575ee482',
+    '.github/workflows/release.yml': '5c286c572df8a571198891df341c11c49f049b2c862fa8449e17ccd941fefb6a',
     'AGENTS.md': '8f35996f40e1605fbaebe3c1aea5c9298358a2102a29db6714fdfa9d88454219',
-    'PROJECT_STATE.md': '557010d3137adfc4d5b5ad7abca34990ac845106cd639b108bd00acda7e79320',
+    'PROJECT_STATE.md': '2b1b2d118433fd74197219bcaf698d717dcad3a35fb0b94e3380f247a6b082d6',
     'README.md': 'a7f0bc467e7ad7a2c1017ee16ca6aefffb38534013cf482c707da37b49d9dca2',
     'android-native/app/build.gradle.kts': '670d78a194343f219c0c384cf415850c5f9b79b2b21f825daccfbdba288ea06b',
     'android-native/app/schemas/cloud.dcompany.erp.core.db.ErpDatabase/49.json': '2413682411447dc1e2e592dfb76bd6930777d562195cfdbee4f9cdedc9cae907',
@@ -236,11 +237,13 @@ REVIEWED_CODE30_2_SHA256 = {
     'backend/app/__init__.py': '3a2d88986b5ede4cfbe3815d507473de0906948ad9e83c44263df57a821756cc',
     'backend/app/api/v1/finance/router.py': '9b7b1261967e6d7f71b6a3c737a842050654069c16fbd834d89474e5313c1f54',
     'backend/app/api/v1/memberships/router.py': '81010109cf22243468cd89c46fd42548d71a1cc46c4b9b94a272b20115dab41c',
-    'backend/app/api/v1/pos/router.py': '046716fe8b6013ceb14a8cdec19143239e0fdc6fcdf533042a69dc9324e1f797',
+    'backend/app/api/v1/pos/router.py': '08e592d0b8b3383ec0150a87d14b1158496c90d983e1b9da9e39e13b4b56019b',
     'backend/app/api/v1/router.py': '0f0e7d3373440f6640ac97e9d3e4d65b55b8d4c5f36f369ac75a7128d0932184',
     'backend/app/api/v1/settings/google_sheets.py': '06f1db71cad62abd0e6c0431f0856faf228948cba56639b43207f84cf95d8fed',
     'backend/app/api/v1/settings/router.py': '95b5dd0b65b6ee41e0c253ee80477452a19651698914c6f5660ef271c2a5e205',
+    'backend/app/core/cleanup_replay_fence.py': '98197540c36d5b7e41011dab31c505d40dde254d126a07e32d5e89c4a88da6e1',
     'backend/app/core/config.py': 'aa711049503fe97da5a0bce887e574e11cbd6bccb8d98709e6abc0f206c01a90',
+    'backend/app/core/idempotency.py': '0344bd3214d992138ce41d739c4f368c54ec64207b5e23add533c34bc9060466',
     'backend/app/main.py': '79971c4d9a947b3faf460100ccefe6e46240aa9d21844478189eab8dd7c5c8a3',
     'backend/app/models/__init__.py': 'ec878311f61767145e0aef178dc63fbd317d92d960412098793fc823f1ab6d7d',
     'backend/app/models/finance.py': 'db63f098495f232968e67ceb33df9ac29592eac6c3373af81df8bd0db5e8bccd',
@@ -254,6 +257,9 @@ REVIEWED_CODE30_2_SHA256 = {
     'backend/app/services/integrations/google_sheets_secrets.py': '07063a73737e9f09194af502145e8dbb90de15859218a00eda355969ecfe2940',
     'backend/app/services/reports/aggregator.py': '8badfd44ddd7c48dc044b71e1628ba46ec39dc318ec8671f5a988bec2fbd8ed5',
     'backend/pyproject.toml': '27c2ecb01e484af01a6d044b8336be8a98ec0793ce0297b2889df6c954db2955',
+    'backend/requirements-ci.in': '6fd9e8fc806692da3fc44f64a14cdaac29be9084d03b1bc6bd93bae2f65f9824',
+    'backend/requirements-ci.lock': 'f77e16af56632cecac34a6e2011f8570b0fb05bce8caec089272a5a4e57a8fe9',
+    'backend/requirements.lock': 'cd319d2a4dc1c29497d7470f4cc8136a126e44d516b731873dade51c6b2d9b81',
     'backend/scripts/physical_audit_fixture.py': '6ec73f1155a8a4e7a8026325420393dc7ea65eaa6341693cc7fec361e86eedbc',
     'backend/tests/integration/test_captured_shift_opening.py': '1ba2b8ef28fb24ee04802822e616827199ffc2e3f3d7adf43a4f6083bf560406',
     'backend/tests/integration/test_code21_cash_expense_compatibility.py': '68bde11fd81d68b0b528183943742f9cf3aecd58c0c79ea20e2846f595bad111',
@@ -277,6 +283,7 @@ REVIEWED_CODE30_2_SHA256 = {
     'backend/tests/unit/test_audit_secret_redaction.py': '101f6452b0891df196d9d12345643ab57ddb44f30567dfbc1540d0bbf8ef8a0f',
     'backend/tests/unit/test_capital_entries_idempotency.py': '054ff548682988c96c00b9916e5dc160a205e0ea1456bcddeffac1528536b903',
     'backend/tests/unit/test_checkout_claims.py': '40f07f0965bb6ad2fa201348ca1e6be6a2cd8ec13e8ac07c457d548be73ccf36',
+    'backend/tests/unit/test_cleanup_replay_fence.py': 'd8df1132b84c0e5f66232f707e9c12509d58113e921c43ad71c6b8760752f81a',
     'backend/tests/unit/test_client_compatibility.py': 'fecc5ce4dc39d75ab485a4962f3c2c971aefdb585f043bee8db097302397a809',
     'backend/tests/unit/test_depreciation.py': '8370f2966c898f0d6c79d15ab67e86f90b058a5115925c108e80deaf8999f4c5',
     'backend/tests/unit/test_event_ticket_report_integrity.py': '0c77c9d5d1f7c1c458447b8c9144b4c370d6a0de8cbf7f0f8d68d55590e48210',
@@ -292,18 +299,19 @@ REVIEWED_CODE30_2_SHA256 = {
     'backend/tests/unit/test_operational_route_integrity.py': '24a98fd7d2ecbc46be304545877438f85bf9a883828fff6f08e789c1b1eb41c7',
     'backend/tests/unit/test_release_audit_fixes.py': 'd6706b64378c8a36884fcb5a36b7baf41fd10c2cd78c70722e95e67b3ae6f0b1',
     'backend/tests/unit/test_release_contracts.py': 'c64f20ed978d61e47cdfa999695c4b56c59486432de97059cc652ca5284d3638',
-    'backend/tests/unit/test_remote_assistance_contract.py': '57631f7c0340745730ab0350cf94b9a6b1806c49aa42014a97e3cee7cdaa2453',
+    'backend/tests/unit/test_remote_assistance_contract.py': '7507fd3dd7b5b9ae016bef8980bf1af33622c17fcd3726541a039b1ab7c04498',
     'backend/tests/unit/test_report_roundoff_reconciliation.py': 'b4cbf5e7c80a08eb55f7eae08e48a1f4a3c9efeec87fa1c26281211afe1b7635',
     'backend/tests/unit/test_runtime_release_parity.py': 'a019ae232496fdc50a4bcfd57aabbc4641824a4ae472118113b73c03eee43028',
     'backend/tests/unit/test_settings_timezone_validation.py': '06c4e48ef802e828e50c6736dec36476ffbd490f1d3286a21ddea103d36a763a',
     'backend/tests/unit/test_tip_payouts.py': 'ecfd81049f24179c7a12c412dda4ea680613dbc5cdf5c0a8a6ca39a81d87df99',
     'backend/tests/unit/test_tip_refund_ledger.py': 'e74d1326e92eda95d5e32985bb6807c651d6547ce92d1d7e4a631099f5d0fc8d',
-    'docker-compose.prod.yml': '09b5a7108ed58db0d0e4f59c20dc1aceaea9ff9f4067785d33e3964e0d157a9f',
-    'docs/CODE30_2_PATCH_CANDIDATE.md': '00ef46901caee193cb9d86ad50d463c26b0968b896eb4144532c728dbe67ea69',
-    'docs/DISTRIBUTION.md': '0c3f327e168c4994846dedc909b03604e7a1226a66d5423a2d176716197215ce',
+    'docker-compose.prod.yml': '6e1812b5ccefb1699852b04d1935c4eee293b23674bcc5b15c5ca49fc94f5274',
+    'docs/CODE30_2_PATCH_CANDIDATE.md': '10d78d1f46a9ccf1f8e2e62afc1ee3ba618193bb38bc07f280f9d4d09cd085fb',
+    'docs/CODE30_2_PRODUCTION_TRIAL_CLEANUP.md': 'cfb0dfabf2b691462562f5ef95f0b8c792c00ff4b9315edaaae974f93b167d99',
+    'docs/DISTRIBUTION.md': '353c82284e479a59288ee5a00575a6972c2a7c03b7844ef6e6c8847348645e9c',
     'docs/GOOGLE_SHEETS.md': '125b7bae2fc7f4c32f17b24af0f45dac179e4044bf8b32c8029ef781e8633de9',
     'docs/PLAY_INTERNAL_TESTING.md': '665f405ebefd1f569c60c2c5b832616b3912e84b2528296bcf4bd74a3a7033a1',
-    'docs/SERVER_DRIVEN_ANDROID_UPDATES.md': 'd74380a766f26abe372ba13bc70c109bfe8eb104cf638fd01810900edde716e8',
+    'docs/SERVER_DRIVEN_ANDROID_UPDATES.md': 'd159094ad70327b50de834b246c05646c4d4e09bdb9b6d77100233a0c3c8ccae',
     'frontend/.env.example': '7a824bff9fb42f1c71cc1fc1d797991426ef488bffd1678973083c880401425d',
     'frontend/CAPACITOR.md': 'de6a9586ac0522b54e1530fe7a47b592cd516b2f418a6c66e6f59eb95ea253bd',
     'frontend/ios/App/App/DCompanyNativeApp.swift': 'f94b30ad03e3f24ac9bbf7e6e14efe928f86686eeea6fe69f0f2fab564022428',
@@ -328,17 +336,51 @@ REVIEWED_CODE30_2_SHA256 = {
     'frontend/src/modules/reports/ReportsScreen.tsx': 'd1e6f9e6afb9c13c005692eefd1d9a75daecbe541de8f7e9ed19b3747765c971',
     'frontend/src/modules/settings/apps-script.txt': 'cbf401b2b7612b049d338a38ab4e53f0e78d7afda2d92782c3477f7b94d1f6d0',
     'frontend/src/modules/settings/tabs/SheetsTab.tsx': '7cafb1ea0fdcf193f7629dc2dda5e5302988f50390a7db4207f99c004e015d61',
+    'infra/docker/backend.Dockerfile': '6ea2f833c7a5eff6f2427a433f99b447ebabd901fdc6bc077a54ae1a39548016',
+    'infra/docker/caddy.Dockerfile': 'e5f0486572636a283a81b5ed2415936cd06836537d394644b801b0b9de054bee',
+    'infra/docker/frontend.Dockerfile': 'e49dd25cb75dbbf962a118cd328a0d174fc0f60b29263662d225297fe843475c',
+    'infra/docker/postgres.Dockerfile': '1e627f5ba7378f3d478a44eafbec6ef9c983523ce19934256de8cd44748a9ee6',
+    'infra/docker/redis.Dockerfile': '58889cfedb7886bc873e41c490ab605914cc7e2a0d25c0aa8b6ff393c7a9aa58',
+    'infra/docker/zlib/bbc2ccf3-gzvprintf-return.patch': '7d00ee29be5e636d30da2890961e83e35cee0b152333ecd97a46ae2e71eb5d47',
+    'infra/docker/zlib/build-patched-zlib.sh': '78691bfd52786075e8b1cb18468631e19ff486d4bffeab864e3795851baaf285',
+    'infra/docker/zlib/cve-2026-85091-followup.patch': '96040ee84d0d187905283912dbd3f7b66ac2033976a2ceefe9b8cca63143d9c2',
+    'infra/docker/zlib/cve-2026-85091.patch': '110ff14375733173d8aa54574473424fbd7dfe4b81f1ca34a759c6fe14b15b14',
+    'infra/docker/zlib/e3dc0a85-null-guard.patch': '183bc8b9dd078a41a62de5c2d905d9b0196b45bc46f100d7e4147ec228207c74',
+    'infra/docker/zlib/verify-patched-zlib.sh': '3861a94f4afeec339e80370fd7e975b2e46147c163a1bcb9e780b4dc29d35f11',
+    'infra/scripts/cleanup-code30-production-trial-data.sh': '5b9fa8cf3654ef31e14aa2736af979059e3255e3adb31a3525a0fb1d16523128',
+    'infra/scripts/cleanup-code30-production-trial-data.sql': 'a29bc08df3f2a034c8b922910c9cfeb294c5499a8cf118460ca9f7c3f8b855fc',
     'infra/scripts/generate-secrets.sh': '51f1c4f51dd0e4087321783ba2885c75cf873ab114a92fbdc89396839bd363aa',
+    'infra/scripts/generate-zlib-vex.py': '3db0ab0c518c4cd5c51da997d61b8680aa7a10fb60fd91225fd299a39bb3d742',
+    'infra/scripts/install-on-vm.sh': '34a3d17aef06b85ff83d5a19157c9c48b5671c300418c1947d25f5fd6cebd3e1',
+    'infra/scripts/run-hardened-image-scanners.sh': 'f08782e27aa43b7d45c2c7e0c9e00f3c16e119b255b17e9e9a8597c8d45cbd9e',
     'infra/scripts/validate-production-env.sh': '9ad57de9b9f14292a70c3b877954f01bef7e40eb5b34cbc46dec9089ef9ac76b',
+    'infra/scripts/verify-code30-2-emulator-quarantine.py': '872fe1fa068de5c4f329ffaf5cc573df8d8938a72d9e370903dc5d9bf8c15585',
+    'infra/scripts/verify-code30-2-post-cleanup-state.py': '64b0d2f303342ee7242f7033b1f4769047b529271d7ece86ff29a18b3dde5995',
+    'infra/scripts/verify-code30-2-post-cleanup-state.sql': '7c44db5afd8ce72bcf22a3c7d4ad034f3cfbede326940b10eefb1d44064d7001',
+    'infra/scripts/verify-production-runtime-images.sh': '9602119873f07a0fa0a163eb32b3ad58806281e14dea92d2c9c5ab45a204261c',
+    'infra/scripts/verify-zlib-vex.py': '873f21ca117967c2088de3066d9b0b40955b6790f24c9b0b8bc868dff3dc51f3',
+    'infra/security/vex/zlib-cve-2026-85091.openvex.json': '5008f90d2b7bcdedd955d30c35618aae1f2c25c81fe3190d6adefdccab882bc7',
     'integrations/google-sheets/Code.gs': 'cbf401b2b7612b049d338a38ab4e53f0e78d7afda2d92782c3477f7b94d1f6d0',
+    'ops/runtime_release_parity.py': 'b9d8348e91785e24eb4e49d7c768b23f96197c978a1c62607d27afa3edcbdf8f',
     'releases/android/README.md': '790179dffcf20aa3834b85f0cf26dd0953bdeecfb19a4bb93be3fc8a4356e786',
+    'releases/evidence/code30-2-emulator-quarantine.json': '379c6368936d03223e19482cc840c2a9d2483dc9a96909fba22cd9f59911eec8',
     'scripts/analyze_code26_physical_evidence.py': '26c94d9abf88cd5211fccdcf3dddd3fe16edc8a653f8c18d0f0d1ff921e20e57',
     'scripts/run_code26_physical_business_audit.sh': 'a778888fde9676de966363f6574f733e214c5d8052f26b31dd55e733bfb17986',
+    'tests/test_android_release_pipeline.py': '4a42d04a662c0da55a2969e3a37ebac4556253d80880c92f8af3c91492b98dc5',
     'tests/test_android_release_version.py': 'c3b15d5ef03e2dac384dd9ab2801d9166ac3439cae0607a9d621b84ea8c380fb',
+    'tests/test_android_runtime_parity.py': 'bf06d06c8673404e8b7760a0974a876ca4b8517ff898ab57276f5146712cf1fb',
+    'tests/test_caddy_dependency_security.py': '523d90bd475ef1bd71e1e820f4b5053dc26f2d1a3581ddabafee39d257797b8e',
+    'tests/test_ci_docker_connection.py': '617fff5d994cdfe2e41ed823c7abe2c373e9ad363d9c553535d9d4d8a5d59b45',
     'tests/test_code26_physical_audit_lane.py': 'eaa3104cbe3faca655dcf866b05008e1a8acde3d2f456c8cb3a9b99d638befed',
-    'tests/test_production_installer_safety.py': '218a18d355de99986638ca9e1907e64ad9c67fd53b8b6607f852031dda1d8d90',
+    'tests/test_code30_2_emulator_quarantine_evidence.py': '5612c7dc5c7b628313103eea10d127822dbe322f945241a0477e23c9ffae94bd',
+    'tests/test_code30_2_freeze_path_safety.py': '2eea4de59f8e4c842daefcf60416a36b23c966a39171a6671a4e80ec642ca22b',
+    'tests/test_code30_2_post_cleanup_installer_guard.py': '37cfccabaace36d3a477415117a4e68e91657fcf6467240978a5b324f88db829',
+    'tests/test_docker_context_safety.py': '26d848d57fb31e026c4f1c1130dcdee13dec71e037ab51af1f2c4697393ab390',
+    'tests/test_hardened_scanner_runtime.py': 'eadb3b4f5cd0b98cfdac9d6c2c7ce56f15cdfd95eca8ac09430108dff428864f',
+    'tests/test_production_installer_safety.py': 'f56fe08679aa450551d76f4c93399d28be04321d8f3aff2b66a67d542d05ea88',
+    'tests/test_production_trial_cleanup_safety.py': '42484cdb31b9ca4172d05c8784d218b9adef3f2a74f2b42d1577d1f7729b22b9',
+    'tests/test_zlib_security_remediation.py': 'e19f0f012d62834eee5e5836efa08d81f965eb96cb63b20b816ade724241a407',
 }
-
 REVIEWED_CODE30_2_PRODUCTION_PATHS = frozenset(
     path
     for path in REVIEWED_CODE30_2_SHA256
@@ -703,6 +745,17 @@ def _code30_2_delta_paths(root: Path) -> set[str]:
     return {path for path in changed if path}
 
 
+def _is_canonical_regular_file(path: Path) -> bool:
+    try:
+        return (
+            path.is_file()
+            and not path.is_symlink()
+            and path.resolve(strict=True) == path.absolute()
+        )
+    except OSError:
+        return False
+
+
 def _verify_code30_2_audit_plan(root: Path, errors: list[str]) -> None:
     plan_path = root / CODE30_2_AUDIT_PLAN_PATH
     try:
@@ -806,16 +859,20 @@ def _verify_code30_2_exact_delta(root: Path, errors: list[str]) -> None:
 
     for path, expected_sha256 in REVIEWED_CODE30_2_SHA256.items():
         candidate_path = root / path
-        if not candidate_path.is_file():
-            errors.append(f"reviewed Code30.2 file was removed: {path}")
+        if not _is_canonical_regular_file(candidate_path):
+            errors.append(
+                f"reviewed Code30.2 file was removed, linked, or non-regular: {path}"
+            )
             continue
         actual_sha256 = hashlib.sha256(candidate_path.read_bytes()).hexdigest()
         if actual_sha256 != expected_sha256:
             errors.append(f"reviewed Code30.2 file differs from its approved bytes: {path}")
 
     for path in CODE30_2_FREEZE_CONTROL_PATHS:
-        if not (root / path).is_file():
-            errors.append(f"Code30.2 freeze control was removed: {path}")
+        if not _is_canonical_regular_file(root / path):
+            errors.append(
+                f"Code30.2 freeze control was removed, linked, or non-regular: {path}"
+            )
 
     _verify_code30_2_audit_plan(root, errors)
 

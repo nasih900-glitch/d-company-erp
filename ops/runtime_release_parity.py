@@ -11,8 +11,8 @@ from pathlib import Path
 from typing import Any
 
 
-RELEASE_IMAGE_SERVICES = ("caddy", "postgres", "backend", "frontend")
-HEALTH_REQUIRED_SERVICES = frozenset({"postgres", "backend", "frontend"})
+RELEASE_IMAGE_SERVICES = ("caddy", "postgres", "redis", "backend", "frontend")
+HEALTH_REQUIRED_SERVICES = frozenset({"postgres", "redis", "backend", "frontend"})
 
 
 class RuntimeParityError(RuntimeError):

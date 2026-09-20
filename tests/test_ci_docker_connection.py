@@ -371,13 +371,54 @@ def test_capture_requires_python312_before_docker_commands(
         MODULE.capture(_capture_args(tmp_path))
 
 
-def test_composite_gates_every_scanner_on_successful_connection_preflight() -> None:
+def test_composite_gates_every_scanner_on_verified_connection_and_hardened_scan() -> None:
     action = (
         ROOT / ".github" / "actions" / "scan-production-images" / "action.yml"
     ).read_text(encoding="utf-8")
     scanner_steps = action.split("    - name: Generate backend image SBOM", 1)[1]
-    guarded = "steps.docker-connection.outcome == 'success'"
-    assert action.count(guarded) == 12
+    connection_guard = (
+        "if: ${{ !cancelled() && steps.docker-connection.outcome == 'success' }}"
+    )
+    hardened_guard = (
+        "if: ${{ !cancelled() && steps.hardened-scan.outcome == 'success' }}"
+    )
+    assert action.count(connection_guard) == 7
+    assert action.count(hardened_guard) == 6
+
+    services = {
+        "backend": "backend",
+        "frontend": "frontend",
+        "Caddy": "caddy",
+        "PostgreSQL": "postgres",
+        "Redis": "redis",
+    }
+    for display_name, input_name in services.items():
+        sbom = action.split(f"    - name: Generate {display_name} image SBOM", 1)[
+            1
+        ].split("    - name:", 1)[0]
+        scan = action.split(f"    - name: Scan {display_name} image", 1)[1].split(
+            "    - name:", 1
+        )[0]
+        assert sbom.count(connection_guard) == 1
+        assert f"image: ${{{{ inputs.{input_name}-image }}}}" in sbom
+        assert scan.count(hardened_guard) == 1
+        assert f"image: ${{{{ inputs.{input_name}-image }}}}" in scan
+        assert (
+            f"vex: ${{{{ runner.temp }}}}/container-security/"
+            f"{input_name}-zlib.openvex.json"
+        ) in scan
+
+    hardened_scan = action.split(
+        "    - name: Exercise hardened archive scanner on all candidate images", 1
+    )[1].split("    # Keep SPDX SBOMs", 1)[0]
+    assert hardened_scan.count(connection_guard) == 1
+    assert "id: hardened-scan" in hardened_scan
+
+    vex_validation = action.split(
+        "    - name: Validate exact zlib VEX dispositions", 1
+    )[1].split("    - name: Retain container security evidence", 1)[0]
+    assert vex_validation.count(hardened_guard) == 1
+    assert "services=(backend frontend caddy postgres redis)" in vex_validation
     assert "sudo -E" not in action
     assert '"DOCKER_HOST=$EXPECTED_DOCKER_HOST"' in action
     assert "/var/run/docker.sock" not in action

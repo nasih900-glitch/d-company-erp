@@ -15,13 +15,13 @@ inputs:
     description: Exact locally built PostgreSQL image tag.
     required: true
   redis-image:
-    description: Exact digest-pinned Redis image used in production.
+    description: Exact locally built Redis image tag.
     required: true
   artifact-prefix:
     description: Unique prefix for the retained security evidence.
     required: true
   source-git-sha:
-    description: Full source commit used to build the four local release images.
+    description: Full source commit used to build the five local release images.
     required: true
   docker-host:
     description: Exact Unix socket URI returned by the pinned setup-Docker action.
@@ -138,61 +138,11 @@ runs:
         upload-release-assets: false
         dependency-snapshot: false
 
-    # Keep SPDX SBOMs as retained audit evidence, but scan the images directly.
-    # SPDX cannot preserve all of Syft's Go-binary metadata, which can make a
-    # later Grype scan less precise than cataloguing the exact image itself.
-    - name: Scan backend image
-      if: ${{ !cancelled() && steps.docker-connection.outcome == 'success' }}
-      uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
-      with:
-        image: ${{ inputs.backend-image }}
-        grype-version: v0.118.0
-        fail-build: true
-        severity-cutoff: high
-        only-fixed: false
-        output-format: json
-        output-file: ${{ runner.temp }}/container-security/backend-grype.json
-
-    - name: Scan frontend image
-      if: ${{ !cancelled() && steps.docker-connection.outcome == 'success' }}
-      uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
-      with:
-        image: ${{ inputs.frontend-image }}
-        grype-version: v0.118.0
-        fail-build: true
-        severity-cutoff: high
-        only-fixed: false
-        output-format: json
-        output-file: ${{ runner.temp }}/container-security/frontend-grype.json
-
-    - name: Scan Caddy image
-      if: ${{ !cancelled() && steps.docker-connection.outcome == 'success' }}
-      uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
-      with:
-        image: ${{ inputs.caddy-image }}
-        grype-version: v0.118.0
-        fail-build: true
-        severity-cutoff: high
-        only-fixed: false
-        output-format: json
-        output-file: ${{ runner.temp }}/container-security/caddy-grype.json
-
-    - name: Scan PostgreSQL image
-      if: ${{ !cancelled() && steps.docker-connection.outcome == 'success' }}
-      uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
-      with:
-        image: ${{ inputs.postgres-image }}
-        grype-version: v0.118.0
-        fail-build: true
-        severity-cutoff: high
-        only-fixed: false
-        output-format: json
-        output-file: ${{ runner.temp }}/container-security/postgres-grype.json
-
-    # The four locally built images additionally run through the exact
+    # The five locally built images additionally run through the exact
     # hardened archive scanner used by the production installer. Its Syft JSON
     # preserves source image IDs and its bounded mounts exercise the VM path.
     - name: Exercise hardened archive scanner on all candidate images
+      id: hardened-scan
       if: ${{ !cancelled() && steps.docker-connection.outcome == 'success' }}
       shell: bash
       env:
@@ -200,6 +150,7 @@ runs:
         FRONTEND_IMAGE: ${{ inputs.frontend-image }}
         CADDY_IMAGE: ${{ inputs.caddy-image }}
         POSTGRES_IMAGE: ${{ inputs.postgres-image }}
+        REDIS_IMAGE: ${{ inputs.redis-image }}
         SOURCE_GIT_SHA: ${{ inputs.source-git-sha }}
         EXPECTED_DOCKER_HOST: ${{ inputs.docker-host }}
         EXPECTED_DOCKER_STORE: ${{ inputs.docker-store }}
@@ -232,8 +183,8 @@ runs:
         bash "$connection_check" \
           "$EXPECTED_DOCKER_HOST" "$EXPECTED_DOCKER_STORE" "$EXPECTED_DOCKER_ROOT" \
           "$evidence_dir/docker-connection-before-hardened.json"
-        services=(backend frontend caddy postgres)
-        images=("$BACKEND_IMAGE" "$FRONTEND_IMAGE" "$CADDY_IMAGE" "$POSTGRES_IMAGE")
+        services=(backend frontend caddy postgres redis)
+        images=("$BACKEND_IMAGE" "$FRONTEND_IMAGE" "$CADDY_IMAGE" "$POSTGRES_IMAGE" "$REDIS_IMAGE")
         image_ids=()
         archives=()
         scanner_arguments=()
@@ -246,7 +197,7 @@ runs:
             exit 1
           fi
           archive="$scanner_evidence/$service-image.tar"
-          docker image save "$image_id" --output "$archive"
+          docker image save "$image" --output "$archive"
           test -s "$archive"
           chmod 0444 "$archive"
           printf '%s_image_ref=%s\n%s_image_id=%s\n%s_archive_sha256=%s\n' \
@@ -255,7 +206,7 @@ runs:
           image_ids+=("$image_id")
           archives+=("$archive")
           scanner_arguments+=(
-            "$service" "$image_id" "$archive"
+            "$service" "$image" "$image_id" "$archive"
             "$scanner_evidence/$service.syft.json"
             "$scanner_evidence/$service-hardened-grype.json"
           )
@@ -343,7 +294,11 @@ runs:
           backend.syft.json backend-hardened-grype.json \
           frontend.syft.json frontend-hardened-grype.json \
           caddy.syft.json caddy-hardened-grype.json \
-          postgres.syft.json postgres-hardened-grype.json; do
+          postgres.syft.json postgres-hardened-grype.json \
+          redis.syft.json redis-hardened-grype.json \
+          backend-zlib.openvex.json frontend-zlib.openvex.json \
+          caddy-zlib.openvex.json postgres-zlib.openvex.json \
+          redis-zlib.openvex.json; do
           if sudo test -f "$scanner_evidence/$evidence"; then
             sudo install -o "$runner_uid" -g "$runner_gid" -m 0600 \
               "$scanner_evidence/$evidence" "$evidence_dir/$evidence"
@@ -360,14 +315,72 @@ runs:
           backend.syft.json backend-hardened-grype.json \
           frontend.syft.json frontend-hardened-grype.json \
           caddy.syft.json caddy-hardened-grype.json \
-          postgres.syft.json postgres-hardened-grype.json; do
+          postgres.syft.json postgres-hardened-grype.json \
+          redis.syft.json redis-hardened-grype.json \
+          backend-zlib.openvex.json frontend-zlib.openvex.json \
+          caddy-zlib.openvex.json postgres-zlib.openvex.json \
+          redis-zlib.openvex.json; do
           sudo rm -f "$scanner_evidence/$evidence"
         done
         sudo rmdir "$scanner_work"
         sudo rmdir "$scanner_evidence"
 
+    # Keep SPDX SBOMs as retained audit evidence, but scan each image directly
+    # with the per-image VEX produced by the hardened archive identity path.
+    - name: Scan backend image
+      if: ${{ !cancelled() && steps.hardened-scan.outcome == 'success' }}
+      uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+      with:
+        image: ${{ inputs.backend-image }}
+        grype-version: v0.118.0
+        fail-build: true
+        severity-cutoff: high
+        only-fixed: false
+        vex: ${{ runner.temp }}/container-security/backend-zlib.openvex.json
+        output-format: json
+        output-file: ${{ runner.temp }}/container-security/backend-grype.json
+
+    - name: Scan frontend image
+      if: ${{ !cancelled() && steps.hardened-scan.outcome == 'success' }}
+      uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+      with:
+        image: ${{ inputs.frontend-image }}
+        grype-version: v0.118.0
+        fail-build: true
+        severity-cutoff: high
+        only-fixed: false
+        vex: ${{ runner.temp }}/container-security/frontend-zlib.openvex.json
+        output-format: json
+        output-file: ${{ runner.temp }}/container-security/frontend-grype.json
+
+    - name: Scan Caddy image
+      if: ${{ !cancelled() && steps.hardened-scan.outcome == 'success' }}
+      uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+      with:
+        image: ${{ inputs.caddy-image }}
+        grype-version: v0.118.0
+        fail-build: true
+        severity-cutoff: high
+        only-fixed: false
+        vex: ${{ runner.temp }}/container-security/caddy-zlib.openvex.json
+        output-format: json
+        output-file: ${{ runner.temp }}/container-security/caddy-grype.json
+
+    - name: Scan PostgreSQL image
+      if: ${{ !cancelled() && steps.hardened-scan.outcome == 'success' }}
+      uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+      with:
+        image: ${{ inputs.postgres-image }}
+        grype-version: v0.118.0
+        fail-build: true
+        severity-cutoff: high
+        only-fixed: false
+        vex: ${{ runner.temp }}/container-security/postgres-zlib.openvex.json
+        output-format: json
+        output-file: ${{ runner.temp }}/container-security/postgres-grype.json
+
     - name: Scan Redis image
-      if: ${{ !cancelled() && steps.docker-connection.outcome == 'success' }}
+      if: ${{ !cancelled() && steps.hardened-scan.outcome == 'success' }}
       uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
       with:
         image: ${{ inputs.redis-image }}
@@ -375,8 +388,49 @@ runs:
         fail-build: true
         severity-cutoff: high
         only-fixed: false
+        vex: ${{ runner.temp }}/container-security/redis-zlib.openvex.json
         output-format: json
         output-file: ${{ runner.temp }}/container-security/redis-grype.json
+
+    - name: Validate exact zlib VEX dispositions
+      if: ${{ !cancelled() && steps.hardened-scan.outcome == 'success' }}
+      shell: bash
+      env:
+        BACKEND_IMAGE: ${{ inputs.backend-image }}
+        FRONTEND_IMAGE: ${{ inputs.frontend-image }}
+        CADDY_IMAGE: ${{ inputs.caddy-image }}
+        POSTGRES_IMAGE: ${{ inputs.postgres-image }}
+        REDIS_IMAGE: ${{ inputs.redis-image }}
+      run: |
+        set -euo pipefail
+        evidence_dir="$RUNNER_TEMP/container-security"
+        identities="$evidence_dir/image-identities.txt"
+        hardened_metadata="$evidence_dir/hardened-scan-metadata.txt"
+        verifier="$GITHUB_ACTION_PATH/../../../infra/scripts/verify-zlib-vex.py"
+        services=(backend frontend caddy postgres redis)
+        images=("$BACKEND_IMAGE" "$FRONTEND_IMAGE" "$CADDY_IMAGE" "$POSTGRES_IMAGE" "$REDIS_IMAGE")
+        validation="$evidence_dir/zlib-vex-validation.txt"
+        : > "$validation"
+        for index in "${!services[@]}"; do
+          service=${services[$index]}
+          image=${images[$index]}
+          mapfile -t runtime_ids < <(awk -F= -v key="${service}_image_id" \
+            '$1 == key {print substr($0, index($0, "=") + 1)}' "$identities")
+          mapfile -t config_ids < <(awk -F= -v key="${service}_scanner_config_image_id" \
+            '$1 == key {print substr($0, index($0, "=") + 1)}' "$hardened_metadata")
+          if [ "${#runtime_ids[@]}" -ne 1 ] || \
+             [ "${#config_ids[@]}" -ne 1 ] || \
+             ! [[ "${runtime_ids[0]}" =~ ^sha256:[0-9a-f]{64}$ ]] || \
+             ! [[ "${config_ids[0]}" =~ ^sha256:[0-9a-f]{64}$ ]] || \
+             [ "$(docker image inspect --format '{{.Id}}' "$image")" != "${runtime_ids[0]}" ]; then
+            echo "Candidate $service identity changed before final VEX validation." >&2
+            exit 1
+          fi
+          python3 "$verifier" \
+            "$evidence_dir/$service-zlib.openvex.json" \
+            "$image" "${config_ids[0]}" \
+            "$service=$evidence_dir/$service-grype.json" >> "$validation"
+        done
 
     - name: Retain container security evidence
       if: always()

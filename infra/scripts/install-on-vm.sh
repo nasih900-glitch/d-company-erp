@@ -178,9 +178,16 @@ CANDIDATE_PARITY_TOOL="$CANDIDATE_BUILD_ROOT/ops/runtime_release_parity.py"
 PREPARE_ENV_TOOL="$CANDIDATE_BUILD_ROOT/infra/scripts/prepare-production-env.sh"
 CAPACITY_CHECK_TOOL="$CANDIDATE_BUILD_ROOT/infra/scripts/check-upgrade-capacity.sh"
 HARDENED_SCANNER_TOOL="$CANDIDATE_BUILD_ROOT/infra/scripts/run-hardened-image-scanners.sh"
+EMULATOR_QUARANTINE_VERIFIER="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-code30-2-emulator-quarantine.py"
+EMULATOR_QUARANTINE_EVIDENCE="$CANDIDATE_BUILD_ROOT/releases/evidence/code30-2-emulator-quarantine.json"
+POST_CLEANUP_STATE_VERIFIER="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-code30-2-post-cleanup-state.py"
+POST_CLEANUP_STATE_SQL="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-code30-2-post-cleanup-state.sql"
+CLEANUP_RUNNER="$REPO_DIR/infra/scripts/cleanup-code30-production-trial-data.sh"
 for release_input in \
   "$RELEASE_COMPOSE_FILE" "$CANDIDATE_PARITY_TOOL" \
-  "$PREPARE_ENV_TOOL" "$CAPACITY_CHECK_TOOL" "$HARDENED_SCANNER_TOOL"; do
+  "$PREPARE_ENV_TOOL" "$CAPACITY_CHECK_TOOL" "$HARDENED_SCANNER_TOOL" \
+  "$EMULATOR_QUARANTINE_VERIFIER" "$EMULATOR_QUARANTINE_EVIDENCE" \
+  "$POST_CLEANUP_STATE_VERIFIER" "$POST_CLEANUP_STATE_SQL"; do
   if [ ! -f "$release_input" ] || [ -L "$release_input" ]; then
     echo "Frozen production release snapshot is incomplete or linked." >&2
     exit 1
@@ -658,6 +665,10 @@ if [ -e "$ENV_CANDIDATE" ]; then
   exit 1
 fi
 PROMOTION_COMPLETE=false
+CODE30_2_STALE_OUTBOX_BRIDGE_USED=false
+CODE30_2_POST_CLEANUP_STALE_OUTBOX_ACCEPTED=false
+CODE30_2_CLEANUP_WINDOW_ACTIVE=false
+CODE30_2_CLEANUP_SUCCEEDED=false
 handle_install_failure() {
   failure_code=$?
   trap - EXIT
@@ -669,7 +680,20 @@ handle_install_failure() {
     docker exec "$EXISTING_POSTGRES_CONTAINER" \
       dropdb -U erp --if-exists "$VERIFY_DATABASE" >/dev/null 2>&1 || true
   fi
-  if [ "$PROMOTION_COMPLETE" = true ] && [ -n "$UPGRADE_SNAPSHOT" ]; then
+  if [ "$PROMOTION_COMPLETE" = true ] && \
+     [ "$CODE30_2_CLEANUP_WINDOW_ACTIVE" = true ] && \
+     [ "$CODE30_2_CLEANUP_SUCCEEDED" != true ]; then
+    # This exact one-time bridge cannot put either the migrated candidate or
+    # the restored predecessor back on the public network until the reviewed
+    # trial-data cleanup has committed and the candidate backend has passed
+    # readiness/parity again. Preserve both database backups for recovery and
+    # leave the current database untouched for a guarded retry.
+    "${candidate_compose[@]}" --env-file .env \
+      stop -t 30 caddy backend >/dev/null 2>&1 || true
+    echo "Code30.2 cleanup cutover failed; Caddy and backend remain stopped." >&2
+    echo "No pre-upgrade database restore was attempted after the cleanup window opened." >&2
+    echo "Use the protected evidence at $UPGRADE_SNAPSHOT and the cleanup runbook." >&2
+  elif [ "$PROMOTION_COMPLETE" = true ] && [ -n "$UPGRADE_SNAPSHOT" ]; then
     echo "==> Release acceptance failed; restoring the quiesced prior release." >&2
     # Stop every candidate writer/runtime, including a partially started
     # PostgreSQL container. Rollback below recreates PostgreSQL from the
@@ -943,29 +967,6 @@ echo "==> Running fail-closed environment and Compose preflight…"
 "${candidate_compose[@]}" --env-file "$ENV_CANDIDATE" config --quiet
 echo "==> Production config preflight passed; no Compose service has been recreated."
 
-# Redis is the only production service supplied directly by an upstream image
-# rather than built from this release snapshot. Resolve its exact reference
-# from the frozen Compose contract, require a digest pin, and fetch/record the
-# platform-specific immutable image ID before the maintenance window. `--pull
-# never` at cutover then cannot depend on an incidental image left by the prior
-# deployment (which is especially important for first installs).
-CANDIDATE_REDIS_IMAGE_REF=$(
-  "${candidate_compose[@]}" --env-file "$ENV_CANDIDATE" config --format json \
-    | python3 -c \
-      'import json,sys; print(json.load(sys.stdin)["services"]["redis"]["image"])'
-)
-if ! [[ "$CANDIDATE_REDIS_IMAGE_REF" =~ ^redis:7-alpine@sha256:[0-9a-f]{64}$ ]]; then
-  echo "Candidate Redis image must be the reviewed digest-pinned Redis 7 Alpine image." >&2
-  exit 1
-fi
-docker pull "$CANDIDATE_REDIS_IMAGE_REF" >/dev/null
-CANDIDATE_REDIS_IMAGE_ID=$(docker image inspect --format '{{.Id}}' \
-  "$CANDIDATE_REDIS_IMAGE_REF")
-if ! [[ "$CANDIDATE_REDIS_IMAGE_ID" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-  echo "Candidate Redis pull returned no immutable image ID." >&2
-  exit 1
-fi
-echo "==> Exact digest-pinned Redis image is present before maintenance."
 if [ -n "$UPGRADE_SNAPSHOT" ]; then
   echo "    Rollback evidence remains at: $UPGRADE_SNAPSHOT"
   echo "==> Proving existing DNS/TLS/readiness before the maintenance window…"
@@ -978,7 +979,7 @@ echo "==> Building candidate images while the existing release remains live…"
 # verification tools all come from the same snapshot created before step 1.
 # This production host has limited memory. Build one image at a time; the Go
 # Dockerfiles also constrain compiler workers and memory internally.
-for candidate_service in caddy postgres backend frontend; do
+for candidate_service in caddy postgres redis backend frontend; do
   COMPOSE_PARALLEL_LIMIT=1 "${candidate_compose[@]}" \
     --env-file "$ENV_CANDIDATE" build "$candidate_service"
 done
@@ -991,8 +992,23 @@ CANDIDATE_IMAGE_ATTESTATION=$(python3 "$CANDIDATE_PARITY_TOOL" candidate \
   --root "$CANDIDATE_BUILD_ROOT" --env-file "$ENV_CANDIDATE" \
   --version-name "$CANDIDATE_APP_VERSION" --source-git-sha "$CURRENT_REVISION" \
   --project-name "$DEPLOY_PROJECT_NAME")
-echo "==> Candidate Caddy/PostgreSQL/backend/frontend identities verified."
+echo "==> Candidate Caddy/PostgreSQL/Redis/backend/frontend identities verified."
 echo "==> Immutable candidate source archive: $CANDIDATE_SOURCE_ARCHIVE_SHA256"
+
+CANDIDATE_REDIS_IMAGE_REF=$(python3 -c \
+  'import json,sys; print(json.loads(sys.argv[1])["services"]["redis"]["image_ref"])' \
+  "$CANDIDATE_IMAGE_ATTESTATION")
+CANDIDATE_REDIS_IMAGE_ID=$(python3 -c \
+  'import json,sys; print(json.loads(sys.argv[1])["services"]["redis"]["image_id"])' \
+  "$CANDIDATE_IMAGE_ATTESTATION")
+if ! [[ "$CANDIDATE_REDIS_IMAGE_REF" =~ ^d-company-erp-redis:[0-9a-f]{40}$ ]] || \
+   ! [[ "$CANDIDATE_REDIS_IMAGE_ID" =~ ^sha256:[0-9a-f]{64}$ ]] || \
+   [ "$(docker image inspect --format '{{.Id}}' "$CANDIDATE_REDIS_IMAGE_REF")" \
+     != "$CANDIDATE_REDIS_IMAGE_ID" ]; then
+  echo "Candidate Redis image is not the attested locally built release image." >&2
+  exit 1
+fi
+echo "==> Patched Redis release image is built and attested before maintenance."
 
 # Fetch the exact scanner images before entering the helper's bounded Docker
 # create lifecycle. A cold registry transfer must not consume that deadline.
@@ -1001,10 +1017,9 @@ timeout --foreground --signal TERM --kill-after=30s 600s \
 timeout --foreground --signal TERM --kill-after=30s 600s \
   docker pull "$GRYPE_IMAGE" >/dev/null
 
-# Scan the exact locally built image IDs before maintenance begins. CI scans
-# the same reviewed source and every digest-pinned infrastructure image, while
-# this gate closes the remaining build-host parity boundary for the four images
-# that the production VM itself will run.
+# Scan the exact locally built image IDs before maintenance begins. CI builds
+# and scans the same reviewed source, while this gate closes the production
+# build-host parity boundary for the five images that the VM itself will run.
 SECURITY_EVIDENCE_DIR=$(mktemp -d \
   "$SECURITY_EVIDENCE_ROOT/${CURRENT_REVISION}.XXXXXX")
 chmod 700 "$SECURITY_EVIDENCE_DIR"
@@ -1027,7 +1042,7 @@ CANDIDATE_SCAN_IMAGE_REFS=()
 CANDIDATE_SCAN_IMAGE_IDS=()
 CANDIDATE_SCAN_ARCHIVES=()
 CANDIDATE_SCANNER_PROBE_IMAGE_ID=""
-for candidate_service in caddy postgres backend frontend; do
+for candidate_service in caddy postgres redis backend frontend; do
   candidate_image_ref=$(python3 -c \
     'import json,sys; print(json.loads(sys.argv[1])["services"][sys.argv[2]]["image_ref"])' \
     "$CANDIDATE_IMAGE_ATTESTATION" "$candidate_service")
@@ -1041,7 +1056,7 @@ for candidate_service in caddy postgres backend frontend; do
     exit 1
   fi
   image_archive="$SECURITY_EVIDENCE_DIR/$candidate_service-image.tar"
-  docker image save "$candidate_image_id" --output "$image_archive"
+  docker image save "$candidate_image_ref" --output "$image_archive"
   test -s "$image_archive"
   chmod 0444 "$image_archive"
   image_archive_sha256=$(sha256sum "$image_archive" | awk '{print $1}')
@@ -1054,7 +1069,7 @@ for candidate_service in caddy postgres backend frontend; do
   CANDIDATE_SCAN_IMAGE_IDS+=("$candidate_image_id")
   CANDIDATE_SCAN_ARCHIVES+=("$image_archive")
   SCANNER_ARGUMENTS+=(
-    "$candidate_service" "$candidate_image_id" "$image_archive"
+    "$candidate_service" "$candidate_image_ref" "$candidate_image_id" "$image_archive"
     "$SECURITY_EVIDENCE_DIR/$candidate_service.syft.json"
     "$SECURITY_EVIDENCE_DIR/$candidate_service-grype.json"
   )
@@ -1098,9 +1113,9 @@ if [ -n "$EXISTING_POSTGRES_CONTAINER" ]; then
     "$database_size_bytes" "$snapshot_free_kib" "$postgres_free_kib"
 fi
 
-# Fail before stopping any writer if the exact Redis image resolved above is
-# no longer available under the frozen digest reference. CI scans this same
-# digest-pinned upstream image; locally built release images are scanned above.
+# Fail before stopping any writer if the exact locally built Redis image
+# resolved above is no longer available under its attested release tag. CI
+# scans this same release-built image alongside the other candidate images.
 if [ "$(docker image inspect --format '{{.Id}}' \
   "$CANDIDATE_REDIS_IMAGE_REF")" != "$CANDIDATE_REDIS_IMAGE_ID" ]; then
   echo "Candidate Redis image changed or disappeared before maintenance." >&2
@@ -1123,8 +1138,67 @@ if [ -n "$EXISTING_POSTGRES_CONTAINER" ]; then
   pending_outbox_count=$(docker exec "$EXISTING_POSTGRES_CONTAINER" \
     psql -U erp -d erp -Atc \
     "SELECT COALESCE(SUM(pending_outbox_count), 0) FROM client_installations")
-  if ! [[ "$pending_outbox_count" =~ ^[0-9]+$ ]] || [ "$pending_outbox_count" -ne 0 ]; then
-    echo "Reported tablet outboxes are not fully drained; refusing migration." >&2
+  if ! [[ "$pending_outbox_count" =~ ^[0-9]+$ ]]; then
+    echo "Reported tablet outbox state is invalid; refusing migration." >&2
+    exit 1
+  fi
+  if [ "$pending_outbox_count" -ne 0 ]; then
+    # The one stale counter may survive forever as preserved historical
+    # evidence. An already-cleaned database is accepted only when a read-only
+    # query proves the exact retained row and key hashes, the single durable
+    # cleanup receipt, all 13 replay fences and the continued absence of every
+    # reviewed deleted row. Any changed, duplicate or partial receipt fails
+    # closed and cannot be mistaken for the one-time pre-cleanup bridge.
+    post_cleanup_state_json=$(docker exec -i "$EXISTING_POSTGRES_CONTAINER" \
+      psql -X --no-psqlrc --quiet -U erp -d erp --tuples-only --no-align \
+      < "$POST_CLEANUP_STATE_SQL")
+    if printf '%s\n' "$post_cleanup_state_json" \
+       | python3 "$POST_CLEANUP_STATE_VERIFIER" --quiet; then
+      CODE30_2_POST_CLEANUP_STALE_OUTBOX_ACCEPTED=true
+      echo "==> Verified completed Code30.2 cleanup and retained historical outbox evidence."
+    else
+      # Before the cleanup exists, permit the exact reviewed row only for the
+      # Code30.2 migration from 0073. The row remains untouched and protected
+      # by the quiesced backup. This branch is impossible for future releases.
+      stale_outbox_signature=$(docker exec "$EXISTING_POSTGRES_CONTAINER" \
+        psql -U erp -d erp -Atc \
+        "SELECT
+           count(*) FILTER (
+             WHERE id = '92b491f1-c35b-4437-af9a-a6be68035001'
+               AND installation_id = 'd664b4a5-d293-48a7-a96c-8c3050ed5e76'
+               AND company_id = '8f323fba-4358-45fe-9d3b-a8e0fae52993'
+               AND version_name = '3.1.28'
+               AND version_code = 36
+               AND pending_outbox_count = 1
+               AND last_seen_at = '2026-09-19 08:33:01.020059+00'::timestamptz
+           )::text || '|' ||
+           count(*) FILTER (WHERE pending_outbox_count IS DISTINCT FROM 0)::text || '|' ||
+           COALESCE(SUM(pending_outbox_count), 0)::text
+         FROM client_installations")
+      if [ "$CANDIDATE_APP_VERSION" != 3.1.29 ] || \
+         [ "$PRIOR_DB_HEAD" != 0073 ] || \
+         [ "$pending_outbox_count" -ne 1 ] || \
+         [ "$stale_outbox_signature" != "1|1|1" ]; then
+        printf '%s\n' "$post_cleanup_state_json" \
+          | python3 "$POST_CLEANUP_STATE_VERIFIER" >/dev/null || true
+        echo "Reported tablet outboxes are not fully drained; refusing migration." >&2
+        exit 1
+      fi
+      quarantine_evidence_result=$(python3 "$EMULATOR_QUARANTINE_VERIFIER" \
+        "$EMULATOR_QUARANTINE_EVIDENCE")
+      if [ "$quarantine_evidence_result" != \
+        "sha256=379c6368936d03223e19482cc840c2a9d2483dc9a96909fba22cd9f59911eec8 avds=18" ]; then
+        echo "Code30.2 emulator quarantine evidence is invalid; refusing migration." >&2
+        exit 1
+      fi
+      echo "==> Verified one-time Code30.2 emulator quarantine: $quarantine_evidence_result"
+      CODE30_2_STALE_OUTBOX_BRIDGE_USED=true
+    fi
+  fi
+  if [ "$pending_outbox_count" -ne 0 ] && \
+     [ "$CODE30_2_POST_CLEANUP_STALE_OUTBOX_ACCEPTED" = \
+       "$CODE30_2_STALE_OUTBOX_BRIDGE_USED" ]; then
+    echo "Retained tablet outbox was not accepted by exactly one guarded path." >&2
     exit 1
   fi
   echo "==> Creating final quiesced pre-upgrade PostgreSQL backup…"
@@ -1171,6 +1245,12 @@ mv "$ENV_CANDIDATE" .env
 ENV_CANDIDATE=""
 MAINTENANCE_ACTIVE=false
 PROMOTION_COMPLETE=true
+if [ "$CODE30_2_STALE_OUTBOX_BRIDGE_USED" = true ]; then
+  # From this point through cleanup acceptance, every failure path keeps
+  # ingress and the backend stopped. The pre-upgrade backup is retained for
+  # deliberate recovery but is never restored automatically into service.
+  CODE30_2_CLEANUP_WINDOW_ACTIVE=true
+fi
 echo "==> Candidate environment promoted atomically."
 
 # The old release may have run MinIO even though no application code uses S3.
@@ -1196,7 +1276,7 @@ if [ "${#CANDIDATE_REDIS_CONTAINER_IDS[@]}" -ne 1 ] || \
    [ "$(docker inspect --format '{{.Image}}' \
      "${CANDIDATE_REDIS_CONTAINER_IDS[0]:-missing}")" \
      != "$CANDIDATE_REDIS_IMAGE_ID" ]; then
-  echo "Running Redis does not use the verified digest-pinned candidate image." >&2
+  echo "Running Redis does not use the verified release-built candidate image." >&2
   exit 1
 fi
 echo "==> Running Redis image identity verified."
@@ -1222,14 +1302,14 @@ echo "==> Backend is ready."
 
 # Docker health checks can lag readiness. Keep ingress closed until every
 # internal release-built image equals the pre-cutover candidate.
-echo "==> Verifying healthy PostgreSQL/backend/frontend release identities…"
+echo "==> Verifying healthy PostgreSQL/Redis/backend/frontend release identities…"
 ATTEMPTS=0
 until python3 "$CANDIDATE_PARITY_TOOL" running \
   --root "$CANDIDATE_BUILD_ROOT" --env-file "$REPO_DIR/.env" \
   --version-name "$CANDIDATE_APP_VERSION" --source-git-sha "$CURRENT_REVISION" \
   --project-name "$DEPLOY_PROJECT_NAME" \
   --expected-images-json "$CANDIDATE_IMAGE_ATTESTATION" \
-  --services postgres backend frontend; do
+  --services postgres redis backend frontend; do
   ATTEMPTS=$((ATTEMPTS+1))
   if [ "$ATTEMPTS" -ge 30 ]; then
     echo "Running release parity was not proven; public ingress remains closed." >&2
@@ -1250,6 +1330,152 @@ echo "==> Applying the owner-approved Gaming Centre tariff…"
 "${candidate_compose[@]}" --env-file .env exec -T backend \
   python -m scripts.ensure_gaming_tariff
 echo "==> Gaming Centre tariff accepted."
+
+if [ "$CODE30_2_STALE_OUTBOX_BRIDGE_USED" = true ]; then
+  # The one stale Code30.1 test-device outbox was accepted only so migration
+  # 0078 could install the durable replay fence. Complete the separately
+  # reviewed production-trial cleanup before any public ingress can reopen.
+  # Ordinary clean-outbox upgrades and fresh installs never enter this block.
+  if [ -z "$UPGRADE_SNAPSHOT" ] || [ "$FRESH_INSTALL" = true ]; then
+    echo "Code30.2 cleanup bridge is valid only for an existing protected upgrade." >&2
+    exit 1
+  fi
+  if [ ! -f "$CLEANUP_RUNNER" ] || [ -L "$CLEANUP_RUNNER" ]; then
+    echo "Canonical Code30.2 cleanup runner is missing or linked." >&2
+    exit 1
+  fi
+  if [ "$(git -C "$REPO_DIR" rev-parse HEAD)" != "$CURRENT_REVISION" ] || \
+     [ -n "$(git -C "$REPO_DIR" status --porcelain=v1 --untracked-files=all)" ]; then
+    echo "Code30.2 cleanup requires the unchanged exact release checkout." >&2
+    exit 1
+  fi
+
+  CANDIDATE_POSTGRES_CONTAINER_IDS=()
+  while IFS= read -r container_id; do
+    [ -n "$container_id" ] && CANDIDATE_POSTGRES_CONTAINER_IDS+=("$container_id")
+  done < <("${candidate_compose[@]}" --env-file .env ps -q postgres)
+  CANDIDATE_BACKEND_CONTAINER_IDS=()
+  while IFS= read -r container_id; do
+    [ -n "$container_id" ] && CANDIDATE_BACKEND_CONTAINER_IDS+=("$container_id")
+  done < <("${candidate_compose[@]}" --env-file .env ps -q backend)
+  if [ "${#CANDIDATE_POSTGRES_CONTAINER_IDS[@]}" -ne 1 ] || \
+     [ "${#CANDIDATE_BACKEND_CONTAINER_IDS[@]}" -ne 1 ]; then
+    echo "Code30.2 cleanup requires one canonical PostgreSQL and backend container." >&2
+    exit 1
+  fi
+  CANDIDATE_POSTGRES_CONTAINER=${CANDIDATE_POSTGRES_CONTAINER_IDS[0]}
+  CANDIDATE_BACKEND_CONTAINER=${CANDIDATE_BACKEND_CONTAINER_IDS[0]}
+  candidate_database_head=$(docker exec "$CANDIDATE_POSTGRES_CONTAINER" sh -eu -c '
+    : "${POSTGRES_USER:?POSTGRES_USER is not set}"
+    : "${POSTGRES_DB:?POSTGRES_DB is not set}"
+    exec psql -X --no-psqlrc --tuples-only --no-align \
+      --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" \
+      --command "SELECT version_num FROM alembic_version"
+  ')
+  if [ "$candidate_database_head" != 0078 ]; then
+    echo "Code30.2 cleanup requires exact database migration 0078." >&2
+    exit 1
+  fi
+
+  echo "==> Holding ingress closed and stopping the backend for Code30.2 cleanup…"
+  "${candidate_compose[@]}" --env-file .env stop -t 30 caddy
+  "${candidate_compose[@]}" --env-file .env stop -t 60 backend
+  if [ "$(docker inspect --format '{{.State.Running}}' \
+       "$CANDIDATE_BACKEND_CONTAINER")" != false ] || \
+     [ -n "$(docker ps -q \
+       --filter "label=com.docker.compose.project=$DEPLOY_PROJECT_NAME" \
+       --filter 'label=com.docker.compose.service=caddy')" ]; then
+    echo "Code30.2 cleanup requires a stopped backend and closed Caddy ingress." >&2
+    exit 1
+  fi
+
+  POST_MIGRATION_DATABASE_BACKUP="$UPGRADE_SNAPSHOT/database-code30-2-0078.dump"
+  if [ -e "$POST_MIGRATION_DATABASE_BACKUP" ]; then
+    echo "Refusing to overwrite an existing Code30.2 post-migration backup." >&2
+    exit 1
+  fi
+  echo "==> Creating fresh post-migration PostgreSQL backup for cleanup verification…"
+  docker exec "$CANDIDATE_POSTGRES_CONTAINER" sh -eu -c '
+    : "${POSTGRES_USER:?POSTGRES_USER is not set}"
+    : "${POSTGRES_DB:?POSTGRES_DB is not set}"
+    exec pg_dump --username "$POSTGRES_USER" --format=custom "$POSTGRES_DB"
+  ' > "$POST_MIGRATION_DATABASE_BACKUP"
+  chmod 600 "$POST_MIGRATION_DATABASE_BACKUP"
+  if [ ! -s "$POST_MIGRATION_DATABASE_BACKUP" ]; then
+    echo "Post-migration PostgreSQL backup is empty; cleanup remains blocked." >&2
+    exit 1
+  fi
+  docker exec -i "$CANDIDATE_POSTGRES_CONTAINER" \
+    pg_restore --list < "$POST_MIGRATION_DATABASE_BACKUP" >/dev/null
+  POST_MIGRATION_DATABASE_BACKUP_SHA256=$(sha256sum \
+    "$POST_MIGRATION_DATABASE_BACKUP" | awk '{print $1}')
+  printf '%s  %s\n' "$POST_MIGRATION_DATABASE_BACKUP_SHA256" \
+    "$(basename "$POST_MIGRATION_DATABASE_BACKUP")" \
+    > "$POST_MIGRATION_DATABASE_BACKUP.sha256"
+  chmod 600 "$POST_MIGRATION_DATABASE_BACKUP.sha256"
+
+  echo "==> Computing exact Code30.2 cleanup fingerprint in a rolled-back dry run…"
+  cleanup_dry_run_output=$(bash "$CLEANUP_RUNNER" \
+    --postgres-container "$CANDIDATE_POSTGRES_CONTAINER")
+  printf '%s\n' "$cleanup_dry_run_output"
+  cleanup_state_fingerprint=$(printf '%s\n' "$cleanup_dry_run_output" \
+    | sed -n 's/.*"state_fingerprint": "\([0-9a-f]\{64\}\)".*/\1/p' \
+    | tail -n 1)
+  if ! [[ "$cleanup_state_fingerprint" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "Code30.2 cleanup dry run returned no exact state fingerprint." >&2
+    exit 1
+  fi
+
+  echo "==> Applying the verified Code30.2 production-trial cleanup…"
+  cleanup_apply_output=$(bash "$CLEANUP_RUNNER" \
+    --postgres-container "$CANDIDATE_POSTGRES_CONTAINER" \
+    --backend-container "$CANDIDATE_BACKEND_CONTAINER" \
+    --apply \
+    --confirm APPLY_CODE30_1_VERIFIED_TRIAL_CLEANUP \
+    --expected-state-fingerprint "$cleanup_state_fingerprint" \
+    --backup-file "$POST_MIGRATION_DATABASE_BACKUP" \
+    --source-git-sha "$CURRENT_REVISION" \
+    --executor "install-on-vm:$CURRENT_REVISION")
+  printf '%s\n' "$cleanup_apply_output"
+  if [[ "$cleanup_apply_output" != *'"mode": "apply"'* ]]; then
+    echo "Code30.2 cleanup did not return its committed apply receipt." >&2
+    exit 1
+  fi
+
+  echo "==> Restarting and re-verifying the cleaned Code30.2 backend…"
+  "${candidate_compose[@]}" --env-file .env \
+    up -d --no-build --pull never backend
+  ATTEMPTS=0
+  until "${candidate_compose[@]}" --env-file .env exec -T backend python -c \
+    "import urllib.request; urllib.request.urlopen('http://localhost:8000/readyz', timeout=2).read()" \
+    >/dev/null 2>&1; do
+    ATTEMPTS=$((ATTEMPTS+1))
+    if [ "$ATTEMPTS" -gt 120 ]; then
+      echo "Cleaned Code30.2 backend did not become ready; ingress remains closed." >&2
+      exit 1
+    fi
+    sleep 1
+  done
+  python3 "$CANDIDATE_PARITY_TOOL" running \
+    --root "$CANDIDATE_BUILD_ROOT" --env-file "$REPO_DIR/.env" \
+    --version-name "$CANDIDATE_APP_VERSION" --source-git-sha "$CURRENT_REVISION" \
+    --project-name "$DEPLOY_PROJECT_NAME" \
+    --expected-images-json "$CANDIDATE_IMAGE_ATTESTATION" \
+    --services postgres redis backend frontend
+  if [ -n "$(docker ps -q \
+       --filter "label=com.docker.compose.project=$DEPLOY_PROJECT_NAME" \
+       --filter 'label=com.docker.compose.service=caddy')" ]; then
+    echo "Caddy started before Code30.2 cleanup acceptance; refusing cutover." >&2
+    exit 1
+  fi
+  CODE30_2_CLEANUP_SUCCEEDED=true
+  # Cleanup has committed and the candidate is healthy. From this exact point
+  # onward a later acceptance failure must preserve the cleaned database; the
+  # pre-upgrade snapshot is no longer an automatic rollback source.
+  trap handle_post_ingress_failure EXIT
+  CODE30_2_CLEANUP_WINDOW_ACTIVE=false
+  echo "==> Code30.2 cleanup, backend readiness, and release parity accepted."
+fi
 
 if [ "$FRESH_INSTALL" = true ]; then
   OWNER_EMAIL=$(grep '^SEED_OWNER_EMAIL=' .env | cut -d= -f2-)

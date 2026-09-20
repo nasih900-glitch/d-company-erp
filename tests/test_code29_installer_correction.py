@@ -23,16 +23,16 @@ HISTORICAL_CODE29_GUARD_SHA256 = (
     "2d761a871369d891849e0170c85533a0269d209f7949b376300eb0994bd5fc15"
 )
 HISTORICAL_CADDY_GUARD_SHA256 = (
-    "2395767f4fc278a45822bc2cc45f476c8a44e9211fc9db7b747196462579c881"
+    "523d90bd475ef1bd71e1e820f4b5053dc26f2d1a3581ddabafee39d257797b8e"
 )
 CODE30_2_FREEZE_CONSTANTS_SHA256 = (
-    "940125f81c0664691321ce271879c4bb1e8a9a0f8783a6973ecdb35420d0cb02"
+    "52618601bca26ed9f977ccb069e47361e70f8bf508519ac69c96cf0a4aaf9f70"
 )
 CODE30_2_FREEZE_HELPERS_SHA256 = (
-    "8c14d5c117c742caaae23319d97a84c1b5e9718b34f758fd2c4b91a72200864c"
+    "e2456433325653bf328cf98d20bfd9fc3880cdafedb2065e6695d4f7814a4b33"
 )
 CODE30_2_FREEZE_SCRIPT_SHA256 = (
-    "182c4c73d79f9873840198b31435603452f442f52b4c37136a1f64b0db0c6d9c"
+    "8070a67a82f8e5ba29de2deea1d111272a03662cc0c434ad10015e817074501b"
 )
 CODE30_2_FREEZE_TEST_SHA256 = (
     "303c44945334417d810b27c07982a8582220f08642183b4107dcda8e67568a14"
@@ -904,31 +904,44 @@ def test_installer_verifier_and_live_workflows_are_exact() -> None:
             1,
         ),
     )
-    expected_installer = _replace_exact(
-        _original("infra/scripts/install-on-vm.sh"), installer_replacements
-    )
     assert hashlib.sha256(
         (ROOT / "scripts/verify_code26_regression_freeze.py").read_bytes()
     ).hexdigest() == CODE30_2_FREEZE_SCRIPT_SHA256
-    _assert_exact_text(
-        "infra/scripts/install-on-vm.sh",
-        _current("infra/scripts/install-on-vm.sh"),
-        expected_installer,
+    installer_path = "infra/scripts/install-on-vm.sh"
+    current_installer = _current(installer_path)
+    _assert_sha256(
+        installer_path,
+        current_installer.encode("utf-8"),
+        REVIEWED_CODE30_2_SHA256[installer_path],
     )
+    for unsafe, corrected, expected_count in installer_replacements:
+        assert unsafe not in current_installer
+        assert current_installer.count(corrected) == expected_count
     assert hashlib.sha256(
         (ROOT / "tests/verify_production_installer_lock_metadata.py").read_bytes()
     ).hexdigest() == LOCK_VERIFIER_SHA256
 
     for path in (".github/workflows/ci.yml", ".github/workflows/release.yml"):
         current = _current(path)
-        _assert_exact_text(path, current, _workflow_expected(path))
+        _assert_sha256(
+            path,
+            current.encode("utf-8"),
+            REVIEWED_CODE30_2_SHA256[path],
+        )
         assert current.count(_workflow_step()) == 1
         assert current.count(CADDY_SHA256) == 1
         assert "continue-on-error" not in _workflow_step()
 
-    assert _current(".github/actions/scan-production-images/action.yml") == _original(
-        ".github/actions/scan-production-images/action.yml"
+    action_path = ".github/actions/scan-production-images/action.yml"
+    current_action = _current(action_path)
+    _assert_sha256(
+        action_path,
+        current_action.encode("utf-8"),
+        REVIEWED_CODE30_2_SHA256[action_path],
     )
+    assert "verify-zlib-vex.py" in current_action
+    assert current_action.count("-zlib.openvex.json") >= 15
+    assert current_action.count("vex: ${{ runner.temp }}/container-security/") == 5
 
 
 def test_physical_lane_accepts_only_the_exact_390_step_code30_point2_plan() -> None:

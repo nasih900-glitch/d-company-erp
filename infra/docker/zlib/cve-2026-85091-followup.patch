@@ -1,0 +1,21 @@
+From 7235b0a581227c56a79a43ff828f8ef6794194c8 Mon Sep 17 00:00:00 2001
+From: Mark Adler <git@madler.net>
+Date: Wed, 16 Sep 2026 17:39:49 -0700
+Subject: [PATCH] Remedy another missing return statement in gzwrite.c.
+
+---
+ gzwrite.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/gzwrite.c b/gzwrite.c
+index 512329244..44b6ae3de 100644
+--- a/gzwrite.c
++++ b/gzwrite.c
+@@ -556,6 +556,7 @@ int ZEXPORTVA gzprintf(gzFile file, const char *format, int a1, int a2, int a3,
+                a Z_BUF_ERROR to let the application know that this gzprintf()
+                needs to be retried. */
+             gz_error(state, Z_BUF_ERROR, "stalled write on gzprintf");
++            return state->err;
+         }
+         if (!state->again)
+             return state->err;

@@ -99,6 +99,7 @@ class DockerContextSafetyTest(unittest.TestCase):
             ROOT / "infra" / "docker" / "caddy.Dockerfile",
             ROOT / "infra" / "docker" / "frontend.Dockerfile",
             ROOT / "infra" / "docker" / "postgres.Dockerfile",
+            ROOT / "infra" / "docker" / "redis.Dockerfile",
         ]
         for dockerfile in dockerfiles:
             for line in dockerfile.read_text(encoding="utf-8").splitlines():
@@ -113,7 +114,7 @@ class DockerContextSafetyTest(unittest.TestCase):
             for match in re.finditer(r"^\s+image:\s+([^$\s][^\s]*)\s*$", compose, re.MULTILINE)
             if not match.group(1).startswith("d-company-erp-")
         ]
-        self.assertEqual(1, len(external_images))
+        self.assertEqual(0, len(external_images))
         for image in external_images:
             with self.subTest(image=image):
                 self.assertRegex(image, r"@sha256:[0-9a-f]{64}$")
@@ -191,6 +192,7 @@ class DockerContextSafetyTest(unittest.TestCase):
         self.assertEqual(5, action.count("severity-cutoff: high"))
         self.assertEqual(5, action.count("fail-build: true"))
         self.assertEqual(5, action.count("only-fixed: false"))
+        self.assertEqual(5, action.count("vex: ${{ runner.temp }}/container-security/"))
         for component in ("backend", "frontend", "caddy", "postgres", "redis"):
             with self.subTest(component=component):
                 self.assertIn(f"{component}_image_id={{{{.Id}}}}", action)
@@ -212,10 +214,9 @@ class DockerContextSafetyTest(unittest.TestCase):
                 tag = f"erp-{component}:{suffix}"
                 self.assertLess(workflow.index(f"-t {tag}"), scan)
                 self.assertIn(f"{component}-image: {tag}", workflow[scan:])
-            self.assertRegex(
-                workflow[scan:],
-                r"redis-image: [^\n]+@sha256:[0-9a-f]{64}",
-            )
+            redis_tag = f"erp-redis:{suffix}"
+            self.assertLess(workflow.index(f"-t {redis_tag}"), scan)
+            self.assertIn(f"redis-image: {redis_tag}", workflow[scan:])
             self.assertNotIn("minio-image:", workflow[scan:])
             self.assertIn(
                 "--build-arg VITE_API_URL=https://dcompany.duckdns.org/api/v1",

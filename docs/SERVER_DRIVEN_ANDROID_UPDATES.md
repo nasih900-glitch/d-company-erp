@@ -155,7 +155,11 @@ responses and network uncertainty remain blocked. The APK itself must return:
 5. Deploy the matching backend/Web source with the guarded installer, a fresh
    quiesced backup, restore proof, migration through `0078`, rollback readiness,
    and authenticated production smoke checks. Confirm all tablets are paused and
-   their outboxes are empty immediately before maintenance.
+   their outboxes are empty immediately before maintenance. For this one
+   production cutover only, the installer separately recognizes the exact
+   retired test-installation heartbeat documented in the Code30.2 cleanup runbook after
+   verifying the immutable 18-AVD quarantine evidence; it never treats any
+   other pending report as drained.
 6. If the optional Sheet mirror is part of this cutover, deploy and authorize
    the bound Apps Script, enter the one-time secret, deliver a connection test
    for the current configuration generation, and reconcile an actual

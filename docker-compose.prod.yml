@@ -88,7 +88,13 @@ services:
       - backend_data
 
   redis:
-    image: redis:7-alpine@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf
+    image: d-company-erp-redis:${APP_REVISION:-unknown}
+    build:
+      context: .
+      dockerfile: infra/docker/redis.Dockerfile
+      args:
+        APP_VERSION: ${APP_VERSION:-3.1.29}
+        APP_REVISION: ${APP_REVISION:-unknown}
     restart: unless-stopped
     logging: *default-logging
     environment:

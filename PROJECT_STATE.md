@@ -1,6 +1,6 @@
 # D Company ERP — current project state
 
-Updated 2026-09-19. This handover describes the in-progress Code30.2 patch.
+Updated 2026-09-20. This handover describes the in-progress Code30.2 patch.
 The immutable Code30.1 scope and completed evidence remain in
 [`docs/CODE30_1_PATCH_CANDIDATE.md`](docs/CODE30_1_PATCH_CANDIDATE.md). Earlier
 release records remain historical evidence and must not be rewritten as
@@ -36,11 +36,16 @@ Code30.2 proof.
 | Android database | Room schema `51` |
 | Backend database | Alembic head `0078` |
 | Immutable release predecessor | Code30.1 `v3.1.28` / build `36` |
+| Last committed candidate source | `efb19f45ec27c5c3a4d63698c73bee3a5d9f54b1` |
 
-The working tree contains the cumulative, uncommitted Code30.2 implementation
-and tests. Source-freeze hashes have deliberately not been regenerated. No
-signed `v3.1.29` artifact exists yet, and Code30.2 has not been deployed,
-staged, activated, offered or accepted on the Redmi Pad 2.
+The committed branch contains the cumulative Code30.2 implementation and
+business-audit corrections. The working tree contains the reviewed
+runtime-image security correction, guarded production trial-cleanup tooling and
+the fail-closed future-upgrade verifier for the retained historical outbox
+counter. The exact delta is protected by the Code30.2 source-freeze map but
+remains uncommitted until the final repository suite passes. No signed
+`v3.1.29` artifact exists yet, and Code30.2 has not been deployed, staged,
+activated, offered or accepted on the Redmi Pad 2.
 
 Production remains on the immutable Code30.1 release line while this candidate
 is prepared. A local build, emulator installation or passing source test cannot
@@ -122,29 +127,86 @@ generation-bound configuration, modern cash drawer provenance, and immutable
 closed-shift finance corrections. Room `49` through `51` add durable finance
 evidence, drawer/correction state and compatibility handling.
 
+### Guarded production trial cleanup
+
+The repository now contains a one-time, rollback-by-default cleanup for the
+exact audited Code30.1 production test rows. It pins the full-table and target
+fingerprints, primary-key allowlists, migration `0078`, dependency graph and
+expected counts; locks every public table without waiting; and verifies every
+retained row and unrelated table after the attempted mutation. Apply mode also
+requires a fresh dry-run fingerprint, the fresh backup file itself, the
+canonical tracked 18-AVD quarantine evidence JSON and its independently
+computed hash, a stopped immutable backend image, a completely clean checkout
+at the exact deployed Git SHA and a named executor. Apply also binds the live
+PostgreSQL and stopped backend containers to the canonical services of the
+same Docker Compose project and refuses any running backend service container
+in that project. It restores and dry-runs that backup in a disposable database,
+then drops the restore on every exit. The durable audit receipt fences all
+deleted offline actions against replay. The exact retired Code30.1 test
+installation remains fully unchanged with its one stale historical saved-action
+report because the server UUID cannot be tied to an AVD. Its device
+heartbeat/sync timestamps and all 29 immutable expired remote-assistance keys
+remain historical evidence. The receipt records the unchanged snapshot with
+null offline and sync markers and fences the 13 exact known deleted actions.
+All 18 local AVDs are wiped, but that quarantine is not attributed to the
+server installation identity. Future installers may accept the retained count
+of one only when a read-only verifier proves the single canonical cleanup
+receipt, exact retained installation and 29-key hashes, all 13 exact replay
+fences, absence of every allowlisted deleted row, and no other pending device.
+Any missing, changed, duplicate or partial evidence remains a hard deployment
+failure. The cleanup has not been run in apply mode against production.
+
 Detailed scope and release boundaries are in
 [`docs/CODE30_2_PATCH_CANDIDATE.md`](docs/CODE30_2_PATCH_CANDIDATE.md), and the
 Sheet contract is in [`docs/GOOGLE_SHEETS.md`](docs/GOOGLE_SHEETS.md).
 
 ## Current verification state
 
-Focused backend, Web and Android checks have passed during implementation,
-including receipt validation and recovery, cash-source integrity, correction
-accounting, migration guards, Sheet authentication/deduplication/configuration
-rotation, and Web type/lint/build checks. Earlier complete Code30.1 gaming,
-billing, offline and cross-user trial evidence remains a regression baseline.
+The last clean committed source completed the full emulator business audit with
+390 checks: 16 sessions/orders/payments, four extensions, two add-ons, two
+pauses, split cash/UPI settlement, discount/COGS/profit reconciliation,
+cross-user operation, offline/reconnect and process restart. It ended with no
+active session, blocked station or unbalanced drawer. The measured 30-frame UI
+sample had 35.378 ms p95, 40.559 ms maximum and no frame above 50 ms, crash,
+ANR or layout jump.
 
-Those checkpoints are not a final Code30.2 release verdict. Functional edits are
-still converging, so the final exact-source backend, Web, Android variant,
-API-35 instrumentation, migration rehearsal, repository-contract and business
-trial runs remain pending. Final totals must be recorded only after those clean
-runs finish. Freeze checks are expected to remain incomplete until the reviewed
-file set and hashes are finalized.
+The current final working tree has separately passed 1,572 backend tests with
+21 expected isolated-audit skips on Python 3.14.7 against a fresh PostgreSQL
+database migrated from zero through `0078`; 526 Web tests, lint, type checking
+and a production build; and 4,406 Android JVM tests, lint and from-scratch debug
+builds. The repository-level release, installer, security, freeze and contract
+suite passed 942 tests, two expected skips and 322 subtests. The canonical
+API-35 tablet-profile lane passed its 333 ordinary device
+tests plus two explicit granted-notification/deep-idle alarm proofs. A direct
+Gradle run at the AVD's 2560x1800 default had first failed the intentionally
+profile-sensitive inventory keyboard threshold; the canonical lane set and
+verified the required 2560x1600, 320-dpi (1280x800 dp) profile and passed the
+same test. Cleanup, future-upgrade and replay-fence focus passed 54 tests with
+one expected skip, and the post-cleanup SQL executed successfully on PostgreSQL
+16 while correctly rejecting a database without the required cleanup receipt.
+
+The first hosted container run for that commit passed backend, Web and Android
+but blocked both image lanes on Python 3.13.15 `CVE-2026-82049` and Alpine zlib
+1.3.2-r0 `CVE-2026-85091`. The dirty security correction moves the backend and
+CI to Python 3.14.7, builds and attests Redis locally, and overlays zlib 1.3.2
+built from the official source plus the complete upstream chain
+`e3dc0a85b7032e98380dec011bc8f2c2ee0d8fca`,
+`bbc2ccf3d0de267576b524b875c769a724a513b0`,
+`df84af25dc1942490e1d1c899a07619152a46148`, and
+`7235b0a581227c56a79a43ff828f8ef6794194c8` in backend, frontend, Caddy,
+PostgreSQL and Redis. Each exact image gets a narrowly scoped OpenVEX document;
+all other High/Critical findings still fail closed.
+
+Those checkpoints are not a final Code30.2 release verdict because the image
+correction and cleanup guard changed the candidate after the business audit.
+The exact final source must still repeat the complete business audit and pass
+both hosted image build/scanner lanes.
 
 ## Known release gaps
 
-- Complete clean exact-source backend, Web and Android suites, API-35
-  instrumentation, release builds, migration rehearsal and repository checks.
+- Repeat the 390-step business audit on the final frozen commit.
+- Build and scan all five exact production images in both hosted Docker-store
+  lanes; retain SBOM, Grype, VEX, image-identity and runtime-probe evidence.
 - Repeat the business trial with two authorized users across shift open/close,
   Gaming start/pause/extend/stop/handoff, POS settlement/refund, split payment,
   manual finance, receipt capture/upload/retry, restart, offline/reconnect,
@@ -158,6 +220,9 @@ file set and hashes are finalized.
 - Deploy backend/Web and Alembic `0078` through the guarded cutover with a
   verified production backup, disposable restore, rollback evidence and
   authenticated smoke checks.
+- While all writers remain stopped, run the exact production cleanup dry run,
+  review its fresh fingerprint, apply it once with the verified backup and
+  emulator-quarantine evidence, then reconcile every final count.
 - Deploy and authorize the bound Apps Script, enter the one-time secret, deliver
   the current-generation connection test and reconcile an actual mirror row.
 - Stage the exact verified APK inactive, then use the bound owner release

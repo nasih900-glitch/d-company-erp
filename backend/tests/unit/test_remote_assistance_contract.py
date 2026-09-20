@@ -402,7 +402,10 @@ def test_production_installer_preflights_before_stack_mutation_and_hides_credent
     assert '--expected-images-json "$CANDIDATE_IMAGE_ATTESTATION"' in installer
     assert installer.index(candidate_image_gate) < installer.index(database_backup)
     assert installer.index(compose_up) < installer.index(running_image_gate)
-    assert "Candidate Caddy/PostgreSQL/backend/frontend identities verified." in installer
+    assert (
+        "Candidate Caddy/PostgreSQL/Redis/backend/frontend identities verified."
+        in installer
+    )
     assert "Expected exactly one existing $service container" in installer
     assert "Existing backend is not running" in installer
     assert "Persistent deployment evidence exists but .env is missing" in installer

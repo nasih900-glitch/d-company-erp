@@ -56,6 +56,16 @@ Receipt bytes, customer identity and private review notes never enter Sheets.
 The Tauri desktop and iOS projects are not built or published by the supported
 release workflow.
 
+Code30.2 also treats backend, frontend, Caddy, PostgreSQL and Redis as five
+locally built release images. The protected CI and release workflows build the
+exact source twice, attest the immutable image IDs, exercise runtime health,
+retain SBOMs and scan each image. The narrowly scoped zlib OpenVEX correction
+described in [`CODE30_2_PATCH_CANDIDATE.md`](CODE30_2_PATCH_CANDIDATE.md) may
+filter only the one exact fixed zlib finding for the exact scanned image. It
+does not relax the High/Critical failure gate for any other package or CVE.
+Production repeats the same five-image identity and scanner checks before it
+stops writers or opens ingress.
+
 Earlier release ledgers remain historical provenance. The signed but superseded
 Code 29 ledger is in [`CODE29_RELEASE_CANDIDATE.md`](CODE29_RELEASE_CANDIDATE.md),
 and the signed but superseded Code 28 ledger is in
@@ -196,6 +206,15 @@ the version bump alone.
 5. Deploy the matching backend and Web source through the guarded production
    installer with a quiesced backup, restore proof, migration through `0078`,
    rollback readiness and authenticated smoke checks.
+   The one-time Code30.2 bridge accepts the exact retired test installation's
+   single stale pending heartbeat only when the prior database is `0073`, the
+   candidate is `3.1.29`, its reviewed identity/version/outbox/last-seen fields
+   and the aggregate `1|1|1` stale-outbox signature match, and the frozen
+   18-AVD quarantine record has exact SHA-256
+   `379c6368936d03223e19482cc840c2a9d2483dc9a96909fba22cd9f59911eec8`.
+   It makes no database change before the verified backup. The archived clear
+   Room snapshot is supporting evidence and is not attributed to that server
+   installation identity.
 6. Deploy and authorize the bound Apps Script, configure its one-time secret,
    deliver the current-generation connection test, and reconcile an actual
    `ERP Mirror v1` row. This is a separate production-configuration gate.

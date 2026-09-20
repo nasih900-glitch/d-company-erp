@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import hashlib
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -56,7 +57,9 @@ args = sys.argv[1:]
 with (state / "docker-calls.jsonl").open("a", encoding="utf-8") as stream:
     stream.write(json.dumps(args) + "\\n")
 
-if args[0] == "create":
+if args[:2] == ["image", "inspect"]:
+    print(os.environ["FAKE_RUNTIME_IMAGE_ID"])
+elif args[0] == "create":
     counter_path = state / "counter"
     counter = int(counter_path.read_text() if counter_path.exists() else "0") + 1
     counter_path.write_text(str(counter))
@@ -112,14 +115,34 @@ elif args[0] == "start":
         }
         if os.environ.get("FAKE_GRYPE_MISSING_STATUS") == "true":
             status = {}
+        ignored = [{
+            "vulnerability": {"id": "CVE-2026-85091"},
+            "artifact": {
+                "name": "zlib",
+                "version": "1.3.2-r0",
+                "type": "apk",
+                "purl": "pkg:apk/alpine/zlib@1.3.2-r0?arch=x86_64",
+            },
+            "appliedIgnoreRules": [{
+                "namespace": "vex",
+                "vulnerability": "CVE-2026-85091",
+                "vex-status": "fixed",
+            }],
+        }]
+        if os.environ.get("FAKE_GRYPE_IGNORED_COUNT") == "0":
+            ignored = []
         report = {
             "descriptor": {
                 "name": "grype",
                 "version": "0.118.0",
                 "db": {"status": status},
             },
-            "source": {"type": "image", "target": {"imageID": image_id}},
+            "source": {"type": "image", "target": {
+                "imageID": image_id,
+                "tags": json.loads(os.environ["FAKE_IMAGE_REFS"]),
+            }},
             "matches": [],
+            "ignoredMatches": ignored,
         }
         print(json.dumps(report))
 elif args[0] == "inspect":
@@ -259,11 +282,15 @@ elif fmt == "%u:%g:%a:%F":
         print("0:0:444:regular file")
     elif path.name == "db":
         print("65532:65532:700:directory")
+    elif path.name.endswith("-zlib.openvex.json"):
+        print("0:0:444:regular file")
     else:
         print("0:0:700:directory")
 elif fmt == "%d:%i:%u:%g:%a:%F":
     inode = int(hashlib.sha256(str(path).encode()).hexdigest()[:8], 16)
     print(f"1:{inode}:0:0:700:directory")
+elif fmt == "%a:%F":
+    print("644:regular file")
 else:
     raise SystemExit(f"unexpected stat format: {fmt}")
 """,
@@ -292,6 +319,7 @@ def _run_helper(
     extra_env: dict[str, str] | None = None,
     archive_kind: str = "classic",
     runtime_image_id_override: str | None = None,
+    scanner: Path = SCANNER,
 ) -> tuple[subprocess.CompletedProcess[str], Path, Path, list[Path]]:
     bin_dir, state = _fake_commands(tmp_path)
     evidence = tmp_path / "evidence"
@@ -301,7 +329,7 @@ def _run_helper(
     metadata = evidence / "metadata.txt"
     metadata.write_text("source_git_sha=" + "b" * 40 + "\n", encoding="utf-8")
     arguments: list[str] = [
-        str(SCANNER),
+        str(scanner),
         str(work_root),
         str(metadata),
         SYFT_IMAGE,
@@ -310,6 +338,8 @@ def _run_helper(
     ]
     archives: list[Path] = []
     scanner_config_id = ""
+    runtime_image_id = ""
+    image_refs: list[str] = []
     for service in services:
         archive = evidence / f"{service} image.tar"
         if archive_kind == "classic":
@@ -321,12 +351,16 @@ def _run_helper(
         if scanner_config_id and fixture.config_id != scanner_config_id:
             raise AssertionError("test archives must share one scanner config ID")
         scanner_config_id = fixture.config_id
+        runtime_image_id = runtime_image_id_override or fixture.runtime_id
+        image_ref = f"erp-{service}:test"
+        image_refs.append(image_ref)
         archive.chmod(0o444)
         archives.append(archive)
         arguments.extend(
             [
                 service,
-                runtime_image_id_override or fixture.runtime_id,
+                image_ref,
+                runtime_image_id,
                 str(archive),
                 str(evidence / f"{service}.spdx.json"),
                 str(evidence / f"{service}-grype.json"),
@@ -341,6 +375,8 @@ def _run_helper(
         "PATH": str(bin_dir) + os.pathsep + os.environ["PATH"],
         "FAKE_SCANNER_STATE": str(state),
         "FAKE_IMAGE_ID": scanner_config_id,
+        "FAKE_RUNTIME_IMAGE_ID": runtime_image_id,
+        "FAKE_IMAGE_REFS": json.dumps(image_refs),
     }
     if extra_env:
         env.update(extra_env)
@@ -365,12 +401,12 @@ def _docker_calls(state: Path) -> list[list[str]]:
 
 def test_batch_scanner_executes_hardened_path_for_every_archive(tmp_path: Path) -> None:
     completed, state, metadata, archives = _run_helper(
-        tmp_path, services=("backend", "frontend", "caddy", "postgres")
+        tmp_path, services=("backend", "frontend", "caddy", "postgres", "redis")
     )
 
     assert completed.returncode == 0, completed.stderr
     creates = [call for call in _docker_calls(state) if call[0] == "create"]
-    assert len(creates) == 9  # one mount probe plus Syft and Grype per archive
+    assert len(creates) == 11  # one mount probe plus Syft and Grype per archive
     for call in creates:
         assert ["--read-only", "--cap-drop", "ALL"] == call[
             call.index("--read-only") : call.index("--read-only") + 3
@@ -397,18 +433,29 @@ def test_batch_scanner_executes_hardened_path_for_every_archive(tmp_path: Path) 
     )
     syft_creates = [call for call in scanner_creates if SYFT_IMAGE in call]
     grype_creates = [call for call in scanner_creates if GRYPE_IMAGE in call]
-    assert len(syft_creates) == len(grype_creates) == 4
+    assert len(syft_creates) == len(grype_creates) == 5
     assert all("none" in call[call.index("--network") + 1 :] for call in syft_creates)
     assert all("--network" not in call for call in grype_creates)
     assert all("GRYPE_DB_CACHE_DIR=/scanner-cache/db" in call for call in grype_creates)
+    assert all("--vex" in call for call in grype_creates)
+    assert all(
+        "/scan/zlib.openvex.json" in call for call in grype_creates
+    )
     assert all(archive.exists() for archive in archives)
     metadata_text = metadata.read_text(encoding="utf-8")
-    for service in ("backend", "frontend", "caddy", "postgres"):
+    for service in ("backend", "frontend", "caddy", "postgres", "redis"):
         assert f"{service}_grype_version=0.118.0" in metadata_text
         assert f"{service}_syft_version=1.42.3" in metadata_text
         assert f"{service}_grype_db_schema=v6.1.9" in metadata_text
         assert f"{service}_grype_db_valid=true" in metadata_text
         assert f"{service}_source_image_id={IMAGE_ID}" in metadata_text
+        assert f"{service}_zlib_vex_fixed_ignored_matches=1" in metadata_text
+    assert metadata_text.count("zlib_vex_sha256=") == 5
+    for service in ("backend", "frontend", "caddy", "postgres", "redis"):
+        vex = metadata.parent / f"{service}-zlib.openvex.json"
+        assert vex.is_file()
+        assert "__D_COMPANY_" not in vex.read_text(encoding="utf-8")
+        assert f'"@id": "erp-{service}:test"' in vex.read_text(encoding="utf-8")
     assert "scanner_cache_sampled_max_bytes=" in metadata_text
     assert "scanner_disk_preflight_is_quota=false" in metadata_text
     assert (
@@ -418,6 +465,37 @@ def test_batch_scanner_executes_hardened_path_for_every_archive(tmp_path: Path) 
     assert metadata_text.count("backend_archive_sha256=") == 1
     assert "backend_verified_archive_digest=sha256:" in metadata_text
     assert (state / "umount-calls.txt").is_file()
+
+
+def test_scanner_rejects_a_symlinked_repository_vex_template(tmp_path: Path) -> None:
+    copied_root = tmp_path / "copied-repo"
+    copied_scripts = copied_root / "infra" / "scripts"
+    copied_vex = copied_root / "infra" / "security" / "vex"
+    copied_scripts.mkdir(parents=True)
+    copied_vex.mkdir(parents=True)
+    for name in (
+        "run-hardened-image-scanners.sh",
+        "verify-image-archive-identity.py",
+        "generate-zlib-vex.py",
+        "verify-zlib-vex.py",
+    ):
+        shutil.copy2(ROOT / "infra" / "scripts" / name, copied_scripts / name)
+    target = tmp_path / "unreviewed-vex.json"
+    shutil.copy2(
+        ROOT / "infra" / "security" / "vex" / "zlib-cve-2026-85091.openvex.json",
+        target,
+    )
+    (copied_vex / "zlib-cve-2026-85091.openvex.json").symlink_to(target)
+
+    execution = tmp_path / "execution"
+    execution.mkdir()
+    completed, _state, _metadata, _archives = _run_helper(
+        execution,
+        scanner=copied_scripts / "run-hardened-image-scanners.sh",
+    )
+
+    assert completed.returncode != 0
+    assert "must not be a symbolic link" in completed.stderr
 
 
 def test_oci_index_runtime_uses_derived_config_for_both_scanners(
@@ -457,16 +535,16 @@ def test_archive_identity_failure_happens_before_any_scanner_runtime(
     assert completed.returncode != 0
     assert "runtime image ID does not match" in completed.stderr
     assert archives[0].exists()
-    assert not (state / "docker-calls.jsonl").exists()
+    assert not any(call[0] == "create" for call in _docker_calls(state))
     assert not (state / "mounted").exists()
 
 
-def test_linux_ci_invokes_same_helper_for_all_four_candidate_archives() -> None:
+def test_linux_ci_invokes_same_helper_for_all_five_candidate_archives() -> None:
     action = (ROOT / ".github/actions/scan-production-images/action.yml").read_text(
         encoding="utf-8"
     )
 
-    assert "services=(backend frontend caddy postgres)" in action
+    assert "services=(backend frontend caddy postgres redis)" in action
     assert "infra/scripts/run-hardened-image-scanners.sh" in action
     assert "sudo /usr/bin/env -i" in action
     assert '"DOCKER_HOST=$EXPECTED_DOCKER_HOST"' in action
@@ -476,8 +554,9 @@ def test_linux_ci_invokes_same_helper_for_all_four_candidate_archives() -> None:
     assert 'scanner_evidence="$evidence_dir/' not in action
     assert '600s docker pull "$syft_image"' in action
     assert '600s docker pull "$grype_image"' in action
-    assert action.count(".syft.json") >= 8
-    assert action.count("-grype.json") >= 9
+    assert action.count(".syft.json") >= 10
+    assert action.count("-grype.json") >= 11
+    assert action.count("vex: ${{ runner.temp }}/container-security/") == 5
     assert "/var/run/docker.sock" not in action
 
 
@@ -691,7 +770,7 @@ def test_insufficient_preflight_space_fails_before_mount_or_scanner(tmp_path: Pa
     assert completed.returncode != 0
     assert "3 GiB free workspace" in completed.stderr
     assert archives[0].exists()
-    assert not (state / "docker-calls.jsonl").exists()
+    assert not any(call[0] == "create" for call in _docker_calls(state))
     assert not (state / "mounted").exists()
     assert "scanner_disk_available_before_bytes=" not in metadata.read_text(encoding="utf-8")
 

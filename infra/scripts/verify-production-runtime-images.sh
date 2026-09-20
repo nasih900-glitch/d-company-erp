@@ -18,7 +18,7 @@ cd "$(dirname "$0")/../.."
 ROOT=$(pwd)
 PROJECT_NAME="code25-runtime-${GITHUB_RUN_ID:-$$}-${GITHUB_RUN_ATTEMPT:-0}"
 PROJECT_NAME=$(printf '%s' "$PROJECT_NAME" | tr '[:upper:]' '[:lower:]')
-REDIS_REF='redis:7-alpine@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf'
+REDIS_REF="d-company-erp-redis:${APP_REVISION}"
 CANDIDATE_ENV=$(mktemp)
 ROUTED_READY=$(mktemp)
 DIAGNOSTIC_LOG=$(mktemp)
@@ -91,14 +91,13 @@ cleanup() {
 }
 trap cleanup EXIT
 
-for service in caddy postgres backend frontend; do
+for service in caddy postgres redis backend frontend; do
   source_ref="erp-${service}:${TAG_SUFFIX}"
   target_ref="d-company-erp-${service}:${APP_REVISION}"
   source_id=$(docker image inspect --format '{{.Id}}' "$source_ref")
   docker image tag "$source_id" "$target_ref"
   test "$(docker image inspect --format '{{.Id}}' "$target_ref")" = "$source_id"
 done
-docker pull "$REDIS_REF" >/dev/null
 REDIS_EXPECTED_ID=$(docker image inspect --format '{{.Id}}' "$REDIS_REF")
 if ! [[ "$REDIS_EXPECTED_ID" =~ ^sha256:[0-9a-f]{64}$ ]]; then
   echo "Pinned Redis reference did not resolve to one immutable local image ID." >&2
@@ -142,7 +141,7 @@ python3 ops/runtime_release_parity.py running \
   --root "$ROOT" --env-file "$CANDIDATE_ENV" \
   --version-name "$APP_VERSION" --source-git-sha "$APP_REVISION" \
   --project-name "$PROJECT_NAME" \
-  --services postgres backend frontend \
+  --services postgres redis backend frontend \
   --expected-images-json "$candidate_images" >/dev/null
 
 # Exercise the actual reverse-proxy boundary without asking an external ACME
@@ -172,4 +171,4 @@ python3 ops/runtime_release_parity.py running \
   --project-name "$PROJECT_NAME" \
   --expected-images-json "$candidate_images" >/dev/null
 
-echo "Production Caddy/PostgreSQL/backend/frontend routing, health and identity passed."
+echo "Production Caddy/PostgreSQL/Redis/backend/frontend routing, health and identity passed."

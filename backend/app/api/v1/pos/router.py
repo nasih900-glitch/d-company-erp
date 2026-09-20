@@ -37,6 +37,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.orm import aliased
 
+from app.core.cleanup_replay_fence import refuse_retired_action_replay
 from app.core.db import SessionDep
 from app.core.errors import (
     BusinessRuleError,
@@ -8315,6 +8316,16 @@ async def open_shift(
         platform=opening_client_platform,
     )
     if capture.key:
+        # The permanent cleanup fence must run before an ordinary shift lookup.
+        # Otherwise a delayed replay could return a shift recreated with the
+        # retired opening key and bypass the durable cleanup receipt.
+        await refuse_retired_action_replay(
+            session,
+            action_key=capture.key,
+            request_hash=capture.request_hash,
+            user_id=tenant.user_id,
+            terminal_id=tenant.terminal_id,
+        )
         receipt = (
             await session.execute(
                 select(Shift)
