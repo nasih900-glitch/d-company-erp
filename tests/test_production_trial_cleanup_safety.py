@@ -334,7 +334,6 @@ def test_cleanup_pins_exact_full_and_target_fingerprints() -> None:
     source = _source(SQL)
 
     expected_hashes = {
-        "e2164c700b9ffc67edc1e63623baf943a89b4dd9cd7392a87a12a054aba7cc82",
         "49c31a308d7980d4b30c0831c03f4e559d27990b175139aa8d3514d7affcc266",
         "72894ce31664b065b73bdcdb7711ffc59d6d76831783f2c837691fc09c44289f",
         "f91749ce9c33b2b09c42f566581341fe25d43e80f52925d69dabf18245198743",
@@ -354,6 +353,10 @@ def test_cleanup_pins_exact_full_and_target_fingerprints() -> None:
     }
     for value in expected_hashes:
         assert source.count(value) == 1
+    assert (
+        source.count("e2164c700b9ffc67edc1e63623baf943a89b4dd9cd7392a87a12a054aba7cc82")
+        == 2
+    )
     assert (
         source.count("301905b96650f3f06fc6b3378a1450cc000159a9909f33af3b951a665eca2696")
         == 4
@@ -398,9 +401,7 @@ def test_cleanup_receipt_and_postconditions_are_exact() -> None:
     assert "(SELECT count(*) FROM refunds) <> 0" in source
     assert "(SELECT count(*) FROM customers) <> 0" in source
     assert "(SELECT count(*) FROM idempotency_keys) <> 37" in source
-    assert (
-        "expected_audit_count := CASE WHEN apply_mode THEN 1235 ELSE 1234 END" in source
-    )
+    assert "SELECT row_count - 37 + CASE WHEN apply_mode THEN 1 ELSE 0 END" in source
     assert "UPDATE client_installations" not in source
     assert "SET pending_outbox_count" not in source
     assert "DELETE FROM client_installations" not in source
@@ -421,6 +422,34 @@ def test_cleanup_receipt_and_postconditions_are_exact() -> None:
     assert "'updated_counts', '{}'::jsonb" in source
     assert "retired_test_installation_security_evidence_unchanged" in source
     assert "direct_installation_identity_link_proven', false" in source
+
+
+def test_cleanup_accepts_only_attributable_login_success_audit_suffix() -> None:
+    source = _source(SQL)
+
+    assert "WHERE id <= 28202" in source
+    assert source.count("audit.id > 28202") >= 2
+    assert "immutable audit-log baseline prefix changed" in source
+    assert "audit-log suffix contains an unreviewed or malformed action" in source
+    assert "audit.action = 'login_success'" in source
+    assert "audit.entity_type = 'User'" in source
+    assert "audit.entity_id = audit.actor_user_id::text" in source
+    assert "actor.status = 'active'" in source
+    assert "actor.deleted_at IS NULL" in source
+    assert "audit.before = 'null'::jsonb" in source
+    assert "audit.after->>'email' = actor.email" in source
+    assert "audit.after->>'name' = actor.name" in source
+    assert "audit.after->>'result' = 'login_success'" in source
+    assert "audit.client_was_offline IS FALSE" in source
+    assert "'login_success_suffix_sha256'" in source
+    assert "'login_success_suffix_max_id'" in source
+
+    # The audit exception remains exactly the reviewed 37-row primary-key
+    # allowlist; the dynamic login suffix can never widen this DELETE.
+    assert (
+        "DELETE FROM audit_log WHERE id IN (SELECT id FROM _cleanup_audit_targets)"
+        in source
+    )
 
 
 def test_cleanup_replay_fence_captures_every_deleted_action_identity() -> None:

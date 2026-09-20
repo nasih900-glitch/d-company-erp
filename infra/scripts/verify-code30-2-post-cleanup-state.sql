@@ -8,7 +8,8 @@ SET LOCAL bytea_output = 'hex';
 \set QUIET off
 
 WITH receipt_candidates AS (
-    SELECT jsonb_build_object(
+    SELECT receipt.id,
+           jsonb_build_object(
                'id', receipt.id,
                'actor_user_id', receipt.actor_user_id,
                'company_id', receipt.company_id,
@@ -38,6 +39,74 @@ WITH receipt_candidates AS (
            OR receipt.request_id = 'code30.1-production-trial-cleanup-20260920'
            OR receipt.client_action_id = 'production-trial-cleanup-20260920'
        )
+),
+normal_login_suffix AS (
+    SELECT audit.id, to_jsonb(audit) AS full_row
+     FROM audit_log audit
+     WHERE audit.id > 28202
+       AND audit.id < coalesce((SELECT min(id) FROM receipt_candidates), 9223372036854775807)
+       AND audit.action = 'login_success'
+       AND audit.entity_type = 'User'
+       AND audit.actor_user_id IS NOT NULL
+       AND audit.entity_id = audit.actor_user_id::text
+       AND audit.company_id = '8f323fba-4358-45fe-9d3b-a8e0fae52993'
+       AND audit.before = 'null'::jsonb
+       AND jsonb_typeof(audit.after) = 'object'
+       AND audit.after ?& ARRAY['email', 'result', 'name', 'roles']
+       AND CASE WHEN jsonb_typeof(audit.after) = 'object'
+                THEN (SELECT count(*) FROM jsonb_object_keys(audit.after))
+                ELSE -1 END = 4
+       AND jsonb_typeof(audit.after->'email') = 'string'
+       AND nullif(btrim(audit.after->>'email'), '') IS NOT NULL
+       AND jsonb_typeof(audit.after->'name') = 'string'
+       AND nullif(btrim(audit.after->>'name'), '') IS NOT NULL
+       AND audit.after->>'result' = 'login_success'
+       AND jsonb_typeof(audit.after->'roles') = 'array'
+       AND jsonb_array_length(
+               CASE WHEN jsonb_typeof(audit.after->'roles') = 'array'
+                    THEN audit.after->'roles' ELSE '[]'::jsonb END
+           ) > 0
+       AND NOT EXISTS (
+           SELECT 1
+             FROM jsonb_array_elements(
+                      CASE WHEN jsonb_typeof(audit.after->'roles') = 'array'
+                           THEN audit.after->'roles' ELSE '[]'::jsonb END
+                  ) role_value
+            WHERE jsonb_typeof(role_value) <> 'string'
+       )
+       AND audit.ip IS NOT NULL
+       AND audit.user_agent IS NOT NULL
+       AND audit.terminal_id IS NULL
+       AND audit.request_id IS NOT NULL
+       AND audit.client_platform IN ('android', 'ios', 'web')
+       AND audit.client_action_id IS NULL
+       AND audit.client_reported_at IS NULL
+       AND audit.client_was_offline IS FALSE
+       AND audit.synced_at IS NULL
+       AND audit.reason IS NULL
+),
+retained_audit_baseline AS (
+    SELECT count(*) AS row_count,
+           encode(
+               sha256(
+                   convert_to(
+                       coalesce(
+                           string_agg(to_jsonb(row_data)::text, E'\n' ORDER BY id),
+                           ''
+                       ),
+                       'UTF8'
+                   )
+               ),
+               'hex'
+           ) AS row_sha256
+      FROM audit_log row_data
+     WHERE id <= 28202
+       AND id NOT IN (
+        1001, 1004, 1142, 1143, 1150, 1161, 1162, 1163, 1164, 1165,
+        1166, 1167, 1168, 1217, 1232, 1233, 1234, 1235, 1236, 1237,
+        1238, 1239, 1240, 28174, 28175, 28176, 28177, 28180, 28183,
+        28188, 28191, 28194, 28197, 28198, 28199, 28200, 28201
+     )
 ),
 retired_installation AS (
     SELECT count(*) AS row_count,
@@ -87,6 +156,39 @@ SELECT jsonb_build_object(
     'retired_installation_row_sha256', (SELECT row_sha256 FROM retired_installation),
     'remote_assistance_device_key_count', (SELECT row_count FROM retained_remote_keys),
     'remote_assistance_device_keys_sha256', (SELECT row_sha256 FROM retained_remote_keys),
+    'audit_integrity', jsonb_build_object(
+        'baseline_max_id', 28202,
+        'retained_baseline_count', (SELECT row_count FROM retained_audit_baseline),
+        'retained_baseline_sha256', (SELECT row_sha256 FROM retained_audit_baseline),
+        'invalid_pre_receipt_suffix_count', (
+            SELECT count(*)
+              FROM audit_log audit
+             WHERE audit.id > 28202
+               AND audit.id < coalesce((SELECT min(id) FROM receipt_candidates), 9223372036854775807)
+               AND NOT EXISTS (SELECT 1 FROM normal_login_suffix login WHERE login.id = audit.id)
+        ),
+        'pre_receipt_login_success_count', (
+            SELECT count(*) FROM normal_login_suffix login
+             WHERE login.id < (SELECT min(id) FROM receipt_candidates)
+        ),
+        'pre_receipt_login_success_sha256', (
+            SELECT encode(
+                       sha256(
+                           convert_to(
+                               coalesce(string_agg(full_row::text, E'\n' ORDER BY id), ''),
+                               'UTF8'
+                           )
+                       ),
+                       'hex'
+                   )
+              FROM normal_login_suffix login
+             WHERE login.id < (SELECT min(id) FROM receipt_candidates)
+        ),
+        'pre_receipt_login_success_max_id', (
+            SELECT max(id) FROM normal_login_suffix login
+             WHERE login.id < (SELECT min(id) FROM receipt_candidates)
+        )
+    ),
     'surviving_deleted_targets', jsonb_build_object(
         'shifts', (SELECT count(*) FROM shifts WHERE id IN (
             'd2337cb0-9b65-4c18-9baa-29b15fd163b6',
@@ -134,7 +236,7 @@ SELECT jsonb_build_object(
     ),
     'cleanup_receipts', coalesce(
         (
-            SELECT jsonb_agg(payload ORDER BY (payload->>'id')::bigint)
+            SELECT jsonb_agg(payload ORDER BY id)
               FROM receipt_candidates
         ),
         '[]'::jsonb

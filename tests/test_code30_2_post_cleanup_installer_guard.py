@@ -25,8 +25,10 @@ def _load_verifier():
 def _valid_document(module) -> dict:
     source_sha = "1" * 40
     replay_fence = deepcopy(module.EXPECTED_REPLAY_FENCE)
+    suffix_count = 1
+    suffix_hash = "e" * 64
     receipt = {
-        "id": 28203,
+        "id": 28204,
         "actor_user_id": module.EXPECTED_ACTOR_USER_ID,
         "company_id": module.EXPECTED_COMPANY_ID,
         "action": "production_trial_cleanup",
@@ -34,10 +36,18 @@ def _valid_document(module) -> dict:
         "entity_id": "code30.1-20260920",
         "before": {
             "schema_revision": "0078",
-            "state_fingerprint": module.EXPECTED_PRE_CLEANUP_STATE_FINGERPRINT,
+            "state_fingerprint": "f" * 64,
             "backup_sha256": "c" * 64,
             "quarantine_evidence_sha256": module.EXPECTED_QUARANTINE_SHA256,
             "counts": deepcopy(module.EXPECTED_PRE_COUNTS),
+            "audit_log": {
+                "baseline_max_id": module.EXPECTED_AUDIT_BASELINE_MAX_ID,
+                "baseline_count": module.EXPECTED_AUDIT_BASELINE_COUNT,
+                "baseline_sha256": module.EXPECTED_AUDIT_BASELINE_SHA256,
+                "login_success_suffix_count": suffix_count,
+                "login_success_suffix_sha256": suffix_hash,
+                "login_success_suffix_max_id": 28203,
+            },
         },
         "after": {
             "source_git_sha": source_sha,
@@ -61,7 +71,12 @@ def _valid_document(module) -> dict:
             "deleted_idempotency_keys": sorted(module.EXPECTED_IDEMPOTENCY_KEYS),
             "deleted_audit_ids": sorted(module.EXPECTED_AUDIT_IDS),
             "replay_fence": replay_fence,
-            "expected_post_counts": deepcopy(module.EXPECTED_POST_COUNTS),
+            "expected_post_counts": {
+                **deepcopy(module.EXPECTED_POST_COUNTS),
+                "audit_log": (
+                    module.EXPECTED_AUDIT_BASELINE_COUNT + suffix_count - 37 + 1
+                ),
+            },
         },
         "ip": None,
         "user_agent": "cleanup-code30-production-trial-data/2",
@@ -84,6 +99,15 @@ def _valid_document(module) -> dict:
         "retired_installation_row_sha256": module.EXPECTED_INSTALLATION_ROW_SHA256,
         "remote_assistance_device_key_count": 29,
         "remote_assistance_device_keys_sha256": module.EXPECTED_REMOTE_KEYS_SHA256,
+        "audit_integrity": {
+            "baseline_max_id": module.EXPECTED_AUDIT_BASELINE_MAX_ID,
+            "retained_baseline_count": module.EXPECTED_RETAINED_AUDIT_BASELINE_COUNT,
+            "retained_baseline_sha256": module.EXPECTED_RETAINED_AUDIT_BASELINE_SHA256,
+            "invalid_pre_receipt_suffix_count": 0,
+            "pre_receipt_login_success_count": suffix_count,
+            "pre_receipt_login_success_sha256": suffix_hash,
+            "pre_receipt_login_success_max_id": 28203,
+        },
         "surviving_deleted_targets": {
             "shifts": 0,
             "orders": 0,
@@ -103,8 +127,84 @@ def test_valid_post_cleanup_state_allows_future_installer() -> None:
     future = _valid_document(verifier)
     future["database_revision"] = "0079"
 
-    assert verifier.verify_state(current) == 28203
-    assert verifier.verify_state(future) == 28203
+    assert verifier.verify_state(current) == 28204
+    assert verifier.verify_state(future) == 28204
+
+
+def test_multiple_reviewed_login_rows_before_receipt_are_allowed() -> None:
+    verifier = _load_verifier()
+    document = _valid_document(verifier)
+    receipt = document["cleanup_receipts"][0]
+    receipt["id"] = 28206
+    receipt["before"]["audit_log"].update(
+        login_success_suffix_count=3,
+        login_success_suffix_sha256="9" * 64,
+        login_success_suffix_max_id=28205,
+    )
+    receipt["after"]["expected_post_counts"]["audit_log"] = 1238
+    document["audit_integrity"].update(
+        pre_receipt_login_success_count=3,
+        pre_receipt_login_success_sha256="9" * 64,
+        pre_receipt_login_success_max_id=28205,
+    )
+
+    assert verifier.verify_state(document) == 28206
+
+
+def test_unreviewed_action_before_receipt_is_rejected() -> None:
+    verifier = _load_verifier()
+    document = _valid_document(verifier)
+    document["audit_integrity"]["invalid_pre_receipt_suffix_count"] = 1
+
+    with pytest.raises(verifier.StateError, match="not login-only"):
+        verifier.verify_state(document)
+
+
+@pytest.mark.parametrize(
+    ("field", "changed", "message"),
+    [
+        ("retained_baseline_count", 1233, "baseline count changed"),
+        ("retained_baseline_sha256", "0" * 64, "baseline rows changed"),
+    ],
+)
+def test_changed_retained_audit_prefix_is_rejected(field, changed, message: str) -> None:
+    verifier = _load_verifier()
+    document = _valid_document(verifier)
+    document["audit_integrity"][field] = changed
+
+    with pytest.raises(verifier.StateError, match=message):
+        verifier.verify_state(document)
+
+
+def test_receipt_must_bind_the_exact_pre_receipt_login_suffix() -> None:
+    verifier = _load_verifier()
+    document = _valid_document(verifier)
+    document["audit_integrity"]["pre_receipt_login_success_sha256"] = "8" * 64
+
+    with pytest.raises(verifier.StateError, match="login suffix hash changed"):
+        verifier.verify_state(document)
+
+
+def test_post_cleanup_query_limits_login_only_rule_to_pre_receipt_rows() -> None:
+    query = STATE_QUERY.read_text(encoding="utf-8")
+
+    assert "audit.id > 28202" in query
+    assert (
+        "audit.id < coalesce((SELECT min(id) FROM receipt_candidates), "
+        "9223372036854775807)" in query
+    )
+    assert "'invalid_pre_receipt_suffix_count'" in query
+    assert "'current_audit_row_count'" not in query
+    assert "'current_login_success_count'" not in query
+    assert "JOIN users" not in query
+    assert "actor.status" not in query
+    assert "actor.deleted_at" not in query
+    assert "actor.email" not in query
+    assert "actor.name" not in query
+    assert "audit.actor_user_id IS NOT NULL" in query
+    assert "f2f0166cd8a87b8f43af616443427fc50ecb379baf35e7a419f16250962c45fc" in (
+        VERIFIER.read_text(encoding="utf-8")
+    )
 
 
 def test_database_without_cleanup_migration_is_rejected() -> None:

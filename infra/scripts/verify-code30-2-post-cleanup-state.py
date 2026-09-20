@@ -30,8 +30,14 @@ EXPECTED_REMOTE_KEYS_SHA256 = (
 EXPECTED_QUARANTINE_SHA256 = (
     "379c6368936d03223e19482cc840c2a9d2483dc9a96909fba22cd9f59911eec8"
 )
-EXPECTED_PRE_CLEANUP_STATE_FINGERPRINT = (
-    "6e6309326781f34596bd987bef2397a68f1f3988754850000a8846ecfefbe39a"
+EXPECTED_AUDIT_BASELINE_MAX_ID = 28202
+EXPECTED_AUDIT_BASELINE_COUNT = 1271
+EXPECTED_AUDIT_BASELINE_SHA256 = (
+    "e2164c700b9ffc67edc1e63623baf943a89b4dd9cd7392a87a12a054aba7cc82"
+)
+EXPECTED_RETAINED_AUDIT_BASELINE_COUNT = 1234
+EXPECTED_RETAINED_AUDIT_BASELINE_SHA256 = (
+    "f2f0166cd8a87b8f43af616443427fc50ecb379baf35e7a419f16250962c45fc"
 )
 
 EXPECTED_SHIFT_IDS = {
@@ -247,7 +253,6 @@ EXPECTED_POST_COUNTS = {
     "refunds": 0,
     "customers": 0,
     "idempotency_keys": 37,
-    "audit_log": 1235,
     "active_sessions": 0,
     "open_orders": 0,
     "open_shifts": 0,
@@ -334,7 +339,7 @@ def _require_exact_list(value: Any, expected: set[Any], label: str) -> None:
         raise StateError(f"{label} does not match the reviewed allowlist")
 
 
-def _verify_receipt(receipt: Any) -> int:
+def _verify_receipt(receipt: Any, audit_integrity: dict[str, Any]) -> int:
     receipt = _require_keys(
         receipt,
         {
@@ -392,13 +397,16 @@ def _verify_receipt(receipt: Any) -> int:
             "backup_sha256",
             "quarantine_evidence_sha256",
             "counts",
+            "audit_log",
         },
         "cleanup receipt before",
     )
     if before["schema_revision"] != "0078":
         raise StateError("cleanup receipt schema revision is not 0078")
-    if before["state_fingerprint"] != EXPECTED_PRE_CLEANUP_STATE_FINGERPRINT:
-        raise StateError("cleanup receipt state fingerprint changed")
+    if not isinstance(before["state_fingerprint"], str) or not HEX_64.fullmatch(
+        before["state_fingerprint"]
+    ):
+        raise StateError("cleanup receipt state fingerprint is invalid")
     if not isinstance(before["backup_sha256"], str) or not HEX_64.fullmatch(
         before["backup_sha256"]
     ):
@@ -407,6 +415,46 @@ def _verify_receipt(receipt: Any) -> int:
         raise StateError("cleanup receipt quarantine evidence changed")
     if before["counts"] != EXPECTED_PRE_COUNTS:
         raise StateError("cleanup receipt pre-cleanup counts changed")
+    audit_before = _require_keys(
+        before["audit_log"],
+        {
+            "baseline_max_id",
+            "baseline_count",
+            "baseline_sha256",
+            "login_success_suffix_count",
+            "login_success_suffix_sha256",
+            "login_success_suffix_max_id",
+        },
+        "cleanup receipt audit-log evidence",
+    )
+    if audit_before["baseline_max_id"] != EXPECTED_AUDIT_BASELINE_MAX_ID:
+        raise StateError("cleanup receipt audit baseline boundary changed")
+    if audit_before["baseline_count"] != EXPECTED_AUDIT_BASELINE_COUNT:
+        raise StateError("cleanup receipt audit baseline count changed")
+    if audit_before["baseline_sha256"] != EXPECTED_AUDIT_BASELINE_SHA256:
+        raise StateError("cleanup receipt audit baseline hash changed")
+    suffix_count = audit_before["login_success_suffix_count"]
+    suffix_hash = audit_before["login_success_suffix_sha256"]
+    suffix_max_id = audit_before["login_success_suffix_max_id"]
+    if type(suffix_count) is not int or suffix_count < 0:
+        raise StateError("cleanup receipt login suffix count is invalid")
+    if not isinstance(suffix_hash, str) or not HEX_64.fullmatch(suffix_hash):
+        raise StateError("cleanup receipt login suffix hash is invalid")
+    if suffix_count == 0:
+        if suffix_max_id is not None:
+            raise StateError("empty cleanup receipt login suffix has a maximum id")
+    elif (
+        type(suffix_max_id) is not int
+        or suffix_max_id <= EXPECTED_AUDIT_BASELINE_MAX_ID
+        or suffix_max_id >= receipt["id"]
+    ):
+        raise StateError("cleanup receipt login suffix maximum id is invalid")
+    if audit_integrity["pre_receipt_login_success_count"] != suffix_count:
+        raise StateError("pre-receipt login suffix count changed")
+    if audit_integrity["pre_receipt_login_success_sha256"] != suffix_hash:
+        raise StateError("pre-receipt login suffix hash changed")
+    if audit_integrity["pre_receipt_login_success_max_id"] != suffix_max_id:
+        raise StateError("pre-receipt login suffix maximum id changed")
 
     after = _require_keys(
         receipt["after"],
@@ -470,7 +518,11 @@ def _verify_receipt(receipt: Any) -> int:
         "direct_installation_identity_link_proven": False,
     }:
         raise StateError("cleanup receipt AVD quarantine evidence changed")
-    if after["expected_post_counts"] != EXPECTED_POST_COUNTS:
+    expected_post_counts = {
+        **EXPECTED_POST_COUNTS,
+        "audit_log": EXPECTED_AUDIT_BASELINE_COUNT + suffix_count - 37 + 1,
+    }
+    if after["expected_post_counts"] != expected_post_counts:
         raise StateError("cleanup receipt expected post-cleanup counts changed")
 
     fence = after["replay_fence"]
@@ -519,6 +571,7 @@ def verify_state(document: Any) -> int:
             "retired_installation_row_sha256",
             "remote_assistance_device_key_count",
             "remote_assistance_device_keys_sha256",
+            "audit_integrity",
             "surviving_deleted_targets",
             "cleanup_receipts",
         },
@@ -544,6 +597,33 @@ def verify_state(document: Any) -> int:
         raise StateError("retained installation row changed")
     if document["remote_assistance_device_keys_sha256"] != EXPECTED_REMOTE_KEYS_SHA256:
         raise StateError("retained remote-assistance key rows changed")
+    audit_integrity = _require_keys(
+        document["audit_integrity"],
+        {
+            "baseline_max_id",
+            "retained_baseline_count",
+            "retained_baseline_sha256",
+            "invalid_pre_receipt_suffix_count",
+            "pre_receipt_login_success_count",
+            "pre_receipt_login_success_sha256",
+            "pre_receipt_login_success_max_id",
+        },
+        "post-cleanup audit integrity",
+    )
+    if audit_integrity["baseline_max_id"] != EXPECTED_AUDIT_BASELINE_MAX_ID:
+        raise StateError("post-cleanup audit baseline boundary changed")
+    if (
+        audit_integrity["retained_baseline_count"]
+        != EXPECTED_RETAINED_AUDIT_BASELINE_COUNT
+    ):
+        raise StateError("retained audit baseline count changed")
+    if (
+        audit_integrity["retained_baseline_sha256"]
+        != EXPECTED_RETAINED_AUDIT_BASELINE_SHA256
+    ):
+        raise StateError("retained audit baseline rows changed")
+    if audit_integrity["invalid_pre_receipt_suffix_count"] != 0:
+        raise StateError("audit suffix before the cleanup receipt is not login-only")
     survivors = document["surviving_deleted_targets"]
     expected_survivors = {
         "shifts": 0,
@@ -559,7 +639,7 @@ def verify_state(document: Any) -> int:
     receipts = document["cleanup_receipts"]
     if not isinstance(receipts, list) or len(receipts) != 1:
         raise StateError("exactly one cleanup receipt is required")
-    return _verify_receipt(receipts[0])
+    return _verify_receipt(receipts[0], audit_integrity)
 
 
 def main() -> int:

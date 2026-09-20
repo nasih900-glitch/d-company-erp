@@ -1,10 +1,13 @@
 # D Company ERP — current project state
 
-Updated 2026-09-20. This handover describes the in-progress Code30.2 patch.
+Updated 2026-09-20. This handover describes the Code30.2 patch release line.
 The immutable Code30.1 scope and completed evidence remain in
 [`docs/CODE30_1_PATCH_CANDIDATE.md`](docs/CODE30_1_PATCH_CANDIDATE.md). Earlier
 release records remain historical evidence and must not be rewritten as
-Code30.2 proof.
+Code30.2 proof. The canonical Code30.2 release identity is the immutable
+`v3.1.29` tag together with the protected workflow's `release-manifest.json`;
+local branch names, working-tree state and manually built packages are not
+release identity.
 
 ## Architecture and supported applications
 
@@ -23,33 +26,36 @@ Code30.2 proof.
   wrapper are not supported clients. There is no supported native iOS
   distribution in Code30.2.
 
-## Repository and candidate identity
+## Repository and release identity
 
 | Item | Current value |
 |---|---|
 | Authoritative checkout | `/Users/mohammednasih/.codex/worktrees/d-company-erp-code30-trial-patches-20260914` |
 | Branch | `codex/code30-2-finance-sheets` |
-| Candidate base | `3b534fdc76a5463475d58f44686f91608e1e2601` (`v3.1.28`, Code30.1) |
-| Intended patch tag | `v3.1.29` |
+| Release base | `3b534fdc76a5463475d58f44686f91608e1e2601` (`v3.1.28`, Code30.1) |
+| Release tag | `v3.1.29` |
 | Public label | Code30.2 |
 | Product / Android identity | `3.1.29` / build `37` / package `cloud.dcompany.erp` |
 | Android database | Room schema `51` |
 | Backend database | Alembic head `0078` |
 | Immutable release predecessor | Code30.1 `v3.1.28` / build `36` |
-| Last committed candidate source | `efb19f45ec27c5c3a4d63698c73bee3a5d9f54b1` |
+| Exact release source | `release-manifest.json.git_sha`, which must equal the commit resolved by `v3.1.29` |
+| Exact Android artifact | The APK hash, size, signer, package, build, version, workflow run and release ref in that same manifest |
 
-The committed branch contains the cumulative Code30.2 implementation and
-business-audit corrections. The working tree contains the reviewed
-runtime-image security correction, guarded production trial-cleanup tooling and
-the fail-closed future-upgrade verifier for the retained historical outbox
-counter. The exact delta is protected by the Code30.2 source-freeze map but
-remains uncommitted until the final repository suite passes. No signed
-`v3.1.29` artifact exists yet, and Code30.2 has not been deployed, staged,
-activated, offered or accepted on the Redmi Pad 2.
+The branch contains the cumulative Code30.2 implementation, runtime-image
+security correction, business-audit corrections, guarded production
+trial-cleanup tooling and the fail-closed future-upgrade verifier for the
+retained historical outbox counter. The exact delta is protected by the
+Code30.2 source-freeze map. This file deliberately does not embed the commit
+that contains itself: the protected release workflow records that source in
+the manifest and must prove that `release_ref` is `v3.1.29` and `git_sha`
+matches the live immutable tag before any artifact is trusted.
 
-Production remains on the immutable Code30.1 release line while this candidate
-is prepared. A local build, emulator installation or passing source test cannot
-change production or create an update offer.
+The 20 September read-only production preflight found the immutable Code30.1
+source `v3.1.28`, backend `3.1.28`, database `0073` and Android offer build
+`36`. A local build, emulator installation or passing source test cannot change
+production or create an update offer; deployment, cleanup, staging and owner
+activation require their separate recorded gates.
 
 ## Completed and known-good foundation
 
@@ -67,7 +73,7 @@ or gaming work and may close the exact branch/terminal shift. Refund, void,
 privileged discount and release controls retain their separate permissions.
 Reward redemption and WhatsApp messaging remain inactive.
 
-## Code30.2 work present in the tree
+## Code30.2 release scope
 
 ### Manual finance and receipt evidence
 
@@ -141,7 +147,13 @@ at the exact deployed Git SHA and a named executor. Apply also binds the live
 PostgreSQL and stopped backend containers to the canonical services of the
 same Docker Compose project and refuses any running backend service container
 in that project. It restores and dry-runs that backup in a disposable database,
-then drops the restore on every exit. The durable audit receipt fences all
+then drops the restore on every exit. Normal owner sign-ins after the reviewed
+snapshot are accepted only when every new pre-cleanup audit row has the exact
+`login_success` shape and resolves to an active user. The frozen 1,271-row audit
+prefix, exact 37-row deletion target and dynamic login-suffix hash remain
+independently guarded and are bound into the durable receipt. The future
+read-only verifier checks the retained prefix and that pre-receipt suffix while
+allowing later normal business audit rows. The durable audit receipt fences all
 deleted offline actions against replay. The exact retired Code30.1 test
 installation remains fully unchanged with its one stale historical saved-action
 report because the server UUID cannot be tied to an AVD. Its device
@@ -170,26 +182,28 @@ active session, blocked station or unbalanced drawer. The measured 30-frame UI
 sample had 35.378 ms p95, 40.559 ms maximum and no frame above 50 ms, crash,
 ANR or layout jump.
 
-The current final working tree has separately passed 1,572 backend tests with
+The cumulative Code30.2 source has recorded passes for 1,572 backend tests with
 21 expected isolated-audit skips on Python 3.14.7 against a fresh PostgreSQL
 database migrated from zero through `0078`; 526 Web tests, lint, type checking
 and a production build; and 4,406 Android JVM tests, lint and from-scratch debug
 builds. The repository-level release, installer, security, freeze and contract
-suite passed 943 tests, two expected skips and 322 subtests. The canonical
+suite passed 950 tests, two expected skips and 322 subtests. The canonical
 API-35 tablet-profile lane passed its 333 ordinary device
 tests plus two explicit granted-notification/deep-idle alarm proofs. A direct
 Gradle run at the AVD's 2560x1800 default had first failed the intentionally
 profile-sensitive inventory keyboard threshold; the canonical lane set and
 verified the required 2560x1600, 320-dpi (1280x800 dp) profile and passed the
-same test. Cleanup, future-upgrade and replay-fence focus passed 54 tests with
-one expected skip, and the post-cleanup SQL executed successfully on PostgreSQL
-16 while correctly rejecting a database without the required cleanup receipt.
+same test. The final audit-drift guard's cleanup and future-upgrade focus passed
+28 tests, and the source-freeze verifier passed. The earlier baseline
+post-cleanup query executed successfully on PostgreSQL 16 while correctly
+rejecting a database without the required cleanup receipt; the final dynamic
+guard must still pass the installer's fresh-backup restore dry run before any
+live cleanup can apply.
 
-The first hosted container run for that commit passed backend, Web and Android
-but blocked both image lanes on Python 3.13.15 `CVE-2026-82049` and Alpine zlib
-1.3.2-r0 `CVE-2026-85091`. The dirty security correction moves the backend and
-CI to Python 3.14.7, builds and attests Redis locally, and overlays zlib 1.3.2
-built from the official source plus the complete upstream chain
+An earlier hosted container run exposed Python 3.13.15 `CVE-2026-82049` and
+Alpine zlib 1.3.2-r0 `CVE-2026-85091`. The committed correction moves the
+backend and CI to Python 3.14.7, builds and attests Redis locally, and overlays
+zlib 1.3.2 built from the official source plus the complete upstream chain
 `e3dc0a85b7032e98380dec011bc8f2c2ee0d8fca`,
 `bbc2ccf3d0de267576b524b875c769a724a513b0`,
 `df84af25dc1942490e1d1c899a07619152a46148`, and
@@ -197,10 +211,12 @@ built from the official source plus the complete upstream chain
 PostgreSQL and Redis. Each exact image gets a narrowly scoped OpenVEX document;
 all other High/Critical findings still fail closed.
 
-Those checkpoints are not a final Code30.2 release verdict because the image
-correction and cleanup guard changed the candidate after the business audit.
-The exact final source must still repeat the complete business audit and pass
-both hosted image build/scanner lanes.
+Protected CI run `35504974966` passed backend, Web, Android and both production
+image lanes for the source immediately before the final audit-log drift guard.
+The drift guard then passed its focused cleanup, future-upgrade, replay-fence,
+freeze and PostgreSQL-16 query checks. The `v3.1.29` tag workflow remains the
+authoritative final rerun because it rebuilds and verifies the exact source and
+artifact recorded in the release manifest.
 
 ## Known release gaps
 
@@ -211,9 +227,11 @@ both hosted image build/scanner lanes.
   Gaming start/pause/extend/stop/handoff, POS settlement/refund, split payment,
   manual finance, receipt capture/upload/retry, restart, offline/reconnect,
   closed-shift correction, reports, Sheet reconciliation and cleanup.
-- Freeze and commit the exact reviewed source, then create `v3.1.29`.
-- Produce the signed build-37 APK through protected GitHub CI and independently
-  verify its manifest, checksum, size, package, source and expected signer.
+- Create `v3.1.29` only from the exact reviewed clean source and require its
+  protected workflow to pass every source, app and production-image lane.
+- Produce the signed build-37 APK through that protected tag workflow and
+  independently verify the manifest's release ref, Git source, checksum, size,
+  package, version, build, workflow provenance and expected signer.
 - Prove a normal same-signer in-place upgrade from exact signed
   `v3.1.28` / build `36` to build `37` without uninstalling or clearing
   Room/outbox state.
@@ -256,8 +274,8 @@ both hosted image build/scanner lanes.
 
 ## Release readiness and priorities
 
-Code30.2 remains an active source candidate and is not ready for live business
-use yet. Finish final review and exact-source verification, freeze the source,
-obtain and verify the signed build-37 APK, prove the in-place upgrade, then
-perform the coordinated production and Sheet cutover. Inactive staging and owner
-activation follow those gates. Physical-tablet acceptance remains separate.
+Code30.2 is not live until the exact `v3.1.29` tag and its protected release
+manifest pass, the signed build-37 APK is independently verified, the in-place
+upgrade is proven, and the coordinated production, cleanup and Sheet cutover
+complete. Inactive staging and owner activation follow those gates.
+Physical-tablet acceptance remains separate.

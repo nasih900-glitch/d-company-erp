@@ -3,8 +3,11 @@
 This is a one-time, fail-closed maintenance procedure for the exact test rows
 verified in the D Company production snapshot on 20 September 2026. It does not
 select rows by date, company, status, or a text label. Every deletion uses a
-reviewed primary-key allowlist, and both the complete source-table fingerprint
-and target-row fingerprint must match before any mutation is attempted.
+reviewed primary-key allowlist, and both the source-table and target-row
+fingerprints must match before any mutation is attempted. The `audit_log`
+exception remains fail-closed: its exact 1,271-row prefix through ID 28202 is
+frozen, and only structurally valid `login_success` rows attributable to an
+active user may appear after that prefix before cleanup.
 
 The test-data classification is based on the owner's confirmation that the ERP
 has had no real use since 5 September, the exact post-cutoff production rows,
@@ -46,7 +49,16 @@ Later patch installers do not treat that preserved counter as newly queued
 tablet work. Before accepting it, they run a read-only database query and
 require exactly one canonical cleanup receipt, the exact unchanged retained
 installation-row and 29-key hashes, all 13 structurally valid replay-fence
-entries, and zero surviving rows from every reviewed deletion allowlist. The
+entries, the retained audit-prefix hash, and zero surviving rows from every
+reviewed deletion allowlist. The receipt also binds the count, full-row hash
+and maximum ID of every allowed login row that appeared between the reviewed
+prefix and the cleanup receipt. Later ordinary business audit rows are allowed;
+the login-only rule applies only to the pre-receipt drift interval. The
+one-time cleanup checks those rows against the current active user, email and
+name. The long-term verifier intentionally checks their immutable audit shape
+and receipt-bound full-row hash instead of mutable current user state, so a
+later legitimate rename, role change, deactivation or deletion cannot invalidate
+historical cleanup evidence. The
 receipt must retain the original pre-cleanup fingerprint, backup and quarantine
 evidence, the exact 13 action identities, deleted IDs and counts, null offline/sync markers, source/image
 identity, and exact cleanup metadata. A missing, duplicate, malformed or
@@ -150,6 +162,9 @@ tables outside the seven explicitly changed tables must have the same row count
 and full-row SHA-256 before and after the transaction. Every retained row in
 those seven tables must also have the same SHA-256. The retained installation
 and 29 expired remote-assistance keys must retain their exact reviewed SHA-256.
+The final audit-row count is derived from the frozen 1,271-row baseline, the
+validated login suffix, 37 exact deletions and the single cleanup receipt; it is
+not weakened to a freshly guessed fixed count.
 
 Restart only after verification:
 

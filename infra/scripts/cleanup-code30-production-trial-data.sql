@@ -218,7 +218,6 @@ CREATE TEMP TABLE _cleanup_expected_full (
 ) ON COMMIT DROP;
 
 INSERT INTO _cleanup_expected_full VALUES
-    ('audit_log', 1271, 'e2164c700b9ffc67edc1e63623baf943a89b4dd9cd7392a87a12a054aba7cc82'),
     ('client_installations', 7, '49c31a308d7980d4b30c0831c03f4e559d27990b175139aa8d3514d7affcc266'),
     ('gaming_sessions', 9, '72894ce31664b065b73bdcdb7711ffc59d6d76831783f2c837691fc09c44289f'),
     ('idempotency_keys', 47, 'f91749ce9c33b2b09c42f566581341fe25d43e80f52925d69dabf18245198743'),
@@ -252,6 +251,121 @@ BEGIN
     END IF;
 END
 $full_snapshot_guard$;
+
+-- audit_log is append-only. The 1,271 reviewed rows form an immutable prefix,
+-- while successful sign-ins can legitimately append after the read-only audit
+-- that produced this cleanup. Accept only that narrow, attributable suffix;
+-- every baseline row and every cleanup-related audit target remains frozen.
+CREATE TEMP TABLE _cleanup_audit_baseline_pre (
+    row_count bigint NOT NULL,
+    row_sha256 text NOT NULL
+) ON COMMIT DROP;
+
+INSERT INTO _cleanup_audit_baseline_pre
+SELECT count(*),
+       encode(
+           sha256(
+               convert_to(
+                   coalesce(
+                       string_agg(to_jsonb(row_data)::text, E'\n' ORDER BY to_jsonb(row_data)::text),
+                       ''
+                   ),
+                   'UTF8'
+               )
+           ),
+           'hex'
+       )
+  FROM audit_log row_data
+ WHERE id <= 28202;
+
+DO $audit_baseline_guard$
+BEGIN
+    IF (SELECT row_count FROM _cleanup_audit_baseline_pre) <> 1271
+       OR (SELECT row_sha256 FROM _cleanup_audit_baseline_pre) IS DISTINCT FROM
+          'e2164c700b9ffc67edc1e63623baf943a89b4dd9cd7392a87a12a054aba7cc82' THEN
+        RAISE EXCEPTION 'immutable audit-log baseline prefix changed';
+    END IF;
+END
+$audit_baseline_guard$;
+
+CREATE TEMP TABLE _cleanup_login_suffix_pre (
+    row_count bigint NOT NULL,
+    row_sha256 text NOT NULL,
+    max_id bigint
+) ON COMMIT DROP;
+
+INSERT INTO _cleanup_login_suffix_pre
+SELECT count(*),
+       encode(
+           sha256(
+               convert_to(
+                   coalesce(
+                       string_agg(to_jsonb(audit)::text, E'\n' ORDER BY audit.id),
+                       ''
+                   ),
+                   'UTF8'
+               )
+           ),
+           'hex'
+       ),
+       max(audit.id)
+  FROM audit_log audit
+ WHERE audit.id > 28202;
+
+DO $audit_suffix_guard$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+          FROM audit_log audit
+          LEFT JOIN users actor ON actor.id = audit.actor_user_id
+         WHERE audit.id > 28202
+           AND NOT (
+               audit.action = 'login_success'
+               AND audit.entity_type = 'User'
+               AND audit.entity_id = audit.actor_user_id::text
+               AND audit.company_id = '8f323fba-4358-45fe-9d3b-a8e0fae52993'
+               AND actor.id IS NOT NULL
+               AND actor.company_id = audit.company_id
+               AND actor.status = 'active'
+               AND actor.deleted_at IS NULL
+               AND audit.before = 'null'::jsonb
+               AND jsonb_typeof(audit.after) = 'object'
+               AND audit.after ?& ARRAY['email', 'result', 'name', 'roles']
+               AND CASE WHEN jsonb_typeof(audit.after) = 'object'
+                        THEN (SELECT count(*) FROM jsonb_object_keys(audit.after))
+                        ELSE -1 END = 4
+               AND audit.after->>'email' = actor.email
+               AND audit.after->>'name' = actor.name
+               AND audit.after->>'result' = 'login_success'
+               AND jsonb_typeof(audit.after->'roles') = 'array'
+               AND jsonb_array_length(
+                       CASE WHEN jsonb_typeof(audit.after->'roles') = 'array'
+                            THEN audit.after->'roles' ELSE '[]'::jsonb END
+                   ) > 0
+               AND NOT EXISTS (
+                   SELECT 1
+                     FROM jsonb_array_elements(
+                              CASE WHEN jsonb_typeof(audit.after->'roles') = 'array'
+                                   THEN audit.after->'roles' ELSE '[]'::jsonb END
+                          ) role_value
+                    WHERE jsonb_typeof(role_value) <> 'string'
+               )
+               AND audit.ip IS NOT NULL
+               AND audit.user_agent IS NOT NULL
+               AND audit.terminal_id IS NULL
+               AND audit.request_id IS NOT NULL
+               AND audit.client_platform IN ('android', 'ios', 'web')
+               AND audit.client_action_id IS NULL
+               AND audit.client_reported_at IS NULL
+               AND audit.client_was_offline IS FALSE
+               AND audit.synced_at IS NULL
+               AND audit.reason IS NULL
+           )
+    ) THEN
+        RAISE EXCEPTION 'audit-log suffix contains an unreviewed or malformed action';
+    END IF;
+END
+$audit_suffix_guard$;
 
 CREATE TEMP TABLE _cleanup_target_pre (
     table_name text PRIMARY KEY,
@@ -867,7 +981,15 @@ SELECT
         'state_fingerprint', state.state_fingerprint,
         'backup_sha256', input.backup_sha256,
         'quarantine_evidence_sha256', input.quarantine_evidence_sha256,
-        'counts', (SELECT jsonb_object_agg(name, value) FROM _cleanup_scalar_pre)
+        'counts', (SELECT jsonb_object_agg(name, value) FROM _cleanup_scalar_pre),
+        'audit_log', jsonb_build_object(
+            'baseline_max_id', 28202,
+            'baseline_count', (SELECT row_count FROM _cleanup_audit_baseline_pre),
+            'baseline_sha256', (SELECT row_sha256 FROM _cleanup_audit_baseline_pre),
+            'login_success_suffix_count', (SELECT row_count FROM _cleanup_login_suffix_pre),
+            'login_success_suffix_sha256', (SELECT row_sha256 FROM _cleanup_login_suffix_pre),
+            'login_success_suffix_max_id', (SELECT max_id FROM _cleanup_login_suffix_pre)
+        )
     ),
     jsonb_build_object(
         'source_git_sha', input.source_git_sha,
@@ -928,7 +1050,8 @@ SELECT
             'client_installations', 7,
             'remote_assistance_device_keys', 379,
             'payments', 3, 'refunds', 0, 'customers', 0,
-            'idempotency_keys', 37, 'audit_log', 1235,
+            'idempotency_keys', 37,
+            'audit_log', (SELECT row_count - 37 + 1 FROM _cleanup_all_pre WHERE table_name = 'audit_log'),
             'active_sessions', 0, 'open_orders', 0, 'open_shifts', 0,
             'pending_tablet_outbox', 1,
             'google_sheets_unresolved', 0
@@ -943,6 +1066,14 @@ DECLARE
 BEGIN
     SELECT * INTO STRICT payload FROM _cleanup_receipt_payload;
     IF jsonb_array_length(payload.after_data->'replay_fence') <> 13
+       OR payload.before_data #>> '{audit_log,baseline_max_id}' IS DISTINCT FROM '28202'
+       OR payload.before_data #>> '{audit_log,baseline_count}' IS DISTINCT FROM '1271'
+       OR payload.before_data #>> '{audit_log,baseline_sha256}' IS DISTINCT FROM
+          'e2164c700b9ffc67edc1e63623baf943a89b4dd9cd7392a87a12a054aba7cc82'
+       OR payload.before_data #>> '{audit_log,login_success_suffix_count}' IS DISTINCT FROM
+          (SELECT row_count::text FROM _cleanup_login_suffix_pre)
+       OR payload.before_data #>> '{audit_log,login_success_suffix_sha256}' IS DISTINCT FROM
+          (SELECT row_sha256 FROM _cleanup_login_suffix_pre)
        OR payload.after_data->>'source_git_sha' !~ '^[0-9a-f]{40}$'
        OR payload.after_data->>'backend_image_id' !~ '^sha256:[0-9a-f]{64}$'
        OR payload.after_data #>> '{retired_test_installation,pending_outbox_count}' IS DISTINCT FROM '1'
@@ -1245,7 +1376,10 @@ DECLARE
     expected_audit_count bigint;
 BEGIN
     SELECT apply INTO STRICT apply_mode FROM _cleanup_inputs;
-    expected_audit_count := CASE WHEN apply_mode THEN 1235 ELSE 1234 END;
+    SELECT row_count - 37 + CASE WHEN apply_mode THEN 1 ELSE 0 END
+      INTO STRICT expected_audit_count
+      FROM _cleanup_all_pre
+     WHERE table_name = 'audit_log';
     IF (SELECT count(*) FROM shifts) <> 7
        OR (SELECT count(*) FROM shifts WHERE status = 'open') <> 0
        OR (SELECT count(*) FROM orders) <> 4
