@@ -174,13 +174,7 @@ def validate_report(
         if not isinstance(rules, list) or len(rules) != 1:
             raise SystemExit(f"zlib VEX disposition is ambiguous for {service}")
         rule = rules[0]
-        if not isinstance(rule, dict) or any(
-            (
-                rule.get("namespace") != "vex",
-                rule.get("vulnerability") != CVE,
-                rule.get("vex-status") != "fixed",
-            )
-        ):
+        if rule != {"namespace": "vex", "vex-status": "fixed"}:
             raise SystemExit(f"zlib VEX disposition is not the reviewed fixed rule for {service}")
     print(f"{service}_zlib_vex_fixed_ignored_matches={len(ignored)}")
 

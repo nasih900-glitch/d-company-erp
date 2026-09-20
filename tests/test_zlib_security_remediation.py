@@ -121,7 +121,6 @@ def _zlib_match(*, cve: str = "CVE-2026-85091", status: str = "fixed") -> dict[s
         "appliedIgnoreRules": [
             {
                 "namespace": "vex",
-                "vulnerability": cve,
                 "vex-status": status,
             }
         ],
@@ -215,6 +214,29 @@ def test_vex_rejects_unrelated_or_nonfixed_ignored_matches(tmp_path: Path) -> No
     nonfixed = _verify_report(tmp_path, _report([_zlib_match(status="not_affected")]))
     assert nonfixed.returncode != 0
     assert "not the reviewed fixed rule" in nonfixed.stderr
+
+
+def test_vex_rejects_extra_or_multiple_ignore_rule_evidence(tmp_path: Path) -> None:
+    extra_field = _zlib_match()
+    extra_field["appliedIgnoreRules"] = [
+        {
+            "namespace": "vex",
+            "vulnerability": "CVE-2026-85091",
+            "vex-status": "fixed",
+        }
+    ]
+    extra = _verify_report(tmp_path / "extra", _report([extra_field]))
+    assert extra.returncode != 0
+    assert "not the reviewed fixed rule" in extra.stderr
+
+    multiple_rules = _zlib_match()
+    multiple_rules["appliedIgnoreRules"] = [
+        {"namespace": "vex", "vex-status": "fixed"},
+        {"namespace": "vex", "vex-status": "fixed"},
+    ]
+    multiple = _verify_report(tmp_path / "multiple", _report([multiple_rules]))
+    assert multiple.returncode != 0
+    assert "disposition is ambiguous" in multiple.stderr
 
 
 def test_vex_rejects_an_unfiltered_zlib_finding(tmp_path: Path) -> None:

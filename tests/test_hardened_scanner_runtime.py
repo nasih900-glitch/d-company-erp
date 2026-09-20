@@ -125,7 +125,6 @@ elif args[0] == "start":
             },
             "appliedIgnoreRules": [{
                 "namespace": "vex",
-                "vulnerability": "CVE-2026-85091",
                 "vex-status": "fixed",
             }],
         }]

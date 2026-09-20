@@ -181,7 +181,7 @@ REVIEWED_CODE30_2_SHA256 = {
     '.github/workflows/ci.yml': '3b2c72c546451f1c5f09d170c0e86fb0febe30e8239b2a682ded2e8c575ee482',
     '.github/workflows/release.yml': '5c286c572df8a571198891df341c11c49f049b2c862fa8449e17ccd941fefb6a',
     'AGENTS.md': '8f35996f40e1605fbaebe3c1aea5c9298358a2102a29db6714fdfa9d88454219',
-    'PROJECT_STATE.md': '2b1b2d118433fd74197219bcaf698d717dcad3a35fb0b94e3380f247a6b082d6',
+    'PROJECT_STATE.md': 'e435ad307eeb17e3eaab99e9e49b184e5714bea1b793ae5cc900653c8e9daaa1',
     'README.md': 'a7f0bc467e7ad7a2c1017ee16ca6aefffb38534013cf482c707da37b49d9dca2',
     'android-native/app/build.gradle.kts': '670d78a194343f219c0c384cf415850c5f9b79b2b21f825daccfbdba288ea06b',
     'android-native/app/schemas/cloud.dcompany.erp.core.db.ErpDatabase/49.json': '2413682411447dc1e2e592dfb76bd6930777d562195cfdbee4f9cdedc9cae907',
@@ -358,7 +358,7 @@ REVIEWED_CODE30_2_SHA256 = {
     'infra/scripts/verify-code30-2-post-cleanup-state.py': '64b0d2f303342ee7242f7033b1f4769047b529271d7ece86ff29a18b3dde5995',
     'infra/scripts/verify-code30-2-post-cleanup-state.sql': '7c44db5afd8ce72bcf22a3c7d4ad034f3cfbede326940b10eefb1d44064d7001',
     'infra/scripts/verify-production-runtime-images.sh': '9602119873f07a0fa0a163eb32b3ad58806281e14dea92d2c9c5ab45a204261c',
-    'infra/scripts/verify-zlib-vex.py': '873f21ca117967c2088de3066d9b0b40955b6790f24c9b0b8bc868dff3dc51f3',
+    'infra/scripts/verify-zlib-vex.py': '6dab14083e7313cdfe0262f3daec430ffd1de17e3736d15e70a45133bcc101ed',
     'infra/security/vex/zlib-cve-2026-85091.openvex.json': '5008f90d2b7bcdedd955d30c35618aae1f2c25c81fe3190d6adefdccab882bc7',
     'integrations/google-sheets/Code.gs': 'cbf401b2b7612b049d338a38ab4e53f0e78d7afda2d92782c3477f7b94d1f6d0',
     'ops/runtime_release_parity.py': 'b9d8348e91785e24eb4e49d7c768b23f96197c978a1c62607d27afa3edcbdf8f',
@@ -376,10 +376,10 @@ REVIEWED_CODE30_2_SHA256 = {
     'tests/test_code30_2_freeze_path_safety.py': '2eea4de59f8e4c842daefcf60416a36b23c966a39171a6671a4e80ec642ca22b',
     'tests/test_code30_2_post_cleanup_installer_guard.py': '37cfccabaace36d3a477415117a4e68e91657fcf6467240978a5b324f88db829',
     'tests/test_docker_context_safety.py': '26d848d57fb31e026c4f1c1130dcdee13dec71e037ab51af1f2c4697393ab390',
-    'tests/test_hardened_scanner_runtime.py': 'eadb3b4f5cd0b98cfdac9d6c2c7ce56f15cdfd95eca8ac09430108dff428864f',
+    'tests/test_hardened_scanner_runtime.py': '5efeeb8f4b514ba593a3dc5573877689df6fb496e5cf6a620973b36ce0eff1c6',
     'tests/test_production_installer_safety.py': 'f56fe08679aa450551d76f4c93399d28be04321d8f3aff2b66a67d542d05ea88',
     'tests/test_production_trial_cleanup_safety.py': '42484cdb31b9ca4172d05c8784d218b9adef3f2a74f2b42d1577d1f7729b22b9',
-    'tests/test_zlib_security_remediation.py': 'e19f0f012d62834eee5e5836efa08d81f965eb96cb63b20b816ade724241a407',
+    'tests/test_zlib_security_remediation.py': 'e44842f9bad30b0d852bc88229537163ea690b71b42f33637ae5ec97213a081d',
 }
 REVIEWED_CODE30_2_PRODUCTION_PATHS = frozenset(
     path

@@ -175,7 +175,7 @@ The current final working tree has separately passed 1,572 backend tests with
 database migrated from zero through `0078`; 526 Web tests, lint, type checking
 and a production build; and 4,406 Android JVM tests, lint and from-scratch debug
 builds. The repository-level release, installer, security, freeze and contract
-suite passed 942 tests, two expected skips and 322 subtests. The canonical
+suite passed 943 tests, two expected skips and 322 subtests. The canonical
 API-35 tablet-profile lane passed its 333 ordinary device
 tests plus two explicit granted-notification/deep-idle alarm proofs. A direct
 Gradle run at the AVD's 2560x1800 default had first failed the intentionally
