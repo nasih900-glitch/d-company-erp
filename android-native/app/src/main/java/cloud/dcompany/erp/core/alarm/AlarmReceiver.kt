@@ -12,6 +12,8 @@ import android.net.Uri
 import androidx.core.app.NotificationCompat
 import cloud.dcompany.erp.DCompanyApp
 import cloud.dcompany.erp.MainActivity
+import cloud.dcompany.erp.PersistedStartupFailure
+import cloud.dcompany.erp.PersistedStartupStateResult
 import cloud.dcompany.erp.R
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -188,14 +190,18 @@ internal object OperationalAlarmRegistry {
      * Forget only delivery memory then; package replacement and permission
      * changes must not ring an unchanged, already-visible alert twice.
      */
-    fun prepareForSystemReschedule(context: Context, action: String?) = synchronized(lock) {
+    fun prepareForSystemReschedule(context: Context, action: String?): Boolean = synchronized(lock) {
         val preferences = context.applicationContext.getSharedPreferences(
             PREFERENCES,
             Context.MODE_PRIVATE,
         )
         val before = preferences.getStringSet(DELIVERED, emptySet()).orEmpty()
         val after = deliveredFingerprintsAfterSystemReschedule(action, before)
-        if (after != before) preferences.edit().putStringSet(DELIVERED, after).commit()
+        if (after == before) return@synchronized true
+        // A reboot removed the corresponding visible notifications. Do not
+        // claim rescheduling succeeded unless forgetting their old delivery
+        // fingerprints was durably committed first.
+        preferences.edit().putStringSet(DELIVERED, after).commit()
     }
 
     /** Sign-out/blocked scope cleanup that does not need to read Room. */
@@ -415,8 +421,26 @@ class AlarmReceiver : BroadcastReceiver() {
         val pendingResult = goAsync()
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             try {
-                if (!OperationalAlarmRuntime.ensureActiveOwnedScope(context)) {
-                    OperationalAlarmRegistry.cancelAll(context)
+                if (
+                    !OperationalAlarmRuntime.ensureActiveOwnedScope(
+                        context,
+                        // AlarmManager redelivery is itself the durable retry
+                        // lane. Refresh a completed transient startup failure
+                        // instead of reusing it for every one-minute retry.
+                        retryFailedStartup = true,
+                    )
+                ) {
+                    val cancelled = OperationalAlarmRegistry.cancelAll(context)
+                    // Another foreground workspace can activate after the
+                    // definitive no-owner check but before this global ledger
+                    // cleanup. Replay the latest process-owned snapshot so its
+                    // alarms are restored; a still-later activation requests
+                    // the same replay from SessionViewModel.
+                    (context.applicationContext as? DCompanyApp)
+                        ?.requestOperationalAlarmReconciliation()
+                    if (!cancelled) {
+                        AlarmScheduler.retryAfterReceiverFailure(context, identity)
+                    }
                     return@launch
                 }
                 val now = System.currentTimeMillis()
@@ -530,24 +554,39 @@ internal fun buildOperationalAlarmNotification(
 /** Rebuilds AlarmManager after reboot, app replacement, or exact-alarm access changes. */
 class AlarmRescheduleReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        if (
-            intent.action != Intent.ACTION_BOOT_COMPLETED &&
-            intent.action != Intent.ACTION_MY_PACKAGE_REPLACED &&
-            intent.action != AlarmManager.ACTION_SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED
-        ) return
+        val action = intent.action?.takeIf(::isSupportedAlarmRescheduleAction) ?: return
         val pendingResult = goAsync()
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             try {
-                if (!OperationalAlarmRuntime.ensureActiveOwnedScope(context)) {
-                    OperationalAlarmRegistry.cancelAll(context)
-                    return@launch
+                val app = context.applicationContext as? DCompanyApp
+                val attempt = runAlarmRescheduleAttempt(
+                    restorePersistedAuthority = {
+                        app?.awaitPersistedStartupState()
+                            ?: PersistedStartupStateResult.Unavailable(PersistedStartupFailure.STORAGE)
+                    },
+                    ensureActiveOwnedScope = {
+                        OperationalAlarmRuntime.ensureActiveOwnedScope(context)
+                    },
+                    cancelAll = {
+                        check(OperationalAlarmRegistry.cancelAll(context)) {
+                            "The stale alarm ledger could not be cleared durably"
+                        }
+                    },
+                    prepareForSystemReschedule = {
+                        OperationalAlarmRegistry.prepareForSystemReschedule(context, action)
+                    },
+                    reconcileGaming = { GamingAlarmReconciler.reconcile(context) },
+                    reconcileHeldOrders = { HeldOrderAlarmReconciler.reconcile(context) },
+                    requestLatestScopeReconciliation = {
+                        app?.requestOperationalAlarmReconciliation()
+                    },
+                )
+                if (attempt == AlarmRescheduleAttemptResult.RETRY) {
+                    runCatching { AlarmRescheduleRetryScheduler.enqueue(context, action) }
                 }
-                OperationalAlarmRegistry.prepareForSystemReschedule(context, intent.action)
-                GamingAlarmReconciler.reconcile(context)
-                HeldOrderAlarmReconciler.reconcile(context)
             } catch (_: Exception) {
-                // Application startup and every Room change also reconcile;
-                // never crash a boot/package receiver on a local I/O failure.
+                // Never crash a boot/package/permission receiver. Unknown
+                // authority is preserved and handed to WorkManager above.
             } finally {
                 pendingResult.finish()
             }

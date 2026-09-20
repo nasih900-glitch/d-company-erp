@@ -44,9 +44,10 @@ def _headers(
     terminal_id=None,
     token_branch_id=None,
     version_code: int = 21,
+    saved_version_code: int | None = None,
 ) -> dict[str, str]:
     key = key or f"expense:{uuid4()}"
-    return {
+    headers = {
         "Authorization": f"Bearer {_token(seed, user=user, branch_id=token_branch_id)}",
         "X-Terminal-Id": str(terminal_id or seed["terminal"].id),
         "X-Client-Platform": "android",
@@ -57,6 +58,9 @@ def _headers(
         "X-Offline-Captured": "true",
         "X-Client-Occurred-At": captured_at.isoformat(),
     }
+    if saved_version_code is not None:
+        headers["X-Saved-Client-Version-Code"] = str(saved_version_code)
+    return headers
 
 
 def _payload(seed, category, *, paid_at: datetime, amount_minor: int = 1_500):
@@ -164,6 +168,64 @@ async def test_code21_cash_expense_is_shift_linked_and_replays_after_cache_expir
             select(func.count(Expense.id)).where(Expense.idempotency_key == key)
         )
     ).scalar_one() == 1
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_upgraded_code21_outbox_replays_without_second_drawer_movement(
+    client, session, seed_owner,
+) -> None:
+    category, shift = await _seed_open_shift(session, seed_owner)
+    captured = datetime.now(UTC) - timedelta(minutes=2)
+    key = f"expense:{uuid4()}"
+    payload = _payload(seed_owner, category, paid_at=captured)
+
+    original = await client.post(
+        "/api/v1/finance/expenses",
+        json=payload,
+        headers=_headers(seed_owner, captured_at=captured, key=key),
+    )
+    assert original.status_code == 201, original.text
+    await session.refresh(shift)
+    assert shift.expected_minor == 8_500
+
+    # Simulate the tablet upgrading after the server committed but before its
+    # Code21 outbox received the response. The generic cache may also expire;
+    # the durable revision-51 receipt must still return the original response.
+    await session.execute(delete(IdempotencyKey).where(IdempotencyKey.key == key))
+    await session.commit()
+    upgraded_headers = _headers(
+        seed_owner,
+        captured_at=captured,
+        key=key,
+        version_code=37,
+        saved_version_code=21,
+    )
+    first, second = await asyncio.gather(
+        client.post("/api/v1/finance/expenses", json=payload, headers=upgraded_headers),
+        client.post("/api/v1/finance/expenses", json=payload, headers=upgraded_headers),
+    )
+    assert first.status_code == second.status_code == 201, (first.text, second.text)
+    assert first.json() == second.json() == original.json()
+    await session.refresh(shift)
+    assert shift.expected_minor == 8_500
+    assert (
+        await session.execute(
+            select(func.count(Expense.id)).where(Expense.idempotency_key == key)
+        )
+    ).scalar_one() == 1
+
+    # A current client cannot enter the recovery path without the durable
+    # row's saved-origin header.
+    modern_without_origin = await client.post(
+        "/api/v1/finance/expenses",
+        json={**payload, "invoice_no": f"CURRENT-{uuid4().hex[:8]}"},
+        headers=_headers(seed_owner, captured_at=captured, version_code=37),
+    )
+    assert modern_without_origin.status_code == 422, modern_without_origin.text
+    assert "Cash paid-outs" in modern_without_origin.text
+    await session.refresh(shift)
+    assert shift.expected_minor == 8_500
 
 
 @pytest.mark.integration

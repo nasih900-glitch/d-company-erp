@@ -30,14 +30,12 @@ from app.core.middleware import (
     TimingMiddleware,
 )
 from app.core.redis_clients import close_request_path_redis_client
-from app.events.bus import get_event_bus
-from app.events.events import OrderPaid
 from app.services.audit.recorder import install_audit_listeners
 from app.services.client_updates.runtime_parity_supervisor import (
     maintain_public_runtime_parity,
     refresh_active_public_runtime_parity,
 )
-from app.services.integrations.google_sheets import on_order_paid
+from app.services.integrations.google_sheets_runtime import maintain_google_sheets_mirror
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -51,9 +49,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Application lifespan — startup and shutdown hooks."""
     configure_logging(settings)
     install_audit_listeners()
-    get_event_bus().subscribe(OrderPaid, on_order_paid)
     logger.info("erp.startup", env=settings.env, version=app.version)
     parity_task: asyncio.Task[None] | None = None
+    sheets_task: asyncio.Task[None] | None = None
     if settings.env == "prod":
         try:
             # If an update was already active before a process restart, warm
@@ -68,6 +66,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             maintain_public_runtime_parity(settings),
             name="android-update-runtime-parity",
         )
+    if settings.env != "test":
+        sheets_task = asyncio.create_task(
+            maintain_google_sheets_mirror(),
+            name="google-sheets-mirror-dispatcher",
+        )
     try:
         yield
     finally:
@@ -75,6 +78,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             parity_task.cancel()
             with suppress(asyncio.CancelledError):
                 await parity_task
+        if sheets_task is not None:
+            sheets_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await sheets_task
         logger.info("erp.shutdown")
 
 
@@ -100,6 +107,10 @@ def create_app() -> FastAPI:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=[
+            "X-Customer-Directory-Revision",
+            "X-Customer-Directory-Company-Id",
+        ],
     )
     app.add_middleware(
         ClientCompatibilityMiddleware,

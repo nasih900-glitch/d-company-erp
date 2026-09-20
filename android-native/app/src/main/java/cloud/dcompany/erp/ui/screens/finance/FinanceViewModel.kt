@@ -4,18 +4,26 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import cloud.dcompany.erp.DCompanyApp
 import cloud.dcompany.erp.core.auth.FinanceAccess
+import cloud.dcompany.erp.core.auth.EffectivePermissions
+import cloud.dcompany.erp.core.auth.OutboxOwnerIdentity
 import cloud.dcompany.erp.core.auth.authorizeAction
 import cloud.dcompany.erp.core.db.AssetCacheEntity
 import cloud.dcompany.erp.core.db.ExpenseCacheEntity
 import cloud.dcompany.erp.core.db.LocalAssetEntity
 import cloud.dcompany.erp.core.db.LocalCapitalEntryEntity
 import cloud.dcompany.erp.core.db.LocalExpenseEntity
+import cloud.dcompany.erp.core.db.LocalExpenseReceiptChunkEntity
+import cloud.dcompany.erp.core.db.LocalExpenseReceiptEntity
+import cloud.dcompany.erp.core.db.LocalExpenseReceiptWithExpense
+import cloud.dcompany.erp.core.db.ResolvedOpenShift
 import cloud.dcompany.erp.core.db.SyncState
 import cloud.dcompany.erp.core.db.cached
+import cloud.dcompany.erp.core.db.observeResolvedOpenShift
 import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.MeResponse
 import cloud.dcompany.erp.core.net.CostingCoverage
 import cloud.dcompany.erp.core.net.asRupees
+import cloud.dcompany.erp.core.diagnostics.DiagnosticsRuntime
 import cloud.dcompany.erp.core.sync.ResourceRefreshResult
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -133,6 +141,8 @@ sealed interface FinanceDialog {
     data object TipPayoutForm : FinanceDialog
     data class VoidManualCollection(val row: ManualCollection) : FinanceDialog
     data class VoidTipPayout(val row: TipPayout) : FinanceDialog
+    data class DiscardRejectedExpense(val row: PendingExpenseRow) : FinanceDialog
+    data class DiscardExpenseReceipt(val row: PendingExpenseReceiptRow) : FinanceDialog
 }
 
 /** A queued-but-not-yet-synced expense, with its category name resolved for display. */
@@ -141,6 +151,17 @@ data class PendingExpenseRow(
     val amountMinor: Long,
     val categoryName: String,
     val vendorName: String?,
+    val rejected: Boolean,
+    val error: String? = null,
+)
+
+data class PendingExpenseReceiptRow(
+    val localId: String,
+    val expenseLocalId: String,
+    val expenseServerId: String?,
+    val contentSha256: String,
+    val filename: String,
+    val waitingForExpense: Boolean,
     val rejected: Boolean,
     val error: String? = null,
 )
@@ -186,7 +207,9 @@ internal data class FinanceUiState(
     val companyWidePartnerDataAvailable: Boolean = false,
     val branches: List<Branch> = emptyList(),
     val categoryNames: Map<String, String> = emptyMap(),
+    val cashExpenseShifts: List<CashExpenseShiftOption> = emptyList(),
     val pendingExpenses: List<PendingExpenseRow> = emptyList(),
+    val pendingExpenseReceipts: List<PendingExpenseReceiptRow> = emptyList(),
     val pendingAssets: List<PendingAssetRow> = emptyList(),
     val pendingCapitalEntries: List<PendingCapitalEntryRow> = emptyList(),
     val dialog: FinanceDialog? = null,
@@ -200,7 +223,8 @@ internal data class FinanceUiState(
     /** True once a load has succeeded; the five report figures always arrive together. */
     val loaded: Boolean get() = pl != null
 
-    val expenseTotalMinor: Long get() = expenses.sumOf { it.amountMinor }
+    val expenseTotalMinor: Long get() =
+        expenses.filterNot { it.isVoided || it.isCorrected }.sumOf { it.amountMinor }
     val collectionTotals: ManualCollectionTotals get() =
         manualCollectionTotals(manualCollections)
     val tipPayoutTotalMinor: Long get() = tipPayoutTotal(tipPayouts)
@@ -250,6 +274,7 @@ internal val FinanceUiState.primaryContentState: FinancePrimaryContentState
     }
 
 private const val FINANCE_LOAD_TIMEOUT_MILLIS = 75_000L
+private const val EXPENSE_RECEIPT_RECONCILIATION_TIMEOUT_MILLIS = 30_000L
 private const val FINANCE_SNAPSHOT_DELIVERY_TIMEOUT_MILLIS = 2_000L
 private const val FINANCE_LOAD_TIMEOUT_MESSAGE =
     "Finance took too long to finish refreshing. Some figures may already be updated while others still show saved values. Check the connection and try again."
@@ -325,6 +350,7 @@ class FinanceViewModel : ViewModel() {
 
     private val appCtx = DCompanyApp.instance
     private val db = appCtx.db
+    private val financeApi = ApiClient.create<FinanceApi>()
     private val onlineWriteExecutor: FinanceOnlineWriteExecutor =
         RetrofitFinanceOnlineWriteExecutor()
     private val writeRecoveryStore: FinanceWriteRecoveryStore =
@@ -389,6 +415,14 @@ class FinanceViewModel : ViewModel() {
         val pendingWrite: PendingFinanceOnlineWrite?,
     )
 
+    private data class ExpenseState(
+        val cache: List<ExpenseCacheEntity>,
+        val localExpenses: List<LocalExpenseEntity>,
+        val localReceipts: List<LocalExpenseReceiptWithExpense>,
+        val resolvedShift: ResolvedOpenShift?,
+        val cashReservations: List<LocalExpenseEntity>,
+    )
+
     private data class RestState(
         val capitalEntries: List<LocalCapitalEntryEntity>,
         val loadingAndError: Triple<Boolean, String?, Boolean>,
@@ -411,7 +445,12 @@ class FinanceViewModel : ViewModel() {
         combine(
             db.financeDao().observeExpenseCache(),
             db.financeDao().observeLocalExpenses(),
-        ) { cache, local -> cache to local },
+            db.financeDao().observeLocalExpenseReceiptsWithExpense(),
+            db.shiftDao().observeResolvedOpenShift(appCtx.terminalStore.terminalIdFlow),
+            db.financeDao().observeCashExpenseReservations(),
+        ) { cache, local, receipts, resolvedShift, cashReservations ->
+            ExpenseState(cache, local, receipts, resolvedShift, cashReservations)
+        },
         combine(
             db.financeDao().observeAssetCache(),
             db.financeDao().observeLocalAssets(),
@@ -449,7 +488,8 @@ class FinanceViewModel : ViewModel() {
         val p = plMetricsDistributable.pl
         val m = plMetricsDistributable.metrics
         val (allocationSnapshot, allocationFetchedAt) = plMetricsDistributable.allocation
-        val (expenseCache, localExpenses) = expenseData
+        val expenseCache = expenseData.cache
+        val localExpenses = expenseData.localExpenses
         val (assetCache, localAssets) = assetData
         val partnerList = refData.partners
         val branchList = refData.branches
@@ -461,6 +501,12 @@ class FinanceViewModel : ViewModel() {
         val form = rest.form
         val operationalMoney = rest.operationalMoney
         val (isLoading, err, isOnline) = loadingAndError
+        val cashShift = cashExpenseShiftOption(
+            resolved = expenseData.resolvedShift,
+            branchId = scope?.branchId ?: expenseData.resolvedShift?.server?.branchId,
+            localCashExpenses = expenseData.cashReservations,
+            currentInstallationId = appCtx.updateTelemetry.installation.installationId(),
+        )
 
         FinanceUiState(
             loading = isLoading,
@@ -504,12 +550,19 @@ class FinanceViewModel : ViewModel() {
             companyWidePartnerDataAvailable = scope?.companyWidePartnerFinance == true,
             branches = branchList,
             categoryNames = catNames,
+            cashExpenseShifts = listOfNotNull(cashShift),
             pendingExpenses = visibleFinanceRows(
                 localExpenses,
                 scope,
                 scope != null,
                 LocalExpenseEntity::branchId,
             ).map { it.toPendingRow(catNames) },
+            pendingExpenseReceipts = visibleFinanceRows(
+                expenseData.localReceipts,
+                scope,
+                scope != null,
+                LocalExpenseReceiptWithExpense::expenseBranchId,
+            ).map { it.toPendingRow() },
             pendingAssets = visibleFinanceRows(
                 localAssets,
                 scope,
@@ -754,6 +807,8 @@ class FinanceViewModel : ViewModel() {
             FinanceDialog.TipPayoutForm,
             is FinanceDialog.VoidManualCollection,
             is FinanceDialog.VoidTipPayout,
+            is FinanceDialog.DiscardRejectedExpense,
+            is FinanceDialog.DiscardExpenseReceipt,
             -> next.canRecordExpenses
             null -> true
         }
@@ -847,7 +902,9 @@ class FinanceViewModel : ViewModel() {
     }
 
     fun openVoidManualCollection(row: ManualCollection) {
-        if (row.isVoided || !requireOperationalMoneyWrite() || !requireNoPendingOnlineWrite() ||
+        if (row.isVoided || row.isCorrected ||
+            (row.method == "cash" && row.sourceShiftStatus != "open") ||
+            !requireOperationalMoneyWrite() || !requireNoPendingOnlineWrite() ||
             !requireOnlineFinancialWrite()
         ) return
         dialog.value = FinanceDialog.VoidManualCollection(row)
@@ -855,10 +912,24 @@ class FinanceViewModel : ViewModel() {
     }
 
     fun openVoidTipPayout(row: TipPayout) {
-        if (row.isVoided || !requireOperationalMoneyWrite() || !requireNoPendingOnlineWrite() ||
+        if (row.isVoided || row.isCorrected ||
+            (row.method == "cash" && row.sourceShiftStatus != "open") ||
+            !requireOperationalMoneyWrite() || !requireNoPendingOnlineWrite() ||
             !requireOnlineFinancialWrite()
         ) return
         dialog.value = FinanceDialog.VoidTipPayout(row)
+        formError.value = null
+    }
+
+    fun openDiscardExpenseReceipt(row: PendingExpenseReceiptRow) {
+        if (!row.rejected || !requireExpenseWrite()) return
+        dialog.value = FinanceDialog.DiscardExpenseReceipt(row)
+        formError.value = null
+    }
+
+    fun openDiscardRejectedExpense(row: PendingExpenseRow) {
+        if (!row.rejected || !requireExpenseWrite()) return
+        dialog.value = FinanceDialog.DiscardRejectedExpense(row)
         formError.value = null
     }
 
@@ -876,6 +947,7 @@ class FinanceViewModel : ViewModel() {
 
     fun createManualCollection(
         branchId: String,
+        shiftId: String?,
         businessDate: String,
         method: String,
         amountMinor: Long,
@@ -886,6 +958,9 @@ class FinanceViewModel : ViewModel() {
             !requireOnlineFinancialWrite() || busy.value
         ) return
         val parsedDate = runCatching { LocalDate.parse(businessDate) }.getOrNull()
+        val selectedDrawer = state.value.cashExpenseShifts.firstOrNull {
+            it.id == shiftId && it.branchId == branchId
+        }
         when {
             branches.value.none { it.id == branchId } ->
                 formError.value = "Select the verified shop for this collection."
@@ -895,6 +970,9 @@ class FinanceViewModel : ViewModel() {
             method !in FINANCE_PAYMENT_METHODS ->
                 formError.value = "Select Cash, UPI, Card or Bank transfer."
             amountMinor <= 0 -> formError.value = "Enter an amount greater than ₹0."
+            method == "cash" && selectedDrawer == null ->
+                formError.value =
+                    "Select the verified open shift whose drawer received this cash."
             sourceRef.trim().isEmpty() ->
                 formError.value =
                     "Enter a reference that can be matched to the daily sheet or payment evidence."
@@ -905,6 +983,7 @@ class FinanceViewModel : ViewModel() {
                         scope,
                         ManualCollectionCreate(
                             branchId = branchId,
+                            shiftId = selectedDrawer?.id.takeIf { method == "cash" },
                             businessDate = businessDate,
                             method = method,
                             amountMinor = amountMinor,
@@ -919,6 +998,7 @@ class FinanceViewModel : ViewModel() {
 
     fun createTipPayout(
         branchId: String,
+        shiftId: String?,
         method: String,
         amountMinor: Long,
         paidAt: String,
@@ -928,12 +1008,21 @@ class FinanceViewModel : ViewModel() {
             !requireOnlineFinancialWrite() || busy.value
         ) return
         val liveTipsPayable = trialBalance.value?.tipsPayableMinor()
+        val selectedDrawer = state.value.cashExpenseShifts.firstOrNull {
+            it.id == shiftId && it.branchId == branchId
+        }
         when {
             branches.value.none { it.id == branchId } ->
                 formError.value = "Select the verified shop for this payout."
             method !in FINANCE_PAYMENT_METHODS ->
                 formError.value = "Select Cash, UPI, Card or Bank transfer."
             amountMinor <= 0 -> formError.value = "Enter an amount greater than ₹0."
+            method == "cash" && selectedDrawer == null ->
+                formError.value =
+                    "Select the verified open shift whose drawer paid these tips."
+            method == "cash" && amountMinor > (selectedDrawer?.availableMinor ?: 0L) ->
+                formError.value =
+                    "This payout exceeds the cash available in the selected drawer."
             liveTipsPayable == null ->
                 formError.value = "Refresh the live Tips Payable balance before paying staff."
             amountMinor > liveTipsPayable ->
@@ -949,6 +1038,7 @@ class FinanceViewModel : ViewModel() {
                         scope,
                         TipPayoutCreate(
                             branchId = branchId,
+                            shiftId = selectedDrawer?.id.takeIf { method == "cash" },
                             amountMinor = amountMinor,
                             method = method,
                             paidAt = paidAt,
@@ -1107,7 +1197,7 @@ class FinanceViewModel : ViewModel() {
 
     // -------------------------------------------------------------- expenses
 
-    fun postExpense(
+    internal fun postExpense(
         branchId: String,
         categoryId: String,
         amountMinor: Long,
@@ -1116,22 +1206,72 @@ class FinanceViewModel : ViewModel() {
         vendorName: String,
         invoiceNo: String,
         note: String,
-    ) = localMutate(
-        allowed = access.canRecordExpenses,
-        deniedMessage = "Expense entry is not allowed for this role. Ask an owner or manager.",
+        shiftId: String? = null,
+        receipt: ExpenseReceiptDraft? = null,
     ) {
-        db.financeDao().insertLocalExpense(
-            LocalExpenseEntity(
-                localId = UUID.randomUUID().toString(),
-                branchId = branchId, categoryId = categoryId, supplierId = null,
-                amountMinor = amountMinor, paidVia = paidVia, paidAt = paidAt,
-                vendorName = vendorName.trim().ifBlank { null },
-                invoiceNo = invoiceNo.trim().ifBlank { null },
-                note = note.trim().ifBlank { null },
-                createdAtMillis = System.currentTimeMillis(),
-            ),
+        if (!requireExpenseWrite()) return
+        val shiftError = cashExpenseSelectionError(
+            paidVia = paidVia,
+            branchId = branchId,
+            shiftId = shiftId,
+            amountMinor = amountMinor,
+            options = state.value.cashExpenseShifts,
         )
-        financeWriteQueuedMessage("Expense", appCtx.connectivity.online.value)
+        if (shiftError != null) {
+            formError.value = shiftError
+            return
+        }
+        val capturedShiftId = shiftId?.takeIf { paidVia == "cash" }
+        localMutate(
+            allowed = access.canRecordExpenses,
+            deniedMessage = "Expense entry is not allowed for this role. Ask an owner or manager.",
+        ) {
+            val expenseLocalId = UUID.randomUUID().toString()
+            val now = System.currentTimeMillis()
+            val receiptLocalId = receipt?.let { UUID.randomUUID().toString() }
+            db.financeDao().insertLocalExpenseWithReceipt(
+                expense = LocalExpenseEntity(
+                    localId = expenseLocalId,
+                    branchId = branchId, categoryId = categoryId, supplierId = null,
+                    amountMinor = amountMinor, paidVia = paidVia, paidAt = paidAt,
+                    vendorName = vendorName.trim().ifBlank { null },
+                    invoiceNo = invoiceNo.trim().ifBlank { null },
+                    note = note.trim().ifBlank { null },
+                    createdAtMillis = now,
+                    shiftId = capturedShiftId,
+                ),
+                receipt = receipt?.let { draft ->
+                    require(draft.source in setOf(
+                        EXPENSE_RECEIPT_CAMERA_SOURCE,
+                        EXPENSE_RECEIPT_GALLERY_SOURCE,
+                        EXPENSE_RECEIPT_FILE_SOURCE,
+                    )) { "Unsupported receipt source." }
+                    LocalExpenseReceiptEntity(
+                        localId = requireNotNull(receiptLocalId),
+                        expenseLocalId = expenseLocalId,
+                        filename = draft.filename,
+                        contentType = draft.contentType,
+                        source = draft.source,
+                        byteSize = draft.content.size,
+                        contentSha256 = expenseReceiptSha256(draft.content),
+                        createdAtMillis = now,
+                    )
+                },
+                receiptChunks = receipt?.let { draft ->
+                    expenseReceiptContentChunks(draft.content).mapIndexed { index, content ->
+                        LocalExpenseReceiptChunkEntity(
+                            receiptLocalId = requireNotNull(receiptLocalId),
+                            chunkIndex = index,
+                            content = content,
+                        )
+                    }
+                }.orEmpty(),
+            )
+            financeWriteQueuedMessage(
+                if (receipt == null) "Expense" else "Expense and receipt",
+                appCtx.connectivity.online.value,
+            )
+        }
     }
 
     fun retryExpense(localId: String) {
@@ -1151,6 +1291,336 @@ class FinanceViewModel : ViewModel() {
                 "This expense is no longer rejected. Refresh Finance to see its current state."
             }
             if (retried) appCtx.sync.requestSync()
+        }
+    }
+
+    fun retryExpenseReceipt(localId: String) {
+        if (!requireExpenseWrite()) return
+        val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
+        viewModelScope.launch {
+            var retried = false
+            if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                    retried = db.financeDao().retryExpenseReceipt(localId) == 1
+                }) {
+                notice.value = "The signed-in account changed. This receipt was not retried."
+                return@launch
+            }
+            notice.value = if (retried) {
+                "The same saved receipt was queued for retry. Do not attach it again."
+            } else {
+                "This receipt is no longer rejected. Refresh Finance to see its current state."
+            }
+            if (retried) appCtx.sync.requestSync()
+        }
+    }
+
+    fun discardRejectedExpense(row: PendingExpenseRow) {
+        if (busy.value || !row.rejected || !requireExpenseWrite()) return
+        if (!appCtx.connectivity.online.value) {
+            formError.value =
+                "Reconnect before checking the server. Nothing was removed from this tablet."
+            return
+        }
+        val lease = appCtx.cacheIsolation.currentLease() ?: run {
+            formError.value = "This account is still opening. Nothing was removed; try again."
+            return
+        }
+        val profile = appCtx.shiftCache.profile.value ?: run {
+            formError.value = "The signed-in account could not be verified. Nothing was removed."
+            return
+        }
+        val capturedOwner = OutboxOwnerIdentity.from(profile)
+        if (!expenseReceiptDiscardScopeMatches(
+                capturedOwner = capturedOwner,
+                currentOwner = capturedOwner,
+                durableOutboxOwner = appCtx.outboxOwnerStore.owner(),
+                cacheScope = lease.scope,
+                hasFinanceWrite = EffectivePermissions.from(profile)
+                    .financeAccess().canRecordExpenses,
+            )
+        ) {
+            formError.value =
+                "This saved expense belongs to a different account scope. Nothing was removed."
+            return
+        }
+
+        busy.value = true
+        formError.value = null
+        viewModelScope.launch {
+            try {
+                val capturedExpense = db.financeDao().expenseByLocalId(row.localId)
+                val capturedReceipts = db.financeDao().expenseReceiptsForExpense(row.localId)
+                if (
+                    capturedExpense == null || capturedExpense.syncState != SyncState.REJECTED ||
+                    capturedExpense.serverId != null ||
+                    (lease.scope.branchId != null &&
+                        capturedExpense.branchId != lease.scope.branchId) ||
+                    capturedReceipts.any {
+                        it.expenseLocalId != capturedExpense.localId ||
+                            it.serverReceiptId != null ||
+                            it.syncState !in setOf(SyncState.PENDING, SyncState.REJECTED)
+                    }
+                ) {
+                    formError.value =
+                        "This saved expense changed before the server check. Nothing was removed."
+                    return@launch
+                }
+                val result = withTimeout(EXPENSE_RECEIPT_RECONCILIATION_TIMEOUT_MILLIS) {
+                    financeApi.reconcileExpenseAction(
+                        actionId = capturedExpense.localId,
+                        branchId = capturedExpense.branchId,
+                    )
+                }
+                if (result.idempotencyKey != expenseIdempotencyKey(capturedExpense.localId)) {
+                    formError.value =
+                        "The server returned a different saved action. Nothing was removed."
+                    return@launch
+                }
+                if (result.state == "in_progress") {
+                    formError.value =
+                        "The server is still resolving this expense. Nothing was removed; retry shortly."
+                    return@launch
+                }
+                val accepted = result.expense
+                if (result.state == "accepted" && (
+                        accepted == null || !authoritativeExpenseMatchesLocal(
+                            capturedExpense,
+                            accepted,
+                            capturedOwner.userId,
+                        )
+                    )
+                ) {
+                    formError.value =
+                        "The server expense does not exactly match this saved request. Nothing was removed."
+                    return@launch
+                }
+                if (result.state !in setOf("accepted", "absent") ||
+                    (result.state == "absent" && accepted != null)
+                ) {
+                    formError.value =
+                        "The server could not prove this action's state. Nothing was removed."
+                    return@launch
+                }
+
+                var outcome = RejectedExpenseActionOutcome.CHANGED
+                val committed = appCtx.cacheIsolation.commitIfCurrent(lease) {
+                    val currentProfile = appCtx.shiftCache.profile.value
+                    val stillAuthorised = currentProfile?.let {
+                        EffectivePermissions.from(it).financeAccess().canRecordExpenses
+                    } == true
+                    if (!expenseReceiptDiscardScopeMatches(
+                            capturedOwner = capturedOwner,
+                            currentOwner = currentProfile?.let { OutboxOwnerIdentity.from(it) },
+                            durableOutboxOwner = appCtx.outboxOwnerStore.owner(),
+                            cacheScope = lease.scope,
+                            hasFinanceWrite = stillAuthorised && access.canRecordExpenses,
+                        )
+                    ) {
+                        outcome = RejectedExpenseActionOutcome.ACCOUNT_CHANGED
+                        return@commitIfCurrent
+                    }
+                    val currentExpense = db.financeDao().expenseByLocalId(row.localId)
+                    val currentReceipts = db.financeDao().expenseReceiptsForExpense(row.localId)
+                    if (currentExpense != capturedExpense || currentReceipts != capturedReceipts) {
+                        outcome = RejectedExpenseActionOutcome.CHANGED
+                        return@commitIfCurrent
+                    }
+                    outcome = if (accepted != null) {
+                        db.financeDao().confirmExpense(
+                            capturedExpense.localId,
+                            accepted.toFinanceCache(),
+                        )
+                        RejectedExpenseActionOutcome.SERVER_ALREADY_ACCEPTED
+                    } else if (
+                        db.financeDao().discardRejectedExpenseAction(
+                            capturedExpense,
+                            capturedReceipts,
+                        )
+                    ) {
+                        RejectedExpenseActionOutcome.DISCARDED
+                    } else {
+                        RejectedExpenseActionOutcome.CHANGED
+                    }
+                }
+                if (committed) {
+                    when (outcome) {
+                        RejectedExpenseActionOutcome.DISCARDED -> {
+                            dialog.value = null
+                            notice.value =
+                                "The server proved this expense action was absent. The exact rejected expense and its saved receipts were removed."
+                        }
+                        RejectedExpenseActionOutcome.SERVER_ALREADY_ACCEPTED -> {
+                            dialog.value = null
+                            notice.value =
+                                "The server already recorded this exact expense. It was marked synced and its saved receipts will upload normally."
+                            appCtx.sync.requestSync()
+                        }
+                        RejectedExpenseActionOutcome.ACCOUNT_CHANGED ->
+                            formError.value =
+                                "The account or Finance permission changed. Nothing was removed."
+                        RejectedExpenseActionOutcome.CHANGED ->
+                            formError.value =
+                                "The saved expense changed during the check. Nothing was removed."
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                if (appCtx.cacheIsolation.currentLease() == lease) {
+                    formError.value =
+                        "The authoritative server check could not be completed. Nothing was removed; update the server, reconnect and try again."
+                }
+            } finally {
+                if (appCtx.cacheIsolation.currentLease() == lease) busy.value = false
+            }
+        }
+    }
+
+    fun discardRejectedExpenseReceipt(row: PendingExpenseReceiptRow) {
+        if (busy.value || !row.rejected || !requireExpenseWrite()) return
+        if (!appCtx.connectivity.online.value) {
+            formError.value =
+                "Reconnect before checking the server. Nothing was removed from this tablet."
+            return
+        }
+        val expenseServerId = row.expenseServerId ?: run {
+            formError.value =
+                "The expense has not been confirmed by the server. Nothing was removed; retry the expense first."
+            return
+        }
+        val lease = appCtx.cacheIsolation.currentLease() ?: run {
+            formError.value = "This account is still opening. Nothing was removed; try again in a moment."
+            return
+        }
+        val profile = appCtx.shiftCache.profile.value ?: run {
+            formError.value = "The signed-in account could not be verified. Nothing was removed."
+            return
+        }
+        val capturedOwner = OutboxOwnerIdentity.from(profile)
+        if (!expenseReceiptDiscardScopeMatches(
+                capturedOwner = capturedOwner,
+                currentOwner = capturedOwner,
+                durableOutboxOwner = appCtx.outboxOwnerStore.owner(),
+                cacheScope = lease.scope,
+                hasFinanceWrite = EffectivePermissions.from(profile)
+                    .financeAccess().canRecordExpenses,
+            )
+        ) {
+            formError.value =
+                "This saved receipt belongs to a different account scope. Nothing was removed."
+            return
+        }
+
+        busy.value = true
+        formError.value = null
+        viewModelScope.launch {
+            try {
+                val serverReceipts = withTimeout(EXPENSE_RECEIPT_RECONCILIATION_TIMEOUT_MILLIS) {
+                    financeApi.expenseReceipts(expenseServerId)
+                }
+                when (val reconciliation = reconcileRejectedExpenseReceipt(
+                    expenseServerId = expenseServerId,
+                    contentSha256 = row.contentSha256,
+                    serverReceipts = serverReceipts,
+                )) {
+                    is ExpenseReceiptReconciliation.Unverifiable -> {
+                        if (appCtx.cacheIsolation.currentLease() == lease) {
+                            formError.value = reconciliation.message
+                        }
+                    }
+                    else -> {
+                        var outcome = ExpenseReceiptDiscardCommitOutcome.CHANGED
+                        val committed = appCtx.cacheIsolation.commitIfCurrent(lease) {
+                            val currentProfile = appCtx.shiftCache.profile.value
+                            val stillAuthorised = currentProfile?.let {
+                                EffectivePermissions.from(it).financeAccess().canRecordExpenses
+                            } == true
+                            if (!expenseReceiptDiscardScopeMatches(
+                                    capturedOwner = capturedOwner,
+                                    currentOwner = currentProfile?.let { OutboxOwnerIdentity.from(it) },
+                                    durableOutboxOwner = appCtx.outboxOwnerStore.owner(),
+                                    cacheScope = lease.scope,
+                                    hasFinanceWrite = stillAuthorised && access.canRecordExpenses,
+                                )
+                            ) {
+                                outcome = ExpenseReceiptDiscardCommitOutcome.ACCOUNT_CHANGED
+                                return@commitIfCurrent
+                            }
+                            val current = db.financeDao()
+                                .expenseReceiptWithExpenseByLocalId(row.localId)
+                            val unchanged = current != null &&
+                                current.receipt.expenseLocalId == row.expenseLocalId &&
+                                current.receipt.contentSha256 == row.contentSha256 &&
+                                current.receipt.syncState == SyncState.REJECTED &&
+                                current.receipt.serverReceiptId == null &&
+                                current.expenseServerId == expenseServerId &&
+                                (lease.scope.branchId == null ||
+                                    current.expenseBranchId == lease.scope.branchId)
+                            if (!unchanged) return@commitIfCurrent
+
+                            outcome = when (reconciliation) {
+                                is ExpenseReceiptReconciliation.AlreadyAccepted -> {
+                                    db.financeDao().confirmExpenseReceipt(
+                                        row.localId,
+                                        reconciliation.serverReceiptId,
+                                    )
+                                    ExpenseReceiptDiscardCommitOutcome.SERVER_ALREADY_ACCEPTED
+                                }
+                                ExpenseReceiptReconciliation.ConfirmedAbsent -> {
+                                    DiagnosticsRuntime
+                                        .recordRejectedExpenseReceiptDiscardAuthorised()
+                                    val removed = db.financeDao().discardRejectedExpenseReceiptEvidence(
+                                        localId = row.localId,
+                                        expenseLocalId = row.expenseLocalId,
+                                        contentSha256 = row.contentSha256,
+                                    ) == 1
+                                    if (removed) {
+                                        ExpenseReceiptDiscardCommitOutcome.DISCARDED
+                                    } else {
+                                        ExpenseReceiptDiscardCommitOutcome.CHANGED
+                                    }
+                                }
+                                is ExpenseReceiptReconciliation.Unverifiable ->
+                                    ExpenseReceiptDiscardCommitOutcome.CHANGED
+                            }
+                        }
+                        // Scope activation clears this ViewModel's sensitive
+                        // state. Publish only while the captured account still
+                        // owns the workspace.
+                        if (committed) {
+                            when (outcome) {
+                                ExpenseReceiptDiscardCommitOutcome.DISCARDED -> {
+                                    dialog.value = null
+                                    notice.value =
+                                        "The server confirmed this file was absent. Only the rejected saved receipt was removed; the expense remains recorded."
+                                }
+                                ExpenseReceiptDiscardCommitOutcome.SERVER_ALREADY_ACCEPTED -> {
+                                    dialog.value = null
+                                    notice.value =
+                                        "The server already had this exact receipt. It was marked synced and the duplicate local bytes were cleared."
+                                }
+                                ExpenseReceiptDiscardCommitOutcome.ACCOUNT_CHANGED -> {
+                                    formError.value =
+                                        "The account or Finance permission changed. Nothing was removed."
+                                }
+                                ExpenseReceiptDiscardCommitOutcome.CHANGED -> {
+                                    formError.value =
+                                        "This receipt changed while the server was checked. Nothing was removed; refresh Finance and review it again."
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                if (appCtx.cacheIsolation.currentLease() == lease) {
+                    formError.value =
+                        "The server receipt check could not be completed. Nothing was removed; reconnect and try again."
+                }
+            } finally {
+                if (appCtx.cacheIsolation.currentLease() == lease) busy.value = false
+            }
         }
     }
 
@@ -1293,10 +1763,32 @@ class FinanceViewModel : ViewModel() {
     }
 }
 
+private enum class ExpenseReceiptDiscardCommitOutcome {
+    DISCARDED,
+    SERVER_ALREADY_ACCEPTED,
+    ACCOUNT_CHANGED,
+    CHANGED,
+}
+
+private enum class RejectedExpenseActionOutcome {
+    DISCARDED,
+    SERVER_ALREADY_ACCEPTED,
+    ACCOUNT_CHANGED,
+    CHANGED,
+}
+
 private fun ExpenseCacheEntity.toExpense(): Expense = Expense(
     id = id, branchId = branchId, categoryId = categoryId, supplierId = supplierId,
     amountMinor = amountMinor, paidVia = paidVia, paidAt = paidAt,
     vendorName = vendorName, invoiceNo = invoiceNo, note = note,
+    receiptCount = receiptCount, receiptStatus = receiptStatus,
+    shiftId = shiftId, createdBy = createdBy, isVoided = isVoided,
+    sourceShiftStatus = sourceShiftStatus, isCorrected = isCorrected,
+    correction = if (isCorrected && correctionReason != null && correctionAt != null) {
+        FinanceSourceCorrection(reason = correctionReason, correctedAt = correctionAt)
+    } else {
+        null
+    },
 )
 
 private fun AssetCacheEntity.toAsset(): Asset = Asset(
@@ -1315,6 +1807,18 @@ private fun LocalExpenseEntity.toPendingRow(categoryNames: Map<String, String>):
         vendorName = vendorName,
         rejected = syncState == SyncState.REJECTED,
         error = lastError,
+    )
+
+private fun LocalExpenseReceiptWithExpense.toPendingRow(): PendingExpenseReceiptRow =
+    PendingExpenseReceiptRow(
+        localId = receipt.localId,
+        expenseLocalId = receipt.expenseLocalId,
+        expenseServerId = expenseServerId,
+        contentSha256 = receipt.contentSha256,
+        filename = receipt.filename,
+        waitingForExpense = expenseServerId == null,
+        rejected = receipt.syncState == SyncState.REJECTED,
+        error = receipt.lastError,
     )
 
 private fun LocalAssetEntity.toPendingRow(): PendingAssetRow = PendingAssetRow(

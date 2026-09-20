@@ -21,7 +21,6 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
 from app.models import (
-    Company,
     Customer,
     CustomerMembership,
     MembershipPayment,
@@ -40,6 +39,22 @@ from app.models import (
 )
 
 _BACKEND_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _insert_historical_company(session: Session, *, name: str) -> SimpleNamespace:
+    """Insert only columns present at every migration boundary in this file.
+
+    The current Company ORM deliberately contains newer integration settings.
+    Historical migration tests must not send those columns to a database held
+    at revision 0033-0046.
+    """
+
+    company_id = uuid4()
+    session.execute(
+        text("INSERT INTO companies (id, name) VALUES (:id, :name)"),
+        {"id": company_id, "name": name},
+    )
+    return SimpleNamespace(id=company_id)
 
 
 def _insert_schema_0034_branch(
@@ -146,8 +161,7 @@ class _PaymentWorkflow:
 
 def _seed_base(session: Session) -> _Seed:
     now = datetime.now(UTC).replace(microsecond=0)
-    company = Company(id=uuid4(), name="0035 downgrade guard")
-    session.add(company)
+    company = _insert_historical_company(session, name="0035 downgrade guard")
     session.flush()
     branch = _insert_schema_0034_branch(session, company_id=company.id)
     terminal_id = uuid4()

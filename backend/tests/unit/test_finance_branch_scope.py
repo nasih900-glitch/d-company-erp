@@ -20,12 +20,16 @@ BRANCH_ID = UUID("22222222-2222-2222-2222-222222222222")
 
 
 class _Result:
-    def __init__(self, *, scalar=None, rows=None) -> None:
+    def __init__(self, *, scalar=None, row=None, rows=None) -> None:
         self.scalar = scalar
+        self.row = row
         self.rows = [] if rows is None else rows
 
     def scalar_one_or_none(self):
         return self.scalar
+
+    def one_or_none(self):
+        return self.row
 
     def scalars(self):
         return self
@@ -38,11 +42,15 @@ class _ExecuteSession:
     def __init__(self, *results: _Result) -> None:
         self.results = list(results)
         self.statements: list[Any] = []
+        self.flush_count = 0
 
     async def execute(self, statement):
         self.statements.append(statement)
         assert self.results, f"Unexpected SQL statement: {statement}"
         return self.results.pop(0)
+
+    async def flush(self) -> None:
+        self.flush_count += 1
 
 
 class _GetSession:
@@ -126,7 +134,7 @@ async def test_expense_update_and_delete_hide_another_branch() -> None:
     assert update_session.flush_count == 0
     assert not hasattr(foreign, "note")
 
-    delete_session = _GetSession(foreign)
+    delete_session = _ExecuteSession(_Result(row=foreign))
     with pytest.raises(NotFoundError, match="expense not found"):
         await finance_router.delete_expense(
             foreign.id,

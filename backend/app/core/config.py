@@ -27,6 +27,9 @@ from app.core.release_identity import ReleaseIdentity, read_backend_build_identi
 
 _ANDROID_COMPATIBILITY_FLOOR_VERSION_CODE = 8
 _DEV_REMOTE_RELAY_SECRET = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="  # noqa: S105
+_DEV_GOOGLE_SHEETS_ENCRYPTION_KEY = (
+    "RENvbXBhbnlTaGVldHNEZXZLZXlPbmx5MTIzNDU2Nzg="  # noqa: S105
+)
 
 
 class Settings(BaseSettings):
@@ -140,6 +143,14 @@ class Settings(BaseSettings):
         min_length=44,
         max_length=44,
     )
+    # Dedicated AES-256-GCM key for per-company Google Sheets HMAC secrets.
+    # The database stores only nonce+ciphertext; Apps Script receives the
+    # generated plaintext once during owner configuration.
+    google_sheets_secret_encryption_key: SecretStr = Field(
+        default=_DEV_GOOGLE_SHEETS_ENCRYPTION_KEY,
+        min_length=44,
+        max_length=44,
+    )
     remote_assistance_device_key_pending_seconds: int = Field(default=600, ge=60, le=900)
     remote_assistance_device_signature_max_skew_seconds: int = Field(
         default=90,
@@ -243,6 +254,22 @@ class Settings(BaseSettings):
             )
         return value
 
+    @field_validator("google_sheets_secret_encryption_key")
+    @classmethod
+    def _validate_google_sheets_encryption_key(cls, value: SecretStr) -> SecretStr:
+        encoded = value.get_secret_value()
+        try:
+            decoded = base64.b64decode(encoded, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise ValueError(
+                "GOOGLE_SHEETS_SECRET_ENCRYPTION_KEY must be standard base64"
+            ) from exc
+        if len(decoded) != 32:
+            raise ValueError(
+                "GOOGLE_SHEETS_SECRET_ENCRYPTION_KEY must decode to exactly 32 bytes"
+            )
+        return value
+
     @model_validator(mode="after")
     def _enforce_prod_secret(self) -> Settings:
         # Fail closed: a prod/staging boot must never fall back to the public
@@ -258,6 +285,9 @@ class Settings(BaseSettings):
             )
         pairing_secret = self.remote_assistance_pairing_secret.get_secret_value()
         relay_secret = self.remote_assistance_relay_secret.get_secret_value()
+        sheets_encryption_key = (
+            self.google_sheets_secret_encryption_key.get_secret_value()
+        )
         if self.env in {"prod", "staging"} and (
             pairing_secret.startswith("CHANGE_ME") or pairing_secret == self.jwt_secret
         ):
@@ -271,6 +301,17 @@ class Settings(BaseSettings):
         ):
             raise ValueError(
                 "REMOTE_ASSISTANCE_RELAY_SECRET must be a dedicated random AES-256 key"
+            )
+        if self.env in {"prod", "staging"} and (
+            sheets_encryption_key == _DEV_GOOGLE_SHEETS_ENCRYPTION_KEY
+            or sheets_encryption_key in {
+                self.jwt_secret,
+                pairing_secret,
+                relay_secret,
+            }
+        ):
+            raise ValueError(
+                "GOOGLE_SHEETS_SECRET_ENCRYPTION_KEY must be a dedicated random AES-256 key"
             )
         if self.env in {"prod", "staging"}:
             redis_username = self.redis_url.username
@@ -290,6 +331,7 @@ class Settings(BaseSettings):
                 "JWT_SECRET": self.jwt_secret,
                 "REMOTE_ASSISTANCE_PAIRING_SECRET": pairing_secret,
                 "REMOTE_ASSISTANCE_RELAY_SECRET": relay_secret,
+                "GOOGLE_SHEETS_SECRET_ENCRYPTION_KEY": sheets_encryption_key,
                 "REDIS_URL password": redis_password,
                 "DATABASE_URL password": unquote(
                     urlsplit(str(self.database_url)).password or ""

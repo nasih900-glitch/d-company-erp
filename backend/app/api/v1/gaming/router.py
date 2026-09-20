@@ -43,6 +43,7 @@ from app.models import (
     AuditLog,
     Branch,
     Company,
+    Customer,
     GamingBooking,
     GamingPackage,
     GamingSession,
@@ -63,6 +64,14 @@ from app.models import (
     Terminal,
     User,
 )
+from app.services.customers.deletion_fence import (
+    MAX_DIRECTORY_REVISION,
+    lock_customer_directory,
+)
+from app.services.customers.identity import (
+    get_selected_gaming_customer,
+    resolve_gaming_customer,
+)
 from app.services.gaming.billing_mode import (
     has_complete_package_snapshot,
     has_partial_package_snapshot,
@@ -77,6 +86,7 @@ from app.services.gaming.pause_clock import (
     finish_pause,
     timer_deadline,
 )
+from app.services.gaming.tariff_catalog import FIXED_TARIFF_STATION_TYPES
 from app.services.pos.order_validation import require_operational_order
 from app.services.pos.pricing import (
     LineRequest,
@@ -134,6 +144,7 @@ class StationUpdate(BaseModel):
 class SessionStart(BaseModel):
     station_id: UUID
     shift_id: UUID
+    customer_id: UUID | None = None
     # Durable native outbox actions capture when the employee tapped Start.
     # Ordinary web/online callers omit this and retain authoritative server
     # receipt time. A supplied value is accepted only with matching offline
@@ -141,6 +152,10 @@ class SessionStart(BaseModel):
     started_at: datetime | None = None
     customer_name: str | None = Field(default=None, max_length=200)
     customer_phone: str | None = Field(default=None, max_length=20)
+    customer_directory_revision: int | None = Field(
+        default=None, ge=0, le=MAX_DIRECTORY_REVISION, strict=True
+    )
+    customer_directory_company_id: UUID | None = None
     # A fixed-price base package (see GET /gaming/packages) — locks in the
     # price immediately and sets timer_minutes from the package's duration.
     # Omit for the legacy open-ended flow (billed by elapsed time at the
@@ -261,6 +276,7 @@ class SessionRead(BaseModel):
     amount_minor: int | None
     customer_name: str | None = None
     customer_phone: str | None = None
+    customer_id: UUID | None = None
     rate_per_hour_minor: int | None = None
     order_id: UUID | None = None
     cancel_reason: str | None = None
@@ -682,6 +698,7 @@ def session_read(gs: GamingSession) -> SessionRead:
         amount_minor=gs.amount_minor,
         customer_name=gs.customer_name,
         customer_phone=gs.customer_phone,
+        customer_id=gs.customer_id,
         rate_per_hour_minor=gs.rate_per_hour_minor,
         order_id=gs.order_id,
         cancel_reason=gs.cancel_reason,
@@ -2399,26 +2416,11 @@ async def start_session(
             "sessions. Select the Gaming Area terminal."
         ),
     )
-    if payload.package_id is None and station.type in {"ps5", "simulator"}:
-        fixed_tariff_available = (
-            await session.execute(
-                select(GamingPackage.id)
-                .where(
-                    GamingPackage.company_id == tenant.company_id,
-                    GamingPackage.branch_id == station.branch_id,
-                    GamingPackage.station_type == station.type,
-                    GamingPackage.kind == "base",
-                    GamingPackage.is_active.is_(True),
-                    GamingPackage.deleted_at.is_(None),
-                )
-                .limit(1)
-            )
-        ).scalar_one_or_none()
-        if fixed_tariff_available is not None:
-            raise BusinessRuleError(
-                "This station requires a fixed-price tariff package. Refresh Gaming and "
-                "choose Standard or Premium, player count, and duration; no session was started."
-            )
+    if payload.package_id is None and station.type in FIXED_TARIFF_STATION_TYPES:
+        raise BusinessRuleError(
+            "This station requires a fixed-price tariff package. Refresh Gaming and "
+            "choose a mode and duration; no session was started."
+        )
     if (
         payload.package_id is None
         and payload.expected_rate_per_hour_minor is None
@@ -2504,6 +2506,8 @@ async def start_session(
             raise NotFoundError("package not found")
         if package.kind != "base":
             raise BusinessRuleError("only a base package can start a session")
+        if package.pricing_tier != "standard":
+            raise BusinessRuleError("this package is retired for new sessions")
         if package.station_type != station.type:
             raise BusinessRuleError("this package is not offered for this station type")
         # Presence is guaranteed by SessionStart's conditional validator.
@@ -2532,6 +2536,37 @@ async def start_session(
     elif payload.extra_controllers or payload.player_count is not None:
         raise BusinessRuleError("player_count and extra_controllers require a package_id")
 
+    _, directory_fence = await lock_customer_directory(
+        session,
+        company_id=tenant.company_id,
+        captured_revision=payload.customer_directory_revision,
+        captured_company_id=payload.customer_directory_company_id,
+    )
+    directory_revision: int | None = directory_fence.revision_to_persist
+    if payload.customer_id is not None:
+        customer = await get_selected_gaming_customer(
+            session,
+            company_id=tenant.company_id,
+            customer_id=payload.customer_id,
+        )
+        if customer is None:
+            # Deleted and foreign identities are deliberately indistinguishable.
+            raise NotFoundError("customer not found")
+        customer_name = customer.name
+        customer_phone = customer.phone
+    else:
+        customer = (
+            await resolve_gaming_customer(
+                session,
+                company_id=tenant.company_id,
+                phone=payload.customer_phone,
+                name=payload.customer_name,
+            )
+            if directory_fence.allows_identity_mutation
+            else None
+        )
+        customer_name = payload.customer_name
+        customer_phone = payload.customer_phone
     gs = GamingSession(
         id=uuid4(),
         company_id=tenant.company_id,
@@ -2552,8 +2587,13 @@ async def start_session(
         extra_controllers=resolved_extra_controllers,
         amount_minor=locked_in_amount_minor,
         status="active",
-        customer_name=payload.customer_name,
-        customer_phone=payload.customer_phone,
+        customer_name=customer_name,
+        customer_phone=customer_phone,
+        customer_id=customer.id if customer is not None else None,
+        customer_identity_provenance=(
+            "start_linked" if customer is not None else "start_unlinked"
+        ),
+        customer_directory_revision=directory_revision,
         timer_minutes=timer_minutes,
         tax_rate=station.tax_rate,
         sac_code=station.sac_code,
@@ -3701,6 +3741,7 @@ async def add_session_addon(
                 ),
             )
         ],
+        customer_id=getattr(gs, "customer_id", None),
         customer_phone=gs.customer_phone,
     )
     priced_line = priced_order.lines[0]
@@ -5269,12 +5310,14 @@ async def _create_session_pos_order(
         else station.rate_includes_tax
     )
     amount_minor = _require_repaired_ended_amount(gaming_session)
+    stable_customer_id = gaming_session.customer_id
     priced = await OrderPricingService(session).price_time_based_line(
         company_id=company_id,
         branch_id=target_shift.branch_id,
         amount_minor=amount_minor,
         tax_rate=tax_rate,
         rate_includes_tax=rate_includes_tax,
+        customer_id=stable_customer_id,
         customer_phone=gaming_session.customer_phone,
         item_type=_MENU_TYPE_FOR_STATION.get(station.type, "gaming"),
     )
@@ -5282,6 +5325,23 @@ async def _create_session_pos_order(
 
     now = datetime.now(timezone.utc)
     note = await _session_pos_description(session, gaming_session)
+    customer_id: UUID | None = None
+    if stable_customer_id is not None:
+        linked_customer = (
+            await session.execute(
+                select(Customer).where(
+                    Customer.id == stable_customer_id,
+                    Customer.company_id == company_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if linked_customer is None:
+            raise BusinessRuleError(
+                "The session's customer link is outside this company or missing. "
+                "A protected owner must repair it before POS handoff."
+            )
+        customer_id = linked_customer.id
+
     order = Order(
         id=uuid4(),
         company_id=company_id,
@@ -5305,6 +5365,8 @@ async def _create_session_pos_order(
         total_minor=order_total_minor,
         customer_name=gaming_session.customer_name,
         customer_phone=gaming_session.customer_phone,
+        customer_id=customer_id,
+        customer_directory_revision=gaming_session.customer_directory_revision,
         notes=f"{station.name} — {note}",
     )
     session.add(order)

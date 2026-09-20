@@ -10,11 +10,11 @@
  * In demo mode the write-oriented tabs show empty states; live mode
  * hits /api/v1/finance/* and /api/v1/settings/*.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   TrendingUp, TrendingDown, Receipt, Users, Plus, Trash2,
   Loader2, AlertCircle, Wallet, Banknote, RefreshCw, BookOpen,
-  Ban, Package, HandCoins,
+  Ban, Package, HandCoins, Camera, Upload, FileText, Eye,
 } from 'lucide-react';
 
 import { inr, inrShort } from '@/lib/inr';
@@ -27,14 +27,15 @@ import {
   profileMembershipMoneyLabel,
 } from '@/lib/product-profile';
 import {
-  finance, insights, pos, settings, reports,
+  finance, insights, pos, settings, reports, shifts,
   type ExpenseDTO, type PartnerDTO, type BranchReferenceDTO, type ExpenseCategoryDTO,
   type CapitalEntryDTO, type ReportDataDTO, type PartnerPLReportDTO,
   type BusinessMetricsDTO, type DistributableProfitReportDTO,
-  type CostingCoverageDTO,
+  type CostingCoverageDTO, type ExpenseReceiptDTO, type ExpenseReceiptSource,
+  type ExpenseReceiptStatus, type ShiftDTO,
 } from '@/lib/erp-api';
 import { rupeesToMinor } from '@/lib/manual-collections';
-import { ConfirmModal } from '@/components/ui/ConfirmDialog';
+import { PromptModal } from '@/components/ui/ConfirmDialog';
 import Modal from '@/components/ui/Modal';
 import { useNotifications } from '@/components/ui/Notifications';
 import { useRealtimeRefresh } from '@/hooks/useRealtimeRefresh';
@@ -60,6 +61,17 @@ import {
   EXPENSE_PAYMENT_OPTIONS,
   type ExpensePaymentOption,
 } from './expense-payment-policy';
+import {
+  EXPENSE_RECEIPT_ACCEPT,
+  EXPENSE_RECEIPT_STATUS_LABEL,
+  expenseReceiptFileError,
+  expenseReceiptReviewError,
+  expenseReceiptReviewStatuses,
+  expenseReceiptSummary,
+  normalizeExpenseReceiptFile,
+  pickedExpenseReceiptSource,
+  persistExpenseWithOptionalReceipt,
+} from './expense-receipts';
 
 type Tab = 'overview' | 'expenses' | 'collections' | 'tips' | 'partners' | 'assets';
 
@@ -375,48 +387,54 @@ function ExpensesTab() {
   const [rows, setRows] = useState<ExpenseDTO[]>([]);
   const [cats, setCats] = useState<ExpenseCategoryDTO[]>([]);
   const [branches, setBranches] = useState<BranchReferenceDTO[]>([]);
+  const [openShifts, setOpenShifts] = useState<ShiftDTO[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
-  const [deleteExpense, setDeleteExpense] = useState<ExpenseDTO | null>(null);
-  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [voidExpense, setVoidExpense] = useState<ExpenseDTO | null>(null);
+  const [correctExpense, setCorrectExpense] = useState<ExpenseDTO | null>(null);
+  const [voidBusy, setVoidBusy] = useState(false);
+  const [receiptExpense, setReceiptExpense] = useState<ExpenseDTO | null>(null);
 
   const load = useCallback(async (silent = false) => {
     const isCurrent = requests.begin();
     if (!silent) setLoading(true);
     try {
-      const [r, c, b] = await Promise.all([
+      const [r, c, b, s] = await Promise.all([
         finance.listExpenses(),
         settings.listExpenseCategories(),
         finance.listBranches(),
+        shifts.list(true),
       ]);
       if (!isCurrent()) return;
       setErr(null);
-      setRows(r); setCats(c); setBranches(b);
+      setRows(r); setCats(c); setBranches(b); setOpenShifts(s);
     } catch (e) { if (isCurrent()) setErr((e as Error).message); }
     finally { if (isCurrent()) setLoading(false); }
   }, [requests]);
   useEffect(() => { void load(); }, [load]);
-  useRealtimeRefresh({ resources: ['finance'], refresh: () => load(true) });
+  useRealtimeRefresh({ resources: ['finance', 'shifts'], refresh: () => load(true) });
 
-  async function confirmDelete() {
-    if (!deleteExpense || deleteBusy) return;
-    setDeleteBusy(true);
+  async function confirmVoid(reason: string) {
+    if (!voidExpense || voidBusy) return;
+    setVoidBusy(true);
     try {
-      await finance.deleteExpense(deleteExpense.id);
-      setDeleteExpense(null);
+      await finance.voidExpense(voidExpense.id, reason);
+      setVoidExpense(null);
       await load();
-      notifications.success('The expense was deleted.', { title: 'Expense deleted' });
+      notifications.success('The expense was voided with an audit reason.', {
+        title: 'Expense voided',
+      });
     } catch (e) {
-      notifications.error((e as Error).message, { title: 'Could not delete expense' });
+      notifications.error((e as Error).message, { title: 'Could not void expense' });
     } finally {
-      setDeleteBusy(false);
+      setVoidBusy(false);
     }
   }
 
   if (loading) return <SkeletonCard />;
 
-  const total = rows.reduce((s, r) => s + r.amount_minor, 0);
+  const total = rows.reduce((s, r) => s + (r.is_corrected ? 0 : r.amount_minor), 0);
   const catName = (id: string) => cats.find((c) => c.id === id)?.name ?? '—';
 
   return (
@@ -459,6 +477,7 @@ function ExpensesTab() {
                 <th className="text-left p-3">Category</th>
                 <th className="text-left p-3">Vendor / invoice</th>
                 <th className="text-left p-3">Paid via</th>
+                <th className="text-left p-3">Receipt</th>
                 <th className="text-right p-3">Amount</th>
                 <th className="text-right p-3 pr-4"></th>
               </tr>
@@ -470,14 +489,37 @@ function ExpensesTab() {
                   <td className="p-3">{catName(r.category_id)}</td>
                   <td className="p-3 text-fg-muted text-xs">
                     {r.vendor_name || '—'}{r.invoice_no ? ` · ${r.invoice_no}` : ''}
+                    {r.correction && (
+                      <div className="mt-1 text-accent-gold">
+                        Corrected {new Date(r.correction.corrected_at).toLocaleString('en-IN')}: {r.correction.reason}
+                      </div>
+                    )}
                   </td>
                   <td className="p-3"><span className="chip text-xs">{r.paid_via}</span></td>
+                  <td className="p-3">
+                    <button
+                      type="button"
+                      className="text-left text-xs text-accent hover:underline"
+                      onClick={() => setReceiptExpense(r)}
+                    >
+                      {expenseReceiptSummary(r)}
+                    </button>
+                  </td>
                   <td className="p-3 text-right font-mono">{inr(r.amount_minor)}</td>
                   <td className="p-3 text-right pr-4">
-                    <button onClick={() => setDeleteExpense(r)}
-                      className="text-fg-muted hover:text-accent-bad">
-                      <Trash2 size={14}/>
-                    </button>
+                    {r.is_corrected ? (
+                      <span className="chip border-accent-gold/40 text-accent-gold text-[10px]">Corrected</span>
+                    ) : r.paid_via === 'cash' && r.shift_id && r.source_shift_status !== 'open' ? (
+                      <button aria-label="Correct closed-shift expense" onClick={() => setCorrectExpense(r)}
+                        className="btn btn-ghost !min-h-[32px] !px-2 !py-1 text-xs">
+                        <Ban size={13}/> Correct
+                      </button>
+                    ) : (
+                      <button aria-label="Void expense" onClick={() => setVoidExpense(r)}
+                        className="text-fg-muted hover:text-accent-bad">
+                        <Trash2 size={14}/>
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -497,20 +539,41 @@ function ExpensesTab() {
                         Invoice {r.invoice_no}
                       </div>
                     )}
+                    {r.correction && (
+                      <div className="mt-1 text-xs text-accent-gold">
+                        Corrected {new Date(r.correction.corrected_at).toLocaleString('en-IN')}: {r.correction.reason}
+                      </div>
+                    )}
                   </div>
                   <div className="shrink-0 text-right">
                     <div className="font-mono font-semibold">{inr(r.amount_minor)}</div>
                     <span className="chip mt-1 text-[10px]">{r.paid_via}</span>
                   </div>
                 </div>
-                <div className="mt-3 flex justify-end">
+                <div className="mt-3 flex items-center justify-between gap-2">
                   <button
-                    aria-label="Delete expense"
-                    onClick={() => setDeleteExpense(r)}
-                    className="btn btn-ghost !min-h-[32px] !min-w-[32px] !px-2 !py-1 hover:!text-accent-bad"
+                    type="button"
+                    className="btn btn-ghost !min-h-[32px] !px-2 !py-1 text-xs"
+                    onClick={() => setReceiptExpense(r)}
                   >
-                    <Trash2 size={14}/>
+                    <FileText size={13}/>{expenseReceiptSummary(r)}
                   </button>
+                  {r.is_corrected ? (
+                    <span className="chip border-accent-gold/40 text-accent-gold text-[10px]">Corrected</span>
+                  ) : r.paid_via === 'cash' && r.shift_id && r.source_shift_status !== 'open' ? (
+                    <button aria-label="Correct closed-shift expense" onClick={() => setCorrectExpense(r)}
+                      className="btn btn-ghost !min-h-[32px] !px-2 !py-1 text-xs">
+                      <Ban size={13}/> Correct
+                    </button>
+                  ) : (
+                    <button
+                      aria-label="Void expense"
+                      onClick={() => setVoidExpense(r)}
+                      className="btn btn-ghost !min-h-[32px] !min-w-[32px] !px-2 !py-1 hover:!text-accent-bad"
+                    >
+                      <Trash2 size={14}/>
+                    </button>
+                  )}
                 </div>
               </div>
             ))}
@@ -519,21 +582,65 @@ function ExpensesTab() {
       )}
 
       {addOpen && (
-        <ExpenseForm cats={cats} branches={branches} onClose={() => setAddOpen(false)} onSuccess={() => {
-          setAddOpen(false);
-          void load();
-          notifications.success('The expense was recorded.', { title: 'Expense saved' });
-        }}/>
+        <ExpenseForm
+          cats={cats}
+          branches={branches}
+          openShifts={openShifts}
+          onClose={() => setAddOpen(false)}
+          onSuccess={({ receipt, receiptRequested }) => {
+            setAddOpen(false);
+            void load();
+            if (receipt) {
+              notifications.success('The expense and its receipt were saved.', {
+                title: 'Expense saved',
+              });
+            } else if (receiptRequested) {
+              notifications.warning(
+                'The expense is saved. Its receipt still needs to be uploaded from the expense list.',
+                { title: 'Receipt still needed', critical: true },
+              );
+            } else {
+              notifications.success('The expense was recorded without a receipt.', {
+                title: 'Expense saved',
+              });
+            }
+          }}
+        />
       )}
-      {deleteExpense && (
-        <ConfirmModal
-          title="Delete expense"
-          message={`Delete the ${inr(deleteExpense.amount_minor)} expense${deleteExpense.vendor_name ? ` from ${deleteExpense.vendor_name}` : ''}?`}
-          confirmLabel="Delete expense"
+      {receiptExpense && (
+        <ExpenseReceiptsModal
+          expense={receiptExpense}
+          onClose={() => setReceiptExpense(null)}
+          onChanged={() => void load(true)}
+        />
+      )}
+      {voidExpense && (
+        <PromptModal
+          title="Void expense"
+          label={`Reason for voiding the ${inr(voidExpense.amount_minor)} expense${voidExpense.vendor_name ? ` from ${voidExpense.vendor_name}` : ''}`}
+          placeholder="For example: duplicate entry or wrong amount"
+          confirmLabel="Void expense"
           danger
-          busy={deleteBusy}
-          onConfirm={() => { void confirmDelete(); }}
-          onCancel={() => { if (!deleteBusy) setDeleteExpense(null); }}
+          busy={voidBusy}
+          minLength={3}
+          maxLength={500}
+          onSubmit={(reason) => { void confirmVoid(reason); }}
+          onCancel={() => { if (!voidBusy) setVoidExpense(null); }}
+        />
+      )}
+      {correctExpense && (
+        <ExpenseCorrectionForm
+          row={correctExpense}
+          openShifts={openShifts.filter((shift) => shift.branch_id === correctExpense.branch_id)}
+          onClose={() => setCorrectExpense(null)}
+          onSuccess={() => {
+            setCorrectExpense(null);
+            void load();
+            notifications.success(
+              'The closed-shift cash expense was reversed in the selected current drawer.',
+              { title: 'Correction recorded' },
+            );
+          }}
         />
       )}
     </div>
@@ -543,121 +650,697 @@ function ExpensesTab() {
 function newExpenseKey(): string {
   const randomPart = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
     ? crypto.randomUUID()
-    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (part) => {
+      const random = Math.floor(Math.random() * 16);
+      return (part === 'x' ? random : (random & 0x3) | 0x8).toString(16);
+    });
   return `expense:${randomPart}`;
 }
 
-function ExpenseForm({
-  cats, branches, onClose, onSuccess,
+function newExpenseCorrectionKey(): string {
+  const id = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return `expense-correction:${id}`;
+}
+
+function ExpenseCorrectionForm({
+  row,
+  openShifts,
+  onClose,
+  onSuccess,
 }: {
-  cats: ExpenseCategoryDTO[];
-  branches: BranchReferenceDTO[];
+  row: ExpenseDTO;
+  openShifts: ShiftDTO[];
   onClose: () => void;
   onSuccess: () => void;
 }) {
+  const [shiftId, setShiftId] = useState(openShifts[0]?.id ?? '');
+  const [reason, setReason] = useState('');
+  const [key] = useState(newExpenseCorrectionKey);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    if (!shiftId) {
+      setErr('Open a same-branch shift and select its drawer before correcting this expense.');
+      return;
+    }
+    setBusy(true);
+    setErr(null);
+    try {
+      await finance.correctExpense(
+        row.id,
+        { settlement_shift_id: shiftId, reason: reason.trim() },
+        key,
+      );
+      onSuccess();
+    } catch (error) {
+      setErr((error as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal open onClose={busy ? () => undefined : onClose} title="Correct closed-shift expense">
+      <form onSubmit={submit} className="space-y-3">
+        <div className="rounded-xl border border-accent-gold/40 bg-accent-gold/10 p-3 text-sm">
+          The original {inr(row.amount_minor)} expense and closed shift stay unchanged. This full
+          reversal is dated now and returns the amount to a current same-branch drawer.
+        </div>
+        <Field label="Current open drawer">
+          <select className="input" required value={shiftId}
+            onChange={(event) => setShiftId(event.target.value)}>
+            <option value="">Select an open drawer…</option>
+            {openShifts.map((shift) => (
+              <option key={shift.id} value={shift.id}>
+                {(shift.opened_by_name || shift.opened_by_email || 'Authorised staff')} · {inr(shift.expected_minor ?? 0)} expected
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Correction reason">
+          <textarea className="input" required minLength={3} maxLength={500} rows={3}
+            value={reason} onChange={(event) => setReason(event.target.value)}/>
+        </Field>
+        {err && <ErrorRow text={err}/>}
+        <div className="flex justify-end gap-2 pt-2">
+          <button type="button" className="btn btn-ghost" onClick={onClose} disabled={busy}>Cancel</button>
+          <button type="submit" className="btn btn-primary"
+            disabled={busy || !shiftId || reason.trim().length < 3}>
+            {busy ? <Loader2 className="animate-spin" size={14}/> : <Ban size={14}/>} Record full correction
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+export function localDateTimeInputValue(value: Date): string {
+  const local = new Date(value.getTime() - value.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 16);
+}
+
+function newExpenseReceiptKey(kind: 'upload' | 'review'): string {
+  const randomPart = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return `expense-receipt-${kind}:${randomPart}`;
+}
+
+function ExpenseForm({
+  cats, branches, openShifts, onClose, onSuccess,
+}: {
+  cats: ExpenseCategoryDTO[];
+  branches: BranchReferenceDTO[];
+  openShifts: ShiftDTO[];
+  onClose: () => void;
+  onSuccess: (result: {
+    expense: ExpenseDTO;
+    receipt: ExpenseReceiptDTO | null;
+    receiptRequested: boolean;
+  }) => void;
+}) {
+  const initialBranchId = branches[0]?.id ?? '';
   const [form, setForm] = useState({
-    branch_id: branches[0]?.id ?? '',
+    branch_id: initialBranchId,
     category_id: cats[0]?.id ?? '',
     amount_rupees: '',
     paid_via: DEFAULT_EXPENSE_PAYMENT_RAIL,
-    paid_at: new Date().toISOString().slice(0, 16),
+    shift_id: openShifts.find((shift) => shift.branch_id === initialBranchId)?.id ?? '',
+    paid_at: localDateTimeInputValue(new Date()),
     vendor_name: '',
     invoice_no: '',
     note: '',
   });
   const [idempotencyKey] = useState(newExpenseKey);
+  const [receiptIdempotencyKey] = useState(() => newExpenseReceiptKey('upload'));
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [receiptSource, setReceiptSource] = useState<ExpenseReceiptSource>('file');
+  const [receiptWasRequested, setReceiptWasRequested] = useState(false);
+  const [savedExpense, setSavedExpense] = useState<ExpenseDTO | null>(null);
+  const eligibleShifts = openShifts.filter((shift) => shift.branch_id === form.branch_id);
+
+  function selectReceipt(file: File, source: ExpenseReceiptSource) {
+    const fileError = expenseReceiptFileError(file);
+    if (fileError) {
+      setErr(fileError);
+      return;
+    }
+    setSelectedFile(file);
+    setReceiptSource(source);
+    setReceiptWasRequested(true);
+    setErr(null);
+  }
+
+  function close() {
+    if (busy) return;
+    if (savedExpense) {
+      onSuccess({ expense: savedExpense, receipt: null, receiptRequested: receiptWasRequested });
+      return;
+    }
+    onClose();
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault(); setBusy(true); setErr(null);
     try {
-      const amountMinor = parseRupeesToMinor(form.amount_rupees);
-      if (amountMinor === null || amountMinor <= 0) {
-        throw new Error('Expense amount must be above ₹0 with at most two decimals.');
+      const result = await persistExpenseWithOptionalReceipt({
+        savedExpense,
+        selectedFile,
+        source: receiptSource,
+        createExpense: async () => {
+          const amountMinor = parseRupeesToMinor(form.amount_rupees);
+          if (amountMinor === null || amountMinor <= 0) {
+            throw new Error('Expense amount must be above ₹0 with at most two decimals.');
+          }
+          if (form.paid_via === 'cash' && !form.shift_id) {
+            throw new Error('Select the open shift drawer that paid this cash expense.');
+          }
+          return finance.createExpense({
+            branch_id: form.branch_id,
+            category_id: form.category_id,
+            amount_minor: amountMinor,
+            paid_via: form.paid_via,
+            shift_id: form.paid_via === 'cash' ? form.shift_id : undefined,
+            paid_at: new Date(form.paid_at).toISOString(),
+            vendor_name: form.vendor_name || undefined,
+            invoice_no: form.invoice_no || undefined,
+            note: form.note || undefined,
+          }, idempotencyKey);
+        },
+        uploadReceipt: finance.uploadExpenseReceipt,
+        receiptIdempotencyKey,
+      });
+      setSavedExpense(result.expense);
+      if (result.receiptError) {
+        setErr(`The expense is saved, but the receipt was not uploaded. ${result.receiptError}`);
+        return;
       }
-      await finance.createExpense({
-        branch_id: form.branch_id,
-        category_id: form.category_id,
-        amount_minor: amountMinor,
-        paid_via: form.paid_via,
-        paid_at: new Date(form.paid_at).toISOString(),
-        vendor_name: form.vendor_name || undefined,
-        invoice_no: form.invoice_no || undefined,
-        note: form.note || undefined,
-      }, idempotencyKey);
-      onSuccess();
+      onSuccess({
+        expense: result.expense,
+        receipt: result.receipt,
+        receiptRequested: receiptWasRequested,
+      });
     } catch (e) { setErr((e as Error).message); }
     finally { setBusy(false); }
   }
 
   return (
-    <Modal open onClose={onClose} title="Add expense">
+    <Modal open onClose={close} title="Add expense" size="lg">
       <form onSubmit={submit} className="space-y-3">
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Branch">
-            <select className="input" required value={form.branch_id}
-              onChange={(e) => setForm({ ...form, branch_id: e.target.value })}>
-              {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-            </select>
+        {savedExpense && (
+          <div className="rounded-xl border border-accent-good/40 bg-accent-good/10 p-3 text-sm">
+            <b>The expense is already saved.</b> Retrying below uploads only the receipt and cannot
+            create a duplicate expense.
+          </div>
+        )}
+        <fieldset disabled={busy || savedExpense !== null} className="space-y-3 disabled:opacity-60">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <Field label="Branch">
+              <select className="input" required value={form.branch_id}
+                onChange={(e) => {
+                  const branchId = e.target.value;
+                  setForm({
+                    ...form,
+                    branch_id: branchId,
+                    shift_id: openShifts.find((shift) => shift.branch_id === branchId)?.id ?? '',
+                  });
+                }}>
+                {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+              </select>
+            </Field>
+            <Field label="Category">
+              <select className="input" required value={form.category_id}
+                onChange={(e) => setForm({ ...form, category_id: e.target.value })}>
+                {cats.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </Field>
+          </div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <Field label="Amount (₹)">
+              <input type="number" min={0} step="0.01" required className="input font-mono text-right"
+                value={form.amount_rupees}
+                onChange={(e) => setForm({ ...form, amount_rupees: e.target.value })}/>
+            </Field>
+            <Field label="Paid via">
+              <select className="input" value={form.paid_via}
+                onChange={(e) => {
+                  const paidVia = e.target.value as ExpensePaymentOption['value'];
+                  setForm({
+                    ...form,
+                    paid_via: paidVia,
+                    shift_id: paidVia === 'cash'
+                      ? eligibleShifts[0]?.id ?? ''
+                      : form.shift_id,
+                  });
+                }}>
+                {EXPENSE_PAYMENT_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </Field>
+          </div>
+          {form.paid_via === 'cash' && (
+            <Field label="Open shift drawer">
+              <select
+                className="input"
+                required
+                value={form.shift_id}
+                onChange={(e) => setForm({ ...form, shift_id: e.target.value })}
+              >
+                <option value="">Select the shift that supplied the cash</option>
+                {eligibleShifts.map((shift) => (
+                  <option key={shift.id} value={shift.id}>
+                    {shift.opened_by_name || shift.opened_by_email || 'Authorised user'} · opened{' '}
+                    {new Date(shift.opened_at).toLocaleString('en-IN')} · drawer {inr(shift.expected_minor ?? 0)}
+                  </option>
+                ))}
+              </select>
+              {!eligibleShifts.length && (
+                <p className="mt-1 text-xs text-accent-bad" role="alert">
+                  This branch has no open shift. Open a shift before recording a cash paid-out.
+                </p>
+              )}
+            </Field>
+          )}
+          <div className="flex items-start gap-2 rounded-xl border border-accent-gold/30 bg-accent-gold/5 p-3 text-xs text-fg-muted">
+            <AlertCircle size={14} className="mt-0.5 shrink-0 text-accent-gold"/>
+            <p>{EXPENSE_CASH_DRAWER_GUIDANCE}</p>
+          </div>
+          <Field label="Date / time">
+            <input type="datetime-local" className="input" required value={form.paid_at}
+              onChange={(e) => setForm({ ...form, paid_at: e.target.value })}/>
           </Field>
-          <Field label="Category">
-            <select className="input" required value={form.category_id}
-              onChange={(e) => setForm({ ...form, category_id: e.target.value })}>
-              {cats.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <Field label="Vendor">
+              <input className="input" value={form.vendor_name}
+                onChange={(e) => setForm({ ...form, vendor_name: e.target.value })}/>
+            </Field>
+            <Field label="Invoice no.">
+              <input className="input" value={form.invoice_no}
+                onChange={(e) => setForm({ ...form, invoice_no: e.target.value })}/>
+            </Field>
+          </div>
+          <Field label="Note">
+            <textarea className="input" rows={2} value={form.note}
+              onChange={(e) => setForm({ ...form, note: e.target.value })}/>
           </Field>
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Amount (₹)">
-            <input type="number" min={0} step="0.01" required className="input font-mono text-right"
-              value={form.amount_rupees}
-              onChange={(e) => setForm({ ...form, amount_rupees: e.target.value })}/>
-          </Field>
-          <Field label="Paid via">
-            <select className="input" value={form.paid_via}
-              onChange={(e) => setForm({
-                ...form,
-                paid_via: e.target.value as ExpensePaymentOption['value'],
-              })}>
-              {EXPENSE_PAYMENT_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>{option.label}</option>
-              ))}
-            </select>
-          </Field>
-        </div>
-        <div className="flex items-start gap-2 rounded-xl border border-accent-gold/30 bg-accent-gold/5 p-3 text-xs text-fg-muted">
-          <AlertCircle size={14} className="mt-0.5 shrink-0 text-accent-gold"/>
-          <p>{EXPENSE_CASH_DRAWER_GUIDANCE}</p>
-        </div>
-        <Field label="Date / time">
-          <input type="datetime-local" className="input" required value={form.paid_at}
-            onChange={(e) => setForm({ ...form, paid_at: e.target.value })}/>
-        </Field>
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Vendor">
-            <input className="input" value={form.vendor_name}
-              onChange={(e) => setForm({ ...form, vendor_name: e.target.value })}/>
-          </Field>
-          <Field label="Invoice no.">
-            <input className="input" value={form.invoice_no}
-              onChange={(e) => setForm({ ...form, invoice_no: e.target.value })}/>
-          </Field>
-        </div>
-        <Field label="Note">
-          <textarea className="input" rows={2} value={form.note}
-            onChange={(e) => setForm({ ...form, note: e.target.value })}/>
-        </Field>
+        </fieldset>
+
+        <ReceiptFilePicker
+          selectedFile={selectedFile}
+          disabled={busy}
+          onSelect={selectReceipt}
+          onClear={() => { setSelectedFile(null); setErr(null); }}
+        />
         {err && <ErrorRow text={err}/>}
-        <div className="flex justify-end gap-2 pt-2">
-          <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
-          <button type="submit" className="btn btn-primary" disabled={busy}>
+        <div className="flex flex-col-reverse justify-end gap-2 pt-2 sm:flex-row">
+          <button type="button" className="btn btn-ghost" onClick={close} disabled={busy}>
+            {savedExpense ? 'Finish later' : 'Cancel'}
+          </button>
+          <button
+            type="submit"
+            className="btn btn-primary"
+            disabled={busy || (form.paid_via === 'cash' && !form.shift_id)}
+          >
             {busy ? <Loader2 className="animate-spin" size={14}/> : null}
-            Record expense
+            {savedExpense
+              ? selectedFile ? 'Retry receipt upload' : 'Finish without receipt'
+              : selectedFile ? 'Save expense and receipt' : 'Record expense'}
           </button>
         </div>
       </form>
     </Modal>
+  );
+}
+
+export function ReceiptFilePicker({
+  selectedFile,
+  disabled,
+  onSelect,
+  onClear,
+}: {
+  selectedFile: File | null;
+  disabled: boolean;
+  onSelect: (file: File, source: ExpenseReceiptSource) => void;
+  onClear: () => void;
+}) {
+  const cameraInput = useRef<HTMLInputElement>(null);
+  const uploadInput = useRef<HTMLInputElement>(null);
+
+  function selected(input: HTMLInputElement, source: ExpenseReceiptSource) {
+    const file = input.files?.[0];
+    input.value = '';
+    if (file) onSelect(file, source);
+  }
+
+  return (
+    <section className="rounded-xl border border-bg-border bg-bg-raised/40 p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-semibold">Bill or receipt</p>
+          <p className="mt-0.5 text-xs text-fg-muted">
+            Optional. Take a photo now or attach a PDF or image. Maximum 10 MB.
+          </p>
+        </div>
+        {selectedFile && (
+          <button type="button" className="text-xs text-fg-muted hover:text-accent-bad"
+            onClick={onClear} disabled={disabled}>
+            Remove
+          </button>
+        )}
+      </div>
+      <input
+        ref={cameraInput}
+        hidden
+        type="file"
+        accept="image/jpeg,image/png,image/webp"
+        capture="environment"
+        aria-label="Take receipt photo"
+        onChange={(event) => selected(event.currentTarget, 'camera')}
+      />
+      <input
+        ref={uploadInput}
+        hidden
+        type="file"
+        accept={EXPENSE_RECEIPT_ACCEPT}
+        aria-label="Choose receipt file"
+        onChange={(event) => {
+          const file = event.currentTarget.files?.[0];
+          event.currentTarget.value = '';
+          if (file) onSelect(file, pickedExpenseReceiptSource(file));
+        }}
+      />
+      <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+        <button type="button" className="btn btn-ghost" disabled={disabled}
+          onClick={() => cameraInput.current?.click()}>
+          <Camera size={15}/> Take photo
+        </button>
+        <button type="button" className="btn btn-ghost" disabled={disabled}
+          onClick={() => uploadInput.current?.click()}>
+          <Upload size={15}/> Choose receipt
+        </button>
+      </div>
+      {selectedFile && (
+        <div className="mt-3 flex items-center gap-2 rounded-lg border border-accent/30 bg-accent/5 p-2 text-xs">
+          <FileText size={14} className="shrink-0 text-accent"/>
+          <span className="min-w-0 flex-1 truncate">{selectedFile.name}</span>
+          <span className="shrink-0 text-fg-muted">{formatFileSize(selectedFile.size)}</span>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.ceil(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function ExpenseReceiptsModal({
+  expense,
+  onClose,
+  onChanged,
+}: {
+  expense: ExpenseDTO;
+  onClose: () => void;
+  onChanged: () => void;
+}) {
+  const notifications = useNotifications();
+  const [rows, setRows] = useState<ExpenseReceiptDTO[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [receiptSource, setReceiptSource] = useState<ExpenseReceiptSource>('file');
+  const [uploading, setUploading] = useState(false);
+  const [openingId, setOpeningId] = useState<string | null>(null);
+  const [preview, setPreview] = useState<{
+    url: string;
+    filename: string;
+    contentType: string;
+  } | null>(null);
+  const [reviewStatus, setReviewStatus] = useState<ExpenseReceiptStatus>(
+    expense.receipt_status ?? 'pending',
+  );
+  const [reviewNote, setReviewNote] = useState('');
+  const [reviewing, setReviewing] = useState(false);
+  const [uploadIdempotencyKey, setUploadIdempotencyKey] = useState(
+    () => newExpenseReceiptKey('upload'),
+  );
+  const [reviewIdempotencyKey, setReviewIdempotencyKey] = useState(
+    () => newExpenseReceiptKey('review'),
+  );
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const receipts = await finance.listExpenseReceipts(expense.id);
+      setRows(receipts);
+      setErr(null);
+    } catch (error) {
+      setErr((error as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }, [expense.id]);
+
+  useEffect(() => { void load(); }, [load]);
+  useEffect(() => () => {
+    if (preview) URL.revokeObjectURL(preview.url);
+  }, [preview]);
+
+  function selectReceipt(file: File, source: ExpenseReceiptSource) {
+    const fileError = expenseReceiptFileError(file);
+    if (fileError) {
+      setErr(fileError);
+      return;
+    }
+    setSelectedFile(file);
+    setReceiptSource(source);
+    setErr(null);
+  }
+
+  async function upload() {
+    if (!selectedFile || uploading) return;
+    setUploading(true); setErr(null);
+    try {
+      await finance.uploadExpenseReceipt(
+        expense.id,
+        normalizeExpenseReceiptFile(selectedFile),
+        receiptSource,
+        uploadIdempotencyKey,
+      );
+      setSelectedFile(null);
+      setUploadIdempotencyKey(newExpenseReceiptKey('upload'));
+      setReviewStatus('pending');
+      await load();
+      onChanged();
+      notifications.success('The receipt was attached and is ready for review.', {
+        title: 'Receipt uploaded',
+      });
+    } catch (error) {
+      setErr((error as Error).message);
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function openReceipt(receipt: ExpenseReceiptDTO) {
+    if (openingId) return;
+    setOpeningId(receipt.id); setErr(null);
+    try {
+      const blob = await finance.getExpenseReceiptContent(receipt.id);
+      const url = URL.createObjectURL(blob);
+      setPreview((current) => {
+        if (current) URL.revokeObjectURL(current.url);
+        return {
+          url,
+          filename: receipt.original_filename,
+          contentType: receipt.content_type || blob.type,
+        };
+      });
+    } catch (error) {
+      setErr((error as Error).message);
+    } finally {
+      setOpeningId(null);
+    }
+  }
+
+  async function saveReview() {
+    if (reviewing) return;
+    const reviewError = expenseReceiptReviewError(reviewStatus, reviewNote);
+    if (reviewError) {
+      setErr(reviewError);
+      return;
+    }
+    setReviewing(true); setErr(null);
+    try {
+      await finance.reviewExpenseReceipts(expense.id, {
+        status: reviewStatus,
+        review_note: reviewNote.trim() || undefined,
+      }, reviewIdempotencyKey);
+      setReviewIdempotencyKey(newExpenseReceiptKey('review'));
+      onChanged();
+      notifications.success(`Receipt status changed to ${EXPENSE_RECEIPT_STATUS_LABEL[reviewStatus]}.`, {
+        title: 'Review saved',
+      });
+    } catch (error) {
+      setErr((error as Error).message);
+    } finally {
+      setReviewing(false);
+    }
+  }
+
+  const statusOptions = expenseReceiptReviewStatuses(rows.length, reviewStatus);
+
+  return (
+    <Modal open onClose={onClose} title="Expense receipt" size="lg">
+      <div className="space-y-4">
+        <div className="rounded-xl border border-bg-border bg-bg-raised/40 p-3 text-sm">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="font-semibold">{expense.vendor_name || 'Manual expense'}</p>
+              <p className="mt-0.5 text-xs text-fg-muted">
+                {new Date(expense.paid_at).toLocaleDateString('en-IN')}
+                {expense.invoice_no ? ` · Invoice ${expense.invoice_no}` : ''}
+              </p>
+            </div>
+            <p className="font-mono font-semibold">{inr(expense.amount_minor)}</p>
+          </div>
+        </div>
+
+        <ReceiptFilePicker
+          selectedFile={selectedFile}
+          disabled={uploading}
+          onSelect={selectReceipt}
+          onClear={() => { setSelectedFile(null); setErr(null); }}
+        />
+        {selectedFile && (
+          <div className="flex justify-end">
+            <button type="button" className="btn btn-primary" onClick={() => void upload()}
+              disabled={uploading}>
+              {uploading ? <Loader2 size={14} className="animate-spin"/> : <Upload size={14}/>} Upload receipt
+            </button>
+          </div>
+        )}
+
+        {err && <ErrorRow text={err}/>}
+
+        <section>
+          <h4 className="mb-2 text-sm font-semibold">
+            Attached receipts · {loading ? '…' : rows.length}
+          </h4>
+          {loading ? (
+            <div className="rounded-xl border border-bg-border p-4 text-sm text-fg-muted">
+              Loading receipts…
+            </div>
+          ) : rows.length === 0 ? (
+            <div className="rounded-xl border border-bg-border p-4 text-sm text-fg-muted">
+              No receipt is attached. This does not stop you from recording the manual expense.
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {rows.map((receipt) => (
+                <div key={receipt.id}
+                  className="flex flex-wrap items-center gap-3 rounded-xl border border-bg-border p-3">
+                  <FileText size={17} className="shrink-0 text-accent"/>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium">{receipt.original_filename}</p>
+                    <p className="text-xs text-fg-muted">
+                      {receipt.source === 'camera'
+                        ? 'Camera'
+                        : receipt.source === 'gallery' ? 'Photo library' : 'File upload'} ·{' '}
+                      {formatFileSize(receipt.size_bytes ?? receipt.byte_size ?? 0)}
+                    </p>
+                  </div>
+                  <button type="button" className="btn btn-ghost !min-h-[36px] !py-1.5 text-xs"
+                    onClick={() => void openReceipt(receipt)} disabled={openingId !== null}>
+                    {openingId === receipt.id ? <Loader2 size={13} className="animate-spin"/> : <Eye size={13}/>} View
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
+        {preview && (
+          <section className="rounded-xl border border-bg-border bg-bg-raised/30 p-3">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <p className="min-w-0 truncate text-sm font-semibold">{preview.filename}</p>
+              <a className="btn btn-ghost !min-h-[36px] !py-1.5 text-xs"
+                href={preview.url} download={preview.filename}>
+                Download
+              </a>
+            </div>
+            <ExpenseReceiptContentPreview preview={preview}/>
+          </section>
+        )}
+
+        {!loading && (
+          <section className="rounded-xl border border-bg-border p-3">
+            <p className="text-sm font-semibold">Receipt review</p>
+            <p className="mt-0.5 text-xs text-fg-muted">
+              Mark the attached evidence after checking it against this expense.
+            </p>
+            <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,12rem)_1fr]">
+              <select className="input" value={reviewStatus}
+                onChange={(event) => setReviewStatus(event.target.value as ExpenseReceiptStatus)}>
+                {statusOptions.map((status) => (
+                  <option key={status} value={status}>{EXPENSE_RECEIPT_STATUS_LABEL[status]}</option>
+                ))}
+              </select>
+              <input className="input"
+                placeholder={reviewStatus === 'rejected' || reviewStatus === 'not_required'
+                  ? 'Reason (required)'
+                  : 'Review note (optional)'}
+                value={reviewNote}
+                onChange={(event) => setReviewNote(event.target.value)}/>
+            </div>
+            <div className="mt-3 flex justify-end">
+              <button type="button" className="btn btn-primary" onClick={() => void saveReview()}
+                disabled={reviewing}>
+                {reviewing && <Loader2 size={14} className="animate-spin"/>} Save review
+              </button>
+            </div>
+          </section>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+export function ExpenseReceiptContentPreview({
+  preview,
+}: {
+  preview: { url: string; filename: string; contentType: string };
+}) {
+  if (preview.contentType === 'application/pdf') {
+    return (
+      <iframe
+        src={preview.url}
+        title={`Receipt ${preview.filename}`}
+        sandbox=""
+        referrerPolicy="no-referrer"
+        className="h-[50vh] w-full rounded-lg bg-white"
+      />
+    );
+  }
+  if (['image/jpeg', 'image/png', 'image/webp'].includes(preview.contentType)) {
+    return (
+      <img src={preview.url} alt={`Receipt ${preview.filename}`}
+        className="max-h-[50vh] w-full rounded-lg bg-white object-contain"/>
+    );
+  }
+  return (
+    <p className="text-sm text-fg-muted">
+      This device cannot preview this file type. Use Download to open it in a compatible app.
+    </p>
   );
 }
 // ============================================================================

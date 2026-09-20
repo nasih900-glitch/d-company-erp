@@ -142,7 +142,6 @@ class CompanyUpdate(BaseModel):
     )
     is_composition: bool | None = None
     e_invoicing_enabled: bool | None = None
-    google_sheets_webhook_url: str | None = Field(default=None, max_length=500)
     # UPI VPA like "name@bank"; allow clearing with "".
     upi_vpa: str | None = Field(
         default=None,
@@ -430,7 +429,7 @@ async def update_company(
         raise NotFoundError("company not found")
     for f in ("name", "legal_name", "timezone", "gstin", "pan",
               "gst_registration_type", "is_composition",
-              "e_invoicing_enabled", "google_sheets_webhook_url", "upi_vpa"):
+              "e_invoicing_enabled", "upi_vpa"):
         v = getattr(payload, f)
         if v is not None:
             setattr(c, f, v)

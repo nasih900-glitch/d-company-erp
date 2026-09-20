@@ -23,11 +23,12 @@ class ShiftResolutionPolicyTest {
     )
 
     @Test
-    fun `adopts a server shift for operational work without granting money access`() {
+    fun `adopts a server shift and permits another verified cashier to bill`() {
         val resolved = requireNotNull(ShiftResolutionPolicy.resolve(null, server))
 
         assertEquals("shift-server", resolved.shiftId)
         assertEquals(ShiftSource.SERVER_CACHE, resolved.source)
+        assertTrue(resolved.canBill(ShiftActor("waiter-b", protectedAccess = false)))
         assertFalse(resolved.canManageMoney(ShiftActor("waiter-b", protectedAccess = false)))
         assertTrue(resolved.canManageMoney(ShiftActor("cashier-a", protectedAccess = false)))
         assertTrue(resolved.canManageMoney(ShiftActor("owner", protectedAccess = true)))
@@ -80,14 +81,24 @@ class ShiftResolutionPolicyTest {
     }
 
     @Test
-    fun `unknown opener fails closed for money but not operational adoption`() {
+    fun `unknown opener allows routine billing but keeps sensitive money actions closed`() {
         val resolved = requireNotNull(
             ShiftResolutionPolicy.resolve(null, server.copy(openedByUserId = null)),
         )
 
         assertEquals("shift-server", resolved.shiftId)
+        assertTrue(resolved.canBill(ShiftActor("cashier-a", protectedAccess = false)))
+        assertNull(resolved.billingAccessMessage(ShiftActor("cashier-a", false)))
         assertFalse(resolved.canManageMoney(ShiftActor("cashier-a", protectedAccess = false)))
         assertTrue(resolved.moneyAccessMessage(ShiftActor("cashier-a", false))!!.contains("not been verified"))
+    }
+
+    @Test
+    fun `routine billing still fails closed without a verified profile`() {
+        val resolved = requireNotNull(ShiftResolutionPolicy.resolve(null, server))
+
+        assertFalse(resolved.canBill(null))
+        assertTrue(resolved.billingAccessMessage(null)!!.contains("could not be verified"))
     }
 
     private fun local(state: String, serverShiftId: String?) = LocalShiftEntity(

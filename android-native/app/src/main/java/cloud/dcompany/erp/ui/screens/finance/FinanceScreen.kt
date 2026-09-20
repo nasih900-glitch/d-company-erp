@@ -1,7 +1,10 @@
 package cloud.dcompany.erp.ui.screens.finance
 
 import android.app.DatePickerDialog
+import android.net.Uri
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -39,16 +42,22 @@ import androidx.compose.material3.Text
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Block
+import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -82,10 +91,15 @@ import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.theme.Spacing
 import cloud.dcompany.erp.ui.components.ViewOnlyNotice
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.text.DateFormat
 import java.time.LocalDate
 import java.time.ZoneOffset
 import java.util.Date
+import java.util.Locale
 import kotlin.math.abs
 
 /**
@@ -101,6 +115,12 @@ fun FinanceScreen(
     val vm: FinanceViewModel = viewModel()
     val state by vm.state.collectAsStateWithLifecycle()
     SideEffect { vm.updateAccess(access) }
+    val context = LocalContext.current
+    LaunchedEffect(state.dialog) {
+        if (state.dialog != FinanceDialog.ExpenseForm) {
+            withContext(Dispatchers.IO) { pruneStaleExpenseReceiptCameraFiles(context) }
+        }
+    }
     FinanceContent(state, vm, access, presentation)
 }
 
@@ -144,37 +164,7 @@ private fun FinanceContent(
                     onSelect = { selected -> tab = selected.toIntOrNull() ?: 0 },
                     modifier = Modifier.padding(horizontal = Spacing.lg),
                 )
-                if (!state.online) {
-                    FinanceOfflineBanner(state.lastUpdatedAtMillis)
-                }
-                // A refresh that failed on top of good data: keep the figures,
-                // but never let the failure pass unmentioned.
-                if (state.error != null && state.online) {
-                    ErrorBanner(state.error, vm::load)
-                }
-                state.pendingOnlineWrite?.let { pending ->
-                    Box(Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.sm)) {
-                        PendingOnlineFinanceWriteBanner(
-                            pending = pending,
-                            online = state.online,
-                            canRetry = access.canRecordExpenses,
-                            busy = state.busy,
-                            onRetry = vm::retryPendingOnlineWrite,
-                        )
-                    }
-                }
-                if (state.notice != null) {
-                    Box(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
-                        NoticeBanner(state.notice, vm::dismissNotice)
-                    }
-                }
-                if (state.pendingExpenses.isNotEmpty() || state.pendingAssets.isNotEmpty() ||
-                    state.pendingCapitalEntries.isNotEmpty()
-                ) {
-                    Box(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
-                        PendingFinanceChangesPanel(state, vm, access)
-                    }
-                }
+                FinanceStatusRegion(state = state, vm = vm, access = access)
                 when (tab) {
                     0 -> OverviewTab(state, presentation)
                     1 -> ExpensesTab(state, vm, access.canRecordExpenses)
@@ -203,6 +193,26 @@ private fun FinanceContent(
                     }
                     is FinanceDialog.VoidTipPayout -> if (access.canRecordExpenses) {
                         VoidTipPayoutDialog(dialog.row, state, vm)
+                    }
+                    is FinanceDialog.DiscardRejectedExpense -> if (access.canRecordExpenses) {
+                        RejectedExpenseDiscardDialog(
+                            row = dialog.row,
+                            online = state.online,
+                            busy = state.busy,
+                            error = state.formError,
+                            onConfirm = { vm.discardRejectedExpense(dialog.row) },
+                            onDismiss = vm::closeDialog,
+                        )
+                    }
+                    is FinanceDialog.DiscardExpenseReceipt -> if (access.canRecordExpenses) {
+                        RejectedExpenseReceiptDiscardDialog(
+                            filename = dialog.row.filename,
+                            online = state.online,
+                            busy = state.busy,
+                            error = state.formError,
+                            onConfirm = { vm.discardRejectedExpenseReceipt(dialog.row) },
+                            onDismiss = vm::closeDialog,
+                        )
                     }
                     null -> {}
                 }
@@ -249,15 +259,71 @@ private fun Header(state: FinanceUiState, onRefresh: () -> Unit) {
                 )
             },
         )
-        if (state.loading && state.loaded) {
-            LinearProgressIndicator(
-                modifier = Modifier.fillMaxWidth(),
-                color = Brand.Information,
-                trackColor = Brand.Surface,
-            )
+        // Reserve the progress rail so a background refresh never pushes the
+        // tabs and report viewport down by one indicator height.
+        Box(Modifier.fillMaxWidth().height(4.dp)) {
+            if (state.loading && state.loaded) {
+                LinearProgressIndicator(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = Brand.Information,
+                    trackColor = Brand.Surface,
+                )
+            }
         }
     }
 }
+
+@Composable
+private fun FinanceStatusRegion(
+    state: FinanceUiState,
+    vm: FinanceViewModel,
+    access: FinanceAccess,
+) {
+    val hasPendingChanges = state.pendingExpenses.isNotEmpty() ||
+        state.pendingExpenseReceipts.isNotEmpty() || state.pendingAssets.isNotEmpty() ||
+        state.pendingCapitalEntries.isNotEmpty()
+    val hasStatus = !state.online || (state.error != null && state.online) ||
+        state.pendingOnlineWrite != null || state.notice != null || hasPendingChanges
+
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .height(FINANCE_STATUS_REGION_HEIGHT)
+            .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
+    ) {
+        if (!hasStatus) {
+            Text(
+                "Finance records are online · no saved finance actions need attention",
+                color = Brand.ForegroundMuted,
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.align(Alignment.CenterStart),
+            )
+        } else {
+            Column(
+                Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+            ) {
+                if (!state.online) FinanceOfflineBanner(state.lastUpdatedAtMillis)
+                // A refresh that failed on top of good data: keep the figures,
+                // but never let the failure pass unmentioned.
+                if (state.error != null && state.online) ErrorBanner(state.error, vm::load)
+                state.pendingOnlineWrite?.let { pending ->
+                    PendingOnlineFinanceWriteBanner(
+                        pending = pending,
+                        online = state.online,
+                        canRetry = access.canRecordExpenses,
+                        busy = state.busy,
+                        onRetry = vm::retryPendingOnlineWrite,
+                    )
+                }
+                state.notice?.let { NoticeBanner(it, vm::dismissNotice) }
+                if (hasPendingChanges) PendingFinanceChangesPanel(state, vm, access)
+            }
+        }
+    }
+}
+
+private val FINANCE_STATUS_REGION_HEIGHT = 132.dp
 
 // ============================================================================
 // OVERVIEW
@@ -482,7 +548,7 @@ private fun ExpenseActionBar(state: FinanceUiState, canWrite: Boolean, onCreate:
                     fontWeight = FontWeight.SemiBold,
                 )
                 Text(
-                    "Loaded history total ${state.expenseTotalMinor.asRupees()}",
+                    "Active loaded total ${state.expenseTotalMinor.asRupees()}",
                     style = MaterialTheme.typography.bodySmall,
                     color = Brand.ForegroundMuted,
                 )
@@ -501,7 +567,7 @@ private fun ExpenseActionBar(state: FinanceUiState, canWrite: Boolean, onCreate:
 
 @Composable
 private fun ExpenseRow(expense: Expense, categoryName: String) {
-    Panel {
+    Panel(border = if (expense.isCorrected) Brand.Warning.copy(alpha = 0.55f) else null) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
             Column(Modifier.weight(1f)) {
                 Text(
@@ -533,6 +599,18 @@ private fun ExpenseRow(expense: Expense, categoryName: String) {
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
+                Text(
+                    expenseReceiptSummary(expense.receiptCount, expense.receiptStatus),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = expenseReceiptStatusColor(expense.receiptStatus),
+                )
+                expense.correction?.let {
+                    Text(
+                        "Corrected ${it.correctedAt.asDay()}: ${it.reason}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Brand.Warning,
+                    )
+                }
             }
             Column(horizontalAlignment = Alignment.End) {
                 Text(
@@ -546,6 +624,9 @@ private fun ExpenseRow(expense: Expense, categoryName: String) {
                     style = MaterialTheme.typography.labelSmall,
                     color = Brand.ForegroundMuted,
                 )
+                if (expense.isCorrected) {
+                    Text("CORRECTED", color = Brand.Warning, style = MaterialTheme.typography.labelSmall)
+                }
             }
         }
     }
@@ -590,7 +671,12 @@ private fun ManualCollectionsTab(
                     StatSpec(
                         "Card + bank",
                         (totals.cardMinor + totals.bankMinor).asRupees(),
-                        countLabel(totals.voidedCount, "voided entry"),
+                        countLabel(totals.voidedCount, "voided entry", "voided entries") +
+                            " · " + countLabel(
+                                totals.correctedCount,
+                                "corrected entry",
+                                "corrected entries",
+                            ),
                     ),
                 ),
                 columns = 4,
@@ -671,7 +757,13 @@ private fun ManualCollectionRow(
     canVoid: Boolean,
     onVoid: () -> Unit,
 ) {
-    Panel(border = if (row.isVoided) Brand.Danger.copy(alpha = 0.45f) else null) {
+    Panel(
+        border = when {
+            row.isVoided -> Brand.Danger.copy(alpha = 0.45f)
+            row.isCorrected -> Brand.Warning.copy(alpha = 0.55f)
+            else -> null
+        },
+    ) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
             Column(Modifier.weight(1f).padding(end = 12.dp)) {
                 Text(
@@ -697,6 +789,13 @@ private fun ManualCollectionRow(
                 row.voidReason?.let {
                     Text("Void reason: $it", style = MaterialTheme.typography.bodySmall, color = Brand.Danger)
                 }
+                row.correction?.let {
+                    Text(
+                        "Corrected ${it.correctedAt.asDay()}: ${it.reason}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Brand.Warning,
+                    )
+                }
             }
             Column(horizontalAlignment = Alignment.End) {
                 Text(
@@ -707,11 +806,14 @@ private fun ManualCollectionRow(
                 )
                 if (row.isVoided) {
                     Text("VOIDED", color = Brand.Danger, style = MaterialTheme.typography.labelSmall)
+                } else if (row.isCorrected) {
+                    Text("CORRECTED", color = Brand.Warning, style = MaterialTheme.typography.labelSmall)
                 } else {
                     ErpButton(
                         text = "Void",
                         onClick = onVoid,
-                        enabled = canVoid,
+                        enabled = canVoid &&
+                            (row.method != "cash" || row.sourceShiftStatus == "open"),
                         intent = ActionIntent.Destructive,
                         leadingIcon = Icons.Default.Block,
                     )
@@ -757,7 +859,10 @@ private fun TipPayoutsTab(state: FinanceUiState, vm: FinanceViewModel, canWrite:
                     StatSpec(
                         "Paid out to date",
                         state.tipPayoutTotalMinor.asRupees(),
-                        countLabel(state.tipPayouts.count { !it.isVoided }, "active payout"),
+                        countLabel(
+                            state.tipPayouts.count { !it.isVoided && !it.isCorrected },
+                            "active payout",
+                        ),
                     ),
                 ),
                 columns = 2,
@@ -832,7 +937,13 @@ private fun TipPayoutRow(
     canVoid: Boolean,
     onVoid: () -> Unit,
 ) {
-    Panel(border = if (row.isVoided) Brand.Danger.copy(alpha = 0.45f) else null) {
+    Panel(
+        border = when {
+            row.isVoided -> Brand.Danger.copy(alpha = 0.45f)
+            row.isCorrected -> Brand.Warning.copy(alpha = 0.55f)
+            else -> null
+        },
+    ) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
             Column(Modifier.weight(1f).padding(end = 12.dp)) {
                 Text(
@@ -855,6 +966,13 @@ private fun TipPayoutRow(
                 row.voidReason?.let {
                     Text("Void reason: $it", style = MaterialTheme.typography.bodySmall, color = Brand.Danger)
                 }
+                row.correction?.let {
+                    Text(
+                        "Corrected ${it.correctedAt.asDay()}: ${it.reason}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Brand.Warning,
+                    )
+                }
             }
             Column(horizontalAlignment = Alignment.End) {
                 Text(
@@ -865,11 +983,14 @@ private fun TipPayoutRow(
                 )
                 if (row.isVoided) {
                     Text("VOIDED", color = Brand.Danger, style = MaterialTheme.typography.labelSmall)
+                } else if (row.isCorrected) {
+                    Text("CORRECTED", color = Brand.Warning, style = MaterialTheme.typography.labelSmall)
                 } else {
                     ErpButton(
                         text = "Void",
                         onClick = onVoid,
-                        enabled = canVoid,
+                        enabled = canVoid &&
+                            (row.method != "cash" || row.sourceShiftStatus == "open"),
                         intent = ActionIntent.Destructive,
                         leadingIcon = Icons.Default.Block,
                     )
@@ -1588,6 +1709,32 @@ private fun PendingFinanceChangesPanel(
                 error = row.error,
                 canRetry = access.canRecordExpenses,
                 onRetry = { vm.retryExpense(row.localId) },
+                onDiscard = if (row.rejected && access.canRecordExpenses) {
+                    { vm.openDiscardRejectedExpense(row) }
+                } else {
+                    null
+                },
+            )
+        }
+        state.pendingExpenseReceipts.forEach { row ->
+            FinancePendingRow(
+                text = "Receipt: ${row.filename}",
+                rejected = row.rejected,
+                error = row.error,
+                pendingLabel = if (row.waitingForExpense) {
+                    "Saved safely · waiting for the expense to sync first"
+                } else {
+                    "Saved safely · waiting to upload"
+                },
+                canRetry = access.canRecordExpenses,
+                onRetry = { vm.retryExpenseReceipt(row.localId) },
+                onDiscard = if (
+                    row.rejected && row.expenseServerId != null && access.canRecordExpenses
+                ) {
+                    { vm.openDiscardExpenseReceipt(row) }
+                } else {
+                    null
+                },
             )
         }
         state.pendingAssets.forEach { row ->
@@ -1613,12 +1760,65 @@ private fun PendingFinanceChangesPanel(
 }
 
 @Composable
+private fun RejectedExpenseDiscardDialog(
+    row: PendingExpenseRow,
+    online: Boolean,
+    busy: Boolean,
+    error: String?,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        title = { Text("Resolve rejected expense?") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "${row.amountMinor.asRupees()} · ${row.categoryName}",
+                    color = Brand.Foreground,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    "The tablet will ask the server about this exact saved action. If it was recorded, the expense is marked synced and its saved receipts continue uploading. Only when the server proves it is absent will the exact rejected expense, receipts and private file chunks be removed.",
+                    color = Brand.ForegroundMuted,
+                )
+                Text(
+                    "Use Retry if the original request is now valid. An old server or an unclear answer keeps everything unchanged.",
+                    color = Brand.ForegroundMuted,
+                )
+                if (!online) Text("Reconnect before resolving this entry.", color = Brand.Warning)
+                error?.let { Text(it, color = Brand.Danger) }
+            }
+        },
+        confirmButton = {
+            ErpButton(
+                text = if (busy) "Checking server…" else "Check server and resolve",
+                onClick = onConfirm,
+                enabled = online && !busy,
+                intent = ActionIntent.Destructive,
+            )
+        },
+        dismissButton = {
+            ErpButton(
+                text = "Keep saved request",
+                onClick = onDismiss,
+                enabled = !busy,
+                intent = ActionIntent.Quiet,
+            )
+        },
+        containerColor = Brand.Surface,
+    )
+}
+
+@Composable
 private fun FinancePendingRow(
     text: String,
     rejected: Boolean,
     error: String?,
     canRetry: Boolean,
     onRetry: () -> Unit,
+    onDiscard: (() -> Unit)? = null,
+    pendingLabel: String = "Not synced yet",
 ) {
     Column(
         Modifier.fillMaxWidth()
@@ -1629,20 +1829,80 @@ private fun FinancePendingRow(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(text, color = Brand.Foreground, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
             if (rejected) {
-                ErpButton(
-                    text = "Retry",
-                    onClick = onRetry,
-                    enabled = canRetry,
-                    intent = ActionIntent.Secondary,
-                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ErpButton(
+                        text = "Retry",
+                        onClick = onRetry,
+                        enabled = canRetry,
+                        intent = ActionIntent.Secondary,
+                    )
+                    onDiscard?.let {
+                        ErpButton(
+                            text = "Remove saved copy",
+                            onClick = it,
+                            enabled = canRetry,
+                            intent = ActionIntent.Quiet,
+                        )
+                    }
+                }
             }
         }
         Text(
-            if (rejected) "Could not sync: ${error ?: "unknown error"}" else "Not synced yet",
+            if (rejected) "Could not sync: ${error ?: "unknown error"}" else pendingLabel,
             color = if (rejected) Brand.Danger else Brand.Warning,
             style = MaterialTheme.typography.labelSmall,
         )
     }
+}
+
+@Composable
+internal fun RejectedExpenseReceiptDiscardDialog(
+    filename: String,
+    online: Boolean,
+    busy: Boolean,
+    error: String?,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        title = { Text("Remove rejected receipt?") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(filename, color = Brand.Foreground, fontWeight = FontWeight.SemiBold)
+                Text(
+                    "The tablet will first refresh the server receipt list. If this exact file is already there, it will be marked synced. If the server proves it is absent, only this rejected saved file is removed; the expense stays recorded.",
+                    color = Brand.ForegroundMuted,
+                )
+                Text(
+                    "Use Retry instead if the same file may now be accepted. A corrected replacement can be attached to the recorded expense from Web ERP.",
+                    color = Brand.ForegroundMuted,
+                )
+                if (!online) {
+                    Text("Reconnect before removing saved evidence.", color = Brand.Warning)
+                }
+                error?.let { Text(it, color = Brand.Danger) }
+            }
+        },
+        confirmButton = {
+            ErpButton(
+                text = if (busy) "Checking server…" else "Check server and remove",
+                onClick = onConfirm,
+                enabled = online && !busy,
+                intent = ActionIntent.Destructive,
+            )
+        },
+        dismissButton = {
+            ErpButton(
+                text = "Keep saved copy",
+                onClick = onDismiss,
+                enabled = !busy,
+                intent = ActionIntent.Quiet,
+            )
+        },
+        containerColor = Brand.Surface,
+        properties = DialogProperties(dismissOnBackPress = !busy, dismissOnClickOutside = !busy),
+    )
 }
 
 @Composable
@@ -1690,6 +1950,30 @@ private fun PendingOnlineFinanceWriteBanner(
 // CREATE DIALOGS
 // ============================================================================
 @Composable
+internal fun FinanceFormDialog(
+    title: String,
+    confirmLabel: String,
+    busy: Boolean,
+    error: String?,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+    confirmEnabled: Boolean = true,
+    content: @Composable (formEnabled: Boolean) -> Unit,
+) {
+    FormDialog(
+        title = title,
+        confirmLabel = confirmLabel,
+        busy = busy,
+        error = error,
+        onDismiss = onDismiss,
+        onConfirm = onConfirm,
+        confirmEnabled = confirmEnabled,
+    ) {
+        content(!busy)
+    }
+}
+
+@Composable
 private fun ManualCollectionCreateDialog(
     state: FinanceUiState,
     vm: FinanceViewModel,
@@ -1703,7 +1987,18 @@ private fun ManualCollectionCreateDialog(
         mutableStateOf(defaultManualCollectionReference(businessDate, method))
     }
     var note by remember { mutableStateOf("") }
+    var shiftId by remember { mutableStateOf("") }
     var localError by remember { mutableStateOf<String?>(null) }
+    val cashShiftOptions = state.cashExpenseShifts.filter { it.branchId == branchId }
+
+    LaunchedEffect(branchId, method, cashShiftOptions) {
+        shiftId = if (method == "cash") {
+            cashShiftOptions.firstOrNull { it.id == shiftId }?.id
+                ?: cashShiftOptions.firstOrNull()?.id.orEmpty()
+        } else {
+            ""
+        }
+    }
 
     fun changeDate(next: String) {
         val oldDefault = defaultManualCollectionReference(businessDate, method)
@@ -1721,7 +2016,7 @@ private fun ManualCollectionCreateDialog(
         }
     }
 
-    FormDialog(
+    FinanceFormDialog(
         title = "Add manual collection",
         confirmLabel = "Record collection",
         busy = state.busy,
@@ -1738,6 +2033,7 @@ private fun ManualCollectionCreateDialog(
                     localError = null
                     vm.createManualCollection(
                         branchId = branchId,
+                        shiftId = shiftId.takeIf { method == "cash" },
                         businessDate = businessDate,
                         method = method,
                         amountMinor = amountMinor,
@@ -1747,7 +2043,7 @@ private fun ManualCollectionCreateDialog(
                 }
             }
         },
-    ) {
+    ) { formEnabled ->
         OperationalBanner(
             title = "Unitemized revenue only",
             detail = if (presentation.showsRestaurantOperations) {
@@ -1758,11 +2054,12 @@ private fun ManualCollectionCreateDialog(
             tone = UiTone.Warning,
             icon = Icons.Default.Payments,
         )
-        BusinessDatePickerField(businessDate, ::changeDate)
+        BusinessDatePickerField(businessDate, ::changeDate, enabled = formEnabled)
         PickerField(
             "Shop",
             state.branches.firstOrNull { it.id == branchId }?.name ?: "Select…",
             state.branches.map { it.id to it.name },
+            enabled = formEnabled,
         ) { branchId = it }
         PickerField(
             "Payment method",
@@ -1773,19 +2070,39 @@ private fun ManualCollectionCreateDialog(
                 "card" to "Card",
                 "bank" to "Bank transfer",
             ),
+            enabled = formEnabled,
         ) { changeMethod(it) }
-        DecimalField(amountRupees, { amountRupees = it }, "Amount (₹)")
+        if (method == "cash") {
+            PickerField(
+                "Drawer shift",
+                cashShiftOptions.firstOrNull { it.id == shiftId }?.let {
+                    "${it.openedBy} · ${it.availableMinor.asRupees()} available"
+                } ?: "No verified open drawer",
+                cashShiftOptions.map {
+                    it.id to "${it.openedBy} · ${it.availableMinor.asRupees()} available"
+                },
+                enabled = formEnabled && cashShiftOptions.isNotEmpty(),
+            ) { shiftId = it }
+            Note("This cash is added to the selected open shift drawer when the server records it.")
+        }
+        DecimalField(amountRupees, { amountRupees = it }, "Amount (₹)", enabled = formEnabled)
         OutlinedTextField(
             value = sourceRef,
             onValueChange = { sourceRef = it.take(160) },
+            enabled = formEnabled,
             label = { Text("Evidence reference") },
-            supportingText = { Text("Daily sheet row, settlement reference, or bank evidence") },
+            supportingText = {
+                Text(
+                    "Private ERP evidence only. Google Sheets receives a generated ERP reference.",
+                )
+            },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
         OutlinedTextField(
             value = note,
             onValueChange = { note = it.take(500) },
+            enabled = formEnabled,
             label = { Text("Note (optional)") },
             modifier = Modifier.fillMaxWidth(),
         )
@@ -1798,18 +2115,32 @@ private fun TipPayoutCreateDialog(state: FinanceUiState, vm: FinanceViewModel) {
     var method by remember { mutableStateOf("cash") }
     var amountRupees by remember { mutableStateOf("") }
     var note by remember { mutableStateOf("") }
+    var shiftId by remember { mutableStateOf("") }
     var localError by remember { mutableStateOf<String?>(null) }
     val amountMinor = parseRupeesToMinor(amountRupees)
     val owed = state.tipsPayableMinor
     val exceedsOwed = amountMinor != null && owed != null && amountMinor > owed
+    val cashShiftOptions = state.cashExpenseShifts.filter { it.branchId == branchId }
+    val selectedCashShift = cashShiftOptions.firstOrNull { it.id == shiftId }
+    val exceedsDrawer = method == "cash" && amountMinor != null &&
+        selectedCashShift != null && amountMinor > selectedCashShift.availableMinor
 
-    FormDialog(
+    LaunchedEffect(branchId, method, cashShiftOptions) {
+        shiftId = if (method == "cash") {
+            cashShiftOptions.firstOrNull { it.id == shiftId }?.id
+                ?: cashShiftOptions.firstOrNull()?.id.orEmpty()
+        } else {
+            ""
+        }
+    }
+
+    FinanceFormDialog(
         title = "Pay out tips",
         confirmLabel = "Record payout",
         busy = state.busy,
         error = localError ?: state.formError,
         onDismiss = vm::closeDialog,
-        confirmEnabled = !exceedsOwed,
+        confirmEnabled = !exceedsOwed && !exceedsDrawer,
         onConfirm = {
             val parsedAmount = parseRupeesToMinor(amountRupees)
             when {
@@ -1825,6 +2156,7 @@ private fun TipPayoutCreateDialog(state: FinanceUiState, vm: FinanceViewModel) {
                     localError = null
                     vm.createTipPayout(
                         branchId = branchId,
+                        shiftId = shiftId.takeIf { method == "cash" },
                         method = method,
                         amountMinor = parsedAmount,
                         paidAt = nowIso(),
@@ -1833,7 +2165,7 @@ private fun TipPayoutCreateDialog(state: FinanceUiState, vm: FinanceViewModel) {
                 }
             }
         },
-    ) {
+    ) { formEnabled ->
         OperationalBanner(
             title = "Owed to staff: ${owed?.asRupees() ?: "Unavailable"}",
             detail =
@@ -1845,6 +2177,7 @@ private fun TipPayoutCreateDialog(state: FinanceUiState, vm: FinanceViewModel) {
             "Shop",
             state.branches.firstOrNull { it.id == branchId }?.name ?: "Select…",
             state.branches.map { it.id to it.name },
+            enabled = formEnabled,
         ) { branchId = it }
         PickerField(
             "Paid via",
@@ -1855,8 +2188,22 @@ private fun TipPayoutCreateDialog(state: FinanceUiState, vm: FinanceViewModel) {
                 "card" to "Card",
                 "bank" to "Bank transfer",
             ),
+            enabled = formEnabled,
         ) { method = it }
-        DecimalField(amountRupees, { amountRupees = it }, "Amount (₹)")
+        if (method == "cash") {
+            PickerField(
+                "Drawer shift",
+                selectedCashShift?.let {
+                    "${it.openedBy} · ${it.availableMinor.asRupees()} available"
+                } ?: "No verified open drawer",
+                cashShiftOptions.map {
+                    it.id to "${it.openedBy} · ${it.availableMinor.asRupees()} available"
+                },
+                enabled = formEnabled && cashShiftOptions.isNotEmpty(),
+            ) { shiftId = it }
+            Note("This cash is deducted from the selected open shift drawer atomically.")
+        }
+        DecimalField(amountRupees, { amountRupees = it }, "Amount (₹)", enabled = formEnabled)
         if (exceedsOwed) {
             Text(
                 "This is more than the ${owed?.asRupees()} currently owed to staff.",
@@ -1864,9 +2211,17 @@ private fun TipPayoutCreateDialog(state: FinanceUiState, vm: FinanceViewModel) {
                 style = MaterialTheme.typography.bodySmall,
             )
         }
+        if (exceedsDrawer) {
+            Text(
+                "This exceeds the ${selectedCashShift?.availableMinor?.asRupees()} available in the selected drawer.",
+                color = Brand.Danger,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
         OutlinedTextField(
             value = note,
             onValueChange = { note = it.take(500) },
+            enabled = formEnabled,
             label = { Text("Staff split / payout note") },
             supportingText = { Text("For example: split among Anu, Basil and Reji on shift") },
             minLines = 2,
@@ -1884,7 +2239,7 @@ private fun VoidManualCollectionDialog(
 ) {
     var reason by remember { mutableStateOf("") }
     var localError by remember { mutableStateOf<String?>(null) }
-    FormDialog(
+    FinanceFormDialog(
         title = "Void manual collection",
         confirmLabel = "Void collection",
         busy = state.busy,
@@ -1899,7 +2254,7 @@ private fun VoidManualCollectionDialog(
                 vm.voidManualCollection(row, reason)
             }
         },
-    ) {
+    ) { formEnabled ->
         OperationalBanner(
             title = "Void ${row.amountMinor.asRupees()} · ${paidViaLabel(row.method)}?",
             detail =
@@ -1910,6 +2265,7 @@ private fun VoidManualCollectionDialog(
         OutlinedTextField(
             value = reason,
             onValueChange = { reason = it.take(500) },
+            enabled = formEnabled,
             label = { Text("Void reason") },
             minLines = 2,
             modifier = Modifier.fillMaxWidth(),
@@ -1921,7 +2277,7 @@ private fun VoidManualCollectionDialog(
 private fun VoidTipPayoutDialog(row: TipPayout, state: FinanceUiState, vm: FinanceViewModel) {
     var reason by remember { mutableStateOf("") }
     var localError by remember { mutableStateOf<String?>(null) }
-    FormDialog(
+    FinanceFormDialog(
         title = "Void tip payout",
         confirmLabel = "Void payout",
         busy = state.busy,
@@ -1936,7 +2292,7 @@ private fun VoidTipPayoutDialog(row: TipPayout, state: FinanceUiState, vm: Finan
                 vm.voidTipPayout(row, reason)
             }
         },
-    ) {
+    ) { formEnabled ->
         OperationalBanner(
             title = "Void ${row.amountMinor.asRupees()} · ${paidViaLabel(row.method)}?",
             detail =
@@ -1947,6 +2303,7 @@ private fun VoidTipPayoutDialog(row: TipPayout, state: FinanceUiState, vm: Finan
         OutlinedTextField(
             value = reason,
             onValueChange = { reason = it.take(500) },
+            enabled = formEnabled,
             label = { Text("Void reason") },
             minLines = 2,
             modifier = Modifier.fillMaxWidth(),
@@ -1955,7 +2312,11 @@ private fun VoidTipPayoutDialog(row: TipPayout, state: FinanceUiState, vm: Finan
 }
 
 @Composable
-private fun BusinessDatePickerField(value: String, onValueChange: (String) -> Unit) {
+private fun BusinessDatePickerField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    enabled: Boolean = true,
+) {
     val context = LocalContext.current
     val current = runCatching { LocalDate.parse(value) }.getOrDefault(financeBusinessToday())
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -1978,12 +2339,15 @@ private fun BusinessDatePickerField(value: String, onValueChange: (String) -> Un
             },
             modifier = Modifier.fillMaxWidth(),
             intent = ActionIntent.Secondary,
+            enabled = enabled,
         )
     }
 }
 
 @Composable
 private fun ExpenseCreateDialog(state: FinanceUiState, vm: FinanceViewModel) {
+    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
     var branchId by remember { mutableStateOf(state.branches.firstOrNull()?.id ?: "") }
     var categoryId by remember { mutableStateOf(state.categoryNames.keys.firstOrNull() ?: "") }
     var amountRupees by remember { mutableStateOf("") }
@@ -1991,14 +2355,81 @@ private fun ExpenseCreateDialog(state: FinanceUiState, vm: FinanceViewModel) {
     var vendorName by remember { mutableStateOf("") }
     var invoiceNo by remember { mutableStateOf("") }
     var note by remember { mutableStateOf("") }
+    var shiftId by remember { mutableStateOf("") }
     var localError by remember { mutableStateOf<String?>(null) }
+    var receipt by remember { mutableStateOf<ExpenseReceiptDraft?>(null) }
+    var receiptError by remember { mutableStateOf<String?>(null) }
+    var receiptLoading by remember { mutableStateOf(false) }
+    var cameraUriValue by rememberSaveable { mutableStateOf<String?>(null) }
+    val cashShiftOptions = state.cashExpenseShifts.filter { it.branchId == branchId }
+    val selectedCashShift = cashShiftOptions.firstOrNull { it.id == shiftId }
 
-    FormDialog(
+    // Run once on form entry. Re-running when the camera callback clears its
+    // URI could race the receipt reader after a very long-lived camera task.
+    LaunchedEffect(Unit) {
+        withContext(Dispatchers.IO) {
+            pruneStaleExpenseReceiptCameraFiles(
+                context,
+                activeUri = cameraUriValue?.let(Uri::parse),
+            )
+        }
+    }
+
+    fun loadReceipt(uri: Uri, source: String, discardAfter: Boolean = false) {
+        receiptLoading = true
+        receiptError = null
+        coroutineScope.launch {
+            try {
+                when (val result = loadExpenseReceipt(context, uri, source)) {
+                    is ExpenseReceiptLoadResult.Ready -> receipt = result.receipt
+                    is ExpenseReceiptLoadResult.Rejected -> receiptError = result.message
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } finally {
+                if (discardAfter) discardExpenseReceiptCameraUri(context, uri)
+                receiptLoading = false
+            }
+        }
+    }
+
+    val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { saved ->
+        val uri = cameraUriValue?.let(Uri::parse)
+        cameraUriValue = null
+        if (saved && uri != null) {
+            loadReceipt(uri, EXPENSE_RECEIPT_CAMERA_SOURCE, discardAfter = true)
+        } else {
+            discardExpenseReceiptCameraUri(context, uri)
+        }
+    }
+    val receiptPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri?.let { loadReceipt(it, EXPENSE_RECEIPT_FILE_SOURCE) }
+    }
+    val takePhoto = {
+        launchExpenseReceiptCapture(
+            create = { createExpenseReceiptCameraUri(context) },
+            retain = { uri -> cameraUriValue = uri.toString() },
+            launch = cameraLauncher::launch,
+            discard = { uri ->
+                cameraUriValue = null
+                discardExpenseReceiptCameraUri(context, uri)
+            },
+        )
+            .onFailure {
+                receiptError = "The camera could not be opened. Choose a receipt file instead."
+            }
+        Unit
+    }
+
+    FinanceFormDialog(
         title = "Add expense",
         confirmLabel = "Queue expense",
-        busy = state.busy,
-        error = localError ?: state.formError,
-        onDismiss = vm::closeDialog,
+        busy = state.busy || receiptLoading,
+        error = localError ?: receiptError ?: state.formError,
+        onDismiss = {
+            discardExpenseReceiptCameraUri(context, cameraUriValue?.let(Uri::parse))
+            vm.closeDialog()
+        },
         onConfirm = confirmExpense@{
             val amountMinor = parseRupeesToMinor(amountRupees)
             if (amountMinor == null) {
@@ -2013,50 +2444,224 @@ private fun ExpenseCreateDialog(state: FinanceUiState, vm: FinanceViewModel) {
                 localError = "Pick a branch and a category."
                 return@confirmExpense
             }
+            val shiftError = cashExpenseSelectionError(
+                paidVia = paidVia,
+                branchId = branchId,
+                shiftId = shiftId.ifBlank { null },
+                amountMinor = amountMinor,
+                options = cashShiftOptions,
+            )
+            if (shiftError != null) {
+                localError = shiftError
+                return@confirmExpense
+            }
             localError = null
             vm.postExpense(
                 branchId = branchId, categoryId = categoryId, amountMinor = amountMinor,
                 paidVia = paidVia, paidAt = nowIso(), vendorName = vendorName,
                 invoiceNo = invoiceNo, note = note,
+                shiftId = shiftId.ifBlank { null }, receipt = receipt,
             )
         },
-    ) {
+    ) { formEnabled ->
         PickerField(
             "Branch",
             state.branches.firstOrNull { it.id == branchId }?.name ?: "Select…",
             state.branches.map { it.id to it.name },
+            enabled = formEnabled,
         ) { branchId = it }
         PickerField(
             "Category",
             state.categoryNames[categoryId] ?: "Select…",
             state.categoryNames.entries.map { it.key to it.value },
+            enabled = formEnabled,
         ) { categoryId = it }
-        DecimalField(amountRupees, { amountRupees = it }, "Amount (₹)")
+        DecimalField(amountRupees, { amountRupees = it }, "Amount (₹)", enabled = formEnabled)
         PickerField(
             "Paid via",
             paidViaLabel(paidVia),
             ExpensePaymentPolicy.Options.map { it.value to it.label },
+            enabled = formEnabled,
         ) { paidVia = it }
-        Text(
-            ExpensePaymentPolicy.CashDrawerGuidance + " UPI and business debit-card " +
-                "expenses reduce the Bank balance. Business credit-card liabilities are not " +
-                "supported yet; do not record a credit-card purchase as Card.",
-            style = MaterialTheme.typography.labelSmall,
-            color = Brand.ForegroundMuted,
-        )
+        if (paidVia == "cash") {
+            Text(
+                ExpensePaymentPolicy.CashDrawerGuidance,
+                style = MaterialTheme.typography.labelSmall,
+                color = Brand.ForegroundMuted,
+            )
+            PickerField(
+                "Open shift drawer",
+                selectedCashShift?.let {
+                    "${it.openedBy} · ${it.availableMinor.asRupees()} available"
+                } ?: "Select the shift that supplied the cash…",
+                cashShiftOptions.map {
+                    it.id to "${it.openedBy} · ${it.availableMinor.asRupees()} available"
+                },
+                enabled = formEnabled,
+            ) { shiftId = it }
+            if (cashShiftOptions.isEmpty()) {
+                Text(
+                    "No eligible drawer is available on this tablet. Record a cash paid-out " +
+                        "from the Android tablet that opened the shift; for a Web-opened drawer, " +
+                        "record it in Web ERP. UPI and card expenses remain available here.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Brand.Warning,
+                )
+            }
+            selectedCashShift?.let { shift ->
+                Column(
+                    Modifier.fillMaxWidth().clip(Radius.shapeSm)
+                        .background(Brand.SurfaceRaised).padding(Spacing.sm),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    Text(
+                        "Opened by ${shift.openedBy}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Brand.Foreground,
+                    )
+                    Text(
+                        "${shift.expectedMinor.asRupees()} expected in drawer",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Brand.ForegroundMuted,
+                    )
+                    if (shift.queuedMinor > 0) {
+                        Text(
+                            "${shift.availableMinor.asRupees()} remains after saved cash paid-outs on this tablet",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Brand.Warning,
+                        )
+                    }
+                }
+            }
+        } else {
+            Text(
+                "UPI and business debit-card expenses reduce the Bank balance. Business credit-card liabilities are not supported yet; do not record a credit-card purchase as Card.",
+                style = MaterialTheme.typography.labelSmall,
+                color = Brand.ForegroundMuted,
+            )
+        }
         OutlinedTextField(
             value = vendorName, onValueChange = { vendorName = it },
+            enabled = formEnabled,
             label = { Text("Vendor (optional)") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
         )
         OutlinedTextField(
             value = invoiceNo, onValueChange = { invoiceNo = it },
+            enabled = formEnabled,
             label = { Text("Invoice no. (optional)") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
         )
         OutlinedTextField(
             value = note, onValueChange = { note = it },
+            enabled = formEnabled,
             label = { Text("Note (optional)") }, modifier = Modifier.fillMaxWidth(),
         )
+        Text(
+            "Receipt evidence (optional)",
+            style = MaterialTheme.typography.labelLarge,
+            color = Brand.Foreground,
+        )
+        Text(
+            "Take a clear photo or choose a JPEG, PNG, WebP or PDF up to 10 MB. You can save the expense without a receipt.",
+            style = MaterialTheme.typography.labelSmall,
+            color = Brand.ForegroundMuted,
+        )
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            if (maxWidth < 420.dp) {
+                Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                    ErpButton(
+                        text = "Take photo",
+                        onClick = takePhoto,
+                        enabled = formEnabled,
+                        intent = ActionIntent.Secondary,
+                        leadingIcon = Icons.Default.CameraAlt,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    ErpButton(
+                        text = "Choose receipt",
+                        onClick = { receiptPicker.launch(EXPENSE_RECEIPT_PICKER_TYPES) },
+                        enabled = formEnabled,
+                        intent = ActionIntent.Secondary,
+                        leadingIcon = Icons.Default.UploadFile,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            } else {
+                Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                    ErpButton(
+                        text = "Take photo",
+                        onClick = takePhoto,
+                        enabled = formEnabled,
+                        intent = ActionIntent.Secondary,
+                        leadingIcon = Icons.Default.CameraAlt,
+                        modifier = Modifier.weight(1f),
+                    )
+                    ErpButton(
+                        text = "Choose receipt",
+                        onClick = { receiptPicker.launch(EXPENSE_RECEIPT_PICKER_TYPES) },
+                        enabled = formEnabled,
+                        intent = ActionIntent.Secondary,
+                        leadingIcon = Icons.Default.UploadFile,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+        }
+        receipt?.let { selected ->
+            Row(
+                Modifier.fillMaxWidth().clip(Radius.shapeSm)
+                    .background(Brand.SurfaceRaised).padding(Spacing.sm),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        selected.filename,
+                        color = Brand.Foreground,
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        expenseReceiptSizeLabel(selected.content.size),
+                        color = Brand.ForegroundMuted,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
+                ErpButton(
+                    text = "Remove",
+                    onClick = {
+                        receipt = null
+                        receiptError = null
+                    },
+                    enabled = formEnabled,
+                    intent = ActionIntent.Quiet,
+                    leadingIcon = Icons.Default.Delete,
+                )
+            }
+        }
     }
+}
+
+internal fun expenseReceiptSummary(count: Int, status: String): String {
+    val evidence = if (count == 0) "No receipt" else countLabel(count, "receipt")
+    val review = when (status) {
+        "verified" -> "Verified"
+        "rejected" -> "Rejected"
+        "not_required" -> "Not required"
+        else -> "Needs review"
+    }
+    return "$evidence · $review"
+}
+
+private fun expenseReceiptStatusColor(status: String): Color = when (status) {
+    "verified", "not_required" -> Brand.Good
+    "rejected" -> Brand.Danger
+    else -> Brand.Warning
+}
+
+internal fun expenseReceiptSizeLabel(sizeBytes: Int): String = when {
+    sizeBytes >= 1024 * 1024 -> "%.1f MB".format(Locale.ROOT, sizeBytes / (1024.0 * 1024.0))
+    sizeBytes >= 1024 -> "%.1f KB".format(Locale.ROOT, sizeBytes / 1024.0)
+    else -> "$sizeBytes bytes"
 }
 
 @Composable
@@ -2076,7 +2681,7 @@ private fun AssetCreateDialog(
     var notesText by remember { mutableStateOf("") }
     var localError by remember { mutableStateOf<String?>(null) }
 
-    FormDialog(
+    FinanceFormDialog(
         title = "Register asset",
         confirmLabel = "Queue asset",
         busy = state.busy,
@@ -2106,15 +2711,17 @@ private fun AssetCreateDialog(
                 }
             }
         },
-    ) {
+    ) { formEnabled ->
         OutlinedTextField(
             value = name, onValueChange = { name = it },
+            enabled = formEnabled,
             label = { Text("Name") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
         )
         PickerField(
             "Branch",
             state.branches.firstOrNull { it.id == branchId }?.name ?: "Select…",
             state.branches.map { it.id to it.name },
+            enabled = formEnabled,
         ) { branchId = it }
         PickerField(
             "Category",
@@ -2128,19 +2735,32 @@ private fun AssetCreateDialog(
                 add("electronics" to "Electronics")
                 add("other" to "Other")
             },
+            enabled = formEnabled,
         ) { type = it }
-        DecimalField(purchaseRupees, { purchaseRupees = it }, "Purchase cost (₹)")
+        DecimalField(
+            purchaseRupees,
+            { purchaseRupees = it },
+            "Purchase cost (₹)",
+            enabled = formEnabled,
+        )
         OutlinedTextField(
             value = usefulLifeMonths,
             onValueChange = { usefulLifeMonths = it.filter(Char::isDigit) },
+            enabled = formEnabled,
             label = { Text("Useful life (months)") },
             singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
             modifier = Modifier.fillMaxWidth(),
         )
-        DecimalField(salvageRupees, { salvageRupees = it }, "Salvage value (₹)")
+        DecimalField(
+            salvageRupees,
+            { salvageRupees = it },
+            "Salvage value (₹)",
+            enabled = formEnabled,
+        )
         OutlinedTextField(
             value = notesText, onValueChange = { notesText = it },
+            enabled = formEnabled,
             label = { Text("Notes (optional)") }, modifier = Modifier.fillMaxWidth(),
         )
     }
@@ -2155,7 +2775,7 @@ private fun CapitalEntryCreateDialog(partner: Partner, state: FinanceUiState, vm
     var note by remember { mutableStateOf("") }
     var localError by remember { mutableStateOf<String?>(null) }
 
-    FormDialog(
+    FinanceFormDialog(
         title = "Capital movement — ${partner.name}",
         confirmLabel = "Queue entry",
         busy = state.busy,
@@ -2180,18 +2800,21 @@ private fun CapitalEntryCreateDialog(partner: Partner, state: FinanceUiState, vm
                 }
             }
         },
-    ) {
+    ) { formEnabled ->
         PickerField(
             "Type", if (type == "invest") "Investment" else "Capital repayment",
             listOf("invest" to "Investment", "withdraw" to "Capital repayment"),
+            enabled = formEnabled,
         ) { type = it }
-        DecimalField(amountRupees, { amountRupees = it }, "Amount (₹)")
+        DecimalField(amountRupees, { amountRupees = it }, "Amount (₹)", enabled = formEnabled)
         PickerField(
             "Settlement account", paidViaLabel(settlementAccount).let { if (it == "Bank transfer") "Bank" else it },
             listOf("cash" to "Cash", "bank" to "Bank", "upi" to "UPI"),
+            enabled = formEnabled,
         ) { settlementAccount = it }
         OutlinedTextField(
             value = sourceRef, onValueChange = { sourceRef = it },
+            enabled = formEnabled,
             label = { Text("Bank UTR / UPI id / voucher no.") }, singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
@@ -2201,6 +2824,7 @@ private fun CapitalEntryCreateDialog(partner: Partner, state: FinanceUiState, vm
         )
         OutlinedTextField(
             value = note, onValueChange = { note = it },
+            enabled = formEnabled,
             label = { Text("Note (optional)") }, modifier = Modifier.fillMaxWidth(),
         )
     }

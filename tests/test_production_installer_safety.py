@@ -17,6 +17,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "infra" / "scripts" / "install-on-vm.sh"
 LOCK_HELPER = ROOT / "infra" / "scripts" / "production_install_lock.py"
+HARDENED_SCANNER = ROOT / "infra" / "scripts" / "run-hardened-image-scanners.sh"
 
 
 def _load_lock_helper():
@@ -38,7 +39,7 @@ def test_candidate_build_uses_a_private_immutable_git_archive() -> None:
     assert source.index(reexec) < source.index(docker_step)
     assert '--project-directory "$CANDIDATE_BUILD_ROOT"' in source
     assert '-f "$RELEASE_COMPOSE_FILE"' in source
-    assert 'for candidate_service in caddy postgres backend frontend; do' in source
+    assert 'for candidate_service in caddy postgres redis backend frontend; do' in source
     build_command = (
         'COMPOSE_PARALLEL_LIMIT=1 "${candidate_compose[@]}" '
         + "\\\n"
@@ -52,11 +53,16 @@ def test_candidate_build_uses_a_private_immutable_git_archive() -> None:
 
 def test_exact_candidate_images_are_scanned_before_maintenance() -> None:
     source = INSTALLER.read_text(encoding="utf-8")
+    scanner_source = HARDENED_SCANNER.read_text(encoding="utf-8")
+    invocation = 'bash "$HARDENED_SCANNER_TOOL"'
+    source = source.replace(invocation, scanner_source + "\n" + invocation)
+    assert '600s \\\n  docker pull "$SYFT_IMAGE"' in source
+    assert '600s \\\n  docker pull "$GRYPE_IMAGE"' in source
 
     attestation = (
         'CANDIDATE_IMAGE_ATTESTATION=$(python3 "$CANDIDATE_PARITY_TOOL" candidate'
     )
-    immutable_save = 'docker image save "$candidate_image_id" --output "$image_archive"'
+    immutable_save = 'docker image save "$candidate_image_ref" --output "$image_archive"'
     syft = '"$SYFT_IMAGE" "/scan/image.tar" --from docker-archive --output syft-json'
     grype = '"$GRYPE_IMAGE" "docker-archive:/scan/image.tar"'
     maintenance = 'echo "==> Entering scheduled maintenance and draining application writers…"'
@@ -76,6 +82,8 @@ def test_exact_candidate_images_are_scanned_before_maintenance() -> None:
     ) >= 2
     assert "--network none --read-only --cap-drop ALL" in source
     assert source.count("--security-opt no-new-privileges") >= 2
+    assert "--vex /scan/zlib.openvex.json" in source
+    assert 'python3 "$ZLIB_VEX_VERIFIER"' in source
 
 
 def test_git_archive_excludes_ignored_bytes_and_freezes_tracked_bytes(tmp_path: Path) -> None:
@@ -314,14 +322,14 @@ def test_candidate_attestation_tool_and_compose_are_from_the_commit_snapshot() -
     snapshot_root = '--root "$CANDIDATE_BUILD_ROOT" --env-file "$ENV_CANDIDATE"'
     final_parity = 'python3 "$CANDIDATE_PARITY_TOOL" running'
     assert source.index(tool) < source.index(attestation) < source.index(snapshot_root)
-    assert source.count(final_parity) == 2
+    assert source.count(final_parity) == 3
     cleanup = 'rm -rf "$CANDIDATE_BUILD_ROOT"'
     assert source.count(cleanup) == 1
     assert source.index(cleanup) < source.index(
         'exec /bin/bash "$CANDIDATE_BUILD_ROOT/infra/scripts/install-on-vm.sh"'
     )
     assert source.count('"${candidate_compose[@]}"') >= 10
-    assert source.count('--project-name "$DEPLOY_PROJECT_NAME"') == 3
+    assert source.count('--project-name "$DEPLOY_PROJECT_NAME"') == 4
     assert "up -d --no-build --pull never postgres redis backend frontend" in source
     assert "up -d --no-build --pull never caddy" in source
 
@@ -341,21 +349,120 @@ def test_candidate_attestation_tool_and_compose_are_from_the_commit_snapshot() -
     assert '--project-directory "$PRIOR_SOURCE_ROOT"' in operational_source
 
 
-def test_digest_pinned_redis_is_present_and_attested_before_cutover() -> None:
+def test_code30_2_stale_outbox_bridge_completes_cleanup_before_caddy() -> None:
     source = INSTALLER.read_text(encoding="utf-8")
 
-    frozen_config = (
-        '"${candidate_compose[@]}" --env-file "$ENV_CANDIDATE" '
-        "config --format json"
+    bridge_default = "CODE30_2_STALE_OUTBOX_BRIDGE_USED=false"
+    quarantine_acceptance = (
+        'echo "==> Verified one-time Code30.2 emulator quarantine: '
+        '$quarantine_evidence_result"'
     )
-    digest_guard = (
+    bridge_enabled = "CODE30_2_STALE_OUTBOX_BRIDGE_USED=true"
+    migration_guard = 'if [ "$candidate_database_head" != 0078 ]; then'
+    stop_backend = (
+        '"${candidate_compose[@]}" --env-file .env stop -t 60 backend'
+    )
+    post_migration_backup = (
+        'POST_MIGRATION_DATABASE_BACKUP="$UPGRADE_SNAPSHOT/'
+        'database-code30-2-0078.dump"'
+    )
+    dry_run = (
+        'cleanup_dry_run_output=$(bash "$CLEANUP_RUNNER" \\\n'
+        '    --postgres-container "$CANDIDATE_POSTGRES_CONTAINER")'
+    )
+    apply = 'cleanup_apply_output=$(bash "$CLEANUP_RUNNER"'
+    restart_backend = (
+        '"${candidate_compose[@]}" --env-file .env \\\n'
+        '    up -d --no-build --pull never backend'
+    )
+    cleanup_accepted = "CODE30_2_CLEANUP_SUCCEEDED=true"
+    preserve_cleaned_database = "trap handle_post_ingress_failure EXIT"
+    public_caddy = (
+        '"${candidate_compose[@]}" --env-file .env \\\n'
+        '  up -d --no-build --pull never caddy'
+    )
+
+    assert source.index(bridge_default) < source.index(quarantine_acceptance)
+    assert source.index(quarantine_acceptance) < source.index(bridge_enabled)
+    assert source.index(bridge_enabled) < source.index(migration_guard)
+    assert source.index(migration_guard) < source.rindex(stop_backend)
+    assert source.rindex(stop_backend) < source.index(post_migration_backup)
+    assert source.index(post_migration_backup) < source.index(dry_run)
+    assert source.index(dry_run) < source.index(apply)
+    assert source.index(apply) < source.index(restart_backend)
+    assert source.index(restart_backend) < source.index(cleanup_accepted)
+    post_cleanup_trap = source.index(
+        preserve_cleaned_database, source.index(cleanup_accepted)
+    )
+    assert source.index(cleanup_accepted) < post_cleanup_trap
+    assert post_cleanup_trap < source.rindex(public_caddy)
+
+    cleanup_block = source[
+        source.index('if [ "$CODE30_2_STALE_OUTBOX_BRIDGE_USED" = true ]; then',
+                     source.index('echo "==> Gaming Centre tariff accepted."'))
+        : source.index('if [ "$FRESH_INSTALL" = true ]; then',
+                       source.index('echo "==> Gaming Centre tariff accepted."'))
+    ]
+    assert "--format=custom" in cleanup_block
+    assert 'pg_restore --list < "$POST_MIGRATION_DATABASE_BACKUP"' in cleanup_block
+    assert "--confirm APPLY_CODE30_1_VERIFIED_TRIAL_CLEANUP" in cleanup_block
+    assert '--expected-state-fingerprint "$cleanup_state_fingerprint"' in cleanup_block
+    assert '--source-git-sha "$CURRENT_REVISION"' in cleanup_block
+    assert '--executor "install-on-vm:$CURRENT_REVISION"' in cleanup_block
+    assert cleanup_block.count('python3 "$CANDIDATE_PARITY_TOOL" running') == 1
+    assert "up -d --no-build --pull never caddy" not in cleanup_block
+
+
+def test_code30_2_cleanup_failure_keeps_ingress_and_backend_closed() -> None:
+    source = INSTALLER.read_text(encoding="utf-8")
+    failure_handler = source[
+        source.index("handle_install_failure() {")
+        : source.index("handle_post_ingress_failure() {")
+    ]
+
+    fail_closed = failure_handler[
+        failure_handler.index('if [ "$PROMOTION_COMPLETE" = true ] && \\\n')
+        : failure_handler.index(
+            'elif [ "$PROMOTION_COMPLETE" = true ] && '
+            '[ -n "$UPGRADE_SNAPSHOT" ]; then'
+        )
+    ]
+    assert '[ "$CODE30_2_CLEANUP_WINDOW_ACTIVE" = true ]' in fail_closed
+    assert '[ "$CODE30_2_CLEANUP_SUCCEEDED" != true ]' in fail_closed
+    assert "stop -t 30 caddy backend" in fail_closed
+    assert "Caddy and backend remain stopped" in fail_closed
+    assert "No pre-upgrade database restore was attempted" in fail_closed
+    assert "up -d" not in fail_closed
+    assert "pg_restore" not in fail_closed
+
+
+def test_code30_2_cleanup_is_not_run_for_ordinary_install_or_upgrade() -> None:
+    source = INSTALLER.read_text(encoding="utf-8")
+    tariff = source.index('echo "==> Gaming Centre tariff accepted."')
+    owner_acceptance = source.index('if [ "$FRESH_INSTALL" = true ]; then', tariff)
+    cleanup_region = source[tariff:owner_acceptance]
+
+    assert cleanup_region.count(
+        'if [ "$CODE30_2_STALE_OUTBOX_BRIDGE_USED" = true ]; then'
+    ) == 1
+    assert cleanup_region.count('bash "$CLEANUP_RUNNER"') == 2
+    assert "Ordinary clean-outbox upgrades and fresh installs never enter this block." in cleanup_region
+
+
+def test_locally_built_redis_is_attested_and_scanned_before_cutover() -> None:
+    source = INSTALLER.read_text(encoding="utf-8")
+
+    build_loop = "for candidate_service in caddy postgres redis backend frontend; do"
+    attestation = (
+        'CANDIDATE_IMAGE_ATTESTATION=$(python3 "$CANDIDATE_PARITY_TOOL" candidate'
+    )
+    reference = "CANDIDATE_REDIS_IMAGE_REF=$(python3 -c"
+    identity = "CANDIDATE_REDIS_IMAGE_ID=$(python3 -c"
+    reference_guard = (
         '[[ "$CANDIDATE_REDIS_IMAGE_REF" =~ '
-        '^redis:7-alpine@sha256:[0-9a-f]{64}$ ]]'
+        '^d-company-erp-redis:[0-9a-f]{40}$ ]]'
     )
-    pull = 'docker pull "$CANDIDATE_REDIS_IMAGE_REF"'
-    image_id = (
-        "CANDIDATE_REDIS_IMAGE_ID=$(docker image inspect --format '{{.Id}}'"
-    )
+    scan_loop = "for candidate_service in caddy postgres redis backend frontend; do"
     pre_maintenance_recheck = (
         '"$CANDIDATE_REDIS_IMAGE_REF")" != "$CANDIDATE_REDIS_IMAGE_ID"'
     )
@@ -366,16 +473,18 @@ def test_digest_pinned_redis_is_present_and_attested_before_cutover() -> None:
     )
     running_image = "docker inspect --format '{{.Image}}'"
 
-    assert frozen_config in source
-    assert digest_guard in source
-    assert source.index(frozen_config) < source.index(digest_guard)
-    assert source.index(digest_guard) < source.index(pull) < source.index(image_id)
-    assert source.index(image_id) < source.index(pre_maintenance_recheck)
-    assert source.index(pre_maintenance_recheck) < source.index(maintenance)
+    assert source.count(scan_loop) >= 2
+    assert source.index(build_loop) < source.index(attestation)
+    assert source.index(attestation) < source.index(reference) < source.index(identity)
+    assert source.index(identity) < source.index(reference_guard)
+    assert source.index(reference_guard) < source.rindex(scan_loop)
+    assert source.rindex(scan_loop) < source.rindex(pre_maintenance_recheck)
+    assert source.rindex(pre_maintenance_recheck) < source.index(maintenance)
     assert source.index(maintenance) < source.index(cutover)
     assert source.index(cutover) < source.index(running_ids)
     assert source.index(running_ids) < source.rindex(running_image)
     assert r"redis_image_ref=%s\nredis_image_id=%s" in source
+    assert 'docker pull "$CANDIDATE_REDIS_IMAGE_REF"' not in source
 
 
 def test_rollback_keeps_ingress_closed_until_core_services_are_ready_and_attested() -> None:
@@ -473,6 +582,155 @@ def test_rollback_keeps_the_live_signed_apk_directory_across_legacy_compose() ->
     assert prior_compose in source
     assert source.index(override) < source.index(manifest)
     assert source.index(live_root) < source.index(prior_compose)
+
+
+def test_existing_environment_crosses_the_frozen_source_boundary_by_absolute_path(
+    tmp_path: Path,
+) -> None:
+    """Execute the installer's real prepare step from a separate source snapshot."""
+
+    repository = tmp_path / "existing repository with spaces"
+    frozen_root = tmp_path / "frozen source with spaces"
+    repository.mkdir()
+    (frozen_root / "infra" / "scripts").mkdir(parents=True)
+    for relative_path in (
+        Path(".env.production.example"),
+        Path("infra/scripts/generate-secrets.sh"),
+        Path("infra/scripts/prepare-production-env.sh"),
+        Path("infra/scripts/validate-production-env.sh"),
+    ):
+        destination = frozen_root / relative_path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / relative_path, destination)
+
+    domain = "erp.example.org"
+    revision = "a" * 40
+    frozen_template = (frozen_root / ".env.production.example").read_text(
+        encoding="utf-8"
+    )
+    frozen_version_match = re.search(
+        r"^APP_VERSION=(\d+\.\d+\.\d+)$", frozen_template, re.MULTILINE
+    )
+    assert frozen_version_match is not None
+    frozen_version = frozen_version_match.group(1)
+    credentials = {
+        "POSTGRES_PASSWORD": "p" * 48,
+        "JWT_SECRET": "j" * 64,
+        "REDIS_PASSWORD": "1" * 64,
+        "REMOTE_ASSISTANCE_PAIRING_SECRET": "q" * 64,
+        "REMOTE_ASSISTANCE_RELAY_SECRET": (
+            "QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE="
+        ),
+        "GOOGLE_SHEETS_SECRET_ENCRYPTION_KEY": (
+            "R0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0c="
+        ),
+        "S3_SECRET_KEY": "m" * 48,
+        "SEED_OWNER_PASSWORD": "source-only-secret-must-not-enter-snapshot",
+    }
+    existing_environment = (
+        frozen_template
+        .replace("CHANGE_ME_git_commit_sha", "b" * 40)
+        .replace(f"APP_VERSION={frozen_version}", "APP_VERSION=3.1.14")
+        .replace("CHANGE_ME.com", domain)
+        .replace("CHANGE_ME_strong_random_password", credentials["POSTGRES_PASSWORD"])
+        .replace("CHANGE_ME_48_char_base64_secret", credentials["JWT_SECRET"])
+        .replace("CHANGE_ME_64_hex_redis_password", credentials["REDIS_PASSWORD"])
+        .replace(
+            "CHANGE_ME_48_char_dedicated_pairing_secret",
+            credentials["REMOTE_ASSISTANCE_PAIRING_SECRET"],
+        )
+        .replace(
+            "CHANGE_ME_32_byte_base64_relay_key",
+            credentials["REMOTE_ASSISTANCE_RELAY_SECRET"],
+        )
+        .replace(
+            "CHANGE_ME_32_byte_base64_sheets_key",
+            credentials["GOOGLE_SHEETS_SECRET_ENCRYPTION_KEY"],
+        )
+        .replace("CHANGE_ME_minio_password", credentials["S3_SECRET_KEY"])
+        .replace(
+            "CHANGE_ME_strong_owner_password", credentials["SEED_OWNER_PASSWORD"]
+        )
+    )
+    source_environment = repository / ".env"
+    source_environment.write_text(existing_environment, encoding="utf-8")
+    source_environment.chmod(0o600)
+    original_source_bytes = source_environment.read_bytes()
+    original_source_mode = stat.S_IMODE(source_environment.stat().st_mode)
+    assert b"APP_VERSION=3.1.14" in original_source_bytes
+    assert f"APP_REVISION={'b' * 40}".encode() in original_source_bytes
+
+    installer_source = INSTALLER.read_text(encoding="utf-8")
+    prepare_call = installer_source.index('bash "$PREPARE_ENV_TOOL"')
+    prepare_start = installer_source.rindex("if [ -f .env ]; then", 0, prepare_call)
+    prepare_end_marker = (
+        '  "$SOURCE_ENV" "$ENV_CANDIDATE" "$DOMAIN" "$CURRENT_REVISION"\n'
+    )
+    prepare_end = installer_source.index(prepare_end_marker, prepare_start) + len(
+        prepare_end_marker
+    )
+    installer_prepare_step = installer_source[prepare_start:prepare_end]
+    candidate_environment = repository / ".env.candidate"
+    result = subprocess.run(
+        ["bash", "-c", "set -euo pipefail\n" + installer_prepare_step],
+        cwd=repository,
+        env={
+            **os.environ,
+            "PREPARE_ENV_TOOL": str(
+                frozen_root / "infra" / "scripts" / "prepare-production-env.sh"
+            ),
+            "ENV_CANDIDATE": str(candidate_environment),
+            "DOMAIN": domain,
+            "CURRENT_REVISION": revision,
+            "REPO_DIR": str(repository),
+        },
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert source_environment.read_bytes() == original_source_bytes
+    assert stat.S_IMODE(source_environment.stat().st_mode) == original_source_mode
+    candidate_source = candidate_environment.read_text(encoding="utf-8")
+    assert f"APP_REVISION={revision}" in candidate_source
+    assert f"APP_VERSION={frozen_version}" in candidate_source
+    assert stat.S_IMODE(candidate_environment.stat().st_mode) == 0o600
+    candidate_lines = set(candidate_source.splitlines())
+    for key, credential in credentials.items():
+        assert f"{key}={credential}" in candidate_lines
+        assert credential not in result.stdout
+        assert credential not in result.stderr
+    assert not (frozen_root / ".env").exists()
+    frozen_files = [path for path in frozen_root.rglob("*") if path.is_file()]
+    for credential in credentials.values():
+        assert all(
+            credential.encode() not in path.read_bytes() for path in frozen_files
+        )
+
+    fresh_repository = tmp_path / "fresh repository with spaces"
+    fresh_repository.mkdir()
+    fresh_candidate = fresh_repository / ".env.candidate"
+    fresh_result = subprocess.run(
+        ["bash", "-c", "set -euo pipefail\n" + installer_prepare_step],
+        cwd=fresh_repository,
+        env={
+            **os.environ,
+            "PREPARE_ENV_TOOL": str(
+                frozen_root / "infra" / "scripts" / "prepare-production-env.sh"
+            ),
+            "ENV_CANDIDATE": str(fresh_candidate),
+            "DOMAIN": domain,
+            "CURRENT_REVISION": revision,
+            "REPO_DIR": str(fresh_repository),
+        },
+        capture_output=True,
+        text=True,
+    )
+    assert fresh_result.returncode == 0, fresh_result.stderr
+    assert fresh_candidate.is_file()
+    assert stat.S_IMODE(fresh_candidate.stat().st_mode) == 0o600
+    assert not (fresh_repository / ".env").exists()
+    assert not (frozen_root / ".env").exists()
 
 
 @pytest.mark.skipif(

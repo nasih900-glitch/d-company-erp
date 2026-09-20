@@ -1,10 +1,15 @@
 package cloud.dcompany.erp.ui.screens.finance
 
+import okhttp3.MultipartBody
+import okhttp3.RequestBody
+
 import cloud.dcompany.erp.core.net.CostingCoverage
 import retrofit2.http.Body
 import retrofit2.http.GET
 import retrofit2.http.Header
 import retrofit2.http.HeaderMap
+import retrofit2.http.Multipart
+import retrofit2.http.Part
 import retrofit2.http.POST
 import retrofit2.http.Path
 import retrofit2.http.Query
@@ -61,6 +66,28 @@ interface FinanceApi {
         @Header("Idempotency-Key") key: String,
         @HeaderMap provenance: Map<String, String> = emptyMap(),
     ): Expense
+
+    /** Server-authoritative action identity check used before deleting a rejected parent. */
+    @GET("finance/expenses/actions/{action_id}/reconciliation")
+    suspend fun reconcileExpenseAction(
+        @Path("action_id") actionId: String,
+        @Query("branch_id") branchId: String,
+    ): ExpenseActionReconciliation
+
+    @Multipart
+    @POST("finance/expenses/{expense_id}/receipts")
+    suspend fun uploadExpenseReceipt(
+        @Path("expense_id") expenseId: String,
+        @Part file: MultipartBody.Part,
+        @Part("source") source: RequestBody,
+        @Header("Idempotency-Key") key: String,
+    ): ExpenseReceipt
+
+    /** Authoritative metadata-only reconciliation. Receipt bytes remain on the server. */
+    @GET("finance/expenses/{expense_id}/receipts")
+    suspend fun expenseReceipts(
+        @Path("expense_id") expenseId: String,
+    ): List<ExpenseReceipt>
 
     /** Immutable off-POS collection register. Reads may be cached, but every
      * create/void is a live, audited server operation. */

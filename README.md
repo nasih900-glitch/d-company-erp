@@ -102,7 +102,7 @@ d-company-erp/
 ## Release status
 
 The current local candidate is documented in
-[`docs/CODE25_RELEASE_CANDIDATE.md`](docs/CODE25_RELEASE_CANDIDATE.md). That file
+[`docs/CODE30_2_PATCH_CANDIDATE.md`](docs/CODE30_2_PATCH_CANDIDATE.md). That file
 separates source/test evidence from signing, hosted-update, physical-device, and
 production-deployment approval.
 
@@ -127,39 +127,37 @@ separately identified prototype, not another supported ERP app.
   links only to the live web ERP and verified artifacts from the official GitHub repository.
 
 Tagging a release that exactly matches the Android `versionName` triggers
-`.github/workflows/release.yml`. The current local release candidate is the
-**unsigned** `3.1.14` (code `25`) candidate; Android code `8` remains the
-minimum-compatible floor. The signed
-`3.1.3` (`14`) direct-release APK is a historical manually distributed,
-update-capable baseline; Code `21` (`3.1.10`) is the current signed
-direct-channel predecessor for Code 25. Code 14 must not be uploaded to the
-server release directory, published as a GitHub or Play release, or registered
-as an update. The public status contract is
+`.github/workflows/release.yml`. The current local candidate is the cumulative
+Code30.2 patch, technical version `3.1.29` with Android installation build `37`,
+Room schema `51`, and backend migration head `0078`. It adds manual expenses and
+collections, up to five private camera/file receipt attachments per expense,
+offline receipt retry, exact cash-drawer provenance, append-only current-period
+closed-shift corrections, and the optional durable `ERP Mirror v1` Google
+Sheets backup. Authorized users can use an eligible same-branch drawer and
+continue the inherited cross-user shift, POS and gaming workflows while actor
+attribution and sensitive-operation permissions remain intact.
+PostgreSQL remains authoritative. An unconfigured Sheet mirror is disabled;
+saving configuration enables it as verification pending, and the ERP calls it
+Connected only after a connection-test event for that exact configuration is
+delivered. Business events are held durably before verification. A verified
+connection must drain pending, leased and quarantined work before URL/secret
+rotation or disconnect; old events are never retargeted. Reward activation and
+WhatsApp messaging remain disabled. Android code `8` remains the
+minimum-compatible floor.
+
+Code30.1 `v3.1.28` / build `36` is the immutable signed release predecessor.
+Its exact scope and evidence remain in
+[`docs/CODE30_1_PATCH_CANDIDATE.md`](docs/CODE30_1_PATCH_CANDIDATE.md). Code30.2
+must pass a same-signer in-place upgrade from that exact predecessor without
+clearing data. A source change, green local build, or emulator run does not sign,
+deploy, stage, activate, offer, install, or approve the update. The public status
+contract remains
 `/api/v1/public/client-compatibility?platform=android&version_code=<installed-code>`.
+Android still requires the employee to approve installation, and emulator proof
+is not physical Redmi Pad 2 acceptance.
 
-The immutable signed `3.1.2` (`13`) APK remains the predecessor used to prove
-the supported in-place upgrade to code `14`; neither signed identity may be
-rebuilt with different bytes. Code `15` (`3.1.4`) is the first identity admitted
-by the server-release registry, but it is an immutable held audit build, not the
-current rollout target. Do not rebuild, overwrite, or activate it as a shortcut.
-Code `16` (`3.1.5`) and Code `17` (`3.1.6`) are immutable predecessors. Code 17
-introduced consent-gated ERP-only remote assistance. Codes `18` through `20`
-remain immutable failed-before-signing history. Code `21` (`3.1.10`) is the
-immutable signed direct-channel predecessor for the next in-place upgrade.
-Code `22` (`3.1.11`) and Code `23` (`3.1.12`) are unsigned, superseded
-candidates and must not be approved, staged, advertised, or activated. Code
-`24` (`3.1.13`) failed before signing and its tag remains immutable history.
-Code `25` (`3.1.14`) is the current unsigned candidate; it is not signed, deployed,
-staged, activated, approved, or partner-installable. Candidate database
-migrations currently run through `0071`. The production compatibility defaults
-remain pinned until a rollout is explicitly reviewed. Any eventual artifact
-must be newly built and signed, verified against its exact SHA-256, byte size,
-package, version and expected signer, and pass a same-lineage Code 21 to Code 25
-upgrade proof. Android still requires the employee to approve installation.
-Emulator or cloud-device evidence is not physical Redmi Pad 2 proof.
-
-See [`docs/CODE25_RELEASE_CANDIDATE.md`](docs/CODE25_RELEASE_CANDIDATE.md) for
-the complete candidate scope, evidence boundaries, and remaining delivery gates.
+See [`docs/CODE30_2_PATCH_CANDIDATE.md`](docs/CODE30_2_PATCH_CANDIDATE.md) for
+the current scope, evidence boundaries, and remaining delivery gates.
 
 ## License
 

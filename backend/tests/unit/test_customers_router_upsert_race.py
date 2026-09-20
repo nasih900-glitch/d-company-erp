@@ -29,6 +29,7 @@ this recovery path exists to not have.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
@@ -132,6 +133,8 @@ async def test_upsert_customer_heals_into_the_winner_on_a_concurrent_create_race
     winner = _customer(tenant, phone=phone, name="Whoever Won The Race")
 
     session = _Session(
+        _Result(),  # create the tenant's directory state if it is absent
+        _Result(scalar=SimpleNamespace(deletion_revision=0)),
         _Result(scalar=None),  # this request's own "does it already exist" check — sees nothing yet
         _Result(scalar=winner),  # post-IntegrityError re-query, finds the row the other request created
         flush_error=IntegrityError(
@@ -157,8 +160,8 @@ async def test_upsert_customer_heals_into_the_winner_on_a_concurrent_create_race
     # company_id filter would still make this test pass on the assertions
     # above alone (the fake doesn't care what query produced a result it was
     # told to hand back), so check the actual statement content too.
-    assert len(session.statements) == 2
-    requery_params = _statement_params(session.statements[1])
+    assert len(session.statements) == 4
+    requery_params = _statement_params(session.statements[3])
     assert phone in requery_params.values()
     assert tenant.company_id in requery_params.values()
 
@@ -180,6 +183,8 @@ async def test_upsert_customer_raises_a_clean_conflict_if_the_winner_vanished_be
     phone = "+919876500000"
 
     session = _Session(
+        _Result(),  # create the tenant's directory state if it is absent
+        _Result(scalar=SimpleNamespace(deletion_revision=0)),
         _Result(scalar=None),  # own existence check — sees nothing
         _Result(scalar=None),  # re-query also finds nothing — the vanished-winner case
         flush_error=IntegrityError(

@@ -146,6 +146,7 @@ describe('POS checkout retry drafts', () => {
         deliveryStateCode: '32',
         customerName: 'Nasih',
         customerPhone: '9999999999',
+        customerDirectoryEvidenceCaptured: true,
       },
     },
   };
@@ -166,6 +167,30 @@ describe('POS checkout retry drafts', () => {
 
   it('round-trips the key, request snapshot, resuming order, and pending order', () => {
     expect(normalizePosRetryDraft(JSON.parse(JSON.stringify(retryDraft)))).toEqual(retryDraft);
+  });
+
+  it('preserves legacy missing directory evidence instead of refreshing an old action', () => {
+    const legacy = JSON.parse(JSON.stringify(retryDraft));
+    delete legacy.retry.snapshot.customerDirectoryEvidenceCaptured;
+    const restored = normalizePosRetryDraft(legacy);
+    expect(restored?.retry?.snapshot).toMatchObject({
+      customerDirectoryEvidenceCaptured: true,
+    });
+    expect(restored?.retry?.snapshot.customerDirectoryRevision).toBeUndefined();
+    expect(restored?.retry?.snapshot.customerDirectoryCompanyId).toBeUndefined();
+  });
+
+  it('rejects partial or malformed directory evidence in a persisted retry', () => {
+    for (const evidence of [
+      { customerDirectoryRevision: 3 },
+      { customerDirectoryCompanyId: 'company-1' },
+      { customerDirectoryRevision: -1, customerDirectoryCompanyId: 'company-1' },
+      { customerDirectoryRevision: 1.5, customerDirectoryCompanyId: 'company-1' },
+    ]) {
+      const malformed = JSON.parse(JSON.stringify(retryDraft));
+      Object.assign(malformed.retry.snapshot, evidence);
+      expect(normalizePosRetryDraft(malformed)).toBeNull();
+    }
   });
 
   it('fails closed when restored checkout-claim credentials are malformed', () => {

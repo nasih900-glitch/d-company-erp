@@ -33,12 +33,12 @@ data class ShiftAccountingBreakdown(
 /**
  * One resolved shift for all native screens.
  *
- * Tables and Gaming consume [shiftId] regardless of opener: they create
- * operational work, not a cash settlement. POS collection/refund/void actions
- * use [canManageMoney] and therefore fail closed when opener identity is
- * unknown. Shift closing is authorised separately by the authenticated
- * `pos.shift.close` permission and records the closer without changing opener
- * attribution.
+ * Tables and Gaming consume [shiftId] regardless of opener. Routine POS billing
+ * uses [canBill] because backend `pos.write` permission, exact shift scope and
+ * actor attribution are the authority; opening a drawer does not give one login
+ * an exclusive lease on every sale. Sensitive refund/membership/whole-bill
+ * recovery paths retain [canManageMoney]. Shift closing is authorised separately
+ * by `pos.shift.close` and records the closer without changing opener attribution.
  */
 data class ResolvedOpenShift(
     val shiftId: String,
@@ -87,6 +87,18 @@ data class ResolvedOpenShift(
     fun canManageMoney(actor: ShiftActor?): Boolean = actor != null && (
         actor.protectedAccess || openedByUserId == actor.userId
     )
+
+    /** Routine create/review/settle POS work may be performed by any verified actor.
+     * The screen and backend independently enforce the actor's current `pos.write`
+     * permission, while this policy proves that an exact open shift is present.
+     */
+    fun canBill(actor: ShiftActor?): Boolean = actor != null
+
+    fun billingAccessMessage(actor: ShiftActor?): String? = if (canBill(actor)) {
+        null
+    } else {
+        "The signed-in employee could not be verified. Reconnect before billing this shift."
+    }
 
     fun moneyAccessMessage(actor: ShiftActor?): String? {
         if (canManageMoney(actor)) return null

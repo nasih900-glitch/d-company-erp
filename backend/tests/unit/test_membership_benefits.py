@@ -638,11 +638,7 @@ async def test_zero_total_finalization_is_replay_safe_and_uses_shared_finalizer(
 
     assert len(finalized) == 1
     assert finalized[0]["actor_user_id"] == tenant.user_id
-    assert len(background_tasks.tasks) == 1, (
-        "finalize-zero must schedule the same OrderPaid mirror event as "
-        "record_payment, or membership-covered visits never reach the "
-        "owner's Google Sheets reconciliation mirror"
-    )
+    assert len(background_tasks.tasks) == 0
     assert response == {
         "order_id": str(order.id),
         "amount_minor": 0,
@@ -707,6 +703,8 @@ async def test_shared_finalizer_consumes_allowance_and_runs_sale_side_effects(
     )
     session_item = SimpleNamespace(type="gaming")
     session = _Session(
+        _Result(),
+        _Result(scalar=SimpleNamespace(deletion_revision=0)),
         _Result(rows=[(order_line, session_item)]),
         entities={(Branch, branch.id): branch},
     )
@@ -764,43 +762,10 @@ async def test_shared_finalizer_consumes_allowance_and_runs_sale_side_effects(
     ]
 
 
-@pytest.mark.asyncio
-async def test_zero_total_finalization_keeps_shift_opener_accountability(monkeypatch) -> None:
-    tenant = _tenant()
-    shift = SimpleNamespace(
-        id=uuid4(),
-        company_id=tenant.company_id,
-        branch_id=tenant.branch_id,
-        terminal_id=tenant.terminal_id,
-        opened_by=uuid4(),
-        status="open",
-    )
-    order = SimpleNamespace(
-        id=uuid4(),
-        company_id=tenant.company_id,
-        branch_id=tenant.branch_id,
-        terminal_id=tenant.terminal_id,
-        shift_id=shift.id,
-        status="held",
-        total_minor=0,
-    )
-    session = _Session(_Result(scalar=order), _Result(scalar=shift))
+def test_zero_total_finalization_uses_pos_permission_not_shift_opener_identity() -> None:
+    endpoint_names = pos_router.finalize_zero_total_order.__code__.co_names
 
-    async def _reserve(*_args, **_kwargs):
-        return None
-
-    monkeypatch.setattr(pos_router, "check_or_reserve", _reserve)
-    request = SimpleNamespace(
-        state=SimpleNamespace(
-            idempotency_key="zero-membership-order-2",
-            idempotency_request_hash="hash-2",
-        )
-    )
-    with pytest.raises(BusinessRuleError, match="Only the staff member who opened this shift"):
-        await pos_router.finalize_zero_total_order(
-            order.id,
-            session,
-            request,
-            BackgroundTasks(),
-            tenant,
-        )
+    assert "require_shift_opener" not in endpoint_names
+    assert "require_open_operational_shift" in endpoint_names
+    assert "validate_checkout_claim" in endpoint_names
+    assert "_require_private_direct_draft_creator" in endpoint_names

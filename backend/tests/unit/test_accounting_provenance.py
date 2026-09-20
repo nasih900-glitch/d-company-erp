@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 import pytest
 from sqlalchemy.orm.attributes import set_committed_value
 
+import app.api.v1.finance.router as finance_router
 from app.api.v1.finance.router import (
     CapitalEntryVoid,
     _partner_balance,
@@ -48,6 +49,14 @@ COMPANY_ID = UUID("11111111-1111-1111-1111-111111111111")
 PARTNER_ID = UUID("22222222-2222-2222-2222-222222222222")
 USER_ID = UUID("33333333-3333-3333-3333-333333333333")
 NOW = datetime(2026, 7, 16, 12, 0, tzinfo=UTC)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_finance_source_mirror(monkeypatch) -> None:
+    async def no_mirror(*_args, **_kwargs) -> None:
+        return None
+
+    monkeypatch.setattr(finance_router, "_enqueue_finance_source_mirror", no_mirror)
 
 
 class _Result:
@@ -309,6 +318,7 @@ async def test_capital_balance_and_ledger_exclude_voids_and_map_historical_funds
             _Result(rows=[]),  # refunds
             _Result(rows=[]),  # tip payouts
             _Result(rows=[]),  # expenses
+            _Result(rows=[]),  # finance source corrections
             _Result(rows=[(active, _partner()), (voided, _partner())]),
             _Result(rows=[]),  # assets (depreciation)
             _Result(rows=[]),  # approved posted journals
@@ -327,7 +337,7 @@ async def test_capital_balance_and_ledger_exclude_voids_and_map_historical_funds
     assert {(line.account_code, line.credit_minor) for line in lines} >= {
         ("3000", active.amount_minor)
     }
-    capital_sql = str(ledger_session.statements[10])
+    capital_sql = str(ledger_session.statements[11])
     assert "capital_entries.voided_at IS NULL" in capital_sql
 
 
@@ -436,7 +446,9 @@ async def test_order_tip_minor_posts_a_balanced_tips_payable_ledger_line() -> No
     app/api/v1/pos/router.py); this proves the ledger side of that contract:
     the tip shows up as its own Tips Payable credit and the whole order
     entry still balances exactly, debit for debit."""
-    order = _paid_order_with_tip(subtotal_minor=8_000, cgst_minor=720, sgst_minor=720, tip_minor=1_500)
+    order = _paid_order_with_tip(
+        subtotal_minor=8_000, cgst_minor=720, sgst_minor=720, tip_minor=1_500
+    )
     assert order.total_minor == 10_940
 
     ledger_session = _QueuedSession(
@@ -451,6 +463,7 @@ async def test_order_tip_minor_posts_a_balanced_tips_payable_ledger_line() -> No
             _Result(rows=[]),  # refunds
             _Result(rows=[]),  # tip payouts
             _Result(rows=[]),  # expenses
+            _Result(rows=[]),  # finance source corrections
             _Result(rows=[]),  # capital entries
             _Result(rows=[]),  # assets (depreciation)
             _Result(rows=[]),  # approved posted journals

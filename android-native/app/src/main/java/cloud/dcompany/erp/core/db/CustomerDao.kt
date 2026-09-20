@@ -10,9 +10,18 @@ import kotlinx.coroutines.flow.Flow
 @Dao
 interface CustomerDao {
 
+    @Query("SELECT * FROM customer_directory_state WHERE companyId = :companyId LIMIT 1")
+    suspend fun directoryState(companyId: String): CustomerDirectoryStateEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertDirectoryState(state: CustomerDirectoryStateEntity)
+
     // ----------------------------------------------------------- read cache
     @Query("SELECT * FROM customer_cache ORDER BY name")
     fun observeCache(): Flow<List<CustomerCacheEntity>>
+
+    @Query("SELECT * FROM customer_cache WHERE id = :id LIMIT 1")
+    suspend fun getCache(id: String): CustomerCacheEntity?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertCache(rows: List<CustomerCacheEntity>)

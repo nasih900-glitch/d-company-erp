@@ -25,6 +25,7 @@ from app.models import (
     CapitalEntry,
     Expense,
     ExpenseCategory,
+    FinanceSourceCorrection,
     GRNLine,
     JournalEntry,
     JournalLine,
@@ -247,6 +248,128 @@ def _manual_collection_ledger_lines(
                     ref_id=collection.id,
                     account=MANUAL_COLLECTION_REVENUE_ACCOUNT,
                     credit=collection.amount_minor,
+                    memo=memo,
+                ),
+            ]
+        )
+    return lines
+
+
+async def _finance_source_correction_ledger_lines(
+    session: AsyncSession,
+    *,
+    company_id: UUID,
+    start_at: datetime | None,
+    end_exclusive: datetime,
+) -> list[LedgerLine]:
+    """Post full reversals in the correction period, leaving history intact."""
+
+    stmt = select(FinanceSourceCorrection).where(
+        FinanceSourceCorrection.company_id == company_id,
+        FinanceSourceCorrection.corrected_at < end_exclusive,
+    )
+    if start_at is not None:
+        stmt = stmt.where(FinanceSourceCorrection.corrected_at >= start_at)
+    corrections = (
+        await session.execute(
+            stmt.order_by(
+                FinanceSourceCorrection.corrected_at,
+                FinanceSourceCorrection.id,
+            )
+        )
+    ).scalars().all()
+    if not corrections:
+        return []
+
+    expense_ids = [row.expense_id for row in corrections if row.expense_id]
+    expense_rows = (
+        await session.execute(
+            select(Expense, ExpenseCategory)
+            .join(ExpenseCategory, ExpenseCategory.id == Expense.category_id)
+            .where(Expense.id.in_(expense_ids))
+        )
+    ).all()
+    expenses = {expense.id: (expense, category) for expense, category in expense_rows}
+
+    async def _sources(model, ids: list[UUID]):
+        if not ids:
+            return {}
+        rows = (await session.execute(select(model).where(model.id.in_(ids)))).scalars().all()
+        return {row.id: row for row in rows}
+
+    manual = await _sources(
+        ManualCollection,
+        [row.manual_collection_id for row in corrections if row.manual_collection_id],
+    )
+    tips = await _sources(
+        TipPayout,
+        [row.tip_payout_id for row in corrections if row.tip_payout_id],
+    )
+    suppliers = await _sources(
+        SupplierPayment,
+        [row.supplier_payment_id for row in corrections if row.supplier_payment_id],
+    )
+
+    lines: list[LedgerLine] = []
+    for correction in corrections:
+        debit_account: tuple[str, str, str]
+        credit_account: tuple[str, str, str]
+        source = None
+        if correction.source_type == "expense" and correction.expense_id:
+            source_pair = expenses.get(correction.expense_id)
+            if source_pair is not None:
+                source, category = source_pair
+                debit_account = CASH.ledger_tuple
+                credit_account = _expense_account(category)
+        elif correction.source_type == "manual_collection" and correction.manual_collection_id:
+            source = manual.get(correction.manual_collection_id)
+            debit_account = MANUAL_COLLECTION_REVENUE_ACCOUNT
+            credit_account = CASH.ledger_tuple
+        elif correction.source_type == "tip_payout" and correction.tip_payout_id:
+            source = tips.get(correction.tip_payout_id)
+            debit_account = CASH.ledger_tuple
+            credit_account = TIPS_PAYABLE.ledger_tuple
+        elif correction.source_type == "supplier_payment" and correction.supplier_payment_id:
+            source = suppliers.get(correction.supplier_payment_id)
+            debit_account = CASH.ledger_tuple
+            credit_account = ACCOUNTS_PAYABLE.ledger_tuple
+        else:
+            raise BusinessRuleError("finance correction has no supported source")
+
+        source_method = (
+            getattr(source, "paid_via", None)
+            if correction.source_type == "expense"
+            else getattr(source, "method", None)
+        )
+        if (
+            source is None
+            or source.company_id != company_id
+            or source.branch_id != correction.branch_id
+            or source.shift_id != correction.original_shift_id
+            or int(source.amount_minor) != int(correction.amount_minor)
+            or source_method != "cash"
+            or source.voided_at is not None
+        ):
+            raise BusinessRuleError(
+                "finance correction provenance does not match its immutable source"
+            )
+        memo = f"Correction: {correction.reason}"
+        lines.extend(
+            [
+                _line(
+                    occurred_at=correction.corrected_at,
+                    ref_type="finance_source_correction",
+                    ref_id=correction.id,
+                    account=debit_account,
+                    debit=int(correction.amount_minor),
+                    memo=memo,
+                ),
+                _line(
+                    occurred_at=correction.corrected_at,
+                    ref_type="finance_source_correction",
+                    ref_id=correction.id,
+                    account=credit_account,
+                    credit=int(correction.amount_minor),
                     memo=memo,
                 ),
             ]
@@ -1018,6 +1141,18 @@ async def build_operational_ledger(
                 ),
             ]
         )
+
+    # Closed-shift mistakes are never rewritten into their historical period.
+    # Their immutable full reversal is recognized when the correction was
+    # approved and applied to a current open drawer.
+    lines.extend(
+        await _finance_source_correction_ledger_lines(
+            session,
+            company_id=company_id,
+            start_at=start_at,
+            end_exclusive=end_exclusive,
+        )
+    )
 
     capital_stmt = (
         select(CapitalEntry, Partner)

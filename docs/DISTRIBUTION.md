@@ -9,62 +9,77 @@ The web ERP at `https://dcompany.duckdns.org` is deployed through the existing
 VPS/Docker Compose procedure in `docs/DEPLOY_LIVE.md`. An Android GitHub Release
 does not deploy the web application.
 
-The historical `3.1.3` (`14`) partner rollout was deliberately manual. This is
-retained as provenance, not as the current Code 25 delivery procedure:
+The early direct-release identities and their failure or supersession records are
+immutable history. Do not rebuild, move, reuse, relabel, stage, or activate any
+of those tags or APKs. Their candidate ledgers remain the authoritative record
+for the release attempt they describe.
+
+Code30.1 `v3.1.28` / Android build `36` is the immutable signed predecessor for
+this patch. Preserve its exact source, manifest, checksums, signer and APK bytes.
+The current Code30.2 candidate is `v3.1.29` / build `37`, Room schema `51`, and
+Alembic head `0078`:
 
 ```
-verified signed 3.1.3/code-14 directRelease APK
-        │
-        ▼ after release-head migrations + production smoke
-owner sends that exact APK directly to the partner
+freeze and verify exact 3.1.29/build-37 source
         │
         ▼
-partner approves the normal Android installer prompt
-```
-
-Do not tag, publish, host, register, or server-advertise code `14`. In
-particular, do not copy its APK into `releases/android`, publish a
-GitHub/Play release, or create an Android release-registry row for it.
-
-Code `15` (`3.1.4`) is the first identity allowed by the server-release registry,
-but it is a held audit build. Preserve any signed artifact and manifest exactly;
-do not rebuild, overwrite, or activate it. Codes `16` (`3.1.5`) and `17`
-(`3.1.6`) are immutable predecessors. Tags `v3.1.7` / code `18`, `v3.1.8` /
-code `19`, and `v3.1.9` / code `20` failed before signing and must not be reused.
-Code `21` (`3.1.10`) is immutable signed predecessor history. Code `22`
-(`3.1.11`) was superseded before signing and must not be approved or activated.
-Code `23` (`3.1.12`) was also superseded without an authorised signed artifact.
-Code `24` (`3.1.13`) failed before signing; its tag remains immutable history.
-Code `25` (`3.1.14`) is the current, separately gated **unsigned**
-server-delivery candidate:
-
-```
-coordinate source at 3.1.14/code 25 through migration 0071
+backend + Web + Android suites and full business trial
         │
         ▼
-local/CI backend + web + Android candidate gates
+tag, protected CI build/sign, independent artifact verification
+        │
+        ▼ same-signer in-place upgrade from exact v3.1.28/build 36
+coordinated backend/Web migration and authenticated production smoke
         │
         ▼
-same-lineage Code 21 to Code 25 upgrade proof
+optional Apps Script live connection test and mirror reconciliation
         │
-        ▼ stage exact CI artifact, then owner review and activation
+        ▼
+stage the same APK inactive; owner activation remains a separate action
 ```
 
-No signed Code 25 artifact exists merely because local or CI candidate checks
-pass. Until the protected signing workflow, exact-artifact verification,
-production deployment, staging, owner activation and target-device acceptance
-all succeed, Code 25 is not deployed, approved, advertised or
-partner-installable.
+A source version, local APK, green emulator run, signed GitHub draft, production
+deployment, staged registry row, active offer, and physical-tablet acceptance
+are separate gates. None may be inferred from another. Code30.2 remains a source
+candidate until every preceding gate has recorded evidence. Its scope is in
+[`CODE30_2_PATCH_CANDIDATE.md`](CODE30_2_PATCH_CANDIDATE.md). Code30.1 evidence
+remains unchanged in
+[`CODE30_1_PATCH_CANDIDATE.md`](CODE30_1_PATCH_CANDIDATE.md).
+
+The patch includes manual finance entries, up to five private camera/file
+receipt attachments per expense, durable Android offline/retry, explicit cash
+drawer selection and current-period corrections for closed-shift cash sources.
+It also adds a generation-bound Sheet outbox whose unverified events remain
+held and whose verified connection must drain before rotation or disconnect.
+Receipt bytes, customer identity and private review notes never enter Sheets.
 
 The Tauri desktop and iOS projects are not built or published by the supported
 release workflow.
 
-The current scope and release gates are recorded in
+Code30.2 also treats backend, frontend, Caddy, PostgreSQL and Redis as five
+locally built release images. The protected CI and release workflows build the
+exact source twice, attest the immutable image IDs, exercise runtime health,
+retain SBOMs and scan each image. The narrowly scoped zlib OpenVEX correction
+described in [`CODE30_2_PATCH_CANDIDATE.md`](CODE30_2_PATCH_CANDIDATE.md) may
+filter only the one exact fixed zlib finding for the exact scanned image. It
+does not relax the High/Critical failure gate for any other package or CVE.
+Production repeats the same five-image identity and scanner checks before it
+stops writers or opens ingress.
+
+Earlier release ledgers remain historical provenance. The signed but superseded
+Code 29 ledger is in [`CODE29_RELEASE_CANDIDATE.md`](CODE29_RELEASE_CANDIDATE.md),
+and the signed but superseded Code 28 ledger is in
+[`CODE28_RELEASE_CANDIDATE.md`](CODE28_RELEASE_CANDIDATE.md). The signed but
+superseded Code 27 ledger remains historical in
+[`CODE27_RELEASE_CANDIDATE.md`](CODE27_RELEASE_CANDIDATE.md), and the signed but
+superseded Code 26 ledger remains historical in
+[`CODE26_RELEASE_CANDIDATE.md`](CODE26_RELEASE_CANDIDATE.md). The rejected Code
+25 ledger remains historical in
 [`CODE25_RELEASE_CANDIDATE.md`](CODE25_RELEASE_CANDIDATE.md). The inherited
 Code 24 scope and audit evidence remain historical in
 [`CODE24_RELEASE_CANDIDATE.md`](CODE24_RELEASE_CANDIDATE.md) and
-[`CODE24_PRODUCTION_AUDIT.md`](CODE24_PRODUCTION_AUDIT.md); they are not proof
-that a Code 25 artifact has been signed or accepted.
+[`CODE24_PRODUCTION_AUDIT.md`](CODE24_PRODUCTION_AUDIT.md); none is proof for a
+Code30.2 artifact or rollout.
 
 ## Android signing and Play Store setup
 
@@ -121,10 +136,11 @@ minimum supported version until that proof passes. See
 Choose one version and apply it consistently. For the current candidate:
 
 ```bash
-CURRENT_RELEASE_VERSION=3.1.14
+CURRENT_RELEASE_VERSION=3.1.29
 
 # Update the coordinated product version in:
-# - android-native/app/build.gradle.kts (versionName and a new versionCode)
+# - android-native/app/build.gradle.kts (versionName; normally also a new
+#   versionCode; the never-issued 3.1.15/code-26 exception is historical only)
 # - backend/pyproject.toml
 # - backend/app/__init__.py
 # - frontend/package.json and frontend/package-lock.json
@@ -140,18 +156,17 @@ CURRENT_RELEASE_VERSION=3.1.14
 python3 scripts/verify_android_release_version.py --tag "v$CURRENT_RELEASE_VERSION"
 ```
 
-That command validates the coordinated code-`25` identity; it does not authorise
-tagging, publishing, advertising, registering, staging, or activating the
-artifact. Tag `v3.1.7` is immutable rejected history and must never be moved or
-reused. Tags `v3.1.8` and `v3.1.9` are also immutable rejected history. Tag
-`v3.1.10` is immutable signed predecessor history. Tag `v3.1.11` is immutable
-superseded history and its waiting signing job must not be approved. Tag
-`v3.1.12` is immutable superseded unsigned history. Tag `v3.1.13` is immutable
-failed-before-signing history. Tag `v3.1.14` may be created only after every
-product-version field is coordinated and the local release gates pass. Keep
-codes `14` through `24` immutable. Never use a blanket
-version replacement: dependency versions and
-Android rollout policy intentionally differ from the product version.
+That command validates the coordinated Code30.2 build-`37` identity; it does
+not authorise tagging, publishing, advertising, registering, staging, or
+activating the artifact. Every earlier tag and signed artifact remains
+immutable. In particular,
+Code30.1 `v3.1.28` / build `36` is the exact same-channel predecessor for this
+release. Tag `v3.1.29` may be created only after every product-version field,
+Room schema, migration head, final test result and source-freeze record agree.
+Code30.2 uses build `37`; never reuse build `36` or rebuild `v3.1.28` with new
+bytes. Isolated debug installations are test evidence, not distribution.
+Never use a blanket version replacement: dependency versions and Android
+compatibility policy intentionally differ from the product version.
 
 The workflow rejects a release unless all of these are true:
 
@@ -165,64 +180,53 @@ than the last published one; the repository cannot verify Play's remote history,
 so increment it for every release. A manual workflow dispatch must target an
 existing tag. Dispatches from branches are rejected.
 
-## Version-code-8 floor, immutable predecessors, and Code 25 candidate
+## Version-code-8 floor, immutable predecessors, and Code30.2 candidate
 
-Version `3.0.7` with version code `8` introduced authoritative terminal
-purposes (`cafe_pos`, `gaming`, and `hybrid`) and the explicit Gaming-to-POS
-handoff. Older Android clients do not understand that contract and can select
-the wrong local shift or attempt an invalid local handoff, so code `8` remains
-the minimum-supported compatibility floor.
+Version `3.0.7` with version code `8` introduced the terminal and Gaming-to-POS
+contract that older clients do not understand, so code `8` remains the
+minimum-supported compatibility floor. An optional Code30.2 offer does not
+authorize changing that floor.
 
-The signed `3.1.2` APK with version code `13` remains immutable historical
-signing-lineage evidence. It must not be rebuilt under the same identity or
-advertised through the server update API. Signed Code `21` (`3.1.10`) is the
-actual installed predecessor that Code 25 must upgrade in place.
+Code30.1 `v3.1.28` / build `36` is the current immutable direct-channel release
+predecessor. Code30.2 is `v3.1.29` / build `37`, Room `51`, and migration `0078`.
+It is not signed, deployed, staged, active, offered, installed, or approved by
+the version bump alone.
 
-The signed `3.1.3` direct-release APK with version code `14` is historical manual
-partner-baseline evidence. Its rollout policy required a coordinated backend
-and physical-tablet smoke before manual delivery. It is not a current hosted or
-server-delivered release: do not publish it to GitHub or Play, copy it into the
-server release directory, or register it through the update channel.
+### Current Code30.2 rollout sequence
 
-Code `11` first introduced the verified in-app direct updater. Code `14` remains
-historical update-capable baseline evidence, while signed Code `21` is the
-current predecessor for Code 25. Code `15` is the
-first version accepted by the immutable server-release registry, but `3.1.4`
-code `15` is a held audit build and is not the current activation target. The
-signed `3.1.5` code-`16` and `3.1.6` code-`17` artifacts are immutable
-predecessors. Codes `18`, `19`, and `20` have no authorised artifact because
-their tagged releases failed before signing. Code `21` (`3.1.10`) is immutable
-signed predecessor history and is the required same-lineage upgrade baseline.
-Codes `22` and `23` were superseded without authorised signed artifacts. Code
-`24` failed before signing and its tag must not be moved or reused. The
-current candidate is the unsigned `3.1.14` with version code `25`; its database
-migration head is `0071`. It may be staged only after the exact green tagged
-workflow produces a signed artifact and becomes an optional server offer only
-after authenticated owner activation. It is not currently signed, deployed,
-staged, active, approved or partner-installable.
+1. Finish the exact source review, clean full suites, migration proof and
+   business trial described in `CODE30_2_PATCH_CANDIDATE.md`.
+2. Freeze the reviewed source and create `v3.1.29` only after all local gates
+   pass. Build and sign only through the protected tagged workflow.
+3. Verify the exact CI APK and manifest: package, build `37`, version `3.1.29`,
+   byte size, SHA-256, source revision and independently preserved signer.
+4. On an isolated emulator, install exact signed `v3.1.28` / build `36`, retain
+   representative Room/outbox state, and install the signed build `37` with
+   normal update semantics. Do not uninstall or clear data.
+5. Deploy the matching backend and Web source through the guarded production
+   installer with a quiesced backup, restore proof, migration through `0078`,
+   rollback readiness and authenticated smoke checks.
+   The one-time Code30.2 bridge accepts the exact retired test installation's
+   single stale pending heartbeat only when the prior database is `0073`, the
+   candidate is `3.1.29`, its reviewed identity/version/outbox/last-seen fields
+   and the aggregate `1|1|1` stale-outbox signature match, and the frozen
+   18-AVD quarantine record has exact SHA-256
+   `379c6368936d03223e19482cc840c2a9d2483dc9a96909fba22cd9f59911eec8`.
+   It makes no database change before the verified backup. The archived clear
+   Room snapshot is supporting evidence and is not attributed to that server
+   installation identity.
+6. Deploy and authorize the bound Apps Script, configure its one-time secret,
+   deliver the current-generation connection test, and reconcile an actual
+   `ERP Mirror v1` row. This is a separate production-configuration gate.
+7. Stage the same verified APK inactive. Staging must not advertise an offer.
+8. The bound owner release-controller may activate the exact staged candidate
+   only after the preceding evidence passes. Android still requires the user to
+   accept the installer; physical-tablet acceptance remains separate.
 
-### Current Code 25 rollout sequence
-
-1. Bring the signed Code 21 installation online and reconcile its exact pending
-   outbox without clearing app data.
-2. Rehearse the production-shaped migration through `0071`, then deploy the
-   coordinated backend and web source with a fresh quiesced backup, restoration
-   proof, rollback readiness and authenticated smoke tests.
-3. Build and sign `3.1.14` / code `25` only through the protected tagged
-   workflow. Verify its package, version, exact bytes, SHA-256, manifest and
-   independent expected signer.
-4. Prove a same-key in-place Code 21 to Code 25 upgrade with Room data and
-   offline work preserved. Do not uninstall or clear storage.
-5. Stage the exact verified CI artifact, review it in the owner ERP and activate
-   only after the prior gates pass. Android still requires employee approval to
-   install it.
-6. Complete authenticated physical-target smoke, offline/restart, alarm,
-   performance and financial reconciliation before wider rollout.
-
-### Historical Code 14 rollout record (do not execute for Code 25)
+### Historical Code 14 rollout record (do not execute for current releases)
 
 The following sequence is retained to explain prior provenance. It is not the
-current Code 25 rollout procedure; use the current sequence above.
+current Code30.2 rollout procedure; use the current sequence above.
 
 1. Preserve the exact signed version-code-13 predecessor and version-code-14
    partner APKs, verify their signer, and never replace either immutable
@@ -453,9 +457,24 @@ history; codes `16` and `17` are immutable predecessors. Codes `18`, `19`, and
 `20` have no authorised artifact or activation target. Code `21` is immutable
 signed predecessor history. Codes `22` and `23` are unsigned, superseded
 candidates and must never be activated. Code `24` failed before signing and
-its tag remains immutable. Code `25` is the unsigned candidate and may be
-activated only after its tagged signing workflow, production deployment,
-staging, review and target-device gates pass. Protected-owner status alone
+its tag remains immutable. Code `25` failed its physical-tablet audit and is
+immutable rejected history; it must never be activated. Code `26` is the
+immutable signed candidate whose production installer stopped before image
+builds or cutover; it is superseded and must not be activated.
+Code `27` (`3.1.17`) is immutable signed history after its Syft scanner gate
+failed before production deployment or cutover. Code `28` (`3.1.18`) is
+immutable signed history after the image-identity gate failed before the
+authorized installer entered maintenance/cutover or any production/partner
+install or offer. Original signed Code `29` (`3.1.19`) is immutable after its
+installer lock gate failed. The `v3.1.20` run was cancelled before build or
+signing. Code30.1 `v3.1.28` / build `36` is the immutable signed predecessor.
+Code30.2 `v3.1.29` / build `37` requires its own complete gates and protected
+workflow output. After final-source trials, signed in-place upgrade continuity,
+and production verification, only the bound owner release-controller may
+activate the staged offer. The offer reaches all eligible direct-channel
+clients; there is no per-device targeting. Further staff installations require
+owner coordination after supervised target-device acceptance passes.
+Protected-owner status alone
 grants no global release authority: only the exact company/user identity
 configured in `ANDROID_RELEASE_CONTROLLER_BINDINGS`, with `admin.system` and
 audit access, may activate a separately approved future release.
@@ -470,9 +489,15 @@ returns a newer, non-cacheable `supported` policy that explicitly includes code
 
 Server-release registration begins at code `15`. Codes `18`, `19`, and `20`
 failed before signing and are never registered; Code `24` also failed before
-signing and is immutable history. Code `25` must first pass the complete backend
-migration/test and web lint/typecheck/test/build gates. It then runs Android release lint, JVM
-tests, emulator instrumentation, and signature verification. The resulting
+signing and is immutable history. Code `25` is rejected and must not be
+registered or offered. Signed Code `26` is immutable superseded history after
+its deployment-only installer failure and must not be relabelled or reused.
+Code `27` is immutable signed history and must not be staged or activated.
+Code `28` is immutable signed history after its image-identity gate failure and
+must not be staged or activated. Code30.1 build `36` is immutable predecessor
+history. Code30.2 build `37` must first pass the complete backend migration/test,
+Web lint/typecheck/test/build, Android release lint/JVM/instrumentation/build,
+and signature-verification gates. The resulting
 draft release contains:
 
 - a signed `.apk` for controlled direct installation;
@@ -481,10 +506,10 @@ draft release contains:
 - `release-manifest.json` with source revision, version, API base URL, and
   signing-certificate fingerprint.
 
-Do not distribute an artifact for live café operation until the release
-workflow is green and the device acceptance checklist has passed on the target
-café tablet. Emulator proof supports candidate review but is not physical-device
-acceptance.
+Do not distribute an artifact beyond the controlled target-tablet offer until
+the release workflow is green and supervised device acceptance has passed on
+that tablet. Emulator proof supports candidate review but is not
+physical-device acceptance.
 
 ## Download page
 

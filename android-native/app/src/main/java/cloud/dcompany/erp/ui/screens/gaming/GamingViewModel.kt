@@ -14,6 +14,7 @@ import cloud.dcompany.erp.core.auth.TerminalPurpose
 import cloud.dcompany.erp.core.auth.ValidatedTerminalDisplay
 import cloud.dcompany.erp.core.auth.VIEW_ONLY_MESSAGE
 import cloud.dcompany.erp.core.auth.authorizeAction
+import cloud.dcompany.erp.core.auth.commitIfCurrentOrNotifyStale
 import cloud.dcompany.erp.core.alarm.GamingAlarmReconciler
 import cloud.dcompany.erp.core.db.GamingSessionCacheEntity
 import cloud.dcompany.erp.core.db.GamingSessionAddonActionState
@@ -41,6 +42,7 @@ import cloud.dcompany.erp.core.db.RecoveredLegacyServerDisposition
 import cloud.dcompany.erp.core.db.ResolvedOpenShift
 import cloud.dcompany.erp.core.db.ShiftState
 import cloud.dcompany.erp.core.db.observeResolvedOpenShift
+import cloud.dcompany.erp.core.db.isCorrectableGamingStopClockRejection
 import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.ApiException
 import cloud.dcompany.erp.core.net.ErpApi
@@ -52,8 +54,14 @@ import cloud.dcompany.erp.core.sync.ResourceRefreshResult
 import cloud.dcompany.erp.ui.screens.CartModifierSelection
 import cloud.dcompany.erp.ui.screens.configuredUnitPriceMinor
 import cloud.dcompany.erp.ui.WorkspaceFeatureProfiles
+import cloud.dcompany.erp.ui.screens.customers.Customer
+import cloud.dcompany.erp.ui.screens.customers.CustomersApi
+import cloud.dcompany.erp.ui.screens.customers.requireCustomerDirectorySnapshot
+import cloud.dcompany.erp.core.db.CustomerDirectoryStateEntity
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -63,6 +71,8 @@ import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.time.Instant
 import java.util.UUID
 import kotlinx.serialization.json.JsonNull
@@ -71,6 +81,8 @@ data class GamingUiState(
     val stations: List<Station> = emptyList(),
     val packages: List<GamingPackage> = emptyList(),
     val sessions: List<GameSession> = emptyList(),
+    /** Scoped Room projection; the server customer pull is currently capped at 500 rows. */
+    val customers: List<GamingCustomerOption> = emptyList(),
     val busyStationId: String? = null,
     val error: String? = null,
     val notice: String? = null,
@@ -119,6 +131,15 @@ data class GamingUiState(
     val needsCancellation: List<GameSession>
         get() = sessions.filter {
             it.canCancelUnbilled() && it.amountMinor == 0L && !hasActiveAddons(it)
+        }
+
+    /** Start/Stop refusals remain station work; Send refusals already belong to the POS queue. */
+    val rejectedSessionsForReview: List<GameSession>
+        get() = sessions.filter {
+            it.localState in setOf(
+                GamingSessionState.START_REJECTED,
+                GamingSessionState.STOP_REJECTED,
+            )
         }
 
     fun packageExtensionFor(serverSessionId: String): PackageExtensionActionUi? =
@@ -711,6 +732,25 @@ internal fun calculateCapturedTimerEndsAtMillis(startedAtMillis: Long, timerMinu
     }.getOrNull()
 }
 
+internal fun gamingStartWorkspaceUnavailableMessage(stationName: String): String =
+    "The verified workspace expired before $stationName could start. Sign in online again, " +
+        "reopen Gaming, and retry. No session was started."
+
+internal const val GAMING_STOP_WORKSPACE_UNAVAILABLE_MESSAGE =
+    "The verified workspace expired before the stop could be saved. Sign in online again, " +
+        "reopen Gaming, and retry. The session is still running and its time continues."
+
+internal fun gamingWorkspaceUnavailableMessage(action: String, preservedState: String): String =
+    "The verified workspace expired before $action. Sign in online again, reopen Gaming, " +
+        "and review the station. $preservedState"
+
+internal fun gamingServerResultWorkspaceUnavailableMessage(
+    action: String,
+    safeNextStep: String,
+): String =
+    "The verified workspace changed while the server was $action. Sign in online again, " +
+        "reopen Gaming, and refresh before retrying. $safeNextStep"
+
 internal fun GameSession.canSendToPos(hasActiveAddons: Boolean = false): Boolean =
     isUnbilledEnded() && amountMinor != null && (amountMinor > 0L || hasActiveAddons) &&
         localState !in setOf(GamingSessionState.SEND_PENDING, GamingSessionState.SENT)
@@ -893,6 +933,7 @@ class GamingViewModel : ViewModel() {
     private val appCtx = DCompanyApp.instance
     private val db = appCtx.db
     private val gamingApi = ApiClient.create<GamingApi>()
+    private val customersApi = ApiClient.create<CustomersApi>()
     /** Validated, persisted purpose is part of the same terminal authority as X-Terminal-Id. */
     val activeTerminal: StateFlow<ValidatedTerminalDisplay?> =
         appCtx.terminalStore.activeValidatedTerminal
@@ -906,6 +947,9 @@ class GamingViewModel : ViewModel() {
     private val notice = MutableStateFlow<String?>(null)
     private val refreshing = MutableStateFlow(true)
     private val refreshError = MutableStateFlow<String?>(null)
+    private var customerSearchJob: Job? = null
+    private var customerSearchGeneration = 0L
+    private val customerLookupMutex = Mutex()
     private val _posTargetSelection = MutableStateFlow<PosTargetSelectionUi?>(null)
     val posTargetSelection: StateFlow<PosTargetSelectionUi?> = _posTargetSelection
     @Volatile private var access = GamingAccess()
@@ -926,6 +970,7 @@ class GamingViewModel : ViewModel() {
         val variants: List<MenuVariantEntity>,
         val modifierGroups: List<MenuModifierGroupEntity>,
         val modifiers: List<MenuModifierEntity>,
+        val customers: List<GamingCustomerOption>,
     )
 
     private data class AddonState(
@@ -953,7 +998,8 @@ class GamingViewModel : ViewModel() {
         ) { categories, items, variants, groups, modifiers ->
             AddonCatalogState(categories, items, variants, groups, modifiers)
         },
-    ) { gaming, menu ->
+        combine(db.customerDao().observeCache(), db.customerDao().observeLocal(), ::Pair),
+    ) { gaming, menu, customerRows ->
         ReferenceState(
             stations = gaming.first,
             packages = gaming.second,
@@ -962,6 +1008,7 @@ class GamingViewModel : ViewModel() {
             variants = menu.variants,
             modifierGroups = menu.modifierGroups,
             modifiers = menu.modifiers,
+            customers = projectGamingCustomers(customerRows.first, customerRows.second),
         )
     }
 
@@ -1039,6 +1086,7 @@ class GamingViewModel : ViewModel() {
             stations = references.stations.map { it.toStation() },
             packages = references.packages.map { it.toGamingPackage() },
             sessions = cacheSessions + localOnly,
+            customers = references.customers,
             busyStationId = actionState.busyStationId,
             error = actionState.actionError,
             notice = actionState.notice,
@@ -1133,6 +1181,67 @@ class GamingViewModel : ViewModel() {
         viewModelScope.launch { refreshGaming() }
     }
 
+    fun refreshCustomersForStart() {
+        viewModelScope.launch {
+            // Best effort: the scoped Room cache remains usable offline and the
+            // dialog states the backend's current 500-row pull bound.
+            customerLookupMutex.withLock { appCtx.sync.refresh("customers") }
+        }
+    }
+
+    fun searchCustomersForStart(rawQuery: String) {
+        customerSearchJob?.cancel()
+        val generation = ++customerSearchGeneration
+        val query = onlineGamingCustomerQuery(rawQuery, state.value.online) ?: return
+        val workspaceMessage = gamingWorkspaceUnavailableMessage(
+            action = "saved customers could be searched",
+            preservedState = "No customer was selected or changed.",
+        )
+        val lease = scopeLeaseOrError(workspaceMessage) ?: return
+        customerSearchJob = viewModelScope.launch {
+            delay(250)
+            try {
+                customerLookupMutex.withLock {
+                    if (!isCurrentGamingCustomerSearch(generation, customerSearchGeneration)) return@withLock
+                    if (!appCtx.cacheIsolation.commitIfCurrentOrNotifyStale(
+                            lease = lease,
+                            onStale = { error.value = workspaceMessage },
+                            write = {},
+                        )
+                    ) return@withLock
+                    val snapshot = customersApi.list(q = query, limit = 50)
+                        .requireCustomerDirectorySnapshot(lease.scope.companyId)
+                    if (!isCurrentGamingCustomerSearch(generation, customerSearchGeneration)) return@withLock
+                    appCtx.cacheIsolation.commitIfCurrentOrNotifyStale(
+                        lease = lease,
+                        onStale = { error.value = workspaceMessage },
+                    ) {
+                        if (!isCurrentGamingCustomerSearch(generation, customerSearchGeneration)) {
+                            return@commitIfCurrentOrNotifyStale
+                        }
+                        // A query subset augments the scoped offline cache. It must
+                        // never wholesale-replace the first-page cache.
+                        db.withTransaction {
+                            db.customerDao().upsertCache(
+                                snapshot.customers.map { it.toGamingCacheEntity() },
+                            )
+                            db.customerDao().upsertDirectoryState(
+                                CustomerDirectoryStateEntity(
+                                    snapshot.companyId,
+                                    snapshot.deletionRevision,
+                                ),
+                            )
+                        }
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                Log.w("GamingViewModel", "Saved-customer search failed; retaining local cache", failure)
+            }
+        }
+    }
+
     private suspend fun refreshGaming() {
         try {
             // Keep setup inside the protected region: requestSync can touch
@@ -1176,6 +1285,12 @@ class GamingViewModel : ViewModel() {
         if (busyStationId.value == null) return true
         error.value = "Another gaming action is still being saved. Wait for it to finish, then try again."
         return false
+    }
+
+    private fun scopeLeaseOrError(message: String): CacheScopeLease? {
+        val lease = appCtx.cacheIsolation.currentLease()
+        if (lease == null) error.value = message
+        return lease
     }
 
     private fun requireNoPackageExtension(session: GameSession, action: String): Boolean {
@@ -1234,6 +1349,8 @@ class GamingViewModel : ViewModel() {
 
     fun start(
         station: Station,
+        customerId: String?,
+        name: String?,
         phone: String?,
         timerMinutes: Int?,
         packageId: String? = null,
@@ -1269,12 +1386,13 @@ class GamingViewModel : ViewModel() {
                 "The exact fixed-price tariff has not synced for ${station.name}. Reconnect and refresh Gaming; no session was started."
             return
         }
-        if (packageId != null && (
-                selectedPackage == null || selectedPackage.kind != "base" ||
-                    selectedPackage.stationType != station.type || selectedPackage.code.isBlank()
-                )
-        ) {
-            error.value = "That package is no longer available for ${station.name}. Refresh Gaming and choose again."
+        val packageStartError = newGamingPackageStartError(
+            station = station,
+            packageId = packageId,
+            selectedPackage = selectedPackage,
+        )
+        if (packageStartError != null) {
+            error.value = packageStartError
             return
         }
         val maximumExtraControllers = selectedPackage?.let {
@@ -1319,7 +1437,11 @@ class GamingViewModel : ViewModel() {
             error.value = "This package total is outside the supported range. Refresh Gaming and choose again."
             return
         }
-        val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
+        val scopeLease = appCtx.cacheIsolation.currentLease()
+        if (scopeLease == null) {
+            error.value = gamingStartWorkspaceUnavailableMessage(station.name)
+            return
+        }
         busyStationId.value = station.id
         error.value = null
         notice.value = null
@@ -1327,8 +1449,16 @@ class GamingViewModel : ViewModel() {
             try {
                 var inserted = false
                 var shiftCaptureError: String? = null
-                val scopeStillCurrent = appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                val scopeStillCurrent = appCtx.cacheIsolation.commitIfCurrentOrNotifyStale(
+                    lease = scopeLease,
+                    onStale = { error.value = gamingStartWorkspaceUnavailableMessage(station.name) },
+                ) {
                     db.withTransaction {
+                        val directoryState = if (customerId == null && !phone.isNullOrBlank()) {
+                            db.customerDao().directoryState(scopeLease.scope.companyId)
+                        } else {
+                            null
+                        }
                         if (currentState.activeShiftAllowsQueuedStart) {
                             val pendingShift = db.shiftDao().byLocalId(shift)
                             if (pendingShift == null || pendingShift.state !in setOf(
@@ -1340,12 +1470,23 @@ class GamingViewModel : ViewModel() {
                                 return@withTransaction
                             }
                         }
+                        if (customerId != null &&
+                            db.customerDao().getCache(customerId) == null &&
+                            db.customerDao().pendingLocalForServerId(customerId) == null
+                        ) {
+                            shiftCaptureError = "That saved customer is no longer available in this workspace. Search again; no play was saved."
+                            return@withTransaction
+                        }
                         inserted = db.gamingDao().insertStartIfStationAvailable(
                             LocalGamingSessionEntity(
                                 localId = UUID.randomUUID().toString(),
                                 stationId = station.id,
                                 shiftId = shift,
+                                customerId = customerId,
+                                customerName = name?.trim()?.takeIf { it.isNotEmpty() },
                                 customerPhone = phone?.trim()?.takeIf { it.isNotEmpty() },
+                                customerDirectoryRevision = directoryState?.deletionRevision,
+                                customerDirectoryCompanyId = directoryState?.companyId,
                                 timerMinutes = capturedTimerMinutes,
                                 ratePerHourMinor = station.ratePerHourMinor,
                                 packageId = selectedPackage?.id,
@@ -1415,7 +1556,11 @@ class GamingViewModel : ViewModel() {
             requireCurrentShiftSession(session, "stopping it")
             return
         }
-        val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
+        val scopeLease = appCtx.cacheIsolation.currentLease()
+        if (scopeLease == null) {
+            error.value = GAMING_STOP_WORKSPACE_UNAVAILABLE_MESSAGE
+            return
+        }
         // Capture exactly once at the employee's tap. If the network returns
         // ten minutes later, billing still ends at this timestamp.
         val stoppedAtMillis = System.currentTimeMillis()
@@ -1425,7 +1570,10 @@ class GamingViewModel : ViewModel() {
         viewModelScope.launch {
             try {
                 var changed = true
-                if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                if (!appCtx.cacheIsolation.commitIfCurrentOrNotifyStale(
+                        lease = scopeLease,
+                        onStale = { error.value = GAMING_STOP_WORKSPACE_UNAVAILABLE_MESSAGE },
+                    ) {
                         val dao = db.gamingDao()
                         val existing = dao.localSessionByEitherId(session.id)
                         if (existing != null) {
@@ -1435,6 +1583,11 @@ class GamingViewModel : ViewModel() {
                                 existing.localId,
                                 stoppedAtMillis,
                                 resolvedStopShiftId,
+                                correctFutureClockRejection =
+                                    isCorrectableGamingStopClockRejection(
+                                        session.localState,
+                                        session.lastError,
+                                    ),
                             ) != 0
                         } else {
                             // A session this device only ever saw via the cache (started
@@ -1461,6 +1614,7 @@ class GamingViewModel : ViewModel() {
                                     // fallback only for a server-known session
                                     // and server-confirmed current shift.
                                     shiftId = resolvedStopShiftId,
+                                    customerName = session.customerName,
                                     customerPhone = session.customerPhone,
                                     ratePerHourMinor = session.ratePerHourMinor,
                                     packageId = session.packageId,
@@ -1541,7 +1695,11 @@ class GamingViewModel : ViewModel() {
             error.value = "Keep the item note within 500 characters."
             return
         }
-        val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
+        val workspaceMessage = gamingWorkspaceUnavailableMessage(
+            action = "this item could be saved",
+            preservedState = "No item was added to the Gaming bill.",
+        )
+        val scopeLease = scopeLeaseOrError(workspaceMessage) ?: return
         val scope = scopeLease.scope
         val branchId = scope.branchId
         if (branchId == null) {
@@ -1561,7 +1719,10 @@ class GamingViewModel : ViewModel() {
         viewModelScope.launch {
             try {
                 var captured = false
-                if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                if (!appCtx.cacheIsolation.commitIfCurrentOrNotifyStale(
+                        lease = scopeLease,
+                        onStale = { error.value = workspaceMessage },
+                    ) {
                         val dao = db.gamingDao()
                         val local = dao.localSessionByEitherId(session.id)
                         val shiftId = local?.shiftId ?: session.shiftId
@@ -1641,10 +1802,20 @@ class GamingViewModel : ViewModel() {
             error.value = "Enter a void reason between 3 and 500 characters."
             return
         }
-        val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
+        val workspaceMessage = gamingWorkspaceUnavailableMessage(
+            action = "this item void could be saved",
+            preservedState = "The item remains billable and no void was queued.",
+        )
+        val scopeLease = scopeLeaseOrError(workspaceMessage) ?: return
         val scope = scopeLease.scope
-        val branchId = scope.branchId ?: return
-        val terminalId = scope.terminalId ?: return
+        val branchId = scope.branchId ?: run {
+            error.value = "This workspace has no verified branch. Reconnect before voiding the item; it remains billable."
+            return
+        }
+        val terminalId = scope.terminalId ?: run {
+            error.value = "This workspace has no verified terminal. Reconnect before voiding the item; it remains billable."
+            return
+        }
         val actionId = UUID.randomUUID().toString()
         busyStationId.value = session.stationId
         error.value = null
@@ -1652,7 +1823,10 @@ class GamingViewModel : ViewModel() {
         viewModelScope.launch {
             try {
                 var captured = false
-                if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                if (!appCtx.cacheIsolation.commitIfCurrentOrNotifyStale(
+                        lease = scopeLease,
+                        onStale = { error.value = workspaceMessage },
+                    ) {
                         val dao = db.gamingDao()
                         val local = dao.localSessionByEitherId(session.id)
                         val shiftId = local?.shiftId ?: session.shiftId
@@ -1711,7 +1885,11 @@ class GamingViewModel : ViewModel() {
             error.value = "Only a definitively rejected Gaming item action can be dismissed."
             return
         }
-        val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
+        val workspaceMessage = gamingWorkspaceUnavailableMessage(
+            action = "the rejected item review could be saved",
+            preservedState = "The retained action was not removed or rewritten.",
+        )
+        val scopeLease = scopeLeaseOrError(workspaceMessage) ?: return
         val actionOwner = state.value.sessions.firstOrNull { session ->
             session.id == action.serverSessionId || session.id == action.localSessionId
         }?.stationId ?: "addon-review:$actionId"
@@ -1737,6 +1915,8 @@ class GamingViewModel : ViewModel() {
                         "Rejected item Add acknowledged. The server did not add it, and no request was rewritten or replayed."
                     }
                     appCtx.sync.requestSync()
+                } else if (changed is cloud.dcompany.erp.core.auth.ScopedCommitResult.Stale) {
+                    error.value = workspaceMessage
                 } else {
                     error.value =
                         "The rejected action changed state. Refresh Gaming before reviewing it again."
@@ -1799,7 +1979,15 @@ class GamingViewModel : ViewModel() {
             error.value = message
             return
         }
-        val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
+        val workspaceMessage = gamingWorkspaceUnavailableMessage(
+            action = "the audited rejected-start recovery could begin",
+            preservedState = "No owner decision was sent and the retained evidence remains unchanged.",
+        )
+        val postRequestWorkspaceMessage = gamingServerResultWorkspaceUnavailableMessage(
+            action = "processing the audited rejected-start recovery",
+            safeNextStep = "The decision may already be recorded; keep the retained evidence and do not create a replacement decision.",
+        )
+        val scopeLease = scopeLeaseOrError(workspaceMessage) ?: return
         val activeTerminal = appCtx.terminalStore.activeValidatedTerminal.value ?: run {
             error.value = "This tablet has no verified terminal. The retained evidence was not changed."
             return
@@ -1865,7 +2053,10 @@ class GamingViewModel : ViewModel() {
             var localActionId: String? = null
             try {
                 var captured: LocalGamingSessionEntity? = null
-                val captureCommitted = appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                val captureCommitted = appCtx.cacheIsolation.commitIfCurrentOrNotifyStale(
+                    lease = scopeLease,
+                    onStale = { error.value = workspaceMessage },
+                ) {
                     val dao = db.gamingDao()
                     val row = dao.localSessionByEitherId(session.id)
                     if (
@@ -1994,7 +2185,10 @@ class GamingViewModel : ViewModel() {
                     RecoveredLegacyServerDisposition.RESTORE_CAPTURED_STOP
                 val retainedBillingReview = recoveredDisposition ==
                     RecoveredLegacyServerDisposition.RETAIN_BILLING_REVIEW
-                val scopeStillCurrent = appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                val scopeStillCurrent = appCtx.cacheIsolation.commitIfCurrentOrNotifyStale(
+                    lease = scopeLease,
+                    onStale = { error.value = postRequestWorkspaceMessage },
+                ) {
                     committed = if (authoritative != null) {
                         db.gamingDao().confirmRecoveredLegacyServerSession(
                             localId = actionId,
@@ -2050,15 +2244,19 @@ class GamingViewModel : ViewModel() {
                 throw cancelled
             } catch (failure: ApiException) {
                 val attemptState = legacyResolutionFailureState(failure)
-                localActionId?.let { actionId ->
-                    appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                val failureStateCommitted = localActionId?.let { actionId ->
+                    appCtx.cacheIsolation.commitIfCurrentOrNotifyStale(
+                        lease = scopeLease,
+                        onStale = { error.value = postRequestWorkspaceMessage },
+                    ) {
                         db.gamingDao().markLegacyPackageResolutionAttempt(
                             actionId,
                             attemptState,
                             failure.message ?: "The server did not confirm this resolution.",
                         )
                     }
-                }
+                } ?: true
+                if (!failureStateCommitted) return@launch
                 error.value = if (attemptState == GamingLegacyResolutionAttemptState.AMBIGUOUS) {
                     if (failure.code == "idempotency_conflict") {
                         "The saved approval belongs to the first protected owner. Use that same owner to retry; the exact decision remains locked."
@@ -2069,15 +2267,19 @@ class GamingViewModel : ViewModel() {
                     legacyResolutionRejectedMessage(failure)
                 }
             } catch (_: Exception) {
-                localActionId?.let { actionId ->
-                    appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                val failureStateCommitted = localActionId?.let { actionId ->
+                    appCtx.cacheIsolation.commitIfCurrentOrNotifyStale(
+                        lease = scopeLease,
+                        onStale = { error.value = postRequestWorkspaceMessage },
+                    ) {
                         db.gamingDao().markLegacyPackageResolutionAttempt(
                             actionId,
                             GamingLegacyResolutionAttemptState.AMBIGUOUS,
                             "The audit response could not be verified.",
                         )
                     }
-                }
+                } ?: true
+                if (!failureStateCommitted) return@launch
                 error.value =
                     "The audit response could not be verified. The exact decision is retained and the station stays blocked; retry it when online."
             } finally {
@@ -2129,14 +2331,21 @@ class GamingViewModel : ViewModel() {
 
     /** Preserve the established durable/offline outbox for Cafe POS and Hybrid terminals. */
     private fun queueLocalPosSend(session: GameSession) {
-        val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
+        val workspaceMessage = gamingWorkspaceUnavailableMessage(
+            action = "the POS handoff could be queued",
+            preservedState = "The ended bill remains saved in Gaming and was not sent.",
+        )
+        val scopeLease = scopeLeaseOrError(workspaceMessage) ?: return
         busyStationId.value = session.stationId
         error.value = null
         notice.value = null
         viewModelScope.launch {
             try {
                 var changed = true
-                if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                if (!appCtx.cacheIsolation.commitIfCurrentOrNotifyStale(
+                        lease = scopeLease,
+                        onStale = { error.value = workspaceMessage },
+                    ) {
                         db.withTransaction {
                             val dao = db.gamingDao()
                             val existing = dao.localSessionByEitherId(session.id)
@@ -2155,6 +2364,7 @@ class GamingViewModel : ViewModel() {
                                     localId = UUID.randomUUID().toString(),
                                     serverId = session.id,
                                     stationId = session.stationId,
+                                    customerName = session.customerName,
                                     customerPhone = session.customerPhone,
                                     startedAtMillis = runCatching { Instant.parse(session.startAt).toEpochMilli() }
                                         .getOrDefault(System.currentTimeMillis()),
@@ -2204,7 +2414,15 @@ class GamingViewModel : ViewModel() {
                 "Reconnect to load open POS shifts. This ended bill remains saved in Gaming."
             return
         }
-        val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
+        val workspaceMessage = gamingWorkspaceUnavailableMessage(
+            action = "open POS shifts could be loaded",
+            preservedState = "No receiving shift was selected and the ended bill remains saved in Gaming.",
+        )
+        val postRequestWorkspaceMessage = gamingServerResultWorkspaceUnavailableMessage(
+            action = "loading open POS shifts",
+            safeNextStep = "No receiving shift was selected and the ended bill remains saved in Gaming.",
+        )
+        val scopeLease = scopeLeaseOrError(workspaceMessage) ?: return
         busyStationId.value = session.stationId
         error.value = null
         notice.value = null
@@ -2223,7 +2441,10 @@ class GamingViewModel : ViewModel() {
                     error.value = message
                     return@launch
                 }
-                if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                if (!appCtx.cacheIsolation.commitIfCurrentOrNotifyStale(
+                        lease = scopeLease,
+                        onStale = { error.value = postRequestWorkspaceMessage },
+                    ) {
                         _posTargetSelection.value = PosTargetSelectionUi(
                             session = session,
                             serverSessionId = serverSessionId,
@@ -2298,7 +2519,15 @@ class GamingViewModel : ViewModel() {
             error.value = "Reconnect before sending this bill to ${target.terminalName}. It remains saved in Gaming."
             return
         }
-        val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
+        val workspaceMessage = gamingWorkspaceUnavailableMessage(
+            action = "the POS handoff could start",
+            preservedState = "No handoff request was sent and the ended bill remains saved in Gaming.",
+        )
+        val postRequestWorkspaceMessage = gamingServerResultWorkspaceUnavailableMessage(
+            action = "sending this bill to POS",
+            safeNextStep = "It may already be linked; do not create another bill before reviewing Gaming and POS.",
+        )
+        val scopeLease = scopeLeaseOrError(workspaceMessage) ?: return
         busyStationId.value = session.stationId
         error.value = null
         notice.value = null
@@ -2318,7 +2547,10 @@ class GamingViewModel : ViewModel() {
                         "$mismatch The ended bill remains visible; refresh Gaming and contact support before retrying."
                     return@launch
                 }
-                val handoffCommitted = appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                val handoffCommitted = appCtx.cacheIsolation.commitIfCurrentOrNotifyStale(
+                    lease = scopeLease,
+                    onStale = { error.value = postRequestWorkspaceMessage },
+                ) {
                     val dao = db.gamingDao()
                     db.withTransaction {
                         dao.localSessionByEitherId(session.id)?.let { local ->
@@ -2443,7 +2675,11 @@ class GamingViewModel : ViewModel() {
         }
         if (!requireCurrentShiftSession(session, "adding paid time")) return
         if (!requireNoPackageExtension(session, "adding another paid extension")) return
-        val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
+        val workspaceMessage = gamingWorkspaceUnavailableMessage(
+            action = "the paid extension could be queued",
+            preservedState = "No extension charge was queued and the session timer was not changed.",
+        )
+        val scopeLease = scopeLeaseOrError(workspaceMessage) ?: return
         val actionId = UUID.randomUUID().toString()
         val totalMinor = extension.priceMinor + extraControllerExtensionSurchargeMinor(
             extraControllers = session.extraControllers,
@@ -2456,7 +2692,10 @@ class GamingViewModel : ViewModel() {
         viewModelScope.launch {
             try {
                 var captured = false
-                if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                if (!appCtx.cacheIsolation.commitIfCurrentOrNotifyStale(
+                        lease = scopeLease,
+                        onStale = { error.value = workspaceMessage },
+                    ) {
                         val dao = db.gamingDao()
                         val local = dao.localSessionByEitherId(session.id)
                         val serverSessionId = local?.serverId ?: session.id.takeIf { local == null }
@@ -2522,14 +2761,29 @@ class GamingViewModel : ViewModel() {
                 "Reconnect before resolving the rejected extension. The original charge must be replayed and verified first."
             return
         }
-        val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
+        val workspaceMessage = gamingWorkspaceUnavailableMessage(
+            action = "the rejected extension review could begin",
+            preservedState = "The original extension record remains blocked and unchanged.",
+        )
+        val postRequestWorkspaceMessage = gamingServerResultWorkspaceUnavailableMessage(
+            action = "verifying the original paid extension",
+            safeNextStep = "It may already be confirmed; do not discard or charge it again until Gaming is refreshed.",
+        )
+        val refusedWorkspaceMessage = gamingServerResultWorkspaceUnavailableMessage(
+            action = "saving the verified rejected extension",
+            safeNextStep = "The server proved no charge was added, but the retained blocker remains on this tablet.",
+        )
+        val scopeLease = scopeLeaseOrError(workspaceMessage) ?: return
         busyStationId.value = action.serverSessionId
         error.value = null
         notice.value = null
         viewModelScope.launch {
             try {
                 var retainedSnapshot: LocalGamingPackageExtensionEntity? = null
-                val retainedSnapshotCommitted = appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                val retainedSnapshotCommitted = appCtx.cacheIsolation.commitIfCurrentOrNotifyStale(
+                    lease = scopeLease,
+                    onStale = { error.value = workspaceMessage },
+                ) {
                     retainedSnapshot = db.gamingDao().packageExtensionAction(actionId)
                 }
                 if (!retainedSnapshotCommitted) {
@@ -2558,7 +2812,10 @@ class GamingViewModel : ViewModel() {
                         throw IllegalStateException("Paid-extension replay returned a different session")
                     }
                     var confirmed = false
-                    val confirmationCommitted = appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                    val confirmationCommitted = appCtx.cacheIsolation.commitIfCurrentOrNotifyStale(
+                        lease = scopeLease,
+                        onStale = { error.value = postRequestWorkspaceMessage },
+                    ) {
                         confirmed = db.gamingDao()
                             .markPackageExtensionConfirmed(retained.actionId) == 1
                     }
@@ -2581,12 +2838,16 @@ class GamingViewModel : ViewModel() {
                     }
                 } catch (failure: ApiException) {
                     if (failure.mustPreserveOutbox) {
-                        appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                        val failureStateCommitted = appCtx.cacheIsolation.commitIfCurrentOrNotifyStale(
+                            lease = scopeLease,
+                            onStale = { error.value = postRequestWorkspaceMessage },
+                        ) {
                             db.gamingDao().markPackageExtensionAmbiguous(
                                 retained.actionId,
                                 packageExtensionFailureMessageForRecovery(failure),
                             )
                         }
+                        if (!failureStateCommitted) return@launch
                         error.value =
                             "The original charge may have committed. It is retained for exact replay and cannot be discarded."
                         return@launch
@@ -2613,7 +2874,10 @@ class GamingViewModel : ViewModel() {
                         return@launch
                     }
                     var discarded = false
-                    val discardCommitted = appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                    val discardCommitted = appCtx.cacheIsolation.commitIfCurrentOrNotifyStale(
+                        lease = scopeLease,
+                        onStale = { error.value = refusedWorkspaceMessage },
+                    ) {
                         discarded = db.gamingDao().discardRejectedPackageExtension(
                             actionId = retained.actionId,
                             reason = normalizedReason,
@@ -2640,12 +2904,16 @@ class GamingViewModel : ViewModel() {
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
-                appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                val failureStateCommitted = appCtx.cacheIsolation.commitIfCurrentOrNotifyStale(
+                    lease = scopeLease,
+                    onStale = { error.value = postRequestWorkspaceMessage },
+                ) {
                     db.gamingDao().markPackageExtensionAmbiguous(
                         actionId,
                         "The original extension replay ended without a verifiable response.",
                     )
                 }
+                if (!failureStateCommitted) return@launch
                 error.value =
                     "The original charge could not be verified. It is retained for exact replay and cannot be discarded."
             } finally {
@@ -2733,7 +3001,15 @@ class GamingViewModel : ViewModel() {
             error.value = "Billing repair needs an internet connection. Reconnect, verify the record, then try again."
             return
         }
-        val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
+        val workspaceMessage = gamingWorkspaceUnavailableMessage(
+            action = "the billing repair could start",
+            preservedState = "No repair request was sent and the missing bill remains unchanged.",
+        )
+        val postRequestWorkspaceMessage = gamingServerResultWorkspaceUnavailableMessage(
+            action = "repairing the missing bill",
+            safeNextStep = "The repair may already be recorded; do not enter another amount before refreshing Gaming.",
+        )
+        val scopeLease = scopeLeaseOrError(workspaceMessage) ?: return
         val actionId = UUID.randomUUID().toString()
         busyStationId.value = session.stationId
         error.value = null
@@ -2749,7 +3025,10 @@ class GamingViewModel : ViewModel() {
                     ),
                     key = "gaming-billing-repair:$actionId",
                 )
-                val scopeStillCurrent = appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                val scopeStillCurrent = appCtx.cacheIsolation.commitIfCurrentOrNotifyStale(
+                    lease = scopeLease,
+                    onStale = { error.value = postRequestWorkspaceMessage },
+                ) {
                     val cache = repaired.toCacheEntity()
                     db.gamingDao().upsertAuthoritativeSession(cache)
                 }
@@ -2797,7 +3076,18 @@ class GamingViewModel : ViewModel() {
         viewModelScope.launch {
             try {
                 val updated = request()
-                if (storeRunningResponse(scopeLease, updated)) {
+                if (
+                    storeRunningResponse(
+                        scopeLease = scopeLease,
+                        updated = updated,
+                        onStale = {
+                            error.value = gamingServerResultWorkspaceUnavailableMessage(
+                                action = action,
+                                safeNextStep = "The change may already be complete; review the current station before acting again.",
+                            )
+                        },
+                    )
+                ) {
                     notice.value = successMessage
                 }
             } catch (cancelled: CancellationException) {
@@ -2831,7 +3121,11 @@ class GamingViewModel : ViewModel() {
     private suspend fun storeRunningResponse(
         scopeLease: CacheScopeLease,
         updated: GameSession,
-    ): Boolean = appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+        onStale: () -> Unit,
+    ): Boolean = appCtx.cacheIsolation.commitIfCurrentOrNotifyStale(
+        lease = scopeLease,
+        onStale = onStale,
+    ) {
         val cache = updated.toCacheEntity()
         db.withTransaction {
             db.gamingDao().upsertSessionCache(listOf(cache))
@@ -2879,7 +3173,15 @@ class GamingViewModel : ViewModel() {
             error.value = "Reconciliation needs an internet connection. Reconnect, then try again."
             return
         }
-        val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
+        val workspaceMessage = gamingWorkspaceUnavailableMessage(
+            action = "the closed-shift POS reconciliation could start",
+            preservedState = "No reconciliation request was sent and the ended bill remains in Gaming.",
+        )
+        val postRequestWorkspaceMessage = gamingServerResultWorkspaceUnavailableMessage(
+            action = "reconciling this bill to POS",
+            safeNextStep = "It may already be linked; do not create another bill before reviewing Gaming and POS.",
+        )
+        val scopeLease = scopeLeaseOrError(workspaceMessage) ?: return
         busyStationId.value = session.stationId
         error.value = null
         notice.value = null
@@ -2889,7 +3191,10 @@ class GamingViewModel : ViewModel() {
                     session.id,
                     SessionReconcileBody(targetShiftId, normalizedReason),
                 )
-                if (appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                if (appCtx.cacheIsolation.commitIfCurrentOrNotifyStale(
+                        lease = scopeLease,
+                        onStale = { error.value = postRequestWorkspaceMessage },
+                    ) {
                         db.withTransaction {
                             db.gamingDao().localSessionByEitherId(session.id)?.let { local ->
                                 db.gamingDao().markSessionSent(
@@ -2961,7 +3266,15 @@ class GamingViewModel : ViewModel() {
                 "Cancellation needs an internet connection so the reason is recorded. Reconnect, then try again."
             return
         }
-        val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
+        val workspaceMessage = gamingWorkspaceUnavailableMessage(
+            action = "the session cancellation could start",
+            preservedState = "No cancellation request was sent and the session remains blocked in Gaming.",
+        )
+        val postRequestWorkspaceMessage = gamingServerResultWorkspaceUnavailableMessage(
+            action = "cancelling this session",
+            safeNextStep = "It may already be cancelled; do not create a replacement session before refreshing Gaming.",
+        )
+        val scopeLease = scopeLeaseOrError(workspaceMessage) ?: return
 
         busyStationId.value = session.stationId
         error.value = null
@@ -2970,7 +3283,10 @@ class GamingViewModel : ViewModel() {
             try {
                 val dao = db.gamingDao()
                 var serverId: String? = null
-                if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                if (!appCtx.cacheIsolation.commitIfCurrentOrNotifyStale(
+                        lease = scopeLease,
+                        onStale = { error.value = workspaceMessage },
+                    ) {
                         val local = dao.localSessionByEitherId(session.id)
                         serverId = local?.serverId ?: session.id.takeIf { local == null }
                     }
@@ -2984,7 +3300,10 @@ class GamingViewModel : ViewModel() {
                     id = requireNotNull(serverId),
                     body = SessionCancelBody(normalizedReason),
                 )
-                if (appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                if (appCtx.cacheIsolation.commitIfCurrentOrNotifyStale(
+                        lease = scopeLease,
+                        onStale = { error.value = postRequestWorkspaceMessage },
+                    ) {
                         dao.upsertAuthoritativeSession(cancelled.toCacheEntity())
                         GamingAlarmReconciler.reconcile(appCtx)
                     }
@@ -3014,6 +3333,22 @@ class GamingViewModel : ViewModel() {
     }
 }
 
+internal fun newGamingPackageStartError(
+    station: Station,
+    packageId: String?,
+    selectedPackage: GamingPackage?,
+): String? {
+    if (packageId == null) return null
+    if (
+        selectedPackage == null || selectedPackage.kind != "base" ||
+        selectedPackage.stationType != station.type || selectedPackage.code.isBlank() ||
+        selectedPackage.pricingTier != "standard"
+    ) {
+        return "That package is no longer available for ${station.name}. Refresh Gaming and choose again."
+    }
+    return null
+}
+
 private fun GamingStationEntity.toStation() = Station(
     id = id,
     code = code,
@@ -3035,6 +3370,25 @@ private fun GamingPackageCacheEntity.toGamingPackage() = GamingPackage(
     name = name,
     durationMinutes = durationMinutes,
     priceMinor = priceMinor,
+)
+
+private fun Customer.toGamingCacheEntity() = cloud.dcompany.erp.core.db.CustomerCacheEntity(
+    id = id,
+    name = name,
+    phone = phone,
+    email = email,
+    birthday = birthday,
+    visitCount = visitCount,
+    totalSpentMinor = totalSpentMinor,
+    loyaltyPoints = loyaltyPoints,
+    lifetimeGamingPointsEarned = lifetimeGamingPointsEarned,
+    gamingRank = gamingRank,
+    gamingRankFloor = gamingRankFloor,
+    nextGamingRank = nextGamingRank,
+    nextGamingRankFloor = nextGamingRankFloor,
+    pointsToNextGamingRank = pointsToNextGamingRank,
+    lastVisitAt = lastVisitAt,
+    notes = notes,
 )
 
 internal fun GamingSessionCacheEntity.toGameSession() = GameSession(
@@ -3062,6 +3416,7 @@ internal fun GamingSessionCacheEntity.toGameSession() = GameSession(
     packageStationTypeSnapshot = packageStationTypeSnapshot,
     packagePricingTierSnapshot = packagePricingTierSnapshot,
     extraControllers = extraControllers,
+    customerId = customerId,
     customerName = customerName,
     customerPhone = customerPhone,
     orderId = orderId,
@@ -3092,6 +3447,7 @@ internal fun GameSession.toCacheEntity() = GamingSessionCacheEntity(
     packageStationTypeSnapshot = packageStationTypeSnapshot,
     packagePricingTierSnapshot = packagePricingTierSnapshot,
     extraControllers = extraControllers,
+    customerId = customerId,
     customerName = customerName,
     customerPhone = customerPhone,
     orderId = orderId,
@@ -3117,7 +3473,8 @@ private fun LocalGamingSessionEntity.toGameSession() = GameSession(
     packageStationTypeSnapshot = packageStationTypeSnapshot,
     packagePricingTierSnapshot = packagePricingTierSnapshot,
     extraControllers = extraControllers,
-    customerName = null,
+    customerId = customerId,
+    customerName = customerName,
     customerPhone = customerPhone,
     orderId = orderId,
     localState = state,

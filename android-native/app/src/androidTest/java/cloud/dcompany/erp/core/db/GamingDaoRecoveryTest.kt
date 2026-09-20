@@ -233,6 +233,7 @@ class GamingDaoRecoveryTest {
                 .copy(
                     stationId = "station-old",
                     shiftId = "shift-old",
+                    customerName = "Local booking name",
                     customerPhone = "1111111111",
                     timerMinutes = 30,
                     startedAtMillis = 1_000,
@@ -258,6 +259,7 @@ class GamingDaoRecoveryTest {
                     ratePerHourMinor = 15_000,
                     packageId = "package-new",
                     extraControllers = 2,
+                    customerName = "Confirmed server name",
                     customerPhone = "2222222222",
                     endAtMillis = null,
                     billableMinutes = null,
@@ -269,6 +271,7 @@ class GamingDaoRecoveryTest {
         assertEquals(GamingSessionState.STOP_PENDING, refreshed.state)
         assertEquals("station-new", refreshed.stationId)
         assertEquals("shift-new", refreshed.shiftId)
+        assertEquals("Confirmed server name", refreshed.customerName)
         assertEquals("2222222222", refreshed.customerPhone)
         assertEquals(60, refreshed.timerMinutes)
         assertEquals(2_000L, refreshed.startedAtMillis)
@@ -282,6 +285,31 @@ class GamingDaoRecoveryTest {
         assertEquals("package-new", refreshed.packageId)
         assertEquals(2, refreshed.extraControllers)
         assertEquals("keep pending-leg evidence", refreshed.lastError)
+    }
+
+    @Test
+    fun authoritativePullCannotRewriteAnUnsentNamedStart() = runBlocking {
+        dao.insertLocalSession(
+            localRow("offline-name", serverId = null, state = GamingSessionState.START_PENDING)
+                .copy(
+                    customerName = "Captured offline name",
+                    customerPhone = "9876543210",
+                ),
+        )
+
+        dao.replaceSessionCache(
+            listOf(
+                serverRow("different-session", status = "active", amountMinor = 0).copy(
+                    customerName = "Different server customer",
+                    customerPhone = "9000000000",
+                ),
+            ),
+        )
+
+        val pending = dao.localSessionById("offline-name")!!
+        assertEquals(GamingSessionState.START_PENDING, pending.state)
+        assertEquals("Captured offline name", pending.customerName)
+        assertEquals("9876543210", pending.customerPhone)
     }
 
     @Test
@@ -443,6 +471,97 @@ class GamingDaoRecoveryTest {
         assertEquals(GamingSessionState.STOP_PENDING, retried.state)
         assertEquals("stopping", retried.status)
         assertEquals(42_123L, retried.endAtMillis)
+    }
+
+    @Test
+    fun futureClockRejectionCanRecaptureStopWithoutLosingOriginalEvidence() = runBlocking {
+        val futureStop = localRow(
+            localId = "future-clock-stop",
+            serverId = "server-future-clock-stop",
+            state = GamingSessionState.STOP_PENDING,
+        ).copy(
+            shiftId = "shift-1",
+            status = "stopping",
+            endAtMillis = 7_201_000,
+        )
+        dao.insertLocalSession(futureStop)
+        dao.markSessionRejected(
+            futureStop.localId,
+            GamingSessionState.STOP_REJECTED,
+            GAMING_STOP_FUTURE_TIME_REJECTION,
+        )
+
+        assertEquals(
+            0,
+            dao.requestSessionStop(
+                futureStop.localId,
+                stoppedAtMillis = 61_000,
+                resolvedShiftId = "different-shift",
+                correctFutureClockRejection = true,
+            ),
+        )
+        assertEquals(
+            1,
+            dao.requestSessionStop(
+                futureStop.localId,
+                stoppedAtMillis = 61_000,
+                resolvedShiftId = futureStop.shiftId,
+                correctFutureClockRejection = true,
+            ),
+        )
+
+        val corrected = dao.localSessionById(futureStop.localId)!!
+        assertEquals(GamingSessionState.STOP_PENDING, corrected.state)
+        assertEquals("stopping", corrected.status)
+        assertEquals(61_000L, corrected.endAtMillis)
+        assertEquals(7_201_000L, corrected.legacyOriginalCapturedStopAtMillis)
+        assertEquals(futureStop.serverId, corrected.serverId)
+        assertEquals(futureStop.shiftId, corrected.shiftId)
+        assertNull(corrected.lastError)
+    }
+
+    @Test
+    fun nonClockRejectionAndPendingRetryNeverReplaceCapturedStop() = runBlocking {
+        val rejected = localRow(
+            localId = "ordinary-stop-rejection",
+            serverId = "server-ordinary-stop-rejection",
+            state = GamingSessionState.STOP_PENDING,
+        ).copy(
+            shiftId = "shift-1",
+            status = "stopping",
+            endAtMillis = 42_123,
+        )
+        dao.insertLocalSession(rejected)
+        dao.markSessionRejected(
+            rejected.localId,
+            GamingSessionState.STOP_REJECTED,
+            "temporary shift conflict",
+        )
+
+        assertEquals(
+            1,
+            dao.requestSessionStop(
+                rejected.localId,
+                stoppedAtMillis = 99_999,
+                resolvedShiftId = rejected.shiftId,
+                correctFutureClockRejection = true,
+            ),
+        )
+        val retried = dao.localSessionById(rejected.localId)!!
+        assertEquals(42_123L, retried.endAtMillis)
+        assertNull(retried.legacyOriginalCapturedStopAtMillis)
+
+        dao.notePendingSessionError(rejected.localId, GAMING_STOP_FUTURE_TIME_REJECTION)
+        assertEquals(
+            0,
+            dao.requestSessionStop(
+                rejected.localId,
+                stoppedAtMillis = 120_000,
+                resolvedShiftId = rejected.shiftId,
+                correctFutureClockRejection = true,
+            ),
+        )
+        assertEquals(42_123L, dao.localSessionById(rejected.localId)?.endAtMillis)
     }
 
     @Test

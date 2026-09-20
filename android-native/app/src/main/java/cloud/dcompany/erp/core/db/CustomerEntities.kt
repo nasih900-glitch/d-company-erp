@@ -4,6 +4,13 @@ import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
 
+/** Tenant-scoped server counter; contains no erased customer identity. */
+@Entity(tableName = "customer_directory_state")
+data class CustomerDirectoryStateEntity(
+    @PrimaryKey val companyId: String,
+    val deletionRevision: Long,
+)
+
 /**
  * The full customer list, wholesale-replaced on every pull — same shape as
  * [MenuItemEntity]. Unlike Menu, this is capped at whatever the backend's
@@ -115,4 +122,9 @@ data class LocalCustomerEntity(
     val state: String = CustomerWriteState.PENDING,
     val lastError: String? = null,
     val version: Long = 0,
+    /** Null preserves the exact pre-Room-48 action ID for migrated queued writes. */
+    val clientActionToken: String? = null,
+    /** Immutable server directory snapshot captured with this customer action. */
+    val customerDirectoryRevision: Long? = null,
+    val customerDirectoryCompanyId: String? = null,
 )

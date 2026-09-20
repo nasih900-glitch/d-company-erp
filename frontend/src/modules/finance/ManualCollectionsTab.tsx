@@ -7,9 +7,11 @@ import { FINANCE_ACTION_FEEDBACK } from '@/lib/action-feedback';
 import {
   finance,
   pos,
+  shifts,
   type BranchReferenceDTO,
   type ManualCollectionDTO,
   type ManualCollectionMethod,
+  type ShiftDTO,
 } from '@/lib/erp-api';
 import { inr, inrShort } from '@/lib/inr';
 import {
@@ -34,25 +36,29 @@ export default function ManualCollectionsTab() {
   const notifications = useNotifications();
   const [rows, setRows] = useState<ManualCollectionDTO[]>([]);
   const [branches, setBranches] = useState<BranchReferenceDTO[]>([]);
+  const [openShifts, setOpenShifts] = useState<ShiftDTO[]>([]);
   const [companyTimezone, setCompanyTimezone] = useState(DEFAULT_BUSINESS_TIMEZONE);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [voiding, setVoiding] = useState<ManualCollectionDTO | null>(null);
+  const [correcting, setCorrecting] = useState<ManualCollectionDTO | null>(null);
 
   const load = useCallback(async (silent = false) => {
     const isCurrent = requests.begin();
     if (!silent) setLoading(true);
     try {
-      const [collections, branchRows, receiptIdentity] = await Promise.all([
+      const [collections, branchRows, receiptIdentity, shiftRows] = await Promise.all([
         finance.listManualCollections({ include_voided: true, limit: 500 }),
         finance.listBranches(),
         pos.receiptBusiness().catch(() => null),
+        shifts.list(true),
       ]);
       if (!isCurrent()) return;
       setErr(null);
       setRows(collections);
       setBranches(branchRows);
+      setOpenShifts(shiftRows.filter((row) => row.status === 'open'));
       setCompanyTimezone(receiptIdentity?.timezone || DEFAULT_BUSINESS_TIMEZONE);
     } catch (error) {
       if (isCurrent()) setErr((error as Error).message);
@@ -171,6 +177,13 @@ export default function ManualCollectionsTab() {
                   <td className="p-3 text-right pr-4">
                     {row.is_voided ? (
                       <span className="chip border-accent-bad/40 text-accent-bad text-[10px]">Voided</span>
+                    ) : row.is_corrected ? (
+                      <span className="chip border-accent-gold/40 text-accent-gold text-[10px]">Corrected</span>
+                    ) : row.method === 'cash' && row.source_shift_status !== 'open' ? (
+                      <button className="btn btn-ghost !min-h-[32px] !py-1 !px-2 text-xs"
+                        onClick={() => setCorrecting(row)} aria-label={`Correct ${row.source_ref}`}>
+                        <Ban size={13}/> Correct
+                      </button>
                     ) : (
                       <button className="btn btn-ghost !min-h-[32px] !py-1 !px-2 text-xs hover:!text-accent-bad"
                         onClick={() => setVoiding(row)} aria-label={`Void ${row.source_ref}`}>
@@ -208,12 +221,24 @@ export default function ManualCollectionsTab() {
                 </div>
                 {row.note && <div className="mt-2 text-xs text-fg-muted break-words">{row.note}</div>}
                 {row.void_reason && <div className="mt-2 text-xs text-accent-bad">Void reason: {row.void_reason}</div>}
+                {row.correction && (
+                  <div className="mt-2 text-xs text-accent-gold">
+                    Corrected {new Date(row.correction.corrected_at).toLocaleString('en-IN')}: {row.correction.reason}
+                  </div>
+                )}
                 <div className="mt-3 flex items-center justify-between border-t border-bg-border/60 pt-3">
                   <span className="text-[10px] text-fg-muted">
                     {row.source_kind === 'legacy_daily' ? 'Legacy daily total' : 'Manual daily total'}
                   </span>
                   {row.is_voided ? (
                     <span className="chip border-accent-bad/40 text-accent-bad text-[10px]">Voided</span>
+                  ) : row.is_corrected ? (
+                    <span className="chip border-accent-gold/40 text-accent-gold text-[10px]">Corrected</span>
+                  ) : row.method === 'cash' && row.source_shift_status !== 'open' ? (
+                    <button className="btn btn-ghost !min-h-[32px] !py-1 !px-2 text-xs"
+                      onClick={() => setCorrecting(row)}>
+                      <Ban size={13}/> Correct
+                    </button>
                   ) : (
                     <button className="btn btn-ghost !min-h-[32px] !py-1 !px-2 text-xs hover:!text-accent-bad"
                       onClick={() => setVoiding(row)}>
@@ -230,6 +255,7 @@ export default function ManualCollectionsTab() {
       {addOpen && (
         <ManualCollectionForm
           branches={branches}
+          openShifts={openShifts}
           defaultBranchId={me?.branch_id ?? branches[0]?.id ?? ''}
           companyTimezone={companyTimezone}
           onClose={() => setAddOpen(false)}
@@ -253,6 +279,18 @@ export default function ManualCollectionsTab() {
           }}
         />
       )}
+      {correcting && (
+        <ManualCollectionCorrectionForm
+          row={correcting}
+          openShifts={openShifts.filter((shift) => shift.branch_id === correcting.branch_id)}
+          onClose={() => setCorrecting(null)}
+          onSuccess={() => {
+            setCorrecting(null);
+            void load();
+            notifications.success('The closed-shift cash collection was reversed in the selected current drawer.', { title: 'Correction recorded' });
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -264,14 +302,23 @@ function newManualCollectionKey(): string {
   return `manual-collection:${randomPart}`;
 }
 
+function newManualCollectionCorrectionKey(): string {
+  const id = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return `manual-collection-correction:${id}`;
+}
+
 function ManualCollectionForm({
   branches,
+  openShifts,
   defaultBranchId,
   companyTimezone,
   onClose,
   onSuccess,
 }: {
   branches: BranchReferenceDTO[];
+  openShifts: ShiftDTO[];
   defaultBranchId: string;
   companyTimezone: string;
   onClose: () => void;
@@ -279,6 +326,7 @@ function ManualCollectionForm({
 }) {
   const [form, setForm] = useState<{
     branch_id: string;
+    shift_id: string;
     business_date: string;
     method: ManualCollectionMethod;
     amount_rupees: string;
@@ -287,10 +335,12 @@ function ManualCollectionForm({
   }>(() => {
     const businessDate = dateISOInTimeZone(new Date(), companyTimezone);
     const method: ManualCollectionMethod = 'cash';
-    return {
-      branch_id: branches.some((branch) => branch.id === defaultBranchId)
+    const branchId = branches.some((branch) => branch.id === defaultBranchId)
         ? defaultBranchId
-        : (branches[0]?.id ?? ''),
+        : (branches[0]?.id ?? '');
+    return {
+      branch_id: branchId,
+      shift_id: openShifts.find((shift) => shift.branch_id === branchId)?.id ?? '',
       business_date: businessDate,
       method,
       amount_rupees: '',
@@ -333,11 +383,16 @@ function ManualCollectionForm({
       setErr('Enter a reference that can be matched to the daily sheet, bank statement, or other evidence.');
       return;
     }
+    if (form.method === 'cash' && !form.shift_id) {
+      setErr('Select the open shift drawer that received this cash.');
+      return;
+    }
     setBusy(true);
     setErr(null);
     try {
       await finance.createManualCollection({
         branch_id: form.branch_id,
+        shift_id: form.method === 'cash' ? form.shift_id : undefined,
         business_date: form.business_date,
         method: form.method,
         amount_minor: amountMinor,
@@ -367,11 +422,34 @@ function ManualCollectionForm({
           </Field>
           <Field label="Branch">
             <select className="input" required value={form.branch_id}
-              onChange={(event) => setForm((current) => ({ ...current, branch_id: event.target.value }))}>
+              onChange={(event) => {
+                const branchId = event.target.value;
+                setForm((current) => ({
+                  ...current,
+                  branch_id: branchId,
+                  shift_id: openShifts.find((shift) => shift.branch_id === branchId)?.id ?? '',
+                }));
+              }}>
               {branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}
             </select>
           </Field>
         </div>
+        {form.method === 'cash' && (
+          <Field label="Open shift drawer">
+            <select className="input" required value={form.shift_id}
+              onChange={(event) => setForm((current) => ({ ...current, shift_id: event.target.value }))}>
+              <option value="">Select an open drawer…</option>
+              {openShifts.filter((shift) => shift.branch_id === form.branch_id).map((shift) => (
+                <option key={shift.id} value={shift.id}>
+                  {(shift.opened_by_name || shift.opened_by_email || 'Authorised staff')} · {inr(shift.expected_minor ?? 0)} expected
+                </option>
+              ))}
+            </select>
+            <span className="mt-1 block text-[10px] text-fg-muted">
+              The server adds this cash to the selected drawer in the same transaction.
+            </span>
+          </Field>
+        )}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Field label="Payment method">
             <select className="input" value={form.method}
@@ -391,7 +469,7 @@ function ManualCollectionForm({
           <input className="input" required minLength={1} maxLength={160} value={form.source_ref}
             onChange={(event) => setForm((current) => ({ ...current, source_ref: event.target.value }))}/>
           <span className="mt-1 block text-[10px] text-fg-muted">
-            Use the daily sheet, bank statement, Z report, or another reference that can prove this total.
+            Kept private in ERP. Google Sheets receives a generated ERP reference instead.
           </span>
         </Field>
         <Field label="Note (optional)">
@@ -460,6 +538,77 @@ function VoidManualCollectionForm({
           <button type="submit" className="btn bg-accent-bad text-white hover:opacity-90" disabled={busy || reason.trim().length < 3}>
             {busy ? <Loader2 className="animate-spin" size={14}/> : <Ban size={14}/>}
             Void collection
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function ManualCollectionCorrectionForm({
+  row,
+  openShifts,
+  onClose,
+  onSuccess,
+}: {
+  row: ManualCollectionDTO;
+  openShifts: ShiftDTO[];
+  onClose: () => void;
+  onSuccess: () => void;
+}) {
+  const [shiftId, setShiftId] = useState(openShifts[0]?.id ?? '');
+  const [reason, setReason] = useState('');
+  const [key] = useState(newManualCollectionCorrectionKey);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    if (!shiftId) {
+      setErr('Open a same-branch shift and select its drawer before correcting this entry.');
+      return;
+    }
+    setBusy(true);
+    setErr(null);
+    try {
+      await finance.correctManualCollection(
+        row.id,
+        { settlement_shift_id: shiftId, reason: reason.trim() },
+        key,
+      );
+      onSuccess();
+    } catch (error) {
+      setErr((error as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal open onClose={busy ? () => undefined : onClose} title="Correct closed-shift collection">
+      <form onSubmit={submit} className="space-y-3">
+        <div className="rounded-xl border border-accent-gold/40 bg-accent-gold/10 p-3 text-sm">
+          The original {inr(row.amount_minor)} receipt and closed shift stay unchanged. This full reversal is dated now and deducts the amount from a current same-branch drawer.
+        </div>
+        <Field label="Current open drawer">
+          <select className="input" required value={shiftId} onChange={(event) => setShiftId(event.target.value)}>
+            <option value="">Select an open drawer…</option>
+            {openShifts.map((shift) => (
+              <option key={shift.id} value={shift.id}>
+                {(shift.opened_by_name || shift.opened_by_email || 'Authorised staff')} · {inr(shift.expected_minor ?? 0)} expected
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Correction reason">
+          <textarea className="input" required minLength={3} maxLength={500} rows={3}
+            value={reason} onChange={(event) => setReason(event.target.value)}/>
+        </Field>
+        {err && <ErrorRow text={err}/>}
+        <div className="flex justify-end gap-2 pt-2">
+          <button type="button" className="btn btn-ghost" onClick={onClose} disabled={busy}>Cancel</button>
+          <button type="submit" className="btn btn-primary" disabled={busy || !shiftId || reason.trim().length < 3}>
+            {busy ? <Loader2 className="animate-spin" size={14}/> : <Ban size={14}/>} Record full correction
           </button>
         </div>
       </form>

@@ -15,6 +15,8 @@ from app.models.client_diagnostic import ClientDiagnosticEvent
 from app.models.client_update import AndroidRelease, ClientInstallation, ClientUpdateEvent
 from app.models.customer import (
     Customer,
+    CustomerDirectoryState,
+    GamingPlaytimeProgramSettings,
     OrderLoyaltySettlement,
     PointsRedemption,
     RefundLoyaltyAdjustment,
@@ -26,6 +28,9 @@ from app.models.finance import (
     CapitalEntry,
     Expense,
     ExpenseCategory,
+    ExpenseReceipt,
+    ExpenseReceiptReview,
+    FinanceSourceCorrection,
     JournalEntry,
     JournalLine,
     ManualCollection,
@@ -42,6 +47,7 @@ from app.models.gaming import (
     Station,
     Tournament,
 )
+from app.models.google_sheets_delivery import GoogleSheetsDelivery
 from app.models.idempotency_key import IdempotencyKey
 from app.models.india import (
     GstRateSlab,
@@ -137,6 +143,7 @@ __all__ = [
     "CapitalEntry",
     "Company",
     "Customer",
+    "CustomerDirectoryState",
     "CustomerSpendReconciliation",
     "ClientInstallation",
     "ClientDiagnosticEvent",
@@ -146,12 +153,17 @@ __all__ = [
     "EventTicket",
     "Expense",
     "ExpenseCategory",
+    "ExpenseReceipt",
+    "ExpenseReceiptReview",
+    "FinanceSourceCorrection",
     "Floor",
     "GamingBooking",
     "GamingPackage",
+    "GamingPlaytimeProgramSettings",
     "GamingSession",
     "GamingSessionAddon",
     "GamingSessionExtension",
+    "GoogleSheetsDelivery",
     "GRN",
     "GRNLine",
     "GstRateSlab",

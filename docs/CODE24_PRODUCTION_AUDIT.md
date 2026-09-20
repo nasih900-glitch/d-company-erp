@@ -1,10 +1,11 @@
 # Code 24 production audit — evidence and remaining gates
 
-Historical audit: Code 24 was superseded by
+Historical audit: Code 24 was superseded by rejected
 [Code 25 / 3.1.14](CODE25_RELEASE_CANDIDATE.md) after the immutable `v3.1.13`
-release failed before signing. References below to the current source or
-candidate describe the Code 24 audit window, not today's release identity.
-The original results are preserved and are not Code 25 artifact acceptance.
+release failed before signing. The current corrective candidate is
+[Code 26 / 3.1.16](CODE26_RELEASE_CANDIDATE.md). References below to the current
+source or candidate describe the Code 24 audit window, not today's release
+identity. The original results are not Code 25 or Code 26 artifact acceptance.
 
 Audit window: 4–5 September 2026. Candidate: D Company ERP 3.1.13, Android
 version code 24. This candidate supersedes the unsigned Code 23 candidate; the

@@ -7,9 +7,11 @@ import { FINANCE_ACTION_FEEDBACK } from '@/lib/action-feedback';
 import {
   accounting,
   finance,
+  shifts,
   type BranchReferenceDTO,
   type TipPayoutDTO,
   type TipPayoutMethod,
+  type ShiftDTO,
 } from '@/lib/erp-api';
 import { inr, inrShort } from '@/lib/inr';
 import { manualCollectionMethodLabel, MANUAL_COLLECTION_METHODS, rupeesToMinor } from '@/lib/manual-collections';
@@ -29,25 +31,29 @@ export default function TipPayoutsTab() {
   const notifications = useNotifications();
   const [rows, setRows] = useState<TipPayoutDTO[]>([]);
   const [branches, setBranches] = useState<BranchReferenceDTO[]>([]);
+  const [openShifts, setOpenShifts] = useState<ShiftDTO[]>([]);
   const [tipsPayableBalance, setTipsPayableBalance] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [voiding, setVoiding] = useState<TipPayoutDTO | null>(null);
+  const [correcting, setCorrecting] = useState<TipPayoutDTO | null>(null);
 
   const load = useCallback(async (silent = false) => {
     const isCurrent = requests.begin();
     if (!silent) setLoading(true);
     try {
-      const [payouts, branchRows, trialBalance] = await Promise.all([
+      const [payouts, branchRows, trialBalance, shiftRows] = await Promise.all([
         finance.listTipPayouts({ include_voided: true, limit: 500 }),
         finance.listBranches(),
         accounting.trialBalance(),
+        shifts.list(true),
       ]);
       if (!isCurrent()) return;
       setErr(null);
       setRows(payouts);
       setBranches(branchRows);
+      setOpenShifts(shiftRows.filter((row) => row.status === 'open'));
       const tipsLine = trialBalance.lines.find((line) => line.account_code === TIPS_PAYABLE_ACCOUNT_CODE);
       setTipsPayableBalance(tipsLine?.balance_minor ?? 0);
     } catch (error) {
@@ -65,7 +71,7 @@ export default function TipPayoutsTab() {
   }
 
   const branchNames = new Map(branches.map((branch) => [branch.id, branch.name]));
-  const activePayouts = rows.filter((row) => !row.is_voided);
+  const activePayouts = rows.filter((row) => !row.is_voided && !row.is_corrected);
   const lifetimePaidOut = activePayouts.reduce((sum, row) => sum + row.amount_minor, 0);
 
   return (
@@ -153,6 +159,11 @@ export default function TipPayoutsTab() {
                     {row.void_reason && (
                       <div className="mt-1 text-xs text-accent-bad break-words">Void reason: {row.void_reason}</div>
                     )}
+                    {row.correction && (
+                      <div className="mt-1 text-xs text-accent-gold break-words">
+                        Corrected {new Date(row.correction.corrected_at).toLocaleString('en-IN')}: {row.correction.reason}
+                      </div>
+                    )}
                   </td>
                   <td className="p-3 text-xs text-fg-muted">
                     <div>{row.created_by_name ?? `User ${row.created_by.slice(0, 8)}`}</div>
@@ -168,6 +179,13 @@ export default function TipPayoutsTab() {
                   <td className="p-3 text-right pr-4">
                     {row.is_voided ? (
                       <span className="chip border-accent-bad/40 text-accent-bad text-[10px]">Voided</span>
+                    ) : row.is_corrected ? (
+                      <span className="chip border-accent-gold/40 text-accent-gold text-[10px]">Corrected</span>
+                    ) : row.method === 'cash' && row.source_shift_status !== 'open' ? (
+                      <button className="btn btn-ghost !min-h-[32px] !py-1 !px-2 text-xs"
+                        onClick={() => setCorrecting(row)} aria-label="Correct tip payout">
+                        <Ban size={13}/> Correct
+                      </button>
                     ) : (
                       <button className="btn btn-ghost !min-h-[32px] !py-1 !px-2 text-xs hover:!text-accent-bad"
                         onClick={() => setVoiding(row)} aria-label="Void tip payout">
@@ -204,9 +222,21 @@ export default function TipPayoutsTab() {
                   </div>
                 </div>
                 {row.void_reason && <div className="mt-2 text-xs text-accent-bad">Void reason: {row.void_reason}</div>}
+                {row.correction && (
+                  <div className="mt-2 text-xs text-accent-gold">
+                    Corrected {new Date(row.correction.corrected_at).toLocaleString('en-IN')}: {row.correction.reason}
+                  </div>
+                )}
                 <div className="mt-3 flex items-center justify-end border-t border-bg-border/60 pt-3">
                   {row.is_voided ? (
                     <span className="chip border-accent-bad/40 text-accent-bad text-[10px]">Voided</span>
+                  ) : row.is_corrected ? (
+                    <span className="chip border-accent-gold/40 text-accent-gold text-[10px]">Corrected</span>
+                  ) : row.method === 'cash' && row.source_shift_status !== 'open' ? (
+                    <button className="btn btn-ghost !min-h-[32px] !py-1 !px-2 text-xs"
+                      onClick={() => setCorrecting(row)}>
+                      <Ban size={13}/> Correct
+                    </button>
                   ) : (
                     <button className="btn btn-ghost !min-h-[32px] !py-1 !px-2 text-xs hover:!text-accent-bad"
                       onClick={() => setVoiding(row)}>
@@ -223,6 +253,7 @@ export default function TipPayoutsTab() {
       {addOpen && (
         <TipPayoutForm
           branches={branches}
+          openShifts={openShifts}
           defaultBranchId={me?.branch_id ?? branches[0]?.id ?? ''}
           tipsPayableBalance={tipsPayableBalance}
           onClose={() => setAddOpen(false)}
@@ -246,6 +277,18 @@ export default function TipPayoutsTab() {
           }}
         />
       )}
+      {correcting && (
+        <TipPayoutCorrectionForm
+          row={correcting}
+          openShifts={openShifts.filter((shift) => shift.branch_id === correcting.branch_id)}
+          onClose={() => setCorrecting(null)}
+          onSuccess={() => {
+            setCorrecting(null);
+            void load();
+            notifications.success('The closed-shift cash payout was reversed in the selected current drawer.', { title: 'Correction recorded' });
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -257,6 +300,13 @@ function newTipPayoutKey(): string {
   return `tip-payout:${randomPart}`;
 }
 
+function newTipPayoutCorrectionKey(): string {
+  const id = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return `tip-payout-correction:${id}`;
+}
+
 function dateTimeLocalNow(): string {
   const now = new Date();
   return new Date(now.getTime() - now.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
@@ -264,12 +314,14 @@ function dateTimeLocalNow(): string {
 
 function TipPayoutForm({
   branches,
+  openShifts,
   defaultBranchId,
   tipsPayableBalance,
   onClose,
   onSuccess,
 }: {
   branches: BranchReferenceDTO[];
+  openShifts: ShiftDTO[];
   defaultBranchId: string;
   tipsPayableBalance: number | null;
   onClose: () => void;
@@ -277,18 +329,23 @@ function TipPayoutForm({
 }) {
   const [form, setForm] = useState<{
     branch_id: string;
+    shift_id: string;
     method: TipPayoutMethod;
     amount_rupees: string;
     paid_at: string;
     note: string;
-  }>({
-    branch_id: branches.some((branch) => branch.id === defaultBranchId)
+  }>(() => {
+    const branchId = branches.some((branch) => branch.id === defaultBranchId)
       ? defaultBranchId
-      : (branches[0]?.id ?? ''),
-    method: 'cash',
-    amount_rupees: '',
-    paid_at: dateTimeLocalNow(),
-    note: '',
+      : (branches[0]?.id ?? '');
+    return {
+      branch_id: branchId,
+      shift_id: openShifts.find((shift) => shift.branch_id === branchId)?.id ?? '',
+      method: 'cash',
+      amount_rupees: '',
+      paid_at: dateTimeLocalNow(),
+      note: '',
+    };
   });
   const [idempotencyKey] = useState(newTipPayoutKey);
   const [busy, setBusy] = useState(false);
@@ -298,6 +355,10 @@ function TipPayoutForm({
   const exceedsBalance = tipsPayableBalance !== null
     && amountMinorPreview !== null
     && amountMinorPreview > tipsPayableBalance;
+  const selectedShift = openShifts.find((shift) => shift.id === form.shift_id);
+  const exceedsDrawer = form.method === 'cash' && amountMinorPreview !== null &&
+    selectedShift?.expected_minor !== null && selectedShift?.expected_minor !== undefined &&
+    amountMinorPreview > selectedShift.expected_minor;
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -310,11 +371,20 @@ function TipPayoutForm({
       setErr('Enter a note explaining how this was split among staff (at least 3 characters).');
       return;
     }
+    if (form.method === 'cash' && !selectedShift) {
+      setErr('Select the open shift drawer that paid these tips.');
+      return;
+    }
+    if (exceedsDrawer) {
+      setErr('This payout exceeds the expected cash in the selected drawer.');
+      return;
+    }
     setBusy(true);
     setErr(null);
     try {
       await finance.createTipPayout({
         branch_id: form.branch_id,
+        shift_id: form.method === 'cash' ? form.shift_id : undefined,
         amount_minor: amountMinor,
         method: form.method,
         paid_at: new Date(form.paid_at).toISOString(),
@@ -340,7 +410,14 @@ function TipPayoutForm({
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Field label="Branch">
             <select className="input" required value={form.branch_id}
-              onChange={(event) => setForm((current) => ({ ...current, branch_id: event.target.value }))}>
+              onChange={(event) => {
+                const branchId = event.target.value;
+                setForm((current) => ({
+                  ...current,
+                  branch_id: branchId,
+                  shift_id: openShifts.find((shift) => shift.branch_id === branchId)?.id ?? '',
+                }));
+              }}>
               {branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}
             </select>
           </Field>
@@ -353,6 +430,22 @@ function TipPayoutForm({
             </select>
           </Field>
         </div>
+        {form.method === 'cash' && (
+          <Field label="Open shift drawer">
+            <select className="input" required value={form.shift_id}
+              onChange={(event) => setForm((current) => ({ ...current, shift_id: event.target.value }))}>
+              <option value="">Select an open drawer…</option>
+              {openShifts.filter((shift) => shift.branch_id === form.branch_id).map((shift) => (
+                <option key={shift.id} value={shift.id}>
+                  {(shift.opened_by_name || shift.opened_by_email || 'Authorised staff')} · {inr(shift.expected_minor ?? 0)} expected
+                </option>
+              ))}
+            </select>
+            <span className="mt-1 block text-[10px] text-fg-muted">
+              The server deducts this cash from the selected drawer in the same transaction.
+            </span>
+          </Field>
+        )}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Field label="Amount (₹)">
             <input type="number" required min="0.01" step="0.01" inputMode="decimal" autoFocus
@@ -369,6 +462,11 @@ function TipPayoutForm({
             <AlertCircle size={14}/> This is more than the {inr(tipsPayableBalance ?? 0)} currently owed to staff.
           </div>
         )}
+        {exceedsDrawer && (
+          <div className="rounded-xl border border-accent-bad/40 bg-accent-bad/10 p-2.5 text-xs text-accent-bad flex items-center gap-2">
+            <AlertCircle size={14}/> This is more than the {inr(selectedShift?.expected_minor ?? 0)} expected in the selected drawer.
+          </div>
+        )}
         <Field label="Note">
           <textarea className="input" required minLength={3} maxLength={500} rows={3} value={form.note}
             placeholder="e.g. Split among staff on shift — Anu, Basil, Reji"
@@ -380,7 +478,7 @@ function TipPayoutForm({
         {err && <ErrorRow text={err}/>}
         <div className="flex justify-end gap-2 pt-2">
           <button type="button" className="btn btn-ghost" onClick={onClose} disabled={busy}>Cancel</button>
-          <button type="submit" className="btn btn-primary" disabled={busy || exceedsBalance}>
+          <button type="submit" className="btn btn-primary" disabled={busy || exceedsBalance || exceedsDrawer}>
             {busy ? <Loader2 className="animate-spin" size={14}/> : <HandCoins size={14}/>}
             Record payout
           </button>
@@ -438,6 +536,77 @@ function VoidTipPayoutForm({
           <button type="submit" className="btn bg-accent-bad text-white hover:opacity-90" disabled={busy || reason.trim().length < 3}>
             {busy ? <Loader2 className="animate-spin" size={14}/> : <Ban size={14}/>}
             Void payout
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function TipPayoutCorrectionForm({
+  row,
+  openShifts,
+  onClose,
+  onSuccess,
+}: {
+  row: TipPayoutDTO;
+  openShifts: ShiftDTO[];
+  onClose: () => void;
+  onSuccess: () => void;
+}) {
+  const [shiftId, setShiftId] = useState(openShifts[0]?.id ?? '');
+  const [reason, setReason] = useState('');
+  const [key] = useState(newTipPayoutCorrectionKey);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    if (!shiftId) {
+      setErr('Open a same-branch shift and select its drawer before correcting this payout.');
+      return;
+    }
+    setBusy(true);
+    setErr(null);
+    try {
+      await finance.correctTipPayout(
+        row.id,
+        { settlement_shift_id: shiftId, reason: reason.trim() },
+        key,
+      );
+      onSuccess();
+    } catch (error) {
+      setErr((error as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal open onClose={busy ? () => undefined : onClose} title="Correct closed-shift tip payout">
+      <form onSubmit={submit} className="space-y-3">
+        <div className="rounded-xl border border-accent-gold/40 bg-accent-gold/10 p-3 text-sm">
+          The original {inr(row.amount_minor)} payout and closed shift stay unchanged. This full reversal is dated now and returns the cash to a current same-branch drawer.
+        </div>
+        <Field label="Current open drawer">
+          <select className="input" required value={shiftId} onChange={(event) => setShiftId(event.target.value)}>
+            <option value="">Select an open drawer…</option>
+            {openShifts.map((shift) => (
+              <option key={shift.id} value={shift.id}>
+                {(shift.opened_by_name || shift.opened_by_email || 'Authorised staff')} · {inr(shift.expected_minor ?? 0)} expected
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Correction reason">
+          <textarea className="input" required minLength={3} maxLength={500} rows={3}
+            value={reason} onChange={(event) => setReason(event.target.value)}/>
+        </Field>
+        {err && <ErrorRow text={err}/>}
+        <div className="flex justify-end gap-2 pt-2">
+          <button type="button" className="btn btn-ghost" onClick={onClose} disabled={busy}>Cancel</button>
+          <button type="submit" className="btn btn-primary" disabled={busy || !shiftId || reason.trim().length < 3}>
+            {busy ? <Loader2 className="animate-spin" size={14}/> : <Ban size={14}/>} Record full correction
           </button>
         </div>
       </form>

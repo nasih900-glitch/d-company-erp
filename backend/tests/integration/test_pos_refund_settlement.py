@@ -900,6 +900,164 @@ async def test_checkout_records_exact_loyalty_snapshot_for_future_refunds(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_phone_reuse_cannot_move_redemption_or_refund_off_stable_customer(
+    client,
+    session,
+    seed_owner,
+) -> None:
+    case = await _seed_case(
+        session,
+        seed_owner,
+        payment_method="cash",
+        defer_settlement=True,
+    )
+    booked = await session.get(Customer, case.customer_id)
+    order = await session.get(Order, case.order_id)
+    assert booked is not None
+    assert order is not None
+    original_phone = order.customer_phone
+    assert original_phone is not None
+    booked.loyalty_points = 100
+    booked.lifetime_gaming_points_earned = 100
+    booked.phone = f"9{uuid4().int % 10**9:09d}"
+    replacement = Customer(
+        id=uuid4(), company_id=case.company_id,
+        name="New owner of checkout phone", phone=original_phone,
+        loyalty_points=1_000, lifetime_gaming_points_earned=1_000,
+    )
+    category = MenuCategory(
+        id=uuid4(), company_id=case.company_id,
+        name=f"Stable loyalty {uuid4().hex[:8]}", sort_order=0,
+    )
+    session.add_all([replacement, category])
+    await session.flush()
+    item = MenuItem(
+        id=uuid4(), company_id=case.company_id, category_id=category.id,
+        sku=f"STABLE-{uuid4().hex[:10]}", name="Stable gaming settlement",
+        type="gaming", base_price_minor=case.amount_minor,
+        tax_rate=0, price_includes_tax=True, is_available=True,
+    )
+    session.add(item)
+    await session.flush()
+    session.add(
+        OrderLine(
+            id=uuid4(), order_id=case.order_id, menu_item_id=item.id, qty=1,
+            unit_price_minor=case.amount_minor, line_total_minor=case.amount_minor,
+            discount_minor=0, tax_rate=0, taxable_value_minor=case.amount_minor,
+            cgst_minor=0, sgst_minor=0, igst_minor=0, cess_minor=0,
+            kitchen_status="queued",
+        )
+    )
+    await session.commit()
+
+    points_key = f"stable-points:{uuid4()}"
+    payment_key = f"stable-payment:{uuid4()}"
+    request_key = f"stable-refund-request:{uuid4()}"
+    begin_key = f"stable-refund-begin:{uuid4()}"
+    settle_key = f"stable-refund-settle:{uuid4()}"
+    finalize_key = f"stable-refund-finalize:{uuid4()}"
+    keys = (points_key, payment_key, request_key, begin_key, settle_key, finalize_key)
+    try:
+        redeemed = await client.patch(
+            f"/api/v1/pos/orders/{case.order_id}/points",
+            json={"points": 20},
+            headers=_headers(case, points_key),
+        )
+        assert redeemed.status_code == 200, redeemed.text
+        due_minor = redeemed.json()["due_minor"]
+        assert redeemed.json()["points_redeemed"] == 20
+
+        paid = await client.post(
+            f"/api/v1/pos/orders/{case.order_id}/payments",
+            json={
+                "method": "cash",
+                "amount_minor": due_minor,
+                "tendered_minor": due_minor,
+                "expected_order_total_minor": due_minor,
+                "expected_due_minor": due_minor,
+            },
+            headers=_headers(case, payment_key),
+        )
+        assert paid.status_code == 201, paid.text
+        async with AsyncSessionLocal() as verify:
+            redemption = (
+                await verify.execute(
+                    select(PointsRedemption).where(PointsRedemption.order_id == case.order_id)
+                )
+            ).scalar_one()
+            assert redemption.customer_id == booked.id
+            assert (await verify.get(Customer, replacement.id)).loyalty_points == 1_000
+
+        refund_payload = {
+            **_request_payload(case, action_id=request_key, mode="cash"),
+            "amount_minor": due_minor,
+            "expected_paid_minor": due_minor,
+            "expected_refundable_minor": due_minor,
+        }
+        accepted = await client.post(
+            "/api/v1/pos/refund-requests",
+            json=refund_payload,
+            headers=_headers(case, request_key),
+        )
+        assert accepted.status_code == 201, accepted.text
+        request_id = accepted.json()["id"]
+        begun = await client.post(
+            f"/api/v1/pos/refund-requests/{request_id}/begin-cash-handoff",
+            json={
+                "shift_id": str(case.shift_id),
+                "expected_amount_minor": due_minor,
+                "ready_to_handover": True,
+            },
+            headers=_headers(case, begin_key),
+        )
+        assert begun.status_code == 201, begun.text
+        settled = await client.post(
+            f"/api/v1/pos/refund-requests/{request_id}/settle-cash",
+            json={
+                "shift_id": str(case.shift_id),
+                "expected_amount_minor": due_minor,
+                "cash_handed_over": True,
+                "settled_at": begun.json()["handoff_started_at"],
+            },
+            headers=_headers(case, settle_key),
+        )
+        assert settled.status_code == 201, settled.text
+        finalized = await client.post(
+            f"/api/v1/pos/refund-requests/{request_id}/finalize-cash",
+            json={
+                "shift_id": str(case.shift_id),
+                "expected_amount_minor": due_minor,
+            },
+            headers=_headers(case, finalize_key),
+        )
+        assert finalized.status_code == 201, finalized.text
+
+        async with AsyncSessionLocal() as verify:
+            booked_after = await verify.get(Customer, booked.id)
+            replacement_after = await verify.get(Customer, replacement.id)
+            adjustment = (
+                await verify.execute(
+                    select(RefundLoyaltyAdjustment).where(
+                        RefundLoyaltyAdjustment.order_id == case.order_id
+                    )
+                )
+            ).scalar_one()
+            assert adjustment.customer_id == booked.id
+            assert booked_after is not None
+            assert booked_after.loyalty_points == 100
+            assert replacement_after is not None
+            assert replacement_after.loyalty_points == 1_000
+    finally:
+        await _cleanup(case, keys=keys)
+        async with AsyncSessionLocal() as cleanup:
+            await cleanup.execute(delete(Customer).where(Customer.id == replacement.id))
+            await cleanup.execute(delete(MenuItem).where(MenuItem.id == item.id))
+            await cleanup.execute(delete(MenuCategory).where(MenuCategory.id == category.id))
+            await cleanup.commit()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_money_refund_does_not_restock_or_reverse_sale_cogs(
     client,
     session,

@@ -4,6 +4,7 @@ import { api } from './api';
 import { pos } from './erp-api';
 
 vi.mock('./api', () => ({
+  readAccessToken: () => null,
   api: {
     patch: vi.fn(),
   },

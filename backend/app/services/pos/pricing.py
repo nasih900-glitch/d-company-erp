@@ -543,6 +543,7 @@ class OrderPricingService:
         company_id: UUID,
         branch_id: UUID,
         line_requests: list[LineRequest],
+        customer_id: UUID | None = None,
         customer_phone: str | None = None,
         place_of_supply_state_code: str | None = None,
         delivery_via: str | None = None,
@@ -578,6 +579,7 @@ class OrderPricingService:
         intra_state = pos_state == branch_state
         membership_rates = await self._membership_discount_rates(
             company_id=company_id,
+            customer_id=customer_id,
             customer_phone=customer_phone,
         )
 
@@ -698,6 +700,7 @@ class OrderPricingService:
         amount_minor: int,
         tax_rate: Decimal,
         rate_includes_tax: bool,
+        customer_id: UUID | None = None,
         customer_phone: str | None = None,
         item_type: str | None = None,
         place_of_supply_state_code: str | None = None,
@@ -729,6 +732,7 @@ class OrderPricingService:
 
         membership_rates = await self._membership_discount_rates(
             company_id=company_id,
+            customer_id=customer_id,
             customer_phone=customer_phone,
         )
         allowance_discount_minor = min(
@@ -779,11 +783,18 @@ class OrderPricingService:
         self,
         *,
         company_id: UUID,
+        customer_id: UUID | None,
         customer_phone: str | None,
     ) -> MembershipDiscountRates:
-        """Load active membership discounts for an existing customer phone."""
-        if not customer_phone:
+        """Load active membership discounts for one stable customer identity."""
+        if customer_id is None and not customer_phone:
             return MembershipDiscountRates()
+
+        customer_identity = (
+            Customer.id == customer_id
+            if customer_id is not None
+            else Customer.phone == customer_phone
+        )
 
         now = datetime.now(timezone.utc)
         tier = (
@@ -793,7 +804,7 @@ class OrderPricingService:
                 .join(Customer, Customer.id == CustomerMembership.customer_id)
                 .where(
                     Customer.company_id == company_id,
-                    Customer.phone == customer_phone,
+                    customer_identity,
                     Customer.deleted_at.is_(None),
                     CustomerMembership.starts_at <= now,
                     CustomerMembership.expires_at > now,

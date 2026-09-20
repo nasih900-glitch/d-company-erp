@@ -2787,6 +2787,131 @@ val MIGRATION_44_45 = object : Migration(44, 45) {
     }
 }
 
+val MIGRATION_45_46 = object : Migration(45, 46) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        // Nullable and additive: queued Code29.1 starts retain byte-for-byte
+        // request meaning because serialization omits the new null field.
+        db.execSQL(
+            "ALTER TABLE `local_gaming_sessions` ADD COLUMN `customerName` TEXT",
+        )
+    }
+}
+
+val MIGRATION_46_47 = object : Migration(46, 47) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `gaming_session_cache` ADD COLUMN `customerId` TEXT")
+        db.execSQL("ALTER TABLE `local_gaming_sessions` ADD COLUMN `customerId` TEXT")
+    }
+}
+
+val MIGRATION_47_48 = object : Migration(47, 48) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `customer_directory_state` " +
+                "(`companyId` TEXT NOT NULL, `deletionRevision` INTEGER NOT NULL, " +
+                "PRIMARY KEY(`companyId`))",
+        )
+        db.execSQL("ALTER TABLE `local_customers` ADD COLUMN `clientActionToken` TEXT")
+        db.execSQL("ALTER TABLE `local_customers` ADD COLUMN `customerDirectoryRevision` INTEGER")
+        db.execSQL("ALTER TABLE `local_customers` ADD COLUMN `customerDirectoryCompanyId` TEXT")
+        db.execSQL("ALTER TABLE `local_gaming_sessions` ADD COLUMN `customerDirectoryRevision` INTEGER")
+        db.execSQL("ALTER TABLE `local_gaming_sessions` ADD COLUMN `customerDirectoryCompanyId` TEXT")
+        db.execSQL("ALTER TABLE `local_orders` ADD COLUMN `customerDirectoryRevision` INTEGER")
+        db.execSQL("ALTER TABLE `local_orders` ADD COLUMN `customerDirectoryCompanyId` TEXT")
+    }
+}
+
+val MIGRATION_48_49 = object : Migration(48, 49) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `expense_cache` ADD COLUMN `receiptCount` INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE `expense_cache` ADD COLUMN `receiptStatus` TEXT NOT NULL DEFAULT 'pending'")
+        db.execSQL("ALTER TABLE `local_expenses` ADD COLUMN `serverId` TEXT")
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `local_expense_receipts` (" +
+                "`localId` TEXT NOT NULL, `expenseLocalId` TEXT NOT NULL, " +
+                "`filename` TEXT NOT NULL, `contentType` TEXT NOT NULL, " +
+                "`source` TEXT NOT NULL, `byteSize` INTEGER NOT NULL, " +
+                "`contentSha256` TEXT NOT NULL, " +
+                "`createdAtMillis` INTEGER NOT NULL, `syncState` TEXT NOT NULL, " +
+                "`serverReceiptId` TEXT, `lastError` TEXT, PRIMARY KEY(`localId`), " +
+                "FOREIGN KEY(`expenseLocalId`) REFERENCES `local_expenses`(`localId`) " +
+                "ON UPDATE NO ACTION ON DELETE CASCADE)",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_local_expense_receipts_expenseLocalId` " +
+                "ON `local_expense_receipts` (`expenseLocalId`)",
+        )
+        db.execSQL(
+            "CREATE UNIQUE INDEX IF NOT EXISTS " +
+                "`index_local_expense_receipts_expenseLocalId_contentSha256` " +
+                "ON `local_expense_receipts` (`expenseLocalId`, `contentSha256`)",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_local_expense_receipts_syncState` " +
+                "ON `local_expense_receipts` (`syncState`)",
+        )
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `local_expense_receipt_chunks` (" +
+                "`receiptLocalId` TEXT NOT NULL, `chunkIndex` INTEGER NOT NULL, " +
+                "`content` BLOB NOT NULL, PRIMARY KEY(`receiptLocalId`, `chunkIndex`), " +
+                "FOREIGN KEY(`receiptLocalId`) REFERENCES `local_expense_receipts`(`localId`) " +
+                "ON UPDATE NO ACTION ON DELETE CASCADE)",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_local_expense_receipt_chunks_receiptLocalId` " +
+                "ON `local_expense_receipt_chunks` (`receiptLocalId`)",
+        )
+    }
+}
+
+val MIGRATION_49_50 = object : Migration(49, 50) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        // Cash paid-outs must replay the exact selected drawer. A current
+        // write always supplies shiftId; migration must never guess one.
+        db.execSQL("ALTER TABLE `local_expenses` ADD COLUMN `shiftId` TEXT")
+        db.execSQL(
+            "ALTER TABLE `local_expenses` ADD COLUMN `legacyOriginVersionCode` INTEGER",
+        )
+        // Existing cache rows deliberately migrate to unknown origin. The
+        // next authenticated online pull fills these values; until then an
+        // offline paid-out must fail closed instead of guessing ownership.
+        db.execSQL(
+            "ALTER TABLE `server_open_shift_cache` ADD COLUMN `openingClientPlatform` TEXT",
+        )
+        db.execSQL(
+            "ALTER TABLE `server_open_shift_cache` ADD COLUMN `openingClientInstallationId` TEXT",
+        )
+        // Code30.1/v48 did not offer cash in the expense form. An unresolved
+        // cash row reaching this migration is therefore preserved signed
+        // Code21 work. Keep that origin so the upgraded app can use the
+        // existing strict terminal-scoped recovery contract. The backend will
+        // refuse a different terminal/branch or a shift opened after capture.
+        db.execSQL(
+            "UPDATE `local_expenses` SET `legacyOriginVersionCode` = 21 " +
+                "WHERE `paidVia` = 'cash' AND `shiftId` IS NULL " +
+                "AND `syncState` IN ('pending', 'rejected')",
+        )
+        installShiftClosingWriteGuards(db)
+    }
+}
+
+/** Persist server correction/drawer state in the offline Finance read cache. */
+val MIGRATION_50_51 = object : Migration(50, 51) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `expense_cache` ADD COLUMN `shiftId` TEXT")
+        db.execSQL("ALTER TABLE `expense_cache` ADD COLUMN `createdBy` TEXT")
+        db.execSQL(
+            "ALTER TABLE `expense_cache` ADD COLUMN `isVoided` INTEGER NOT NULL DEFAULT 0",
+        )
+        db.execSQL("ALTER TABLE `expense_cache` ADD COLUMN `sourceShiftStatus` TEXT")
+        db.execSQL(
+            "ALTER TABLE `expense_cache` ADD COLUMN `isCorrected` INTEGER NOT NULL DEFAULT 0",
+        )
+        db.execSQL("ALTER TABLE `expense_cache` ADD COLUMN `correctionReason` TEXT")
+        db.execSQL("ALTER TABLE `expense_cache` ADD COLUMN `correctionAt` TEXT")
+    }
+}
+
 val ALL_MIGRATIONS = arrayOf(
     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8,
     MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14,
@@ -2796,5 +2921,6 @@ val ALL_MIGRATIONS = arrayOf(
     MIGRATION_29_30, MIGRATION_30_31, MIGRATION_31_32, MIGRATION_32_33, MIGRATION_33_34,
     MIGRATION_34_35, MIGRATION_35_36, MIGRATION_36_37, MIGRATION_37_38, MIGRATION_38_39,
     MIGRATION_39_40, MIGRATION_40_41, MIGRATION_41_42, MIGRATION_42_43, MIGRATION_43_44,
-    MIGRATION_44_45,
+    MIGRATION_44_45, MIGRATION_45_46, MIGRATION_46_47, MIGRATION_47_48, MIGRATION_48_49,
+    MIGRATION_49_50, MIGRATION_50_51,
 )

@@ -163,6 +163,9 @@ class Order(Base, TimestampMixin, TenantMixin):
     customer_id: Mapped[UUID | None] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("customers.id", ondelete="SET NULL"), index=True
     )
+    # Immutable server-issued deletion generation captured with the original
+    # order. Settlement must never substitute a payment-time refresh.
+    customer_directory_revision: Mapped[int | None] = mapped_column(BigInteger)
     type: Mapped[str] = mapped_column(String(20), nullable=False)  # dine_in|takeaway|delivery
     # Section 9(5): when delivery_via is an aggregator (Zomato/Swiggy/UberEats),
     # the aggregator is the deemed restaurant for GST. Our invoice shows ZERO tax;

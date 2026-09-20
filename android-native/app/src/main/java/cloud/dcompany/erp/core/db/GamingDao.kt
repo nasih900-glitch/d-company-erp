@@ -378,7 +378,8 @@ interface GamingDao {
 
     @Query(
         "UPDATE local_gaming_sessions SET state = :state, stationId = :stationId, " +
-            "shiftId = COALESCE(:shiftId, shiftId), customerPhone = :customerPhone, timerMinutes = :timerMinutes, " +
+            "shiftId = COALESCE(:shiftId, shiftId), customerName = :customerName, " +
+            "customerPhone = :customerPhone, timerMinutes = :timerMinutes, " +
             "startedAtMillis = :startedAtMillis, status = :status, endAtMillis = :endAtMillis, " +
             "timerEndsAtMillis = :timerEndsAtMillis, billableMinutes = :billableMinutes, " +
             "amountMinor = :amountMinor, ratePerHourMinor = :ratePerHourMinor, " +
@@ -396,6 +397,7 @@ interface GamingDao {
         state: String,
         stationId: String,
         shiftId: String?,
+        customerName: String?,
         customerPhone: String?,
         timerMinutes: Int?,
         startedAtMillis: Long,
@@ -466,6 +468,7 @@ interface GamingDao {
                 state = state,
                 stationId = server.stationId,
                 shiftId = server.shiftId,
+                customerName = server.customerName,
                 customerPhone = server.customerPhone,
                 timerMinutes = server.timerMinutes,
                 startedAtMillis = server.startAtMillis,
@@ -598,14 +601,27 @@ interface GamingDao {
     @Query(
         "UPDATE local_gaming_sessions SET state = 'stop_pending', status = 'stopping', " +
             "shiftId = COALESCE(shiftId, :resolvedShiftId), " +
-            "endAtMillis = CASE WHEN state = 'stop_rejected' THEN endAtMillis ELSE :stoppedAtMillis END, " +
+            "legacyOriginalCapturedStopAtMillis = CASE " +
+            "WHEN state = 'stop_rejected' AND :correctFutureClockRejection = 1 " +
+            "AND lastError = 'Session stop time is in the future. Correct the tablet clock and try again.' " +
+            "THEN COALESCE(legacyOriginalCapturedStopAtMillis, endAtMillis) " +
+            "ELSE legacyOriginalCapturedStopAtMillis END, " +
+            "endAtMillis = CASE " +
+            "WHEN state = 'stop_rejected' AND :correctFutureClockRejection = 1 " +
+            "AND lastError = 'Session stop time is in the future. Correct the tablet clock and try again.' " +
+            "THEN :stoppedAtMillis " +
+            "WHEN state = 'stop_rejected' THEN endAtMillis ELSE :stoppedAtMillis END, " +
             "lastError = NULL " +
-            "WHERE localId = :localId AND state IN ('start_pending', 'start_synced', 'stop_rejected')",
+            "WHERE localId = :localId AND state IN ('start_pending', 'start_synced', 'stop_rejected') " +
+            "AND (state != 'stop_rejected' OR :correctFutureClockRejection = 0 " +
+            "OR lastError != 'Session stop time is in the future. Correct the tablet clock and try again.' " +
+            "OR (serverId IS NOT NULL AND shiftId IS NOT NULL AND shiftId = :resolvedShiftId))",
     )
     suspend fun requestSessionStop(
         localId: String,
         stoppedAtMillis: Long,
         resolvedShiftId: String?,
+        correctFutureClockRejection: Boolean = false,
     ): Int
 
     @Query(

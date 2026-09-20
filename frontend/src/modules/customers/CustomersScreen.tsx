@@ -19,6 +19,9 @@ import { ConfirmModal } from '@/components/ui/ConfirmDialog';
 import Modal from '@/components/ui/Modal';
 import { useNotifications } from '@/components/ui/Notifications';
 import { SkeletonCard } from '@/components/ui/Skeleton';
+import CustomerPlaytimePanel from './CustomerPlaytimePanel';
+import { useAuth } from '@/modules/auth/AuthContext';
+import { canWriteCustomers } from './customer-access';
 
 const RANK_STYLES: Record<string, string> = {
   Rookie: 'text-fg-muted border-bg-border',
@@ -37,6 +40,8 @@ function RankBadge({ rank }: { rank: string }) {
 
 export default function CustomersScreen() {
   const notifications = useNotifications();
+  const { me, demo } = useAuth();
+  const canWrite = canWriteCustomers(me, demo);
   const [rows, setRows] = useState<CustomerDTO[]>([]);
   const [q, setQ] = useState('');
   const [loading, setLoading] = useState(true);
@@ -92,11 +97,15 @@ export default function CustomersScreen() {
         </div>
         <div className="flex w-full gap-2 sm:w-auto">
           <button className="btn btn-ghost shrink-0" onClick={() => load(q)}><RefreshCw size={14}/></button>
-          <button className="btn btn-primary flex-1 sm:flex-none" onClick={() => setAddOpen(true)}>
-            <UserPlus size={14}/> Add customer
-          </button>
+          {canWrite && (
+            <button className="btn btn-primary flex-1 sm:flex-none" onClick={() => setAddOpen(true)}>
+              <UserPlus size={14}/> Add customer
+            </button>
+          )}
         </div>
       </header>
+
+      <CustomerPlaytimePanel />
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
         <Stat label="Customers"    value={totals.customers.toString()}/>
@@ -155,6 +164,7 @@ export default function CustomersScreen() {
                     {c.last_visit_at ? new Date(c.last_visit_at).toLocaleDateString('en-IN') : '—'}
                   </td>
                   <td className="p-3 text-right">
+                    {canWrite && <>
                     <button className="text-fg-muted hover:text-accent" onClick={() => setEdit(c)}>
                       <Edit2 size={14}/>
                     </button>
@@ -165,6 +175,7 @@ export default function CustomersScreen() {
                     >
                       <Trash2 size={14}/>
                     </button>
+                    </>}
                   </td>
                 </tr>
               ))}
@@ -182,7 +193,7 @@ export default function CustomersScreen() {
                       <Phone size={11}/> <span className="truncate">{c.phone}</span>
                     </div>
                   </div>
-                  <div className="flex shrink-0 gap-1.5">
+                  {canWrite && <div className="flex shrink-0 gap-1.5">
                     <button
                       aria-label={`Edit ${c.name || c.phone}`}
                       className="btn btn-ghost !min-h-[32px] !min-w-[32px] !px-2 !py-1"
@@ -197,7 +208,7 @@ export default function CustomersScreen() {
                     >
                       <Trash2 size={14}/>
                     </button>
-                  </div>
+                  </div>}
                 </div>
                 <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs">
                   <div>
@@ -227,21 +238,21 @@ export default function CustomersScreen() {
         </div>
       )}
 
-      {addOpen && (
+      {canWrite && addOpen && (
         <CustomerForm onClose={() => setAddOpen(false)} onSuccess={() => {
           setAddOpen(false);
           void load();
           notifications.success('The customer was added.', { title: 'Customer saved' });
         }}/>
       )}
-      {edit && (
+      {canWrite && edit && (
         <CustomerForm customer={edit} onClose={() => setEdit(null)} onSuccess={() => {
           setEdit(null);
           void load();
           notifications.success('The customer details were updated.', { title: 'Changes saved' });
         }}/>
       )}
-      {deleteCustomer && (
+      {canWrite && deleteCustomer && (
         <ConfirmModal
           title="Delete customer"
           message={

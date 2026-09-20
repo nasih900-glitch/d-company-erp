@@ -100,6 +100,9 @@ data class LocalOrderEntity(
     val type: String,
     val customerName: String? = null,
     val customerPhone: String? = null,
+    /** Immutable customer-directory evidence captured before this bill is queued. */
+    val customerDirectoryRevision: Long? = null,
+    val customerDirectoryCompanyId: String? = null,
     val orderNote: String? = null,
     /** Cashier-entered reduction, applied and revalidated by the server before online collection. */
     @ColumnInfo(defaultValue = "0") val manualDiscountMinor: Long = 0,

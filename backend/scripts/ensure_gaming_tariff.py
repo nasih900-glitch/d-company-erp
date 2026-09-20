@@ -94,15 +94,19 @@ async def _resolve_company(session, company_id: UUID | None) -> Company:
         return company
 
     companies = (
-        await session.execute(
-            select(Company)
-            .where(
-                Company.name == EXPECTED_COMPANY_NAME,
-                Company.deleted_at.is_(None),
+        (
+            await session.execute(
+                select(Company)
+                .where(
+                    Company.name == EXPECTED_COMPANY_NAME,
+                    Company.deleted_at.is_(None),
+                )
+                .order_by(Company.created_at, Company.id)
             )
-            .order_by(Company.created_at, Company.id)
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     if len(companies) != 1:
         raise RuntimeError(
             f"expected exactly one active {EXPECTED_COMPANY_NAME!r} tenant, "
@@ -124,8 +128,8 @@ async def _resolve_branches(
     if branch_id is not None:
         statement = statement.where(Branch.id == branch_id)
     branches = (
-        await session.execute(statement.order_by(Branch.created_at, Branch.id))
-    ).scalars().all()
+        (await session.execute(statement.order_by(Branch.created_at, Branch.id))).scalars().all()
+    )
     if not branches:
         scope = f"branch {branch_id}" if branch_id else "any active branch"
         raise RuntimeError(f"D Company has no matching {scope}")
@@ -137,12 +141,15 @@ def _print_result(branch: Branch, result: GamingTariffUpsertResult) -> None:
     print(
         f"[{mode}] {branch.name} ({branch.id}): "
         f"create={len(result.created_codes)} update={len(result.updated_codes)} "
+        f"retire={len(result.retired_codes)} "
         f"unchanged={len(result.unchanged_codes)}"
     )
     if result.created_codes:
         print(f"  create: {', '.join(result.created_codes)}")
     if result.updated_codes:
         print(f"  update: {', '.join(result.updated_codes)}")
+    if result.retired_codes:
+        print(f"  retire: {', '.join(result.retired_codes)}")
 
 
 async def run(arguments: Arguments) -> None:

@@ -12,7 +12,7 @@ import yaml
 from ops import runtime_release_parity as parity
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "3.1.14"
+VERSION = "3.1.25"
 REVISION = "a" * 40
 IMAGE = "sha256:" + "b" * 64
 CONTAINER = "c" * 64
@@ -92,7 +92,7 @@ class RuntimeParityTest(unittest.TestCase):
                     running=True, expected_images={"services": {"backend": {"image_id": "sha256:" + "d" * 64}}})
 
     def test_internal_pre_ingress_subset_is_explicit_and_validated(self):
-        services = ("postgres", "backend", "frontend")
+        services = ("postgres", "redis", "backend", "frontend")
         with patch.object(parity, "_run", side_effect=self.replies()):
             result = parity.inspect_release_pair(
                 "/erp", "/erp/.env", VERSION, REVISION, running=True,
@@ -100,7 +100,7 @@ class RuntimeParityTest(unittest.TestCase):
             )
         self.assertEqual(set(services), set(result["services"]))
 
-        for invalid in ((), ("backend", "backend"), ("redis",)):
+        for invalid in ((), ("backend", "backend"), ("unknown",)):
             with self.subTest(invalid=invalid), patch.object(parity, "_run") as run:
                 with self.assertRaises(parity.RuntimeParityError):
                     parity.inspect_release_pair(
@@ -110,7 +110,7 @@ class RuntimeParityTest(unittest.TestCase):
                 run.assert_not_called()
 
     def test_invalid_identity_fails_before_any_docker_command(self):
-        for version, revision in (("dev", REVISION), ("03.1.14", REVISION), (VERSION, "unknown"), (VERSION, "A" * 40), ("0.0.0", "0" * 40), (VERSION, "0" * 40)):
+        for version, revision in (("dev", REVISION), ("03.1.25", REVISION), (VERSION, "unknown"), (VERSION, "A" * 40), ("0.0.0", "0" * 40), (VERSION, "0" * 40)):
             with patch.object(parity, "_run") as run:
                 with self.assertRaises(parity.RuntimeParityError):
                     parity.inspect_release_pair("/erp", "/erp/.env", version, revision, running=True)
@@ -238,6 +238,24 @@ class RuntimeParityTest(unittest.TestCase):
             cleanup.index('emit_failure_diagnostics "$failure_code"'),
             cleanup.index('down --volumes --remove-orphans'),
         )
+
+    def test_runtime_gate_binds_running_redis_to_pinned_candidate_and_health(self):
+        source = (
+            ROOT / "infra" / "scripts" / "verify-production-runtime-images.sh"
+        ).read_text()
+
+        self.assertIn(
+            'REDIS_REF="d-company-erp-redis:${APP_REVISION}"',
+            source,
+        )
+        self.assertIn("REDIS_EXPECTED_ID=$(docker image inspect", source)
+        self.assertIn("ps --all --status running -q redis", source)
+        self.assertIn("REDIS_RUNNING_ID=$(docker inspect --format '{{.Image}}'", source)
+        self.assertIn("REDIS_HEALTH=$(docker inspect --format '{{.State.Health.Status}}'", source)
+        self.assertIn('"$REDIS_RUNNING_ID" != "$REDIS_EXPECTED_ID"', source)
+        self.assertIn('"$REDIS_HEALTH" != healthy', source)
+        self.assertGreaterEqual(source.count('docker image inspect --format \'{{.Id}}\' "$REDIS_REF"'), 2)
+        self.assertNotIn("docker inspect --format '{{json .Config.Env}}'", source)
 
 
 if __name__ == "__main__":

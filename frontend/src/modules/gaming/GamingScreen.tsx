@@ -34,6 +34,7 @@ import {
   type GamingPackageDTO,
   type GamingPosTargetShiftDTO,
   type GamingSessionAddonDTO,
+  type CustomerDTO,
   type LegacyPausedSessionResolutionDTO,
   type MenuItemDTO,
   type StationDTO,
@@ -109,6 +110,11 @@ import {
   type GamingAddonCreateTerminalScope,
 } from './gaming-addon-create-attempt';
 import { enterGamingMutation, leaveGamingMutation } from './gaming-mutation-gate';
+import {
+  buildGamingCustomerStartIdentity,
+  clearStartedStationCustomer,
+  GamingCustomerPicker,
+} from './GamingCustomerPicker';
 
 async function loadGamingCentreAddonCatalog(): Promise<MenuItemDTO[]> {
   const [items, categories] = await Promise.all([menuApi.items(), menuApi.categories()]);
@@ -376,28 +382,38 @@ export function extraControllerExtensionSurchargeMinor(
   );
 }
 
-export function resolvePricingTier(
-  availableTiers: string[],
-  requestedTier: string | undefined,
-): string | undefined {
-  if (requestedTier && availableTiers.includes(requestedTier)) return requestedTier;
-  return availableTiers.includes('standard') ? 'standard' : availableTiers[0];
+export function gamingModeLabel(variant: string): string {
+  if (variant === 'simdrive') return 'Racing Sim';
+  if (variant === 'vr_racing') return 'VR Racing Sim';
+  if (variant === 'vr_games') return 'VR Games';
+  return variant.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+export function requiresFixedGamingTariff(stationType: string): boolean {
+  return ['ps5', 'simulator', 'vr'].includes(stationType);
+}
+
+export function eligibleNewStartPackages(
+  packages: GamingPackageDTO[],
+  stationType: string,
+): GamingPackageDTO[] {
+  return packages.filter((item) => (
+    item.station_type === stationType
+    && item.kind === 'base'
+    && item.pricing_tier === 'standard'
+    && (!requiresFixedGamingTariff(stationType) || Boolean(item.code))
+  ));
 }
 
 export function gamingPackageSelectionLabel(session: LocalSession): string | null {
   if (session.billing_mode !== 'package' && session.billing_mode !== 'legacy_ambiguous') return null;
-  const tier = session.package_pricing_tier_snapshot
-    ? session.package_pricing_tier_snapshot[0].toUpperCase() + session.package_pricing_tier_snapshot.slice(1)
-    : null;
+  const tier = session.package_pricing_tier_snapshot === 'premium' ? 'Premium' : null;
   let mode: string | null = null;
   if (session.package_variant_snapshot === 'single') mode = 'Single';
   else if (session.package_variant_snapshot === 'dual') {
     const players = 2 + Math.max(0, session.extra_controllers ?? 0);
     mode = players === 2 ? 'Two players' : `${players} players`;
-  } else if (session.package_variant_snapshot === 'simdrive') mode = 'Simdrive';
-  else if (session.package_variant_snapshot) {
-    mode = session.package_variant_snapshot[0].toUpperCase() + session.package_variant_snapshot.slice(1);
-  }
+  } else if (session.package_variant_snapshot) mode = gamingModeLabel(session.package_variant_snapshot);
   const parts = [tier, mode].filter((value): value is string => Boolean(value));
   return parts.length > 0 ? parts.join(' · ') : null;
 }
@@ -467,11 +483,14 @@ export default function GamingScreen() {
   const [, setTick] = useState(0); // force overtime/countdown recompute every second
   const [pendingDuration, setPendingDuration] = useState<Record<string, number | null>>({});
   const [customDurationFor, setCustomDurationFor] = useState<string | null>(null);
-  // Customer phone attached at session start — carried through to the order
-  // created at send-to-pos so the cashier does not re-enter it at checkout.
+  // One optional booking contact is carried through to POS. A valid phone is
+  // required for stable customer playtime tracking; a name alone is a receipt
+  // snapshot and intentionally does not create identity.
+  const [sessionName, setSessionName] = useState<Record<string, string>>({});
   const [sessionPhone, setSessionPhone] = useState<Record<string, string>>({});
+  const [selectedCustomers, setSelectedCustomers] = useState<Record<string, CustomerDTO | undefined>>({});
   const [packages, setPackages] = useState<GamingPackageDTO[]>([]);
-  const [pickerTier, setPickerTier] = useState<Record<string, string>>({});
+  const [pickerVariant, setPickerVariant] = useState<Record<string, string>>({});
   const [pickerPlayerCount, setPickerPlayerCount] = useState<Record<string, number>>({});
   const [mutedStations, setMutedStations] = useState<Record<string, boolean>>({});
   const [sendingToPos, setSendingToPos] = useState<string | null>(null);
@@ -1147,6 +1166,7 @@ export default function GamingScreen() {
     customer = '',
     pkg?: { packageId: string; extraControllers: number; playerCount: number },
     phone = '',
+    selectedCustomer?: CustomerDTO,
   ) {
     const write = requireGamingWrite('Cannot start session');
     if (!write.allowed) return;
@@ -1190,8 +1210,7 @@ export default function GamingScreen() {
         const r = await write.dispatch('startSession', {
           station_id: st.id,
           shift_id: shiftId,
-          customer_name: customer || undefined,
-          customer_phone: phone.trim() || undefined,
+          ...buildGamingCustomerStartIdentity(selectedCustomer, customer, phone),
           timer_minutes: timerMinutes ?? undefined,
           package_id: pkg?.packageId,
           extra_controllers: pkg?.extraControllers,
@@ -1261,9 +1280,15 @@ export default function GamingScreen() {
       },
     }));
     setPendingDuration((p) => ({ ...p, [st.id]: null }));
-    setPickerTier((p) => ({ ...p, [st.id]: 'standard' }));
+    setPickerVariant((current) => {
+      const next = { ...current };
+      delete next[st.id];
+      return next;
+    });
     setPickerPlayerCount((p) => ({ ...p, [st.id]: 1 }));
+    setSessionName((p) => ({ ...p, [st.id]: '' }));
     setSessionPhone((p) => ({ ...p, [st.id]: '' }));
+    setSelectedCustomers((current) => clearStartedStationCustomer(current, st.id));
     setCustomDurationFor(null);
     notifications.success(`${st.name} session started.`, { title: 'Session running' });
   }
@@ -1669,14 +1694,10 @@ export default function GamingScreen() {
   }
 
   function packagesFor(stationType: string, kind: 'base' | 'extension') {
+    if (kind === 'base') return eligibleNewStartPackages(packages, stationType);
     return packages.filter((p) => p.station_type === stationType && p.kind === kind && (
-      !['ps5', 'simulator'].includes(stationType) || Boolean(p.code)
+      !requiresFixedGamingTariff(stationType) || Boolean(p.code)
     ));
-  }
-
-  function pricingTiersFor(stationType: string) {
-    return Array.from(new Set(packagesFor(stationType, 'base').map((p) => p.pricing_tier)))
-      .sort((left, right) => (left === 'standard' ? -1 : right === 'standard' ? 1 : left.localeCompare(right)));
   }
 
   async function changeSessionPause(st: StationDTO, action: 'pause' | 'resume', rawReason: string) {
@@ -2805,6 +2826,7 @@ export default function GamingScreen() {
             );
             const legacyBillingAmbiguous = session?.billing_mode === 'legacy_ambiguous';
             const phone = sessionPhone[st.id] ?? '';
+            const customerName = sessionName[st.id] ?? '';
             const elapsedMs = session ? playedSessionMilliseconds(session, Date.now()) : 0;
             const elapsedMin = Math.floor(elapsedMs / 60000);
             // A package session's price is locked in at start (see backend
@@ -2876,7 +2898,7 @@ export default function GamingScreen() {
               ? `${packageSelection ?? (session.billing_mode === 'legacy_ambiguous' ? 'Billing mode review' : 'Fixed package')} · ${session.locked_amount_minor == null
                 ? 'locked total unavailable'
                 : `${inr(session.locked_amount_minor)} fixed total`}`
-              : !session && ['ps5', 'simulator'].includes(st.type)
+              : !session && requiresFixedGamingTariff(st.type)
                 ? stationBaseTariffs.length > 0
                   ? `Fixed sessions from ${inr(Math.min(...stationBaseTariffs.map((item) => item.price_minor)))}`
                   : 'Fixed-price tariff not synced'
@@ -3302,46 +3324,50 @@ export default function GamingScreen() {
                   </>
                 ) : packagesFor(st.type, 'base').length > 0 ? (() => {
                   const allBasePackages = packagesFor(st.type, 'base');
-                  const pricingTiers = pricingTiersFor(st.type);
-                  const pricingTier = resolvePricingTier(pricingTiers, pickerTier[st.id]);
-                  const tierPackages = allBasePackages.filter((item) => item.pricing_tier === pricingTier);
+                  const availableVariants = Array.from(new Set(allBasePackages.map((item) => item.variant)));
+                  const preferredVariant = st.type === 'simulator' ? 'simdrive' : availableVariants[0];
+                  const selectedVariant = availableVariants.includes(pickerVariant[st.id])
+                    ? pickerVariant[st.id]
+                    : availableVariants.includes(preferredVariant) ? preferredVariant : availableVariants[0];
                   const supportsPlayerModes = st.type === 'ps5'
-                    && tierPackages.some((item) => item.variant === 'single' || item.variant === 'dual');
-                  const maximumPlayers = Math.max(1, ...tierPackages.map((item) => item.max_players));
+                    && allBasePackages.some((item) => item.variant === 'single' || item.variant === 'dual');
+                  const maximumPlayers = Math.max(1, ...allBasePackages.map((item) => item.max_players));
                   const playerCount = Math.min(
                     Math.max(1, pickerPlayerCount[st.id] ?? 1),
                     maximumPlayers,
                   );
                   const requiredVariant = supportsPlayerModes
                     ? playerCount === 1 ? 'single' : 'dual'
-                    : null;
-                  const tariffs = tierPackages.filter((item) => (
+                    : selectedVariant;
+                  const tariffs = allBasePackages.filter((item) => (
                     requiredVariant === null || item.variant === requiredVariant
                   ));
                   return (
                     <>
-                      <input type="tel" placeholder="Customer phone (optional)"
-                        className="input !py-1.5 text-xs w-full mb-2"
+                      <GamingCustomerPicker
+                        stationId={st.id}
                         disabled={!canManageStations || !canStartOnSelectedTerminal}
-                        value={phone}
-                        onChange={(e) => setSessionPhone((s) => ({ ...s, [st.id]: e.target.value }))}/>
-                      {pricingTiers.length > 1 && (
+                        selected={selectedCustomers[st.id]}
+                        name={customerName}
+                        phone={phone}
+                        onSelect={(customer) => setSelectedCustomers((current) => ({ ...current, [st.id]: customer }))}
+                        onNameChange={(value) => setSessionName((current) => ({ ...current, [st.id]: value }))}
+                        onPhoneChange={(value) => setSessionPhone((current) => ({ ...current, [st.id]: value }))}
+                      />
+                      {st.type === 'simulator' && availableVariants.length > 1 && (
                         <div
                           className="flex items-center gap-1.5 mb-2"
                           role="radiogroup"
-                          aria-label={`${st.name} service tier`}>
-                          {pricingTiers.map((tierName) => (
-                            <button key={tierName}
+                          aria-label={`${st.name} mode`}>
+                          {availableVariants.map((variant) => (
+                            <button key={variant}
                               type="button"
                               role="radio"
-                              aria-checked={pricingTier === tierName}
+                              aria-checked={selectedVariant === variant}
                               disabled={!canManageStations || !canStartOnSelectedTerminal}
-                              className={`chip min-h-11 px-3 text-xs capitalize touch-manipulation ${pricingTier === tierName ? '!border-accent !text-accent' : 'hover:border-accent'}`}
-                              onClick={() => {
-                                setPickerTier((current) => ({ ...current, [st.id]: tierName }));
-                                setPickerPlayerCount((current) => ({ ...current, [st.id]: 1 }));
-                              }}>
-                              {tierName}
+                              className={`chip min-h-11 px-3 text-xs touch-manipulation ${selectedVariant === variant ? '!border-accent !text-accent' : 'hover:border-accent'}`}
+                              onClick={() => setPickerVariant((current) => ({ ...current, [st.id]: variant }))}>
+                              {gamingModeLabel(variant)}
                             </button>
                           ))}
                         </div>
@@ -3381,11 +3407,11 @@ export default function GamingScreen() {
                             canManageSessions={canManageStations}
                             key={tariff.id}
                             className="btn btn-ghost !justify-between !py-1.5 text-xs"
-                            onClick={() => startSession(st, '', {
+                            onClick={() => startSession(st, customerName, {
                               packageId: tariff.id,
                               extraControllers,
                               playerCount: supportsPlayerModes ? playerCount : tariff.included_players,
-                            }, phone)}
+                            }, phone, selectedCustomers[st.id])}
                             disabled={!st.is_active || !packageStartRecoveryReady || !canStartOnSelectedTerminal || startingSession !== null}
                             title={packageStartRecoveryReady
                               ? canStartOnSelectedTerminal
@@ -3416,7 +3442,7 @@ export default function GamingScreen() {
                       )}
                     </>
                   );
-                })() : ['ps5', 'simulator'].includes(st.type) ? (
+                })() : requiresFixedGamingTariff(st.type) ? (
                   <div className="rounded-lg border border-accent-bad/30 bg-accent-bad/10 p-3 text-xs text-accent-bad">
                     Fixed-price tariff is unavailable. Refresh Gaming after the server finishes
                     synchronising; hourly fallback is disabled for this station so the customer is
@@ -3424,11 +3450,16 @@ export default function GamingScreen() {
                   </div>
                 ) : (
                   <>
-                    <input type="tel" placeholder="Customer phone (optional)"
-                      className="input !py-1.5 text-xs w-full mb-2"
+                    <GamingCustomerPicker
+                      stationId={st.id}
                       disabled={!canManageStations || !canStartOnSelectedTerminal}
-                      value={phone}
-                      onChange={(e) => setSessionPhone((s) => ({ ...s, [st.id]: e.target.value }))}/>
+                      selected={selectedCustomers[st.id]}
+                      name={customerName}
+                      phone={phone}
+                      onSelect={(customer) => setSelectedCustomers((current) => ({ ...current, [st.id]: customer }))}
+                      onNameChange={(value) => setSessionName((current) => ({ ...current, [st.id]: value }))}
+                      onPhoneChange={(value) => setSessionPhone((current) => ({ ...current, [st.id]: value }))}
+                    />
                     <div className="flex items-center gap-1.5 mb-2 flex-wrap">
                       {DURATION_PRESETS.map((p) => (
                         <button key={p.label}
@@ -3460,7 +3491,7 @@ export default function GamingScreen() {
                     <GamingMutationButton
                       canManageSessions={canManageStations}
                       className="btn btn-primary w-full"
-                      onClick={() => startSession(st, '', undefined, phone)}
+                      onClick={() => startSession(st, customerName, undefined, phone, selectedCustomers[st.id])}
                       disabled={!st.is_active || !canStartOnSelectedTerminal || startingSession !== null}
                       title={canStartOnSelectedTerminal
                         ? undefined

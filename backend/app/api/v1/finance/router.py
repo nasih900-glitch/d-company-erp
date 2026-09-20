@@ -8,18 +8,37 @@ screen needs.
 
 from __future__ import annotations
 
+import json
+import warnings
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
+from functools import partial
 from hashlib import sha256
-from typing import Any, Literal
+from io import BytesIO
+from pathlib import Path
+from typing import Annotated, Any, Literal, cast
+from urllib.parse import quote
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request, status
+from anyio import CapacityLimiter, to_thread
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    Form,
+    Query,
+    Request,
+    UploadFile,
+    status,
+)
+from fastapi.responses import Response
+from PIL import Image, UnidentifiedImageError
 from pydantic import AwareDatetime, BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import exists, func, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import aliased
+from sqlalchemy.orm import aliased, undefer
 
 from app.core.db import SessionDep
 from app.core.errors import (
@@ -39,6 +58,7 @@ from app.core.timezone import company_timezone, local_date_bounds_utc, local_tod
 from app.models import (
     GRN,
     Asset,
+    AuditLog,
     Branch,
     CapitalEntry,
     Company,
@@ -46,7 +66,11 @@ from app.models import (
     CustomerMembership,
     Expense,
     ExpenseCategory,
+    ExpenseReceipt,
+    ExpenseReceiptReview,
+    FinanceSourceCorrection,
     GRNLine,
+    IdempotencyKey,
     JournalEntry,
     ManualCollection,
     MembershipPayment,
@@ -56,9 +80,9 @@ from app.models import (
     Partner,
     PurchaseOrder,
     Refund,
+    Shift,
     Supplier,
     SupplierPayment,
-    Shift,
     TipPayout,
     User,
 )
@@ -80,7 +104,9 @@ from app.services.accounting.purchases import (
     received_line_total_minor,
     require_invoice_matches_capitalised_total,
 )
-from app.services.integrations.google_sheets import push_manual_collection_to_sheet
+from app.services.integrations.google_sheets_mirror import (
+    enqueue_google_sheets_event_if_enabled,
+)
 from app.services.reports import ReportsAggregator
 from app.services.reports.aggregator import CostingConfidence, PnLReport
 from app.services.reports.business_metrics import (
@@ -117,13 +143,22 @@ EXPENSE_CASH_PAID_OUT_UNAVAILABLE = (
     "or business debit card. Cash paid-outs require the shift-linked drawer workflow."
 )
 CODE21_CASH_EXPENSE_VERSION = 21
+SAVED_CLIENT_VERSION_CODE_HEADER = "X-Saved-Client-Version-Code"
 CODE21_CASH_EXPENSE_RECEIPT_REVISION = 51
+MODERN_CASH_EXPENSE_RECEIPT_REVISION = 52
 CODE21_CASH_EXPENSE_CLOCK_WINDOW = timedelta(minutes=5)
+MAX_EXPENSE_RECEIPT_BYTES = 10 * 1024 * 1024
+MAX_EXPENSE_RECEIPTS = 5
+_EXPENSE_RECEIPT_DECODER_LIMITER = CapacityLimiter(2)
+
+ExpenseReceiptSource = Literal["camera", "gallery", "file"]
+ExpenseReceiptStatus = Literal["pending", "verified", "not_required", "rejected"]
 
 
 # ---------------------------------------------------------------- DTOs
 class ExpenseCreate(BaseModel):
     branch_id: UUID
+    shift_id: UUID | None = None
     category_id: UUID
     supplier_id: UUID | None = None
     amount_minor: int = Field(gt=0)
@@ -133,6 +168,23 @@ class ExpenseCreate(BaseModel):
     invoice_no: str | None = Field(default=None, max_length=100)
     note: str | None = Field(default=None, max_length=500)
     ocr_extraction_id: UUID | None = None
+
+
+class FinanceSourceCorrectionCreate(BaseModel):
+    settlement_shift_id: UUID
+    reason: str = Field(min_length=3, max_length=500)
+
+
+class FinanceSourceCorrectionRead(BaseModel):
+    id: UUID
+    source_type: str
+    source_id: UUID
+    original_shift_id: UUID
+    settlement_shift_id: UUID
+    amount_minor: int
+    corrected_by: UUID
+    reason: str
+    corrected_at: datetime
 
 
 class FinanceBranchRead(BaseModel):
@@ -154,15 +206,59 @@ class ExpenseRead(BaseModel):
     vendor_name: str | None
     invoice_no: str | None
     note: str | None
-    # Present only for the narrow shift-linked Code 21 cash-expense recovery
-    # contract.  They are optional so cached responses and older clients keep
-    # their existing wire shape/decoder compatibility.
+    # Present for shift-linked cash-expense receipts (the Code 21 recovery and
+    # the modern explicit-shift flow). They stay optional so cached responses
+    # and older clients keep their existing wire shape/decoder compatibility.
     shift_id: UUID | None = None
     created_by: UUID | None = None
     voided_at: datetime | None = None
     voided_by: UUID | None = None
     void_reason: str | None = None
     is_voided: bool = False
+    receipt_count: int = 0
+    receipt_status: ExpenseReceiptStatus = "pending"
+    source_shift_status: str | None = None
+    is_corrected: bool = False
+    correction: FinanceSourceCorrectionRead | None = None
+
+
+class ExpenseActionReconciliationRead(BaseModel):
+    """Authoritative metadata-only result for one saved offline expense action."""
+
+    state: Literal["absent", "in_progress", "accepted"]
+    idempotency_key: str
+    expense: ExpenseRead | None = None
+
+
+class ExpenseReceiptRead(BaseModel):
+    id: UUID
+    expense_id: UUID
+    original_filename: str
+    content_type: str
+    size_bytes: int
+    # Content identity lets an offline client reconcile a rejected local copy
+    # against the authoritative receipt list without downloading private bytes.
+    # Optional only when replaying a historical idempotency response captured
+    # before this field existed. Fresh reads and uploads always include it.
+    sha256: str | None = None
+    source: ExpenseReceiptSource
+    status: ExpenseReceiptStatus
+    review_note: str | None
+    created_at: datetime
+
+
+class ExpenseReceiptReviewCreate(BaseModel):
+    status: ExpenseReceiptStatus
+    review_note: str | None = Field(default=None, max_length=500)
+
+
+class ExpenseReceiptReviewRead(BaseModel):
+    id: UUID
+    expense_id: UUID
+    status: ExpenseReceiptStatus
+    review_note: str | None
+    reviewed_by: UUID
+    created_at: datetime
 
 
 class ExpenseUpdate(BaseModel):
@@ -181,6 +277,7 @@ class ExpenseVoid(BaseModel):
 
 class ManualCollectionCreate(BaseModel):
     branch_id: UUID
+    shift_id: UUID | None = None
     business_date: date
     method: Literal["cash", "upi", "card", "bank"]
     amount_minor: int = Field(gt=0)
@@ -199,6 +296,7 @@ class ManualCollectionRead(BaseModel):
     id: UUID
     company_id: UUID
     branch_id: UUID
+    shift_id: UUID | None = None
     business_date: date
     method: str
     amount_minor: int
@@ -214,10 +312,14 @@ class ManualCollectionRead(BaseModel):
     voided_by_name: str | None = None
     void_reason: str | None
     is_voided: bool
+    source_shift_status: str | None = None
+    is_corrected: bool = False
+    correction: FinanceSourceCorrectionRead | None = None
 
 
 class TipPayoutCreate(BaseModel):
     branch_id: UUID
+    shift_id: UUID | None = None
     amount_minor: int = Field(gt=0)
     method: Literal["cash", "upi", "card", "bank"]
     paid_at: AwareDatetime
@@ -232,6 +334,7 @@ class TipPayoutRead(BaseModel):
     id: UUID
     company_id: UUID
     branch_id: UUID
+    shift_id: UUID | None = None
     amount_minor: int
     method: str
     paid_at: datetime
@@ -245,10 +348,14 @@ class TipPayoutRead(BaseModel):
     voided_by_name: str | None = None
     void_reason: str | None
     is_voided: bool
+    source_shift_status: str | None = None
+    is_corrected: bool = False
+    correction: FinanceSourceCorrectionRead | None = None
 
 
 class SupplierPaymentCreate(BaseModel):
     branch_id: UUID
+    shift_id: UUID | None = None
     supplier_id: UUID
     grn_id: UUID
     amount_minor: int = Field(gt=0)
@@ -266,6 +373,7 @@ class SupplierPaymentRead(BaseModel):
     id: UUID
     company_id: UUID
     branch_id: UUID
+    shift_id: UUID | None = None
     supplier_id: UUID
     grn_id: UUID
     journal_entry_id: UUID
@@ -281,6 +389,9 @@ class SupplierPaymentRead(BaseModel):
     voided_by: UUID | None
     void_reason: str | None
     is_voided: bool
+    source_shift_status: str | None = None
+    is_corrected: bool = False
+    correction: FinanceSourceCorrectionRead | None = None
 
 
 class PartnerRead(BaseModel):
@@ -694,7 +805,80 @@ async def list_finance_branches(
 # ============================================================================
 # EXPENSES
 # ============================================================================
-def _expense_read(row: Expense) -> ExpenseRead:
+def _finance_correction_source_id(row: FinanceSourceCorrection) -> UUID:
+    source_id = {
+        "expense": row.expense_id,
+        "manual_collection": row.manual_collection_id,
+        "tip_payout": row.tip_payout_id,
+        "supplier_payment": row.supplier_payment_id,
+    }.get(row.source_type)
+    if source_id is None:  # pragma: no cover - enforced by database constraints
+        raise RuntimeError("finance correction is missing its source id")
+    return source_id
+
+
+def _finance_correction_read(
+    row: FinanceSourceCorrection,
+) -> FinanceSourceCorrectionRead:
+    return FinanceSourceCorrectionRead(
+        id=row.id,
+        source_type=row.source_type,
+        source_id=_finance_correction_source_id(row),
+        original_shift_id=row.original_shift_id,
+        settlement_shift_id=row.settlement_shift_id,
+        amount_minor=int(row.amount_minor),
+        corrected_by=row.corrected_by,
+        reason=row.reason,
+        corrected_at=row.corrected_at,
+    )
+
+
+async def _finance_source_context(
+    session: SessionDep,
+    *,
+    source_type: Literal[
+        "expense", "manual_collection", "tip_payout", "supplier_payment"
+    ],
+    source_ids: list[UUID],
+    shift_ids: list[UUID | None],
+) -> tuple[dict[UUID, FinanceSourceCorrection], dict[UUID, str]]:
+    """Load correction and original-shift state in two bounded list queries."""
+
+    if not source_ids:
+        return {}, {}
+    source_column = {
+        "expense": FinanceSourceCorrection.expense_id,
+        "manual_collection": FinanceSourceCorrection.manual_collection_id,
+        "tip_payout": FinanceSourceCorrection.tip_payout_id,
+        "supplier_payment": FinanceSourceCorrection.supplier_payment_id,
+    }[source_type]
+    corrections = (
+        await session.execute(
+            select(FinanceSourceCorrection).where(source_column.in_(source_ids))
+        )
+    ).scalars().all()
+    correction_by_source = {
+        _finance_correction_source_id(row): row for row in corrections
+    }
+    concrete_shift_ids = {shift_id for shift_id in shift_ids if shift_id is not None}
+    if not concrete_shift_ids:
+        return correction_by_source, {}
+    statuses = (
+        await session.execute(
+            select(Shift.id, Shift.status).where(Shift.id.in_(concrete_shift_ids))
+        )
+    ).all()
+    return correction_by_source, dict(statuses)
+
+
+def _expense_read(
+    row: Expense,
+    *,
+    receipt_count: int = 0,
+    receipt_status: ExpenseReceiptStatus = "pending",
+    source_shift_status: str | None = None,
+    correction: FinanceSourceCorrection | None = None,
+) -> ExpenseRead:
     return ExpenseRead(
         id=row.id,
         branch_id=row.branch_id,
@@ -712,6 +896,250 @@ def _expense_read(row: Expense) -> ExpenseRead:
         voided_by=row.voided_by,
         void_reason=row.void_reason,
         is_voided=row.voided_at is not None,
+        receipt_count=receipt_count,
+        receipt_status=receipt_status,
+        source_shift_status=source_shift_status,
+        is_corrected=correction is not None,
+        correction=_finance_correction_read(correction) if correction else None,
+    )
+
+
+async def _enqueue_expense_mirror(
+    session: SessionDep,
+    *,
+    row: Expense,
+    actor_user_id: UUID,
+    event_kind: Literal["recorded", "voided"],
+) -> None:
+    """Mirror an immutable expense fact without exporting receipt bytes or notes."""
+
+    company = await session.get(Company, row.company_id)
+    if company is None or company.deleted_at is not None:
+        return
+    branch = await session.get(Branch, row.branch_id)
+    category = await session.get(ExpenseCategory, row.category_id)
+    is_void = event_kind == "voided"
+    stable_actor_id = row.voided_by if is_void and row.voided_by else actor_user_id
+    actor = await session.get(User, stable_actor_id)
+    occurred_at = row.voided_at if is_void else row.paid_at
+    if occurred_at is None:  # pragma: no cover - guarded by the persisted state
+        raise RuntimeError("voided expense is missing its void timestamp")
+    category_name = category.name if category else "Expense"
+    description = category_name
+    if row.vendor_name:
+        description = f"{category_name} · {row.vendor_name}"
+    await enqueue_google_sheets_event_if_enabled(
+        session,
+        company_id=row.company_id,
+        event_type=f"finance.expense.{event_kind}",
+        source_type="expense",
+        source_id=str(row.id),
+        source_revision="void-v1" if is_void else "recorded-v1",
+        occurred_at=occurred_at,
+        payload={
+            "branch": branch.name if branch else str(row.branch_id),
+            "reference": row.invoice_no or str(row.id),
+            "description": f"Void · {description}" if is_void else description,
+            "customer": "",
+            "quantity": 1,
+            "amount_minor": int(row.amount_minor) if is_void else -int(row.amount_minor),
+            "expense_total_minor": -int(row.amount_minor) if is_void else int(row.amount_minor),
+            "payment_method": row.paid_via,
+            "actor": actor.name if actor else "",
+            "status": event_kind,
+            "currency": company.currency,
+            "expense_id": str(row.id),
+            "branch_id": str(row.branch_id),
+            "category_id": str(row.category_id),
+            "shift_id": str(row.shift_id) if row.shift_id else "",
+        },
+    )
+
+
+def _short_finance_reference(prefix: str, source_id: UUID) -> str:
+    """Return a readable identifier without exposing request or payment secrets."""
+
+    return f"{prefix}-{str(source_id).split('-', 1)[0].upper()}"
+
+
+async def _enqueue_finance_source_mirror(
+    session: SessionDep,
+    *,
+    company_id: UUID,
+    branch_id: UUID | None,
+    actor_user_id: UUID | None,
+    event_type: str,
+    source_type: str,
+    source_id: UUID,
+    source_revision: str,
+    occurred_at: datetime,
+    reference: str,
+    description: str,
+    amount_minor: int,
+    payment_method: str,
+    status_label: str,
+    identifiers: dict[str, str],
+) -> None:
+    """Queue one sanitized finance fact in the caller-owned transaction.
+
+    Free-form notes, void reasons, receipt evidence, credentials and payment
+    references are deliberately absent from this contract. Source-specific
+    identifiers are UUIDs or bounded accounting classifications only.
+    """
+
+    company = await session.get(Company, company_id)
+    if company is None or company.deleted_at is not None:
+        return
+    branch = await session.get(Branch, branch_id) if branch_id is not None else None
+    actor = (
+        await session.get(User, actor_user_id)
+        if actor_user_id is not None
+        else None
+    )
+    await enqueue_google_sheets_event_if_enabled(
+        session,
+        company_id=company_id,
+        event_type=event_type,
+        source_type=source_type,
+        source_id=str(source_id),
+        source_revision=source_revision,
+        occurred_at=occurred_at,
+        payload={
+            "branch": branch.name if branch is not None else "Company-wide",
+            "reference": reference,
+            "description": description,
+            "customer": "",
+            "quantity": 1,
+            "amount_minor": int(amount_minor),
+            "payment_method": payment_method,
+            "actor": actor.name if actor is not None else str(actor_user_id or ""),
+            "status": status_label,
+            "currency": company.currency,
+            **dict(identifiers),
+        },
+    )
+
+
+async def _expense_receipt_summaries(
+    session: SessionDep,
+    *,
+    company_id: UUID,
+    expense_ids: list[UUID],
+) -> tuple[dict[UUID, int], dict[UUID, ExpenseReceiptStatus]]:
+    """Load receipt counts and the latest append-only review in two queries."""
+
+    if not expense_ids:
+        return {}, {}
+    count_rows = (
+        await session.execute(
+            select(ExpenseReceipt.expense_id, func.count(ExpenseReceipt.id))
+            .where(
+                ExpenseReceipt.company_id == company_id,
+                ExpenseReceipt.expense_id.in_(expense_ids),
+            )
+            .group_by(ExpenseReceipt.expense_id)
+        )
+    ).all()
+    counts = {expense_id: int(count) for expense_id, count in count_rows}
+
+    ranked = (
+        select(
+            ExpenseReceiptReview.expense_id.label("expense_id"),
+            ExpenseReceiptReview.status.label("status"),
+            func.row_number()
+            .over(
+                partition_by=ExpenseReceiptReview.expense_id,
+                order_by=(
+                    ExpenseReceiptReview.created_at.desc(),
+                    ExpenseReceiptReview.id.desc(),
+                ),
+            )
+            .label("position"),
+        )
+        .where(
+            ExpenseReceiptReview.company_id == company_id,
+            ExpenseReceiptReview.expense_id.in_(expense_ids),
+        )
+        .subquery()
+    )
+    review_rows = (
+        await session.execute(
+            select(ranked.c.expense_id, ranked.c.status).where(ranked.c.position == 1)
+        )
+    ).all()
+    statuses = {
+        expense_id: cast("ExpenseReceiptStatus", review_status)
+        for expense_id, review_status in review_rows
+    }
+    return counts, statuses
+
+
+async def _expense_or_404(
+    session: SessionDep,
+    *,
+    expense_id: UUID,
+    tenant: TenantContext,
+    lock: bool,
+    allow_voided: bool,
+) -> Expense:
+    stmt = select(Expense).where(
+        Expense.id == expense_id,
+        Expense.company_id == tenant.company_id,
+        Expense.deleted_at.is_(None),
+    )
+    if not allow_voided:
+        stmt = stmt.where(Expense.voided_at.is_(None))
+    if lock:
+        stmt = stmt.with_for_update()
+    row = (await session.execute(stmt)).scalar_one_or_none()
+    if row is None or not tenant.in_branch(row.branch_id):
+        raise NotFoundError("expense not found")
+
+    return row
+
+
+async def _current_expense_receipt_review(
+    session: SessionDep,
+    *,
+    company_id: UUID,
+    expense_id: UUID,
+) -> tuple[ExpenseReceiptStatus, str | None]:
+    row = (
+        await session.execute(
+            select(ExpenseReceiptReview.status, ExpenseReceiptReview.review_note)
+            .where(
+                ExpenseReceiptReview.company_id == company_id,
+                ExpenseReceiptReview.expense_id == expense_id,
+            )
+            .order_by(
+                ExpenseReceiptReview.created_at.desc(),
+                ExpenseReceiptReview.id.desc(),
+            )
+            .limit(1)
+        )
+    ).one_or_none()
+    if row is None:
+        return "pending", None
+    return cast("ExpenseReceiptStatus", row.status), row.review_note
+
+
+def _receipt_read(
+    row: ExpenseReceipt,
+    *,
+    review_status: ExpenseReceiptStatus,
+    review_note: str | None,
+) -> ExpenseReceiptRead:
+    return ExpenseReceiptRead(
+        id=row.id,
+        expense_id=row.expense_id,
+        original_filename=row.original_filename,
+        content_type=row.content_type,
+        size_bytes=row.size_bytes,
+        sha256=row.sha256,
+        source=cast("ExpenseReceiptSource", row.source),
+        status=review_status,
+        review_note=review_note,
+        created_at=row.created_at,
     )
 
 
@@ -731,10 +1159,20 @@ class _Code21CashExpenseCapture:
 
 def _is_code21_android_request(request: Request) -> bool:
     headers = getattr(request, "headers", {})
-    return (
-        headers.get("X-Client-Platform", "").strip().lower() == "android"
-        and parse_client_version_code(headers.get("X-Client-Version-Code"))
-        == CODE21_CASH_EXPENSE_VERSION
+    installed_version = parse_client_version_code(
+        headers.get("X-Client-Version-Code")
+    )
+    saved_version = parse_client_version_code(
+        headers.get(SAVED_CLIENT_VERSION_CODE_HEADER)
+    )
+    is_android = headers.get("X-Client-Platform", "").strip().lower() == "android"
+    return is_android and (
+        installed_version == CODE21_CASH_EXPENSE_VERSION
+        or (
+            installed_version is not None
+            and installed_version > CODE21_CASH_EXPENSE_VERSION
+            and saved_version == CODE21_CASH_EXPENSE_VERSION
+        )
     )
 
 
@@ -883,6 +1321,188 @@ async def _validate_code21_cash_expense_replay(
     )
 
 
+def _require_modern_cash_expense_action_key(idempotency_key: str) -> None:
+    """Require the durable ``expense:<uuid>`` identity used by native/web outboxes."""
+
+    if not idempotency_key.startswith("expense:"):
+        raise BusinessRuleError(
+            "Cash expense Idempotency-Key must use the expense:<uuid> format."
+        )
+    try:
+        action_id = UUID(idempotency_key.removeprefix("expense:"))
+    except ValueError as exc:
+        raise BusinessRuleError(
+            "Cash expense Idempotency-Key must contain a valid UUID."
+        ) from exc
+    if idempotency_key != f"expense:{action_id}":
+        raise BusinessRuleError(
+            "Cash expense Idempotency-Key must use the canonical expense:<uuid> format."
+        )
+
+
+def _modern_cash_expense_request_hash(payload: ExpenseCreate) -> str:
+    """Hash normalized business facts, independent of JSON formatting or key order."""
+
+    if payload.paid_at.tzinfo is None:
+        raise BusinessRuleError("Cash expense payment time must include a timezone.")
+    canonical = payload.model_dump(mode="json")
+    canonical["paid_at"] = payload.paid_at.astimezone(timezone.utc).isoformat()
+    encoded = json.dumps(
+        canonical,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return sha256(f"modern-cash-expense-v1\n{encoded}".encode()).hexdigest()
+
+
+def _original_expense_create_response(row: Expense) -> ExpenseRead:
+    """Reconstruct the immutable create response even after a later reasoned void."""
+
+    return _expense_read(row).model_copy(
+        update={
+            "voided_at": None,
+            "voided_by": None,
+            "void_reason": None,
+            "is_voided": False,
+        }
+    )
+
+
+def _validate_modern_cash_expense_replay(
+    *,
+    row: Expense,
+    shift: Shift | None,
+    idempotency_key: str,
+    request_hash: str,
+    tenant: TenantContext,
+) -> ExpenseRead:
+    if row.request_hash != request_hash:
+        raise IdempotencyConflict(
+            "Idempotency-Key reused with different cash-expense facts",
+            details={"key": idempotency_key},
+        )
+    if row.created_by != tenant.user_id:
+        raise IdempotencyConflict(
+            "Idempotency-Key reused by a different user",
+            details={"key": idempotency_key},
+        )
+    if (
+        shift is None
+        or shift.company_id != tenant.company_id
+        or shift.branch_id != row.branch_id
+        or row.shift_id != shift.id
+    ):
+        raise BusinessRuleError(
+            "The saved cash expense has an invalid shift receipt. Do not enter it "
+            "again; ask an owner to reconcile the original record."
+        )
+    if not tenant.in_branch(row.branch_id):
+        raise NotFoundError("expense not found")
+    return _original_expense_create_response(row)
+
+
+async def _locked_modern_cash_expense_replay(
+    session: SessionDep,
+    *,
+    idempotency_key: str,
+    request_hash: str,
+    payload: ExpenseCreate,
+    tenant: TenantContext,
+) -> ExpenseRead | None:
+    """Resolve a durable modern replay using the global Shift -> Expense lock order."""
+
+    preflight = (
+        await session.execute(
+            select(Expense.shift_id).where(
+                Expense.company_id == tenant.company_id,
+                Expense.idempotency_key == idempotency_key,
+                Expense.source_integrity_revision
+                == MODERN_CASH_EXPENSE_RECEIPT_REVISION,
+            )
+        )
+    ).scalar_one_or_none()
+    if preflight is None:
+        return None
+    if payload.shift_id != preflight:
+        raise IdempotencyConflict(
+            "Idempotency-Key reused with a different cash-expense shift",
+            details={"key": idempotency_key},
+        )
+
+    shift = (
+        await session.execute(
+            select(Shift).where(Shift.id == preflight).with_for_update()
+        )
+    ).scalar_one_or_none()
+    row = (
+        await session.execute(
+            select(Expense)
+            .where(
+                Expense.company_id == tenant.company_id,
+                Expense.idempotency_key == idempotency_key,
+                Expense.source_integrity_revision
+                == MODERN_CASH_EXPENSE_RECEIPT_REVISION,
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        return None
+    return _validate_modern_cash_expense_replay(
+        row=row,
+        shift=shift,
+        idempotency_key=idempotency_key,
+        request_hash=request_hash,
+        tenant=tenant,
+    )
+
+
+async def _lock_modern_cash_expense_shift(
+    session: SessionDep,
+    *,
+    payload: ExpenseCreate,
+    tenant: TenantContext,
+) -> Shift:
+    """Lock and validate the explicit drawer before inserting its expense child."""
+
+    if payload.shift_id is None:
+        raise BusinessRuleError("Select the open shift that paid this cash expense.")
+    if not tenant.in_branch(payload.branch_id):
+        raise NotFoundError("branch not found")
+    shift = (
+        await session.execute(
+            select(Shift)
+            .where(
+                Shift.id == payload.shift_id,
+                Shift.company_id == tenant.company_id,
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if shift is None or shift.branch_id != payload.branch_id:
+        raise NotFoundError("shift not found")
+    if shift.status != "open":
+        raise BusinessRuleError(
+            "This shift is closed and cannot pay a new cash expense. Select an open shift."
+        )
+    if payload.paid_at.tzinfo is None:
+        raise BusinessRuleError("Cash expense payment time must include a timezone.")
+    paid_at = payload.paid_at.astimezone(timezone.utc)
+    now = datetime.now(timezone.utc)
+    if paid_at < shift.opened_at:
+        raise BusinessRuleError(
+            "Cash expense payment time cannot be before the selected shift opened."
+        )
+    if paid_at > now:
+        raise BusinessRuleError("Cash expense payment time cannot be in the future.")
+    if payload.amount_minor > int(shift.expected_minor or 0):
+        raise BusinessRuleError(
+            "This cash expense exceeds the cash expected in the selected shift drawer."
+        )
+    return shift
+
+
 @router.get("/expenses", response_model=list[ExpenseRead])
 async def list_expenses(
     session: SessionDep,
@@ -905,7 +1525,140 @@ async def list_expenses(
         stmt = stmt.where(Expense.paid_at < to_exclusive)
     stmt = stmt.order_by(Expense.paid_at.desc())
     rows = (await session.execute(stmt)).scalars().all()
-    return [_expense_read(row) for row in rows]
+    counts, statuses = await _expense_receipt_summaries(
+        session,
+        company_id=tenant.company_id,
+        expense_ids=[row.id for row in rows],
+    )
+    corrections, shift_statuses = await _finance_source_context(
+        session,
+        source_type="expense",
+        source_ids=[row.id for row in rows],
+        shift_ids=[row.shift_id for row in rows],
+    )
+    return [
+        _expense_read(
+            row,
+            receipt_count=counts.get(row.id, 0),
+            receipt_status=statuses.get(row.id, "pending"),
+            source_shift_status=(
+                shift_statuses.get(row.shift_id) if row.shift_id else None
+            ),
+            correction=corrections.get(row.id),
+        )
+        for row in rows
+    ]
+
+
+@router.get(
+    "/expenses/actions/{action_id}/reconciliation",
+    response_model=ExpenseActionReconciliationRead,
+)
+async def reconcile_saved_expense_action(
+    action_id: UUID,
+    branch_id: UUID,
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("finance.write")),
+) -> ExpenseActionReconciliationRead:
+    """Resolve whether this user's rejected offline expense reached the server.
+
+    The response contains metadata only. A missing action key is authoritative
+    absence in this database; a reserved key fails closed; and an accepted key
+    is returned only after its source row is checked against the authenticated
+    company and requested branch. Older servers do not expose this route, so a
+    client must never interpret HTTP 404 as absence.
+    """
+
+    if not tenant.in_branch(branch_id):
+        raise NotFoundError("branch not found")
+    branch = (
+        await session.execute(
+            select(Branch.id).where(
+                Branch.id == branch_id,
+                Branch.company_id == tenant.company_id,
+                Branch.deleted_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if branch is None:
+        raise NotFoundError("branch not found")
+
+    idempotency_key = f"expense:{action_id}"
+    source = (
+        await session.execute(
+            select(Expense).where(
+                Expense.company_id == tenant.company_id,
+                Expense.branch_id == branch_id,
+                Expense.idempotency_key == idempotency_key,
+            )
+        )
+    ).scalar_one_or_none()
+    receipt = (
+        await session.execute(
+            select(IdempotencyKey).where(IdempotencyKey.key == idempotency_key)
+        )
+    ).scalar_one_or_none()
+    if source is None and receipt is None:
+        return ExpenseActionReconciliationRead(
+            state="absent",
+            idempotency_key=idempotency_key,
+        )
+    if source is not None and source.created_by != tenant.user_id:
+        raise NotFoundError("saved expense action not found")
+    if receipt is not None and (
+        receipt.user_id != tenant.user_id or receipt.terminal_id is not None
+    ):
+        raise NotFoundError("saved expense action not found")
+    if source is None and (
+        receipt.response_status is None or receipt.response_body is None
+    ):
+        return ExpenseActionReconciliationRead(
+            state="in_progress",
+            idempotency_key=idempotency_key,
+        )
+
+    if receipt is not None and receipt.response_body is not None:
+        try:
+            stored = ExpenseRead.model_validate(receipt.response_body)
+        except ValueError as exc:
+            raise ConflictError(
+                "The saved expense action has an unreadable server receipt; "
+                "nothing was removed."
+            ) from exc
+        if source is not None and stored.id != source.id:
+            raise ConflictError(
+                "The saved expense action receipt does not match its durable expense; "
+                "nothing was removed."
+            )
+    if source is None:
+        raise ConflictError(
+            "The saved expense action receipt does not match a current expense; nothing was removed."
+        )
+    counts, statuses = await _expense_receipt_summaries(
+        session,
+        company_id=tenant.company_id,
+        expense_ids=[source.id],
+    )
+    corrections, shift_statuses = await _finance_source_context(
+        session,
+        source_type="expense",
+        source_ids=[source.id],
+        shift_ids=[source.shift_id],
+    )
+    authoritative = _expense_read(
+        source,
+        receipt_count=counts.get(source.id, 0),
+        receipt_status=statuses.get(source.id, "pending"),
+        source_shift_status=(
+            shift_statuses.get(source.shift_id) if source.shift_id else None
+        ),
+        correction=corrections.get(source.id),
+    )
+    return ExpenseActionReconciliationRead(
+        state="accepted",
+        idempotency_key=idempotency_key,
+        expense=authoritative,
+    )
 
 
 def _require_idempotency(request: Request, *, what: str) -> tuple[str, str]:
@@ -924,6 +1677,143 @@ def _require_idempotency(request: Request, *, what: str) -> tuple[str, str]:
     return str(key), str(request_hash)
 
 
+def _detect_expense_receipt_content_type(
+    body: bytes,
+    *,
+    claimed_content_type: str | None,
+) -> str:
+    """Validate receipt bytes and return one canonical media type.
+
+    Camera and gallery clients sometimes omit the MIME type or send
+    ``application/octet-stream``. Detection therefore comes from the bytes;
+    a specific but contradictory claimed type is rejected rather than trusted.
+    """
+
+    if not body:
+        raise BusinessRuleError("The selected receipt is empty.")
+    if len(body) > MAX_EXPENSE_RECEIPT_BYTES:
+        raise BusinessRuleError("The receipt exceeds the 10 MB limit.")
+
+    detected: str | None = None
+    if body.startswith(b"\x89PNG\r\n\x1a\n"):
+        detected = "image/png"
+    elif body.startswith(b"\xff\xd8\xff") and body.rstrip().endswith(b"\xff\xd9"):
+        detected = "image/jpeg"
+    elif len(body) >= 12 and body[:4] == b"RIFF" and body[8:12] == b"WEBP":
+        detected = "image/webp"
+    elif body.startswith(b"%PDF-") and b"%%EOF" in body[-4096:]:
+        detected = "application/pdf"
+    if detected is None:
+        raise BusinessRuleError(
+            "Attach a valid JPEG, PNG, WebP, or PDF receipt."
+        )
+
+    claimed = (claimed_content_type or "").split(";", 1)[0].strip().lower()
+    claimed_aliases = {
+        "image/jpg": "image/jpeg",
+        "application/x-pdf": "application/pdf",
+    }
+    claimed = claimed_aliases.get(claimed, claimed)
+    if claimed not in {"", "application/octet-stream", detected}:
+        raise BusinessRuleError(
+            "The receipt file type does not match its contents. Choose the original file."
+        )
+
+    if detected in {"image/jpeg", "image/png", "image/webp"}:
+        expected_format = {
+            "image/jpeg": "JPEG",
+            "image/png": "PNG",
+            "image/webp": "WEBP",
+        }[detected]
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("error", Image.DecompressionBombWarning)
+                with Image.open(BytesIO(body)) as image:
+                    if (image.format or "").upper() != expected_format:
+                        raise BusinessRuleError(
+                            "The receipt file type does not match its contents."
+                        )
+                    if getattr(image, "n_frames", 1) != 1:
+                        raise BusinessRuleError(
+                            "Animated images cannot be used as receipt evidence."
+                        )
+                    image.verify()
+        except BusinessRuleError:
+            raise
+        except (
+            Image.DecompressionBombError,
+            Image.DecompressionBombWarning,
+            MemoryError,
+            OSError,
+            SyntaxError,
+            UnidentifiedImageError,
+            ValueError,
+        ) as exc:
+            raise BusinessRuleError(
+                "Attach a valid JPEG, PNG, or WebP receipt image."
+            ) from exc
+    return detected
+
+
+def _safe_expense_receipt_filename(filename: str | None, content_type: str) -> str:
+    extension = {
+        "image/jpeg": ".jpg",
+        "image/png": ".png",
+        "image/webp": ".webp",
+        "application/pdf": ".pdf",
+    }[content_type]
+    basename = Path(filename or "receipt").name
+    stem = Path(basename).stem
+    cleaned = "".join(
+        char for char in stem if char >= " " and char not in {'"', "\\", "/"}
+    ).strip(" .")
+    safe_stem = (cleaned or "receipt")[: 200 - len(extension)].rstrip(" .")
+    return f"{safe_stem or 'receipt'}{extension}"
+
+
+async def _expense_receipt_or_404(
+    session: SessionDep,
+    *,
+    company_id: UUID,
+    expense_id: UUID,
+    receipt_id: UUID,
+) -> ExpenseReceipt:
+    row = (
+        await session.execute(
+            select(ExpenseReceipt)
+            .options(undefer(ExpenseReceipt.payload))
+            .where(
+                ExpenseReceipt.id == receipt_id,
+                ExpenseReceipt.company_id == company_id,
+                ExpenseReceipt.expense_id == expense_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise NotFoundError("expense receipt not found")
+    return row
+
+
+def _private_expense_receipt_response(receipt: ExpenseReceipt) -> Response:
+    safe_name = (
+        receipt.original_filename.replace('"', "").replace("\r", "").replace("\n", "")
+    )
+    ascii_name = safe_name.encode("ascii", "ignore").decode().strip() or "receipt"
+    encoded_name = quote(safe_name, safe="")
+    return Response(
+        content=receipt.payload,
+        media_type=receipt.content_type,
+        headers={
+            "Cache-Control": "private, no-store",
+            "Content-Disposition": (
+                f'inline; filename="{ascii_name}"; filename*=UTF-8\'\'{encoded_name}'
+            ),
+            "Content-Security-Policy": "sandbox",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
 @router.post("/expenses", response_model=ExpenseRead, status_code=status.HTTP_201_CREATED)
 async def create_expense(
     payload: ExpenseCreate,
@@ -933,13 +1823,37 @@ async def create_expense(
 ) -> ExpenseRead:
     idempotency_key, request_hash = _require_idempotency(request, what="expense")
     cash_capture: _Code21CashExpenseCapture | None = None
+    is_code21_cash_recovery = (
+        payload.paid_via == "cash"
+        and payload.shift_id is None
+        and _is_code21_android_request(request)
+    )
+
+    if payload.paid_via != "cash" and payload.shift_id is not None:
+        raise BusinessRuleError("Only cash expenses can be linked to a shift drawer.")
+    if payload.paid_via == "cash" and not is_code21_cash_recovery:
+        if payload.shift_id is None:
+            raise BusinessRuleError(
+                "Cash paid-outs require selecting the open shift that paid the expense."
+            )
+        _require_modern_cash_expense_action_key(idempotency_key)
+        request_hash = _modern_cash_expense_request_hash(payload)
+        durable_replay = await _locked_modern_cash_expense_replay(
+            session,
+            idempotency_key=idempotency_key,
+            request_hash=request_hash,
+            payload=payload,
+            tenant=tenant,
+        )
+        if durable_replay is not None:
+            return durable_replay
 
     # A Code 21 cash receipt outlives the generic idempotency cache. Looking it
     # up before reserving that short-lived key prevents a lost response from
     # decrementing the drawer a second time after cache cleanup. The initial
     # platform/version check is routing only; the helper below still validates
     # provenance, actor and exact authenticated workspace.
-    if payload.paid_via == "cash" and _is_code21_android_request(request):
+    if is_code21_cash_recovery:
         cash_capture = _read_code21_cash_expense_capture(
             request,
             idempotency_key=idempotency_key,
@@ -972,7 +1886,7 @@ async def create_expense(
         # Revision-51 cached responses must pass the same exact provenance and
         # terminal checks as their durable form. Historical cash responses have
         # no shift_id and retain the previous exact-idempotency replay behavior.
-        if payload.paid_via == "cash" and response.shift_id is not None:
+        if is_code21_cash_recovery and response.shift_id is not None:
             if cash_capture is None:
                 cash_capture = _read_code21_cash_expense_capture(
                     request,
@@ -1003,7 +1917,7 @@ async def create_expense(
     # clear business-rule response instead of an opaque validation error. Code
     # 24+ never offers cash here; this is a narrowly gated recovery contract for
     # already-deployed Code 21 outbox rows.
-    if payload.paid_via == "cash":
+    if payload.paid_via == "cash" and is_code21_cash_recovery:
         if cash_capture is None:
             cash_capture = _read_code21_cash_expense_capture(
                 request,
@@ -1074,11 +1988,62 @@ async def create_expense(
             request_hash=cash_capture.receipt_hash,
             created_by=tenant.user_id,
             source_integrity_revision=CODE21_CASH_EXPENSE_RECEIPT_REVISION,
-            **payload.model_dump(),
+            **payload.model_dump(exclude={"shift_id"}),
         )
         session.add(ex)
         shift.expected_minor = available_minor - payload.amount_minor
         await session.flush()
+        await _enqueue_expense_mirror(
+            session,
+            row=ex,
+            actor_user_id=tenant.user_id,
+            event_kind="recorded",
+        )
+        response = _expense_read(ex)
+        await store_response(
+            session,
+            key=idempotency_key,
+            status_code=status.HTTP_201_CREATED,
+            body=response.model_dump(mode="json"),
+        )
+        return response
+
+    if payload.paid_via == "cash":
+        await _validate_expense_references(
+            session,
+            company_id=tenant.company_id,
+            branch_id=payload.branch_id,
+            category_id=payload.category_id,
+            supplier_id=payload.supplier_id,
+            ocr_extraction_id=payload.ocr_extraction_id,
+        )
+        shift = await _lock_modern_cash_expense_shift(
+            session,
+            payload=payload,
+            tenant=tenant,
+        )
+        ex = Expense(
+            id=uuid4(),
+            company_id=tenant.company_id,
+            shift_id=shift.id,
+            idempotency_key=idempotency_key,
+            request_hash=request_hash,
+            created_by=tenant.user_id,
+            source_integrity_revision=MODERN_CASH_EXPENSE_RECEIPT_REVISION,
+            **payload.model_dump(exclude={"shift_id"}),
+        )
+        session.add(ex)
+        # Migration 0077's database guard decrements the already-locked drawer
+        # in the same transaction as the immutable expense insert. This keeps
+        # direct SQL and future write paths from creating a cash fact without
+        # its matching drawer movement.
+        await session.flush()
+        await _enqueue_expense_mirror(
+            session,
+            row=ex,
+            actor_user_id=tenant.user_id,
+            event_kind="recorded",
+        )
         response = _expense_read(ex)
         await store_response(
             session,
@@ -1101,11 +2066,484 @@ async def create_expense(
     ex = Expense(
         id=uuid4(),
         company_id=tenant.company_id,
-        **payload.model_dump(),
+        **payload.model_dump(exclude={"shift_id"}),
     )
     session.add(ex)
     await session.flush()
+    await _enqueue_expense_mirror(
+        session,
+        row=ex,
+        actor_user_id=tenant.user_id,
+        event_kind="recorded",
+    )
     response = _expense_read(ex)
+    await store_response(
+        session,
+        key=idempotency_key,
+        status_code=status.HTTP_201_CREATED,
+        body=response.model_dump(mode="json"),
+    )
+    return response
+
+
+@router.get(
+    "/expenses/{expense_id}/receipts",
+    response_model=list[ExpenseReceiptRead],
+)
+async def list_expense_receipts(
+    expense_id: UUID,
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("finance.read")),
+) -> list[ExpenseReceiptRead]:
+    await _expense_or_404(
+        session,
+        expense_id=expense_id,
+        tenant=tenant,
+        lock=False,
+        allow_voided=True,
+    )
+    rows = (
+        await session.execute(
+            select(ExpenseReceipt)
+            .where(
+                ExpenseReceipt.company_id == tenant.company_id,
+                ExpenseReceipt.expense_id == expense_id,
+            )
+            .order_by(ExpenseReceipt.created_at, ExpenseReceipt.id)
+        )
+    ).scalars().all()
+    current_status, review_note = await _current_expense_receipt_review(
+        session,
+        company_id=tenant.company_id,
+        expense_id=expense_id,
+    )
+    return [
+        _receipt_read(
+            row,
+            review_status=current_status,
+            review_note=review_note,
+        )
+        for row in rows
+    ]
+
+
+@router.post(
+    "/expenses/{expense_id}/receipts",
+    response_model=ExpenseReceiptRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def upload_expense_receipt(
+    expense_id: UUID,
+    request: Request,
+    session: SessionDep,
+    file: Annotated[UploadFile, File()],
+    source: Annotated[ExpenseReceiptSource, Form()] = "file",
+    tenant: TenantContext = Depends(requires("finance.write")),
+) -> ExpenseReceiptRead:
+    """Retain one original bill selected from camera, gallery, or file picker."""
+
+    idempotency_key, _multipart_hash = _require_idempotency(
+        request,
+        what="expense receipt",
+    )
+    original_filename = file.filename
+    claimed_content_type = file.content_type
+    try:
+        body = await file.read(MAX_EXPENSE_RECEIPT_BYTES + 1)
+    finally:
+        await file.close()
+    content_type = await to_thread.run_sync(
+        partial(
+            _detect_expense_receipt_content_type,
+            body,
+            claimed_content_type=claimed_content_type,
+        ),
+        limiter=_EXPENSE_RECEIPT_DECODER_LIMITER,
+    )
+    filename = _safe_expense_receipt_filename(original_filename, content_type)
+    digest = sha256(body).hexdigest()
+    request_hash = sha256(
+        (
+            f"expense-receipt-v1\n{expense_id}\n{content_type}\n{digest}\n"
+            f"{filename}\n{source}"
+        ).encode()
+    ).hexdigest()
+
+    # Check scope before reserving a globally unique idempotency key. A caller
+    # must not be able to reserve keys against another tenant's identifiers.
+    await _expense_or_404(
+        session,
+        expense_id=expense_id,
+        tenant=tenant,
+        lock=False,
+        allow_voided=False,
+    )
+    replay = await check_or_reserve(
+        session,
+        key=idempotency_key,
+        request_hash=request_hash,
+        user_id=tenant.user_id,
+        terminal_id=tenant.terminal_id,
+    )
+    if replay:
+        return ExpenseReceiptRead.model_validate(replay["body"])
+
+    expense = await _expense_or_404(
+        session,
+        expense_id=expense_id,
+        tenant=tenant,
+        lock=True,
+        allow_voided=False,
+    )
+    duplicate = (
+        await session.execute(
+            select(ExpenseReceipt).where(
+                ExpenseReceipt.company_id == tenant.company_id,
+                ExpenseReceipt.expense_id == expense_id,
+                ExpenseReceipt.sha256 == digest,
+            )
+        )
+    ).scalar_one_or_none()
+    if duplicate is not None:
+        current_status, review_note = await _current_expense_receipt_review(
+            session,
+            company_id=tenant.company_id,
+            expense_id=expense_id,
+        )
+        response = _receipt_read(
+            duplicate,
+            review_status=current_status,
+            review_note=review_note,
+        )
+        await store_response(
+            session,
+            key=idempotency_key,
+            status_code=status.HTTP_201_CREATED,
+            body=response.model_dump(mode="json"),
+        )
+        return response
+
+    receipt_count = int(
+        (
+            await session.execute(
+                select(func.count(ExpenseReceipt.id)).where(
+                    ExpenseReceipt.company_id == tenant.company_id,
+                    ExpenseReceipt.expense_id == expense_id,
+                )
+            )
+        ).scalar_one()
+        or 0
+    )
+    if receipt_count >= MAX_EXPENSE_RECEIPTS:
+        raise BusinessRuleError(
+            f"An expense can contain up to {MAX_EXPENSE_RECEIPTS} receipt files."
+        )
+
+    now = datetime.now(timezone.utc)
+    receipt = ExpenseReceipt(
+        id=uuid4(),
+        company_id=tenant.company_id,
+        expense_id=expense_id,
+        uploader_user_id=tenant.user_id,
+        original_filename=filename,
+        content_type=content_type,
+        size_bytes=len(body),
+        sha256=digest,
+        source=source,
+        payload=body,
+        created_at=now,
+    )
+    # Every new piece of evidence needs review, even if a previous file for the
+    # expense had already been verified or marked not required.
+    review = ExpenseReceiptReview(
+        id=uuid4(),
+        company_id=tenant.company_id,
+        expense_id=expense_id,
+        status="pending",
+        review_note=None,
+        reviewed_by=tenant.user_id,
+        created_at=now,
+    )
+    session.add_all([receipt, review])
+    session.add(
+        AuditLog(
+            actor_user_id=tenant.user_id,
+            company_id=tenant.company_id,
+            action="expense_receipt_add",
+            entity_type="Expense",
+            entity_id=str(expense_id),
+            before=None,
+            after={
+                "receipt_id": str(receipt.id),
+                "content_type": content_type,
+                "size_bytes": len(body),
+                "source": source,
+                "sha256": digest,
+            },
+        )
+    )
+    await session.flush()
+    await enqueue_google_sheets_event_if_enabled(
+        session,
+        company_id=tenant.company_id,
+        event_type="finance.expense.receipt_attached",
+        source_type="expense_receipt",
+        source_id=str(receipt.id),
+        source_revision="attached-v1",
+        occurred_at=now,
+        payload={
+            "branch": str(expense.branch_id),
+            "reference": expense.invoice_no or str(expense.id),
+            "description": "Expense receipt attached",
+            "actor": str(tenant.user_id),
+            "status": "pending",
+            "expense_id": str(expense.id),
+            "receipt_id": str(receipt.id),
+            "content_type": content_type,
+            "size_bytes": len(body),
+            "source": source,
+            "receipt_sha256": digest,
+        },
+    )
+    response = _receipt_read(
+        receipt,
+        review_status="pending",
+        review_note=None,
+    )
+    await store_response(
+        session,
+        key=idempotency_key,
+        status_code=status.HTTP_201_CREATED,
+        body=response.model_dump(mode="json"),
+    )
+    return response
+
+
+@router.get(
+    "/expenses/{expense_id}/receipts/{receipt_id}",
+    response_class=Response,
+)
+async def download_expense_receipt(
+    expense_id: UUID,
+    receipt_id: UUID,
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("finance.read")),
+) -> Response:
+    await _expense_or_404(
+        session,
+        expense_id=expense_id,
+        tenant=tenant,
+        lock=False,
+        allow_voided=True,
+    )
+    receipt = await _expense_receipt_or_404(
+        session,
+        company_id=tenant.company_id,
+        expense_id=expense_id,
+        receipt_id=receipt_id,
+    )
+    return _private_expense_receipt_response(receipt)
+
+
+@router.get(
+    "/expense-receipts/{receipt_id}/content",
+    response_class=Response,
+)
+async def download_expense_receipt_content(
+    receipt_id: UUID,
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("finance.read")),
+) -> Response:
+    """Stable client download path when the expense id is already in metadata."""
+
+    receipt = (
+        await session.execute(
+            select(ExpenseReceipt)
+            .options(undefer(ExpenseReceipt.payload))
+            .where(
+                ExpenseReceipt.id == receipt_id,
+                ExpenseReceipt.company_id == tenant.company_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if receipt is None:
+        raise NotFoundError("expense receipt not found")
+    await _expense_or_404(
+        session,
+        expense_id=receipt.expense_id,
+        tenant=tenant,
+        lock=False,
+        allow_voided=True,
+    )
+    return _private_expense_receipt_response(receipt)
+
+
+@router.get(
+    "/expenses/{expense_id}/receipt-reviews",
+    response_model=list[ExpenseReceiptReviewRead],
+)
+async def list_expense_receipt_reviews(
+    expense_id: UUID,
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("finance.read")),
+) -> list[ExpenseReceiptReviewRead]:
+    await _expense_or_404(
+        session,
+        expense_id=expense_id,
+        tenant=tenant,
+        lock=False,
+        allow_voided=True,
+    )
+    rows = (
+        await session.execute(
+            select(ExpenseReceiptReview)
+            .where(
+                ExpenseReceiptReview.company_id == tenant.company_id,
+                ExpenseReceiptReview.expense_id == expense_id,
+            )
+            .order_by(
+                ExpenseReceiptReview.created_at.desc(),
+                ExpenseReceiptReview.id.desc(),
+            )
+        )
+    ).scalars().all()
+    return [
+        ExpenseReceiptReviewRead(
+            id=row.id,
+            expense_id=row.expense_id,
+            status=cast("ExpenseReceiptStatus", row.status),
+            review_note=row.review_note,
+            reviewed_by=row.reviewed_by,
+            created_at=row.created_at,
+        )
+        for row in rows
+    ]
+
+
+@router.post(
+    "/expenses/{expense_id}/receipt-review",
+    response_model=ExpenseReceiptReviewRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def review_expense_receipts(
+    expense_id: UUID,
+    payload: ExpenseReceiptReviewCreate,
+    request: Request,
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("finance.write")),
+) -> ExpenseReceiptReviewRead:
+    idempotency_key, request_hash = _require_idempotency(
+        request,
+        what="expense receipt review",
+    )
+    review_note = payload.review_note.strip() if payload.review_note else None
+    if payload.status in {"rejected", "not_required"} and (
+        review_note is None or len(review_note) < 3
+    ):
+        raise BusinessRuleError(
+            f"A {payload.status.replace('_', ' ')} receipt decision requires a reason."
+        )
+
+    await _expense_or_404(
+        session,
+        expense_id=expense_id,
+        tenant=tenant,
+        lock=False,
+        allow_voided=False,
+    )
+    replay = await check_or_reserve(
+        session,
+        key=idempotency_key,
+        request_hash=request_hash,
+        user_id=tenant.user_id,
+        terminal_id=tenant.terminal_id,
+    )
+    if replay:
+        return ExpenseReceiptReviewRead.model_validate(replay["body"])
+
+    expense = await _expense_or_404(
+        session,
+        expense_id=expense_id,
+        tenant=tenant,
+        lock=True,
+        allow_voided=False,
+    )
+    previous_status, previous_note = await _current_expense_receipt_review(
+        session,
+        company_id=tenant.company_id,
+        expense_id=expense_id,
+    )
+    receipt_count = int(
+        (
+            await session.execute(
+                select(func.count(ExpenseReceipt.id)).where(
+                    ExpenseReceipt.company_id == tenant.company_id,
+                    ExpenseReceipt.expense_id == expense_id,
+                )
+            )
+        ).scalar_one()
+        or 0
+    )
+    if payload.status in {"verified", "rejected"} and receipt_count == 0:
+        raise BusinessRuleError(
+            f"A receipt cannot be {payload.status} until evidence is uploaded."
+        )
+
+    now = datetime.now(timezone.utc)
+    review = ExpenseReceiptReview(
+        id=uuid4(),
+        company_id=tenant.company_id,
+        expense_id=expense_id,
+        status=payload.status,
+        review_note=review_note,
+        reviewed_by=tenant.user_id,
+        created_at=now,
+    )
+    session.add(review)
+    session.add(
+        AuditLog(
+            actor_user_id=tenant.user_id,
+            company_id=tenant.company_id,
+            action="expense_receipt_review",
+            entity_type="Expense",
+            entity_id=str(expense_id),
+            before={"status": previous_status, "review_note": previous_note},
+            after={
+                "review_id": str(review.id),
+                "status": payload.status,
+                "review_note": review_note,
+                "receipt_count": receipt_count,
+            },
+        )
+    )
+    await session.flush()
+    await enqueue_google_sheets_event_if_enabled(
+        session,
+        company_id=tenant.company_id,
+        event_type="finance.expense.receipt_reviewed",
+        source_type="expense_receipt_review",
+        source_id=str(review.id),
+        source_revision="decision-v1",
+        occurred_at=now,
+        payload={
+            "branch": str(expense.branch_id),
+            "reference": expense.invoice_no or str(expense.id),
+            "description": "Expense receipt review",
+            "actor": str(tenant.user_id),
+            "status": payload.status,
+            "expense_id": str(expense.id),
+            "review_id": str(review.id),
+            "receipt_count": receipt_count,
+        },
+    )
+    response = ExpenseReceiptReviewRead(
+        id=review.id,
+        expense_id=review.expense_id,
+        status=payload.status,
+        review_note=review.review_note,
+        reviewed_by=review.reviewed_by,
+        created_at=review.created_at,
+    )
     await store_response(
         session,
         key=idempotency_key,
@@ -1145,7 +2583,19 @@ async def _void_expense(
     normalized_reason = reason.strip()
     if len(normalized_reason) < 3:
         raise BusinessRuleError("void reason must contain at least 3 characters")
-    probe = await session.get(Expense, expense_id)
+    probe = (
+        await session.execute(
+            select(
+                Expense.company_id,
+                Expense.branch_id,
+                Expense.shift_id,
+                Expense.paid_via,
+                Expense.source_integrity_revision,
+                Expense.voided_at,
+                Expense.deleted_at,
+            ).where(Expense.id == expense_id)
+        )
+    ).one_or_none()
     if (
         probe is None
         or probe.company_id != tenant.company_id
@@ -1159,7 +2609,11 @@ async def _void_expense(
     # cannot snapshot expected cash between the reasoned void and its reversal.
     shift: Shift | None = None
     is_shift_linked_cash = (
-        probe.source_integrity_revision == CODE21_CASH_EXPENSE_RECEIPT_REVISION
+        probe.source_integrity_revision
+        in {
+            CODE21_CASH_EXPENSE_RECEIPT_REVISION,
+            MODERN_CASH_EXPENSE_RECEIPT_REVISION,
+        }
         and probe.paid_via == "cash"
         and probe.shift_id is not None
     )
@@ -1178,10 +2632,21 @@ async def _void_expense(
                 Expense.deleted_at.is_(None),
             )
             .with_for_update()
+            .execution_options(populate_existing=True)
         )
     ).scalar_one_or_none()
     if row is None or not tenant.in_branch(row.branch_id):
         raise NotFoundError("expense not found")
+
+    correction = (
+        await session.execute(
+            select(FinanceSourceCorrection).where(
+                FinanceSourceCorrection.expense_id == row.id
+            )
+        )
+    ).scalar_one_or_none()
+    if correction is not None:
+        raise BusinessRuleError("A corrected expense cannot also be voided.")
 
     if row.voided_at is not None:
         if row.void_reason != normalized_reason:
@@ -1198,7 +2663,13 @@ async def _void_expense(
                 "This cash expense has an invalid shift receipt. It was not voided; "
                 "ask an owner to reconcile the original drawer movement."
             )
-        if tenant.branch_id != row.branch_id or tenant.terminal_id != shift.terminal_id:
+        if (
+            row.source_integrity_revision == CODE21_CASH_EXPENSE_RECEIPT_REVISION
+            and (
+                tenant.branch_id != row.branch_id
+                or tenant.terminal_id != shift.terminal_id
+            )
+        ):
             raise BusinessRuleError(
                 "This cash expense belongs to a different branch or workspace. "
                 "Return to its original workspace before voiding it."
@@ -1209,7 +2680,10 @@ async def _void_expense(
                 "shift's saved closing cash. Record an audited correction in the "
                 "current period instead."
             )
-        shift.expected_minor = int(shift.expected_minor or 0) + int(row.amount_minor)
+        if row.source_integrity_revision == CODE21_CASH_EXPENSE_RECEIPT_REVISION:
+            shift.expected_minor = int(shift.expected_minor or 0) + int(
+                row.amount_minor
+            )
 
     row.voided_at = datetime.now(timezone.utc)
     row.voided_by = tenant.user_id
@@ -1233,7 +2707,22 @@ async def void_expense(
         session=session,
         tenant=tenant,
     )
-    return _expense_read(row)
+    await _enqueue_expense_mirror(
+        session,
+        row=row,
+        actor_user_id=tenant.user_id,
+        event_kind="voided",
+    )
+    counts, statuses = await _expense_receipt_summaries(
+        session,
+        company_id=tenant.company_id,
+        expense_ids=[row.id],
+    )
+    return _expense_read(
+        row,
+        receipt_count=counts.get(row.id, 0),
+        receipt_status=statuses.get(row.id, "pending"),
+    )
 
 
 @router.delete("/expenses/{expense_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -1246,10 +2735,354 @@ async def delete_expense(
     # deletes or hides a source fact without provenance: it performs the same
     # one-way void as the explicit endpoint. New clients should collect a user
     # reason and call POST /expenses/{id}/void.
-    await _void_expense(
+    row = await _void_expense(
         expense_id=expense_id,
         reason="Voided through legacy expense delete action",
         session=session,
+        tenant=tenant,
+    )
+    await _enqueue_expense_mirror(
+        session,
+        row=row,
+        actor_user_id=tenant.user_id,
+        event_kind="voided",
+    )
+
+
+async def _create_finance_source_correction(
+    *,
+    source_type: Literal[
+        "expense", "manual_collection", "tip_payout", "supplier_payment"
+    ],
+    source_id: UUID,
+    payload: FinanceSourceCorrectionCreate,
+    session: SessionDep,
+    request: Request,
+    tenant: TenantContext,
+) -> FinanceSourceCorrectionRead:
+    """Append one full current-period reversal without rewriting history."""
+
+    prefix = {
+        "expense": "expense-correction",
+        "manual_collection": "manual-collection-correction",
+        "tip_payout": "tip-payout-correction",
+        "supplier_payment": "supplier-payment-correction",
+    }[source_type]
+    idempotency_key, request_hash = _require_idempotency(
+        request, what=f"{source_type.replace('_', ' ')} correction"
+    )
+    _require_finance_action_key(idempotency_key, prefix=prefix)
+    reason = payload.reason.strip()
+    if len(reason) < 3:
+        raise BusinessRuleError("correction reason must contain at least 3 characters")
+
+    durable_replay = (
+        await session.execute(
+            select(FinanceSourceCorrection)
+            .where(
+                FinanceSourceCorrection.company_id == tenant.company_id,
+                FinanceSourceCorrection.idempotency_key == idempotency_key,
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if durable_replay is not None:
+        if not tenant.in_branch(durable_replay.branch_id):
+            raise NotFoundError("finance correction not found")
+        if (
+            durable_replay.source_type != source_type
+            or _finance_correction_source_id(durable_replay) != source_id
+            or durable_replay.settlement_shift_id != payload.settlement_shift_id
+            or durable_replay.reason != reason
+            or durable_replay.request_hash != request_hash
+            or durable_replay.corrected_by != tenant.user_id
+        ):
+            raise IdempotencyConflict(
+                "Idempotency-Key reused with a different finance correction or actor",
+                details={"key": idempotency_key},
+            )
+        return _finance_correction_read(durable_replay)
+
+    model = {
+        "expense": Expense,
+        "manual_collection": ManualCollection,
+        "tip_payout": TipPayout,
+        "supplier_payment": SupplierPayment,
+    }[source_type]
+    probe = (
+        await session.execute(
+            select(model).where(
+                model.id == source_id,
+                model.company_id == tenant.company_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if probe is None or not tenant.in_branch(probe.branch_id):
+        raise NotFoundError(f"{source_type.replace('_', ' ')} not found")
+    if probe.shift_id is None:
+        raise BusinessRuleError(
+            "Only a cash source with an auditable shift receipt can be corrected."
+        )
+
+    # Shift order is stable across shift-close, ordinary void and correction.
+    shift_ids = sorted({probe.shift_id, payload.settlement_shift_id}, key=str)
+    shifts = (
+        await session.execute(
+            select(Shift)
+            .where(Shift.id.in_(shift_ids), Shift.company_id == tenant.company_id)
+            .order_by(Shift.id)
+            .with_for_update()
+        )
+    ).scalars().all()
+    shift_by_id = {shift.id: shift for shift in shifts}
+    original_shift = shift_by_id.get(probe.shift_id)
+    settlement_shift = shift_by_id.get(payload.settlement_shift_id)
+    if original_shift is None or settlement_shift is None:
+        raise NotFoundError("shift not found")
+
+    source = (
+        await session.execute(
+            select(model)
+            .where(
+                model.id == source_id,
+                model.company_id == tenant.company_id,
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
+    if source is None or source.shift_id != original_shift.id:
+        raise BusinessRuleError("finance source changed during correction; refresh and retry")
+    existing = (
+        await session.execute(
+            select(FinanceSourceCorrection).where(
+                {
+                    "expense": FinanceSourceCorrection.expense_id,
+                    "manual_collection": FinanceSourceCorrection.manual_collection_id,
+                    "tip_payout": FinanceSourceCorrection.tip_payout_id,
+                    "supplier_payment": FinanceSourceCorrection.supplier_payment_id,
+                }[source_type]
+                == source_id
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        if existing.idempotency_key == idempotency_key:
+            if (
+                existing.source_type != source_type
+                or _finance_correction_source_id(existing) != source_id
+                or existing.settlement_shift_id != payload.settlement_shift_id
+                or existing.reason != reason
+                or existing.request_hash != request_hash
+                or existing.corrected_by != tenant.user_id
+            ):
+                raise IdempotencyConflict(
+                    "Idempotency-Key reused with a different finance correction or actor",
+                    details={"key": idempotency_key},
+                )
+            # A concurrent exact retry can miss the optimistic durable lookup,
+            # then wait behind the winner on the shift/source locks above.  At
+            # READ COMMITTED this post-lock lookup sees the committed receipt;
+            # return it without reserving/applying a second drawer movement.
+            return _finance_correction_read(existing)
+        raise BusinessRuleError("This finance entry has already been corrected.")
+
+    if original_shift.status not in {"closed", "reconciled"}:
+        raise BusinessRuleError(
+            "The original shift is still open. Use the ordinary void action instead."
+        )
+    if (
+        settlement_shift.status != "open"
+        or settlement_shift.branch_id != source.branch_id
+        or original_shift.branch_id != source.branch_id
+    ):
+        raise BusinessRuleError(
+            "Select a currently open shift from the same branch as the original entry."
+        )
+    if source.voided_at is not None:
+        raise BusinessRuleError("A voided finance entry cannot also be corrected.")
+    source_method = source.paid_via if source_type == "expense" else source.method
+    if source_method != "cash":
+        raise BusinessRuleError("Only closed-shift cash entries use this correction.")
+    if source_type == "expense":
+        if source.deleted_at is not None or source.source_integrity_revision not in {
+            CODE21_CASH_EXPENSE_RECEIPT_REVISION,
+            MODERN_CASH_EXPENSE_RECEIPT_REVISION,
+        }:
+            raise BusinessRuleError("The expense has no valid cash drawer receipt.")
+    elif source.source_integrity_revision != 1:
+        raise BusinessRuleError(
+            "Legacy drawer-neutral entries cannot be corrected against a shift."
+        )
+    if source_type == "manual_collection" and source.source_kind != "manual_daily":
+        raise BusinessRuleError(
+            "Legacy daily collection history is drawer-neutral and cannot be corrected."
+        )
+    if (
+        source_type == "manual_collection"
+        and int(settlement_shift.expected_minor or 0) < int(source.amount_minor)
+    ):
+        raise BusinessRuleError(
+            "This correction exceeds the expected cash in the selected drawer."
+        )
+
+    replay = await check_or_reserve(
+        session,
+        key=idempotency_key,
+        request_hash=request_hash,
+        user_id=tenant.user_id,
+        terminal_id=None,
+    )
+    if replay:
+        return FinanceSourceCorrectionRead.model_validate(replay["body"])
+
+    source_fields: dict[str, UUID | None] = {
+        "expense_id": None,
+        "manual_collection_id": None,
+        "tip_payout_id": None,
+        "supplier_payment_id": None,
+    }
+    source_fields[f"{source_type}_id"] = source_id
+    correction = FinanceSourceCorrection(
+        id=uuid4(),
+        company_id=tenant.company_id,
+        branch_id=source.branch_id,
+        source_type=source_type,
+        original_shift_id=original_shift.id,
+        settlement_shift_id=settlement_shift.id,
+        amount_minor=int(source.amount_minor),
+        idempotency_key=idempotency_key,
+        request_hash=request_hash,
+        corrected_by=tenant.user_id,
+        reason=reason,
+        **source_fields,
+    )
+    session.add(correction)
+    await session.flush()
+
+    cash_delta = {
+        "expense": int(source.amount_minor),
+        "manual_collection": -int(source.amount_minor),
+        "tip_payout": int(source.amount_minor),
+        "supplier_payment": int(source.amount_minor),
+    }[source_type]
+    await _enqueue_finance_source_mirror(
+        session,
+        company_id=tenant.company_id,
+        branch_id=source.branch_id,
+        actor_user_id=tenant.user_id,
+        event_type=f"finance.{source_type}.corrected",
+        source_type="finance_source_correction",
+        source_id=correction.id,
+        source_revision="correction-v1",
+        occurred_at=correction.corrected_at,
+        reference=_short_finance_reference("COR", correction.id),
+        description=f"{source_type.replace('_', ' ').title()} correction",
+        amount_minor=cash_delta,
+        payment_method="cash",
+        status_label="corrected",
+        identifiers={
+            "finance_source_correction_id": str(correction.id),
+            "finance_source_id": str(source_id),
+            "branch_id": str(source.branch_id),
+            "original_shift_id": str(original_shift.id),
+            "settlement_shift_id": str(settlement_shift.id),
+        },
+    )
+    response = _finance_correction_read(correction)
+    await store_response(
+        session,
+        key=idempotency_key,
+        status_code=status.HTTP_201_CREATED,
+        body=response.model_dump(mode="json"),
+    )
+    return response
+
+
+@router.post(
+    "/expenses/{source_id}/corrections",
+    response_model=FinanceSourceCorrectionRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def correct_closed_shift_expense(
+    source_id: UUID,
+    payload: FinanceSourceCorrectionCreate,
+    session: SessionDep,
+    request: Request,
+    tenant: TenantContext = Depends(requires("finance.write")),
+) -> FinanceSourceCorrectionRead:
+    return await _create_finance_source_correction(
+        source_type="expense",
+        source_id=source_id,
+        payload=payload,
+        session=session,
+        request=request,
+        tenant=tenant,
+    )
+
+
+@router.post(
+    "/manual-collections/{source_id}/corrections",
+    response_model=FinanceSourceCorrectionRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def correct_closed_shift_manual_collection(
+    source_id: UUID,
+    payload: FinanceSourceCorrectionCreate,
+    session: SessionDep,
+    request: Request,
+    tenant: TenantContext = Depends(requires("finance.write")),
+) -> FinanceSourceCorrectionRead:
+    return await _create_finance_source_correction(
+        source_type="manual_collection",
+        source_id=source_id,
+        payload=payload,
+        session=session,
+        request=request,
+        tenant=tenant,
+    )
+
+
+@router.post(
+    "/tip-payouts/{source_id}/corrections",
+    response_model=FinanceSourceCorrectionRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def correct_closed_shift_tip_payout(
+    source_id: UUID,
+    payload: FinanceSourceCorrectionCreate,
+    session: SessionDep,
+    request: Request,
+    tenant: TenantContext = Depends(requires("finance.write")),
+) -> FinanceSourceCorrectionRead:
+    return await _create_finance_source_correction(
+        source_type="tip_payout",
+        source_id=source_id,
+        payload=payload,
+        session=session,
+        request=request,
+        tenant=tenant,
+    )
+
+
+@router.post(
+    "/supplier-payments/{source_id}/corrections",
+    response_model=FinanceSourceCorrectionRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def correct_closed_shift_supplier_payment(
+    source_id: UUID,
+    payload: FinanceSourceCorrectionCreate,
+    session: SessionDep,
+    request: Request,
+    tenant: TenantContext = Depends(requires("finance.write")),
+) -> FinanceSourceCorrectionRead:
+    return await _create_finance_source_correction(
+        source_type="supplier_payment",
+        source_id=source_id,
+        payload=payload,
+        session=session,
+        request=request,
         tenant=tenant,
     )
 
@@ -1267,16 +3100,73 @@ def _require_manual_collection_idempotency(request: Request) -> tuple[str, str]:
     return str(key), str(request_hash)
 
 
+def _require_finance_action_key(key: str, *, prefix: str) -> None:
+    expected = f"{prefix}:"
+    if not key.startswith(expected):
+        raise BusinessRuleError(
+            f"Idempotency-Key must use the {expected}<uuid> action format"
+        )
+    try:
+        parsed = UUID(key[len(expected) :])
+    except ValueError as exc:
+        raise BusinessRuleError(
+            f"Idempotency-Key must use the {expected}<uuid> action format"
+        ) from exc
+    if str(parsed) != key[len(expected) :].lower():
+        raise BusinessRuleError(
+            f"Idempotency-Key must use a canonical lowercase UUID after {expected}"
+        )
+
+
+async def _lock_finance_cash_shift(
+    session: SessionDep,
+    *,
+    shift_id: UUID | None,
+    method: str,
+    company_id: UUID,
+    branch_id: UUID,
+    incoming: bool,
+    amount_minor: int,
+) -> Shift | None:
+    """Validate and lock the exact drawer used by a live finance cash fact."""
+
+    if method != "cash":
+        if shift_id is not None:
+            raise BusinessRuleError("Only cash entries can name a shift drawer.")
+        return None
+    if shift_id is None:
+        raise BusinessRuleError("Cash entries require selecting an open shift drawer.")
+    shift = (
+        await session.execute(
+            select(Shift)
+            .where(Shift.id == shift_id, Shift.company_id == company_id)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if shift is None or shift.branch_id != branch_id:
+        raise NotFoundError("shift not found")
+    if shift.status != "open":
+        raise BusinessRuleError("Select a currently open shift for this cash entry.")
+    if not incoming and int(shift.expected_minor or 0) < amount_minor:
+        raise BusinessRuleError(
+            "This cash entry exceeds the expected cash in the selected drawer."
+        )
+    return shift
+
+
 def _manual_collection_read(
     row: ManualCollection,
     *,
     created_by_name: str | None = None,
     voided_by_name: str | None = None,
+    source_shift_status: str | None = None,
+    correction: FinanceSourceCorrection | None = None,
 ) -> ManualCollectionRead:
     return ManualCollectionRead(
         id=row.id,
         company_id=row.company_id,
         branch_id=row.branch_id,
+        shift_id=row.shift_id,
         business_date=row.business_date,
         method=row.method,
         amount_minor=int(row.amount_minor),
@@ -1292,6 +3182,9 @@ def _manual_collection_read(
         voided_by_name=voided_by_name,
         void_reason=row.void_reason,
         is_voided=row.voided_at is not None,
+        source_shift_status=source_shift_status,
+        is_corrected=correction is not None,
+        correction=_finance_correction_read(correction) if correction else None,
     )
 
 
@@ -1340,66 +3233,24 @@ async def list_manual_collections(
     ).limit(limit)
 
     rows = (await session.execute(stmt)).all()
+    corrections, shift_statuses = await _finance_source_context(
+        session,
+        source_type="manual_collection",
+        source_ids=[row.id for row, _creator, _voider in rows],
+        shift_ids=[row.shift_id for row, _creator, _voider in rows],
+    )
     return [
         _manual_collection_read(
             row,
             created_by_name=created_by_name,
             voided_by_name=voided_by_name,
+            source_shift_status=(
+                shift_statuses.get(row.shift_id) if row.shift_id else None
+            ),
+            correction=corrections.get(row.id),
         )
         for row, created_by_name, voided_by_name in rows
     ]
-
-
-def _schedule_manual_collection_push(
-    background_tasks: BackgroundTasks,
-    *,
-    webhook_url: str | None,
-    row_id: UUID,
-    company_id: UUID,
-    branch_name: str | None,
-    business_date: date,
-    method: str,
-    amount_minor: int,
-    source_kind: str,
-    source_ref: str,
-    note: str | None,
-) -> None:
-    """Mirror a manual (off-POS) collection to the company's Google Sheet.
-
-    Scheduled via BackgroundTasks — same reasoning as the POS OrderPaid
-    mirror in app/api/v1/pos/router.py: it runs only after the response has
-    been sent, i.e. after this request's SessionDep has already committed,
-    so a webhook failure or slow retry can never delay or fail the actual
-    collection write. No DB session is required here (unlike the OrderPaid
-    handler) — every field the sheet needs is already in hand from this
-    request, so this calls the sheets service directly rather than going
-    through the event bus.
-    """
-    if not webhook_url:
-        return  # not every company has this configured — silent no-op
-
-    async def _push() -> None:
-        try:
-            await push_manual_collection_to_sheet(
-                url=webhook_url,
-                row_id=row_id,
-                company_id=company_id,
-                branch_name=branch_name,
-                business_date=business_date,
-                method=method,
-                amount_minor=amount_minor,
-                source_kind=source_kind,
-                source_ref=source_ref,
-                note=note,
-            )
-        except Exception:  # noqa: BLE001
-            log.warning(
-                "finance.manual_collection_push.failed",
-                manual_collection_id=str(row_id),
-                exc_info=True,
-            )
-
-    background_tasks.add_task(_push)
 
 
 @router.post(
@@ -1421,6 +3272,50 @@ async def create_manual_collection(
     HSN/SAC, or invoice-level GST.  Such companies must enter itemized sales.
     """
     idempotency_key, request_hash = _require_manual_collection_idempotency(request)
+    _require_finance_action_key(idempotency_key, prefix="manual-collection")
+    if not tenant.in_branch(payload.branch_id):
+        raise NotFoundError("branch not found")
+    durable_replay = (
+        await session.execute(
+            select(ManualCollection)
+            .where(
+                ManualCollection.company_id == tenant.company_id,
+                ManualCollection.idempotency_key == idempotency_key,
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if durable_replay is not None:
+        if not tenant.in_branch(durable_replay.branch_id):
+            raise NotFoundError("manual collection not found")
+        if (
+            durable_replay.request_hash != request_hash
+            or durable_replay.created_by != tenant.user_id
+        ):
+            raise IdempotencyConflict(
+                "Idempotency-Key reused with a different manual collection or actor",
+                details={"key": idempotency_key},
+        )
+        creator = await session.get(User, durable_replay.created_by)
+        voider = (
+            await session.get(User, durable_replay.voided_by)
+            if durable_replay.voided_by
+            else None
+        )
+        return _manual_collection_read(
+            durable_replay,
+            created_by_name=creator.name if creator else None,
+            voided_by_name=voider.name if voider else None,
+        )
+    await _lock_finance_cash_shift(
+        session,
+        shift_id=payload.shift_id,
+        method=payload.method,
+        company_id=tenant.company_id,
+        branch_id=payload.branch_id,
+        incoming=True,
+        amount_minor=payload.amount_minor,
+    )
     replay = await check_or_reserve(
         session,
         key=idempotency_key,
@@ -1430,9 +3325,6 @@ async def create_manual_collection(
     )
     if replay:
         return ManualCollectionRead.model_validate(replay["body"])
-
-    if not tenant.in_branch(payload.branch_id):
-        raise NotFoundError("branch not found")
 
     company = await session.get(Company, tenant.company_id)
     if not company or company.deleted_at:
@@ -1488,6 +3380,7 @@ async def create_manual_collection(
         id=uuid4(),
         company_id=tenant.company_id,
         branch_id=payload.branch_id,
+        shift_id=payload.shift_id,
         business_date=payload.business_date,
         method=payload.method,
         amount_minor=payload.amount_minor,
@@ -1495,24 +3388,36 @@ async def create_manual_collection(
         source_ref=source_ref,
         note=note,
         idempotency_key=idempotency_key,
+        request_hash=request_hash,
         created_by=tenant.user_id,
+        source_integrity_revision=1,
     )
     session.add(row)
     await session.flush()
-    _schedule_manual_collection_push(
-        background_tasks,
-        webhook_url=company.google_sheets_webhook_url,
-        row_id=row.id,
-        company_id=tenant.company_id,
-        branch_name=branch.name,
-        business_date=row.business_date,
-        method=row.method,
-        amount_minor=row.amount_minor,
-        source_kind=row.source_kind,
-        source_ref=row.source_ref,
-        note=row.note,
-    )
     creator = await session.get(User, tenant.user_id)
+    await _enqueue_finance_source_mirror(
+        session,
+        company_id=tenant.company_id,
+        branch_id=row.branch_id,
+        actor_user_id=row.created_by,
+        event_type="finance.manual_collection.recorded",
+        source_type="manual_collection",
+        source_id=row.id,
+        source_revision="created-v1",
+        occurred_at=row.created_at,
+        reference=_short_finance_reference("MAN", row.id),
+        description="Manual daily collection",
+        amount_minor=int(row.amount_minor),
+        payment_method=row.method,
+        status_label="recorded",
+        identifiers={
+            "manual_collection_id": str(row.id),
+            "branch_id": str(row.branch_id),
+            "source_kind": row.source_kind,
+            "period_start": row.business_date.isoformat(),
+            "period_end": row.business_date.isoformat(),
+        },
+    )
     response = _manual_collection_read(
         row,
         created_by_name=creator.name if creator else None,
@@ -1537,6 +3442,31 @@ async def void_manual_collection(
     tenant: TenantContext = Depends(requires("finance.write")),
 ) -> ManualCollectionRead:
     """Void a collection without deleting or overwriting its original data."""
+    probe = (
+        await session.execute(
+            select(
+                ManualCollection.branch_id,
+                ManualCollection.shift_id,
+                ManualCollection.method,
+                ManualCollection.source_integrity_revision,
+                ManualCollection.voided_at,
+            ).where(
+                ManualCollection.id == collection_id,
+                ManualCollection.company_id == tenant.company_id,
+            )
+        )
+    ).one_or_none()
+    if probe is None or not tenant.in_branch(probe.branch_id):
+        raise NotFoundError("manual collection not found")
+    if (
+        probe.voided_at is None
+        and probe.method == "cash"
+        and probe.source_integrity_revision == 1
+        and probe.shift_id is not None
+    ):
+        await session.execute(
+            select(Shift.id).where(Shift.id == probe.shift_id).with_for_update()
+        )
     row = (
         await session.execute(
             select(ManualCollection)
@@ -1550,9 +3480,32 @@ async def void_manual_collection(
     if not row or not tenant.in_branch(row.branch_id):
         raise NotFoundError("manual collection not found")
 
+    correction = (
+        await session.execute(
+            select(FinanceSourceCorrection).where(
+                FinanceSourceCorrection.manual_collection_id == row.id
+            )
+        )
+    ).scalar_one_or_none()
+    if correction is not None:
+        raise BusinessRuleError("A corrected manual collection cannot also be voided.")
+    if (
+        row.voided_at is None
+        and row.method == "cash"
+        and row.source_integrity_revision == 1
+        and row.shift_id is not None
+    ):
+        shift = await session.get(Shift, row.shift_id)
+        if shift is None or shift.status != "open":
+            raise BusinessRuleError(
+                "This collection belongs to a closed shift. Use a current-period "
+                "cash correction and select an open same-branch shift."
+            )
+
     reason = payload.reason.strip()
     if len(reason) < 3:
         raise BusinessRuleError("void reason must contain at least 3 characters")
+    newly_voided = False
     if row.voided_at is not None:
         if row.void_reason != reason:
             raise BusinessRuleError(
@@ -1563,9 +3516,35 @@ async def void_manual_collection(
         row.voided_by = tenant.user_id
         row.void_reason = reason
         await session.flush()
+        newly_voided = True
 
     creator = await session.get(User, row.created_by)
     voider = await session.get(User, row.voided_by) if row.voided_by else None
+    if newly_voided:
+        assert row.voided_at is not None
+        await _enqueue_finance_source_mirror(
+            session,
+            company_id=tenant.company_id,
+            branch_id=row.branch_id,
+            actor_user_id=row.voided_by,
+            event_type="finance.manual_collection.voided",
+            source_type="manual_collection",
+            source_id=row.id,
+            source_revision="void-v1",
+            occurred_at=row.voided_at,
+            reference=_short_finance_reference("MAN", row.id),
+            description="Manual collection reversal",
+            amount_minor=-int(row.amount_minor),
+            payment_method=row.method,
+            status_label="voided",
+            identifiers={
+                "manual_collection_id": str(row.id),
+                "branch_id": str(row.branch_id),
+                "source_kind": row.source_kind,
+                "period_start": row.business_date.isoformat(),
+                "period_end": row.business_date.isoformat(),
+            },
+        )
     return _manual_collection_read(
         row,
         created_by_name=creator.name if creator else None,
@@ -1594,11 +3573,14 @@ def _tip_payout_read(
     *,
     created_by_name: str | None = None,
     voided_by_name: str | None = None,
+    source_shift_status: str | None = None,
+    correction: FinanceSourceCorrection | None = None,
 ) -> TipPayoutRead:
     return TipPayoutRead(
         id=row.id,
         company_id=row.company_id,
         branch_id=row.branch_id,
+        shift_id=row.shift_id,
         amount_minor=int(row.amount_minor),
         method=row.method,
         paid_at=row.paid_at,
@@ -1612,6 +3594,9 @@ def _tip_payout_read(
         voided_by_name=voided_by_name,
         void_reason=row.void_reason,
         is_voided=row.voided_at is not None,
+        source_shift_status=source_shift_status,
+        is_corrected=correction is not None,
+        correction=_finance_correction_read(correction) if correction else None,
     )
 
 
@@ -1650,8 +3635,22 @@ async def list_tip_payouts(
     ).limit(limit)
 
     rows = (await session.execute(stmt)).all()
+    corrections, shift_statuses = await _finance_source_context(
+        session,
+        source_type="tip_payout",
+        source_ids=[row.id for row, _creator, _voider in rows],
+        shift_ids=[row.shift_id for row, _creator, _voider in rows],
+    )
     return [
-        _tip_payout_read(row, created_by_name=created_by_name, voided_by_name=voided_by_name)
+        _tip_payout_read(
+            row,
+            created_by_name=created_by_name,
+            voided_by_name=voided_by_name,
+            source_shift_status=(
+                shift_statuses.get(row.shift_id) if row.shift_id else None
+            ),
+            correction=corrections.get(row.id),
+        )
         for row, created_by_name, voided_by_name in rows
     ]
 
@@ -1674,6 +3673,49 @@ async def create_tip_payout(
     of how it was distributed until the full Payroll feature exists.
     """
     idempotency_key, request_hash = _require_tip_payout_idempotency(request)
+    _require_finance_action_key(idempotency_key, prefix="tip-payout")
+    if not tenant.in_branch(payload.branch_id):
+        raise NotFoundError("branch not found")
+    durable_replay = (
+        await session.execute(
+            select(TipPayout)
+            .where(
+                TipPayout.company_id == tenant.company_id,
+                TipPayout.idempotency_key == idempotency_key,
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if durable_replay is not None:
+        if not tenant.in_branch(durable_replay.branch_id):
+            raise NotFoundError("tip payout not found")
+        if (
+            durable_replay.request_hash != request_hash
+            or durable_replay.created_by != tenant.user_id
+        ):
+            raise IdempotencyConflict(
+                "Idempotency-Key reused with a different tip payout or actor",
+                details={"key": idempotency_key},
+        )
+        creator = await session.get(User, durable_replay.created_by)
+        voider = (
+            await session.get(User, durable_replay.voided_by)
+            if durable_replay.voided_by
+            else None
+        )
+        return _tip_payout_read(
+            durable_replay,
+            created_by_name=creator.name if creator else None,
+            voided_by_name=voider.name if voider else None,
+        )
+    if payload.paid_at > datetime.now(timezone.utc):
+        raise BusinessRuleError(
+            "Tip payout time cannot be in the future. Enter when the money was "
+            "actually paid to staff, then try again."
+        )
+    note = payload.note.strip()
+    if len(note) < 3:
+        raise BusinessRuleError("note must contain at least 3 characters")
     replay = await check_or_reserve(
         session,
         key=idempotency_key,
@@ -1683,18 +3725,12 @@ async def create_tip_payout(
     )
     if replay:
         return TipPayoutRead.model_validate(replay["body"])
-
-    if payload.paid_at > datetime.now(timezone.utc):
-        raise BusinessRuleError(
-            "Tip payout time cannot be in the future. Enter when the money was "
-            "actually paid to staff, then try again."
-        )
-    if not tenant.in_branch(payload.branch_id):
-        raise NotFoundError("branch not found")
-
     # Tips Payable is a company-wide balance. Lock that common owner row
     # before reading the ledger so concurrent payouts, including ones from
     # different branches, cannot both spend the same outstanding amount.
+    # SQLAlchemy's ``key_share=True`` with its default ``read=False`` compiles
+    # to PostgreSQL FOR NO KEY UPDATE, a writer-conflicting lock (not the
+    # mutually compatible FOR KEY SHARE mode).
     branch = (
         await session.execute(
             select(Branch).join(Company, Company.id == Branch.company_id).where(
@@ -1708,9 +3744,15 @@ async def create_tip_payout(
     if not branch:
         raise NotFoundError("branch not found")
 
-    note = payload.note.strip()
-    if len(note) < 3:
-        raise BusinessRuleError("note must contain at least 3 characters")
+    await _lock_finance_cash_shift(
+        session,
+        shift_id=payload.shift_id,
+        method=payload.method,
+        company_id=tenant.company_id,
+        branch_id=payload.branch_id,
+        incoming=False,
+        amount_minor=payload.amount_minor,
+    )
 
     ledger = await build_operational_ledger(
         session, company_id=tenant.company_id, end_exclusive=datetime.now(timezone.utc)
@@ -1732,17 +3774,40 @@ async def create_tip_payout(
         id=uuid4(),
         company_id=tenant.company_id,
         branch_id=payload.branch_id,
+        shift_id=payload.shift_id,
         amount_minor=payload.amount_minor,
         method=payload.method,
         paid_at=payload.paid_at,
         note=note,
         idempotency_key=idempotency_key,
+        request_hash=request_hash,
         created_by=tenant.user_id,
+        source_integrity_revision=1,
     )
     session.add(row)
     await session.flush()
 
     creator = await session.get(User, tenant.user_id)
+    await _enqueue_finance_source_mirror(
+        session,
+        company_id=row.company_id,
+        branch_id=row.branch_id,
+        actor_user_id=row.created_by,
+        event_type="finance.tip_payout.recorded",
+        source_type="tip_payout",
+        source_id=row.id,
+        source_revision="recorded-v1",
+        occurred_at=row.paid_at,
+        reference=_short_finance_reference("TIP", row.id),
+        description="Tip payout to staff",
+        amount_minor=-int(row.amount_minor),
+        payment_method=row.method,
+        status_label="recorded",
+        identifiers={
+            "tip_payout_id": str(row.id),
+            "branch_id": str(row.branch_id),
+        },
+    )
     response = _tip_payout_read(row, created_by_name=creator.name if creator else None)
     await store_response(
         session,
@@ -1764,6 +3829,36 @@ async def void_tip_payout(
     tenant: TenantContext = Depends(requires("finance.write")),
 ) -> TipPayoutRead:
     """Void a tip payout without deleting or overwriting its original data."""
+    probe = (
+        await session.execute(
+            select(
+                TipPayout.branch_id,
+                TipPayout.shift_id,
+                TipPayout.method,
+                TipPayout.source_integrity_revision,
+                TipPayout.voided_at,
+            ).where(
+                TipPayout.id == payout_id,
+                TipPayout.company_id == tenant.company_id,
+            )
+        )
+    ).one_or_none()
+    if probe is None or not tenant.in_branch(probe.branch_id):
+        raise NotFoundError("tip payout not found")
+    await session.execute(
+        select(Company.id)
+        .where(Company.id == tenant.company_id)
+        .with_for_update(key_share=True)
+    )
+    if (
+        probe.voided_at is None
+        and probe.method == "cash"
+        and probe.source_integrity_revision == 1
+        and probe.shift_id is not None
+    ):
+        await session.execute(
+            select(Shift.id).where(Shift.id == probe.shift_id).with_for_update()
+        )
     row = (
         await session.execute(
             select(TipPayout)
@@ -1777,9 +3872,32 @@ async def void_tip_payout(
     if not row or not tenant.in_branch(row.branch_id):
         raise NotFoundError("tip payout not found")
 
+    correction = (
+        await session.execute(
+            select(FinanceSourceCorrection).where(
+                FinanceSourceCorrection.tip_payout_id == row.id
+            )
+        )
+    ).scalar_one_or_none()
+    if correction is not None:
+        raise BusinessRuleError("A corrected tip payout cannot also be voided.")
+    if (
+        row.voided_at is None
+        and row.method == "cash"
+        and row.source_integrity_revision == 1
+        and row.shift_id is not None
+    ):
+        shift = await session.get(Shift, row.shift_id)
+        if shift is None or shift.status != "open":
+            raise BusinessRuleError(
+                "This payout belongs to a closed shift. Use a current-period cash "
+                "correction and select an open same-branch shift."
+            )
+
     reason = payload.reason.strip()
     if len(reason) < 3:
         raise BusinessRuleError("void reason must contain at least 3 characters")
+    newly_voided = False
     if row.voided_at is not None:
         if row.void_reason != reason:
             raise BusinessRuleError("tip payout is already voided with a different reason")
@@ -1788,9 +3906,33 @@ async def void_tip_payout(
         row.voided_by = tenant.user_id
         row.void_reason = reason
         await session.flush()
+        newly_voided = True
 
     creator = await session.get(User, row.created_by)
     voider = await session.get(User, row.voided_by) if row.voided_by else None
+    if newly_voided:
+        assert row.voided_at is not None
+        assert row.voided_by is not None
+        await _enqueue_finance_source_mirror(
+            session,
+            company_id=row.company_id,
+            branch_id=row.branch_id,
+            actor_user_id=row.voided_by,
+            event_type="finance.tip_payout.voided",
+            source_type="tip_payout",
+            source_id=row.id,
+            source_revision="void-v1",
+            occurred_at=row.voided_at,
+            reference=_short_finance_reference("TIP", row.id),
+            description="Tip payout reversal",
+            amount_minor=int(row.amount_minor),
+            payment_method=row.method,
+            status_label="voided",
+            identifiers={
+                "tip_payout_id": str(row.id),
+                "branch_id": str(row.branch_id),
+            },
+        )
     return _tip_payout_read(
         row,
         created_by_name=creator.name if creator else None,
@@ -1801,11 +3943,17 @@ async def void_tip_payout(
 # ============================================================================
 # SUPPLIER PAYMENTS / ACCOUNTS PAYABLE SETTLEMENT
 # ============================================================================
-def _supplier_payment_read(row: SupplierPayment) -> SupplierPaymentRead:
+def _supplier_payment_read(
+    row: SupplierPayment,
+    *,
+    source_shift_status: str | None = None,
+    correction: FinanceSourceCorrection | None = None,
+) -> SupplierPaymentRead:
     return SupplierPaymentRead(
         id=row.id,
         company_id=row.company_id,
         branch_id=row.branch_id,
+        shift_id=row.shift_id,
         supplier_id=row.supplier_id,
         grn_id=row.grn_id,
         journal_entry_id=row.journal_entry_id,
@@ -1821,6 +3969,9 @@ def _supplier_payment_read(row: SupplierPayment) -> SupplierPaymentRead:
         voided_by=row.voided_by,
         void_reason=row.void_reason,
         is_voided=row.voided_at is not None,
+        source_shift_status=source_shift_status,
+        is_corrected=correction is not None,
+        correction=_finance_correction_read(correction) if correction else None,
     )
 
 
@@ -1883,7 +4034,22 @@ async def list_supplier_payments(
             ).limit(limit)
         )
     ).scalars().all()
-    return [_supplier_payment_read(row) for row in rows]
+    corrections, shift_statuses = await _finance_source_context(
+        session,
+        source_type="supplier_payment",
+        source_ids=[row.id for row in rows],
+        shift_ids=[row.shift_id for row in rows],
+    )
+    return [
+        _supplier_payment_read(
+            row,
+            source_shift_status=(
+                shift_statuses.get(row.shift_id) if row.shift_id else None
+            ),
+            correction=corrections.get(row.id),
+        )
+        for row in rows
+    ]
 
 
 @router.post(
@@ -1908,44 +4074,23 @@ async def create_supplier_payment(
     idempotency_key, request_hash = _require_idempotency(
         request, what="supplier payment"
     )
-    # Canonical lock hierarchy for every supplier-payment path is GRN(s), then
-    # SupplierPayment. Probe replay identity without a row lock, lock the
-    # sorted source set, and only then lock/read the settlement row. This also
-    # handles an idempotency-key conflict whose stored GRN differs from the
-    # request without deadlocking a concurrent void (which locks GRN -> row).
-    replay_grn_id = (
-        await session.execute(
-            select(SupplierPayment.grn_id).where(
-                SupplierPayment.company_id == tenant.company_id,
-                SupplierPayment.idempotency_key == idempotency_key,
-            )
-        )
-    ).scalar_one_or_none()
-    grn_ids_to_lock = sorted(
-        {payload.grn_id, *([replay_grn_id] if replay_grn_id is not None else [])},
-        key=str,
-    )
-    await session.execute(
-        select(GRN.id)
-        .join(PurchaseOrder, PurchaseOrder.id == GRN.purchase_order_id)
-        .where(
-            GRN.id.in_(grn_ids_to_lock),
-            PurchaseOrder.company_id == tenant.company_id,
-        )
-        .order_by(GRN.id)
-        .with_for_update(of=GRN)
-    )
+    _require_finance_action_key(idempotency_key, prefix="supplier-payment")
+    if not tenant.in_branch(payload.branch_id):
+        raise NotFoundError("branch not found")
+    # The immutable source row is the durable replay receipt. Read it before
+    # validating the currently-open drawer so a valid retry still succeeds
+    # after that original drawer has closed.
     durable_replay = (
         await session.execute(
-            select(SupplierPayment)
-            .where(
+            select(SupplierPayment).where(
                 SupplierPayment.company_id == tenant.company_id,
                 SupplierPayment.idempotency_key == idempotency_key,
             )
-            .with_for_update()
         )
     ).scalar_one_or_none()
     if durable_replay is not None:
+        if not tenant.in_branch(durable_replay.branch_id):
+            raise NotFoundError("supplier payment not found")
         if (
             durable_replay.request_hash != request_hash
             or durable_replay.created_by != tenant.user_id
@@ -1953,8 +4098,29 @@ async def create_supplier_payment(
             raise IdempotencyConflict(
                 "Idempotency-Key reused with different supplier payment payload or actor",
                 details={"key": idempotency_key},
-            )
+        )
         return _supplier_payment_read(durable_replay)
+
+    # New writes use one lock hierarchy everywhere: drawer, then GRN, then
+    # supplier payment. This cannot deadlock with shift close or correction.
+    await _lock_finance_cash_shift(
+        session,
+        shift_id=payload.shift_id,
+        method=payload.method,
+        company_id=tenant.company_id,
+        branch_id=payload.branch_id,
+        incoming=False,
+        amount_minor=payload.amount_minor,
+    )
+    await session.execute(
+        select(GRN.id)
+        .join(PurchaseOrder, PurchaseOrder.id == GRN.purchase_order_id)
+        .where(
+            GRN.id == payload.grn_id,
+            PurchaseOrder.company_id == tenant.company_id,
+        )
+        .with_for_update(of=GRN)
+    )
 
     replay = await check_or_reserve(
         session,
@@ -1966,8 +4132,6 @@ async def create_supplier_payment(
     if replay:
         return SupplierPaymentRead.model_validate(replay["body"])
 
-    if not tenant.in_branch(payload.branch_id):
-        raise NotFoundError("branch not found")
     if payload.paid_at.tzinfo is None or payload.paid_at.utcoffset() is None:
         raise BusinessRuleError("supplier payment paid_at must include a timezone")
 
@@ -2003,6 +4167,12 @@ async def create_supplier_payment(
                     SupplierPayment.company_id == tenant.company_id,
                     SupplierPayment.grn_id == grn.id,
                     SupplierPayment.voided_at.is_(None),
+                    ~exists(
+                        select(FinanceSourceCorrection.id).where(
+                            FinanceSourceCorrection.supplier_payment_id
+                            == SupplierPayment.id
+                        )
+                    ),
                 )
             )
         ).scalar_one()
@@ -2040,6 +4210,7 @@ async def create_supplier_payment(
         id=payment_id,
         company_id=tenant.company_id,
         branch_id=payload.branch_id,
+        shift_id=payload.shift_id,
         supplier_id=payload.supplier_id,
         grn_id=payload.grn_id,
         journal_entry_id=journal.id,
@@ -2051,9 +4222,33 @@ async def create_supplier_payment(
         idempotency_key=idempotency_key,
         request_hash=request_hash,
         created_by=tenant.user_id,
+        source_integrity_revision=1,
     )
     session.add(row)
     await session.flush()
+    await _enqueue_finance_source_mirror(
+        session,
+        company_id=row.company_id,
+        branch_id=row.branch_id,
+        actor_user_id=row.created_by,
+        event_type="finance.supplier_payment.recorded",
+        source_type="supplier_payment",
+        source_id=row.id,
+        source_revision="recorded-v1",
+        occurred_at=row.paid_at,
+        reference=_short_finance_reference("GRN", row.grn_id),
+        description="Supplier payment",
+        amount_minor=-int(row.amount_minor),
+        payment_method=row.method,
+        status_label="recorded",
+        identifiers={
+            "supplier_payment_id": str(row.id),
+            "supplier_id": str(row.supplier_id),
+            "grn_id": str(row.grn_id),
+            "journal_entry_id": str(row.journal_entry_id),
+            "branch_id": str(row.branch_id),
+        },
+    )
     response = _supplier_payment_read(row)
     await store_response(
         session,
@@ -2076,16 +4271,34 @@ async def void_supplier_payment(
 ) -> SupplierPaymentRead:
     probe = (
         await session.execute(
-            select(SupplierPayment.grn_id).where(
+            select(
+                SupplierPayment.grn_id,
+                SupplierPayment.shift_id,
+                SupplierPayment.method,
+                SupplierPayment.source_integrity_revision,
+                SupplierPayment.voided_at,
+                SupplierPayment.branch_id,
+            ).where(
                 SupplierPayment.id == payment_id,
                 SupplierPayment.company_id == tenant.company_id,
             )
         )
-    ).scalar_one_or_none()
-    if probe is None:
+    ).one_or_none()
+    if probe is None or not tenant.in_branch(probe.branch_id):
         raise NotFoundError("supplier payment not found")
-    # Match create's lock hierarchy: GRN first, then its settlement source.
-    await session.execute(select(GRN.id).where(GRN.id == probe).with_for_update())
+    # Match create's lock hierarchy: Shift, GRN, then its settlement source.
+    if (
+        probe.voided_at is None
+        and probe.method == "cash"
+        and probe.source_integrity_revision == 1
+        and probe.shift_id is not None
+    ):
+        await session.execute(
+            select(Shift.id).where(Shift.id == probe.shift_id).with_for_update()
+        )
+    await session.execute(
+        select(GRN.id).where(GRN.id == probe.grn_id).with_for_update()
+    )
     row = (
         await session.execute(
             select(SupplierPayment)
@@ -2098,6 +4311,28 @@ async def void_supplier_payment(
     ).scalar_one_or_none()
     if row is None or not tenant.in_branch(row.branch_id):
         raise NotFoundError("supplier payment not found")
+
+    correction = (
+        await session.execute(
+            select(FinanceSourceCorrection).where(
+                FinanceSourceCorrection.supplier_payment_id == row.id
+            )
+        )
+    ).scalar_one_or_none()
+    if correction is not None:
+        raise BusinessRuleError("A corrected supplier payment cannot also be voided.")
+    if (
+        row.voided_at is None
+        and row.method == "cash"
+        and row.source_integrity_revision == 1
+        and row.shift_id is not None
+    ):
+        shift = await session.get(Shift, row.shift_id)
+        if shift is None or shift.status != "open":
+            raise BusinessRuleError(
+                "This payment belongs to a closed shift. Use a current-period cash "
+                "correction and select an open same-branch shift."
+            )
 
     reason = payload.reason.strip()
     if row.voided_at is not None:
@@ -2133,6 +4368,31 @@ async def void_supplier_payment(
     journal.voided_by = tenant.user_id
     journal.void_reason = reason
     await session.flush()
+    assert row.voided_at is not None
+    assert row.voided_by is not None
+    await _enqueue_finance_source_mirror(
+        session,
+        company_id=row.company_id,
+        branch_id=row.branch_id,
+        actor_user_id=row.voided_by,
+        event_type="finance.supplier_payment.voided",
+        source_type="supplier_payment",
+        source_id=row.id,
+        source_revision="void-v1",
+        occurred_at=row.voided_at,
+        reference=_short_finance_reference("GRN", row.grn_id),
+        description="Supplier payment reversal",
+        amount_minor=int(row.amount_minor),
+        payment_method=row.method,
+        status_label="voided",
+        identifiers={
+            "supplier_payment_id": str(row.id),
+            "supplier_id": str(row.supplier_id),
+            "grn_id": str(row.grn_id),
+            "journal_entry_id": str(row.journal_entry_id),
+            "branch_id": str(row.branch_id),
+        },
+    )
     return _supplier_payment_read(row)
 
 
@@ -2413,6 +4673,34 @@ async def create_capital_entry(
             f"a capital entry with source_ref '{source_ref}' already exists"
         ) from exc
     creator = await session.get(User, tenant.user_id)
+    capital_amount_minor = (
+        int(ce.amount_minor) if ce.type == "invest" else -int(ce.amount_minor)
+    )
+    await _enqueue_finance_source_mirror(
+        session,
+        company_id=tenant.company_id,
+        branch_id=None,
+        actor_user_id=ce.created_by,
+        event_type="finance.capital_entry.recorded",
+        source_type="capital_entry",
+        source_id=ce.id,
+        source_revision="recorded-v1",
+        occurred_at=ce.effective_at,
+        reference=_short_finance_reference("CAP", ce.id),
+        description=(
+            "Partner capital investment"
+            if ce.type == "invest"
+            else "Partner capital withdrawal"
+        ),
+        amount_minor=capital_amount_minor,
+        payment_method=ce.settlement_account,
+        status_label=ce.type,
+        identifiers={
+            "capital_entry_id": str(ce.id),
+            "partner_id": str(ce.partner_id),
+            "capital_type": ce.type,
+        },
+    )
     response = _capital_entry_read(
         ce,
         created_by_name=creator.name if creator else None,
@@ -2456,6 +4744,7 @@ async def void_capital_entry(
     reason = payload.reason.strip()
     if len(reason) < 3:
         raise BusinessRuleError("void reason must contain at least 3 characters")
+    newly_voided = False
     if row.voided_at is not None:
         if row.void_reason != reason:
             raise BusinessRuleError(
@@ -2466,9 +4755,43 @@ async def void_capital_entry(
         row.voided_by = tenant.user_id
         row.void_reason = reason
         await session.flush()
+        newly_voided = True
 
     creator = await session.get(User, row.created_by) if row.created_by else None
     voider = await session.get(User, row.voided_by) if row.voided_by else None
+    if newly_voided:
+        assert row.voided_at is not None
+        assert row.voided_by is not None
+        capital_amount_minor = (
+            int(row.amount_minor)
+            if row.type == "invest"
+            else -int(row.amount_minor)
+        )
+        await _enqueue_finance_source_mirror(
+            session,
+            company_id=tenant.company_id,
+            branch_id=None,
+            actor_user_id=row.voided_by,
+            event_type="finance.capital_entry.voided",
+            source_type="capital_entry",
+            source_id=row.id,
+            source_revision="void-v1",
+            occurred_at=row.voided_at,
+            reference=_short_finance_reference("CAP", row.id),
+            description=(
+                "Partner capital investment reversal"
+                if row.type == "invest"
+                else "Partner capital withdrawal reversal"
+            ),
+            amount_minor=-capital_amount_minor,
+            payment_method=row.settlement_account,
+            status_label=f"{row.type}_voided",
+            identifiers={
+                "capital_entry_id": str(row.id),
+                "partner_id": str(row.partner_id),
+                "capital_type": row.type,
+            },
+        )
     return _capital_entry_read(
         row,
         created_by_name=creator.name if creator else None,
@@ -2550,6 +4873,28 @@ async def create_asset(
     )
     session.add(a)
     await session.flush()
+    await _enqueue_finance_source_mirror(
+        session,
+        company_id=a.company_id,
+        branch_id=a.branch_id,
+        actor_user_id=tenant.user_id,
+        event_type="finance.asset.registered",
+        source_type="asset",
+        source_id=a.id,
+        source_revision="registered-v1",
+        occurred_at=a.purchase_date,
+        reference=_short_finance_reference("ASSET", a.id),
+        description=f"Asset registered · {a.name}",
+        amount_minor=-int(a.purchase_minor),
+        payment_method="",
+        status_label="registered",
+        identifiers={
+            "asset_id": str(a.id),
+            "branch_id": str(a.branch_id),
+            "asset_type": a.type,
+            "purchase_date": a.purchase_date.date().isoformat(),
+        },
+    )
     response = _asset_read(a, as_of=datetime.now(timezone.utc))
     await store_response(
         session,

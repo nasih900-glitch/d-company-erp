@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime, timedelta
-from uuid import uuid4
+from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -18,6 +18,7 @@ import pytest_asyncio
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.exc import DBAPIError
 
+from app.core.security import hash_password, issue_access_token
 from app.models import (
     GRN,
     Account,
@@ -32,6 +33,7 @@ from app.models import (
     Shift,
     Supplier,
     SupplierPayment,
+    User,
 )
 from app.services.accounting.accounts import (
     ACCOUNTS_PAYABLE,
@@ -61,6 +63,14 @@ async def test_grn_fifo_sale_finance_and_supplier_settlement_are_exact_and_idemp
     terminal = seed_owner["terminal"]
     owner = seed_owner["owner"]
     owner_id = owner.id
+    finance_colleague = User(
+        id=uuid4(),
+        company_id=company.id,
+        email=f"supplier-manager-{uuid4().hex[:8]}@test.local",
+        name="Authorised supplier payment manager",
+        password_hash=hash_password("password1234"),
+        status="active",
+    )
     company.gst_registration_type = "unregistered"
     branch.state_code = "32"
     branch.code = f"F{uuid4().hex[:8].upper()}"
@@ -137,7 +147,7 @@ async def test_grn_fifo_sale_finance_and_supplier_settlement_are_exact_and_idemp
     # These legacy mappers intentionally expose few ORM relationships, so
     # make FK insertion order explicit instead of relying on unit-of-work
     # dependency discovery from bare UUID columns.
-    session.add_all([category, ingredient, supplier, shift])
+    session.add_all([category, ingredient, supplier, shift, finance_colleague])
     await session.flush()
     session.add(item)
     await session.flush()
@@ -156,6 +166,17 @@ async def test_grn_fifo_sale_finance_and_supplier_settlement_are_exact_and_idemp
     assert login.status_code == 200, login.text
     headers = {
         "Authorization": f"Bearer {login.json()['access_token']}",
+        "X-Terminal-Id": str(terminal.id),
+    }
+    finance_token = issue_access_token(
+        user_id=finance_colleague.id,
+        company_id=company.id,
+        branch_id=branch.id,
+        roles=["manager"],
+        auth_version=finance_colleague.auth_version,
+    )
+    finance_headers = {
+        "Authorization": f"Bearer {finance_token}",
         "X-Terminal-Id": str(terminal.id),
     }
 
@@ -311,6 +332,8 @@ async def test_grn_fifo_sale_finance_and_supplier_settlement_are_exact_and_idemp
         },
     )
     assert paid.status_code == 201, paid.text
+    await session.refresh(shift)
+    drawer_after_sale = int(shift.expected_minor)
 
     batches = (
         await session.execute(
@@ -325,9 +348,10 @@ async def test_grn_fifo_sale_finance_and_supplier_settlement_are_exact_and_idemp
     ).scalars().all()
     assert [float(batch.qty_on_hand) for batch in batches] == [0.0, 8.0]
 
-    supplier_payment_key = f"supplier-payment-{uuid4()}"
+    supplier_payment_key = f"supplier-payment:{uuid4()}"
     supplier_payment_payload = {
         "branch_id": str(branch.id),
+        "shift_id": str(shift.id),
         "supplier_id": str(supplier.id),
         "grn_id": grn_responses[0]["id"],
         "amount_minor": 2_000,
@@ -338,13 +362,17 @@ async def test_grn_fifo_sale_finance_and_supplier_settlement_are_exact_and_idemp
     }
     settled_one = await client.post(
         "/api/v1/finance/supplier-payments",
-        headers={**headers, "Idempotency-Key": supplier_payment_key},
+        headers={**finance_headers, "Idempotency-Key": supplier_payment_key},
         json=supplier_payment_payload,
     )
     assert settled_one.status_code == 201, settled_one.text
+    assert settled_one.json()["created_by"] == str(finance_colleague.id)
+    assert shift.opened_by == owner.id
+    await session.refresh(shift)
+    assert shift.expected_minor == drawer_after_sale - 2_000
     replay_settlement = await client.post(
         "/api/v1/finance/supplier-payments",
-        headers={**headers, "Idempotency-Key": supplier_payment_key},
+        headers={**finance_headers, "Idempotency-Key": supplier_payment_key},
         json=supplier_payment_payload,
     )
     assert replay_settlement.status_code == 201, replay_settlement.text
@@ -355,15 +383,20 @@ async def test_grn_fifo_sale_finance_and_supplier_settlement_are_exact_and_idemp
     await session.commit()
     durable_settlement_replay = await client.post(
         "/api/v1/finance/supplier-payments",
-        headers={**headers, "Idempotency-Key": supplier_payment_key},
+        headers={**finance_headers, "Idempotency-Key": supplier_payment_key},
         json=supplier_payment_payload,
     )
     assert durable_settlement_replay.status_code == 201
     assert durable_settlement_replay.json() == settled_one.json()
+    await session.refresh(shift)
+    assert shift.expected_minor == drawer_after_sale - 2_000
 
     settled_two = await client.post(
         "/api/v1/finance/supplier-payments",
-        headers={**headers, "Idempotency-Key": f"supplier-payment-{uuid4()}"},
+        headers={
+            **finance_headers,
+            "Idempotency-Key": f"supplier-payment:{uuid4()}",
+        },
         json={
             **supplier_payment_payload,
             "grn_id": grn_responses[1]["id"],
@@ -372,6 +405,9 @@ async def test_grn_fifo_sale_finance_and_supplier_settlement_are_exact_and_idemp
         },
     )
     assert settled_two.status_code == 201, settled_two.text
+    assert settled_two.json()["created_by"] == str(finance_colleague.id)
+    await session.refresh(shift)
+    assert shift.expected_minor == drawer_after_sale - 7_000
 
     assert (
         await session.execute(
@@ -541,9 +577,13 @@ async def test_grn_fifo_sale_finance_and_supplier_settlement_are_exact_and_idemp
     async def pay_racing_action(label: str):
         return await client.post(
             "/api/v1/finance/supplier-payments",
-            headers={**headers, "Idempotency-Key": f"supplier-race-{uuid4()}"},
+            headers={
+                **finance_headers,
+                "Idempotency-Key": f"supplier-payment:{uuid4()}",
+            },
             json={
                 "branch_id": str(branch.id),
+                "shift_id": str(shift.id),
                 "supplier_id": str(supplier.id),
                 "grn_id": concurrent_grn.json()["id"],
                 "amount_minor": 700,
@@ -570,6 +610,8 @@ async def test_grn_fifo_sale_finance_and_supplier_settlement_are_exact_and_idemp
         )
     ).scalar_one()
     assert int(raced_paid_minor) == 700
+    await session.refresh(shift)
+    assert shift.expected_minor == drawer_after_sale - 7_700
 
     successful_race = next(
         response for response in race_results if response.status_code == 201
@@ -584,6 +626,10 @@ async def test_grn_fifo_sale_finance_and_supplier_settlement_are_exact_and_idemp
     assert voided.status_code == 200, voided.text
     assert voided.json()["is_voided"] is True
     assert voided.json()["void_reason"] == void_payload["reason"]
+    assert voided.json()["created_by"] == str(finance_colleague.id)
+    assert voided.json()["voided_by"] == str(owner.id)
+    await session.refresh(shift)
+    assert shift.expected_minor == drawer_after_sale - 7_000
 
     void_replay = await client.post(
         f"/api/v1/finance/supplier-payments/{raced_payment['id']}/void",
@@ -619,6 +665,131 @@ async def test_grn_fifo_sale_finance_and_supplier_settlement_are_exact_and_idemp
     assert journal.voided_at == source.voided_at
     assert journal.voided_by == source.voided_by
     assert journal.void_reason == source.void_reason
+
+    # Correcting a closed-shift supplier payment reopens that GRN's AP balance.
+    # The immutable original remains unvoided, while one replacement may settle
+    # the reopened amount.  Router and DB balance guards must both exclude the
+    # corrected original, and the GRN lock must still reject a racing overpay.
+    await session.refresh(shift)
+    shift.closed_by = owner.id
+    shift.closed_at = datetime.now(UTC)
+    shift.counted_minor = shift.expected_minor
+    shift.variance_minor = 0
+    shift.status = "closed"
+    await session.commit()
+    settlement_shift = Shift(
+        id=uuid4(),
+        company_id=company.id,
+        branch_id=branch.id,
+        terminal_id=terminal.id,
+        opened_by=owner.id,
+        opened_at=datetime.now(UTC),
+        opening_float_minor=10_000,
+        expected_minor=10_000,
+        status="open",
+    )
+    session.add(settlement_shift)
+    await session.commit()
+
+    supplier_correction = await client.post(
+        f"/api/v1/finance/supplier-payments/{settled_one.json()['id']}/corrections",
+        headers={
+            **headers,
+            "Idempotency-Key": f"supplier-payment-correction:{uuid4()}",
+        },
+        json={
+            "settlement_shift_id": str(settlement_shift.id),
+            "reason": "Owner approved replacement of the closed-shift payment",
+        },
+    )
+    assert supplier_correction.status_code == 201, supplier_correction.text
+    assert supplier_correction.json()["amount_minor"] == 2_000
+    await session.refresh(settlement_shift)
+    assert settlement_shift.expected_minor == 12_000
+
+    async def race_replacement_payment(label: str):
+        return await client.post(
+            "/api/v1/finance/supplier-payments",
+            headers={
+                **finance_headers,
+                "Idempotency-Key": f"supplier-payment:{uuid4()}",
+            },
+            json={
+                **supplier_payment_payload,
+                "shift_id": str(settlement_shift.id),
+                "payment_reference": f"REPLACEMENT-{label}-{uuid4().hex[:6]}",
+            },
+        )
+
+    replacement_results = await asyncio.gather(
+        race_replacement_payment("A"),
+        race_replacement_payment("B"),
+    )
+    assert sorted(result.status_code for result in replacement_results) == [201, 422]
+    replacement = next(
+        result for result in replacement_results if result.status_code == 201
+    )
+    rejected_replacement = next(
+        result for result in replacement_results if result.status_code == 422
+    )
+    assert "already fully paid" in rejected_replacement.text
+    await session.refresh(settlement_shift)
+    assert settlement_shift.expected_minor == 10_000
+
+    active_paid_minor = (
+        await session.execute(
+            text(
+                "SELECT COALESCE(SUM(payment.amount_minor), 0) "
+                "FROM supplier_payments payment "
+                "WHERE payment.grn_id = :grn_id "
+                "AND payment.voided_at IS NULL "
+                "AND NOT EXISTS ("
+                "SELECT 1 FROM finance_source_corrections correction "
+                "WHERE correction.supplier_payment_id = payment.id)"
+            ),
+            {"grn_id": grn_responses[0]["id"]},
+        )
+    ).scalar_one()
+    assert int(active_paid_minor) == 2_000
+    original_supplier_payment = await session.get(
+        SupplierPayment,
+        UUID(settled_one.json()["id"]),
+        populate_existing=True,
+    )
+    assert original_supplier_payment is not None
+    assert original_supplier_payment.voided_at is None
+
+    correction_ledger_response = await client.get(
+        "/api/v1/accounting/general-ledger",
+        headers=headers,
+        params={"from_date": day, "to_date": day, "limit": 2000},
+    )
+    assert correction_ledger_response.status_code == 200
+    correction_ledger = correction_ledger_response.json()
+    correction_lines = [
+        line
+        for line in correction_ledger
+        if line["ref_type"] == "finance_source_correction"
+        and line["ref_id"] == supplier_correction.json()["id"]
+    ]
+    replacement_lines = [
+        line
+        for line in correction_ledger
+        if line["ref_type"] == "supplier_payment"
+        and line["ref_id"] == replacement.json()["id"]
+    ]
+    assert len(correction_lines) == 2
+    assert len(replacement_lines) == 2
+    assert sum(
+        line["credit_minor"]
+        for line in correction_lines
+        if line["account_code"] == "2000"
+    ) == 2_000
+    assert sum(
+        line["debit_minor"]
+        for line in replacement_lines
+        if line["account_code"] == "2000"
+    ) == 2_000
 
     # A posted inventory receipt is one immutable financial source. Native SQL
     # cannot alter/delete its header or lines, append a later line, or void its
@@ -705,7 +876,7 @@ async def test_grn_fifo_sale_finance_and_supplier_settlement_are_exact_and_idemp
     # 0050 makes the source contract authoritative below the ORM/API layer.
     # Native SQL cannot rewrite/delete a settlement or void only one side of
     # the exact SupplierPayment <-> JournalEntry pair.
-    active_payment_id = settled_one.json()["id"]
+    active_payment_id = replacement.json()["id"]
     with pytest.raises(DBAPIError, match="financial/provenance fields are immutable"):
         await session.execute(
             text(

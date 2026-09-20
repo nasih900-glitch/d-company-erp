@@ -9,6 +9,19 @@ import org.junit.Test
 class FinanceWireContractTest {
 
     @Test
+    fun receiptFingerprintDecodesWhileOldServerPayloadFailsClosed() {
+        val current = ApiClient.json.decodeFromString<ExpenseReceipt>(
+            """{"id":"r1","expense_id":"e1","original_filename":"bill.pdf","content_type":"application/pdf","size_bytes":12,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","source":"file","status":"pending","review_note":null,"created_at":"2026-09-19T12:00:00Z"}""",
+        )
+        val legacy = ApiClient.json.decodeFromString<ExpenseReceipt>(
+            """{"id":"r1","expense_id":"e1","original_filename":"bill.pdf","content_type":"application/pdf","size_bytes":12,"source":"file","status":"pending","review_note":null,"created_at":"2026-09-19T12:00:00Z"}""",
+        )
+
+        assertEquals(64, current.sha256?.length)
+        assertNull(legacy.sha256)
+    }
+
+    @Test
     fun distributableFieldsDecodeAuthoritativeSpendableAndClearingBreakdown() {
         val report = ApiClient.json.decodeFromString<DistributableProfit>(
             """

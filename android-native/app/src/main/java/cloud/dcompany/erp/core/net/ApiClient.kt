@@ -1,6 +1,5 @@
 package cloud.dcompany.erp.core.net
 
-import android.annotation.SuppressLint
 import cloud.dcompany.erp.BuildConfig
 import cloud.dcompany.erp.core.diagnostics.ApiFailureObservation
 import cloud.dcompany.erp.core.diagnostics.DiagnosticConnectivity
@@ -177,7 +176,8 @@ object ApiClient {
 
     lateinit var api: ErpApi
         private set
-    private lateinit var refreshApi: ErpApi
+    @Volatile
+    private lateinit var authenticatedSession: AuthenticatedSession
 
     /**
      * Shared Retrofit. Each feature declares its own endpoint interface and
@@ -213,7 +213,7 @@ object ApiClient {
 
     /**
      * Creates an isolated, non-refreshing client for one transient authority
-     * check. It never reads or writes [tokens], [activeTerminalHeaders], or
+     * check. It never reads or writes [TokenStore], [activeTerminalHeaders], or
      * cache scope. Callers must keep the returned API and bearer in local
      * memory only and discard both when the operation completes.
      */
@@ -244,9 +244,6 @@ object ApiClient {
             .create(service)
     }
 
-    // TokenStore canonicalizes its constructor argument to applicationContext.
-    @SuppressLint("StaticFieldLeak")
-    private lateinit var tokens: TokenStore
     private val activeTerminalHeaders = ActiveTerminalHeaderContext()
 
     /** Set by the app when the server definitively rejects the session. */
@@ -258,7 +255,6 @@ object ApiClient {
 
     fun init(tokenStore: TokenStore, @Suppress("UNUSED_PARAMETER") terminalStore: TerminalStore) {
         backendReachability.reset()
-        tokens = tokenStore
         // A value in TerminalStore is a login-resolution candidate, never
         // proof that this process currently owns that terminal.
         activeTerminalHeaders.deactivate()
@@ -272,12 +268,23 @@ object ApiClient {
             .addInterceptor(ClientIdentityInterceptor())
             .addInterceptor(ErrorInterceptor(json))
             .build()
-        refreshApi = Retrofit.Builder()
+        val sessionRefreshApi = Retrofit.Builder()
             .baseUrl(BuildConfig.API_BASE_URL)
             .client(refreshClient)
             .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
             .build()
             .create(ErpApi::class.java)
+        val sessionRefreshCoordinator = SessionRefreshCoordinator(
+            tokenStore = tokenStore,
+            refreshCall = { refresh ->
+                kotlinx.coroutines.runBlocking {
+                    sessionRefreshApi.refresh(RefreshRequest(refresh))
+                }
+            },
+            onForcedLogout = { onForcedLogout?.invoke() },
+        )
+        val session = AuthenticatedSession(tokenStore, sessionRefreshCoordinator)
+        authenticatedSession = session
 
         val client = authenticatedClientBuilder()
             // Order matters here more than it looks: OkHttp interceptors
@@ -340,28 +347,49 @@ object ApiClient {
             .create(service)
     }
 
-    private fun authenticatedClientBuilder(): OkHttpClient.Builder = baseClientBuilder()
-        .addInterceptor(ClientIdentityInterceptor())
-        .addInterceptor(TerminalInterceptor())
-        .addInterceptor(
-            PricingTokenInterceptor(allowPricingAuthority = true) {
-                PricingLock.currentToken(tokens.currentPricingSession())
-            },
-        )
-        .addInterceptor(ErrorInterceptor(json))
-        .addInterceptor(AuthInterceptor())
+    private fun authenticatedClientBuilder(): OkHttpClient.Builder {
+        val session = authenticatedSession
+        return baseClientBuilder()
+            .addInterceptor(ClientIdentityInterceptor())
+            .addInterceptor(TerminalInterceptor())
+            .addInterceptor(
+                PricingTokenInterceptor(allowPricingAuthority = true) {
+                    PricingLock.currentToken(session.tokenStore.currentPricingSession())
+                },
+            )
+            .addInterceptor(ErrorInterceptor(json))
+            .addInterceptor(
+                AuthInterceptor(
+                    tokenStore = session.tokenStore,
+                    refreshCoordinator = session.refreshCoordinator,
+                ),
+            )
+    }
 
     /** Remote support never receives the short-lived authority to mutate prices. */
-    private fun remoteAuthenticatedClientBuilder(): OkHttpClient.Builder = baseClientBuilder()
-        .addInterceptor(ClientIdentityInterceptor())
-        .addInterceptor(TerminalInterceptor())
-        .addInterceptor(
-            PricingTokenInterceptor(allowPricingAuthority = false) {
-                PricingLock.currentToken(tokens.currentPricingSession())
-            },
-        )
-        .addInterceptor(ErrorInterceptor(json))
-        .addInterceptor(AuthInterceptor())
+    private fun remoteAuthenticatedClientBuilder(): OkHttpClient.Builder {
+        val session = authenticatedSession
+        return baseClientBuilder()
+            .addInterceptor(ClientIdentityInterceptor())
+            .addInterceptor(TerminalInterceptor())
+            .addInterceptor(
+                PricingTokenInterceptor(allowPricingAuthority = false) {
+                    PricingLock.currentToken(session.tokenStore.currentPricingSession())
+                },
+            )
+            .addInterceptor(ErrorInterceptor(json))
+            .addInterceptor(
+                AuthInterceptor(
+                    tokenStore = session.tokenStore,
+                    refreshCoordinator = session.refreshCoordinator,
+                ),
+            )
+    }
+
+    private class AuthenticatedSession(
+        val tokenStore: TokenStore,
+        val refreshCoordinator: SessionRefreshCoordinator,
+    )
 
     private fun baseClientBuilder(): OkHttpClient.Builder = OkHttpClient.Builder()
         // Cafe wifi is congested, not dead. These are deliberately generous:
@@ -383,19 +411,14 @@ object ApiClient {
      * Attaches the bearer token and, on a 401, refreshes once and replays the
      * original request.
      */
-    private class AuthInterceptor : Interceptor {
-
-        private val refreshCoordinator = SessionRefreshCoordinator(
-            tokenStore = tokens,
-            refreshCall = { refresh ->
-                kotlinx.coroutines.runBlocking { refreshApi.refresh(RefreshRequest(refresh)) }
-            },
-            onForcedLogout = { onForcedLogout?.invoke() },
-        )
+    internal class AuthInterceptor(
+        private val tokenStore: TokenStore,
+        private val refreshCoordinator: SessionRefreshCoordinator,
+    ) : Interceptor {
 
         override fun intercept(chain: Interceptor.Chain): Response {
             val original = chain.request()
-            val lease = tokens.refreshLease()
+            val lease = tokenStore.refreshLease()
             val response = chain.proceed(signed(original, lease?.accessToken))
 
             val isAuthRoute = original.url.encodedPath.let {

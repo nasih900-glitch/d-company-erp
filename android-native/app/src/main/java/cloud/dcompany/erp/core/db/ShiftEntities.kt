@@ -115,6 +115,9 @@ data class ServerOpenShiftEntity(
     val openedByUserId: String? = null,
     val openedByName: String? = null,
     val openedByEmail: String? = null,
+    /** Origin facts are not authority; they only make offline drawer capture fail closed. */
+    val openingClientPlatform: String? = null,
+    val openingClientInstallationId: String? = null,
     val verifiedAtMillis: Long,
 )
 

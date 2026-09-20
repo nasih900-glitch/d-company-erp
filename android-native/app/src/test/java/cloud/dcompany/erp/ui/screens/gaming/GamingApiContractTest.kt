@@ -17,6 +17,53 @@ import retrofit2.http.POST
 class GamingApiContractTest {
 
     @Test
+    fun `selected saved customer id survives start JSON and response decode`() {
+        val body = ApiClient.json.parseToJsonElement(
+            ApiClient.json.encodeToString(
+                SessionStartBody(
+                    stationId = "station-1",
+                    shiftId = "shift-1",
+                    startedAt = "2026-09-13T12:00:00Z",
+                    customerId = "customer-1",
+                    expectedRatePerHourMinor = 15_000,
+                ),
+            ),
+        ).jsonObject
+        assertEquals(JsonPrimitive("customer-1"), body["customer_id"])
+        assertFalse(body.containsKey("customer_name"))
+        assertFalse(body.containsKey("customer_phone"))
+
+        val decoded = ApiClient.json.decodeFromString<GameSession>(
+            """{"id":"session-1","station_id":"station-1","shift_id":"shift-1","status":"active","start_at":"2026-09-13T12:00:00Z","customer_id":"customer-1"}""",
+        )
+        assertEquals("customer-1", decoded.customerId)
+    }
+
+    @Test
+    fun `queued start keeps old JSON unchanged when optional customer name is absent`() {
+        val legacy = SessionStartBody(
+            stationId = "station-1",
+            shiftId = "shift-1",
+            customerPhone = "+91 98765 43210",
+            timerMinutes = 60,
+            startedAt = "2026-09-13T12:00:00Z",
+            expectedRatePerHourMinor = 15_000,
+        )
+        val legacyBody = ApiClient.json.parseToJsonElement(
+            ApiClient.json.encodeToString(legacy),
+        ).jsonObject
+        assertFalse(legacyBody.containsKey("customer_name"))
+        assertFalse(legacyBody.containsKey("customer_id"))
+        assertEquals(JsonPrimitive("+91 98765 43210"), legacyBody["customer_phone"])
+
+        val namedBody = ApiClient.json.parseToJsonElement(
+            ApiClient.json.encodeToString(legacy.copy(customerName = "Booking guest")),
+        ).jsonObject
+        assertEquals(JsonPrimitive("Booking guest"), namedBody["customer_name"])
+        assertEquals(legacyBody.keys + "customer_name", namedBody.keys)
+    }
+
+    @Test
     fun `cross-terminal handoff contract keeps the explicit target and provenance receipt`() {
         val encoded = ApiClient.json.encodeToString(
             SessionPosHandoffBody(targetShiftId = "target-shift"),

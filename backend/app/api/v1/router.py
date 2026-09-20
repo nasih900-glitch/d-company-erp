@@ -27,6 +27,7 @@ from app.api.v1.public.router import router as public_router
 from app.api.v1.remote_assistance.router import router as remote_assistance_router
 from app.api.v1.reports.router import router as reports_router
 from app.api.v1.settings.router import router as settings_router
+from app.api.v1.settings.google_sheets import router as google_sheets_settings_router
 from app.api.v1.staff.router import router as staff_router
 from app.api.v1.tables.router import router as tables_router
 from app.api.v1.ws.router import router as ws_router
@@ -67,6 +68,11 @@ api_router.include_router(
 )
 api_router.include_router(admin_router, prefix="/admin", tags=["admin"])
 api_router.include_router(settings_router, prefix="/settings", tags=["settings"])
+api_router.include_router(
+    google_sheets_settings_router,
+    prefix="/settings",
+    tags=["settings", "google-sheets"],
+)
 api_router.include_router(customers_router, prefix="/customers", tags=["customers"])
 api_router.include_router(public_router, prefix="/public", tags=["public"])
 api_router.include_router(memberships_router, prefix="/memberships", tags=["memberships"])

@@ -68,7 +68,12 @@ def _headers(seed_owner, token: str, key: str, **extra: str) -> dict[str, str]:
     }
 
 
-def _station(seed_owner, *, station_type: str = "ps5", branch_id: UUID | None = None) -> Station:
+def _station(
+    seed_owner,
+    *,
+    station_type: str = "projector",
+    branch_id: UUID | None = None,
+) -> Station:
     return Station(
         id=uuid4(),
         company_id=seed_owner["company"].id,

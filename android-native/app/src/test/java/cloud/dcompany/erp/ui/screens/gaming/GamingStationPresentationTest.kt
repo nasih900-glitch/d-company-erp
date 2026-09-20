@@ -74,10 +74,21 @@ class GamingStationPresentationTest {
             ),
         )
         assertEquals(
-            "₹350.00/hour",
+            "Fixed packages from ₹80.00",
             availableStationPricingDescription(
                 station.copy(type = "vr", ratePerHourMinor = 35_000),
-                packages,
+                listOf(
+                    GamingPackage(
+                        id = "vr-games-15",
+                        code = "vr-games-session-15m",
+                        stationType = "vr",
+                        variant = "vr_games",
+                        kind = "base",
+                        name = "VR Games · 15 min",
+                        durationMinutes = 15,
+                        priceMinor = 8_000,
+                    ),
+                ),
             ),
         )
     }
@@ -159,6 +170,7 @@ class GamingStationPresentationTest {
                 focusRequested = false,
                 hasRefreshError = false,
                 orphanedExtensionCount = 2,
+                rejectedSessionCount = 0,
                 needsCancellation = true,
                 awaitingPayment = false,
                 busy = false,
@@ -172,6 +184,7 @@ class GamingStationPresentationTest {
                 focusRequested = false,
                 hasRefreshError = false,
                 orphanedExtensionCount = 0,
+                rejectedSessionCount = 0,
                 needsCancellation = false,
                 awaitingPayment = false,
                 busy = false,
@@ -187,6 +200,7 @@ class GamingStationPresentationTest {
             focusRequested = false,
             hasRefreshError = false,
             orphanedExtensionCount = 0,
+            rejectedSessionCount = 0,
             needsCancellation = false,
             awaitingPayment = false,
             busy = false,
@@ -197,6 +211,7 @@ class GamingStationPresentationTest {
             focusRequested = false,
             hasRefreshError = false,
             orphanedExtensionCount = 0,
+            rejectedSessionCount = 0,
             needsCancellation = false,
             awaitingPayment = false,
             busy = true,
@@ -344,6 +359,18 @@ class GamingStationPresentationTest {
 
         assertEquals(StationVisualState.Overtime, result.state)
         assertEquals("Overtime", result.statusLabel)
+    }
+
+    @Test
+    fun `expired workspace feedback says what remained unchanged and how to recover`() {
+        val startMessage = gamingStartWorkspaceUnavailableMessage("PS5 Station 2")
+
+        assertTrue(startMessage.contains("PS5 Station 2"))
+        assertTrue(startMessage.contains("Sign in online again"))
+        assertTrue(startMessage.contains("No session was started"))
+        assertTrue(GAMING_STOP_WORKSPACE_UNAVAILABLE_MESSAGE.contains("Sign in online again"))
+        assertTrue(GAMING_STOP_WORKSPACE_UNAVAILABLE_MESSAGE.contains("still running"))
+        assertTrue(GAMING_STOP_WORKSPACE_UNAVAILABLE_MESSAGE.contains("time continues"))
     }
 
     @Test
@@ -595,7 +622,7 @@ class GamingStationPresentationTest {
     @Test
     fun `package selection label exposes immutable tier mode and player count`() {
         assertEquals(
-            "Standard · Single",
+            "Single",
             gamingPackageSelectionLabel(
                 session(
                     status = "active",
@@ -619,7 +646,10 @@ class GamingStationPresentationTest {
         )
         assertTrue(requiresCanonicalGamingTariff("ps5"))
         assertTrue(requiresCanonicalGamingTariff("racing simulator"))
-        assertFalse(requiresCanonicalGamingTariff("vr"))
+        assertTrue(requiresCanonicalGamingTariff("vr"))
+        assertEquals("Racing Sim", gamingModeLabel("simdrive"))
+        assertEquals("VR Racing Sim", gamingModeLabel("vr_racing"))
+        assertEquals("VR Games", gamingModeLabel("vr_games"))
     }
 
     @Test

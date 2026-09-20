@@ -35,10 +35,21 @@ PARTNER_ID = UUID("22222222-2222-2222-2222-222222222222")
 USER_ID = UUID("44444444-4444-4444-4444-444444444444")
 
 
+@pytest.fixture(autouse=True)
+def _isolate_finance_source_mirror(monkeypatch) -> None:
+    async def no_mirror(*_args, **_kwargs) -> None:
+        return None
+
+    monkeypatch.setattr(finance_router, "_enqueue_finance_source_mirror", no_mirror)
+
+
 def _tenant() -> TenantContext:
     return TenantContext(
-        user_id=USER_ID, company_id=COMPANY_ID, branch_id=None,
-        terminal_id=None, roles=("owner",),
+        user_id=USER_ID,
+        company_id=COMPANY_ID,
+        branch_id=None,
+        terminal_id=None,
+        roles=("owner",),
     )
 
 
@@ -90,6 +101,7 @@ class _QueuedSession:
 
     async def get(self, model, key):
         from app.models import User
+
         if model is User:
             return SimpleNamespace(id=key, name="Owner")
         raise AssertionError(f"unexpected get({model}, {key})")
@@ -179,7 +191,10 @@ async def test_create_capital_entry_is_idempotent_on_exact_replay(monkeypatch) -
             raise AssertionError(f"Replay attempted database mutation via {name}")
 
     response = await create_capital_entry(
-        _payload(), _NoMutationSession(), _request(), _tenant(),
+        _payload(),
+        _NoMutationSession(),
+        _request(),
+        _tenant(),
     )
     assert response == existing
 
@@ -190,15 +205,14 @@ async def test_create_capital_entry_still_rejects_a_reused_source_ref(monkeypatc
     independent layers — a *different* idempotency key citing a source_ref
     that already exists must still be rejected, not silently treated as a
     replay of the earlier entry."""
+
     async def reserve(*_args, **_kwargs):
         return None
 
     monkeypatch.setattr(finance_router, "check_or_reserve", reserve)
 
     existing_id = uuid4()
-    session = _QueuedSession(
-        [_Result(scalar=_partner()), _Result(scalar=existing_id)]
-    )
+    session = _QueuedSession([_Result(scalar=_partner()), _Result(scalar=existing_id)])
 
     with pytest.raises(ConflictError, match="already exists"):
         await create_capital_entry(_payload(), session, _request(), _tenant())

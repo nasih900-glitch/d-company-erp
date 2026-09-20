@@ -6,7 +6,6 @@ import {
 
 import { CATEGORIES, MENU, type MenuItem } from '@/lib/demo-data';
 import { inr, splitTaxFromInclusive, roundToRupee } from '@/lib/inr';
-import { pushToSheet } from '@/lib/google-sheets';
 import Receipt from './Receipt';
 
 type CartLine = { item: MenuItem; qty: number };
@@ -75,26 +74,6 @@ export default function POSScreen() {
     });
     setShowPay(false);
     setCart([]);
-
-    void pushToSheet('order', {
-      invoice_no: invoiceNo,
-      date: at.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
-      time: at.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
-      type: orderType,
-      table: orderType === 'dine_in' ? table : '',
-      items_text: lines.map((l) => `${l.qty}× ${l.name}`).join(', '),
-      items_count: lines.reduce((s, l) => s + l.qty, 0),
-      cashier: 'Demo Owner',
-      taxable_minor: totals.taxable,
-      cgst_minor: totals.cgst,
-      sgst_minor: totals.sgst,
-      igst_minor: 0,
-      round_off_minor: totals.round_off,
-      total_minor: totals.total,
-      method,
-      gstin: '',
-      place_of_supply: '',
-    });
   }
 
   return (

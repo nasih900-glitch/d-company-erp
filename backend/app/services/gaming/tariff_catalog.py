@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 from uuid import UUID, uuid4
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.models import AuditLog, Branch, GamingPackage
@@ -36,7 +36,7 @@ class GamingTariffSpec:
     sort_order: int
 
 
-# Exact transcription of the D Company printed card supplied on 2026-09-03.
+# Exact transcription of the D Company printed card supplied on 2026-09-13.
 # All money is integer paise (₹80 == 8_000), never floating-point rupees.
 D_COMPANY_GAMING_TARIFF: Final[tuple[GamingTariffSpec, ...]] = (
     GamingTariffSpec(
@@ -149,7 +149,7 @@ D_COMPANY_GAMING_TARIFF: Final[tuple[GamingTariffSpec, ...]] = (
         "simdrive",
         "standard",
         "base",
-        "Simdrive · 15 min",
+        "Racing Sim · 15 min",
         15,
         7_000,
         1,
@@ -162,7 +162,7 @@ D_COMPANY_GAMING_TARIFF: Final[tuple[GamingTariffSpec, ...]] = (
         "simdrive",
         "standard",
         "base",
-        "Simdrive · 30 min",
+        "Racing Sim · 30 min",
         30,
         10_000,
         1,
@@ -175,7 +175,7 @@ D_COMPANY_GAMING_TARIFF: Final[tuple[GamingTariffSpec, ...]] = (
         "simdrive",
         "standard",
         "base",
-        "Simdrive · 1 hour",
+        "Racing Sim · 1 hour",
         60,
         18_000,
         1,
@@ -183,89 +183,99 @@ D_COMPANY_GAMING_TARIFF: Final[tuple[GamingTariffSpec, ...]] = (
         30,
     ),
     GamingTariffSpec(
-        "premium-single-session-60m",
-        "ps5",
-        "single",
-        "premium",
+        "vr-games-session-15m",
+        "vr",
+        "vr_games",
+        "standard",
         "base",
-        "Premium Single Mode · 1 hour",
-        60,
-        15_000,
+        "VR Games · 15 min",
+        15,
+        8_000,
         1,
         1,
-        110,
+        10,
     ),
     GamingTariffSpec(
-        "premium-single-extension-30m",
-        "ps5",
-        "single",
-        "premium",
-        "extension",
-        "Premium Single Mode · 30 min extension",
+        "vr-games-session-30m",
+        "vr",
+        "vr_games",
+        "standard",
+        "base",
+        "VR Games · 30 min",
         30,
-        7_000,
-        1,
-        1,
-        120,
-    ),
-    GamingTariffSpec(
-        "premium-single-extension-60m",
-        "ps5",
-        "single",
-        "premium",
-        "extension",
-        "Premium Single Mode · 1 hour extension",
-        60,
         12_000,
         1,
         1,
-        130,
+        20,
     ),
     GamingTariffSpec(
-        "premium-dual-session-60m",
-        "ps5",
-        "dual",
-        "premium",
+        "vr-games-session-60m",
+        "vr",
+        "vr_games",
+        "standard",
         "base",
-        "Premium Dual Mode · 1 hour",
+        "VR Games · 1 hour",
         60,
-        19_000,
-        2,
-        4,
+        20_000,
+        1,
+        1,
+        30,
+    ),
+    GamingTariffSpec(
+        "vr-racing-session-15m",
+        "simulator",
+        "vr_racing",
+        "standard",
+        "base",
+        "VR Racing Sim · 15 min",
+        15,
+        10_000,
+        1,
+        1,
         110,
     ),
     GamingTariffSpec(
-        "premium-dual-extension-30m",
-        "ps5",
-        "dual",
-        "premium",
-        "extension",
-        "Premium Dual Mode · 30 min extension",
+        "vr-racing-session-30m",
+        "simulator",
+        "vr_racing",
+        "standard",
+        "base",
+        "VR Racing Sim · 30 min",
         30,
-        9_000,
-        2,
-        4,
+        14_000,
+        1,
+        1,
         120,
     ),
     GamingTariffSpec(
-        "premium-dual-extension-60m",
-        "ps5",
-        "dual",
-        "premium",
-        "extension",
-        "Premium Dual Mode · 1 hour extension",
+        "vr-racing-session-60m",
+        "simulator",
+        "vr_racing",
+        "standard",
+        "base",
+        "VR Racing Sim · 1 hour",
         60,
-        15_000,
-        2,
-        4,
+        25_000,
+        1,
+        1,
         130,
     ),
 )
 
-_CANONICAL_CODES: Final[frozenset[str]] = frozenset(
-    spec.code for spec in D_COMPANY_GAMING_TARIFF
+RETIRED_PREMIUM_CODES: Final[frozenset[str]] = frozenset(
+    {
+        "premium-single-session-60m",
+        "premium-single-extension-30m",
+        "premium-single-extension-60m",
+        "premium-dual-session-60m",
+        "premium-dual-extension-30m",
+        "premium-dual-extension-60m",
+    }
 )
-_COVERED_STATION_TYPES: Final[frozenset[str]] = frozenset({"ps5", "simulator"})
+
+_CANONICAL_CODES: Final[frozenset[str]] = frozenset(spec.code for spec in D_COMPANY_GAMING_TARIFF)
+FIXED_TARIFF_STATION_TYPES: Final[frozenset[str]] = frozenset({"ps5", "simulator", "vr"})
+_KNOWN_CODES: Final[frozenset[str]] = _CANONICAL_CODES | RETIRED_PREMIUM_CODES
 _UPSERT_FIELDS: Final[tuple[str, ...]] = (
     "station_type",
     "variant",
@@ -279,8 +289,8 @@ _UPSERT_FIELDS: Final[tuple[str, ...]] = (
     "sort_order",
     "is_active",
 )
-_AUDIT_SOURCE: Final[str] = "script/ensure_gaming_tariff-v1"
-_AUDIT_REASON: Final[str] = "Applied the owner-approved D Company tariff card dated 2026-09-03."
+_AUDIT_SOURCE: Final[str] = "script/ensure_gaming_tariff-v2"
+_AUDIT_REASON: Final[str] = "Applied the owner-approved D Company tariff card dated 2026-09-13."
 
 
 @dataclass(frozen=True, slots=True)
@@ -307,7 +317,7 @@ class GamingTariffCatalogConflictError(RuntimeError):
             for row in conflicts
         )
         super().__init__(
-            "unexpected active PS5/simulator package rows block tariff sync; "
+            "unexpected active fixed-tariff package rows block tariff sync; "
             f"review or explicitly retire them first: {rows}"
         )
 
@@ -317,11 +327,12 @@ class GamingTariffUpsertResult:
     created_codes: tuple[str, ...]
     updated_codes: tuple[str, ...]
     unchanged_codes: tuple[str, ...]
+    retired_codes: tuple[str, ...]
     dry_run: bool
 
     @property
     def changed_count(self) -> int:
-        return len(self.created_codes) + len(self.updated_codes)
+        return len(self.created_codes) + len(self.updated_codes) + len(self.retired_codes)
 
 
 def _desired_values(spec: GamingTariffSpec) -> dict[str, object]:
@@ -369,9 +380,7 @@ def _validate_catalog_definition() -> None:
         if not (1 <= spec.included_players <= spec.max_players <= 10):
             raise RuntimeError(f"invalid player limits in gaming tariff: {spec.code}")
         supports_extra_players = (
-            spec.station_type == "ps5"
-            and spec.variant == "dual"
-            and spec.included_players == 2
+            spec.station_type == "ps5" and spec.variant == "dual" and spec.included_players == 2
         )
         if spec.max_players > spec.included_players and not supports_extra_players:
             raise RuntimeError(f"invalid multiplayer package in gaming tariff: {spec.code}")
@@ -389,7 +398,7 @@ async def upsert_d_company_gaming_tariff(
 ) -> GamingTariffUpsertResult:
     """Plan and, unless dry-run, upsert the canonical 17-row tariff.
 
-    Active non-canonical rows in the covered PS5/simulator scope are reported
+    Active unknown rows in the covered PS5/simulator/VR scope are reported
     as conflicts. They are never silently deleted, retired, renamed, or folded
     into the new catalog.
     """
@@ -412,30 +421,32 @@ async def upsert_d_company_gaming_tariff(
             )
         ).scalar_one_or_none()
         if locked_branch_id is None:
-            raise RuntimeError(
-                f"active branch {branch_id} was not found for company {company_id}"
-            )
+            raise RuntimeError(f"active branch {branch_id} was not found for company {company_id}")
 
     rows = (
-        await session.execute(
-            select(GamingPackage)
-            .where(
-                GamingPackage.company_id == company_id,
-                GamingPackage.branch_id == branch_id,
-                GamingPackage.deleted_at.is_(None),
-                or_(
-                    GamingPackage.code.in_(_CANONICAL_CODES),
-                    (
-                        GamingPackage.is_active.is_(True)
-                        & GamingPackage.station_type.in_(_COVERED_STATION_TYPES)
+        (
+            await session.execute(
+                select(GamingPackage)
+                .where(
+                    GamingPackage.company_id == company_id,
+                    GamingPackage.branch_id == branch_id,
+                    GamingPackage.deleted_at.is_(None),
+                    or_(
+                        GamingPackage.code.in_(_KNOWN_CODES),
+                        (
+                            GamingPackage.is_active.is_(True)
+                            & GamingPackage.station_type.in_(FIXED_TARIFF_STATION_TYPES)
+                        ),
                     ),
-                ),
+                )
+                .order_by(GamingPackage.code, GamingPackage.id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
             )
-            .order_by(GamingPackage.code, GamingPackage.id)
-            .with_for_update()
-            .execution_options(populate_existing=True)
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
 
     conflicts = tuple(
         GamingTariffConflict(
@@ -449,16 +460,18 @@ async def upsert_d_company_gaming_tariff(
             price_minor=int(row.price_minor),
         )
         for row in rows
-        if row.code not in _CANONICAL_CODES
-        and row.station_type in _COVERED_STATION_TYPES
+        if row.code not in _KNOWN_CODES and row.station_type in FIXED_TARIFF_STATION_TYPES
     )
     if conflicts:
         raise GamingTariffCatalogConflictError(conflicts)
 
-    existing_by_code = {row.code: row for row in rows if row.code in _CANONICAL_CODES}
+    existing_by_code = {row.code: row for row in rows if row.code in _KNOWN_CODES}
     created_codes: list[str] = []
     updated_codes: list[str] = []
     unchanged_codes: list[str] = []
+    retired_codes = sorted(
+        row.code for row in rows if row.code in RETIRED_PREMIUM_CODES and row.is_active
+    )
     for spec in D_COMPANY_GAMING_TARIFF:
         existing = existing_by_code.get(spec.code)
         if existing is None:
@@ -474,6 +487,7 @@ async def upsert_d_company_gaming_tariff(
         created_codes=tuple(created_codes),
         updated_codes=tuple(updated_codes),
         unchanged_codes=tuple(unchanged_codes),
+        retired_codes=tuple(retired_codes),
         dry_run=dry_run,
     )
     if dry_run:
@@ -510,10 +524,7 @@ async def upsert_d_company_gaming_tariff(
     ]
     insert_statement = pg_insert(GamingPackage).values(values)
     excluded = insert_statement.excluded
-    update_values = {
-        field: getattr(excluded, field)
-        for field in _UPSERT_FIELDS
-    }
+    update_values = {field: getattr(excluded, field) for field in _UPSERT_FIELDS}
     update_values["updated_at"] = func.now()
     statement = insert_statement.on_conflict_do_update(
         index_elements=[
@@ -525,14 +536,28 @@ async def upsert_d_company_gaming_tariff(
         set_=update_values,
         where=or_(
             *(
-                getattr(GamingPackage, field).is_distinct_from(
-                    getattr(excluded, field)
-                )
+                getattr(GamingPackage, field).is_distinct_from(getattr(excluded, field))
                 for field in _UPSERT_FIELDS
             )
         ),
     )
     await session.execute(statement)
+
+    if retired_codes:
+        for code in retired_codes:
+            package = existing_by_code[code]
+            # Avoid triggering the normal ORM package audit in addition to
+            # the explicit deployment audit recorded below.
+            await session.execute(
+                update(GamingPackage)
+                .where(
+                    GamingPackage.id == package.id,
+                    GamingPackage.company_id == company_id,
+                    GamingPackage.branch_id == branch_id,
+                    GamingPackage.is_active.is_(True),
+                )
+                .values(is_active=False, updated_at=func.now())
+            )
 
     for code in created_codes:
         desired = _desired_values(specs_by_code[code])
@@ -572,11 +597,28 @@ async def upsert_d_company_gaming_tariff(
                 reason=_AUDIT_REASON,
             )
         )
+    for code in retired_codes:
+        package = existing_by_code[code]
+        session.add(
+            AuditLog(
+                actor_user_id=None,
+                company_id=company_id,
+                action="update",
+                entity_type="GamingPackage",
+                entity_id=str(package.id),
+                before={"is_active": True},
+                after={"is_active": False},
+                user_agent=_AUDIT_SOURCE,
+                reason=_AUDIT_REASON,
+            )
+        )
     return result
 
 
 __all__ = [
     "D_COMPANY_GAMING_TARIFF",
+    "FIXED_TARIFF_STATION_TYPES",
+    "RETIRED_PREMIUM_CODES",
     "GamingTariffCatalogConflictError",
     "GamingTariffConflict",
     "GamingTariffSpec",

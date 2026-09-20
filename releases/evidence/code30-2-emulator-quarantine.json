@@ -1,0 +1,157 @@
+{
+  "schema_version": 1,
+  "captured_at_utc": "2026-09-20T01:26:03Z",
+  "package_name": "cloud.dcompany.erp",
+  "archive_sha256": "7a44d49f12fbae4a14dca1352284542c96ab0f6fe3c3c6fc53f172cfeb0e9dbe",
+  "archived_room_unresolved_outbox_count": 0,
+  "retired_installation_ids": [
+    "63a3bdac-1e66-4656-86ba-7ffedefc11d0",
+    "d664b4a5-d293-48a7-a96c-8c3050ed5e76"
+  ],
+  "avds": [
+    {
+      "name": "code29_patch_trial_20260912",
+      "factory_reset_or_previously_clean": true,
+      "package_absent": true,
+      "data_absent": true,
+      "network_disabled_during_verification": true,
+      "verified_at_utc": "2026-09-20T01:13:42Z"
+    },
+    {
+      "name": "code29_pos_notice_regression_20260912",
+      "factory_reset_or_previously_clean": true,
+      "package_absent": true,
+      "data_absent": true,
+      "network_disabled_during_verification": true,
+      "verified_at_utc": "2026-09-20T01:15:50Z"
+    },
+    {
+      "name": "code29_release_20260912",
+      "factory_reset_or_previously_clean": true,
+      "package_absent": true,
+      "data_absent": true,
+      "network_disabled_during_verification": true,
+      "verified_at_utc": "2026-09-20T01:16:27Z"
+    },
+    {
+      "name": "code29_signed_upgrade_20260912",
+      "factory_reset_or_previously_clean": true,
+      "package_absent": true,
+      "data_absent": true,
+      "network_disabled_during_verification": true,
+      "verified_at_utc": "2026-09-20T01:17:02Z"
+    },
+    {
+      "name": "dcompany_code26_auth_regression",
+      "factory_reset_or_previously_clean": true,
+      "package_absent": true,
+      "data_absent": true,
+      "network_disabled_during_verification": true,
+      "verified_at_utc": "2026-09-20T01:17:37Z"
+    },
+    {
+      "name": "dcompany_code26_release_ime_audit",
+      "factory_reset_or_previously_clean": true,
+      "package_absent": true,
+      "data_absent": true,
+      "network_disabled_during_verification": true,
+      "verified_at_utc": "2026-09-20T01:18:14Z"
+    },
+    {
+      "name": "dcompany_code26_shop_day",
+      "factory_reset_or_previously_clean": true,
+      "package_absent": true,
+      "data_absent": true,
+      "network_disabled_during_verification": true,
+      "verified_at_utc": "2026-09-20T01:18:50Z"
+    },
+    {
+      "name": "dcompany_code26_shop_day_fixed",
+      "factory_reset_or_previously_clean": true,
+      "package_absent": true,
+      "data_absent": true,
+      "network_disabled_during_verification": true,
+      "verified_at_utc": "2026-09-20T01:19:26Z"
+    },
+    {
+      "name": "dcompany_code26_signed_upgrade",
+      "factory_reset_or_previously_clean": true,
+      "package_absent": true,
+      "data_absent": true,
+      "network_disabled_during_verification": true,
+      "verified_at_utc": "2026-09-20T01:20:07Z"
+    },
+    {
+      "name": "dcompany_code27_signed_upgrade_20260909_0901",
+      "factory_reset_or_previously_clean": true,
+      "package_absent": true,
+      "data_absent": true,
+      "network_disabled_during_verification": true,
+      "verified_at_utc": "2026-09-20T01:20:42Z"
+    },
+    {
+      "name": "dcompany_code28_signed_upgrade_20260909_2038",
+      "factory_reset_or_previously_clean": true,
+      "package_absent": true,
+      "data_absent": true,
+      "network_disabled_during_verification": true,
+      "verified_at_utc": "2026-09-20T01:21:18Z"
+    },
+    {
+      "name": "dcompany_code29_business",
+      "factory_reset_or_previously_clean": true,
+      "package_absent": true,
+      "data_absent": true,
+      "network_disabled_during_verification": true,
+      "verified_at_utc": "2026-09-20T01:21:59Z"
+    },
+    {
+      "name": "dcompany_code29_pricing_card",
+      "factory_reset_or_previously_clean": true,
+      "package_absent": true,
+      "data_absent": true,
+      "network_disabled_during_verification": true,
+      "verified_at_utc": "2026-09-20T01:22:48Z"
+    },
+    {
+      "name": "dcompany_code30_ci_touch_triage_20260913",
+      "factory_reset_or_previously_clean": true,
+      "package_absent": true,
+      "data_absent": true,
+      "network_disabled_during_verification": true,
+      "verified_at_utc": "2026-09-20T01:23:24Z"
+    },
+    {
+      "name": "dcompany_code30_customer_lookup_20260913",
+      "factory_reset_or_previously_clean": true,
+      "package_absent": true,
+      "data_absent": true,
+      "network_disabled_during_verification": true,
+      "verified_at_utc": "2026-09-20T01:24:02Z"
+    },
+    {
+      "name": "dcompany_code30_full_trial_20260914",
+      "factory_reset_or_previously_clean": true,
+      "package_absent": true,
+      "data_absent": true,
+      "network_disabled_during_verification": true,
+      "verified_at_utc": "2026-09-20T01:25:47Z"
+    },
+    {
+      "name": "dcompany_customer_playtime_20260913",
+      "factory_reset_or_previously_clean": true,
+      "package_absent": true,
+      "data_absent": true,
+      "network_disabled_during_verification": true,
+      "verified_at_utc": "2026-09-20T01:24:39Z"
+    },
+    {
+      "name": "dcompany_tablet",
+      "factory_reset_or_previously_clean": true,
+      "package_absent": true,
+      "data_absent": true,
+      "network_disabled_during_verification": true,
+      "verified_at_utc": "2026-09-20T01:25:20Z"
+    }
+  ]
+}

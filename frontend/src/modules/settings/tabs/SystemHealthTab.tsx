@@ -331,7 +331,7 @@ export function SystemHealthOverview({
               <div>
                 <p className="text-xs font-medium uppercase tracking-wide text-fg-muted">Update coverage</p>
                 <p className="mt-1 font-mono text-xl font-semibold tabular-nums">
-                  Code {health.devices.latest_supported_version_code}
+                  Build {health.devices.latest_supported_version_code}
                 </p>
                 <p className="mt-1 text-xs text-fg-muted">Latest supported Android version code</p>
               </div>

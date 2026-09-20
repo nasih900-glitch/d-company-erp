@@ -54,7 +54,7 @@ def test_prod_accepts_strong_jwt_secret(monkeypatch):
     from app.core import config
     from app.core.release_identity import ReleaseIdentity
 
-    identity = ReleaseIdentity(version_name="3.1.14", source_git_sha="ab" * 20)
+    identity = ReleaseIdentity(version_name="3.1.25", source_git_sha="ab" * 20)
     monkeypatch.setattr(config, "read_backend_build_identity", lambda: identity)
     s = _settings(
         env="prod",
@@ -63,6 +63,9 @@ def test_prod_accepts_strong_jwt_secret(monkeypatch):
         jwt_secret="k" * 48,
         remote_assistance_pairing_secret="independent-pairing-secret-longer-than-32-characters",
         remote_assistance_relay_secret="cnJycnJycnJycnJycnJycnJycnJycnJycnJycnJycnI=",
+        google_sheets_secret_encryption_key=(
+            "Z2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2c="
+        ),
         redis_url=(
             "redis://erp_backend:0123456789abcdef0123456789abcdef"
             "0123456789abcdef0123456789abcdef@redis:6379/0"

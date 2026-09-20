@@ -26,7 +26,7 @@ services:
       context: .
       dockerfile: infra/docker/caddy.Dockerfile
       args:
-        APP_VERSION: ${APP_VERSION:-3.1.14}
+        APP_VERSION: ${APP_VERSION:-3.1.29}
         APP_REVISION: ${APP_REVISION:-unknown}
     restart: unless-stopped
     logging: *default-logging
@@ -61,7 +61,7 @@ services:
       context: .
       dockerfile: infra/docker/postgres.Dockerfile
       args:
-        APP_VERSION: ${APP_VERSION:-3.1.14}
+        APP_VERSION: ${APP_VERSION:-3.1.29}
         APP_REVISION: ${APP_REVISION:-unknown}
     restart: unless-stopped
     logging: *default-logging
@@ -88,7 +88,13 @@ services:
       - backend_data
 
   redis:
-    image: redis:7-alpine@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf
+    image: d-company-erp-redis:${APP_REVISION:-unknown}
+    build:
+      context: .
+      dockerfile: infra/docker/redis.Dockerfile
+      args:
+        APP_VERSION: ${APP_VERSION:-3.1.29}
+        APP_REVISION: ${APP_REVISION:-unknown}
     restart: unless-stopped
     logging: *default-logging
     environment:
@@ -121,14 +127,14 @@ services:
       context: .
       dockerfile: infra/docker/backend.Dockerfile
       args:
-        APP_VERSION: ${APP_VERSION:-3.1.14}
+        APP_VERSION: ${APP_VERSION:-3.1.29}
         APP_REVISION: ${APP_REVISION:-unknown}
     restart: unless-stopped
     logging: *default-logging
     environment:
       ENV: prod
       # Runtime declarations are checked against the independently baked file.
-      APP_VERSION: ${APP_VERSION:-3.1.14}
+      APP_VERSION: ${APP_VERSION:-3.1.29}
       APP_REVISION: ${APP_REVISION:-unknown}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: json
@@ -144,6 +150,7 @@ services:
       # rejects a missing/default value in production; never reuse JWT_SECRET.
       REMOTE_ASSISTANCE_PAIRING_SECRET: ${REMOTE_ASSISTANCE_PAIRING_SECRET}
       REMOTE_ASSISTANCE_RELAY_SECRET: ${REMOTE_ASSISTANCE_RELAY_SECRET}
+      GOOGLE_SHEETS_SECRET_ENCRYPTION_KEY: ${GOOGLE_SHEETS_SECRET_ENCRYPTION_KEY}
       JWT_SECRET: ${JWT_SECRET}
       JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
       ACCESS_TOKEN_MINUTES: ${ACCESS_TOKEN_MINUTES:-15}
@@ -214,8 +221,8 @@ services:
       dockerfile: infra/docker/frontend.Dockerfile
       args:
         VITE_API_URL: https://${DOMAIN}/api/v1
-        VITE_APP_VERSION: ${APP_VERSION:-3.1.14}
-        APP_VERSION: ${APP_VERSION:-3.1.14}
+        VITE_APP_VERSION: ${APP_VERSION:-3.1.29}
+        APP_VERSION: ${APP_VERSION:-3.1.29}
         APP_REVISION: ${APP_REVISION:-unknown}
     restart: unless-stopped
     logging: *default-logging

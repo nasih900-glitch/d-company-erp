@@ -259,7 +259,13 @@ async def test_direct_publish_claim_and_legacy_protected_recovery(
         password_hash=hash_password("password1234"),
         status="active",
     )
-    session.add_all([category, shift, abandoned_opener])
+    # The open drawer belongs to a different employee. The ordinary owner token
+    # below has POS permission but no protected-access bypass, proving routine
+    # direct billing is permission-scoped rather than shift-opener-scoped.
+    shift.opened_by = abandoned_opener.id
+    session.add_all([category, abandoned_opener])
+    await session.flush()
+    session.add(shift)
     await session.flush()
     session.add(item)
     await session.commit()
@@ -274,6 +280,18 @@ async def test_direct_publish_claim_and_legacy_protected_recovery(
     )
     headers = {
         "Authorization": f"Bearer {access_token}",
+        "X-Terminal-Id": str(terminal.id),
+    }
+    billing_token = issue_access_token(
+        user_id=owner.id,
+        company_id=company.id,
+        branch_id=branch.id,
+        roles=["owner"],
+        auth_version=owner.auth_version,
+        extra={"protected_access": False, "audit_access": False},
+    )
+    billing_headers = {
+        "Authorization": f"Bearer {billing_token}",
         "X-Terminal-Id": str(terminal.id),
     }
     publish_create_key = f"direct-publish-source-{uuid4()}"
@@ -303,7 +321,7 @@ async def test_direct_publish_claim_and_legacy_protected_recovery(
         }
         publish_source = await client.post(
             "/api/v1/pos/orders",
-            headers={**headers, "Idempotency-Key": publish_create_key},
+            headers={**billing_headers, "Idempotency-Key": publish_create_key},
             json=payload,
         )
         assert publish_source.status_code == 201, publish_source.text
@@ -314,7 +332,7 @@ async def test_direct_publish_claim_and_legacy_protected_recovery(
         client_a = uuid4()
         client_b = uuid4()
         publish_headers = {
-            **headers,
+            **billing_headers,
             "Idempotency-Key": publish_key,
             "X-Checkout-Client-Instance": str(client_a),
         }
@@ -349,7 +367,7 @@ async def test_direct_publish_claim_and_legacy_protected_recovery(
         competing_publish = await client.post(
             f"/api/v1/pos/orders/{published_order_id}/publish-checkout-claim",
             headers={
-                **headers,
+                **billing_headers,
                 "Idempotency-Key": f"competing-publish-{uuid4()}",
                 "X-Checkout-Client-Instance": str(client_b),
             },

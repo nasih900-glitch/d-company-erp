@@ -117,7 +117,9 @@ class ShiftAccountingContractTest {
               "net_collections_minor": 89000,
               "total_sales_minor": 83600,
               "opened_by": "user-1",
-              "opened_by_name": "Rafi"
+              "opened_by_name": "Rafi",
+              "opening_client_platform": "android",
+              "opening_client_installation_id": "b7ee1c68-77e2-48e8-82ac-0d4623606ec1"
             }
             """.trimIndent(),
         )
@@ -130,6 +132,11 @@ class ShiftAccountingContractTest {
         val accounting = resolved.accountingBreakdownOrNull()
 
         assertNotNull(accounting)
+        assertEquals("android", openCache.openingClientPlatform)
+        assertEquals(
+            "b7ee1c68-77e2-48e8-82ac-0d4623606ec1",
+            openCache.openingClientInstallationId,
+        )
         assertEquals(83_600L, accounting!!.posCollectionsMinor)
         assertEquals(10_000L, accounting.membershipCollectionsMinor)
         assertEquals(93_600L, accounting.grossCollectionsMinor)

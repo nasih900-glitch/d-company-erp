@@ -706,7 +706,6 @@ async def test_valid_held_payment_consumes_claim_in_sale_transaction(monkeypatch
     monkeypatch.setattr(pos_router, "check_or_reserve", _reserve)
     monkeypatch.setattr(pos_router, "store_response", _store)
     monkeypatch.setattr(pos_router, "_finalize_order", _finalize)
-    monkeypatch.setattr(pos_router, "_schedule_order_paid_event", lambda *_args, **_kwargs: None)
     request = SimpleNamespace(
         state=SimpleNamespace(
             idempotency_key="held-payment-valid-claim",
@@ -802,11 +801,6 @@ async def test_valid_held_zero_finalization_consumes_claim_atomically(monkeypatc
     monkeypatch.setattr(pos_router, "check_or_reserve", _reserve)
     monkeypatch.setattr(pos_router, "_finalize_order", _finalize)
     monkeypatch.setattr(pos_router, "store_response", _store)
-    monkeypatch.setattr(
-        pos_router,
-        "_schedule_order_paid_event",
-        lambda *_args, **_kwargs: None,
-    )
     request = SimpleNamespace(
         state=SimpleNamespace(
             idempotency_key="held-zero-valid-claim",

@@ -5,23 +5,18 @@ internal data class ExpensePaymentOption(
     val label: String,
 )
 
-/**
- * Ordinary Finance expenses are not connected to a POS shift drawer. Keeping
- * cash out of this form prevents a paid-out from silently leaving expected
- * drawer cash unchanged. Historical cash expenses remain readable; the API
- * is the final enforcement boundary for deployed older clients.
- */
+/** Cash is explicit because it moves one selected open shift drawer. */
 internal object ExpensePaymentPolicy {
     const val DefaultRail = "upi"
 
     val Options = listOf(
+        ExpensePaymentOption("cash", "Cash paid from shift drawer"),
         ExpensePaymentOption("upi", "UPI (business account)"),
         ExpensePaymentOption("card", "Business debit card"),
         ExpensePaymentOption("bank", "Bank transfer"),
     )
 
     const val CashDrawerGuidance =
-        "Cash is unavailable here because ordinary expenses are not linked to the open " +
-            "shift drawer. Use UPI, business debit card or bank transfer. Cash paid-outs " +
-            "will be available only through the future shift-linked drawer workflow."
+        "Cash paid-outs require selecting the exact open shift that supplied the cash. " +
+            "The server reduces that drawer atomically when the saved expense syncs."
 }

@@ -49,9 +49,12 @@ class CacheIsolationRoomTest {
             SERVER_DERIVED_CACHE_TABLES.toSet() + LOCAL_DURABLE_TABLES,
             applicationTables,
         )
-        val insertionOrder = ALL_SCOPE_TABLES
-            .filterNot { it == "local_bug_report_attachments" } +
-            "local_bug_report_attachments"
+        val childTables = listOf(
+            "local_expense_receipts",
+            "local_expense_receipt_chunks",
+            "local_bug_report_attachments",
+        )
+        val insertionOrder = ALL_SCOPE_TABLES.filterNot { it in childTables } + childTables
         insertionOrder.forEach { table ->
             insertSyntheticRow(table)
         }
@@ -81,6 +84,45 @@ class CacheIsolationRoomTest {
 
         assertEquals(menuBefore, dumpTable("menu_items"))
         assertEquals(orderBefore, dumpTable("local_orders"))
+    }
+
+    @Test
+    fun pendingExpenseReceiptBlocksPurgeAfterExpenseHeaderIsSynced() = runBlocking {
+        insertSyntheticRow("local_expenses")
+        insertSyntheticRow("local_expense_receipts", unresolvedState = "pending")
+        val retained = dumpTable("local_expense_receipts")
+        val purger = RoomScopeDataPurger(db)
+
+        assertTrue(purger.hasUnresolvedWork())
+        assertFalse(purger.purgeIfClean())
+        assertEquals(retained, dumpTable("local_expense_receipts"))
+
+        db.openHelper.writableDatabase.execSQL(
+            "UPDATE local_expense_receipts SET syncState = 'synced'",
+        )
+        assertFalse(purger.hasUnresolvedWork())
+        assertTrue(purger.purgeIfClean())
+    }
+
+    @Test
+    fun pendingCashExpenseBlocksPurgeAndRetainsSelectedShiftIdentity() = runBlocking {
+        insertSyntheticRow("local_expenses", unresolvedState = "pending")
+        db.openHelper.writableDatabase.execSQL(
+            "UPDATE local_expenses SET paidVia = 'cash', shiftId = ?",
+            arrayOf("6d330c0a-d038-40d8-befb-b9fd21898fec"),
+        )
+        val before = dumpTable("local_expenses")
+        val purger = RoomScopeDataPurger(db)
+
+        assertTrue(purger.hasUnresolvedWork())
+        assertFalse(purger.purgeIfClean())
+        assertEquals(before, dumpTable("local_expenses"))
+        db.openHelper.writableDatabase.query(
+            "SELECT shiftId FROM local_expenses",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("6d330c0a-d038-40d8-befb-b9fd21898fec", cursor.getString(0))
+        }
     }
 
     @Test
@@ -146,6 +188,8 @@ class CacheIsolationRoomTest {
                 table == "local_bug_report_attachments" && name == "reportLocalId" -> "value-0"
                 table == "local_bug_report_attachments" && name == "ownerCompanyId" -> "value-1"
                 table == "local_bug_report_attachments" && name == "ownerUserId" -> "value-2"
+                table == "local_expense_receipts" && name == "expenseLocalId" -> "value-0"
+                table == "local_expense_receipt_chunks" && name == "receiptLocalId" -> "value-0"
                 table.startsWith("local_") && name in setOf("state", "syncState") ->
                     unresolvedState ?: cleanLocalState(table)
                 type.contains("INT", ignoreCase = true) -> index + 1

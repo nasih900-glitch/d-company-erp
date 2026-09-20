@@ -2,11 +2,48 @@ package cloud.dcompany.erp.ui.screens
 
 import cloud.dcompany.erp.core.db.LocalOrderEntity
 import cloud.dcompany.erp.core.db.SyncState
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PosDirectSaleFeedbackTest {
+
+    @Test
+    fun `void failure claims checkout closure only after the bearer was removed`() {
+        val notClosed = posVoidFailureNotice(
+            checkoutClosedSafely = false,
+            checkoutWasSelected = true,
+            apiFailure = false,
+            detail = "local compare-and-set failed",
+        )
+        assertFalse(notClosed.contains("old checkout was closed safely"))
+        assertTrue(notClosed.contains("void request was not sent"))
+        assertTrue(notClosed.contains("may remain reserved"))
+
+        val closed = posVoidFailureNotice(
+            checkoutClosedSafely = true,
+            checkoutWasSelected = true,
+            apiFailure = true,
+            detail = "connection lost",
+        )
+        assertTrue(closed.contains("old checkout was closed safely"))
+        assertTrue(closed.contains("void was not confirmed"))
+    }
+
+    @Test
+    fun expiredWorkspaceFeedbackProtectsAgainstUnrecordedCollection() {
+        assertTrue(POS_PAYMENT_WORKSPACE_UNAVAILABLE_MESSAGE.contains("Sign in online again"))
+        assertTrue(POS_PAYMENT_WORKSPACE_UNAVAILABLE_MESSAGE.contains("No ERP payment was recorded"))
+        assertTrue(POS_PAYMENT_WORKSPACE_UNAVAILABLE_MESSAGE.contains("do not collect or retry"))
+    }
+
+    @Test
+    fun `retry and zero workspace feedback preserve the known financial outcome`() {
+        assertTrue(POS_RETRY_WORKSPACE_UNAVAILABLE_MESSAGE.contains("original saved payment"))
+        assertTrue(POS_RETRY_WORKSPACE_UNAVAILABLE_MESSAGE.contains("Do not collect payment again"))
+        assertTrue(POS_ZERO_WORKSPACE_UNAVAILABLE_MESSAGE.contains("Collect no money"))
+    }
 
     @Test
     fun pendingSaleDoesNotClaimAConfirmedOutcome() {

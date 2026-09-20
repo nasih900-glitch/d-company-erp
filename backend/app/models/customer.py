@@ -11,6 +11,7 @@ from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import (
+    Boolean,
     BigInteger,
     CheckConstraint,
     DateTime,
@@ -59,6 +60,67 @@ class Customer(Base, TimestampMixin, SoftDeleteMixin, TenantMixin):
     # app/services/pos/points.py) so spending points never demotes you.
     lifetime_gaming_points_earned: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     notes: Mapped[str | None] = mapped_column(String(500))
+
+
+class CustomerDirectoryState(Base):
+    """PII-free tenant generation advanced by every customer deletion."""
+
+    __tablename__ = "customer_directory_state"
+    __table_args__ = (
+        CheckConstraint(
+            "deletion_revision >= 0",
+            name="ck_customer_directory_state_nonnegative_revision",
+        ),
+    )
+
+    company_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("companies.id", ondelete="RESTRICT"),
+        primary_key=True,
+    )
+    deletion_revision: Mapped[int] = mapped_column(
+        BigInteger, default=0, server_default="0", nullable=False
+    )
+
+
+class GamingPlaytimeProgramSettings(Base, TimestampMixin, TenantMixin):
+    """Company-scoped proposal; it cannot activate rewards or messaging."""
+
+    __tablename__ = "gaming_playtime_program_settings"
+    __table_args__ = (
+        UniqueConstraint("company_id", name="uq_gaming_playtime_program_company"),
+        CheckConstraint("status = 'draft'", name="ck_gaming_playtime_program_draft"),
+        CheckConstraint(
+            "rewards_enabled = false AND messaging_enabled = false",
+            name="ck_gaming_playtime_program_disabled",
+        ),
+        CheckConstraint(
+            "threshold_paid_minutes BETWEEN 1 AND 525600",
+            name="ck_gaming_playtime_program_threshold",
+        ),
+        CheckConstraint(
+            "reward_minutes BETWEEN 1 AND 10080",
+            name="ck_gaming_playtime_program_reward",
+        ),
+    )
+
+    id: Mapped[UUID] = _uuid_pk()
+    status: Mapped[str] = mapped_column(
+        String(20), default="draft", server_default="draft", nullable=False
+    )
+    rewards_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
+    messaging_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
+    threshold_paid_minutes: Mapped[int] = mapped_column(
+        Integer, default=600, server_default="600", nullable=False
+    )
+    reward_minutes: Mapped[int] = mapped_column(
+        Integer, default=60, server_default="60", nullable=False
+    )
+    company_whatsapp_phone: Mapped[str | None] = mapped_column(String(20))
 
 
 class PointsRedemption(Base, TimestampMixin):

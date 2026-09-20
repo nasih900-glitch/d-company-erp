@@ -522,6 +522,7 @@ interface SyncMetaDao {
         LocalRefundEntity::class,
         ReportSnapshotEntity::class,
         CustomerCacheEntity::class,
+        CustomerDirectoryStateEntity::class,
         CustomerOrderHistoryEntity::class,
         LocalCustomerEntity::class,
         LocalMenuCategoryEntity::class,
@@ -539,6 +540,8 @@ interface SyncMetaDao {
         LocalAdjustmentEntity::class,
         ExpenseCacheEntity::class,
         LocalExpenseEntity::class,
+        LocalExpenseReceiptEntity::class,
+        LocalExpenseReceiptChunkEntity::class,
         AssetCacheEntity::class,
         LocalAssetEntity::class,
         CapitalEntryCacheEntity::class,
@@ -578,7 +581,7 @@ interface SyncMetaDao {
         LocalBugReportEntity::class,
         LocalBugReportAttachmentEntity::class,
     ],
-    version = 45,
+    version = 51,
     exportSchema = true,
 )
 @TypeConverters(

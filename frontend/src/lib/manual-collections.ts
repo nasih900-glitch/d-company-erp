@@ -79,6 +79,7 @@ export interface ManualCollectionTotals {
   total_minor: number;
   active_count: number;
   voided_count: number;
+  corrected_count: number;
 }
 
 export function manualCollectionTotals(rows: ManualCollectionDTO[]): ManualCollectionTotals {
@@ -90,11 +91,16 @@ export function manualCollectionTotals(rows: ManualCollectionDTO[]): ManualColle
     total_minor: 0,
     active_count: 0,
     voided_count: 0,
+    corrected_count: 0,
   };
 
   for (const row of rows) {
     if (row.is_voided) {
       totals.voided_count += 1;
+      continue;
+    }
+    if (row.is_corrected) {
+      totals.corrected_count += 1;
       continue;
     }
     totals[`${row.method}_minor`] += row.amount_minor;

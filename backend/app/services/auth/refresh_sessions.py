@@ -137,8 +137,12 @@ async def _locked_user(
     *,
     user_id: UUID,
 ) -> User:
+    # FOR NO KEY UPDATE still serializes rotation, logout, and user mutation,
+    # while allowing unrelated foreign-key inserts to reference this user.
     user = (
-        await session.execute(select(User).where(User.id == user_id).with_for_update())
+        await session.execute(
+            select(User).where(User.id == user_id).with_for_update(key_share=True)
+        )
     ).scalar_one_or_none()
     if not user or user.deleted_at or user.status != "active":
         raise AuthError("user not found")

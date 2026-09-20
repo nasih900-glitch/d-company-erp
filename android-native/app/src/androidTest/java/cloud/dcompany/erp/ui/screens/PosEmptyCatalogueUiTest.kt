@@ -1,13 +1,19 @@
 package cloud.dcompany.erp.ui.screens
 
+import android.view.accessibility.AccessibilityNodeInfo
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
+import androidx.compose.runtime.State
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsNotFocused
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
@@ -15,6 +21,7 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performImeAction
 import androidx.compose.ui.test.performTextReplacement
+import androidx.compose.ui.text.AnnotatedString
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import cloud.dcompany.erp.core.auth.PosAccess
 import cloud.dcompany.erp.core.db.MenuItemEntity
@@ -24,8 +31,11 @@ import cloud.dcompany.erp.ui.WorkspacePresentationPolicy
 import cloud.dcompany.erp.ui.presentationPolicy
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.DCompanyTheme
+import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Rule
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -146,6 +156,16 @@ class PosEmptyCatalogueUiTest {
     }
 
     @Test
+    fun refreshedHeldReviewDoesNotReplaceVisibleDiscountSuccessNotice() {
+        verifyHeldDiscountNoticeLayering(noticeBeforeRefresh = true)
+    }
+
+    @Test
+    fun discountSuccessNoticeAlsoLayersOverAnAlreadyRefreshedHeldReview() {
+        verifyHeldDiscountNoticeLayering(noticeBeforeRefresh = false)
+    }
+
+    @Test
     fun directCustomerBenefitsAreEditedBeforePaymentControlsExist() {
         val review = DirectCheckoutReview(
             localId = "direct-1",
@@ -227,11 +247,25 @@ class PosEmptyCatalogueUiTest {
             WorkspaceFeatureProfiles.Active.presentationPolicy(),
         onUpdateHeldOrderDiscount: (String, Long) -> Unit = { _, _ -> },
     ) {
+        renderDynamic(
+            state = mutableStateOf(state),
+            presentation = presentation,
+            onUpdateHeldOrderDiscount = onUpdateHeldOrderDiscount,
+        )
+    }
+
+    private fun renderDynamic(
+        state: State<PosUiState>,
+        presentation: WorkspacePresentationPolicy =
+            WorkspaceFeatureProfiles.Active.presentationPolicy(),
+        onUpdateHeldOrderDiscount: (String, Long) -> Unit = { _, _ -> },
+        onDismissNotice: () -> Unit = {},
+    ) {
         compose.setContent {
             DCompanyTheme {
                 Surface(Modifier.fillMaxSize(), color = Brand.Background) {
                     PosScreen(
-                        state = state,
+                        state = state.value,
                         recentReceipts = emptyList(),
                         canonicalReceipts = emptyList(),
                         receiptHistoryHasMore = false,
@@ -269,7 +303,7 @@ class PosEmptyCatalogueUiTest {
                         onVoidOrder = { _, _ -> },
                         onDismissHeldOrderReview = {},
                         onDismissHeldOrder = {},
-                        onDismissNotice = {},
+                        onDismissNotice = onDismissNotice,
                         onAcknowledgeReceipt = {},
                         onRefreshReceiptHistory = {},
                         onLoadMoreReceiptHistory = {},
@@ -283,5 +317,158 @@ class PosEmptyCatalogueUiTest {
                 }
             }
         }
+    }
+
+    private fun verifyHeldDiscountNoticeLayering(noticeBeforeRefresh: Boolean) {
+        val initialReview = heldDiscountReview(
+            manualDiscountMinor = 0L,
+            totalMinor = 23_000L,
+            dueMinor = 23_000L,
+            checkoutVersion = 1L,
+        )
+        val refreshedReview = heldDiscountReview(
+            manualDiscountMinor = 2_000L,
+            totalMinor = 21_000L,
+            dueMinor = 21_000L,
+            checkoutVersion = 2L,
+        )
+        val notice = "Manual discount ₹20.00 applied. Review the refreshed total before payment."
+        val state = mutableStateOf(
+            PosUiState(
+                items = emptyList(),
+                operationalItems = emptyList(),
+                menuEmpty = true,
+                everSynced = true,
+                online = true,
+                activeShiftId = "shift-1",
+                canCollectPayment = true,
+                heldOrderReview = initialReview,
+            ),
+        )
+        val updates = mutableListOf<Pair<String, Long>>()
+        renderDynamic(
+            state = state,
+            onUpdateHeldOrderDiscount = { orderId, amount -> updates += orderId to amount },
+            onDismissNotice = { state.value = state.value.copy(notice = null) },
+        )
+
+        compose.onNode(hasSetTextAction()).performClick().performTextReplacement("20")
+        compose.onNode(hasSetTextAction()).performImeAction()
+        compose.onNode(hasSetTextAction()).assertIsNotFocused()
+        compose.onNodeWithText("Apply discount").performScrollTo()
+            .assertIsDisplayed().assertIsEnabled().performClick()
+        compose.runOnIdle {
+            assertEquals(listOf("held-notice-1" to 2_000L), updates)
+        }
+
+        if (noticeBeforeRefresh) {
+            compose.runOnIdle { state.value = state.value.copy(notice = notice) }
+            awaitActiveWindowNode(notice, actionable = false)
+            compose.runOnIdle { state.value = state.value.copy(heldOrderReview = refreshedReview) }
+        } else {
+            compose.runOnIdle { state.value = state.value.copy(heldOrderReview = refreshedReview) }
+            settleActiveWindow()
+            compose.runOnIdle { state.value = state.value.copy(notice = notice) }
+        }
+
+        val noticeNode = awaitActiveWindowNode(notice, actionable = false)
+        assertEquals(notice, noticeNode.text?.toString())
+        val ok = awaitActiveWindowNode("OK", actionable = true)
+        assertTrue("The active-window OK action must dismiss the notice", ok.performAction(AccessibilityNodeInfo.ACTION_CLICK))
+        settleActiveWindow()
+
+        compose.onNodeWithText(notice).assertDoesNotExist()
+        compose.onNodeWithText("Review PS5 Station 3").assertIsDisplayed()
+        compose.onNode(hasSetTextAction()).assert(
+            SemanticsMatcher.expectValue(
+                SemanticsProperties.EditableText,
+                AnnotatedString("20"),
+            ),
+        ).assertIsEnabled()
+        compose.onNodeWithText("Apply discount").performScrollTo()
+            .assertIsDisplayed().assertIsNotEnabled()
+        compose.onNodeWithText("CONTINUE TO PAYMENT · ₹210.00")
+            .assertIsDisplayed().assertIsEnabled()
+        compose.runOnIdle {
+            assertEquals(listOf("held-notice-1" to 2_000L), updates)
+        }
+    }
+
+    private fun heldDiscountReview(
+        manualDiscountMinor: Long,
+        totalMinor: Long,
+        dueMinor: Long,
+        checkoutVersion: Long,
+    ) = HeldOrderReview(
+        orderId = "held-notice-1",
+        shiftIdAtReview = "shift-1",
+        sourceLabel = "PS5 Station 3",
+        invoiceNo = null,
+        type = "gaming",
+        subtotalMinor = 23_000L,
+        discountMinor = manualDiscountMinor,
+        manualDiscountMinor = manualDiscountMinor,
+        pointsRedeemedMinor = 0L,
+        pointsRedeemed = 0,
+        taxMinor = 0L,
+        roundOffMinor = 0L,
+        tipMinor = 0L,
+        totalMinor = totalMinor,
+        paidMinor = 0L,
+        dueMinor = dueMinor,
+        checkoutVersion = checkoutVersion,
+        maxManualDiscountMinor = 23_000L,
+        lines = listOf(
+            HeldOrderReviewLine(
+                identity = "held-notice-line",
+                name = "PS5 Station 3 · Solo · 60 min",
+                quantity = 1.0,
+                unitPriceMinor = 23_000L,
+                discountMinor = manualDiscountMinor,
+                lineTotalMinor = totalMinor,
+                variantName = null,
+                modifiers = emptyList(),
+                note = null,
+            ),
+        ),
+    )
+
+    private fun awaitActiveWindowNode(
+        exactText: String,
+        actionable: Boolean,
+    ): AccessibilityNodeInfo {
+        var matched: AccessibilityNodeInfo? = null
+        settleActiveWindow()
+        compose.waitUntil(timeoutMillis = 5_000L) {
+            matched = InstrumentationRegistry.getInstrumentation().uiAutomation.rootInActiveWindow
+                ?.findExactText(exactText, actionable)
+            matched != null
+        }
+        assertNotNull("Active window did not expose exact text: $exactText", matched)
+        return checkNotNull(matched)
+    }
+
+    private fun settleActiveWindow() {
+        compose.waitForIdle()
+        InstrumentationRegistry.getInstrumentation().uiAutomation.waitForIdle(250L, 5_000L)
+        compose.waitForIdle()
+    }
+
+    private fun AccessibilityNodeInfo.findExactText(
+        exactText: String,
+        actionable: Boolean,
+    ): AccessibilityNodeInfo? {
+        if (text?.toString() == exactText) {
+            if (!actionable) return this
+            var actionTarget: AccessibilityNodeInfo? = this
+            while (actionTarget != null) {
+                if (actionTarget.isClickable && actionTarget.isEnabled) return actionTarget
+                actionTarget = actionTarget.parent
+            }
+        }
+        for (index in 0 until childCount) {
+            getChild(index)?.findExactText(exactText, actionable)?.let { return it }
+        }
+        return null
     }
 }

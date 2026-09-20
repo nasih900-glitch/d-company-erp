@@ -20,7 +20,6 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models import (
-    Company,
     Customer,
     PosRefundCashHandoff,
     PosRefundCashHandoffCompletion,
@@ -30,6 +29,17 @@ from app.models import (
 )
 
 _BACKEND_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _insert_historical_company(session: Session, *, name: str) -> SimpleNamespace:
+    """Insert the company shape shared by the old schemas under test."""
+
+    company_id = uuid4()
+    session.execute(
+        text("INSERT INTO companies (id, name) VALUES (:id, :name)"),
+        {"id": company_id, "name": name},
+    )
+    return SimpleNamespace(id=company_id)
 
 
 def _insert_legacy_branch(
@@ -296,8 +306,10 @@ def test_0034_downgrade_refuses_to_drop_normalized_order_customer() -> None:
         engine = create_engine(database_url)
         try:
             with Session(engine) as session:
-                company = Company(id=uuid4(), name="0034 downgrade guard")
-                session.add(company)
+                company = _insert_historical_company(
+                    session,
+                    name="0034 downgrade guard",
+                )
                 session.flush()
                 branch = _insert_legacy_branch(session, company_id=company.id)
                 terminal = _insert_legacy_terminal(
@@ -389,8 +401,10 @@ def test_0036_upgrade_refuses_untrusted_legacy_refund_provenance(
         engine = create_engine(database_url)
         try:
             with Session(engine) as session:
-                company = Company(id=uuid4(), name="0036 orphan provider guard")
-                session.add(company)
+                company = _insert_historical_company(
+                    session,
+                    name="0036 orphan provider guard",
+                )
                 session.flush()
                 branch = _insert_legacy_branch(session, company_id=company.id)
                 terminal = _insert_legacy_terminal(
@@ -492,8 +506,10 @@ def test_0036_preserves_legacy_refund_but_rejects_forward_unlinked_writes() -> N
         engine = create_engine(database_url)
         try:
             with Session(engine) as session:
-                company = Company(id=uuid4(), name="0036 legacy LTV guard")
-                session.add(company)
+                company = _insert_historical_company(
+                    session,
+                    name="0036 legacy LTV guard",
+                )
                 session.flush()
                 branch = _insert_legacy_branch(session, company_id=company.id)
                 terminal = _insert_legacy_terminal(
@@ -684,8 +700,10 @@ def test_0036_downgrade_refuses_to_drop_forward_workflow_history(
         engine = create_engine(database_url)
         try:
             with Session(engine) as session:
-                company = Company(id=uuid4(), name="0036 downgrade guard")
-                session.add(company)
+                company = _insert_historical_company(
+                    session,
+                    name="0036 downgrade guard",
+                )
                 session.flush()
                 branch = _insert_legacy_branch(session, company_id=company.id)
                 terminal = _insert_legacy_terminal(

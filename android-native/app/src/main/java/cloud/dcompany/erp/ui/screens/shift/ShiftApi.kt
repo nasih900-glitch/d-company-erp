@@ -52,6 +52,9 @@ data class ShiftDetail(
     @SerialName("opening_protocol_revision") val openingProtocolRevision: Int? = null,
     /** Client class only; the server never exposes the causal opening key. */
     @SerialName("opening_client_platform") val openingClientPlatform: String? = null,
+    /** Random app-install discriminator used only for fail-closed offline ownership checks. */
+    @SerialName("opening_client_installation_id")
+    val openingClientInstallationId: String? = null,
     @SerialName("closed_by") val closedByUserId: String? = null,
     @SerialName("closed_by_name") val closedByName: String? = null,
     @SerialName("closed_by_email") val closedByEmail: String? = null,

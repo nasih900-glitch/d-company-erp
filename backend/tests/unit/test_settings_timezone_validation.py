@@ -46,3 +46,7 @@ def test_omitting_the_timezone_leaves_the_stored_value_untouched() -> None:
     assert BranchUpdate.model_validate({"name": "Nilambur"}).timezone is None
     # The branch default must itself survive the validator.
     assert BranchCreate.model_validate({"name": "Nilambur"}).timezone == "Asia/Kolkata"
+
+
+def test_company_update_cannot_mutate_google_sheets_destination() -> None:
+    assert "google_sheets_webhook_url" not in CompanyUpdate.model_fields

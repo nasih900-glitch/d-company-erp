@@ -29,10 +29,10 @@ from app.core.errors import (
 )
 from app.core.permissions import ROLE_PERMISSIONS
 from app.core.tenant import TenantContext
-from app.events.events import OrderPaid
 from app.models import (
     AuditLog,
     Branch,
+    Company,
     Order,
     OrderCheckoutClaim,
     OrderLine,
@@ -136,9 +136,7 @@ def test_membership_operations_do_not_widen_legacy_evidence_controls() -> None:
     assert _route_permissions(memberships_router.prepare_membership_payment) == (
         "memberships.manage",
     )
-    assert _route_permissions(memberships_router.refund_membership) == (
-        "memberships.manage",
-    )
+    assert _route_permissions(memberships_router.refund_membership) == ("memberships.manage",)
 
     protected_support_endpoints = (
         memberships_router.resolve_rejected_membership_payment_attempt,
@@ -469,11 +467,7 @@ async def test_direct_publish_is_atomic_and_same_instance_retry_rotates_claim(
     assert first.order_version == 8
     assert first.reused is False
     assert first_http_response.headers["Cache-Control"] == "no-store"
-    claim = next(
-        entity
-        for entity in first_session.added
-        if isinstance(entity, OrderCheckoutClaim)
-    )
+    claim = next(entity for entity in first_session.added if isinstance(entity, OrderCheckoutClaim))
     assert claim.client_instance_hash != str(client_instance)
     assert len(claim.client_instance_hash) == 64
 
@@ -631,20 +625,26 @@ async def test_private_direct_open_is_owner_scoped_but_protected_discoverable() 
     # An empty list is enough to inspect the SQL visibility boundary without
     # invoking the response aggregation queries.
     ordinary_list = _Session(_Result(rows=[]))
-    assert await pos_router.list_orders(
-        ordinary_list,
-        other,
-        status_filter=["open"],
-    ) == []
+    assert (
+        await pos_router.list_orders(
+            ordinary_list,
+            other,
+            status_filter=["open"],
+        )
+        == []
+    )
     ordinary_where = str(ordinary_list.statements[0].whereclause)
     assert "orders.opened_by" in ordinary_where
 
     protected_list = _Session(_Result(rows=[]))
-    assert await pos_router.list_orders(
-        protected_list,
-        protected,
-        status_filter=["open"],
-    ) == []
+    assert (
+        await pos_router.list_orders(
+            protected_list,
+            protected,
+            status_filter=["open"],
+        )
+        == []
+    )
     protected_where = str(protected_list.statements[0].whereclause)
     assert "orders.opened_by" not in protected_where
 
@@ -727,9 +727,39 @@ def test_private_direct_draft_mutations_are_creator_only() -> None:
         not in pos_router.hold_direct_order_for_checkout.__code__.co_names
     )
     assert (
-        "_require_private_direct_draft_creator"
-        not in pos_router.void_held_order.__code__.co_names
+        "_require_private_direct_draft_creator" not in pos_router.void_held_order.__code__.co_names
     )
+
+
+def test_routine_pos_billing_is_permission_scoped_not_shift_opener_scoped() -> None:
+    """Opening the drawer must not give one login an exclusive lease on sales.
+
+    Route-level RBAC, exact company/branch/terminal/shift validation, private
+    draft ownership and checkout claims remain independent guards.
+    """
+    billing_endpoints = (
+        pos_router.create_order,
+        pos_router.attach_order_customer,
+        pos_router.apply_order_discount,
+        pos_router.redeem_points,
+        pos_router.redeem_reward,
+        pos_router.publish_direct_order_checkout_claim,
+        pos_router.claim_order_for_checkout,
+        pos_router.unclaim_order_checkout,
+        pos_router.finalize_zero_total_order,
+        pos_router.record_payment,
+    )
+    for endpoint in billing_endpoints:
+        assert "require_shift_opener" not in endpoint.__code__.co_names
+        assert (
+            "require_open_operational_shift" in endpoint.__code__.co_names
+            or "require_operational_shift_scope" in endpoint.__code__.co_names
+        )
+
+    # Charge-erasing and payout workflows keep their independent high-trust
+    # permission plus the existing opener/protected-owner accountability rule.
+    assert "require_shift_opener" in pos_router.void_held_order.__code__.co_names
+    assert "require_shift_opener" in pos_router.create_pos_refund_request.__code__.co_names
 
 
 def test_create_batch_rejects_duplicate_client_line_identity() -> None:
@@ -878,6 +908,9 @@ def _billable_non_kitchen_line_row():
     return (
         SimpleNamespace(
             id=uuid4(),
+            qty=10,
+            menu_item_name_snapshot="Gaming Session",
+            taxable_value_minor=4_800,
             kitchen_released_at=None,
             kitchen_round_no=None,
             kitchen_status="queued",
@@ -907,6 +940,8 @@ def _gaming_session(tenant: TenantContext, station_id: UUID, shift_id: UUID, **o
         "cancel_reason": None,
         "customer_name": "Cafe Guest",
         "customer_phone": "9000000000",
+        "customer_id": None,
+        "customer_directory_revision": None,
         "tax_rate": 0.18,
         "sac_code": "999692",
         "rate_includes_tax": True,
@@ -1088,21 +1123,15 @@ async def test_record_payment_with_tip_grows_order_total_and_settles_in_one_shot
     assert response.order_status == "paid"
     assert stored["status_code"] == 201
 
-    # A fully-settled payment must queue exactly one OrderPaid publish as a
-    # BackgroundTask — never awaited inline (that would delay the response
-    # on a slow webhook) and never fired before the response, since
-    # BackgroundTasks only run after this request's session has committed.
-    assert len(background_tasks.tasks) == 1
+    # The durable mirror enqueue occurs inside the payment transaction. There
+    # is no post-response webhook task that can be lost after commit.
+    assert len(background_tasks.tasks) == 0
 
 
 @pytest.mark.asyncio
-async def test_record_payment_schedules_order_paid_event_with_correct_shape(
+async def test_record_payment_enqueues_paid_order_mirror_with_stable_identity(
     monkeypatch,
 ) -> None:
-    """The queued background task must publish OrderPaid with the real
-    order/company/branch ids, the settled total, and the payment method —
-    and must never raise even if the bus itself blows up.
-    """
     tenant = _tenant()
     shift = _shift(tenant, opened_by=tenant.user_id, status="open")
     branch = SimpleNamespace(
@@ -1111,6 +1140,7 @@ async def test_record_payment_schedules_order_paid_event_with_correct_shape(
         deleted_at=None,
         timezone="Asia/Kolkata",
         code="MN",
+        name="Main Branch",
     )
     order = SimpleNamespace(
         id=uuid4(),
@@ -1123,7 +1153,13 @@ async def test_record_payment_schedules_order_paid_event_with_correct_shape(
         status="open",
         total_minor=5_000,
         tip_minor=0,
+        cgst_minor=100,
+        sgst_minor=100,
+        igst_minor=0,
+        cess_minor=0,
+        round_off_minor=0,
         table_id=None,
+        customer_name="Walk-in Guest",
         customer_phone=None,
         invoice_no="INV-PRESET-0002",
         fiscal_year="2026-27",
@@ -1145,13 +1181,17 @@ async def test_record_payment_schedules_order_paid_event_with_correct_shape(
 
     monkeypatch.setattr(pos_router, "deduct_for_order", _no_inventory)
 
-    published: list[OrderPaid] = []
+    captured: dict = {}
 
-    class _FakeBus:
-        async def publish(self, event):
-            published.append(event)
+    async def _capture_enqueue(caller_session, **kwargs):
+        captured["session"] = caller_session
+        captured.update(kwargs)
 
-    monkeypatch.setattr(pos_router, "get_event_bus", lambda: _FakeBus())
+    monkeypatch.setattr(
+        pos_router,
+        "enqueue_google_sheets_event_if_enabled",
+        _capture_enqueue,
+    )
 
     request = SimpleNamespace(
         state=SimpleNamespace(
@@ -1166,7 +1206,17 @@ async def test_record_payment_schedules_order_paid_event_with_correct_shape(
         _Result(rows=[]),
         _Result(scalar=None),
         _Result(rows=[_billable_non_kitchen_line_row()]),
-        entities={(Branch, tenant.branch_id): branch},
+        entities={
+            (Branch, tenant.branch_id): branch,
+            (Company, tenant.company_id): SimpleNamespace(
+                id=tenant.company_id,
+                currency="INR",
+            ),
+            (User, tenant.user_id): SimpleNamespace(
+                id=tenant.user_id,
+                name="Owner",
+            ),
+        },
     )
 
     background_tasks = BackgroundTasks()
@@ -1185,26 +1235,67 @@ async def test_record_payment_schedules_order_paid_event_with_correct_shape(
         tenant,
     )
 
-    assert published == []  # not fired inline — only queued so far
-    await background_tasks()  # simulate Starlette running it post-response
-
-    assert len(published) == 1
-    event = published[0]
-    assert event.order_id == order.id
-    assert event.company_id == tenant.company_id
-    assert event.branch_id == tenant.branch_id
-    assert event.total_minor == 5_000
-    assert event.method == "cash"
+    assert len(background_tasks.tasks) == 0
+    assert captured["session"] is session
+    assert captured["company_id"] == tenant.company_id
+    assert captured["event_type"] == "pos.order.paid"
+    assert captured["source_type"] == "pos_order"
+    assert captured["source_id"] == str(order.id)
+    assert captured["source_revision"] == "paid-v2"
+    assert captured["payload"]["branch"] == "Main Branch"
+    assert captured["payload"]["reference"] == order.invoice_no
+    assert captured["payload"]["amount_minor"] == 5_000
+    assert captured["payload"]["quantity"] == "10"
+    assert captured["payload"]["description"] == "10× Gaming Session"
+    assert captured["payload"]["customer"] == ""
+    assert "Walk-in Guest" not in str(captured["payload"])
+    assert captured["payload"]["payment_method"] == "cash"
+    assert captured["payload"]["payment_breakdown_minor"] == {
+        "cash": 5_000,
+        "card": 0,
+        "upi": 0,
+        "qr": 0,
+        "wallet": 0,
+    }
+    assert captured["payload"]["actor"] == "Owner"
+    assert captured["payload"]["status"] == "paid"
+    assert captured["payload"]["currency"] == "INR"
 
 
 @pytest.mark.asyncio
-async def test_record_payment_order_paid_publish_failure_never_raises(
+async def test_final_payment_breakdown_preserves_every_split_rail() -> None:
+    session = _Session(
+        _Result(
+            rows=[
+                ("cash", 1_200),
+                ("card", 1_300),
+                ("qr", 500),
+            ]
+        )
+    )
+
+    breakdown = await pos_router._final_payment_breakdown(
+        session,
+        order_id=uuid4(),
+        already_paid_minor=3_000,
+        current_method="upi",
+        current_amount_minor=2_000,
+        expected_total_minor=5_000,
+    )
+
+    assert breakdown == {
+        "cash": 1_200,
+        "card": 1_300,
+        "upi": 2_000,
+        "qr": 500,
+        "wallet": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_record_payment_with_unconfigured_mirror_has_no_background_task(
     monkeypatch,
 ) -> None:
-    """A broken/unreachable event bus must not surface as an error — the
-    payment already succeeded and the response was already sent by the time
-    this background task runs.
-    """
     tenant = _tenant()
     shift = _shift(tenant, opened_by=tenant.user_id, status="open")
     branch = SimpleNamespace(
@@ -1247,12 +1338,6 @@ async def test_record_payment_order_paid_publish_failure_never_raises(
 
     monkeypatch.setattr(pos_router, "deduct_for_order", _no_inventory)
 
-    class _ExplodingBus:
-        async def publish(self, _event):
-            raise RuntimeError("event bus is down")
-
-    monkeypatch.setattr(pos_router, "get_event_bus", lambda: _ExplodingBus())
-
     request = SimpleNamespace(
         state=SimpleNamespace(
             idempotency_key="payment-event-failure-test",
@@ -1293,8 +1378,7 @@ async def test_record_payment_order_paid_publish_failure_never_raises(
     assert response.paid_at is not None
     assert response.order_status == "paid"
 
-    # Must not raise even though the bus explodes.
-    await background_tasks()
+    assert len(background_tasks.tasks) == 0
 
 
 @pytest.mark.asyncio
@@ -1350,14 +1434,20 @@ def test_customer_repricing_recovers_stored_gross_without_current_menu_price() -
         discount_minor=4_000,
     )
 
-    assert pos_router._stored_line_gross_amount(
-        inclusive,
-        price_includes_tax=True,
-    ) == 20_000
-    assert pos_router._stored_line_gross_amount(
-        exclusive,
-        price_includes_tax=False,
-    ) == 20_000
+    assert (
+        pos_router._stored_line_gross_amount(
+            inclusive,
+            price_includes_tax=True,
+        )
+        == 20_000
+    )
+    assert (
+        pos_router._stored_line_gross_amount(
+            exclusive,
+            price_includes_tax=False,
+        )
+        == 20_000
+    )
 
 
 @pytest.mark.asyncio
@@ -1369,7 +1459,9 @@ async def test_customer_repricing_updates_existing_lines_and_canonical_order_tot
     item_id = uuid4()
     order = SimpleNamespace(
         id=uuid4(),
+        company_id=company_id,
         branch_id=branch_id,
+        customer_id=None,
         customer_phone="9000000000",
         place_of_supply_state_code="32",
         delivery_via=None,
@@ -1459,7 +1551,9 @@ async def test_deleted_package_session_cannot_receive_hourly_membership_waiver(
     item_id = uuid4()
     order = SimpleNamespace(
         id=uuid4(),
+        company_id=company_id,
         branch_id=branch_id,
+        customer_id=None,
         customer_phone="9000000000",
         place_of_supply_state_code="32",
         delivery_via=None,
@@ -1755,9 +1849,7 @@ async def test_shift_summary_keeps_pos_and_membership_receipts_explicit() -> Non
     rows = await pos_router.list_shifts(session, tenant, only_open=True)
 
     assert len(rows) == 1
-    statement_sql = str(
-        session.statements[0].compile(dialect=postgresql.dialect())
-    )
+    statement_sql = str(session.statements[0].compile(dialect=postgresql.dialect()))
     assert "FROM refunds" in statement_sql
     assert "refunds.settlement_shift_id = shifts.id" in statement_sql
     assert "FROM membership_refund_settlements" in statement_sql
@@ -1892,9 +1984,7 @@ async def test_close_shift_blocks_only_scoped_unresolved_membership_refund_recov
         _Result(scalar=0),  # running gaming sessions
         _Result(scalar=0),  # stopped, unbilled gaming sessions
         _Result(scalar=0),  # membership payments resolved
-        _Result(
-            rows=[recovery_id, later_recovery_id]
-        ),  # exact scoped recoveries remain unresolved
+        _Result(rows=[recovery_id, later_recovery_id]),  # exact scoped recoveries remain unresolved
     )
 
     with pytest.raises(
@@ -1967,6 +2057,7 @@ async def test_close_shift_succeeds_only_after_all_financial_tasks_resolve() -> 
 @pytest.mark.asyncio
 async def test_pos_refund_evidence_reconciliation_requires_financial_recovery_permission() -> None:
     from dataclasses import replace
+
     tenant = replace(_tenant(protected_access=False), roles=("cashier",))
     payload = pos_router.PosRefundEvidenceReconciliationCreate(
         refund_id=uuid4(),

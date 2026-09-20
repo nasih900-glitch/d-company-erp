@@ -45,6 +45,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -52,6 +53,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
@@ -76,6 +80,12 @@ import cloud.dcompany.erp.core.auth.InventoryAccess
 import cloud.dcompany.erp.core.db.BatchCacheEntity
 import cloud.dcompany.erp.core.money.parseRupeesToMinor
 import cloud.dcompany.erp.core.net.asRupees
+import cloud.dcompany.erp.core.quantity.QuantityInputResult
+import cloud.dcompany.erp.core.quantity.normalizedOrNull
+import cloud.dcompany.erp.core.quantity.parseQuantityInput
+import cloud.dcompany.erp.core.quantity.percentageInputText
+import cloud.dcompany.erp.core.quantity.quantityInputText
+import cloud.dcompany.erp.core.quantity.valueOrNull
 import cloud.dcompany.erp.ui.WorkspaceFeatureProfiles
 import cloud.dcompany.erp.ui.WorkspacePresentationPolicy
 import cloud.dcompany.erp.ui.presentationPolicy
@@ -95,6 +105,7 @@ import cloud.dcompany.erp.ui.components.OperationalStatusBadge
 import cloud.dcompany.erp.ui.components.PanelDivider
 import cloud.dcompany.erp.ui.components.PickerField
 import cloud.dcompany.erp.ui.components.PremiumTabBar
+import cloud.dcompany.erp.ui.components.QuantityField
 import cloud.dcompany.erp.ui.components.SearchInput
 import cloud.dcompany.erp.ui.components.SectionCard
 import cloud.dcompany.erp.ui.components.TabOption
@@ -110,6 +121,51 @@ private val UNITS = listOf(
     "unit" to "unit (each / piece)",
 )
 
+internal const val INVENTORY_WORKSPACE_TAG = "inventory-loaded-workspace"
+internal const val INVENTORY_PANE_TAG = "inventory-active-pane"
+internal const val INVENTORY_DETAIL_BODY_TAG = "inventory-selected-detail-body"
+internal fun inventoryIngredientRowTag(sku: String) = "inventory-ingredient-row-$sku"
+internal fun inventoryBatchRowTag(id: String) = "inventory-batch-row-$id"
+internal fun inventoryPendingGrnRetryTag(id: String) = "inventory-pending-grn-retry-$id"
+internal fun inventoryPendingAdjustmentRetryTag(id: String) =
+    "inventory-pending-adjustment-retry-$id"
+
+internal data class InventoryPresentationActions(
+    val retry: () -> Unit = {},
+    val dismissNotice: () -> Unit = {},
+    val retryGrn: (String) -> Unit = {},
+    val retryAdjustment: (String) -> Unit = {},
+    val selectBranch: (String) -> Unit = {},
+    val openDialog: (InventoryDialog) -> Unit = {},
+    val selectIngredient: (IngredientRow?) -> Unit = {},
+    val selectTab: (InventoryTab) -> Unit = {},
+    val selectRecipeMenuItem: (cloud.dcompany.erp.core.db.MenuItemEntity) -> Unit = {},
+    val retryRecipes: () -> Unit = {},
+    val cancelIngredientRemoval: (IngredientRow) -> Unit = {},
+    val retryIngredientSync: (IngredientRow) -> Unit = {},
+    val retryBatches: () -> Unit = {},
+    val cancelSupplierRemoval: (SupplierRow) -> Unit = {},
+    val retrySupplierSync: (SupplierRow) -> Unit = {},
+)
+
+private fun InventoryViewModel.presentationActions() = InventoryPresentationActions(
+    retry = ::retry,
+    dismissNotice = ::dismissNotice,
+    retryGrn = ::retryGrn,
+    retryAdjustment = ::retryAdjustment,
+    selectBranch = ::selectBranch,
+    openDialog = ::openDialog,
+    selectIngredient = ::select,
+    selectTab = ::selectTab,
+    selectRecipeMenuItem = ::selectRecipeMenuItem,
+    retryRecipes = ::retryRecipes,
+    cancelIngredientRemoval = ::cancelIngredientRemoval,
+    retryIngredientSync = ::retryIngredientSync,
+    retryBatches = ::retryBatches,
+    cancelSupplierRemoval = ::cancelSupplierRemoval,
+    retrySupplierSync = ::retrySupplierSync,
+)
+
 @Composable
 fun InventoryScreen(
     access: InventoryAccess = InventoryAccess(),
@@ -117,6 +173,7 @@ fun InventoryScreen(
     presentation: WorkspacePresentationPolicy = WorkspaceFeatureProfiles.Active.presentationPolicy(),
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
+    val presentationActions = remember(vm) { vm.presentationActions() }
     SideEffect { vm.updateAccess(access) }
 
     Column(
@@ -147,50 +204,13 @@ fun InventoryScreen(
                 )
             }
 
-            else -> Column(
-                Modifier.fillMaxSize().weight(1f),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                listOfNotNull(state.refreshError, state.branchesError).distinct().forEach { error ->
-                    RefreshErrorBanner(error, vm::retry)
-                }
-                state.notice?.let {
-                    NoticeBanner(it, vm::dismissNotice)
-                }
-                if (state.pendingGrns.isNotEmpty() || state.pendingAdjustments.isNotEmpty()) {
-                    PendingStockChangesPanel(state, access.canManageInventory, vm)
-                }
-                BranchContext(state, vm)
-                StatRow(state)
-                if (state.restockPriority.isNotEmpty()) {
-                    RestockStrip(state, vm)
-                }
-                TabBar(state, access.canManageCosting, vm)
-                InventoryActionBar(state, access.canManageInventory, vm)
-                when (state.tab) {
-                    InventoryTab.INGREDIENTS -> IngredientsPane(
-                        state,
-                        access.canManageInventory,
-                        vm,
-                        presentation,
-                        Modifier.weight(1f),
-                    )
-                    InventoryTab.SUPPLIERS -> SuppliersPane(
-                        state,
-                        access.canManageInventory,
-                        vm,
-                        presentation,
-                        Modifier.weight(1f),
-                    )
-                    InventoryTab.RECIPES -> RecipesPane(
-                        state = state,
-                        canManageCosting = access.canManageCosting,
-                        vm = vm,
-                        presentation = presentation,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-            }
+            else -> InventoryLoadedPresentation(
+                state = state,
+                access = access,
+                presentation = presentation,
+                actions = presentationActions,
+                modifier = Modifier.fillMaxSize().weight(1f),
+            )
         }
     }
 
@@ -245,7 +265,72 @@ fun InventoryScreen(
 }
 
 @Composable
-private fun BranchContext(state: InventoryUiState, vm: InventoryViewModel) {
+internal fun InventoryLoadedPresentation(
+    state: InventoryUiState,
+    access: InventoryAccess,
+    presentation: WorkspacePresentationPolicy,
+    actions: InventoryPresentationActions,
+    modifier: Modifier = Modifier,
+) {
+    BoxWithConstraints(modifier) {
+        val density = LocalDensity.current
+        var chromeHeightPx by remember { mutableIntStateOf(0) }
+        val paneHeight = maxOf(
+            360.dp,
+            maxHeight - with(density) { chromeHeightPx.toDp() } - 12.dp,
+        )
+        Column(
+            Modifier.fillMaxWidth().verticalScroll(rememberScrollState())
+                .testTag(INVENTORY_WORKSPACE_TAG),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Column(
+                Modifier.fillMaxWidth().onSizeChanged { chromeHeightPx = it.height },
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                listOfNotNull(state.refreshError, state.branchesError).distinct().forEach { error ->
+                    RefreshErrorBanner(error, actions.retry)
+                }
+                state.notice?.let { NoticeBanner(it, actions.dismissNotice) }
+                if (state.pendingGrns.isNotEmpty() || state.pendingAdjustments.isNotEmpty()) {
+                    PendingStockChangesPanel(state, access.canManageInventory, actions)
+                }
+                BranchContext(state, actions)
+                StatRow(state)
+                if (state.restockPriority.isNotEmpty()) RestockStrip(state, actions)
+                TabBar(state, access.canManageCosting, actions)
+                InventoryActionBar(state, access.canManageInventory, actions)
+            }
+            when (state.tab) {
+                InventoryTab.INGREDIENTS -> IngredientsPane(
+                    state,
+                    access.canManageInventory,
+                    actions,
+                    presentation,
+                    Modifier.fillMaxWidth().height(paneHeight).testTag(INVENTORY_PANE_TAG),
+                )
+                InventoryTab.SUPPLIERS -> SuppliersPane(
+                    state,
+                    access.canManageInventory,
+                    actions,
+                    presentation,
+                    Modifier.fillMaxWidth().height(paneHeight).testTag(INVENTORY_PANE_TAG),
+                )
+                InventoryTab.RECIPES -> RecipesPane(
+                    state = state,
+                    canManageCosting = access.canManageCosting,
+                    actions = actions,
+                    presentation = presentation,
+                    modifier = Modifier.fillMaxWidth().height(paneHeight)
+                        .testTag(INVENTORY_PANE_TAG),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun BranchContext(state: InventoryUiState, actions: InventoryPresentationActions) {
     val selected = state.branches.firstOrNull { it.id == state.branchId }
     if (state.branches.size <= 1) {
         OperationalBanner(
@@ -269,14 +354,18 @@ private fun BranchContext(state: InventoryUiState, vm: InventoryViewModel) {
                 label = "Branch",
                 selectedLabel = selected?.name ?: "— select —",
                 options = state.branches.map { it.id to it.name },
-                onSelect = vm::selectBranch,
+                onSelect = actions.selectBranch,
             )
         }
     }
 }
 
 @Composable
-private fun InventoryActionBar(state: InventoryUiState, canWrite: Boolean, vm: InventoryViewModel) {
+private fun InventoryActionBar(
+    state: InventoryUiState,
+    canWrite: Boolean,
+    actions: InventoryPresentationActions,
+) {
     BoxWithConstraints(Modifier.fillMaxWidth()) {
         val compact = maxWidth < 700.dp
         ActionBar(
@@ -290,7 +379,7 @@ private fun InventoryActionBar(state: InventoryUiState, canWrite: Boolean, vm: I
             trailing = {
                 ErpButton(
                     text = if (state.syncing) "Refreshing" else "Refresh",
-                    onClick = vm::retry,
+                    onClick = actions.retry,
                     enabled = !state.syncing,
                     busy = state.syncing,
                     intent = ActionIntent.Quiet,
@@ -301,14 +390,14 @@ private fun InventoryActionBar(state: InventoryUiState, canWrite: Boolean, vm: I
                     InventoryTab.INGREDIENTS -> {
                         ErpButton(
                             text = if (compact) "Ingredient" else "New ingredient",
-                            onClick = { vm.openDialog(InventoryDialog.IngredientForm(null)) },
+                            onClick = { actions.openDialog(InventoryDialog.IngredientForm(null)) },
                             enabled = state.ingredientsLoaded,
                             intent = ActionIntent.Secondary,
                             leadingIcon = Icons.Default.Add,
                         )
                         ErpButton(
                             text = if (compact) "Receive" else "Receive stock",
-                            onClick = { vm.openDialog(InventoryDialog.Grn) },
+                            onClick = { actions.openDialog(InventoryDialog.Grn) },
                             enabled = state.branchId != null &&
                                 state.syncedSuppliers.isNotEmpty() && state.syncedIngredients.isNotEmpty(),
                             leadingIcon = Icons.Default.LocalShipping,
@@ -317,7 +406,7 @@ private fun InventoryActionBar(state: InventoryUiState, canWrite: Boolean, vm: I
                     InventoryTab.SUPPLIERS -> {
                         ErpButton(
                             text = if (compact) "Supplier" else "New supplier",
-                            onClick = { vm.openDialog(InventoryDialog.SupplierForm(null)) },
+                            onClick = { actions.openDialog(InventoryDialog.SupplierForm(null)) },
                             enabled = state.suppliersLoaded,
                             leadingIcon = Icons.Default.Add,
                         )
@@ -326,7 +415,7 @@ private fun InventoryActionBar(state: InventoryUiState, canWrite: Boolean, vm: I
                         if (state.activeRecipe == null) {
                             ErpButton(
                                 text = if (compact) "Link" else "Link recipe",
-                                onClick = { vm.openDialog(InventoryDialog.RecipeCreate(item)) },
+                                onClick = { actions.openDialog(InventoryDialog.RecipeCreate(item)) },
                                 enabled = state.syncedIngredients.isNotEmpty() && !state.recipesLoading,
                                 leadingIcon = Icons.Default.Add,
                             )
@@ -344,7 +433,7 @@ private fun InventoryActionBar(state: InventoryUiState, canWrite: Boolean, vm: I
 private fun PendingStockChangesPanel(
     state: InventoryUiState,
     canWrite: Boolean,
-    vm: InventoryViewModel,
+    actions: InventoryPresentationActions,
 ) {
     SectionCard(
         title = "Pending stock changes",
@@ -358,7 +447,8 @@ private fun PendingStockChangesPanel(
                 rejected = grn.rejected,
                 error = grn.error,
                 canRetry = canWrite,
-                onRetry = { vm.retryGrn(grn.localId) },
+                retryTag = inventoryPendingGrnRetryTag(grn.localId),
+                onRetry = { actions.retryGrn(grn.localId) },
             )
         }
         state.pendingAdjustments.forEach { adj ->
@@ -368,7 +458,8 @@ private fun PendingStockChangesPanel(
                 rejected = adj.rejected,
                 error = adj.error,
                 canRetry = canWrite,
-                onRetry = { vm.retryAdjustment(adj.localId) },
+                retryTag = inventoryPendingAdjustmentRetryTag(adj.localId),
+                onRetry = { actions.retryAdjustment(adj.localId) },
             )
         }
     }
@@ -380,6 +471,7 @@ private fun PendingRow(
     rejected: Boolean,
     error: String?,
     canRetry: Boolean,
+    retryTag: String,
     onRetry: () -> Unit,
 ) {
     Column(
@@ -390,7 +482,13 @@ private fun PendingRow(
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(text, color = Brand.Foreground, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-            if (rejected) TextButton(onClick = onRetry, enabled = canRetry) { Text("Retry") }
+            if (rejected) {
+                TextButton(
+                    onClick = onRetry,
+                    enabled = canRetry,
+                    modifier = Modifier.testTag(retryTag),
+                ) { Text("Retry") }
+            }
         }
         Text(
             if (rejected) "Could not sync: ${error ?: "unknown error"}" else "Not synced yet",
@@ -482,7 +580,7 @@ private fun SupplierCountMetric(state: InventoryUiState, modifier: Modifier) = C
 
 /** The one thing an owner opens this screen to find out: what to buy today. */
 @Composable
-private fun RestockStrip(state: InventoryUiState, vm: InventoryViewModel) {
+private fun RestockStrip(state: InventoryUiState, actions: InventoryPresentationActions) {
     SectionCard(
         contentPadding = PaddingValues(10.dp),
     ) {
@@ -525,7 +623,7 @@ private fun RestockStrip(state: InventoryUiState, vm: InventoryViewModel) {
                         Modifier.width(205.dp).heightIn(min = 64.dp)
                             .clip(Radius.shapeSm)
                             .background(Brand.SurfaceRaised)
-                            .clickable { vm.select(ingredient) }
+                            .clickable { actions.selectIngredient(ingredient) }
                             .padding(horizontal = 10.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -568,7 +666,11 @@ private fun RestockStrip(state: InventoryUiState, vm: InventoryViewModel) {
 }
 
 @Composable
-private fun TabBar(state: InventoryUiState, canManageCosting: Boolean, vm: InventoryViewModel) {
+private fun TabBar(
+    state: InventoryUiState,
+    canManageCosting: Boolean,
+    actions: InventoryPresentationActions,
+) {
     PremiumTabBar(
         options = buildList {
             add(
@@ -582,7 +684,7 @@ private fun TabBar(state: InventoryUiState, canManageCosting: Boolean, vm: Inven
             }
         },
         selectedId = state.tab.name,
-        onSelect = { id -> vm.selectTab(InventoryTab.valueOf(id)) },
+        onSelect = { id -> actions.selectTab(InventoryTab.valueOf(id)) },
     )
 }
 
@@ -592,7 +694,7 @@ private fun TabBar(state: InventoryUiState, canManageCosting: Boolean, vm: Inven
 private fun RecipesPane(
     state: InventoryUiState,
     canManageCosting: Boolean,
-    vm: InventoryViewModel,
+    actions: InventoryPresentationActions,
     presentation: WorkspacePresentationPolicy,
     modifier: Modifier = Modifier,
 ) {
@@ -608,7 +710,7 @@ private fun RecipesPane(
                 },
                 icon = Icons.Default.Inventory2,
                 primaryLabel = "Refresh",
-                onPrimary = vm::retry,
+                onPrimary = actions.retry,
             )
         }
         return
@@ -637,13 +739,13 @@ private fun RecipesPane(
         BoxWithConstraints(Modifier.fillMaxSize().weight(1f)) {
             if (maxWidth >= 820.dp) {
                 Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    RecipeItemList(filtered, state, vm, Modifier.weight(1f))
-                    RecipeDetail(state, vm, Modifier.width(420.dp).fillMaxHeight())
+                    RecipeItemList(filtered, state, actions, Modifier.weight(1f))
+                    RecipeDetail(state, actions, Modifier.width(420.dp).fillMaxHeight())
                 }
             } else {
                 Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    RecipeItemList(filtered, state, vm, Modifier.weight(0.46f))
-                    RecipeDetail(state, vm, Modifier.weight(0.54f))
+                    RecipeItemList(filtered, state, actions, Modifier.weight(0.46f))
+                    RecipeDetail(state, actions, Modifier.weight(0.54f))
                 }
             }
         }
@@ -654,7 +756,7 @@ private fun RecipesPane(
 private fun RecipeItemList(
     items: List<cloud.dcompany.erp.core.db.MenuItemEntity>,
     state: InventoryUiState,
-    vm: InventoryViewModel,
+    actions: InventoryPresentationActions,
     modifier: Modifier,
 ) {
     SectionCard(
@@ -671,7 +773,7 @@ private fun RecipeItemList(
                     modifier = Modifier.background(
                         if (selected) Brand.SurfaceRaised else Color.Transparent,
                     ),
-                    onClick = { vm.selectRecipeMenuItem(item) },
+                    onClick = { actions.selectRecipeMenuItem(item) },
                     content = {
                         Text(
                             item.name,
@@ -694,7 +796,42 @@ private fun RecipeItemList(
 }
 
 @Composable
-private fun RecipeDetail(state: InventoryUiState, vm: InventoryViewModel, modifier: Modifier) {
+private fun RecipeDetail(
+    state: InventoryUiState,
+    actions: InventoryPresentationActions,
+    modifier: Modifier,
+) {
+    RecipeDetailPresentation(
+        state = state,
+        modifier = modifier,
+        onRetry = actions.retryRecipes,
+        onLinkRecipe = { item -> actions.openDialog(InventoryDialog.RecipeCreate(item)) },
+        onDeactivateRecipe = { recipe ->
+            actions.openDialog(InventoryDialog.ConfirmDeleteRecipe(recipe))
+        },
+        onEditRecipeLine = { recipe, line ->
+            actions.openDialog(InventoryDialog.RecipeLineForm(recipe, line))
+        },
+        onRemoveRecipeLine = { recipe, line ->
+            actions.openDialog(InventoryDialog.ConfirmDeleteRecipeLine(recipe, line))
+        },
+        onAddRecipeLine = { recipe ->
+            actions.openDialog(InventoryDialog.RecipeLineForm(recipe, null))
+        },
+    )
+}
+
+@Composable
+internal fun RecipeDetailPresentation(
+    state: InventoryUiState,
+    modifier: Modifier,
+    onRetry: () -> Unit,
+    onLinkRecipe: (cloud.dcompany.erp.core.db.MenuItemEntity) -> Unit,
+    onDeactivateRecipe: (Recipe) -> Unit,
+    onEditRecipeLine: (Recipe, RecipeLine) -> Unit,
+    onRemoveRecipeLine: (Recipe, RecipeLine) -> Unit,
+    onAddRecipeLine: (Recipe) -> Unit,
+) {
     val item = state.selectedRecipeMenuItem
     val active = state.activeRecipe
     SectionCard(
@@ -714,47 +851,84 @@ private fun RecipeDetail(state: InventoryUiState, vm: InventoryViewModel, modifi
             state.recipesLoading -> Box(Modifier.fillMaxSize(), Alignment.Center) {
                 CircularProgressIndicator(color = Brand.Gold)
             }
-            state.recipesError != null -> DesignedEmptyState(
-                title = "Could not load recipe",
-                body = state.recipesError,
-                icon = Icons.Default.CloudOff,
-                primaryLabel = "Retry",
-                onPrimary = vm::retryRecipes,
-            )
-            active == null -> DesignedEmptyState(
-                title = "No active recipe",
-                body = "Sales of ${item.name} do not currently deduct ingredient stock. Link at least one ingredient before relying on COGS.",
-                icon = Icons.Default.WarningAmber,
-                primaryLabel = "Link recipe",
-                onPrimary = { vm.openDialog(InventoryDialog.RecipeCreate(item)) },
-            )
-            else -> {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(active.name, color = Brand.Foreground, fontWeight = FontWeight.Bold)
-                        Text(
-                            "Version ${active.version} · yield ${active.yieldQty.asQty()}",
-                            color = Brand.ForegroundMuted,
-                            style = MaterialTheme.typography.labelSmall,
-                        )
-                    }
-                    TextButton(
-                        onClick = { vm.openDialog(InventoryDialog.ConfirmDeleteRecipe(active)) },
-                    ) { Text("Deactivate", color = Brand.Danger) }
-                }
-                InfoRow("Recorded recipe cost", active.costMinor.asRupees())
-                PanelDivider()
-                Text("Ingredient deductions", color = Brand.Foreground, fontWeight = FontWeight.SemiBold)
-                if (active.lines.isEmpty()) {
-                    OperationalBanner(
-                        title = "Empty recipe",
-                        detail = "This item will not deduct stock until at least one ingredient line is added.",
-                        tone = UiTone.Warning,
-                        icon = Icons.Default.WarningAmber,
+            state.recipesError != null -> LazyColumn(Modifier.fillMaxSize()) {
+                item {
+                    DesignedEmptyState(
+                        title = "Could not load recipe",
+                        body = state.recipesError,
+                        icon = Icons.Default.CloudOff,
+                        primaryLabel = "Retry",
+                        onPrimary = onRetry,
                     )
                 }
-                LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(active.lines, key = { it.id }) { line ->
+            }
+            active == null -> LazyColumn(Modifier.fillMaxSize()) {
+                item {
+                    DesignedEmptyState(
+                        title = "No active recipe",
+                        body = "Sales of ${item.name} do not currently deduct ingredient stock. Link at least one ingredient before relying on COGS.",
+                        icon = Icons.Default.WarningAmber,
+                        primaryLabel = "Link recipe",
+                        onPrimary = { onLinkRecipe(item) },
+                    )
+                }
+            }
+            else -> LazyColumn(Modifier.fillMaxSize()) {
+                item {
+                    Column {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text(active.name, color = Brand.Foreground, fontWeight = FontWeight.Bold)
+                                Text(
+                                    "Version ${active.version} · yield ${active.yieldQty.asQty()}",
+                                    color = Brand.ForegroundMuted,
+                                    style = MaterialTheme.typography.labelSmall,
+                                )
+                            }
+                            TextButton(
+                                onClick = { onDeactivateRecipe(active) },
+                            ) { Text("Deactivate", color = Brand.Danger) }
+                        }
+                        Spacer(Modifier.height(12.dp))
+                    }
+                }
+                item {
+                    Column {
+                        InfoRow("Recorded recipe cost", active.costMinor.asRupees())
+                        Spacer(Modifier.height(12.dp))
+                    }
+                }
+                item {
+                    Column {
+                        PanelDivider()
+                        Spacer(Modifier.height(12.dp))
+                    }
+                }
+                item {
+                    Column {
+                        Text(
+                            "Ingredient deductions",
+                            color = Brand.Foreground,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Spacer(Modifier.height(12.dp))
+                    }
+                }
+                if (active.lines.isEmpty()) {
+                    item {
+                        Column {
+                            OperationalBanner(
+                                title = "Empty recipe",
+                                detail = "This item will not deduct stock until at least one ingredient line is added.",
+                                tone = UiTone.Warning,
+                                icon = Icons.Default.WarningAmber,
+                            )
+                            Spacer(Modifier.height(12.dp))
+                        }
+                    }
+                }
+                itemsIndexed(active.lines, key = { _, line -> line.id }) { index, line ->
+                    Column {
                         val ingredient = state.syncedIngredients.firstOrNull { it.id == line.ingredientId }
                         Column(
                             Modifier.fillMaxWidth().clip(Radius.shapeSm)
@@ -775,28 +949,29 @@ private fun RecipeDetail(state: InventoryUiState, vm: InventoryViewModel, modifi
                                     )
                                 }
                                 TextButton(
-                                    onClick = {
-                                        vm.openDialog(InventoryDialog.RecipeLineForm(active, line))
-                                    },
+                                    onClick = { onEditRecipeLine(active, line) },
                                 ) { Text("Edit") }
                                 TextButton(
-                                    onClick = {
-                                        vm.openDialog(
-                                            InventoryDialog.ConfirmDeleteRecipeLine(active, line),
-                                        )
-                                    },
+                                    onClick = { onRemoveRecipeLine(active, line) },
                                 ) { Text("Remove", color = Brand.Danger) }
                             }
                         }
+                        Spacer(
+                            Modifier.height(
+                                if (index == active.lines.lastIndex) 12.dp else 8.dp,
+                            ),
+                        )
                     }
                 }
-                ErpButton(
-                    text = "Add ingredient",
-                    onClick = { vm.openDialog(InventoryDialog.RecipeLineForm(active, null)) },
-                    enabled = state.syncedIngredients.isNotEmpty(),
-                    leadingIcon = Icons.Default.Add,
-                    modifier = Modifier.fillMaxWidth(),
-                )
+                item {
+                    ErpButton(
+                        text = "Add ingredient",
+                        onClick = { onAddRecipeLine(active) },
+                        enabled = state.syncedIngredients.isNotEmpty(),
+                        leadingIcon = Icons.Default.Add,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
             }
         }
     }
@@ -808,7 +983,7 @@ private fun RecipeDetail(state: InventoryUiState, vm: InventoryViewModel, modifi
 private fun IngredientsPane(
     state: InventoryUiState,
     canWrite: Boolean,
-    vm: InventoryViewModel,
+    actions: InventoryPresentationActions,
     presentation: WorkspacePresentationPolicy,
     modifier: Modifier = Modifier,
 ) {
@@ -820,7 +995,7 @@ private fun IngredientsPane(
                     ?: "This tablet has not successfully downloaded ingredients yet.",
                 icon = Icons.Default.CloudOff,
                 primaryLabel = "Retry",
-                onPrimary = vm::retry,
+                onPrimary = actions.retry,
             )
         }
         return
@@ -839,7 +1014,7 @@ private fun IngredientsPane(
                 icon = Icons.Default.Inventory2,
                 primaryLabel = if (canWrite) "New ingredient" else null,
                 onPrimary = if (canWrite) {
-                    { vm.openDialog(InventoryDialog.IngredientForm(null)) }
+                    { actions.openDialog(InventoryDialog.IngredientForm(null)) }
                 } else null,
             )
         }
@@ -864,14 +1039,14 @@ private fun IngredientsPane(
         BoxWithConstraints(Modifier.fillMaxSize().weight(1f)) {
             if (maxWidth >= 820.dp) {
                 Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    IngredientResultsPanel(filtered, state, canWrite, vm, Modifier.weight(1f))
-                    DetailPanel(state, canWrite, vm, Modifier.width(360.dp).fillMaxHeight())
+                    IngredientResultsPanel(filtered, state, canWrite, actions, Modifier.weight(1f))
+                    DetailPanel(state, canWrite, actions, Modifier.width(360.dp).fillMaxHeight())
                 }
             } else {
                 Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    IngredientResultsPanel(filtered, state, canWrite, vm, Modifier.weight(0.58f))
+                    IngredientResultsPanel(filtered, state, canWrite, actions, Modifier.weight(0.58f))
                     if (state.selected != null) {
-                        DetailPanel(state, canWrite, vm, Modifier.weight(0.42f))
+                        DetailPanel(state, canWrite, actions, Modifier.weight(0.42f))
                     }
                 }
             }
@@ -884,7 +1059,7 @@ private fun IngredientResultsPanel(
     rows: List<IngredientRow>,
     state: InventoryUiState,
     canWrite: Boolean,
-    vm: InventoryViewModel,
+    actions: InventoryPresentationActions,
     modifier: Modifier = Modifier,
 ) {
     SectionCard(
@@ -907,12 +1082,12 @@ private fun IngredientResultsPanel(
                     ingredient = ingredient,
                     selected = ingredient.sku == state.selectedSku,
                     canWrite = canWrite,
-                    onClick = { vm.select(ingredient) },
-                    onAdjust = { vm.openDialog(InventoryDialog.Adjust(ingredient)) },
-                    onEdit = { vm.openDialog(InventoryDialog.IngredientForm(ingredient)) },
-                    onDelete = { vm.openDialog(InventoryDialog.ConfirmDeleteIngredient(ingredient)) },
-                    onCancelRemoval = { vm.cancelIngredientRemoval(ingredient) },
-                    onRetrySync = { vm.retryIngredientSync(ingredient) },
+                    onClick = { actions.selectIngredient(ingredient) },
+                    onAdjust = { actions.openDialog(InventoryDialog.Adjust(ingredient)) },
+                    onEdit = { actions.openDialog(InventoryDialog.IngredientForm(ingredient)) },
+                    onDelete = { actions.openDialog(InventoryDialog.ConfirmDeleteIngredient(ingredient)) },
+                    onCancelRemoval = { actions.cancelIngredientRemoval(ingredient) },
+                    onRetrySync = { actions.retryIngredientSync(ingredient) },
                 )
                     if (index < rows.lastIndex) PanelDivider()
                 }
@@ -975,6 +1150,7 @@ private fun IngredientRowCard(
             .border(1.dp, if (selected) Brand.GoldMuted else Color.Transparent),
     ) {
         DataListRow(
+            modifier = Modifier.testTag(inventoryIngredientRowTag(ingredient.sku)),
             onClick = onClick,
             content = {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1133,7 +1309,7 @@ private fun SmallAction(label: String, onClick: () -> Unit, tint: Color = Brand.
 private fun DetailPanel(
     state: InventoryUiState,
     canWrite: Boolean,
-    vm: InventoryViewModel,
+    actions: InventoryPresentationActions,
     modifier: Modifier = Modifier,
 ) {
     val ingredient = state.selected
@@ -1154,94 +1330,111 @@ private fun DetailPanel(
             return@SectionCard
         }
 
-        InfoRow(
-            label = "On hand",
-            value = "${ingredient.currentQty.asQty()} ${ingredient.baseUnit}",
-            valueColor = if (ingredient.isLow) Brand.Danger else Brand.Foreground,
-        )
-        InfoRow(
-            label = "Weighted cost",
-            value = "${ingredient.avgCostMinor.asRupees()}/${ingredient.baseUnit}",
-        )
-        InfoRow(
-            label = "Exact FIFO value",
-            value = ingredient.stockValueMinor?.asRupees() ?: "Unavailable — refresh Inventory",
-            valueColor = if (ingredient.stockValueMinor == null) Brand.Warning else Brand.Foreground,
-        )
-        if (ingredient.isUnsyncedDraft) {
-            OperationalBanner(
-                title = "Ingredient pending sync",
-                detail = "Stock actions unlock after the ingredient is confirmed by the server.",
-                tone = UiTone.Warning,
-                icon = Icons.Default.SyncProblem,
-            )
-        } else {
-            ErpButton(
-                text = "Adjust stock",
-                onClick = { vm.openDialog(InventoryDialog.Adjust(ingredient)) },
-                enabled = canWrite,
-                modifier = Modifier.fillMaxWidth(),
-                intent = ActionIntent.Secondary,
-                leadingIcon = Icons.Default.Tune,
-            )
-        }
-
-        Text(
-            "Batches (oldest first)",
-            style = MaterialTheme.typography.labelLarge,
-            color = Brand.Foreground,
-        )
-        if (state.batchesLoading) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                CircularProgressIndicator(
-                    color = Brand.Gold,
-                    strokeWidth = 2.dp,
-                    modifier = Modifier.width(20.dp).height(20.dp),
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().testTag(INVENTORY_DETAIL_BODY_TAG),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            item {
+                InfoRow(
+                    label = "On hand",
+                    value = "${ingredient.currentQty.asQty()} ${ingredient.baseUnit}",
+                    valueColor = if (ingredient.isLow) Brand.Danger else Brand.Foreground,
                 )
-                Text("Refreshing batches…", color = Brand.ForegroundMuted)
             }
-        }
-        state.batchesError?.let { message ->
-            Column(
-                Modifier.fillMaxWidth().clip(Radius.shapeSm)
-                    .background(Brand.SurfaceRaised)
-                    .border(1.dp, Brand.Danger, Radius.shapeSm)
-                    .padding(10.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                Text(message, color = Brand.Danger, style = MaterialTheme.typography.bodyMedium)
-                if (state.batches.isNotEmpty()) {
-                    Text(
-                        "Saved batch quantities are shown below and may be out of date.",
-                        color = Brand.ForegroundMuted,
-                        style = MaterialTheme.typography.labelSmall,
+            item {
+                InfoRow(
+                    label = "Weighted cost",
+                    value = "${ingredient.avgCostMinor.asRupees()}/${ingredient.baseUnit}",
+                )
+            }
+            item {
+                InfoRow(
+                    label = "Exact FIFO value",
+                    value = ingredient.stockValueMinor?.asRupees() ?: "Unavailable — refresh Inventory",
+                    valueColor = if (ingredient.stockValueMinor == null) Brand.Warning else Brand.Foreground,
+                )
+            }
+            item {
+                if (ingredient.isUnsyncedDraft) {
+                    OperationalBanner(
+                        title = "Ingredient pending sync",
+                        detail = "Stock actions unlock after the ingredient is confirmed by the server.",
+                        tone = UiTone.Warning,
+                        icon = Icons.Default.SyncProblem,
+                    )
+                } else {
+                    ErpButton(
+                        text = "Adjust stock",
+                        onClick = { actions.openDialog(InventoryDialog.Adjust(ingredient)) },
+                        enabled = canWrite,
+                        modifier = Modifier.fillMaxWidth(),
+                        intent = ActionIntent.Secondary,
+                        leadingIcon = Icons.Default.Tune,
                     )
                 }
-                TextButton(onClick = vm::retryBatches) { Text("Retry batch refresh") }
             }
-        }
-        when {
-            ingredient.isUnsyncedDraft -> Text(
-                "No batches yet — this ingredient hasn't synced.",
-                color = Brand.ForegroundMuted,
-                style = MaterialTheme.typography.bodyMedium,
-            )
-            state.batches.isEmpty() && state.batchesLoading -> Unit
-            state.batches.isEmpty() && state.batchesError != null -> Unit
-            state.batches.isEmpty() -> Text(
-                "No open batches. Record a stock receipt (GRN) — a positive adjustment " +
-                    "needs an existing batch to attach to.",
-                color = Brand.ForegroundMuted,
-                style = MaterialTheme.typography.bodyMedium,
-            )
-            else -> LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                items(state.batches, key = { it.id }) { batch ->
+            item {
+                Text(
+                    "Batches (oldest first)",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = Brand.Foreground,
+                )
+            }
+            if (state.batchesLoading) {
+                item {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        CircularProgressIndicator(
+                            color = Brand.Gold,
+                            strokeWidth = 2.dp,
+                            modifier = Modifier.width(20.dp).height(20.dp),
+                        )
+                        Text("Refreshing batches…", color = Brand.ForegroundMuted)
+                    }
+                }
+            }
+            state.batchesError?.let { message ->
+                item {
+                    Column(
+                        Modifier.fillMaxWidth().clip(Radius.shapeSm)
+                            .background(Brand.SurfaceRaised)
+                            .border(1.dp, Brand.Danger, Radius.shapeSm)
+                            .padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Text(message, color = Brand.Danger, style = MaterialTheme.typography.bodyMedium)
+                        if (state.batches.isNotEmpty()) {
+                            Text(
+                                "Saved batch quantities are shown below and may be out of date.",
+                                color = Brand.ForegroundMuted,
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                        }
+                        TextButton(onClick = actions.retryBatches) { Text("Retry batch refresh") }
+                    }
+                }
+            }
+            when {
+                ingredient.isUnsyncedDraft -> item {
+                    Text(
+                        "No batches yet — this ingredient hasn't synced.",
+                        color = Brand.ForegroundMuted,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+                state.batches.isEmpty() && state.batchesLoading -> Unit
+                state.batches.isEmpty() && state.batchesError != null -> Unit
+                state.batches.isEmpty() -> item {
+                    Text(
+                        "No open batches. Record a stock receipt (GRN) — a positive adjustment " +
+                            "needs an existing batch to attach to.",
+                        color = Brand.ForegroundMuted,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+                else -> items(state.batches, key = { it.id }) { batch ->
                     BatchRow(
                         batch,
                         ingredient.baseUnit,
@@ -1257,7 +1450,7 @@ private fun DetailPanel(
 private fun BatchRow(batch: BatchCacheEntity, unit: String, branchName: String?) {
     Column(
         Modifier.fillMaxWidth().clip(Radius.shapeSm)
-            .background(Brand.SurfaceRaised).padding(10.dp),
+            .background(Brand.SurfaceRaised).testTag(inventoryBatchRowTag(batch.id)).padding(10.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -1292,7 +1485,7 @@ private fun BatchRow(batch: BatchCacheEntity, unit: String, branchName: String?)
 private fun SuppliersPane(
     state: InventoryUiState,
     canWrite: Boolean,
-    vm: InventoryViewModel,
+    actions: InventoryPresentationActions,
     presentation: WorkspacePresentationPolicy,
     modifier: Modifier = Modifier,
 ) {
@@ -1304,7 +1497,7 @@ private fun SuppliersPane(
                     ?: "This tablet has not successfully downloaded suppliers yet.",
                 icon = Icons.Default.CloudOff,
                 primaryLabel = "Retry",
-                onPrimary = vm::retry,
+                onPrimary = actions.retry,
             )
         }
         return
@@ -1318,7 +1511,7 @@ private fun SuppliersPane(
                 icon = Icons.Default.LocalShipping,
                 primaryLabel = if (canWrite) "New supplier" else null,
                 onPrimary = if (canWrite) {
-                    { vm.openDialog(InventoryDialog.SupplierForm(null)) }
+                    { actions.openDialog(InventoryDialog.SupplierForm(null)) }
                 } else null,
             )
         }
@@ -1371,10 +1564,10 @@ private fun SuppliersPane(
                             supplier = supplier,
                             canWrite = canWrite,
                             presentation = presentation,
-                            onEdit = { vm.openDialog(InventoryDialog.SupplierForm(supplier)) },
-                            onDelete = { vm.openDialog(InventoryDialog.ConfirmDeleteSupplier(supplier)) },
-                            onCancelRemoval = { vm.cancelSupplierRemoval(supplier) },
-                            onRetrySync = { vm.retrySupplierSync(supplier) },
+                            onEdit = { actions.openDialog(InventoryDialog.SupplierForm(supplier)) },
+                            onDelete = { actions.openDialog(InventoryDialog.ConfirmDeleteSupplier(supplier)) },
+                            onCancelRemoval = { actions.cancelSupplierRemoval(supplier) },
+                            onRetrySync = { actions.retrySupplierSync(supplier) },
                         )
                         if (index < filtered.lastIndex) PanelDivider()
                     }
@@ -1563,16 +1756,24 @@ private fun IngredientDialog(
         error = state.formError,
         onDismiss = vm::closeDialog,
         onConfirm = {
+            val parsedThreshold = optionalQuantityValue(threshold)
+            val parsedReorderQty = optionalQuantityValue(reorderQty)
             when {
                 editing == null && sku.isBlank() -> vm.showFormError("SKU is required.")
                 name.isBlank() -> vm.showFormError("Name is required.")
+                parsedThreshold == null -> vm.showFormError(
+                    "Reorder level must be blank, zero or a positive ungrouped quantity.",
+                )
+                parsedReorderQty == null -> vm.showFormError(
+                    "Reorder quantity must be blank, zero or a positive ungrouped quantity.",
+                )
                 else -> vm.saveIngredient(
                     editing = editing,
                     sku = sku,
                     name = name,
                     baseUnit = unit,
-                    reorderThreshold = threshold.toDoubleOrNull() ?: 0.0,
-                    reorderQty = reorderQty.toDoubleOrNull() ?: 0.0,
+                    reorderThreshold = parsedThreshold,
+                    reorderQty = parsedReorderQty,
                 )
             }
         },
@@ -1606,13 +1807,13 @@ private fun IngredientDialog(
             onSelect = { unit = it },
         )
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            DecimalField(
+            QuantityField(
                 value = threshold,
                 onValueChange = { threshold = it },
                 label = "Reorder at",
                 modifier = Modifier.weight(1f),
             )
-            DecimalField(
+            QuantityField(
                 value = reorderQty,
                 onValueChange = { reorderQty = it },
                 label = "Reorder qty",
@@ -1678,7 +1879,7 @@ private fun SupplierDialog(
     }
 }
 
-private data class GrnLineDraft(
+internal data class GrnLineDraft(
     val ingredientId: String = "",
     val qty: String = "",
     val unitCostRupees: String = "",
@@ -1686,25 +1887,38 @@ private data class GrnLineDraft(
     val lotCode: String = "",
 )
 
-private data class RecipeLineDraft(
+internal data class RecipeLineDraft(
     val ingredientId: String = "",
     val qty: String = "",
     val wastagePercent: String = "0",
 ) {
-    fun error(lineNumber: Int): String? = when {
-        ingredientId.isBlank() -> "Select an ingredient on recipe line $lineNumber."
-        qty.toDoubleOrNull() == null || qty.toDouble() <= 0 ->
-            "Enter a quantity greater than zero on recipe line $lineNumber."
-        wastagePercent.toDoubleOrNull() == null || wastagePercent.toDouble() !in 0.0..100.0 ->
-            "Wastage on recipe line $lineNumber must be from 0 to 100%."
-        else -> null
+    fun error(lineNumber: Int): String? {
+        if (ingredientId.isBlank()) return "Select an ingredient on recipe line $lineNumber."
+        val parsedQty = parseQuantityInput(qty)
+        val quantity = parsedQty.valueOrNull()
+        if (quantity == null || quantity <= 0.0) {
+            return parsedQty.formErrorOr("Enter a quantity greater than zero on recipe line $lineNumber.")
+        }
+        val parsedWastage = parseQuantityInput(wastagePercent)
+        val wastage = parsedWastage.valueOrNull()
+        if (wastage == null || wastage !in 0.0..100.0) {
+            return parsedWastage.formErrorOr(
+                "Wastage on recipe line $lineNumber must be from 0 to 100%.",
+            )
+        }
+        return null
     }
 
-    fun toBody(): RecipeLineBody = RecipeLineBody(
-        ingredientId = ingredientId,
-        qty = qty.toDouble(),
-        wastagePct = wastagePercent.toDouble() / 100.0,
-    )
+    fun toBody(): RecipeLineBody? {
+        val quantity = parseQuantityInput(qty).valueOrNull() ?: return null
+        val wastage = parseQuantityInput(wastagePercent).valueOrNull() ?: return null
+        if (ingredientId.isBlank() || quantity <= 0.0 || wastage !in 0.0..100.0) return null
+        return RecipeLineBody(
+            ingredientId = ingredientId,
+            qty = quantity,
+            wastagePct = wastage / 100.0,
+        )
+    }
 }
 
 @Composable
@@ -1728,19 +1942,22 @@ private fun RecipeCreateDialog(
         width = 760.dp,
         onDismiss = vm::closeDialog,
         onConfirm = {
-            val parsedYield = yieldQty.toDoubleOrNull()
+            val parsedYieldResult = parseQuantityInput(yieldQty)
+            val parsedYield = parsedYieldResult.valueOrNull()
             val lineError = lines.mapIndexedNotNull { index, line -> line.error(index + 1) }.firstOrNull()
+            val bodies = lines.mapNotNull(RecipeLineDraft::toBody)
             val duplicates = lines.map { it.ingredientId }.filter(String::isNotBlank)
                 .groupingBy { it }.eachCount().any { it.value > 1 }
             when {
                 name.isBlank() -> vm.showFormError("Enter a recipe name.")
                 parsedYield == null || parsedYield <= 0 ->
-                    vm.showFormError("Yield must be greater than zero.")
+                    vm.showFormError(parsedYieldResult.formErrorOr("Yield must be greater than zero."))
                 lineError != null -> vm.showFormError(lineError)
+                bodies.size != lines.size -> vm.showFormError("Check every recipe quantity and wastage value.")
                 duplicates -> vm.showFormError(
                     "Each ingredient can appear only once. Combine duplicate quantities into one line.",
                 )
-                else -> vm.createRecipe(menuItem, name, parsedYield, lines.map(RecipeLineDraft::toBody))
+                else -> vm.createRecipe(menuItem, name, parsedYield, bodies)
             }
         },
     ) {
@@ -1757,7 +1974,7 @@ private fun RecipeCreateDialog(
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
-        DecimalField(
+        QuantityField(
             value = yieldQty,
             onValueChange = { yieldQty = it },
             label = "Menu units produced by these quantities",
@@ -1782,13 +1999,13 @@ private fun RecipeCreateDialog(
                     onSelect = { id -> lines = lines.replaceAt(index) { it.copy(ingredientId = id) } },
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    DecimalField(
+                    QuantityField(
                         value = line.qty,
                         onValueChange = { value -> lines = lines.replaceAt(index) { it.copy(qty = value) } },
                         label = "Quantity for full yield",
                         modifier = Modifier.weight(1f),
                     )
-                    DecimalField(
+                    QuantityField(
                         value = line.wastagePercent,
                         onValueChange = { value ->
                             lines = lines.replaceAt(index) { it.copy(wastagePercent = value) }
@@ -1820,9 +2037,11 @@ private fun RecipeLineDialog(
 ) {
     val initialIngredient = editing?.ingredientId ?: state.syncedIngredients.firstOrNull()?.id.orEmpty()
     var ingredientId by remember(recipe.id, editing?.id) { mutableStateOf(initialIngredient) }
-    var qty by remember(recipe.id, editing?.id) { mutableStateOf(editing?.qty?.asQty() ?: "") }
+    var qty by remember(recipe.id, editing?.id) {
+        mutableStateOf(editing?.qty?.let(::quantityInputText) ?: "")
+    }
     var wastage by remember(recipe.id, editing?.id) {
-        mutableStateOf(editing?.let { (it.wastagePct * 100).asQty() } ?: "0")
+        mutableStateOf(editing?.let { percentageInputText(it.wastagePct) } ?: "0")
     }
     FormDialog(
         title = if (editing == null) "Add recipe ingredient" else "Edit recipe ingredient",
@@ -1838,7 +2057,11 @@ private fun RecipeLineDialog(
                 duplicate -> vm.showFormError(
                     "This ingredient is already linked. Edit its existing line instead.",
                 )
-                else -> vm.saveRecipeLine(recipe, editing, draft.toBody())
+                else -> {
+                    val body = draft.toBody()
+                    if (body == null) vm.showFormError("Check the quantity and wastage value.")
+                    else vm.saveRecipeLine(recipe, editing, body)
+                }
             }
         },
     ) {
@@ -1849,13 +2072,13 @@ private fun RecipeLineDialog(
             options = state.syncedIngredients.map { it.id to "${it.name} (${it.baseUnit})" },
             onSelect = { ingredientId = it },
         )
-        DecimalField(
+        QuantityField(
             value = qty,
             onValueChange = { qty = it },
             label = "Quantity for full yield (${recipe.yieldQty.asQty()} menu units)",
             modifier = Modifier.fillMaxWidth(),
         )
-        DecimalField(
+        QuantityField(
             value = wastage,
             onValueChange = { wastage = it },
             label = "Wastage %",
@@ -1878,12 +2101,16 @@ private fun GrnDialog(state: InventoryUiState, vm: InventoryViewModel) {
 
     val branchId = state.branchId
     val lineTotals = lines.map { line ->
-        grnLineTotalMinor(line.qty, parseRupeesToMinor(line.unitCostRupees))
+        line.normalizedQuantity()?.let { quantity ->
+            grnLineTotalMinor(quantity, parseRupeesToMinor(line.unitCostRupees))
+        }
     }
     // The backend rounds each line HALF_UP to whole paise before summing.
     // Never round the combined receipt or truncate fractional paise here.
     val totalMinor = grnReceiptTotalMinor(
-        lines.map { it.qty to parseRupeesToMinor(it.unitCostRupees) },
+        lines.map { line ->
+            line.normalizedQuantity().orEmpty() to parseRupeesToMinor(line.unitCostRupees)
+        },
     )
 
     FormDialog(
@@ -1903,6 +2130,7 @@ private fun GrnDialog(state: InventoryUiState, vm: InventoryViewModel) {
                 branchId.isNullOrBlank() -> vm.showFormError("Select a branch.")
                 supplierId.isBlank() -> vm.showFormError("Select a supplier.")
                 lineError != null -> vm.showFormError(lineError)
+                ready.size != lines.size -> vm.showFormError("Check every receipt line.")
                 ready.isEmpty() -> vm.showFormError("Add at least one line.")
                 invoiceNo.isNotBlank() && invoiceTotal.isBlank() ->
                     vm.showFormError("Enter the supplier invoice total, or clear the invoice number.")
@@ -2008,7 +2236,7 @@ private fun GrnDialog(state: InventoryUiState, vm: InventoryViewModel) {
                             lines = lines.replaceAt(index) { it.copy(ingredientId = id) }
                         },
                     )
-                    DecimalField(
+                    QuantityField(
                         value = line.qty,
                         onValueChange = { v -> lines = lines.replaceAt(index) { it.copy(qty = v) } },
                         label = "Qty",
@@ -2087,7 +2315,8 @@ private fun AdjustDialog(
     var note by remember { mutableStateOf("") }
 
     val branchId = state.branchId
-    val typed = qty.toDoubleOrNull()
+    val parsedQty = parseQuantityInput(qty, allowNegative = allowsNegativeInput(type))
+    val typed = parsedQty.valueOrNull()
     // The exact number that will be sent, from the same function the request
     // uses. Nothing here re-derives the sign.
     val delta = typed?.let { adjustmentDelta(type, it) }
@@ -2102,7 +2331,7 @@ private fun AdjustDialog(
         onConfirm = {
             when {
                 branchId.isNullOrBlank() -> vm.showFormError("Select a branch.")
-                typed == null -> vm.showFormError("Enter a quantity.")
+                typed == null -> vm.showFormError(parsedQty.formErrorOr("Enter a quantity."))
                 delta == null || delta == 0.0 ->
                     vm.showFormError("A zero adjustment changes nothing — enter an amount.")
                 delta < 0 && -delta > ingredient.currentQty ->
@@ -2137,7 +2366,7 @@ private fun AdjustDialog(
                 type = picked
             },
         )
-        DecimalField(
+        QuantityField(
             value = qty,
             onValueChange = { qty = it },
             label = if (type == ADJ_COUNT) {
@@ -2194,22 +2423,24 @@ private fun AdjustDialog(
 
 // ------------------------------------------------------------------ helpers
 
-private fun Double.asQtyInput(): String = if (this == 0.0) "" else asQty().replace(",", "")
+internal fun Double.asQtyInput(): String = quantityInputText(this, blankZero = true)
 
-private fun GrnLineDraft.validationError(lineNumber: Int): String? {
+internal fun GrnLineDraft.validationError(lineNumber: Int): String? {
     if (ingredientId.isBlank()) return "Line $lineNumber: select an ingredient."
-    val quantity = qty.toDoubleOrNull()
-    if (quantity == null || !quantity.isFinite() || quantity <= 0.0) {
-        return "Line $lineNumber: quantity must be greater than 0."
+    val parsedQuantity = parseQuantityInput(qty)
+    val quantity = parsedQuantity.valueOrNull()
+    if (quantity == null || quantity <= 0.0) {
+        return parsedQuantity.formErrorOr("Line $lineNumber: quantity must be greater than 0.")
     }
-    if (!isSupportedGrnQuantity(qty)) {
+    val normalizedQuantity = parsedQuantity.normalizedOrNull() ?: return "Line $lineNumber: invalid quantity."
+    if (!isSupportedGrnQuantity(normalizedQuantity)) {
         return "Line $lineNumber: quantity supports up to 10 whole-number digits and 4 decimal places."
     }
     val unitCostMinor = parseRupeesToMinor(unitCostRupees)
     if (unitCostMinor == null) {
         return "Line $lineNumber: unit cost must be rupees with no more than 2 decimal places."
     }
-    if (grnLineTotalMinor(qty, unitCostMinor) == null) {
+    if (grnLineTotalMinor(normalizedQuantity, unitCostMinor) == null) {
         return "Line $lineNumber: quantity and unit cost are too large to value safely."
     }
     val expiry = expiresAt.trim()
@@ -2219,11 +2450,14 @@ private fun GrnLineDraft.validationError(lineNumber: Int): String? {
     return null
 }
 
-private fun GrnLineDraft.toBody(): GrnLineBody? {
+internal fun GrnLineDraft.toBody(): GrnLineBody? {
     if (ingredientId.isBlank()) return null
-    val quantity = qty.toDoubleOrNull() ?: return null
-    if (!quantity.isFinite() || quantity <= 0) return null
+    val parsedQuantity = parseQuantityInput(qty)
+    val quantity = parsedQuantity.valueOrNull() ?: return null
+    val normalizedQuantity = parsedQuantity.normalizedOrNull() ?: return null
+    if (quantity <= 0 || !isSupportedGrnQuantity(normalizedQuantity)) return null
     val unitCostMinor = parseRupeesToMinor(unitCostRupees) ?: return null
+    if (grnLineTotalMinor(normalizedQuantity, unitCostMinor) == null) return null
     val expiry = expiresAt.trim()
     if (expiry.isNotEmpty() && !Regex("""\d{4}-\d{2}-\d{2}""").matches(expiry)) return null
     return GrnLineBody(
@@ -2235,6 +2469,18 @@ private fun GrnLineDraft.toBody(): GrnLineBody? {
         lotCode = lotCode.trim().ifBlank { null },
     )
 }
+
+internal fun GrnLineDraft.normalizedQuantity(): String? =
+    parseQuantityInput(qty).normalizedOrNull()
+
+internal fun optionalQuantityValue(raw: String): Double? {
+    if (raw.isEmpty()) return 0.0
+    val value = parseQuantityInput(raw).valueOrNull() ?: return null
+    return value.takeIf { it >= 0.0 }
+}
+
+private fun QuantityInputResult.formErrorOr(fallback: String): String =
+    (this as? QuantityInputResult.Invalid)?.message ?: fallback
 
 private fun <T> List<T>.replaceAt(index: Int, block: (T) -> T): List<T> =
     mapIndexed { i, item -> if (i == index) block(item) else item }

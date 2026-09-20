@@ -76,7 +76,7 @@ export function DeviceDetail({
           </div>
           <p className="mt-1 text-xs text-fg-muted">
             Last seen {formatDate(device.remote_support_last_seen_at ?? device.last_seen_at)} · App{' '}
-            {device.version_name} ({device.version_code})
+            {device.version_name} (build {device.version_code})
           </p>
         </div>
         <div className="text-left text-xs text-fg-muted sm:text-right">

@@ -9,6 +9,8 @@ import android.view.Choreographer
 import android.view.MotionEvent
 import android.view.accessibility.AccessibilityWindowInfo
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.MutableLongState
@@ -33,6 +35,7 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithContentDescription
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onRoot
@@ -49,12 +52,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.ViewRootForTest
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.dp
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.test.platform.app.InstrumentationRegistry
+import cloud.dcompany.erp.core.db.GamingSessionAddonActionState
 import cloud.dcompany.erp.core.db.GamingSessionState
 import cloud.dcompany.erp.core.db.GamingPackageExtensionState
 import cloud.dcompany.erp.core.db.GamingLegacyResolution
@@ -74,6 +79,15 @@ import org.junit.Test
 @Composable
 private fun rememberedWallClock(epochMillis: Long): MutableLongState =
     remember(epochMillis) { mutableLongStateOf(epochMillis) }
+
+private const val PINNED_ACTION_VIEWPORT_TAG = "pinned-gaming-action-viewport"
+private val PINNED_ACTIVE_ACTION_LABELS = listOf(
+    "Add drinks & snacks",
+    "Extend",
+    "Transfer",
+    "Pause",
+    "Stop & calculate",
+)
 
 /**
  * Exercises the actual gaming dialogs rather than isolated input primitives.
@@ -384,6 +398,299 @@ class GamingDialogUiTest {
         compose.onNodeWithText("Resume").performClick()
         compose.onNodeWithText("Stop & calculate").assertIsDisplayed()
         compose.runOnIdle { assertEquals("resume", actions.last()) }
+    }
+
+    @Test
+    fun commandViewportKeepsCriticalActionsVisibleBeforeSavedItemHistory() {
+        val station = testStation()
+        val session = GameSession(
+            id = "session-command-actions",
+            stationId = station.id,
+            shiftId = "shift-1",
+            status = "active",
+            startAt = "2026-08-26T17:00:00Z",
+            timerMinutes = 30,
+            timerEndsAt = "2026-08-26T17:30:00Z",
+            amountMinor = 8_000,
+            ratePerHourMinor = 15_000,
+            packageId = "standard-single-30",
+            billingMode = "package",
+            packagePriceMinorSnapshot = 8_000,
+            packageDurationMinutesSnapshot = 30,
+            packageVariantSnapshot = "single",
+            packageStationTypeSnapshot = "ps5",
+            packagePricingTierSnapshot = "standard",
+            pauseVersion = 0,
+            pauseAvailable = true,
+        )
+        val packages = listOf(
+            GamingPackage(
+                id = "standard-single-30",
+                code = "standard-single-session-30m",
+                stationType = "ps5",
+                pricingTier = "standard",
+                variant = "single",
+                kind = "base",
+                name = "Single Mode 30 minutes",
+                durationMinutes = 30,
+                priceMinor = 8_000,
+            ),
+            GamingPackage(
+                id = "standard-single-extension-30",
+                code = "standard-single-extension-30m",
+                stationType = "ps5",
+                pricingTier = "standard",
+                variant = "single",
+                kind = "extension",
+                name = "Single Mode +30 minutes",
+                durationMinutes = 30,
+                priceMinor = 6_000,
+            ),
+        )
+        val savedAddon = GamingSessionAddonUi(
+            id = "addon-cola",
+            serverAddonId = "server-addon-cola",
+            serverSessionId = session.id,
+            clientLineId = "line-cola",
+            menuItemId = "item-cola",
+            menuItemName = "Cola",
+            menuItemType = "product",
+            qty = 1,
+            unitPriceMinor = 5_000,
+            lineTotalMinor = 5_000,
+            localState = GamingSessionAddonActionState.CONFIRMED,
+        )
+
+        compose.setContent {
+            DCompanyTheme {
+                // The Tab P12 physical run exposed a 417dp x 267dp Station
+                // command viewport. Keep the production scroll boundary in
+                // this regression so saved item rows cannot push Stop below
+                // the initially visible command surface again.
+                Box(
+                    Modifier.width(417.dp).height(267.dp)
+                        .testTag(PINNED_ACTION_VIEWPORT_TAG),
+                ) {
+                    GamingStationCard(
+                        station = station,
+                        session = session,
+                        packageExtensionAction = null,
+                        sessionAddons = listOf(savedAddon),
+                        wallClock = rememberedWallClock(
+                            Instant.parse("2026-08-26T17:05:00Z").toEpochMilli(),
+                        ),
+                        actionInProgress = false,
+                        busyHere = false,
+                        focused = false,
+                        canWrite = true,
+                        canReconcileLegacy = false,
+                        activeShiftId = "shift-1",
+                        activeShiftServerConfirmed = true,
+                        packages = packages,
+                        hasTransferTarget = true,
+                        onStart = {},
+                        onStop = {},
+                        onSend = {},
+                        onCancelUnbilled = {},
+                        onExtendTimer = {},
+                        onExtendPackage = { _, _ -> },
+                        onTransfer = {},
+                        onReconcile = {},
+                        onRepairBilling = {},
+                        onResolveLegacyStart = {},
+                        onDiscardPackageExtension = {},
+                        pinActiveSessionActions = true,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+            }
+        }
+
+        PINNED_ACTIVE_ACTION_LABELS.forEach { label ->
+            assertPinnedActionInsideViewport(label, enabled = true)
+        }
+        compose.onAllNodesWithText("+30 min").assertCountEquals(0)
+        compose.onNode(hasScrollAction()).assertExists()
+        compose.onNodeWithText("Session items").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Cola ×1").performScrollTo().assertIsDisplayed()
+        // The saved-item history scroll belongs only to the upper card body.
+        // Reassert every command afterwards so a future parent-scroll change
+        // cannot move a critical action partly or completely off-screen.
+        PINNED_ACTIVE_ACTION_LABELS.forEach { label ->
+            assertPinnedActionInsideViewport(label, enabled = true)
+        }
+    }
+
+    @Test
+    fun compactPinnedOfflineWarningKeepsActionsAndRecoveryReasonFullyVisible() {
+        val station = testStation()
+        val session = GameSession(
+            id = "session-command-warning",
+            stationId = station.id,
+            shiftId = "shift-1",
+            status = "active",
+            startAt = "2026-08-26T17:00:00Z",
+            timerMinutes = 30,
+            timerEndsAt = "2026-08-26T17:30:00Z",
+            amountMinor = 8_000,
+            ratePerHourMinor = 15_000,
+            packageId = "standard-single-30",
+            billingMode = "package",
+            packagePriceMinorSnapshot = 8_000,
+            packageDurationMinutesSnapshot = 30,
+            packageVariantSnapshot = "single",
+            packageStationTypeSnapshot = "ps5",
+            packagePricingTierSnapshot = "standard",
+            pauseVersion = 0,
+            pauseAvailable = true,
+        )
+        val packages = listOf(
+            GamingPackage(
+                id = "standard-single-30",
+                code = "standard-single-session-30m",
+                stationType = "ps5",
+                pricingTier = "standard",
+                variant = "single",
+                kind = "base",
+                name = "Single Mode 30 minutes",
+                durationMinutes = 30,
+                priceMinor = 8_000,
+            ),
+            GamingPackage(
+                id = "standard-single-extension-30",
+                code = "standard-single-extension-30m",
+                stationType = "ps5",
+                pricingTier = "standard",
+                variant = "single",
+                kind = "extension",
+                name = "Single Mode +30 minutes",
+                durationMinutes = 30,
+                priceMinor = 6_000,
+            ),
+        )
+
+        compose.setContent {
+            DCompanyTheme {
+                Box(
+                    Modifier.width(417.dp).height(267.dp)
+                        .testTag(PINNED_ACTION_VIEWPORT_TAG),
+                ) {
+                    GamingStationCard(
+                        station = station,
+                        session = session,
+                        packageExtensionAction = null,
+                        wallClock = rememberedWallClock(
+                            Instant.parse("2026-08-26T17:05:00Z").toEpochMilli(),
+                        ),
+                        actionInProgress = false,
+                        busyHere = false,
+                        focused = false,
+                        canWrite = true,
+                        canReconcileLegacy = false,
+                        activeShiftId = "shift-1",
+                        activeShiftServerConfirmed = true,
+                        online = false,
+                        packages = packages,
+                        hasTransferTarget = true,
+                        onStart = {},
+                        onStop = {},
+                        onSend = {},
+                        onCancelUnbilled = {},
+                        onExtendTimer = {},
+                        onExtendPackage = { _, _ -> },
+                        onTransfer = {},
+                        onReconcile = {},
+                        onRepairBilling = {},
+                        onResolveLegacyStart = {},
+                        onDiscardPackageExtension = {},
+                        pinActiveSessionActions = true,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+            }
+        }
+
+        PINNED_ACTIVE_ACTION_LABELS.forEach { label ->
+            assertPinnedActionInsideViewport(label, enabled = label != "Pause")
+        }
+        compose.onNodeWithText("Reconnect to pause or resume safely across devices.")
+            .assertIsDisplayed()
+            .assertFullyInsidePinnedViewport(
+                label = "disabled Pause recovery reason",
+                requireTouchTarget = false,
+            )
+    }
+
+    @Test
+    fun commandViewportKeepsPaymentDueActionsReachableAfterSavedItems() {
+        val station = testStation()
+        val session = GameSession(
+            id = "session-payment-due-items",
+            stationId = station.id,
+            shiftId = "shift-1",
+            status = "ended",
+            startAt = "2026-08-26T17:00:00Z",
+            endAt = "2026-08-26T17:30:00Z",
+            amountMinor = 8_000,
+            ratePerHourMinor = 15_000,
+        )
+        val savedAddon = GamingSessionAddonUi(
+            id = "addon-payment-cola",
+            serverAddonId = "server-addon-payment-cola",
+            serverSessionId = session.id,
+            clientLineId = "line-payment-cola",
+            menuItemId = "item-cola",
+            menuItemName = "Cola",
+            menuItemType = "product",
+            qty = 1,
+            unitPriceMinor = 5_000,
+            lineTotalMinor = 5_000,
+            voided = true,
+            voidReason = "Customer changed order",
+            localState = GamingSessionAddonActionState.CONFIRMED,
+        )
+
+        compose.setContent {
+            DCompanyTheme {
+                Box(Modifier.width(417.dp).height(267.dp)) {
+                    GamingStationCard(
+                        station = station,
+                        session = session,
+                        packageExtensionAction = null,
+                        sessionAddons = listOf(savedAddon),
+                        wallClock = rememberedWallClock(
+                            Instant.parse("2026-08-26T17:30:00Z").toEpochMilli(),
+                        ),
+                        actionInProgress = false,
+                        busyHere = false,
+                        focused = false,
+                        canWrite = true,
+                        canReconcileLegacy = false,
+                        activeShiftId = "shift-1",
+                        activeShiftServerConfirmed = true,
+                        packages = emptyList(),
+                        hasTransferTarget = true,
+                        onStart = {},
+                        onStop = {},
+                        onSend = {},
+                        onCancelUnbilled = {},
+                        onExtendTimer = {},
+                        onExtendPackage = { _, _ -> },
+                        onTransfer = {},
+                        onReconcile = {},
+                        onRepairBilling = {},
+                        onResolveLegacyStart = {},
+                        onDiscardPackageExtension = {},
+                        pinActiveSessionActions = true,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+            }
+        }
+
+        compose.onNode(hasScrollAction()).assertExists()
+        compose.onNodeWithText("Void").performScrollTo().assertIsDisplayed().assertIsEnabled()
+        compose.onNodeWithText("Send to POS").performScrollTo().assertIsDisplayed().assertIsEnabled()
     }
 
     @Test
@@ -1296,23 +1603,25 @@ class GamingDialogUiTest {
 
     @Test
     fun startSession_phoneInputAndPrimaryActionRemainReachable() {
+        var submittedName: String? = null
         var submittedPhone: String? = null
         var submittedMinutes: Int? = null
 
         compose.setContent {
             DCompanyTheme {
                 StartSessionDialog(
-                    // VR remains an hourly station in Code22. PS5 and racing
+                    // Streaming remains hourly. PS5, racing and VR
                     // deliberately fail closed until the canonical fixed
                     // tariff has synced, so they cannot exercise this generic
                     // phone-and-duration path without a package catalogue.
                     station = testStation().copy(
-                        code = "VR-1",
-                        name = "VR Pod 1",
-                        type = "vr",
+                        code = "STREAM-1",
+                        name = "Streaming Booth 1",
+                        type = "streaming",
                     ),
                     onDismiss = {},
-                    onConfirm = { phone, minutes, _, _ ->
+                    onConfirm = { _, name, phone, minutes, _, _ ->
+                        submittedName = name
                         submittedPhone = phone
                         submittedMinutes = minutes
                     },
@@ -1320,11 +1629,31 @@ class GamingDialogUiTest {
             }
         }
 
-        compose.onNodeWithContentDescription("Customer phone (optional)")
-            .bringIntoViewIfNeeded()
-            .performClick()
-            .assertIsFocused()
-            .performTextReplacement("+91 98765 43210")
+        compose.onNodeWithText("Add new").performClick()
+
+        val nameField = compose.onNodeWithContentDescription("Customer name (optional)")
+        val phoneField = compose.onNodeWithContentDescription("Customer phone (optional)")
+        val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+        val originalFlags = automation.serviceInfo.flags
+        try {
+            automation.serviceInfo = automation.serviceInfo.apply {
+                flags = flags or AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
+            }
+            nameField
+                .bringIntoViewIfNeeded()
+                .performClick()
+                .performTextReplacement("Booking guest")
+            nameField.assertIsDisplayed().assertIsFocused().awaitImeSettledTouchTarget()
+
+            phoneField
+                .performScrollTo()
+                .assertIsDisplayed()
+                .performAndroidScreenTouch()
+                .assertIsFocused()
+                .performTextReplacement("+91 98765 43210")
+        } finally {
+            automation.serviceInfo = automation.serviceInfo.apply { flags = originalFlags }
+        }
 
         compose.onNodeWithText("Start session")
             .bringIntoViewIfNeeded()
@@ -1333,8 +1662,69 @@ class GamingDialogUiTest {
             .performClick()
 
         compose.runOnIdle {
-            assertEquals("919876543210", submittedPhone)
+            assertEquals("Booking guest", submittedName)
+            assertEquals("+91 98765 43210", submittedPhone)
             assertEquals(60, submittedMinutes)
+        }
+    }
+
+    @Test
+    fun startSession_savedCustomerSearchSelectAndChangeNeverLeakHiddenSnapshots() {
+        var submittedCustomerId: String? = "not-submitted"
+        var submittedName: String? = "not-submitted"
+        var submittedPhone: String? = "not-submitted"
+        var searched = ""
+        compose.setContent {
+            DCompanyTheme {
+                StartSessionDialog(
+                    station = testStation().copy(type = "streaming", name = "Streaming Booth 2"),
+                    customers = listOf(
+                        GamingCustomerOption(
+                            customerId = "customer-501",
+                            name = "Amina Returning",
+                            phone = "9876543210",
+                            pending = false,
+                        ),
+                    ),
+                    online = true,
+                    onSearchCustomer = { searched = it },
+                    onDismiss = {},
+                    onConfirm = { customerId, name, phone, _, _, _ ->
+                        submittedCustomerId = customerId
+                        submittedName = name
+                        submittedPhone = phone
+                    },
+                )
+            }
+        }
+
+        val searchField = compose.onNodeWithContentDescription(
+            "Search saved customers by name or phone",
+        )
+        val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+        val originalFlags = automation.serviceInfo.flags
+        try {
+            automation.serviceInfo = automation.serviceInfo.apply {
+                flags = flags or AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
+            }
+            searchField.performTextReplacement("Amina")
+            compose.runOnIdle { assertEquals("Amina", searched) }
+            searchField.assertIsDisplayed().assertIsFocused().awaitImeSettledTouchTarget()
+            compose.onNodeWithText("Amina Returning")
+                .performScrollTo()
+                .assertIsDisplayed()
+                .performAndroidScreenTouch()
+        } finally {
+            automation.serviceInfo = automation.serviceInfo.apply { flags = originalFlags }
+        }
+        compose.onNodeWithText("9876543210").assertIsDisplayed()
+        compose.onNodeWithText("Change").assertIsDisplayed().performClick()
+        compose.onNodeWithText("Start session").bringIntoViewIfNeeded().performClick()
+
+        compose.runOnIdle {
+            assertEquals(null, submittedCustomerId)
+            assertEquals(null, submittedName)
+            assertEquals(null, submittedPhone)
         }
     }
 
@@ -1377,7 +1767,7 @@ class GamingDialogUiTest {
                         ),
                     ),
                     onDismiss = {},
-                    onConfirm = { _, minutes, packageId, controllers ->
+                    onConfirm = { _, _, _, minutes, packageId, controllers ->
                         submittedMinutes = minutes
                         submittedPackage = packageId
                         submittedControllers = controllers
@@ -1404,6 +1794,31 @@ class GamingDialogUiTest {
             assertEquals("standard-dual-60", submittedPackage)
             assertEquals(1, submittedControllers)
         }
+    }
+
+    @Test
+    fun startSession_simulatorUsesModeSelectorAndNeverOffersStalePremium() {
+        var submittedPackage: String? = null
+        compose.setContent {
+            DCompanyTheme {
+                StartSessionDialog(
+                    station = testStation().copy(type = "simulator", name = "Racing Simulator 1"),
+                    packages = listOf(
+                        GamingPackage("simdrive-15", "standard-simdrive-session-15m", "simulator", "standard", "simdrive", 1, 1, "base", "Racing Sim · 15 min", 15, 7_000),
+                        GamingPackage("vr-racing-15", "vr-racing-session-15m", "simulator", "standard", "vr_racing", 1, 1, "base", "VR Racing Sim · 15 min", 15, 10_000),
+                        GamingPackage("premium-stale", "premium-single-session-60m", "simulator", "premium", "simdrive", 1, 1, "base", "Premium stale", 60, 15_000),
+                    ),
+                    onDismiss = {},
+                    onConfirm = { _, _, _, _, packageId, _ -> submittedPackage = packageId },
+                )
+            }
+        }
+
+        compose.onNodeWithText("Premium stale").assertDoesNotExist()
+        compose.onNodeWithText("VR Racing Sim").performClick()
+        compose.onNodeWithText("15 min · ₹100.00 total").performClick()
+        compose.onNodeWithText("Start · ₹100.00").performClick()
+        compose.runOnIdle { assertEquals("vr-racing-15", submittedPackage) }
     }
 
     @Test
@@ -1486,6 +1901,62 @@ class GamingDialogUiTest {
         type = "ps5",
         ratePerHourMinor = 15_000,
     )
+
+    private fun assertPinnedActionInsideViewport(label: String, enabled: Boolean) {
+        val action = compose.onNodeWithText(label)
+            .assertIsDisplayed()
+        if (enabled) action.assertIsEnabled() else action.assertIsNotEnabled()
+        action.assertFullyInsidePinnedViewport(label = label, requireTouchTarget = true)
+    }
+
+    private fun SemanticsNodeInteraction.assertFullyInsidePinnedViewport(
+        label: String,
+        requireTouchTarget: Boolean,
+    ): SemanticsNodeInteraction {
+        val viewportNode = compose.onNodeWithTag(
+            PINNED_ACTION_VIEWPORT_TAG,
+            useUnmergedTree = true,
+        ).fetchSemanticsNode()
+        val targetNode = fetchSemanticsNode()
+        // boundsInRoot/boundsInWindow may already be clipped. Position plus
+        // measured size preserves the complete laid-out target and therefore
+        // detects an action whose hidden edge only appears to fit.
+        val viewportPosition = viewportNode.positionOnScreen
+        val targetPosition = targetNode.positionOnScreen
+        val viewport = Rect(
+            viewportPosition.x,
+            viewportPosition.y,
+            viewportPosition.x + viewportNode.size.width,
+            viewportPosition.y + viewportNode.size.height,
+        )
+        val target = Rect(
+            targetPosition.x,
+            targetPosition.y,
+            targetPosition.x + targetNode.size.width,
+            targetPosition.y + targetNode.size.height,
+        )
+        val tolerancePx = 1f
+        val fullyInside = target.left >= viewport.left - tolerancePx &&
+            target.top >= viewport.top - tolerancePx &&
+            target.right <= viewport.right + tolerancePx &&
+            target.bottom <= viewport.bottom + tolerancePx
+        if (requireTouchTarget) {
+            val root = targetNode.root as ViewRootForTest
+            val minimumTouchPx = 48f * root.view.resources.displayMetrics.density
+            assertTrue(
+                "$label must expose a complete 48dp touch target: target=$target, " +
+                    "minimumPx=$minimumTouchPx",
+                target.width >= minimumTouchPx - tolerancePx &&
+                    target.height >= minimumTouchPx - tolerancePx,
+            )
+        }
+        assertTrue(
+            "$label must be fully inside the tagged 417dp x 267dp viewport: " +
+                "target=$target, viewport=$viewport",
+            fullyInside,
+        )
+        return this
+    }
 
     private fun SemanticsNodeInteraction.bringIntoViewIfNeeded(): SemanticsNodeInteraction =
         if (isDisplayed()) this else performScrollTo()

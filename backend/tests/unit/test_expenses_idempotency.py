@@ -29,8 +29,11 @@ USER_ID = UUID("44444444-4444-4444-4444-444444444444")
 
 def _tenant() -> TenantContext:
     return TenantContext(
-        user_id=USER_ID, company_id=COMPANY_ID, branch_id=None,
-        terminal_id=None, roles=("owner",),
+        user_id=USER_ID,
+        company_id=COMPANY_ID,
+        branch_id=None,
+        terminal_id=None,
+        roles=("owner",),
     )
 
 
@@ -108,8 +111,12 @@ async def test_create_expense_persists_correct_fields(monkeypatch) -> None:
     async def store(*_args, **_kwargs):
         return None
 
+    async def mirror(*_args, **_kwargs):
+        return None
+
     monkeypatch.setattr(finance_router, "check_or_reserve", reserve)
     monkeypatch.setattr(finance_router, "store_response", store)
+    monkeypatch.setattr(finance_router, "_enqueue_expense_mirror", mirror)
 
     session = _CreateSession(branch=_branch(), category=_category())
     result = await create_expense(_payload(), session, _request(), _tenant())
@@ -136,7 +143,7 @@ async def test_create_expense_is_idempotent_on_exact_replay(monkeypatch) -> None
         category_id=CATEGORY_ID,
         supplier_id=None,
         amount_minor=45_000,
-        paid_via="cash",
+        paid_via="upi",
         paid_at=datetime(2026, 8, 22, 10, 0, tzinfo=UTC),
         vendor_name="Local Roasters",
         invoice_no="INV-2201",
@@ -153,7 +160,10 @@ async def test_create_expense_is_idempotent_on_exact_replay(monkeypatch) -> None
             raise AssertionError(f"Replay attempted database mutation via {name}")
 
     response = await create_expense(
-        _payload(paid_via="cash"), _NoMutationSession(), _request(), _tenant(),
+        _payload(paid_via="upi"),
+        _NoMutationSession(),
+        _request(),
+        _tenant(),
     )
     assert response == existing
 
@@ -170,10 +180,13 @@ async def test_create_expense_rejects_new_cash_paid_out_before_business_mutation
 
     with pytest.raises(
         BusinessRuleError,
-        match="Cash paid-outs.*shift-linked drawer workflow",
+        match="Cash paid-outs.*selecting the open shift",
     ):
         await create_expense(
-            _payload(paid_via="cash"), session, _request(), _tenant(),
+            _payload(paid_via="cash"),
+            session,
+            _request(),
+            _tenant(),
         )
 
     assert session.added == []
@@ -187,14 +200,19 @@ async def test_create_expense_second_call_with_a_fresh_key_creates_a_second_row(
     """Sanity check that idempotency doesn't over-suppress: two genuinely
     different submissions (different keys, as a real second purchase would
     be) both reach the database, they are not conflated into one."""
+
     async def reserve(*_args, **_kwargs):
         return None
 
     async def store(*_args, **_kwargs):
         return None
 
+    async def mirror(*_args, **_kwargs):
+        return None
+
     monkeypatch.setattr(finance_router, "check_or_reserve", reserve)
     monkeypatch.setattr(finance_router, "store_response", store)
+    monkeypatch.setattr(finance_router, "_enqueue_expense_mirror", mirror)
 
     session = _CreateSession(branch=_branch(), category=_category())
     await create_expense(_payload(), session, _request(), _tenant())

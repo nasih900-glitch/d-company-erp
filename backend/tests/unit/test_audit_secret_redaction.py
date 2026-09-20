@@ -1,10 +1,10 @@
-"""Audit snapshots must never retain authentication secrets."""
+"""Audit snapshots must never retain authentication or integration secrets."""
 
 from __future__ import annotations
 
 from uuid import uuid4
 
-from app.models import User
+from app.models import Company, User
 from app.models.auth_challenge import AuthOtpChallenge
 from app.services.audit.recorder import TRACKED, _captured_diff, _serialize
 
@@ -42,6 +42,38 @@ def test_user_audit_snapshots_and_diffs_redact_password_and_mfa_secrets() -> Non
     }
     assert "replacement-password-hash" not in repr(diff)
     assert "replacement-mfa-secret" not in repr(diff)
+
+
+def test_company_audit_snapshots_and_diffs_redact_sheets_secret_ciphertext() -> None:
+    first_ciphertext = "gcm-envelope-containing-first-secret"
+    replacement_ciphertext = "gcm-envelope-containing-replacement-secret"
+    company = Company(
+        id=uuid4(),
+        name="Audit Integration Secret",
+        google_sheets_signing_secret_ciphertext=first_ciphertext,
+    )
+
+    snapshot = _serialize(company)
+    assert snapshot is not None
+    assert snapshot["google_sheets_signing_secret_ciphertext"] == "***REDACTED***"
+    assert first_ciphertext not in repr(snapshot)
+
+    company.google_sheets_signing_secret_ciphertext = replacement_ciphertext
+    rotated = _captured_diff(company)
+    assert rotated["google_sheets_signing_secret_ciphertext"] == {
+        "before": "***REDACTED***",
+        "after": "***REDACTED***",
+    }
+    assert first_ciphertext not in repr(rotated)
+    assert replacement_ciphertext not in repr(rotated)
+
+    company.google_sheets_signing_secret_ciphertext = None
+    disconnected = _captured_diff(company)
+    assert disconnected["google_sheets_signing_secret_ciphertext"] == {
+        "before": "***REDACTED***",
+        "after": "***REDACTED***",
+    }
+    assert replacement_ciphertext not in repr(disconnected)
 
 
 def test_pending_password_challenges_are_not_automatically_audited() -> None:

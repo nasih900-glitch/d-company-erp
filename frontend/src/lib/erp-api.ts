@@ -6,7 +6,7 @@
  *
  * All methods raise a normalized Error with .code (see /lib/api.ts).
  */
-import { api } from './api';
+import { api, readAccessToken } from './api';
 import { checkoutClientInstance } from './checkout-client-instance';
 import {
   buildRemoteAssistanceCommand,
@@ -255,6 +255,86 @@ export interface CreateOrderRequest {
   place_of_supply_state_code?: string;
 }
 
+const CUSTOMER_DIRECTORY_REVISION_HEADER = 'x-customer-directory-revision';
+const CUSTOMER_DIRECTORY_COMPANY_HEADER = 'x-customer-directory-company-id';
+const customerDirectoryRevisions = new Map<string, number>();
+
+function authenticatedCompanyId(): string | null {
+  const token = readAccessToken();
+  const payload = token?.split('.')[1];
+  if (!payload) return null;
+  try {
+    const padded = payload.replace(/-/g, '+').replace(/_/g, '/')
+      .padEnd(Math.ceil(payload.length / 4) * 4, '=');
+    const decoded = JSON.parse(atob(padded)) as { company_id?: unknown };
+    return typeof decoded.company_id === 'string' ? decoded.company_id : null;
+  } catch {
+    return null;
+  }
+}
+
+function captureCustomerDirectoryRevision(headers: Record<string, unknown> | undefined): void {
+  const authenticatedCompany = authenticatedCompanyId();
+  const headerCompany = headers?.[CUSTOMER_DIRECTORY_COMPANY_HEADER];
+  const rawRevision = headers?.[CUSTOMER_DIRECTORY_REVISION_HEADER];
+  if (typeof headerCompany !== 'string' || headerCompany !== authenticatedCompany) return;
+  if (typeof rawRevision !== 'string' || !/^(0|[1-9][0-9]*)$/.test(rawRevision)) return;
+  const revision = Number(rawRevision);
+  if (!Number.isSafeInteger(revision) || revision < 0) return;
+  customerDirectoryRevisions.set(headerCompany, revision);
+}
+
+export interface CustomerDirectoryEvidence {
+  customer_directory_revision?: number;
+  customer_directory_company_id?: string;
+}
+
+export function captureCustomerDirectoryEvidence(): CustomerDirectoryEvidence {
+  const companyId = authenticatedCompanyId();
+  if (!companyId) return {};
+  const revision = customerDirectoryRevisions.get(companyId);
+  return revision === undefined ? {} : {
+    customer_directory_revision: revision,
+    customer_directory_company_id: companyId,
+  };
+}
+
+function customerDirectoryEvidenceForAction(actionId: string): CustomerDirectoryEvidence {
+  const companyId = authenticatedCompanyId();
+  if (!companyId) return {};
+  const key = `customer-directory-action:${companyId}:${actionId}`;
+  try {
+    const stored = localStorage.getItem(key);
+    if (stored !== null) {
+      const parsed = JSON.parse(stored) as unknown;
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+        throw new Error('Saved customer directory action evidence is invalid.');
+      }
+      const evidence = parsed as CustomerDirectoryEvidence;
+      const keys = Object.keys(evidence);
+      if (keys.length === 0) return {};
+      if (
+        keys.some((key) => !['customer_directory_revision', 'customer_directory_company_id'].includes(key))
+        || evidence.customer_directory_company_id !== companyId
+        || !Number.isSafeInteger(evidence.customer_directory_revision)
+        || (evidence.customer_directory_revision ?? -1) < 0
+      ) throw new Error('Saved customer directory action evidence is invalid.');
+      return evidence;
+    }
+    const captured = captureCustomerDirectoryEvidence();
+    localStorage.setItem(key, JSON.stringify(captured));
+    return captured;
+  } catch (cause) {
+    throw new Error('Customer directory action evidence could not be stored safely.', { cause });
+  }
+}
+
+function clearCustomerDirectoryActionEvidence(actionId: string): void {
+  const companyId = authenticatedCompanyId();
+  if (!companyId) return;
+  try { localStorage.removeItem(`customer-directory-action:${companyId}:${actionId}`); } catch { /* no-op */ }
+}
+
 // ----- Auth -----
 export const auth = {
   login: (email: string, password: string) =>
@@ -293,12 +373,29 @@ export const menu = {
 export const pos = {
   receiptBusiness: () =>
     api.get<ReceiptBusinessDTO>('/pos/receipt-business').then((r) => r.data),
-  createOrder: (req: CreateOrderRequest, idempotencyKey: string) =>
-    api
-      .post<OrderDTO>('/pos/orders', req, {
+  createOrder: (
+    req: CreateOrderRequest,
+    idempotencyKey: string,
+    capturedEvidence?: CustomerDirectoryEvidence | null,
+  ) => {
+    const actionId = `pos-order:${idempotencyKey}`;
+    const evidence = req.customer_phone
+      ? capturedEvidence === undefined
+        ? customerDirectoryEvidenceForAction(actionId)
+        : capturedEvidence ?? {}
+      : {};
+    return api
+      .post<OrderDTO>('/pos/orders', {
+        ...req,
+        ...(req.customer_phone ? evidence : {}),
+      }, {
         headers: { 'Idempotency-Key': idempotencyKey },
       })
-      .then((r) => r.data),
+      .then((r) => {
+        if (capturedEvidence === undefined) clearCustomerDirectoryActionEvidence(actionId);
+        return r.data;
+      });
+  },
   getOrder: (orderId: string) =>
     api.get<OrderDTO>(`/pos/orders/${orderId}`).then((r) => r.data),
   addLines: (
@@ -316,15 +413,27 @@ export const pos = {
     body: { customer_name?: string; customer_phone?: string },
     idempotencyKey: string,
     expectedCheckoutVersion: number,
-  ) =>
-    api
+    capturedEvidence?: CustomerDirectoryEvidence | null,
+  ) => {
+    const actionId = `pos-customer:${orderId}:${idempotencyKey}`;
+    const evidence = body.customer_phone
+      ? capturedEvidence === undefined
+        ? customerDirectoryEvidenceForAction(actionId)
+        : capturedEvidence ?? {}
+      : {};
+    return api
       .patch<OrderDTO>(`/pos/orders/${orderId}/customer`, {
         ...body,
+        ...(body.customer_phone ? evidence : {}),
         expected_checkout_version: expectedCheckoutVersion,
       }, {
         headers: { 'Idempotency-Key': idempotencyKey },
       })
-      .then((r) => r.data),
+      .then((r) => {
+        if (capturedEvidence === undefined) clearCustomerDirectoryActionEvidence(actionId);
+        return r.data;
+      });
+  },
   sendToPos: (orderId: string) =>
     api.patch<OrderDTO>(`/pos/orders/${orderId}/send-to-pos`).then((r) => r.data),
   applyDiscount: (
@@ -664,11 +773,40 @@ export const recipes = {
 // FINANCE — expenses + partners + capital + assets
 // =============================================================================
 export type ExpensePaymentRail = 'cash' | 'card' | 'bank' | 'upi';
-export type ExpenseCreatePaymentRail = Exclude<ExpensePaymentRail, 'cash'>;
+export type ExpenseCreatePaymentRail = ExpensePaymentRail;
+export type ExpenseReceiptSource = 'camera' | 'gallery' | 'file';
+export type ExpenseReceiptStatus = 'pending' | 'verified' | 'not_required' | 'rejected';
+
+export interface ExpenseReceiptDTO {
+  id: string;
+  expense_id: string;
+  original_filename: string;
+  content_type: string;
+  size_bytes: number;
+  /** Compatibility alias accepted during a rolling backend update. */
+  byte_size?: number;
+  /** Present on Code30.2 responses; optional for rolling-update replay compatibility. */
+  sha256?: string | null;
+  source: ExpenseReceiptSource;
+  status: ExpenseReceiptStatus;
+  review_note: string | null;
+  created_at: string;
+}
+
+export interface ExpenseReceiptReviewDTO {
+  id: string;
+  expense_id: string;
+  status: ExpenseReceiptStatus;
+  review_note: string | null;
+  reviewed_by: string;
+  created_at: string;
+}
 
 export interface ExpenseDTO {
   id: string;
   branch_id: string;
+  /** Present for a cash paid-out linked to a specific open shift drawer. */
+  shift_id?: string | null;
   category_id: string;
   supplier_id: string | null;
   amount_minor: number;
@@ -677,6 +815,25 @@ export interface ExpenseDTO {
   vendor_name: string | null;
   invoice_no: string | null;
   note: string | null;
+  /** Optional only while web and API instances roll through the Code30.2 update. */
+  receipt_count?: number;
+  receipt_status?: ExpenseReceiptStatus;
+  is_voided?: boolean;
+  source_shift_status?: string | null;
+  is_corrected?: boolean;
+  correction?: FinanceSourceCorrectionDTO | null;
+}
+
+export interface FinanceSourceCorrectionDTO {
+  id: string;
+  source_type: 'expense' | 'manual_collection' | 'tip_payout' | 'supplier_payment';
+  source_id: string;
+  original_shift_id: string;
+  settlement_shift_id: string;
+  amount_minor: number;
+  corrected_by: string;
+  reason: string;
+  corrected_at: string;
 }
 
 export interface PartnerDTO {
@@ -714,6 +871,7 @@ export interface ManualCollectionDTO {
   id: string;
   company_id: string;
   branch_id: string;
+  shift_id?: string | null;
   business_date: string;
   method: ManualCollectionMethod;
   amount_minor: number;
@@ -729,6 +887,9 @@ export interface ManualCollectionDTO {
   voided_by_name: string | null;
   void_reason: string | null;
   is_voided: boolean;
+  source_shift_status?: string | null;
+  is_corrected?: boolean;
+  correction?: FinanceSourceCorrectionDTO | null;
 }
 
 export type TipPayoutMethod = 'cash' | 'upi' | 'card' | 'bank';
@@ -737,6 +898,7 @@ export interface TipPayoutDTO {
   id: string;
   company_id: string;
   branch_id: string;
+  shift_id?: string | null;
   amount_minor: number;
   method: TipPayoutMethod;
   paid_at: string;
@@ -750,6 +912,9 @@ export interface TipPayoutDTO {
   voided_by_name: string | null;
   void_reason: string | null;
   is_voided: boolean;
+  source_shift_status?: string | null;
+  is_corrected?: boolean;
+  correction?: FinanceSourceCorrectionDTO | null;
 }
 
 export interface PartnerProfitShareDTO {
@@ -866,11 +1031,49 @@ export const finance = {
     branch_id: string; category_id: string; supplier_id?: string;
     amount_minor: number; paid_via: ExpenseCreatePaymentRail;
     paid_at: string; vendor_name?: string; invoice_no?: string; note?: string;
+    shift_id?: string;
   }, idempotencyKey: string) =>
     api.post<ExpenseDTO>('/finance/expenses', body, {
       headers: { 'Idempotency-Key': idempotencyKey },
     }).then((r) => r.data),
-  deleteExpense: (id: string) => api.delete(`/finance/expenses/${id}`),
+  voidExpense: (id: string, reason: string) =>
+    api.post<ExpenseDTO>(`/finance/expenses/${id}/void`, { reason }).then((r) => r.data),
+  correctExpense: (
+    id: string,
+    body: { settlement_shift_id: string; reason: string },
+    idempotencyKey: string,
+  ) => api.post<FinanceSourceCorrectionDTO>(`/finance/expenses/${id}/corrections`, body, {
+    headers: { 'Idempotency-Key': idempotencyKey },
+  }).then((r) => r.data),
+  listExpenseReceipts: (expenseId: string) =>
+    api.get<ExpenseReceiptDTO[]>(`/finance/expenses/${expenseId}/receipts`)
+      .then((r) => r.data),
+  uploadExpenseReceipt: (
+    expenseId: string,
+    file: File,
+    source: ExpenseReceiptSource,
+    idempotencyKey: string,
+  ) => {
+    const body = new FormData();
+    body.append('file', file);
+    body.append('source', source);
+    return api.post<ExpenseReceiptDTO>(`/finance/expenses/${expenseId}/receipts`, body, {
+      headers: { 'Idempotency-Key': idempotencyKey },
+    })
+      .then((r) => r.data);
+  },
+  getExpenseReceiptContent: (receiptId: string) =>
+    api.get<Blob>(`/finance/expense-receipts/${receiptId}/content`, {
+      responseType: 'blob',
+    }).then((r) => r.data),
+  reviewExpenseReceipts: (
+    expenseId: string,
+    body: { status: ExpenseReceiptStatus; review_note?: string },
+    idempotencyKey: string,
+  ) => api.post<ExpenseReceiptReviewDTO>(`/finance/expenses/${expenseId}/receipt-review`, body, {
+    headers: { 'Idempotency-Key': idempotencyKey },
+  })
+    .then((r) => r.data),
 
   listPartners: () => api.get<PartnerDTO[]>('/finance/partners').then((r) => r.data),
   createPartner: (body: {
@@ -919,6 +1122,7 @@ export const finance = {
   }) => api.get<ManualCollectionDTO[]>('/finance/manual-collections', { params }).then((r) => r.data),
   createManualCollection: (body: {
     branch_id: string;
+    shift_id?: string;
     business_date: string;
     method: ManualCollectionMethod;
     amount_minor: number;
@@ -931,6 +1135,13 @@ export const finance = {
   voidManualCollection: (id: string, reason: string) =>
     api.post<ManualCollectionDTO>(`/finance/manual-collections/${id}/void`, { reason })
       .then((r) => r.data),
+  correctManualCollection: (
+    id: string,
+    body: { settlement_shift_id: string; reason: string },
+    idempotencyKey: string,
+  ) => api.post<ManualCollectionDTO>(`/finance/manual-collections/${id}/corrections`, body, {
+    headers: { 'Idempotency-Key': idempotencyKey },
+  }).then((r) => r.data),
 
   listTipPayouts: (params?: {
     branch_id?: string;
@@ -939,6 +1150,7 @@ export const finance = {
   }) => api.get<TipPayoutDTO[]>('/finance/tip-payouts', { params }).then((r) => r.data),
   createTipPayout: (body: {
     branch_id: string;
+    shift_id?: string;
     amount_minor: number;
     method: TipPayoutMethod;
     paid_at: string;
@@ -950,6 +1162,13 @@ export const finance = {
   voidTipPayout: (id: string, reason: string) =>
     api.post<TipPayoutDTO>(`/finance/tip-payouts/${id}/void`, { reason })
       .then((r) => r.data),
+  correctTipPayout: (
+    id: string,
+    body: { settlement_shift_id: string; reason: string },
+    idempotencyKey: string,
+  ) => api.post<TipPayoutDTO>(`/finance/tip-payouts/${id}/corrections`, body, {
+    headers: { 'Idempotency-Key': idempotencyKey },
+  }).then((r) => r.data),
 
   listAssets: () => api.get<AssetDTO[]>('/finance/assets').then((r) => r.data),
   // Idempotency-Key is required server-side — Asset has no unique
@@ -986,6 +1205,30 @@ export interface CompanyDTO {
   payment_provider: string | null;
   payment_key_id: string | null;
   payment_secret_set: boolean;
+}
+
+export interface GoogleSheetsMirrorStatusDTO {
+  enabled: boolean;
+  connection_verified: boolean;
+  webhook_url: string | null;
+  configured_at: string | null;
+  secret_configured: boolean;
+  pending_count: number;
+  held_count: number;
+  quarantined_count: number;
+  delivered_count: number;
+  last_delivered_at: string | null;
+  last_error: string | null;
+}
+
+export interface GoogleSheetsMirrorConfigureResultDTO extends GoogleSheetsMirrorStatusDTO {
+  signing_secret: string | null;
+}
+
+export interface GoogleSheetsMirrorTestResultDTO {
+  event_id: string;
+  status: string;
+  message: string;
 }
 
 /** Narrow branch identity returned by operational modules without admin access. */
@@ -1628,6 +1871,52 @@ export interface CustomerDTO {
   notes: string | null;
 }
 
+export interface PlaytimeProgramDTO {
+  status: 'draft';
+  rewards_enabled: false;
+  messaging_enabled: false;
+  threshold_paid_minutes: number;
+  reward_minutes: number;
+  company_whatsapp_phone: string | null;
+  message_template_preview: string;
+}
+
+export interface PlaytimeLeaderboardItemDTO {
+  rank: number;
+  customer_id: string;
+  name: string | null;
+  masked_phone: string;
+  total_played_minutes: number;
+  qualifying_paid_minutes: number;
+  draft_estimated_reward_minutes: number;
+}
+
+export interface PlaytimeLeaderboardDTO {
+  items: PlaytimeLeaderboardItemDTO[];
+  total: number;
+  page: number;
+  limit: number;
+  program: PlaytimeProgramDTO;
+}
+
+export interface CustomerPlaytimeDTO {
+  customer_id: string;
+  customer_name: string | null;
+  total_sessions: number;
+  total_played_minutes: number;
+  qualifying_paid_minutes: number;
+  draft_estimated_reward_minutes: number;
+  program: PlaytimeProgramDTO;
+  history: Array<{
+    session_id: string;
+    station_name: string;
+    ended_at: string | null;
+    played_minutes: number;
+    qualifying_paid_minutes: number;
+    qualification_status: string;
+  }>;
+}
+
 // =============================================================================
 // MEMBERSHIPS — D Club tiers + subscriptions
 // =============================================================================
@@ -2108,18 +2397,43 @@ export interface RewardDTO {
 }
 
 export const customers = {
-  list: (q?: string) =>
-    api.get<CustomerDTO[]>('/customers', { params: q ? { q } : {} }).then((r) => r.data),
+  list: (q?: string, signal?: AbortSignal) =>
+    api.get<CustomerDTO[]>('/customers', { params: q ? { q } : {}, signal }).then((r) => {
+      captureCustomerDirectoryRevision(r.headers as Record<string, unknown>);
+      return r.data;
+    }),
   byPhone: (phone: string) =>
-    api.get<CustomerDTO | null>(`/customers/by-phone/${encodeURIComponent(phone)}`).then((r) => r.data),
+    api.get<CustomerDTO | null>(`/customers/by-phone/${encodeURIComponent(phone)}`).then((r) => {
+      captureCustomerDirectoryRevision(r.headers as Record<string, unknown>);
+      return r.data;
+    }),
   get: (id: string) => api.get<CustomerDTO>(`/customers/${id}`).then((r) => r.data),
   upsert: (body: { phone: string; name?: string; email?: string; birthday?: string; notes?: string }) =>
-    api.post<CustomerDTO>('/customers', body).then((r) => r.data),
+    api.post<CustomerDTO>('/customers', { ...body, ...captureCustomerDirectoryEvidence() }).then((r) => r.data),
   update: (id: string, body: Partial<{ name: string; phone: string; email: string; birthday: string; notes: string }>) =>
     api.patch<CustomerDTO>(`/customers/${id}`, body).then((r) => r.data),
   remove: (id: string) => api.delete<void>(`/customers/${id}`).then(() => undefined),
   rewardsByPhone: (phone: string) =>
     api.get<RewardDTO[]>(`/customers/by-phone/${encodeURIComponent(phone)}/rewards`).then((r) => r.data),
+  playtimeProgram: () =>
+    api.get<PlaytimeProgramDTO>('/customers/playtime/program-draft').then((r) => r.data),
+  savePlaytimeProgram: (body: Pick<
+    PlaytimeProgramDTO,
+    'threshold_paid_minutes' | 'reward_minutes' | 'company_whatsapp_phone'
+  >) => api.put<PlaytimeProgramDTO>('/customers/playtime/program-draft', body)
+    .then((r) => r.data),
+  playtimeLeaderboard: (
+    params: { q?: string; page?: number; limit?: number } = {},
+    signal?: AbortSignal,
+  ) =>
+    api.get<PlaytimeLeaderboardDTO>('/customers/playtime/leaderboard', { params, signal })
+      .then((r) => r.data),
+  playtime: (
+    id: string,
+    params: { limit?: number; offset?: number } = {},
+    signal?: AbortSignal,
+  ) => api.get<CustomerPlaytimeDTO>(`/customers/${id}/playtime`, { params, signal })
+    .then((r) => r.data),
 };
 
 // =============================================================================
@@ -2923,6 +3237,9 @@ export interface GameSessionDTO {
   timer_alarm_version?: number;
   billable_minutes: number | null;
   amount_minor: number | null;
+  customer_id?: string | null;
+  customer_name?: string | null;
+  customer_phone?: string | null;
   rate_per_hour_minor: number | null;
   order_id: string | null;
   cancel_reason: string | null;
@@ -3111,15 +3428,27 @@ export const gaming = {
     { headers: { 'Idempotency-Key': idempotencyKey } },
   ).then((r) => r.data),
   startSession: (body: {
-    station_id: string; shift_id: string; customer_name?: string; customer_phone?: string;
+    station_id: string; shift_id: string; customer_id?: string; customer_name?: string; customer_phone?: string;
     timer_minutes?: number; package_id?: string; extra_controllers?: number; player_count?: number;
     expected_rate_per_hour_minor: number;
     expected_package_price_minor?: number;
     expected_package_duration_minutes?: number;
     expected_package_variant?: string;
-  }, idempotencyKey: string) => api.post<GameSessionDTO>('/gaming/sessions/start', body, {
-    headers: { 'Idempotency-Key': idempotencyKey },
-  }).then((r) => r.data),
+  }, idempotencyKey: string) => {
+    const actionId = `gaming-start:${idempotencyKey}`;
+    const hasPhoneOnlyIdentity = !body.customer_id && Boolean(body.customer_phone);
+    return api.post<GameSessionDTO>('/gaming/sessions/start', {
+      ...body,
+      ...(hasPhoneOnlyIdentity
+        ? customerDirectoryEvidenceForAction(actionId)
+        : {}),
+    }, {
+      headers: { 'Idempotency-Key': idempotencyKey },
+    }).then((r) => {
+      if (hasPhoneOnlyIdentity) clearCustomerDirectoryActionEvidence(actionId);
+      return r.data;
+    });
+  },
   setSessionTimer: (id: string, timer_minutes: number | null) =>
     api.patch<GameSessionDTO>(`/gaming/sessions/${id}/timer`, { timer_minutes }).then((r) => r.data),
   pauseSession: (id: string, body: { reason: string; expected_pause_version: number }, idempotencyKey: string) =>
@@ -3588,6 +3917,19 @@ export const settings = {
   getCompany: () => api.get<CompanyDTO>('/settings/company').then((r) => r.data),
   updateCompany: (body: Partial<CompanyDTO>) =>
     api.patch<CompanyDTO>('/settings/company', body).then((r) => r.data),
+  getGoogleSheetsMirror: () =>
+    api.get<GoogleSheetsMirrorStatusDTO>('/settings/google-sheets').then((r) => r.data),
+  configureGoogleSheetsMirror: (body: { webhook_url: string; rotate_secret?: boolean }) =>
+    api.post<GoogleSheetsMirrorConfigureResultDTO>('/settings/google-sheets/configure', body)
+      .then((r) => r.data),
+  testGoogleSheetsMirror: () =>
+    api.post<GoogleSheetsMirrorTestResultDTO>('/settings/google-sheets/test')
+      .then((r) => r.data),
+  retryGoogleSheetsMirror: () =>
+    api.post<GoogleSheetsMirrorStatusDTO>('/settings/google-sheets/retry-quarantined')
+      .then((r) => r.data),
+  disconnectGoogleSheetsMirror: () =>
+    api.delete<GoogleSheetsMirrorStatusDTO>('/settings/google-sheets').then((r) => r.data),
 
   listBranches: () => api.get<BranchDTO[]>('/settings/branches').then((r) => r.data),
   createBranch: (body: Partial<BranchDTO>, idempotencyKey: string) =>
