@@ -253,6 +253,8 @@ class SystemHealthDevices(BaseModel):
     with_pending_sync: int
     sync_stalled: int
     max_pending_outbox_count: int
+    stale_with_last_reported_pending: int
+    stale_max_last_reported_pending: int
     latest_supported_version_code: int
     outdated_installations: int
 
@@ -558,9 +560,7 @@ async def list_events(
     )
     total = int(
         (
-            await session.execute(
-                select(func.count(ClientDiagnosticEvent.id)).where(*conditions)
-            )
+            await session.execute(select(func.count(ClientDiagnosticEvent.id)).where(*conditions))
         ).scalar_one()
     )
     return ClientDiagnosticPage(
@@ -603,9 +603,7 @@ async def _build_summary(
 
     async def grouped(column: InstrumentedAttribute[str]) -> dict[str, int]:
         result = await session.execute(
-            select(column, func.count(ClientDiagnosticEvent.id))
-            .where(*conditions)
-            .group_by(column)
+            select(column, func.count(ClientDiagnosticEvent.id)).where(*conditions).group_by(column)
         )
         return {str(key): int(count) for key, count in result.all()}
 
@@ -694,6 +692,8 @@ async def system_health(
         stale_devices,
         pending_devices,
         max_pending,
+        stale_pending_devices,
+        stale_max_pending,
     ) = (
         await session.execute(
             select(
@@ -705,9 +705,25 @@ async def system_health(
                     ClientInstallation.last_seen_at < stale_before
                 ),
                 func.count(ClientInstallation.id).filter(
-                    ClientInstallation.pending_outbox_count > 0
+                    ClientInstallation.last_seen_at >= stale_before,
+                    ClientInstallation.pending_outbox_count > 0,
                 ),
-                func.coalesce(func.max(ClientInstallation.pending_outbox_count), 0),
+                func.coalesce(
+                    func.max(ClientInstallation.pending_outbox_count).filter(
+                        ClientInstallation.last_seen_at >= stale_before
+                    ),
+                    0,
+                ),
+                func.count(ClientInstallation.id).filter(
+                    ClientInstallation.last_seen_at < stale_before,
+                    ClientInstallation.pending_outbox_count > 0,
+                ),
+                func.coalesce(
+                    func.max(ClientInstallation.pending_outbox_count).filter(
+                        ClientInstallation.last_seen_at < stale_before
+                    ),
+                    0,
+                ),
             ).where(ClientInstallation.company_id == tenant.company_id)
         )
     ).one()
@@ -759,6 +775,8 @@ async def system_health(
         with_pending_sync=int(pending_devices),
         sync_stalled=stalled_devices,
         max_pending_outbox_count=int(max_pending),
+        stale_with_last_reported_pending=int(stale_pending_devices),
+        stale_max_last_reported_pending=int(stale_max_pending),
         latest_supported_version_code=latest_supported,
         outdated_installations=outdated_devices,
     )

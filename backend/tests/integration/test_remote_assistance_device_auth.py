@@ -8,33 +8,76 @@ import hashlib
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
 import pytest_asyncio
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
-from sqlalchemy import or_, select, text
+from sqlalchemy import event, or_, select, text
 
+from app.api.v1.client_installations.router import (
+    GamingCleanupLocalSnapshot,
+    GamingCleanupReportWrite,
+    gaming_cleanup_action_hashes,
+    gaming_cleanup_candidate_sha256,
+    gaming_cleanup_snapshot_sha256,
+)
 from app.api.v1.remote_assistance import router as remote_router
 from app.core.security import hash_password, issue_access_token
 from app.models import (
     AuditLog,
     Branch,
+    ClientGamingCleanupReconciliation,
     ClientInstallation,
     Company,
     RemoteAssistanceDeviceKey,
     RemoteAssistanceGrant,
     RemoteAssistanceSession,
     Role,
+    Station,
     Terminal,
     User,
     UserRole,
 )
+from app.services.audit.recorder import install_audit_listeners
 from app.services.remote_assistance.device_auth import (
     canonical_enrollment_statement,
     canonical_request_statement,
 )
+
+_CLEANUP_PROTOCOL_FIXTURE = (
+    Path(__file__).resolve().parents[3] / "protocol-fixtures" / "gaming_cleanup_full_flow_v1.json"
+)
+_ANDROID_CLEANUP_DIRECTIVE_FIELDS = (
+    "id",
+    "installation_id",
+    "branch_id",
+    "terminal_id",
+    "station_id",
+    "local_action_id",
+    "server_session_id",
+    "revision",
+    "is_current",
+    "reported_local_state",
+    "local_evidence_revision",
+    "local_snapshot_sha256",
+    "candidate_sha256",
+    "unresolved_child_count",
+    "cleanup_receipt_audit_id",
+    "status",
+    "approval_reason",
+    "device_directive",
+)
+
+
+def _cleanup_protocol_fixture() -> dict[str, object]:
+    return json.loads(_CLEANUP_PROTOCOL_FIXTURE.read_text(encoding="utf-8"))
+
+
+def _android_cleanup_directive(body: dict[str, object]) -> dict[str, object]:
+    return {field: body[field] for field in _ANDROID_CLEANUP_DIRECTIVE_FIELDS}
 
 
 @pytest_asyncio.fixture(autouse=True)
@@ -75,26 +118,31 @@ def _auth_headers(seed: dict, *, roles: list[str], android: bool) -> dict[str, s
         headers.update(
             {
                 "X-Client-Platform": "android",
-                "X-Client-Version-Code": "18",
+                "X-Client-Version-Code": "37",
                 "X-Client-Distribution-Channel": "direct",
             }
         )
     return headers
 
 
-async def _installation(session, seed: dict) -> ClientInstallation:
+async def _installation(
+    session,
+    seed: dict,
+    *,
+    installation_id: UUID | None = None,
+) -> ClientInstallation:
     now = datetime.now(UTC)
     row = ClientInstallation(
         id=uuid4(),
         company_id=seed["company"].id,
-        installation_id=uuid4(),
+        installation_id=installation_id or uuid4(),
         registered_by_user_id=seed["owner"].id,
         last_user_id=seed["owner"].id,
         terminal_id=seed["terminal"].id,
         platform="android",
         distribution_channel="direct",
-        version_name="3.1.7",
-        version_code=18,
+        version_name="3.1.29",
+        version_code=37,
         pending_outbox_count=0,
         last_successful_sync_at=now,
         update_state="idle",
@@ -285,6 +333,8 @@ async def _signed_json(
     epoch: int | None = None,
     signer: ec.EllipticCurvePrivateKey | None = None,
     signed_content: bytes | None = None,
+    extra_headers: dict[str, str] | None = None,
+    roles: list[str] | None = None,
 ):
     content = json.dumps(payload, separators=(",", ":")).encode("utf-8")
     signature_headers, used_nonce = _device_signature_headers(
@@ -300,13 +350,561 @@ async def _signed_json(
         method,
         target,
         headers={
-            **_auth_headers(seed, roles=["staff"], android=True),
+            **_auth_headers(seed, roles=roles or ["staff"], android=True),
             **signature_headers,
+            **(extra_headers or {}),
             "Content-Type": "application/json",
         },
         content=content,
     )
     return response, used_nonce
+
+
+def _cleanup_receipt(
+    *,
+    seed: dict,
+    report: GamingCleanupReportWrite,
+    audit_id: int | None = None,
+) -> AuditLog:
+    local_ids = [report.local_action_id, *(uuid4() for _ in range(4))]
+    session_ids = [report.server_session_id, *(uuid4() for _ in range(4))]
+    fence: list[dict[str, object]] = []
+    for local_id in local_ids:
+        for action in ("start", "stop"):
+            is_target = local_id == report.local_action_id
+            request_hash = (
+                (report.start_request_hash if action == "start" else report.stop_request_hash)
+                if is_target
+                else ("a" if action == "start" else "b") * 64
+            )
+            fence.append(
+                {
+                    "action_type": "idempotency",
+                    "action_key": f"gaming-session-{action}:{local_id}",
+                    "request_hash": request_hash,
+                    "user_id": str(seed["owner"].id),
+                    "terminal_id": str(seed["terminal"].id),
+                    "source_entity_id": None,
+                }
+            )
+    for index in range(3):
+        fence.append(
+            {
+                "action_type": "shift_open",
+                "action_key": f"shift-open:{index + 1:02d}",
+                "request_hash": "c" * 64,
+                "user_id": str(seed["owner"].id),
+                "terminal_id": str(seed["terminal"].id),
+                "source_entity_id": str(uuid4()),
+            }
+        )
+    fence.sort(key=lambda item: str(item["action_key"]))
+    idempotency_keys = [
+        item["action_key"] for item in fence if item["action_type"] == "idempotency"
+    ]
+    source = "1" * 40
+    values: dict[str, object] = {
+        "actor_user_id": seed["owner"].id,
+        "company_id": seed["company"].id,
+        "action": "production_trial_cleanup",
+        "entity_type": "ReleaseCleanup",
+        "entity_id": "code30.1-20260920",
+        "before": {
+            "schema_revision": "0078",
+            "state_fingerprint": "d" * 64,
+            "backup_sha256": "e" * 64,
+            "quarantine_evidence_sha256": "f" * 64,
+            "counts": {},
+            "audit_log": {},
+        },
+        "after": {
+            "source_git_sha": source,
+            "backend_image_id": f"sha256:{'2' * 64}",
+            "executor": f"install-on-vm:{source}",
+            "executed_at": "2026-09-20T04:30:00+00:00",
+            "deleted_counts": {
+                "audit_log": 37,
+                "idempotency_keys": 10,
+                "gaming_sessions": 5,
+                "order_lines": 3,
+                "orders": 3,
+                "menu_items": 1,
+                "shifts": 3,
+            },
+            "deleted_shift_ids": [],
+            "deleted_order_ids": [],
+            "deleted_order_line_ids": [],
+            "deleted_gaming_session_ids": sorted(str(value) for value in session_ids),
+            "deleted_menu_item_ids": [],
+            "retired_test_installation": {},
+            "local_avd_quarantine": {},
+            "deleted_idempotency_keys": idempotency_keys,
+            "deleted_audit_ids": [],
+            "replay_fence": fence,
+            "expected_post_counts": {},
+        },
+        "user_agent": "cleanup-code30-production-trial-data/2",
+        "terminal_id": seed["terminal"].id,
+        "request_id": "code30.1-production-trial-cleanup-20260920",
+        "client_action_id": "production-trial-cleanup-20260920",
+        "client_was_offline": None,
+        "synced_at": None,
+    }
+    if audit_id is not None:
+        values["id"] = audit_id
+    return AuditLog(**values)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_cleanup_report_requires_exact_active_installation_proof(
+    client,
+    session,
+    seed_owner,
+) -> None:
+    installation = await _installation(session, seed_owner)
+    key = _new_key()
+    enrolled = await _enroll(client, seed_owner, installation.installation_id, key)
+    assert enrolled.status_code == 200, enrolled.text
+    approved = await _approve(
+        client, seed_owner, key.key_id, enrolled.json()["pairing_code"], uuid4()
+    )
+    assert approved.status_code == 200, approved.text
+
+    snapshot = GamingCleanupLocalSnapshot(
+        shift_id=uuid4(),
+        started_at_millis=1_795_000_000_123,
+        ended_at_millis=1_795_003_600_456,
+        rate_per_hour_minor=15_000,
+        extra_controllers=0,
+        evidence_revision=7,
+    )
+    report = GamingCleanupReportWrite(
+        installation_id=installation.installation_id,
+        local_action_id=uuid4(),
+        server_session_id=uuid4(),
+        branch_id=seed_owner["branch"].id,
+        terminal_id=seed_owner["terminal"].id,
+        station_id=uuid4(),
+        reported_local_state="stop_pending",
+        local_snapshot=snapshot,
+        local_snapshot_sha256=gaming_cleanup_snapshot_sha256(snapshot),
+        start_request_hash="0" * 64,
+        stop_request_hash="0" * 64,
+        candidate_sha256="0" * 64,
+        unresolved_child_count=0,
+    )
+    start_hash, stop_hash = gaming_cleanup_action_hashes(report)
+    report = report.model_copy(
+        update={"start_request_hash": start_hash, "stop_request_hash": stop_hash}
+    )
+    report = report.model_copy(update={"candidate_sha256": gaming_cleanup_candidate_sha256(report)})
+    payload = report.model_dump(mode="json")
+    target = "/api/v1/client-installations/gaming-cleanup-reconciliations/report"
+    installation_headers = {"X-Installation-Id": str(installation.installation_id)}
+
+    browser = await client.post(
+        target,
+        headers=_auth_headers(seed_owner, roles=["super_owner"], android=False),
+        json=payload,
+    )
+    assert browser.status_code in {401, 403, 422}
+    acknowledgement_target = (
+        f"/api/v1/client-installations/gaming-cleanup-reconciliations/{uuid4()}/acknowledge"
+    )
+    browser_ack = await client.post(
+        acknowledgement_target,
+        headers=_auth_headers(seed_owner, roles=["super_owner"], android=False),
+        json={
+            "installation_id": str(installation.installation_id),
+            "expected_candidate_sha256": report.candidate_sha256,
+        },
+    )
+    assert browser_ack.status_code in {401, 403, 422}
+
+    valid, nonce = await _signed_json(
+        client,
+        seed=seed_owner,
+        key=key,
+        method="POST",
+        target=target,
+        payload=payload,
+        extra_headers=installation_headers,
+        roles=["gaming_supervisor"],
+    )
+    # Device proof passed; the deliberately absent historical receipt blocks later.
+    assert valid.status_code == 422, valid.text
+    assert "cleanup receipt" in valid.text.lower()
+
+    content = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    proof_headers, _ = _device_signature_headers(
+        key=key,
+        method="POST",
+        raw_target=target + "?changed=true",
+        content=content,
+    )
+    wrong_target = await client.post(
+        target,
+        headers={
+            **_auth_headers(seed_owner, roles=["gaming_supervisor"], android=True),
+            **installation_headers,
+            **proof_headers,
+            "Content-Type": "application/json",
+        },
+        content=content,
+    )
+    assert wrong_target.status_code == 401
+
+    wrong_installation, _ = await _signed_json(
+        client,
+        seed=seed_owner,
+        key=key,
+        method="POST",
+        target=target,
+        payload=payload,
+        extra_headers={"X-Installation-Id": str(uuid4())},
+        roles=["gaming_supervisor"],
+    )
+    assert wrong_installation.status_code == 422
+
+    replay_headers, _ = _device_signature_headers(
+        key=key, method="POST", raw_target=target, content=content, nonce=nonce
+    )
+    replay = await client.post(
+        target,
+        headers={
+            **_auth_headers(seed_owner, roles=["gaming_supervisor"], android=True),
+            **installation_headers,
+            **replay_headers,
+            "Content-Type": "application/json",
+        },
+        content=content,
+    )
+    assert replay.status_code == 401
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_cleanup_report_approved_revision_race_and_acknowledgement_full_flow(
+    client,
+    session,
+    seed_owner,
+    request,
+) -> None:
+    install_audit_listeners()
+    company_id = seed_owner["company"].id
+    fixture = _cleanup_protocol_fixture()
+    assert fixture["schema"] == "dcompany.gaming-cleanup-full-flow.v1"
+    initial_payload = fixture["initial_report"]
+    approved_payload = fixture["approved_report"]
+    expected_directive = fixture["approved_directive"]
+    expected_acknowledgement = fixture["acknowledgement"]
+    assert isinstance(initial_payload, dict)
+    assert isinstance(approved_payload, dict)
+    assert isinstance(expected_directive, dict)
+    assert isinstance(expected_acknowledgement, dict)
+
+    branch = Branch(
+        id=UUID(str(initial_payload["branch_id"])),
+        company_id=seed_owner["company"].id,
+        name="Cleanup protocol fixture branch",
+        code="CPF",
+        invoice_series_code="PX",
+    )
+    terminal = Terminal(
+        id=UUID(str(initial_payload["terminal_id"])),
+        branch_id=branch.id,
+        name="Cleanup protocol fixture terminal",
+        device_id="cleanup-protocol-fixture-terminal",
+    )
+    fixture_seed = {**seed_owner, "branch": branch, "terminal": terminal}
+    session.add_all([branch, terminal])
+    await session.flush()
+    installation = await _installation(
+        session,
+        fixture_seed,
+        installation_id=UUID(str(initial_payload["installation_id"])),
+    )
+
+    reconciliation_ids = iter(
+        (
+            UUID(str(fixture["initial_reconciliation_id"])),
+            UUID(str(expected_directive["id"])),
+        )
+    )
+    fixture_local_action_id = UUID(str(initial_payload["local_action_id"]))
+
+    def assign_fixture_reconciliation_id(
+        _mapper: object,
+        _connection: object,
+        target: ClientGamingCleanupReconciliation,
+    ) -> None:
+        if target.local_action_id == fixture_local_action_id and target.id is None:
+            target.id = next(reconciliation_ids)
+
+    event.listen(
+        ClientGamingCleanupReconciliation,
+        "before_insert",
+        assign_fixture_reconciliation_id,
+    )
+    request.addfinalizer(
+        lambda: event.remove(
+            ClientGamingCleanupReconciliation,
+            "before_insert",
+            assign_fixture_reconciliation_id,
+        )
+    )
+
+    key = _new_key()
+    enrolled = await _enroll(client, fixture_seed, installation.installation_id, key)
+    assert enrolled.status_code == 200, enrolled.text
+    key_approval = await _approve(
+        client, fixture_seed, key.key_id, enrolled.json()["pairing_code"], uuid4()
+    )
+    assert key_approval.status_code == 200, key_approval.text
+
+    station = Station(
+        id=UUID(str(initial_payload["station_id"])),
+        company_id=seed_owner["company"].id,
+        branch_id=branch.id,
+        code="PS5-01",
+        name="PS5 Station 1",
+        type="ps5",
+        rate_per_hour_minor=12_000,
+        is_active=True,
+        notes=None,
+        sac_code="999692",
+        tax_rate=0.18,
+        rate_includes_tax=True,
+    )
+    report = GamingCleanupReportWrite.model_validate(initial_payload)
+    newer = GamingCleanupReportWrite.model_validate(approved_payload)
+    assert gaming_cleanup_snapshot_sha256(report.local_snapshot) == report.local_snapshot_sha256
+    assert gaming_cleanup_action_hashes(report) == (
+        report.start_request_hash,
+        report.stop_request_hash,
+    )
+    assert gaming_cleanup_candidate_sha256(report) == report.candidate_sha256
+    assert gaming_cleanup_snapshot_sha256(newer.local_snapshot) == newer.local_snapshot_sha256
+    assert gaming_cleanup_action_hashes(newer) == (
+        newer.start_request_hash,
+        newer.stop_request_hash,
+    )
+    assert gaming_cleanup_candidate_sha256(newer) == newer.candidate_sha256
+    assert newer.local_snapshot.evidence_revision == report.local_snapshot.evidence_revision + 1
+    session.add_all(
+        [
+            station,
+            _cleanup_receipt(
+                seed=fixture_seed,
+                report=report,
+                audit_id=int(expected_directive["cleanup_receipt_audit_id"]),
+            ),
+        ]
+    )
+    await session.commit()
+
+    report_target = "/api/v1/client-installations/gaming-cleanup-reconciliations/report"
+    install_headers = {"X-Installation-Id": str(installation.installation_id)}
+    first_report, _ = await _signed_json(
+        client,
+        seed=fixture_seed,
+        key=key,
+        method="POST",
+        target=report_target,
+        payload=report.model_dump(mode="json"),
+        extra_headers=install_headers,
+        roles=["gaming_supervisor"],
+    )
+    assert first_report.status_code == 200, first_report.text
+    first = first_report.json()
+    assert first["id"] == fixture["initial_reconciliation_id"]
+    assert first["status"] == "reported"
+    assert first["review"] == {
+        "amount_minor": 12_000,
+        "billable_minutes": 54,
+        "started_at": "2026-11-18T11:06:40.123000Z",
+        "ended_at": "2026-11-18T12:00:40.456000Z",
+    }
+    serialized_first = json.dumps(first).lower()
+    assert "private cleanup customer" not in serialized_first
+    assert "+919999999999" not in serialized_first
+    assert "customer_name" not in serialized_first
+    assert "customer_phone" not in serialized_first
+    assert "customer_id" not in serialized_first
+
+    owner_headers = _auth_headers(fixture_seed, roles=["super_owner"], android=False)
+    owner_listing = await client.get(
+        "/api/v1/client-installations/gaming-cleanup-reconciliations",
+        headers=owner_headers,
+    )
+    assert owner_listing.status_code == 200, owner_listing.text
+    listed = next(item for item in owner_listing.json()["items"] if item["id"] == first["id"])
+    assert listed["station_id"] == str(station.id)
+    assert listed["review"] == first["review"]
+    assert "private cleanup customer" not in json.dumps(listed).lower()
+    assert "+919999999999" not in json.dumps(listed)
+
+    first_approval_body = {
+        "expected_candidate_sha256": first["candidate_sha256"],
+        "reason": "Reviewed exact Station 1 amount and duration",
+    }
+    first_approval = await client.post(
+        f"/api/v1/client-installations/gaming-cleanup-reconciliations/{first['id']}/approve",
+        headers={**owner_headers, "Idempotency-Key": str(uuid4())},
+        json=first_approval_body,
+    )
+    assert first_approval.status_code == 200, first_approval.text
+    assert first_approval.json()["status"] == "approved"
+
+    second_report, _ = await _signed_json(
+        client,
+        seed=fixture_seed,
+        key=key,
+        method="POST",
+        target=report_target,
+        payload=newer.model_dump(mode="json"),
+        extra_headers=install_headers,
+        roles=["gaming_supervisor"],
+    )
+    assert second_report.status_code == 200, second_report.text
+    second = second_report.json()
+    assert second["revision"] == 2
+    assert second["status"] == "reported"
+    assert second["candidate_sha256"] != first["candidate_sha256"]
+
+    await session.rollback()
+    historical = (
+        (
+            await session.execute(
+                select(ClientGamingCleanupReconciliation)
+                .where(
+                    ClientGamingCleanupReconciliation.client_installation_id == installation.id,
+                    ClientGamingCleanupReconciliation.local_action_id == report.local_action_id,
+                )
+                .order_by(ClientGamingCleanupReconciliation.revision)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert [row.status for row in historical] == ["superseded", "reported"]
+    assert historical[0].approved_at is not None
+    assert historical[0].approved_by == seed_owner["owner"].id
+    assert historical[0].approval_reason == first_approval_body["reason"]
+    assert historical[0].approval_idempotency_key is not None
+    assert historical[0].superseded_at is not None
+
+    second_approval = await client.post(
+        f"/api/v1/client-installations/gaming-cleanup-reconciliations/{second['id']}/approve",
+        headers={**owner_headers, "Idempotency-Key": str(uuid4())},
+        json={
+            "expected_candidate_sha256": second["candidate_sha256"],
+            "reason": expected_directive["approval_reason"],
+        },
+    )
+    assert second_approval.status_code == 200, second_approval.text
+    approved = second_approval.json()
+    assert _android_cleanup_directive(approved) == expected_directive
+
+    acknowledgement_target = (
+        f"/api/v1/client-installations/gaming-cleanup-reconciliations/{second['id']}/acknowledge"
+    )
+    mismatched_acknowledgement, _ = await _signed_json(
+        client,
+        seed=fixture_seed,
+        key=key,
+        method="POST",
+        target=acknowledgement_target,
+        payload={
+            "installation_id": str(installation.installation_id),
+            "expected_candidate_sha256": "0" * 64,
+        },
+        extra_headers=install_headers,
+        roles=["gaming_supervisor"],
+    )
+    assert mismatched_acknowledgement.status_code == 409
+
+    acknowledgement, _ = await _signed_json(
+        client,
+        seed=fixture_seed,
+        key=key,
+        method="POST",
+        target=acknowledgement_target,
+        payload={
+            "installation_id": str(installation.installation_id),
+            "expected_candidate_sha256": second["candidate_sha256"],
+        },
+        extra_headers=install_headers,
+        roles=["gaming_supervisor"],
+    )
+    assert acknowledgement.status_code == 200, acknowledgement.text
+    assert _android_cleanup_directive(acknowledgement.json()) == expected_acknowledgement
+
+    repeated_ack, _ = await _signed_json(
+        client,
+        seed=fixture_seed,
+        key=key,
+        method="POST",
+        target=acknowledgement_target,
+        payload={
+            "installation_id": str(installation.installation_id),
+            "expected_candidate_sha256": second["candidate_sha256"],
+        },
+        extra_headers=install_headers,
+        roles=["gaming_supervisor"],
+    )
+    assert repeated_ack.status_code == 200, repeated_ack.text
+    assert repeated_ack.json()["applied_at"] == acknowledgement.json()["applied_at"]
+
+    await session.rollback()
+    audit_rows = (
+        (
+            await session.execute(
+                select(AuditLog).where(AuditLog.company_id == company_id).order_by(AuditLog.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    cleanup_audits = [
+        row for row in audit_rows if row.entity_type == "ClientGamingCleanupReconciliation"
+    ]
+    assert [row.action for row in cleanup_audits].count("create") == 2
+    assert [row.action for row in cleanup_audits].count("update") == 4
+    create_snapshots = [row.after for row in cleanup_audits if row.action == "create"]
+    assert all(snapshot is not None for snapshot in create_snapshots)
+    assert {
+        snapshot["local_snapshot_sha256"] for snapshot in create_snapshots if snapshot is not None
+    } == {
+        report.local_snapshot_sha256,
+        newer.local_snapshot_sha256,
+    }
+    assert all(
+        snapshot["local_snapshot"] == "***REDACTED***"
+        for snapshot in create_snapshots
+        if snapshot is not None
+    )
+
+    # Scan every field from both generic and explicit tenant audit rows. This
+    # covers create/update before+after payloads, action/reason/request
+    # metadata, the explicit production cleanup receipt, and remote-device
+    # enrollment/approval audit entries created by this signed flow.
+    audit_material = [
+        {column.name: getattr(row, column.name) for column in AuditLog.__table__.columns}
+        for row in audit_rows
+    ]
+    serialized_audit = json.dumps(audit_material, default=str).lower()
+    for private_sentinel in (
+        "private cleanup customer",
+        "+919999999999",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        '"customer_name"',
+        '"customer_phone"',
+        '"customer_id"',
+    ):
+        assert private_sentinel not in serialized_audit
+    assert any(row.action == "production_trial_cleanup" for row in audit_rows)
 
 
 @pytest.mark.integration
@@ -407,9 +1005,7 @@ async def test_pairing_hides_pending_fingerprint_and_gates_device_requests(
 
     approval_id = uuid4()
     displayed_code = pending["pairing_code"]
-    human_entered_code = (
-        f"{displayed_code[:4].lower()}-{displayed_code[4:8]} {displayed_code[8:]}"
-    )
+    human_entered_code = f"{displayed_code[:4].lower()}-{displayed_code[4:8]} {displayed_code[8:]}"
     approved = await _approve(
         client,
         seed_owner,

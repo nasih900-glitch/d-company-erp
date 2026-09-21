@@ -52,6 +52,8 @@ import cloud.dcompany.erp.core.db.GamingSessionAddonActionState
 import cloud.dcompany.erp.core.db.GamingSessionAddonActionType
 import cloud.dcompany.erp.core.db.GamingSessionAddonCacheEntity
 import cloud.dcompany.erp.core.db.GamingSessionState
+import cloud.dcompany.erp.core.db.cleanupSnapshotOrNull
+import cloud.dcompany.erp.core.db.gamingCleanupSnapshotSha256
 import cloud.dcompany.erp.core.db.GamingPackageCacheEntity
 import cloud.dcompany.erp.core.db.BatchCacheEntity
 import cloud.dcompany.erp.core.db.GamingStationEntity
@@ -141,6 +143,10 @@ import cloud.dcompany.erp.ui.screens.finance.toFinanceCache
 import cloud.dcompany.erp.ui.screens.finance.toExpenseCreate
 import cloud.dcompany.erp.ui.screens.gaming.GameSession
 import cloud.dcompany.erp.ui.screens.gaming.GamingApi
+import cloud.dcompany.erp.ui.screens.gaming.GamingCleanupAcknowledgeBody
+import cloud.dcompany.erp.ui.screens.gaming.GamingCleanupDeviceApi
+import cloud.dcompany.erp.ui.screens.gaming.GamingCleanupReconciliation
+import cloud.dcompany.erp.ui.screens.gaming.GamingCleanupReportBody
 import cloud.dcompany.erp.ui.screens.gaming.SessionAddonVoidBody
 import cloud.dcompany.erp.ui.screens.gaming.SessionStartBody
 import cloud.dcompany.erp.ui.screens.gaming.SessionStopBody
@@ -203,6 +209,7 @@ import cloud.dcompany.erp.ui.screens.shift.ShiftApi
 import cloud.dcompany.erp.ui.screens.shift.ShiftCloseBody
 import cloud.dcompany.erp.ui.screens.shift.ShiftOpenBody
 import cloud.dcompany.erp.ui.screens.staff.StaffApi
+import java.security.MessageDigest
 import cloud.dcompany.erp.ui.screens.staff.StaffUserUpdateBody
 import cloud.dcompany.erp.ui.screens.tables.TablesApi
 import kotlinx.coroutines.CompletableDeferred
@@ -791,7 +798,7 @@ internal suspend fun resolveMissingGamingSessions(
     boardSessions: List<GameSession>,
     localServerIds: Iterable<String?>,
     fetchExact: suspend (String) -> GameSession,
-    onNotFound: (String) -> Unit = {},
+    onNotFound: suspend (String) -> Unit = {},
 ): List<GameSession> {
     val missingIds = missingGamingSessionResolutionIds(
         boardSessionIds = boardSessions.map(GameSession::id),
@@ -813,6 +820,72 @@ internal suspend fun resolveMissingGamingSessions(
     }
     return (boardSessions + resolved).distinctBy(GameSession::id)
 }
+
+internal fun gamingCleanupCandidateSha256(body: GamingCleanupReportBody): String {
+    val canonical = listOf(
+        "client-gaming-cleanup-v2",
+        body.installationId,
+        body.localActionId,
+        body.serverSessionId,
+        body.branchId,
+        body.terminalId,
+        body.stationId,
+        body.reportedLocalState,
+        body.localSnapshot.evidenceRevision.toString(),
+        body.localSnapshotSha256,
+        body.startRequestHash,
+        body.stopRequestHash,
+        body.unresolvedChildCount.toString(),
+    ).joinToString("\n")
+    return MessageDigest.getInstance("SHA-256")
+        .digest(canonical.toByteArray(Charsets.UTF_8))
+        .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
+}
+
+internal fun cleanupAcknowledgementMatches(
+    acknowledgement: GamingCleanupReconciliation,
+    installationId: String,
+    localId: String,
+    reconciliationId: String,
+    candidateSha256: String,
+): Boolean = acknowledgement.id == reconciliationId &&
+    acknowledgement.localActionId == localId &&
+    acknowledgement.installationId == installationId &&
+    acknowledgement.candidateSha256 == candidateSha256 &&
+    acknowledgement.status == "applied" &&
+    acknowledgement.deviceDirective == "already_applied"
+
+internal fun gamingActionRequestHash(
+    method: String,
+    path: String,
+    idempotencyKey: String,
+    body: ByteArray,
+): String {
+    val prefix = "${method.uppercase(Locale.ROOT)}\n$path\n\n$idempotencyKey\n"
+        .toByteArray(Charsets.UTF_8)
+    return MessageDigest.getInstance("SHA-256")
+        .digest(prefix + body)
+        .joinToString("") { byte -> "%02x".format(Locale.ROOT, byte.toInt() and 0xff) }
+}
+
+internal fun gamingStartRequestHash(localId: String, body: SessionStartBody): String =
+    gamingActionRequestHash(
+        method = "POST",
+        path = "/api/v1/gaming/sessions/start",
+        idempotencyKey = "gaming-session-start:$localId",
+        body = ApiClient.json.encodeToString(body).toByteArray(Charsets.UTF_8),
+    )
+
+internal fun gamingStopRequestHash(
+    localId: String,
+    serverId: String,
+    body: SessionStopBody,
+): String = gamingActionRequestHash(
+    method = "POST",
+    path = "/api/v1/gaming/sessions/$serverId/stop",
+    idempotencyKey = "gaming-session-stop:$localId",
+    body = ApiClient.json.encodeToString(body).toByteArray(Charsets.UTF_8),
+)
 
 enum class RejectedShiftOpenVerificationStatus {
     CLEARED,
@@ -895,6 +968,11 @@ class SyncEngine(
 
     private val shiftApi = ApiClient.create<ShiftApi>()
     private val gamingApi = ApiClient.create<GamingApi>()
+    private val gamingCleanupApi by lazy {
+        DCompanyApp.instance.remoteAssistance.createInstallationProofApi(
+            GamingCleanupDeviceApi::class.java,
+        )
+    }
     private val kitchenApi = ApiClient.create<KitchenApi>()
     private val tablesApi = ApiClient.create<TablesApi>()
     private val cafeOrderSync = CafeOrderSyncCoordinator(db, db.cafeOrderDao(), tablesApi)
@@ -2845,8 +2923,7 @@ class SyncEngine(
             // rather than crashing the sync.
             val shiftId = row.shiftId!!
             val resolvedShiftId = db.shiftDao().byLocalId(shiftId)?.serverShiftId ?: shiftId
-            val started = gamingApi.start(
-                SessionStartBody(
+            val startBody = SessionStartBody(
                     stationId = row.stationId,
                     shiftId = resolvedShiftId,
                     // Preserve offline start -> stop chronology. The server
@@ -2886,7 +2963,19 @@ class SyncEngine(
                             "This saved package start has no locked variant snapshot. Refresh Gaming and capture a new start."
                         }
                     },
-                ),
+                )
+            val startHash = gamingStartRequestHash(row.localId, startBody)
+            val existingStartHash = row.startRequestHash
+            check(existingStartHash == null || existingStartHash == startHash) {
+                "Saved Gaming Start request evidence changed."
+            }
+            val capturedStartHash = dao.captureStartRequestHash(row.localId, startHash)
+            check(
+                capturedStartHash == 1 ||
+                    dao.localSessionById(row.localId)?.startRequestHash == startHash,
+            ) { "Saved Gaming Start request evidence changed concurrently." }
+            val started = gamingApi.start(
+                startBody,
                 "gaming-session-start:${row.localId}",
                 outboxProvenanceHeaders(row.startedAtMillis, "gaming-session-start:${row.localId}"),
             )
@@ -2936,14 +3025,26 @@ class SyncEngine(
             val stopKey = "gaming-session-stop:${row.localId}"
             val provenance = outboxProvenanceHeaders(current.endAtMillis, stopKey)
             val stopped = when (gamingStopReplayMode(current.endAtMillis)) {
-                GamingStopReplayMode.CAPTURED_TIMESTAMP_BODY -> gamingApi.stop(
-                    id = resolvedServerId,
-                    body = SessionStopBody(
+                GamingStopReplayMode.CAPTURED_TIMESTAMP_BODY -> {
+                    val stopBody = SessionStopBody(
                         Instant.ofEpochMilli(requireNotNull(current.endAtMillis)).toString(),
-                    ),
-                    key = stopKey,
-                    provenance = provenance,
-                )
+                    )
+                    val stopHash = gamingStopRequestHash(current.localId, resolvedServerId, stopBody)
+                    check(current.stopRequestHash == null || current.stopRequestHash == stopHash) {
+                        "Saved Gaming Stop request evidence changed."
+                    }
+                    val capturedStopHash = dao.captureStopRequestHash(current.localId, stopHash)
+                    check(
+                        capturedStopHash == 1 ||
+                            dao.localSessionById(current.localId)?.stopRequestHash == stopHash,
+                    ) { "Saved Gaming Stop request evidence changed concurrently." }
+                    gamingApi.stop(
+                        id = resolvedServerId,
+                        body = stopBody,
+                        key = stopKey,
+                        provenance = provenance,
+                    )
+                }
                 GamingStopReplayMode.LEGACY_BODYLESS -> gamingApi.stopLegacy(
                     id = resolvedServerId,
                     key = stopKey,
@@ -3203,6 +3304,7 @@ class SyncEngine(
      */
     private suspend fun pullGamingData() {
         val lease = cacheIsolation.currentLease() ?: return
+        acknowledgeCleanupRetirements(lease)
         val stations = gamingApi.stations()
         val packages = gamingApi.packages()
         val sessions = gamingApi.sessions()
@@ -3224,6 +3326,7 @@ class SyncEngine(
                     "SyncEngine",
                     "Exact Gaming session was not found; retaining local recovery evidence for $serverId",
                 )
+                reportAndApplyCleanupCandidate(lease, serverId)
             },
         )
         // Fetch the complete staged-item ledger for the bounded Gaming board
@@ -3286,6 +3389,192 @@ class SyncEngine(
             // lease so A cannot schedule a notification after B activates.
             GamingAlarmReconciler.reconcile(DCompanyApp.instance)
         }
+    }
+
+    private suspend fun reportAndApplyCleanupCandidate(
+        lease: CacheScopeLease,
+        serverId: String,
+    ) {
+        val branchId = lease.scope.branchId ?: return
+        val terminalId = lease.scope.terminalId ?: return
+        val installationId = checkoutClientInstance()?.takeIf(String::isNotBlank) ?: return
+        val dao = db.gamingDao()
+        val row = dao.localSessionByEitherId(serverId) ?: return
+        if (row.serverId != serverId || row.orderId != null ||
+            row.state !in setOf(
+                GamingSessionState.STOP_PENDING,
+                GamingSessionState.STOP_REJECTED,
+                GamingSessionState.ENDED_UNBILLED,
+                GamingSessionState.SEND_PENDING,
+                GamingSessionState.SEND_REJECTED,
+            ) || row.legacyResolution != null || row.legacyResolutionAttemptState != null
+        ) return
+        val childCount = dao.unresolvedSessionAddonActionCount(row.localId, serverId) +
+            dao.unresolvedPackageExtensionCount(serverId)
+        // A report is immutable by design. Wait until dependent work is clear
+        // so a transient child cannot permanently strand this candidate.
+        if (childCount != 0) return
+        val snapshot = row.cleanupSnapshotOrNull() ?: return
+        val snapshotHash = gamingCleanupSnapshotSha256(snapshot)
+        val startBody = cleanupStartBody(row, snapshot.shiftId) ?: return
+        val computedStartHash = gamingStartRequestHash(row.localId, startBody)
+        val stopBody = SessionStopBody(Instant.ofEpochMilli(snapshot.endedAtMillis).toString())
+        val computedStopHash = gamingStopRequestHash(row.localId, serverId, stopBody)
+        val startHash = row.startRequestHash ?: computedStartHash
+        val stopHash = row.stopRequestHash ?: computedStopHash
+        if (!startHash.matches(Regex("^[0-9a-f]{64}$")) ||
+            !stopHash.matches(Regex("^[0-9a-f]{64}$"))
+        ) return
+        val unsigned = GamingCleanupReportBody(
+            installationId = installationId,
+            localActionId = row.localId,
+            serverSessionId = serverId,
+            branchId = branchId,
+            terminalId = terminalId,
+            stationId = row.stationId,
+            reportedLocalState = row.state,
+            localSnapshot = snapshot,
+            localSnapshotSha256 = snapshotHash,
+            startRequestHash = startHash,
+            stopRequestHash = stopHash,
+            candidateSha256 = "0".repeat(64),
+            unresolvedChildCount = childCount,
+        )
+        val body = unsigned.copy(candidateSha256 = gamingCleanupCandidateSha256(unsigned))
+        val proofTag = DCompanyApp.instance.remoteAssistance.currentInstallationProofTag() ?: return
+        val directive = try {
+            gamingCleanupApi.reportCleanupCandidate(body, installationId, proofTag)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            return
+        }
+        if (directive.status == "applied" || directive.deviceDirective == "already_applied") {
+            dao.noteCleanupDiagnostic(
+                row.localId,
+                "Server recorded this cleanup as applied, but this tablet has no matching local directive evidence. Owner review is required.",
+            )
+            return
+        }
+        val exact = directive.installationId == installationId &&
+            directive.localActionId == row.localId &&
+            directive.serverSessionId == serverId &&
+            directive.branchId == branchId && directive.terminalId == terminalId &&
+            directive.stationId == row.stationId &&
+            directive.reportedLocalState == row.state &&
+            directive.localEvidenceRevision == snapshot.evidenceRevision &&
+            directive.localSnapshotSha256 == snapshotHash &&
+            directive.candidateSha256 == body.candidateSha256 &&
+            directive.unresolvedChildCount == childCount
+        if (!exact || directive.status != "approved" ||
+            directive.deviceDirective != "cleanup_retire" || childCount != 0 ||
+            directive.cleanupReceiptAuditId <= 0L || directive.approvalReason.isNullOrBlank()
+        ) return
+        var applied = false
+        val committed = commitToCurrentScope(lease) {
+            applied = dao.applyCleanupRetirement(
+                localId = row.localId,
+                serverSessionId = serverId,
+                stationId = row.stationId,
+                expectedState = row.state,
+                reconciliationId = directive.id,
+                receiptAuditId = directive.cleanupReceiptAuditId,
+                candidateSha256 = directive.candidateSha256,
+                reason = directive.approvalReason,
+                retiredAtMillis = System.currentTimeMillis(),
+                branchId = branchId,
+                terminalId = terminalId,
+                expectedEvidenceRevision = snapshot.evidenceRevision,
+                expectedSnapshotSha256 = snapshotHash,
+            )
+        }
+        if (!committed || !applied) return
+        DCompanyApp.instance.requestOperationalAlarmReconciliation()
+        acknowledgeCleanupRetirement(
+            lease, installationId, row.localId, directive.id, directive.candidateSha256,
+        )
+    }
+
+    private suspend fun acknowledgeCleanupRetirements(lease: CacheScopeLease) {
+        val installationId = checkoutClientInstance()?.takeIf(String::isNotBlank) ?: return
+        db.gamingDao().cleanupRetiredSessions().forEach { row ->
+            if (row.cleanupBranchId != lease.scope.branchId ||
+                row.cleanupTerminalId != lease.scope.terminalId
+            ) return@forEach
+            acknowledgeCleanupRetirement(
+                lease,
+                installationId,
+                row.localId,
+                row.cleanupReconciliationId ?: return@forEach,
+                row.cleanupCandidateSha256 ?: return@forEach,
+            )
+        }
+    }
+
+    private suspend fun acknowledgeCleanupRetirement(
+        lease: CacheScopeLease,
+        installationId: String,
+        localId: String,
+        reconciliationId: String,
+        candidateSha256: String,
+    ) {
+        val proofTag = DCompanyApp.instance.remoteAssistance.currentInstallationProofTag() ?: return
+        try {
+            val acknowledged = gamingCleanupApi.acknowledgeCleanupCandidate(
+                reconciliationId,
+                GamingCleanupAcknowledgeBody(installationId, candidateSha256),
+                installationId,
+                proofTag,
+            )
+            check(cleanupAcknowledgementMatches(
+                acknowledged, installationId, localId, reconciliationId, candidateSha256,
+            )) { "Cleanup acknowledgement did not match the retired local evidence." }
+            commitToCurrentScope(lease) {
+                db.gamingDao().markCleanupAcknowledgedCas(
+                    localId = localId,
+                    reconciliationId = reconciliationId,
+                    candidateSha256 = candidateSha256,
+                    acknowledgedAtMillis = System.currentTimeMillis(),
+                )
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            // The retained directive evidence makes acknowledgement retryable.
+        }
+    }
+
+    private fun cleanupStartBody(
+        row: LocalGamingSessionEntity,
+        shiftId: String,
+    ): SessionStartBody? {
+        val rate = row.ratePerHourMinor ?: return null
+        return SessionStartBody(
+            stationId = row.stationId,
+            shiftId = shiftId,
+            startedAt = Instant.ofEpochMilli(row.startedAtMillis).toString(),
+            customerId = row.customerId,
+            customerName = row.customerName,
+            customerPhone = row.customerPhone,
+            customerDirectoryRevision = row.customerDirectoryRevision,
+            customerDirectoryCompanyId = row.customerDirectoryCompanyId,
+            timerMinutes = row.timerMinutes,
+            packageId = row.packageId,
+            extraControllers = row.extraControllers,
+            playerCount = row.packageId?.let {
+                when (row.packageVariant) {
+                    "single" -> 1
+                    "dual" -> 2 + row.extraControllers
+                    else -> null
+                }
+            },
+            expectedRatePerHourMinor = rate,
+            expectedPackagePriceMinor = row.packageId?.let { row.packagePriceMinor ?: return null },
+            expectedPackageDurationMinutes = row.packageId?.let {
+                row.packageDurationMinutes ?: return null
+            },
+            expectedPackageVariant = row.packageId?.let { row.packageVariant ?: return null },
+        )
     }
 
     /**

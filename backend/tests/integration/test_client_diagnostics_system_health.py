@@ -388,7 +388,10 @@ async def test_summary_and_system_health_are_protected_and_sanitized(
     }
     assert health_body["devices"]["total"] == 2
     assert health_body["devices"]["stale"] == 1
-    assert health_body["devices"]["with_pending_sync"] == 2
+    assert health_body["devices"]["with_pending_sync"] == 1
+    assert health_body["devices"]["max_pending_outbox_count"] == 4
+    assert health_body["devices"]["stale_with_last_reported_pending"] == 1
+    assert health_body["devices"]["stale_max_last_reported_pending"] == 9
     # Stale historical installs stay visible, but do not keep the actionable
     # outdated count permanently red after a reinstall. A reconnect makes the
     # old build recent and therefore actionable again.

@@ -41,31 +41,29 @@ change their identity, or lower the compatibility floor.
 
 ## Current rollout boundary
 
-Code30.1 `v3.1.28` / version code `36` is the immutable signed direct-channel
+Code30.2 `v3.1.29` / version code `37` at commit
+`3ea84be4718a794d5a2e8efc7ac9bcacbc0cee01` is the immutable direct-channel
 predecessor for the current patch. Preserve its exact source, manifest, hashes,
 signer, and APK bytes. All earlier release identities and candidate ledgers also
 remain immutable history.
 
-Code30.2 is the `v3.1.29` / version code `37` source candidate at Room schema
-`51` and Alembic head `0078`. A local build, emulator run, version bump, or green
+Code30.3 is the `v3.1.30` / version code `38` source candidate at Room schema
+`52` and Alembic head `0079`. A local build, emulator run, version bump, or green
 source suite does not make it signed, deployed, staged, active, offered, or
 partner-installable. Its complete scope and gates are in
-[`CODE30_2_PATCH_CANDIDATE.md`](CODE30_2_PATCH_CANDIDATE.md); immutable Code30.1
+[`CODE30_3_PATCH_CANDIDATE.md`](CODE30_3_PATCH_CANDIDATE.md); immutable Code30.2
 evidence remains in
-[`CODE30_1_PATCH_CANDIDATE.md`](CODE30_1_PATCH_CANDIDATE.md).
+[`CODE30_2_PATCH_CANDIDATE.md`](CODE30_2_PATCH_CANDIDATE.md).
 
-The candidate includes manual expenses/collections, up to five private
-camera/file receipt attachments per expense, Android offline retry, exact
-drawer selection, and append-only current-period corrections after a source
-shift closes. Its optional Sheet mirror holds new events until the exact
-configuration generation passes a connection test and refuses rotation or
-disconnect until current pending, leased and quarantined business work drains.
-Receipt bytes, customer identity and private review notes are never mirrored.
+The candidate preserves Code30.2 finance, receipt and Sheet behavior and adds
+owner-reviewed recovery of an exact stale Gaming overlay. The build-38 tablet
+must reconnect, apply the matching directive and acknowledge it. Web cannot
+rewrite an offline Room database and provides no broad clear-all.
 
 Only the exact APK and release manifest produced together by a green protected
-`v3.1.29` workflow may advance. Verify the package, version, build, source,
+`v3.1.30` workflow may advance. Verify the package, version, build, source,
 SHA-256, size and independently preserved signer, then prove a same-signer
-in-place upgrade from exact signed build `36` to build `37` without uninstalling
+in-place upgrade from exact signed build `37` to build `38` without uninstalling
 or clearing data. Production backend/Web migration, inactive staging, owner
 activation, installation, and physical-tablet acceptance remain separate gates.
 
@@ -124,57 +122,47 @@ responses and network uncertainty remain blocked. The APK itself must return:
 - `Cache-Control: public, immutable, no-transform, max-age=31536000` (or longer)
 - no redirect from its same-origin versioned URL
 
-## Code30.2 staging procedure
+## Code30.3 staging procedure
 
 1. Complete the frozen-source suites and business trial recorded in
-   `CODE30_2_PATCH_CANDIDATE.md`, including receipts, manual finance, offline
-   replay, exact drawer effects, Sheet-event deduplication, and the inherited
-   shift/Gaming/POS regression flows.
-2. Coordinate the source at `3.1.29` / code `37`, Room `51`, and migration
-   `0078`. Build and sign only through the protected tagged release workflow.
+   `CODE30_3_PATCH_CANDIDATE.md`, including exact cleanup report, owner
+   approval, supersession, tablet apply/acknowledgement, lost-ack retry and the
+   inherited shift/Gaming/POS/finance regression flows.
+2. Coordinate the source at `3.1.30` / code `38`, Room `52`, and migration
+   `0079`. Build and sign only through the protected tagged release workflow.
 3. Download the direct APK and `release-manifest.json` from the same workflow
    without renaming or modifying them. Run a verification-only plan:
 
    ```bash
    python3 ops/stage_android_release.py \
-     --manifest /secure/release-3.1.29/release-manifest.json \
-     --apk /secure/release-3.1.29/d-company-erp-v3.1.29-direct.apk \
+     --manifest /secure/release-3.1.30/release-manifest.json \
+     --apk /secure/release-3.1.30/d-company-erp-v3.1.30-direct.apk \
      --expected-signer-sha256 <trusted-release-certificate-sha256> \
      --release-notes \
-       "Code30.2 finance evidence, manual entries, and optional ERP Mirror v1"
+       "Code30.3 exact owner-reviewed stale Gaming recovery"
    ```
 
    This verifies the manifest, byte size, SHA-256, package
-   `cloud.dcompany.erp`, build `37`, version `3.1.29`, and signing certificate.
+   `cloud.dcompany.erp`, build `38`, version `3.1.30`, and signing certificate.
    It does not contact or change production.
-4. On an isolated emulator, install exact signed Code30.1 `v3.1.28` / build `36`,
+4. On an isolated emulator, install exact signed Code30.2 `v3.1.29` / build `37`,
    preserve representative Room and pending-outbox state, then install the exact
-   verified build `37` as an update. Do not uninstall or clear data. Confirm
-   migration to Room `51`, one-time replay, manual finance, receipt
-   parent/attachment recovery, corrections, shifts, Gaming and POS.
+   verified build `38` as an update. Do not uninstall or clear data. Confirm
+   migration to Room `52`, cleanup report/apply/acknowledgement, normal
+   offline replay, shifts, Gaming, POS and preserved Code30.2 finance behavior.
 5. Deploy the matching backend/Web source with the guarded installer, a fresh
-   quiesced backup, restore proof, migration through `0078`, rollback readiness,
-   and authenticated production smoke checks. Confirm all tablets are paused and
-   their outboxes are empty immediately before maintenance. For this one
-   production cutover only, the installer separately recognizes the exact
-   retired test-installation heartbeat documented in the Code30.2 cleanup runbook after
-   verifying the immutable 18-AVD quarantine evidence; it never treats any
-   other pending report as drained.
-6. If the optional Sheet mirror is part of this cutover, deploy and authorize
-   the bound Apps Script, enter the one-time secret, deliver a connection test
-   for the current configuration generation, and reconcile an actual
-   `ERP Mirror v1` row. Do not rotate or disconnect while its current generation
-   has undelivered business events; retry quarantined entries and let it drain.
-   This Sheet acceptance is separate from Android signing and staging.
-7. Review the staging plan and stage the exact same inputs inactive:
+   quiesced backup, restore proof, migration through `0079`, rollback readiness,
+   and authenticated production smoke checks. Confirm all tablets are paused
+   and their outboxes are empty immediately before maintenance.
+6. Review the staging plan and stage the exact same inputs inactive:
 
    ```bash
    python3 ops/stage_android_release.py \
-     --manifest /secure/release-3.1.29/release-manifest.json \
-     --apk /secure/release-3.1.29/d-company-erp-v3.1.29-direct.apk \
+     --manifest /secure/release-3.1.30/release-manifest.json \
+     --apk /secure/release-3.1.30/d-company-erp-v3.1.30-direct.apk \
      --expected-signer-sha256 <trusted-release-certificate-sha256> \
      --release-notes \
-       "Code30.2 finance evidence, manual entries, and optional ERP Mirror v1" \
+       "Code30.3 exact owner-reviewed stale Gaming recovery" \
      --ssh-key ~/.ssh/dcompany_do \
      --apply
    ```
@@ -182,11 +170,15 @@ responses and network uncertainty remain blocked. The APK itself must return:
    The tool uploads immutable bytes, verifies the public copy, registers only a
    staged row, and writes an append-only attestation. Staging must not advertise
    an offer.
-8. In the owner ERP, compare version, release notes, SHA-256, size, signer and
+7. In the owner ERP, compare version, release notes, SHA-256, size, signer and
    source evidence. The bound owner release-controller may activate the exact
    staged candidate only after every earlier gate passes. The offer is visible
    to all eligible direct-channel clients; there is no per-device allowlist.
    Android still requires each user to approve installation.
+8. After the tablet user accepts build `38`, reconnect the affected tablet.
+   In Web Gaming, review the exact station/session/amount/duration/hash
+   candidate, approve it with a reason, wait for acknowledgement and verify the
+   station becomes available. Web cannot repair the tablet while it is offline.
 
 Do not activate an intermediate held build as its own update. Do not stage from an arbitrary
 local Gradle build, a renamed APK, a different workflow run, or a candidate

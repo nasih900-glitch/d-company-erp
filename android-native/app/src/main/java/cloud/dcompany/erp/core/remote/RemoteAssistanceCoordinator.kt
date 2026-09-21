@@ -71,8 +71,12 @@ internal class RemoteAssistanceCoordinator(
     val uiGateway = RemoteUiCommandGateway()
 
     private val api: RemoteAssistanceApi by lazy {
+        createInstallationProofApi(RemoteAssistanceApi::class.java)
+    }
+
+    internal fun <T> createInstallationProofApi(service: Class<T>): T =
         ApiClient.createApiWithNetworkProof(
-            RemoteAssistanceApi::class.java,
+            service,
             RemoteDeviceSigningInterceptor(
                 identity = ::currentRemoteDeviceIdentity,
                 currentScope = {
@@ -81,7 +85,9 @@ internal class RemoteAssistanceCoordinator(
                 keyStore = deviceKeyStore,
             ),
         )
-    }
+
+    internal fun currentInstallationProofTag(): RemoteRequestScopeTag? =
+        currentRemoteRequestTag()
     private val _uiState = MutableStateFlow(initialUiState())
     val uiState: StateFlow<RemoteAssistanceUiState> = _uiState.asStateFlow()
     private val pollWakeups = Channel<Unit>(Channel.CONFLATED)

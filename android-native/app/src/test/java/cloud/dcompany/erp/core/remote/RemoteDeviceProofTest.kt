@@ -6,10 +6,43 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RemoteDeviceProofTest {
+    @Test
+    fun `cleanup proof allowlist accepts only exact report and canonical acknowledgement targets`() {
+        val hash = "a".repeat(64)
+        for (target in listOf(
+            "/api/v1/client-installations/gaming-cleanup-reconciliations/report",
+            "/api/v1/client-installations/gaming-cleanup-reconciliations/" +
+                "22222222-2222-4222-8222-222222222222/acknowledge",
+        )) {
+            val statement = canonicalRemoteRequestStatement(
+                method = "POST",
+                rawTarget = target,
+                contentSha256 = hash,
+                signedAtEpochSeconds = 1_777_777_778L,
+                nonce = NONCE,
+                keyId = KEY_ID,
+            ).decodeToString()
+            assertTrue(statement.contains("\nPOST\n$target\n$hash\n"))
+        }
+        for (target in listOf(
+            "/api/v1/client-installations/gaming-cleanup-reconciliations",
+            "/api/v1/client-installations/gaming-cleanup-reconciliations/not-a-uuid/acknowledge",
+            "/api/v1/client-installations/gaming-cleanup-reconciliations/report?extra=true",
+        )) {
+            assertThrows(IllegalArgumentException::class.java) {
+                canonicalRemoteRequestStatement(
+                    method = "POST", rawTarget = target, contentSha256 = hash,
+                    signedAtEpochSeconds = 1_777_777_778L, nonce = NONCE, keyId = KEY_ID,
+                )
+            }
+        }
+    }
+
     @Test
     fun `enrollment statement matches locked ASCII contract with no trailing newline`() {
         val statement = canonicalRemoteEnrollmentStatement(

@@ -334,7 +334,7 @@ interface GamingDao {
 
     @Query(
         "SELECT COUNT(*) FROM local_gaming_sessions WHERE stationId = :stationId " +
-            "AND state NOT IN ('sent', 'cancelled', 'legacy_resolved')",
+        "AND state NOT IN ('sent', 'cancelled', 'legacy_resolved', 'cleanup_retired')",
     )
     suspend fun unresolvedLocalSessionCount(stationId: String): Int
 
@@ -349,6 +349,22 @@ interface GamingDao {
     @Query("SELECT * FROM local_gaming_sessions WHERE localId = :localId")
     suspend fun localSessionById(localId: String): LocalGamingSessionEntity?
 
+    @Query(
+        "UPDATE local_gaming_sessions SET startRequestHash = :requestHash, " +
+            "cleanupEvidenceRevision = cleanupEvidenceRevision + 1 " +
+            "WHERE localId = :localId AND startRequestHash IS NULL " +
+            "AND :requestHash GLOB '[0-9a-f]*' AND length(:requestHash) = 64",
+    )
+    suspend fun captureStartRequestHash(localId: String, requestHash: String): Int
+
+    @Query(
+        "UPDATE local_gaming_sessions SET stopRequestHash = :requestHash, " +
+            "cleanupEvidenceRevision = cleanupEvidenceRevision + 1 " +
+            "WHERE localId = :localId AND stopRequestHash IS NULL " +
+            "AND :requestHash GLOB '[0-9a-f]*' AND length(:requestHash) = 64",
+    )
+    suspend fun captureStopRequestHash(localId: String, requestHash: String): Int
+
     /**
      * A UI-facing session id is either this device's own `localId` (not yet
      * synced) or a real `serverId` (synced, or seen only via the cache
@@ -358,8 +374,28 @@ interface GamingDao {
     @Query("SELECT * FROM local_gaming_sessions WHERE localId = :id OR serverId = :id LIMIT 1")
     suspend fun localSessionByEitherId(id: String): LocalGamingSessionEntity?
 
+    @Query(
+        "SELECT * FROM local_gaming_sessions WHERE state = 'cleanup_retired' " +
+            "AND cleanupAcknowledgedAtMillis IS NULL",
+    )
+    suspend fun cleanupRetiredSessions(): List<LocalGamingSessionEntity>
+
+    @Query(
+        "UPDATE local_gaming_sessions SET cleanupAcknowledgedAtMillis = :acknowledgedAtMillis " +
+            "WHERE localId = :localId AND state = 'cleanup_retired' " +
+            "AND cleanupReconciliationId = :reconciliationId " +
+            "AND cleanupCandidateSha256 = :candidateSha256 " +
+            "AND cleanupAcknowledgedAtMillis IS NULL AND :acknowledgedAtMillis > 0",
+    )
+    suspend fun markCleanupAcknowledgedCas(
+        localId: String,
+        reconciliationId: String,
+        candidateSha256: String,
+        acknowledgedAtMillis: Long,
+    ): Int
+
     /** Local lifecycle overlays, including ended sessions still waiting for POS. */
-    @Query("SELECT * FROM local_gaming_sessions WHERE state NOT IN ('sent', 'cancelled', 'legacy_resolved')")
+    @Query("SELECT * FROM local_gaming_sessions WHERE state NOT IN ('sent', 'cancelled', 'legacy_resolved', 'cleanup_retired')")
     fun observeActiveLocalSessions(): Flow<List<LocalGamingSessionEntity>>
 
     /**
@@ -367,14 +403,107 @@ interface GamingDao {
      * remains active and billable until stop is confirmed; the alarm policy
      * therefore keeps their existing deadline armed.
      */
-    @Query("SELECT * FROM local_gaming_sessions WHERE state NOT IN ('sent', 'cancelled', 'legacy_resolved')")
+    @Query("SELECT * FROM local_gaming_sessions WHERE state NOT IN ('sent', 'cancelled', 'legacy_resolved', 'cleanup_retired')")
     suspend fun localSessionOverlaysForAlarms(): List<LocalGamingSessionEntity>
 
     @Query(
         "SELECT * FROM local_gaming_sessions WHERE serverId IS NOT NULL " +
-            "AND state NOT IN ('sent', 'cancelled', 'legacy_resolved')",
+            "AND state NOT IN ('sent', 'cancelled', 'legacy_resolved', 'cleanup_retired')",
     )
     suspend fun localSessionsForServerReconciliation(): List<LocalGamingSessionEntity>
+
+    @Query("DELETE FROM gaming_session_cache WHERE id = :serverSessionId")
+    suspend fun deleteExactSessionCache(serverSessionId: String): Int
+
+    @Query(
+        "UPDATE local_gaming_sessions SET state = 'cleanup_retired', status = 'retired', " +
+            "lastError = NULL, cleanupReconciliationId = :reconciliationId, " +
+            "cleanupReceiptAuditId = :receiptAuditId, cleanupCandidateSha256 = :candidateSha256, " +
+            "cleanupRetirementReason = :reason, cleanupRetiredAtMillis = :retiredAtMillis, " +
+            "cleanupBranchId = :branchId, cleanupTerminalId = :terminalId, " +
+            "cleanupEvidenceRevision = cleanupEvidenceRevision + 1 " +
+            "WHERE localId = :localId AND serverId = :serverSessionId AND stationId = :stationId " +
+            "AND state = :expectedState AND orderId IS NULL " +
+            "AND legacyResolution IS NULL AND legacyResolutionAttemptState IS NULL " +
+            "AND cleanupReconciliationId IS NULL AND cleanupReceiptAuditId IS NULL " +
+            "AND cleanupCandidateSha256 IS NULL AND cleanupRetiredAtMillis IS NULL " +
+            "AND cleanupEvidenceRevision = :expectedEvidenceRevision",
+    )
+    suspend fun retireExactCleanupCandidateCas(
+        localId: String,
+        serverSessionId: String,
+        stationId: String,
+        expectedState: String,
+        reconciliationId: String,
+        receiptAuditId: Long,
+        candidateSha256: String,
+        reason: String,
+        retiredAtMillis: Long,
+        branchId: String,
+        terminalId: String,
+        expectedEvidenceRevision: Long,
+    ): Int
+
+    /** Apply only an exact approved directive; retain the full local row as evidence. */
+    @Transaction
+    suspend fun applyCleanupRetirement(
+        localId: String,
+        serverSessionId: String,
+        stationId: String,
+        expectedState: String,
+        reconciliationId: String,
+        receiptAuditId: Long,
+        candidateSha256: String,
+        reason: String,
+        retiredAtMillis: Long,
+        branchId: String,
+        terminalId: String,
+        expectedEvidenceRevision: Long,
+        expectedSnapshotSha256: String,
+    ): Boolean {
+        val existing = localSessionById(localId) ?: return false
+        if (existing.state == GamingSessionState.CLEANUP_RETIRED) {
+            return existing.serverId == serverSessionId &&
+                existing.stationId == stationId &&
+                existing.cleanupReconciliationId == reconciliationId &&
+                existing.cleanupReceiptAuditId == receiptAuditId &&
+                existing.cleanupCandidateSha256 == candidateSha256 &&
+                existing.cleanupRetirementReason == reason &&
+                existing.cleanupBranchId == branchId &&
+                existing.cleanupTerminalId == terminalId
+        }
+        require(expectedState in setOf(
+            GamingSessionState.STOP_PENDING,
+            GamingSessionState.STOP_REJECTED,
+            GamingSessionState.ENDED_UNBILLED,
+            GamingSessionState.SEND_PENDING,
+            GamingSessionState.SEND_REJECTED,
+        ))
+        require(candidateSha256.matches(Regex("^[0-9a-f]{64}$")))
+        require(receiptAuditId > 0L && retiredAtMillis > 0L)
+        require(reason.trim().length in 3..500 && reason == reason.trim())
+        require(listOf(localId, serverSessionId, stationId, reconciliationId, branchId, terminalId)
+            .all { runCatching { UUID.fromString(it) }.isSuccess })
+        if (existing.orderId != null || existing.serverId != serverSessionId ||
+            existing.stationId != stationId || existing.state != expectedState ||
+            existing.legacyResolution != null || existing.legacyResolutionAttemptState != null
+        ) return false
+        val snapshot = existing.cleanupSnapshotOrNull() ?: return false
+        if (snapshot.evidenceRevision != expectedEvidenceRevision ||
+            gamingCleanupSnapshotSha256(snapshot) != expectedSnapshotSha256
+        ) return false
+        val children = unresolvedSessionAddonActionCount(localId, serverSessionId) +
+            unresolvedPackageExtensionCount(serverSessionId)
+        if (children != 0) return false
+        val changed = retireExactCleanupCandidateCas(
+            localId, serverSessionId, stationId, expectedState, reconciliationId,
+            receiptAuditId, candidateSha256, reason, retiredAtMillis, branchId, terminalId,
+            expectedEvidenceRevision,
+        )
+        if (changed != 1) return false
+        deleteExactSessionCache(serverSessionId)
+        return true
+    }
 
     @Query(
         "UPDATE local_gaming_sessions SET state = :state, stationId = :stationId, " +
@@ -389,7 +518,8 @@ interface GamingDao {
             "packageStationTypeSnapshot = :packageStationTypeSnapshot, " +
             "packagePricingTierSnapshot = :packagePricingTierSnapshot, " +
             "extraControllers = :extraControllers, orderId = :orderId, " +
-            "lastError = CASE WHEN :clearLastError THEN NULL ELSE lastError END " +
+            "lastError = CASE WHEN :clearLastError THEN NULL ELSE lastError END, " +
+            "cleanupEvidenceRevision = cleanupEvidenceRevision + 1 " +
             "WHERE localId = :localId",
     )
     suspend fun applyAuthoritativeSessionSnapshot(
@@ -539,7 +669,8 @@ interface GamingDao {
             "packagePricingTierSnapshot = :packagePricingTierSnapshot, " +
             "extraControllers = :extraControllers, " +
             "state = CASE WHEN state = 'start_pending' THEN 'start_synced' ELSE state END, " +
-            "lastError = NULL WHERE localId = :localId",
+            "lastError = NULL, cleanupEvidenceRevision = cleanupEvidenceRevision + 1 " +
+            "WHERE localId = :localId",
     )
     suspend fun setSessionStarted(
         localId: String,
@@ -571,7 +702,8 @@ interface GamingDao {
             "packageDurationMinutes = :packageDurationMinutes, packageVariant = :packageVariant, " +
             "packageStationTypeSnapshot = :packageStationTypeSnapshot, " +
             "packagePricingTierSnapshot = :packagePricingTierSnapshot, " +
-            "extraControllers = :extraControllers, lastError = NULL WHERE serverId = :serverId " +
+            "extraControllers = :extraControllers, lastError = NULL, " +
+            "cleanupEvidenceRevision = cleanupEvidenceRevision + 1 WHERE serverId = :serverId " +
             "AND state = 'start_synced'",
     )
     suspend fun updateRunningLocalSnapshot(
@@ -594,7 +726,9 @@ interface GamingDao {
     )
 
     @Query(
-        "UPDATE local_gaming_sessions SET state = :toState WHERE localId = :localId AND state = :fromState",
+        "UPDATE local_gaming_sessions SET state = :toState, " +
+            "cleanupEvidenceRevision = cleanupEvidenceRevision + 1 " +
+            "WHERE localId = :localId AND state = :fromState",
     )
     suspend fun transitionSessionState(localId: String, fromState: String, toState: String)
 
@@ -611,7 +745,7 @@ interface GamingDao {
             "AND lastError = 'Session stop time is in the future. Correct the tablet clock and try again.' " +
             "THEN :stoppedAtMillis " +
             "WHEN state = 'stop_rejected' THEN endAtMillis ELSE :stoppedAtMillis END, " +
-            "lastError = NULL " +
+            "lastError = NULL, cleanupEvidenceRevision = cleanupEvidenceRevision + 1 " +
             "WHERE localId = :localId AND state IN ('start_pending', 'start_synced', 'stop_rejected') " +
             "AND (state != 'stop_rejected' OR :correctFutureClockRejection = 0 " +
             "OR lastError != 'Session stop time is in the future. Correct the tablet clock and try again.' " +
@@ -626,7 +760,8 @@ interface GamingDao {
 
     @Query(
         "UPDATE local_gaming_sessions SET state = 'ended_unbilled', status = :status, " +
-            "endAtMillis = :endAtMillis, billableMinutes = :billableMinutes, amountMinor = :amountMinor " +
+            "endAtMillis = :endAtMillis, billableMinutes = :billableMinutes, amountMinor = :amountMinor, " +
+            "cleanupEvidenceRevision = cleanupEvidenceRevision + 1 " +
             "WHERE localId = :localId",
     )
     suspend fun markSessionStopped(
@@ -638,7 +773,8 @@ interface GamingDao {
     )
 
     @Query(
-        "UPDATE local_gaming_sessions SET state = 'send_pending', lastError = NULL " +
+        "UPDATE local_gaming_sessions SET state = 'send_pending', lastError = NULL, " +
+            "cleanupEvidenceRevision = cleanupEvidenceRevision + 1 " +
             "WHERE localId = :localId AND state IN ('ended_unbilled', 'send_rejected')",
     )
     suspend fun requestSessionSend(localId: String): Int
@@ -667,15 +803,27 @@ interface GamingDao {
             "status = CASE " +
             "WHEN :state = 'start_rejected' THEN 'start_failed' " +
             "WHEN :state = 'stop_rejected' THEN 'active' " +
-            "ELSE status END WHERE localId = :localId",
+            "ELSE status END, cleanupEvidenceRevision = cleanupEvidenceRevision + 1 " +
+            "WHERE localId = :localId",
     )
     suspend fun markSessionRejected(localId: String, state: String, error: String)
 
     @Query(
-        "UPDATE local_gaming_sessions SET lastError = :error WHERE localId = :localId " +
-            "AND state IN ('start_pending', 'stop_pending', 'send_pending')",
+        "UPDATE local_gaming_sessions SET lastError = :error, " +
+            "cleanupEvidenceRevision = cleanupEvidenceRevision + 1 WHERE localId = :localId " +
+            "AND state IN ('start_pending', 'stop_pending', 'send_pending') " +
+            "AND lastError IS NOT :error",
     )
-    suspend fun notePendingSessionError(localId: String, error: String)
+    suspend fun notePendingSessionError(localId: String, error: String): Int
+
+    @Query(
+        "UPDATE local_gaming_sessions SET lastError = :error, " +
+            "cleanupEvidenceRevision = cleanupEvidenceRevision + 1 " +
+            "WHERE localId = :localId AND state IN " +
+            "('stop_pending', 'stop_rejected', 'ended_unbilled', 'send_pending', 'send_rejected') " +
+            "AND lastError IS NOT :error",
+    )
+    suspend fun noteCleanupDiagnostic(localId: String, error: String): Int
 
     // -------------------------- rejected start evidence reconciliation
 

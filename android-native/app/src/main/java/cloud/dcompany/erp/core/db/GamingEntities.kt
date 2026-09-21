@@ -139,6 +139,8 @@ object GamingSessionState {
     const val SEND_REJECTED = "send_rejected"
     /** A pre-v28 package outbox was resolved without replaying untrusted pricing facts. */
     const val LEGACY_RESOLVED = "legacy_resolved"
+    /** Exact owner-approved server-cleanup directive; row remains durable audit evidence. */
+    const val CLEANUP_RETIRED = "cleanup_retired"
 }
 
 /**
@@ -331,6 +333,20 @@ data class LocalGamingSessionEntity(
     val legacyResolvedAtMillis: Long? = null,
     val legacyResolvedByUserId: String? = null,
     val legacyResolutionReceiptId: Long? = null,
+    /** Monotonic ABA guard plus exact middleware hashes for this captured lifecycle. */
+    val cleanupEvidenceRevision: Long = 0,
+    val startRequestHash: String? = null,
+    val stopRequestHash: String? = null,
+    /** Exact Code30.3 server directive evidence. These fields are set only by a CAS transition. */
+    val cleanupReconciliationId: String? = null,
+    val cleanupReceiptAuditId: Long? = null,
+    val cleanupCandidateSha256: String? = null,
+    val cleanupRetirementReason: String? = null,
+    val cleanupRetiredAtMillis: Long? = null,
+    /** Set only after the server returns the exact applied acknowledgement receipt. */
+    val cleanupAcknowledgedAtMillis: Long? = null,
+    val cleanupBranchId: String? = null,
+    val cleanupTerminalId: String? = null,
 )
 
 object GamingPackageExtensionState {

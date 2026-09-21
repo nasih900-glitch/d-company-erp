@@ -167,7 +167,7 @@ interface ShiftCloseSafetyDao {
               WHERE a.state <> 'pending' AND
                 (b.shiftId = :localShiftId OR (:serverShiftId IS NOT NULL AND b.shiftId = :serverShiftId))) +
             (SELECT COUNT(*) FROM local_gaming_sessions
-              WHERE state NOT IN ('start_pending', 'stop_pending', 'send_pending', 'sent', 'cancelled', 'legacy_resolved') AND
+              WHERE state NOT IN ('start_pending', 'stop_pending', 'send_pending', 'sent', 'cancelled', 'legacy_resolved', 'cleanup_retired') AND
                 (shiftId = :localShiftId OR (:serverShiftId IS NOT NULL AND shiftId = :serverShiftId))) +
             (SELECT COUNT(*) FROM local_gaming_package_extensions
               WHERE state NOT IN ('pending', 'confirmed', 'discarded') AND
@@ -201,7 +201,7 @@ interface ShiftCloseSafetyDao {
               WHERE syncState NOT IN ('pending', 'synced') AND paidVia = 'cash' AND
                 (shiftId = :localShiftId OR (:serverShiftId IS NOT NULL AND shiftId = :serverShiftId))) +
             (SELECT COUNT(*) FROM local_gaming_sessions
-              WHERE state NOT IN ('start_pending', 'stop_pending', 'send_pending', 'sent', 'cancelled', 'legacy_resolved') AND
+              WHERE state NOT IN ('start_pending', 'stop_pending', 'send_pending', 'sent', 'cancelled', 'legacy_resolved', 'cleanup_retired') AND
                 shiftId IS NULL)
           ) AS attentionLocalCount,
           (
@@ -227,7 +227,7 @@ interface ShiftCloseSafetyDao {
                 NOT EXISTS (
                   SELECT 1 FROM local_gaming_sessions AS local_session
                    WHERE local_session.serverId = cached_session.id AND
-                     local_session.state NOT IN ('sent', 'cancelled', 'legacy_resolved')
+                     local_session.state NOT IN ('sent', 'cancelled', 'legacy_resolved', 'cleanup_retired')
                 ))
           ) AS serverGamingSessionCount,
           (

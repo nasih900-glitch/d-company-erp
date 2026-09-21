@@ -1051,7 +1051,7 @@ fun GamingScreen(
                     when {
                         session.authority(state.activeShiftId) == GamingSessionAuthority.CURRENT_SHIFT -> "Send"
                         access.canReconcileLegacySessions && state.activeShiftId != null -> "Reconcile"
-                        else -> "Other terminal"
+                        else -> "Unavailable"
                     }
                 },
                 actionEnabled = { session ->
@@ -1065,7 +1065,8 @@ fun GamingScreen(
                     if (state.unresolvedAddonsFor(session).isNotEmpty()) {
                         "Saved Gaming item actions must finish syncing or be reviewed before POS handoff."
                     } else {
-                        null
+                        sessionAuthorityMessage(session, state.activeShiftId)
+                            ?: "Open the session's shift on its recorded terminal before POS handoff."
                     }
                 },
                 actionIntent = ActionIntent.Primary,
@@ -2651,7 +2652,15 @@ internal fun GamingStationCard(
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                val crossTerminalBlocked = !ownsSession &&
+                    !(canReconcileLegacy && activeShiftId != null)
+                if (crossTerminalBlocked) {
+                    Text(
+                        "This payment belongs to another terminal. Finish it there, or ask the protected owner to open a current shift and reconcile it.",
+                        color = Brand.Warning,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                } else Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
                     OutlinedButton(
                         onClick = { session?.let(onCancelUnbilled) },
                         enabled = actionsEnabled && session != null &&
@@ -2666,7 +2675,7 @@ internal fun GamingStationCard(
                             ownsSession && presentation.state == StationVisualState.SendRejected -> "Retry send"
                             ownsSession -> "Send to POS"
                             canReconcileLegacy && activeShiftId != null -> "Reconcile to POS"
-                            else -> "Other terminal"
+                            else -> "Reconciliation unavailable"
                         },
                         onClick = {
                             session?.let { if (ownsSession) onSend(it) else onReconcile(it) }
@@ -3400,13 +3409,15 @@ private fun GamingQueueDialog(
                                     }
                                 }
                             }
-                            ErpButton(
-                                text = actionLabel(session),
-                                onClick = { onSelect(session) },
-                                intent = actionIntent,
-                                enabled = busyStationId == null && actionEnabled(session),
-                                busy = busyStationId == session.stationId,
-                            )
+                            if (actionEnabled(session)) {
+                                ErpButton(
+                                    text = actionLabel(session),
+                                    onClick = { onSelect(session) },
+                                    intent = actionIntent,
+                                    enabled = busyStationId == null,
+                                    busy = busyStationId == session.stationId,
+                                )
+                            }
                         }
                     }
                 }

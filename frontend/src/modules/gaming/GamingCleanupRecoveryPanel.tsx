@@ -1,0 +1,235 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { AlertCircle, CheckCircle2, Copy, Loader2, RefreshCw, ShieldCheck } from 'lucide-react';
+
+import { type ApiError } from '@/lib/api';
+import {
+  clientInstallations,
+  type ClientInstallationDTO,
+  type GamingCleanupReconciliationDTO,
+  type StationDTO,
+} from '@/lib/erp-api';
+import { inr } from '@/lib/inr';
+import { createOperationKey } from '@/lib/retry-drafts';
+
+function when(value: string | null): string {
+  return value ? new Date(value).toLocaleString() : 'Not reported';
+}
+
+export function gamingCleanupStationLabel(station: StationDTO | undefined): string {
+  return station ? `${station.name} (${station.code})` : 'Station record unavailable';
+}
+
+export function gamingCleanupApprovalConfirmation(
+  row: GamingCleanupReconciliationDTO,
+  station: StationDTO | undefined,
+): string {
+  const amount = row.review.amount_minor == null
+    ? 'billing amount unavailable'
+    : inr(row.review.amount_minor);
+  const duration = row.review.billable_minutes == null
+    ? 'billable duration unavailable'
+    : `${row.review.billable_minutes} billable min`;
+  return `Approve retiring only ${gamingCleanupStationLabel(station)} (${row.station_id}) `
+    + `for ${amount}, ${duration}? The exact tablet action is ${row.local_action_id}.`;
+}
+
+export function canApproveGamingCleanupCandidate(
+  row: Pick<GamingCleanupReconciliationDTO, 'status' | 'unresolved_child_count'>,
+  reason: string,
+): boolean {
+  const length = reason.trim().length;
+  return row.status === 'reported' && row.unresolved_child_count === 0 && length >= 3 && length <= 500;
+}
+
+export type GamingCleanupApprovalAttempt = { reason: string; key: string };
+
+export function approvalAttemptFor(
+  attempts: Map<string, GamingCleanupApprovalAttempt>,
+  candidateId: string,
+  normalizedReason: string,
+  createKey: () => string,
+): GamingCleanupApprovalAttempt | null {
+  const previous = attempts.get(candidateId);
+  if (previous?.reason !== undefined && previous.reason !== normalizedReason) return null;
+  const attempt = previous ?? { reason: normalizedReason, key: createKey() };
+  attempts.set(candidateId, attempt);
+  return attempt;
+}
+
+type GamingCleanupRecoveryPanelProps = {
+  stations: StationDTO[];
+  confirmApproval?: (message: string) => boolean;
+};
+
+function CopyableIdentifier({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <dt className="text-fg-muted">{label}</dt>
+      <dd className="flex items-start gap-1 font-mono">
+        <span className="min-w-0 break-all select-all">{value}</span>
+        <button
+          type="button"
+          className="btn btn-ghost shrink-0 !p-1"
+          aria-label={`Copy ${label}`}
+          onClick={() => void navigator.clipboard?.writeText(value)}
+        >
+          <Copy size={12} aria-hidden="true" />
+        </button>
+      </dd>
+    </div>
+  );
+}
+
+export default function GamingCleanupRecoveryPanel({
+  stations,
+  confirmApproval,
+}: GamingCleanupRecoveryPanelProps) {
+  const [rows, setRows] = useState<GamingCleanupReconciliationDTO[]>([]);
+  const [devices, setDevices] = useState<ClientInstallationDTO[]>([]);
+  const [reasons, setReasons] = useState<Record<string, string>>({});
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const approvalAttempts = useRef(new Map<string, GamingCleanupApprovalAttempt>());
+
+  const load = useCallback(async () => {
+    setError(null);
+    try {
+      const [reconciliations, installations] = await Promise.all([
+        clientInstallations.listGamingCleanupReconciliations(),
+        clientInstallations.list({ stale_after_hours: 24, limit: 200 }),
+      ]);
+      setRows(reconciliations.items);
+      setDevices(installations.items);
+      approvalAttempts.current.clear();
+    } catch (cause) {
+      setError((cause as ApiError).message || 'Cleanup recovery evidence could not be loaded.');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { void load(); }, [load]);
+  const devicesById = useMemo(
+    () => new Map(devices.map((device) => [device.installation_id, device])),
+    [devices],
+  );
+  const stationsById = useMemo(
+    () => new Map(stations.map((station) => [station.id, station])),
+    [stations],
+  );
+
+  async function approve(row: GamingCleanupReconciliationDTO) {
+    const reason = (reasons[row.id] ?? '').trim();
+    if (!canApproveGamingCleanupCandidate(row, reason)) {
+      setError('Enter a review reason between 3 and 500 characters.');
+      return;
+    }
+    const confirmation = gamingCleanupApprovalConfirmation(row, stationsById.get(row.station_id));
+    const confirmed = confirmApproval
+      ? confirmApproval(confirmation)
+      : globalThis.confirm(confirmation);
+    if (!confirmed) return;
+    setBusy(row.id);
+    setError(null);
+    const attempt = approvalAttemptFor(
+      approvalAttempts.current, row.id, reason, createOperationKey,
+    );
+    if (!attempt) {
+      setBusy(null);
+      setError('Refresh this candidate before changing the approval reason.');
+      return;
+    }
+    try {
+      const approved = await clientInstallations.approveGamingCleanupReconciliation(
+        row.id,
+        row.candidate_sha256,
+        reason,
+        attempt.key,
+      );
+      approvalAttempts.current.delete(row.id);
+      setRows((current) => current.map((item) => item.id === approved.id ? approved : item));
+    } catch (cause) {
+      setError((cause as ApiError).message || 'The candidate could not be approved.');
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <section className="card mb-4 border-accent/30" aria-labelledby="gaming-cleanup-title">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-start gap-2">
+          <ShieldCheck size={18} className="mt-0.5 text-accent" aria-hidden="true" />
+          <div>
+            <h3 id="gaming-cleanup-title" className="font-semibold">Tablet Gaming cleanup recovery</h3>
+            <p className="mt-1 text-sm text-fg-muted">
+              Only candidates reported by the exact tablet and verified against the immutable production cleanup receipt appear here. Approval retires that one local overlay after the tablet refreshes.
+            </p>
+          </div>
+        </div>
+        <button type="button" className="btn btn-ghost !py-1.5" onClick={() => void load()} disabled={loading || busy !== null}>
+          {loading ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />} Refresh
+        </button>
+      </div>
+      {error && <p className="mt-3 flex items-center gap-2 text-sm text-accent-bad"><AlertCircle size={14} />{error}</p>}
+      {!loading && rows.length === 0 && (
+        <p className="mt-4 text-sm text-fg-muted">No tablet has reported an eligible stale Gaming overlay.</p>
+      )}
+      <div className="mt-4 space-y-3">
+        {rows.map((row) => {
+          const device = devicesById.get(row.installation_id);
+          const station = stationsById.get(row.station_id);
+          const blocked = row.unresolved_child_count > 0;
+          return (
+            <article key={row.id} className="rounded-xl border border-bg-border bg-bg-raised/40 p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="font-medium">{gamingCleanupStationLabel(station)}</p>
+                  <p className="mt-1 text-xs text-fg-muted">
+                    App {device ? `v${device.version_name} · build ${device.version_code}` : 'build unavailable'} · last seen {when(device?.last_seen_at ?? null)} · last Sync {when(device?.last_successful_sync_at ?? null)}
+                  </p>
+                </div>
+                <span className={`chip ${row.status === 'applied' ? 'text-accent-good' : row.status === 'approved' ? 'text-accent' : 'text-accent-gold'}`}>
+                  {row.status === 'superseded' ? 'Superseded by newer tablet evidence' : blocked ? 'Blocked' : row.status === 'reported' ? 'Verified · review needed' : row.status === 'approved' ? 'Approved · waiting for tablet' : 'Applied · tablet acknowledged'}
+                </span>
+              </div>
+              <dl className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
+                <CopyableIdentifier label="Station ID" value={row.station_id} />
+                <CopyableIdentifier label="Server session ID" value={row.server_session_id} />
+                <CopyableIdentifier label="Tablet installation ID" value={row.installation_id} />
+                <CopyableIdentifier label="Local action ID" value={row.local_action_id} />
+                <div><dt className="text-fg-muted">Local evidence</dt><dd className="font-mono">revision {row.revision} · {row.reported_local_state}</dd></div>
+                <div><dt className="text-fg-muted">Verified receipt</dt><dd className="font-mono">audit #{row.cleanup_receipt_audit_id}</dd></div>
+                <div><dt className="text-fg-muted">Reviewed amount</dt><dd>{row.review.amount_minor == null ? 'Unavailable' : inr(row.review.amount_minor)}</dd></div>
+                <div><dt className="text-fg-muted">Billable duration</dt><dd>{row.review.billable_minutes == null ? 'Unavailable' : `${row.review.billable_minutes} min`}</dd></div>
+                <div><dt className="text-fg-muted">Started / ended</dt><dd>{when(row.review.started_at)} / {when(row.review.ended_at)}</dd></div>
+                <CopyableIdentifier label="Original action actor" value={row.original_action_user_id} />
+                <div><dt className="text-fg-muted">Candidate hash</dt><dd className="break-all font-mono">{row.candidate_sha256}</dd></div>
+                <div><dt className="text-fg-muted">Saved child work</dt><dd>{row.unresolved_child_count || 'None'}</dd></div>
+              </dl>
+              {blocked && <p className="mt-3 text-sm text-accent-bad">Resolve the tablet's saved add-on or extension work before approval.</p>}
+              {row.status === 'reported' && !blocked && (
+                <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+                  <input
+                    className="input flex-1"
+                    value={reasons[row.id] ?? ''}
+                    maxLength={500}
+                    placeholder="Reviewed reason for retiring this exact stale overlay"
+                    onChange={(event) => setReasons((current) => ({ ...current, [row.id]: event.target.value }))}
+                  />
+                  <button type="button" className="btn btn-primary" disabled={busy !== null} onClick={() => void approve(row)}>
+                    {busy === row.id ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />} Approve exact candidate
+                  </button>
+                </div>
+              )}
+              {row.status === 'approved' && <p className="mt-3 text-sm text-accent">Foreground the tablet and refresh Gaming. It will apply and acknowledge this exact directive.</p>}
+              {row.status === 'applied' && <p className="mt-3 text-sm text-accent-good">The tablet acknowledged the retired overlay at {when(row.applied_at)}.</p>}
+              {row.status === 'superseded' && <p className="mt-3 text-sm text-fg-muted">This immutable revision remains as audit history. Only the current revision can be approved.</p>}
+            </article>
+          );
+        })}
+      </div>
+    </section>
+  );
+}

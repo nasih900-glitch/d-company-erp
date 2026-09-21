@@ -1320,6 +1320,48 @@ export interface ClientInstallationListDTO {
   items: ClientInstallationDTO[];
 }
 
+export type GamingCleanupReconciliationStatus = 'reported' | 'approved' | 'applied' | 'superseded';
+
+export interface GamingCleanupReconciliationDTO {
+  id: string;
+  installation_id: string;
+  branch_id: string;
+  terminal_id: string;
+  station_id: string;
+  local_action_id: string;
+  server_session_id: string;
+  revision: number;
+  is_current: boolean;
+  reported_local_state: string;
+  local_evidence_revision: number;
+  local_snapshot_sha256: string;
+  start_request_hash: string;
+  stop_request_hash: string;
+  original_action_user_id: string;
+  candidate_sha256: string;
+  unresolved_child_count: number;
+  cleanup_receipt_audit_id: number;
+  review: {
+    amount_minor: number | null;
+    billable_minutes: number | null;
+    started_at: string;
+    ended_at: string;
+  };
+  status: GamingCleanupReconciliationStatus;
+  reported_at: string;
+  approved_at: string | null;
+  approved_by: string | null;
+  approval_reason: string | null;
+  applied_at: string | null;
+  applied_by: string | null;
+  superseded_at: string | null;
+  device_directive: 'wait_for_owner' | 'cleanup_retire' | 'already_applied' | 'superseded';
+}
+
+export interface GamingCleanupReconciliationListDTO {
+  items: GamingCleanupReconciliationDTO[];
+}
+
 export type AndroidReleaseStatus = 'staged' | 'active' | 'withdrawn';
 
 export interface AndroidReleaseDTO {
@@ -1411,6 +1453,8 @@ export interface SystemHealthDTO {
     with_pending_sync: number;
     sync_stalled: number;
     max_pending_outbox_count: number;
+    stale_with_last_reported_pending: number;
+    stale_max_last_reported_pending: number;
     latest_supported_version_code: number;
     outdated_installations: number;
   };
@@ -3626,6 +3670,20 @@ export const clientInstallations = {
     offset?: number;
   } = {}) => api.get<ClientInstallationListDTO>('/client-installations', { params })
     .then((r) => r.data),
+  listGamingCleanupReconciliations: () =>
+    api.get<GamingCleanupReconciliationListDTO>(
+      '/client-installations/gaming-cleanup-reconciliations',
+    ).then((r) => r.data),
+  approveGamingCleanupReconciliation: (
+    reconciliationId: string,
+    expectedCandidateSha256: string,
+    reason: string,
+    idempotencyKey: string,
+  ) => api.post<GamingCleanupReconciliationDTO>(
+    `/client-installations/gaming-cleanup-reconciliations/${reconciliationId}/approve`,
+    { expected_candidate_sha256: expectedCandidateSha256, reason },
+    { headers: { 'Idempotency-Key': idempotencyKey } },
+  ).then((r) => r.data),
 };
 
 export const androidReleases = {

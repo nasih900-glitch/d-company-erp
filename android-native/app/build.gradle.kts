@@ -81,8 +81,8 @@ android {
         // Every Room schema change must ship under a strictly newer Android
         // version code so an installed tablet upgrades in place instead of
         // requiring an uninstall that would destroy its offline outbox.
-        versionCode = 37
-        versionName = "3.1.29"
+        versionCode = 38
+        versionName = "3.1.30"
         buildConfigField("boolean", "DIRECT_UPDATES_ENABLED", "false")
         buildConfigField("String", "DISTRIBUTION_CHANNEL", buildConfigString("play"))
 
@@ -182,7 +182,12 @@ android {
     // source control. Point instrumentation directly at that canonical folder
     // so a new schema version cannot be generated successfully yet omitted
     // from tests by a forgotten manual copy into src/androidTest/assets.
-    sourceSets.getByName("androidTest").assets.setSrcDirs(listOf("$projectDir/schemas"))
+    sourceSets.getByName("androidTest").assets.setSrcDirs(
+        listOf(
+            "$projectDir/schemas",
+            "$rootDir/../protocol-fixtures",
+        ),
+    )
 }
 
 // Room schema history — needed for MigrationTestHelper to replay old schemas

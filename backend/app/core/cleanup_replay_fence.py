@@ -8,15 +8,17 @@ to reject a delayed tablet replay after the cleanup has committed.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import re
+from dataclasses import dataclass
+from datetime import datetime
+from typing import TYPE_CHECKING, Any
+from uuid import UUID
 
 from sqlalchemy import select
 
-from app.core.errors import IdempotencyConflict
+from app.core.errors import BusinessRuleError, IdempotencyConflict
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -32,6 +34,296 @@ _RETIRED_ACTION_PREFIXES = (
 
 def _identity_text(value: UUID | None) -> str | None:
     return str(value) if value is not None else None
+
+
+@dataclass(frozen=True, slots=True)
+class CanonicalGamingCleanupReceipt:
+    audit_id: int
+    deleted_gaming_session_ids: tuple[UUID, ...]
+    original_action_user_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class _ValidatedCleanupReceipt:
+    deleted_gaming_session_ids: tuple[UUID, ...]
+    replay_fence_by_key: dict[str, dict[str, Any]]
+
+
+def _canonical_uuid_list(value: object) -> tuple[UUID, ...] | None:
+    if not isinstance(value, list) or not value:
+        return None
+    parsed: list[UUID] = []
+    for raw in value:
+        if not isinstance(raw, str):
+            return None
+        try:
+            item = UUID(raw)
+        except ValueError:
+            return None
+        if str(item) != raw:
+            return None
+        parsed.append(item)
+    if len(set(parsed)) != len(parsed) or value != sorted(value):
+        return None
+    return tuple(parsed)
+
+
+def _exact_keys(value: object, keys: set[str]) -> bool:
+    return isinstance(value, dict) and set(value) == keys
+
+
+def _structurally_valid_cleanup_receipt(receipt: object) -> _ValidatedCleanupReceipt | None:
+    before = getattr(receipt, "before", None)
+    after = getattr(receipt, "after", None)
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        return None
+    source_sha = after.get("source_git_sha")
+    image_id = after.get("backend_image_id")
+    if not _exact_keys(
+        before,
+        {
+            "schema_revision",
+            "state_fingerprint",
+            "backup_sha256",
+            "quarantine_evidence_sha256",
+            "counts",
+            "audit_log",
+        },
+    ) or not _exact_keys(
+        after,
+        {
+            "source_git_sha",
+            "backend_image_id",
+            "executor",
+            "executed_at",
+            "deleted_counts",
+            "deleted_shift_ids",
+            "deleted_order_ids",
+            "deleted_order_line_ids",
+            "deleted_gaming_session_ids",
+            "deleted_menu_item_ids",
+            "retired_test_installation",
+            "local_avd_quarantine",
+            "deleted_idempotency_keys",
+            "deleted_audit_ids",
+            "replay_fence",
+            "expected_post_counts",
+        },
+    ):
+        return None
+    if not isinstance(source_sha, str) or re.fullmatch(r"[0-9a-f]{40}", source_sha) is None:
+        return None
+    if not isinstance(image_id, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", image_id) is None:
+        return None
+    if before["schema_revision"] != "0078":
+        return None
+    if after["executor"] != f"install-on-vm:{source_sha}":
+        return None
+    if any(
+        not isinstance(before.get(key), str) or re.fullmatch(r"[0-9a-f]{64}", before[key]) is None
+        for key in ("state_fingerprint", "backup_sha256", "quarantine_evidence_sha256")
+    ):
+        return None
+    if not isinstance(before["counts"], dict) or not isinstance(before["audit_log"], dict):
+        return None
+    if after["deleted_counts"] != {
+        "audit_log": 37,
+        "idempotency_keys": 10,
+        "gaming_sessions": 5,
+        "order_lines": 3,
+        "orders": 3,
+        "menu_items": 1,
+        "shifts": 3,
+    }:
+        return None
+    try:
+        executed_at = datetime.fromisoformat(after["executed_at"].replace("Z", "+00:00"))
+    except (AttributeError, TypeError, ValueError):
+        return None
+    if executed_at.tzinfo is None or executed_at.utcoffset() is None:
+        return None
+    if (
+        getattr(receipt, "actor_user_id", None) is None
+        or getattr(receipt, "terminal_id", None) is None
+    ):
+        return None
+    if getattr(receipt, "request_id", None) != "code30.1-production-trial-cleanup-20260920":
+        return None
+    if getattr(receipt, "client_action_id", None) != "production-trial-cleanup-20260920":
+        return None
+    if (
+        getattr(receipt, "client_was_offline", None) is not None
+        or getattr(receipt, "synced_at", None) is not None
+    ):
+        return None
+    if getattr(receipt, "user_agent", None) != "cleanup-code30-production-trial-data/2":
+        return None
+    deleted = _canonical_uuid_list(after.get("deleted_gaming_session_ids"))
+    if deleted is None or len(deleted) != 5:
+        return None
+    fence = after.get("replay_fence")
+    if not isinstance(fence, list) or len(fence) != 13:
+        return None
+    entries: dict[str, dict[str, Any]] = {}
+    ordered_keys: list[str] = []
+    for raw in fence:
+        if not _exact_keys(
+            raw,
+            {
+                "action_type",
+                "action_key",
+                "request_hash",
+                "user_id",
+                "terminal_id",
+                "source_entity_id",
+            },
+        ):
+            return None
+        action_key = raw["action_key"]
+        if not isinstance(action_key, str) or not action_key:
+            return None
+        if raw["action_type"] not in {"idempotency", "shift_open"}:
+            return None
+        if (
+            not isinstance(raw["request_hash"], str)
+            or re.fullmatch(r"[0-9a-f]{64}", raw["request_hash"]) is None
+        ):
+            return None
+        try:
+            UUID(raw["user_id"])
+            UUID(raw["terminal_id"])
+            if raw["source_entity_id"] is not None:
+                UUID(raw["source_entity_id"])
+        except (TypeError, ValueError):
+            return None
+        entries[action_key] = raw
+        ordered_keys.append(action_key)
+    if ordered_keys != sorted(ordered_keys) or len(entries) != len(fence):
+        return None
+    idempotency_keys = [
+        key for key, entry in entries.items() if entry["action_type"] == "idempotency"
+    ]
+    gaming_keys = {
+        key
+        for key in idempotency_keys
+        if re.fullmatch(r"gaming-session-(start|stop):[0-9a-f-]{36}", key)
+    }
+    lifecycle_ids = {
+        key.split(":", 1)[1] for key in gaming_keys if key.startswith("gaming-session-start:")
+    }
+    try:
+        canonical_lifecycle_ids = {str(UUID(local_id)) for local_id in lifecycle_ids}
+    except ValueError:
+        return None
+    if (
+        len(idempotency_keys) != 10
+        or len(gaming_keys) != 10
+        or len(lifecycle_ids) != 5
+        or lifecycle_ids != canonical_lifecycle_ids
+        or any(f"gaming-session-stop:{local_id}" not in gaming_keys for local_id in lifecycle_ids)
+        or after.get("deleted_idempotency_keys") != idempotency_keys
+    ):
+        return None
+    for local_id in lifecycle_ids:
+        start = entries[f"gaming-session-start:{local_id}"]
+        stop = entries[f"gaming-session-stop:{local_id}"]
+        if (
+            start["source_entity_id"] is not None
+            or stop["source_entity_id"] is not None
+            or (start["user_id"], start["terminal_id"]) != (stop["user_id"], stop["terminal_id"])
+        ):
+            return None
+    if sum(entry["action_type"] == "shift_open" for entry in entries.values()) != 3:
+        return None
+    return _ValidatedCleanupReceipt(deleted, entries)
+
+
+async def require_canonical_gaming_cleanup_receipt(
+    session: AsyncSession,
+    *,
+    company_id: UUID,
+    branch_id: UUID,
+    terminal_id: UUID,
+    station_id: UUID,
+    local_action_id: UUID,
+    server_session_id: UUID,
+    start_request_hash: str,
+    stop_request_hash: str,
+) -> CanonicalGamingCleanupReceipt:
+    """Require the one canonical Code30.1 receipt and current absent target.
+
+    Any duplicate or malformed matching receipt fails closed. This helper is
+    intentionally separate from the existing replay-fence scan so the shipped
+    replay behavior remains byte-for-byte unchanged.
+    """
+    from app.models import AuditLog, GamingSession, Station
+
+    receipts = (
+        (
+            await session.execute(
+                select(AuditLog).where(
+                    AuditLog.company_id == company_id,
+                    AuditLog.action == _CLEANUP_ACTION,
+                    AuditLog.entity_type == _CLEANUP_ENTITY_TYPE,
+                    AuditLog.entity_id == _CLEANUP_ENTITY_ID,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if len(receipts) != 1:
+        raise BusinessRuleError(
+            "The verified production cleanup receipt is missing or duplicated. Recovery is blocked."
+        )
+    receipt = receipts[0]
+    validated = _structurally_valid_cleanup_receipt(receipt)
+    if validated is None or server_session_id not in validated.deleted_gaming_session_ids:
+        raise BusinessRuleError(
+            "This Gaming session is not an exact target of the verified production cleanup."
+        )
+    start = validated.replay_fence_by_key.get(f"gaming-session-start:{local_action_id}")
+    stop = validated.replay_fence_by_key.get(f"gaming-session-stop:{local_action_id}")
+    original_user_id = start["user_id"] if start is not None else None
+    expected_identity = (original_user_id, str(terminal_id))
+    if (
+        start is None
+        or stop is None
+        or start["action_type"] != "idempotency"
+        or stop["action_type"] != "idempotency"
+        or start["source_entity_id"] is not None
+        or stop["source_entity_id"] is not None
+        or (start["user_id"], start["terminal_id"]) != expected_identity
+        or (stop["user_id"], stop["terminal_id"]) != expected_identity
+        or start["request_hash"] != start_request_hash
+        or stop["request_hash"] != stop_request_hash
+    ):
+        raise BusinessRuleError(
+            "The local Gaming lifecycle does not match the cleanup receipt action evidence."
+        )
+    station = (
+        await session.execute(
+            select(Station.id).where(
+                Station.id == station_id,
+                Station.company_id == company_id,
+                Station.branch_id == branch_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if station is None:
+        raise BusinessRuleError("The reported Gaming station is outside the current shop scope.")
+    existing = (
+        await session.execute(select(GamingSession.id).where(GamingSession.id == server_session_id))
+    ).scalar_one_or_none()
+    if existing is not None:
+        raise BusinessRuleError(
+            "The Gaming session still exists on the server; cleanup recovery is unsafe."
+        )
+    return CanonicalGamingCleanupReceipt(
+        receipt.id,
+        validated.deleted_gaming_session_ids,
+        UUID(original_user_id),
+    )
 
 
 async def refuse_retired_action_replay(

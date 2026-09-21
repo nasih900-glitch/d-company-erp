@@ -322,6 +322,7 @@ export function SystemHealthOverview({
               <DataPoint label="Stale" value={health.devices.stale} tone={health.devices.stale ? 'warning' : 'good'} />
               <DataPoint label="Pending Sync" value={health.devices.with_pending_sync} tone={health.devices.with_pending_sync ? 'warning' : 'good'} />
               <DataPoint label="Largest queue" value={health.devices.max_pending_outbox_count} tone={health.devices.max_pending_outbox_count ? 'warning' : 'good'} />
+              <DataPoint label="Stale last-reported pending" value={health.devices.stale_with_last_reported_pending} tone="neutral" />
               <DataPoint label="Sync stalled" value={health.devices.sync_stalled} tone={health.devices.sync_stalled ? 'bad' : 'good'} />
             </dl>
           )}

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "name": "Code30.2 3.1.29 current-tariff Gaming and Finance emulator acceptance",
+  "name": "Code30.3 3.1.30 current-tariff Gaming and Finance emulator acceptance",
   "fixture": "backend/scripts/physical_audit_fixture.py",
   "expected_sessions": 16,
   "maximum_steps": 500,

@@ -44,6 +44,7 @@ import { GAMING_CENTRE_TERMINAL_POLICY } from '@/lib/product-profile';
 import { createOperationKey, isAmbiguousApiError } from '@/lib/retry-drafts';
 import { subscribeRealtime } from '@/lib/realtime';
 import { useAuth } from '@/modules/auth/AuthContext';
+import { hasAdminSystemAccess } from '@/lib/admin-access';
 import { ConfirmModal, PromptModal } from '@/components/ui/ConfirmDialog';
 import Modal from '@/components/ui/Modal';
 import { useNotifications } from '@/components/ui/Notifications';
@@ -61,6 +62,7 @@ import {
   GamingWriteOnly,
   type GamingWriteDispatcher,
 } from './gaming-write-controls';
+import GamingCleanupRecoveryPanel from './GamingCleanupRecoveryPanel';
 
 import {
   PaidExtensionPersistenceError,
@@ -2679,6 +2681,10 @@ export default function GamingScreen() {
         <div className="card mb-4 border-accent-bad/40 bg-accent-bad/10 text-accent-bad text-sm flex items-center gap-2">
           <AlertCircle size={14}/> {error}
         </div>
+      )}
+
+      {LIVE_MODE && hasAdminSystemAccess(me) && (
+        <GamingCleanupRecoveryPanel stations={stations} />
       )}
 
       {LIVE_MODE && addonCatalogError && (
