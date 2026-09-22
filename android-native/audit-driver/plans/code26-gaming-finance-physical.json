@@ -3116,7 +3116,7 @@
       "text": "Close shift",
       "timeoutMs": 60000,
       "then": {
-        "text": "The drawer balanced exactly."
+        "text": "The server confirmed this shift is closed. The drawer balanced exactly."
       }
     },
     {
