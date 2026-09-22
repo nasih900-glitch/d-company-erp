@@ -5,6 +5,10 @@ import cloud.dcompany.erp.core.net.OrderLine
 import cloud.dcompany.erp.core.net.OrderModifierSnapshot
 import cloud.dcompany.erp.core.net.OrderVariantSnapshot
 import cloud.dcompany.erp.core.net.PaymentResult
+import cloud.dcompany.erp.core.net.PaymentBundleLegResult
+import cloud.dcompany.erp.core.net.PaymentBundleResult
+import cloud.dcompany.erp.core.checkout.SplitPaymentLeg
+import cloud.dcompany.erp.core.checkout.SplitPaymentPolicy
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Test
@@ -70,5 +74,54 @@ class PosReceiptMappingTest {
         assertEquals("Extra shot", line.modifiers?.single()?.name)
         assertEquals("No ice", line.note)
         assertNotNull(receipt.linesJson)
+    }
+
+    @Test
+    fun paymentBundleReceiptKeepsExactSplitAndCashChangeEvidence() {
+        val order = Order(
+            id = "order-split",
+            invoiceNo = "INV-SPLIT",
+            status = "paid",
+            type = "gaming",
+            totalMinor = 12_000,
+            paidMinor = 12_000,
+            dueMinor = 0,
+        )
+        val plan = SplitPaymentPolicy.create(
+            12_000,
+            listOf(SplitPaymentLeg("cash", 5_000, 10_000), SplitPaymentLeg("upi", 7_000)),
+        )
+        val result = PaymentBundleResult(
+            orderId = order.id,
+            shiftId = "shift-1",
+            payments = listOf(
+                PaymentBundleLegResult(
+                    "cash-1", "cash", 5_000, 10_000, 5_000,
+                    paidAt = "2026-09-21T12:00:00Z",
+                ),
+                PaymentBundleLegResult(
+                    "upi-1", "upi", 7_000,
+                    paidAt = "2026-09-21T12:00:00Z",
+                ),
+            ),
+            totalAmountMinor = 12_000,
+            paymentBreakdownMinor = mapOf(
+                "cash" to 5_000, "card" to 0, "upi" to 7_000, "qr" to 0, "wallet" to 0,
+            ),
+            orderStatus = "paid",
+            invoiceNo = "INV-SPLIT",
+            fiscalYear = "2026-27",
+            invoiceIssuedAt = "2026-09-21T12:00:00Z",
+        )
+        val storedMethod = SplitPaymentPolicy.encode(plan)
+
+        val receipt = paymentBundleReceipt(order, result, storedMethod, PosReceiptSource.HELD)
+
+        assertEquals("bundle:order-split", receipt.receiptId)
+        assertEquals(storedMethod, receipt.method)
+        assertEquals(12_000L, receipt.amountMinor)
+        assertEquals(10_000L, receipt.tenderedMinor)
+        assertEquals(5_000L, receipt.changeMinor)
+        assertEquals(0L, receipt.tipMinor)
     }
 }

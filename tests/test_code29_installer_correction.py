@@ -41,7 +41,7 @@ CODE30_2_FREEZE_SCRIPT_SHA256 = (
 CODE30_2_FREEZE_TEST_SHA256 = (
     "303c44945334417d810b27c07982a8582220f08642183b4107dcda8e67568a14"
 )
-CODE30_3_FREEZE_SCRIPT_SHA256 = "5257de4e82e443392e3b779daeb57203a17af25d0d47bf3160ac9ff8c2f64ba2"
+CODE30_3_FREEZE_SCRIPT_SHA256 = "4a9f0cbb5423621ed229ad85036fd7c08d22105014934dd638bc0fb6b4a5ef65"
 OPERATOR_RECORD_SHA256 = {
     "docs/CODE29_RELEASE_CANDIDATE.md": "8f15d3f031daef79ecd1a5680b8bf9f527598d558a004ea198225919898821e4",
     "docs/DISTRIBUTION.md": "601007e7eaca4b700c82e5e70ffd139a6ff9c9921e5c53581284491808710b1e",
@@ -971,7 +971,9 @@ def test_installer_verifier_and_live_workflows_are_exact() -> None:
     _assert_sha256(
         installer_path,
         current_installer.encode("utf-8"),
-        REVIEWED_CODE30_2_SHA256[installer_path],
+        _current_reviewed_sha256(
+            installer_path, REVIEWED_CODE30_2_SHA256[installer_path]
+        ),
     )
     for unsafe, corrected, expected_count in installer_replacements:
         assert unsafe not in current_installer
@@ -2333,23 +2335,38 @@ def test_freeze_extensions_and_historical_guards_are_exact() -> None:
 
 def test_reviewed_pos_and_inventory_ui_corrections_are_exact() -> None:
     pos_path = "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/PosScreen.kt"
+    stale_held_review_key = (
+        "    state.heldOrderReview\n"
+        "        ?.takeIf { access.canCreateAndCollect && voidTarget == null }\n"
+        "        ?.let { review ->\n"
+        "            key(review.orderId, review.checkoutVersion) {"
+    )
+    corrected_held_review_key = (
+        "    state.heldOrderReview\n"
+        "        ?.takeIf { access.canCreateAndCollect && voidTarget == null }\n"
+        "        ?.let { review ->\n"
+        "            key(review.orderId) {"
+    )
     expected_pos = _replace_exact(
         _original(pos_path),
         (
             (
-                "    state.heldOrderReview\n"
-                "        ?.takeIf { access.canCreateAndCollect && voidTarget == null }\n"
-                "        ?.let { review ->\n"
-                "            key(review.orderId, review.checkoutVersion) {",
-                "    state.heldOrderReview\n"
-                "        ?.takeIf { access.canCreateAndCollect && voidTarget == null }\n"
-                "        ?.let { review ->\n"
-                "            key(review.orderId) {",
+                stale_held_review_key,
+                corrected_held_review_key,
                 1,
             ),
         ),
     )
-    _assert_exact_text(pos_path, _current(pos_path), expected_pos)
+    current_pos = _current(pos_path)
+    _assert_sha256(
+        pos_path,
+        current_pos.encode("utf-8"),
+        _current_reviewed_sha256(
+            pos_path, hashlib.sha256(expected_pos.encode("utf-8")).hexdigest()
+        ),
+    )
+    assert stale_held_review_key not in current_pos
+    assert current_pos.count(corrected_held_review_key) == 1
 
     for path in REVIEWED_UI_SHA256:
         _assert_sha256(
@@ -2629,7 +2646,7 @@ def test_operator_records_are_frozen_and_trial_precedes_production() -> None:
         "Room schema `51`",
         "v3.1.30",
         "build `38`",
-        "Alembic head `0079`",
+        "Alembic head `0081`",
         "Room schema `52`",
         "Physical Redmi Pad 2 acceptance",
     ):

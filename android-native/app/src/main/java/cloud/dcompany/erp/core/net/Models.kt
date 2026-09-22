@@ -138,6 +138,26 @@ data class PaymentRequest(
     @SerialName("tip_minor") val tipMinor: Long = 0,
 )
 
+/** One tender rail in an all-or-nothing split settlement. */
+@Serializable
+data class PaymentBundleLegRequest(
+    val method: String,
+    @SerialName("amount_minor") val amountMinor: Long,
+    @SerialName("tendered_minor") val tenderedMinor: Long? = null,
+    @SerialName("ref_external") val refExternal: String? = null,
+)
+
+/**
+ * Complete bill settlement. There is intentionally no tip field: split mode
+ * allocates the authoritative amount due and cannot add money above the bill.
+ */
+@Serializable
+data class PaymentBundleRequest(
+    val payments: List<PaymentBundleLegRequest>,
+    @SerialName("expected_order_total_minor") val expectedTotalMinor: Long,
+    @SerialName("expected_due_minor") val expectedDueMinor: Long,
+)
+
 @Serializable
 data class OrderCustomerUpdateRequest(
     @SerialName("customer_name") val customerName: String? = null,
@@ -215,6 +235,8 @@ data class OrderLine(
 data class Order(
     val id: String,
     @SerialName("invoice_no") val invoiceNo: String? = null,
+    @SerialName("fiscal_year") val fiscalYear: String? = null,
+    @SerialName("invoice_issued_at") val invoiceIssuedAt: String? = null,
     // Defaulted for the same reason as OrderLine: an unexpected payload must
     // surface as a handled error, not kill the process mid-sale.
     val status: String = "",
@@ -319,6 +341,31 @@ data class PaymentResult(
     @SerialName("ref_external") val refExternal: String? = null,
     @SerialName("paid_at") val paidAt: String? = null,
     @SerialName("order_status") val orderStatus: String? = null,
+    @SerialName("invoice_no") val invoiceNo: String? = null,
+    @SerialName("fiscal_year") val fiscalYear: String? = null,
+    @SerialName("invoice_issued_at") val invoiceIssuedAt: String? = null,
+)
+
+@Serializable
+data class PaymentBundleLegResult(
+    val id: String,
+    val method: String,
+    @SerialName("amount_minor") val amountMinor: Long,
+    @SerialName("tendered_minor") val tenderedMinor: Long? = null,
+    @SerialName("change_minor") val changeMinor: Long? = null,
+    @SerialName("ref_external") val refExternal: String? = null,
+    @SerialName("paid_at") val paidAt: String,
+)
+
+/** Authoritative receipt returned by the atomic split-payment endpoint. */
+@Serializable
+data class PaymentBundleResult(
+    @SerialName("order_id") val orderId: String,
+    @SerialName("shift_id") val shiftId: String,
+    val payments: List<PaymentBundleLegResult>,
+    @SerialName("total_amount_minor") val totalAmountMinor: Long,
+    @SerialName("payment_breakdown_minor") val paymentBreakdownMinor: Map<String, Long>,
+    @SerialName("order_status") val orderStatus: String,
     @SerialName("invoice_no") val invoiceNo: String? = null,
     @SerialName("fiscal_year") val fiscalYear: String? = null,
     @SerialName("invoice_issued_at") val invoiceIssuedAt: String? = null,

@@ -31,13 +31,14 @@ Code30.2 `v3.1.29` / build `37` is the immutable direct-channel
 predecessor. Preserve its exact APK, manifest, hashes, source and signer.
 
 Code30.3 is the in-progress `v3.1.30` / build `38` source candidate at Room
-schema `52` and Alembic head `0079`. There is no distributable signed Code30.3
+schema `52` and Alembic head `0081`. There is no distributable signed Code30.3
 APK yet. Do not place local/debug bytes in this directory. Before staging, the
 exact protected-workflow APK and manifest must pass independent package,
 version, hash, size, source and signer checks plus a same-signer in-place update
 from exact build `37` without uninstalling or clearing data. The matching
-backend/Web migration, stale-session recovery acceptance, inactive staging, owner
-activation and physical Redmi Pad 2 acceptance are separate gates.
+backend/Web migration, split-payment and station-transfer acceptance,
+stale-session recovery acceptance, inactive staging, owner activation and
+physical Redmi Pad 2 acceptance are separate gates.
 
 Staging build `38` does not offer it. Only the bound owner release-controller
 may activate the exact staged record after the earlier gates pass, and Android

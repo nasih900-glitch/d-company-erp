@@ -18,7 +18,7 @@ Code30.2 `v3.1.29` / Android build `37` at commit
 `3ea84be4718a794d5a2e8efc7ac9bcacbc0cee01` is the immutable predecessor for
 this patch. Preserve its exact source, manifest, checksums, signer and APK
 bytes. The current Code30.3 candidate is `v3.1.30` / build `38`, Room schema
-`52`, and Alembic head `0079`:
+`52`, and Alembic head `0081`:
 
 ```
 freeze and verify exact 3.1.30/build-38 source
@@ -52,6 +52,20 @@ generation-bound Sheet outbox behavior. It adds exact, owner-reviewed recovery
 for a stale Android Gaming overlay. The build-38 tablet must reconnect, apply
 the matching directive and acknowledge it. There is no broad clear-all or
 remote edit of an offline Room database.
+
+The production installer refuses cutover unless a global database check shows
+no in-flight business work. It runs once before maintenance and again from a
+fresh snapshot after Web/API writers stop, before the final backup or migration.
+Open shifts, open/held orders, active/paused or ended-unsettled Gaming sessions,
+unresolved refund/payment work, kitchen cancellation acknowledgements and
+unresolved Sheets deliveries all block the upgrade.
+
+The owner recovery control is in Web **Gaming**. It can approve only the exact
+device-reported candidate after showing branch, terminal, tablet installation,
+build, station, session, local amount, duration and cryptographic identity. It
+cannot edit an offline Room database: the same build-38-or-later tablet must
+reconnect, apply the exact directive and acknowledge it. This boundary avoids a
+broad reset that could discard an unsynced bill or payment.
 
 The Tauri desktop and iOS projects are not built or published by the supported
 release workflow.
@@ -188,7 +202,7 @@ minimum-supported compatibility floor. An optional Code30.3 offer does not
 authorize changing that floor.
 
 Code30.2 `v3.1.29` / build `37` is the current immutable direct-channel release
-predecessor. Code30.3 is `v3.1.30` / build `38`, Room `52`, and migration `0079`.
+predecessor. Code30.3 is `v3.1.30` / build `38`, Room `52`, and migration `0081`.
 It is not signed, deployed, staged, active, offered, installed, or approved by
 the version bump alone.
 
@@ -204,7 +218,7 @@ the version bump alone.
    representative Room/outbox state, and install the signed build `38` with
    normal update semantics. Do not uninstall or clear data.
 5. Deploy the matching backend and Web source through the guarded production
-   installer with a quiesced backup, restore proof, migration through `0079`,
+   installer with a quiesced backup, restore proof, migration through `0081`,
    rollback readiness and authenticated smoke checks. The old one-time
    Code30.2 cleanup bridge is predecessor history and is not a substitute for
    this fresh preflight.

@@ -3,10 +3,27 @@ package cloud.dcompany.erp.core.db
 import androidx.room.Room
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import cloud.dcompany.erp.DCompanyApp
+import cloud.dcompany.erp.core.auth.CacheIsolationCoordinator
+import cloud.dcompany.erp.core.auth.CacheScope
+import cloud.dcompany.erp.core.auth.CacheScopeMarker
+import cloud.dcompany.erp.core.auth.OutboxSafetyGate
+import cloud.dcompany.erp.core.auth.ScopeDataPurger
+import cloud.dcompany.erp.core.remote.RemoteAssistanceJournalScope
+import cloud.dcompany.erp.core.remote.RemoteRequestScopeTag
+import cloud.dcompany.erp.core.sync.SyncEngine
 import cloud.dcompany.erp.core.sync.cleanupAcknowledgementMatches
 import cloud.dcompany.erp.core.sync.gamingCleanupCandidateSha256
+import cloud.dcompany.erp.ui.screens.gaming.GamingCleanupAcknowledgeBody
+import cloud.dcompany.erp.ui.screens.gaming.GamingCleanupDeviceApi
 import cloud.dcompany.erp.ui.screens.gaming.GamingCleanupReconciliation
 import cloud.dcompany.erp.ui.screens.gaming.GamingCleanupReportBody
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
@@ -27,6 +44,10 @@ import org.junit.runner.RunWith
  * same literal response with production Android serializers, applies it to a
  * real file-backed Room database, acknowledges it with the exact backend
  * receipt, and proves both transitions survive process-style database reopen.
+ * The acknowledgement leg deliberately crosses an extra reopen after the
+ * server receipt is available but before the local acknowledgement is stored;
+ * that is the process/coroutine interruption boundary which previously lacked
+ * direct regression coverage.
  */
 @RunWith(AndroidJUnit4::class)
 class GamingCleanupProtocolBridgeTest {
@@ -34,7 +55,7 @@ class GamingCleanupProtocolBridgeTest {
     private val json = Json { ignoreUnknownKeys = true }
 
     @Test
-    fun backendApprovedDirectiveAppliesAndAcknowledgesExactlyAcrossRoomReopen() = runBlocking {
+    fun backendApprovedDirectiveRetriesExactlyAfterInterruptedAcknowledgement() = runBlocking {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val fixtureText = instrumentation.context.assets
             .open("gaming_cleanup_full_flow_v1.json")
@@ -59,8 +80,6 @@ class GamingCleanupProtocolBridgeTest {
         )
         val clock = fixture.getValue("local_clock").jsonObject
         val retiredAtMillis = clock.getValue("retired_at_millis").jsonPrimitive.long
-        val acknowledgedAtMillis =
-            clock.getValue("acknowledged_at_millis").jsonPrimitive.long
 
         assertEquals(report.localSnapshotSha256, gamingCleanupSnapshotSha256(report.localSnapshot))
         assertEquals(report.candidateSha256, gamingCleanupCandidateSha256(report))
@@ -118,6 +137,35 @@ class GamingCleanupProtocolBridgeTest {
                     first.gamingDao().localSessionById(report.localActionId),
                 )
                 assertEquals(captured, inserted.cleanupSnapshotOrNull())
+                assertEquals(
+                    1,
+                    first.gamingDao().noteCleanupWorkflowStatusCas(
+                        localId = report.localActionId,
+                        serverSessionId = report.serverSessionId,
+                        expectedState = report.reportedLocalState,
+                        expectedEvidenceRevision = report.localSnapshot.evidenceRevision,
+                        message = GamingCleanupWorkflowStatus.WAITING_FOR_OWNER.persistedMessage,
+                    ),
+                )
+                val waitingForOwner = requireNotNull(
+                    first.gamingDao().localSessionById(report.localActionId),
+                )
+                assertEquals(
+                    GamingCleanupWorkflowStatus.WAITING_FOR_OWNER.persistedMessage,
+                    waitingForOwner.lastError,
+                )
+                assertEquals(captured.evidenceRevision, waitingForOwner.cleanupEvidenceRevision)
+                assertEquals(captured, waitingForOwner.cleanupSnapshotOrNull())
+                assertEquals(
+                    0,
+                    first.gamingDao().noteCleanupWorkflowStatusCas(
+                        localId = report.localActionId,
+                        serverSessionId = "00000000-0000-4000-8000-000000000000",
+                        expectedState = report.reportedLocalState,
+                        expectedEvidenceRevision = report.localSnapshot.evidenceRevision,
+                        message = GamingCleanupWorkflowStatus.REVIEW_REQUIRED.persistedMessage,
+                    ),
+                )
                 assertFalse(
                     first.gamingDao().applyCleanupRetirement(
                         localId = directive.localActionId,
@@ -172,6 +220,7 @@ class GamingCleanupProtocolBridgeTest {
                 assertEquals(directive.candidateSha256, retained.cleanupCandidateSha256)
                 assertEquals(retiredAtMillis, retained.cleanupRetiredAtMillis)
                 assertNull(retained.cleanupAcknowledgedAtMillis)
+                assertNull(retained.lastError)
                 assertEquals(
                     directive.localEvidenceRevision + 1,
                     retained.cleanupEvidenceRevision,
@@ -179,6 +228,64 @@ class GamingCleanupProtocolBridgeTest {
                 assertEquals(
                     report.localActionId,
                     afterRetirement.gamingDao().cleanupRetiredSessions().single().localId,
+                )
+                assertEquals(
+                    report.localActionId,
+                    afterRetirement.gamingDao()
+                        .observeCleanupRetirementsAwaitingAcknowledgement()
+                        .first()
+                        .single()
+                        .localId,
+                )
+                assertTrue(afterRetirement.gamingDao().observeActiveLocalSessions().first().isEmpty())
+                assertTrue(afterRetirement.gamingDao().localSessionsForServerReconciliation().isEmpty())
+                assertEquals(
+                    0,
+                    afterRetirement.gamingDao().unresolvedLocalSessionCount(directive.stationId),
+                )
+
+                // Replaying the same approved directive after process restart
+                // is idempotent. It reports the already-applied outcome but
+                // must not advance evidence, change the retirement timestamp,
+                // or recreate the stale station overlay.
+                assertTrue(
+                    afterRetirement.gamingDao().applyCleanupRetirement(
+                        localId = directive.localActionId,
+                        serverSessionId = directive.serverSessionId,
+                        stationId = directive.stationId,
+                        expectedState = directive.reportedLocalState,
+                        reconciliationId = directive.id,
+                        receiptAuditId = directive.cleanupReceiptAuditId,
+                        candidateSha256 = directive.candidateSha256,
+                        reason = requireNotNull(directive.approvalReason),
+                        retiredAtMillis = retiredAtMillis + 9_999,
+                        branchId = directive.branchId,
+                        terminalId = directive.terminalId,
+                        expectedEvidenceRevision = directive.localEvidenceRevision,
+                        expectedSnapshotSha256 = directive.localSnapshotSha256,
+                    ),
+                )
+                val afterDirectiveReplay = requireNotNull(
+                    afterRetirement.gamingDao().localSessionById(report.localActionId),
+                )
+                assertEquals(retiredAtMillis, afterDirectiveReplay.cleanupRetiredAtMillis)
+                assertEquals(
+                    directive.localEvidenceRevision + 1,
+                    afterDirectiveReplay.cleanupEvidenceRevision,
+                )
+                assertTrue(afterRetirement.gamingDao().observeActiveLocalSessions().first().isEmpty())
+                assertEquals(
+                    1,
+                    afterRetirement.gamingDao().noteCleanupAcknowledgementPendingCas(
+                        localId = report.localActionId,
+                        reconciliationId = directive.id,
+                        candidateSha256 = directive.candidateSha256,
+                        message = GamingCleanupWorkflowStatus.ACKNOWLEDGEMENT_PENDING.persistedMessage,
+                    ),
+                )
+                assertEquals(
+                    GamingCleanupWorkflowStatus.ACKNOWLEDGEMENT_PENDING.persistedMessage,
+                    afterRetirement.gamingDao().localSessionById(report.localActionId)?.lastError,
                 )
 
                 assertFalse(
@@ -199,32 +306,226 @@ class GamingCleanupProtocolBridgeTest {
                         candidateSha256 = directive.candidateSha256,
                     ),
                 )
-                assertEquals(
-                    0,
-                    afterRetirement.gamingDao().markCleanupAcknowledgedCas(
-                        localId = report.localActionId,
-                        reconciliationId = directive.id,
-                        candidateSha256 = "0".repeat(64),
-                        acknowledgedAtMillis = acknowledgedAtMillis,
-                    ),
-                )
-                assertEquals(
-                    1,
-                    afterRetirement.gamingDao().markCleanupAcknowledgedCas(
-                        localId = report.localActionId,
-                        reconciliationId = acknowledgement.id,
-                        candidateSha256 = acknowledgement.candidateSha256,
-                        acknowledgedAtMillis = acknowledgedAtMillis,
-                    ),
-                )
-                assertEquals(
-                    directive.localEvidenceRevision + 1,
+                // Simulate process death after the local retirement commits
+                // and before the first acknowledgement attempt. The next
+                // process must discover this row from Room alone.
+                assertNull(
                     afterRetirement.gamingDao()
                         .localSessionById(report.localActionId)
-                        ?.cleanupEvidenceRevision,
+                        ?.cleanupAcknowledgedAtMillis,
                 )
             } finally {
                 afterRetirement.close()
+            }
+
+            val afterInterruptedAcknowledgement =
+                Room.databaseBuilder(context, ErpDatabase::class.java, databaseName).build()
+            try {
+                val retained = requireNotNull(
+                    afterInterruptedAcknowledgement.gamingDao()
+                        .cleanupRetiredSessions()
+                        .single(),
+                )
+                assertEquals(report.localActionId, retained.localId)
+                assertEquals(directive.id, retained.cleanupReconciliationId)
+                assertEquals(directive.cleanupReceiptAuditId, retained.cleanupReceiptAuditId)
+                assertEquals(directive.candidateSha256, retained.cleanupCandidateSha256)
+                assertEquals(retiredAtMillis, retained.cleanupRetiredAtMillis)
+                assertEquals(
+                    directive.localEvidenceRevision + 1,
+                    retained.cleanupEvidenceRevision,
+                )
+                assertEquals(
+                    GamingCleanupWorkflowStatus.ACKNOWLEDGEMENT_PENDING.persistedMessage,
+                    retained.lastError,
+                )
+                assertTrue(
+                    afterInterruptedAcknowledgement.gamingDao()
+                        .observeActiveLocalSessions()
+                        .first()
+                        .isEmpty(),
+                )
+
+                // A stale or mismatched receipt cannot resolve the durable
+                // evidence, even if a future caller bypasses the app-level
+                // response check.
+                assertTrue(
+                    cleanupAcknowledgementMatches(
+                        acknowledgement,
+                        installationId = report.installationId,
+                        localId = report.localActionId,
+                        reconciliationId = directive.id,
+                        candidateSha256 = directive.candidateSha256,
+                    ),
+                )
+                assertEquals(
+                    0,
+                    afterInterruptedAcknowledgement.gamingDao().markCleanupAcknowledgedCas(
+                        localId = report.localActionId,
+                        reconciliationId = directive.id,
+                        candidateSha256 = "0".repeat(64),
+                        acknowledgedAtMillis = System.currentTimeMillis(),
+                    ),
+                )
+
+                // A fresh SyncEngine reaches the server with the exact durable
+                // identity. Cancel after the successful response and before
+                // the local CAS to exercise the narrowest interruption window.
+                val application = context.applicationContext as DCompanyApp
+                val cacheScope = CacheScope(
+                    userId = "cleanup-bridge-user",
+                    companyId = "cleanup-bridge-company",
+                    branchId = directive.branchId,
+                    terminalId = directive.terminalId,
+                )
+                val cacheIsolation = CacheIsolationCoordinator(
+                    purger = CleanScopeDataPurger(),
+                    marker = FixedCacheScopeMarker(cacheScope),
+                )
+                cacheIsolation.activateValidated(cacheScope)
+                val lease = requireNotNull(cacheIsolation.currentLease())
+                val interruptedApi = RecordingGamingCleanupDeviceApi(acknowledgement)
+                val proofTag = RemoteRequestScopeTag(
+                    RemoteAssistanceJournalScope(
+                        companyId = cacheScope.companyId,
+                        installationId = report.installationId,
+                        userId = cacheScope.userId,
+                    ),
+                )
+                val interruptedEngineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+                val interruptedSyncEngine = SyncEngine(
+                    db = afterInterruptedAcknowledgement,
+                    scope = interruptedEngineScope,
+                    outboxSafety = OutboxSafetyGate(
+                        afterInterruptedAcknowledgement,
+                        application.outboxOwnerStore,
+                        application.tokens,
+                    ),
+                    cacheIsolation = cacheIsolation,
+                    checkoutClientInstance = { report.installationId },
+                    scheduleDurableSync = {},
+                    gamingCleanupApi = interruptedApi,
+                    gamingCleanupProofTagProvider = { proofTag },
+                    afterGamingCleanupAcknowledgeResponse = {
+                        throw CancellationException("simulated process interruption")
+                    },
+                )
+                try {
+                    val interruption = runCatching {
+                        interruptedSyncEngine.acknowledgeCleanupRetirements(lease)
+                    }.exceptionOrNull()
+                    assertTrue(interruption is CancellationException)
+                    assertEquals(1, interruptedApi.acknowledgeCallCount)
+                    assertEquals(directive.id, interruptedApi.lastReconciliationId)
+                    assertEquals(report.installationId, interruptedApi.lastInstallationId)
+                    assertEquals(report.installationId, interruptedApi.lastBody?.installationId)
+                    assertEquals(
+                        directive.candidateSha256,
+                        interruptedApi.lastBody?.expectedCandidateSha256,
+                    )
+                    assertEquals(proofTag, interruptedApi.lastRequestScope)
+                    val stillPending = requireNotNull(
+                        afterInterruptedAcknowledgement.gamingDao()
+                            .localSessionById(report.localActionId),
+                    )
+                    assertNull(stillPending.cleanupAcknowledgedAtMillis)
+                    assertEquals(
+                        GamingCleanupWorkflowStatus.ACKNOWLEDGEMENT_PENDING.persistedMessage,
+                        stillPending.lastError,
+                    )
+                } finally {
+                    interruptedEngineScope.cancel()
+                }
+            } finally {
+                afterInterruptedAcknowledgement.close()
+            }
+
+            val afterResponseInterruption =
+                Room.databaseBuilder(context, ErpDatabase::class.java, databaseName).build()
+            try {
+                val retained = requireNotNull(
+                    afterResponseInterruption.gamingDao().cleanupRetiredSessions().single(),
+                )
+                assertEquals(directive.id, retained.cleanupReconciliationId)
+                assertEquals(directive.candidateSha256, retained.cleanupCandidateSha256)
+                assertNull(retained.cleanupAcknowledgedAtMillis)
+
+                // The next process retries the same idempotent receipt, commits
+                // the exact CAS once, then excludes the row from later sweeps.
+                val application = context.applicationContext as DCompanyApp
+                val cacheScope = CacheScope(
+                    userId = "cleanup-bridge-user",
+                    companyId = "cleanup-bridge-company",
+                    branchId = directive.branchId,
+                    terminalId = directive.terminalId,
+                )
+                val cacheIsolation = CacheIsolationCoordinator(
+                    purger = CleanScopeDataPurger(),
+                    marker = FixedCacheScopeMarker(cacheScope),
+                )
+                cacheIsolation.activateValidated(cacheScope)
+                val lease = requireNotNull(cacheIsolation.currentLease())
+                val retryApi = RecordingGamingCleanupDeviceApi(acknowledgement)
+                val proofTag = RemoteRequestScopeTag(
+                    RemoteAssistanceJournalScope(
+                        companyId = cacheScope.companyId,
+                        installationId = report.installationId,
+                        userId = cacheScope.userId,
+                    ),
+                )
+                val retryEngineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+                val retrySyncEngine = SyncEngine(
+                    db = afterResponseInterruption,
+                    scope = retryEngineScope,
+                    outboxSafety = OutboxSafetyGate(
+                        afterResponseInterruption,
+                        application.outboxOwnerStore,
+                        application.tokens,
+                    ),
+                    cacheIsolation = cacheIsolation,
+                    checkoutClientInstance = { report.installationId },
+                    scheduleDurableSync = {},
+                    gamingCleanupApi = retryApi,
+                    gamingCleanupProofTagProvider = { proofTag },
+                )
+                val acknowledgementStartedAt = System.currentTimeMillis()
+                try {
+                    retrySyncEngine.acknowledgeCleanupRetirements(lease)
+                    assertEquals(1, retryApi.acknowledgeCallCount)
+                    assertEquals(directive.id, retryApi.lastReconciliationId)
+                    assertEquals(report.installationId, retryApi.lastBody?.installationId)
+                    assertEquals(
+                        directive.candidateSha256,
+                        retryApi.lastBody?.expectedCandidateSha256,
+                    )
+                    val acknowledgedRow = requireNotNull(
+                        afterResponseInterruption.gamingDao()
+                            .localSessionById(report.localActionId),
+                    )
+                    assertTrue(
+                        requireNotNull(acknowledgedRow.cleanupAcknowledgedAtMillis) >=
+                            acknowledgementStartedAt,
+                    )
+                    assertNull(acknowledgedRow.lastError)
+
+                    retrySyncEngine.acknowledgeCleanupRetirements(lease)
+                    assertEquals(1, retryApi.acknowledgeCallCount)
+                } finally {
+                    retryEngineScope.cancel()
+                }
+                assertEquals(
+                    directive.localEvidenceRevision + 1,
+                    afterResponseInterruption.gamingDao()
+                        .localSessionById(report.localActionId)
+                        ?.cleanupEvidenceRevision,
+                )
+                assertNull(
+                    afterResponseInterruption.gamingDao()
+                        .localSessionById(report.localActionId)
+                        ?.lastError,
+                )
+            } finally {
+                afterResponseInterruption.close()
             }
 
             val afterAcknowledgement =
@@ -235,13 +536,69 @@ class GamingCleanupProtocolBridgeTest {
                     afterAcknowledgement.gamingDao().localSessionById(report.localActionId),
                 )
                 assertEquals(GamingSessionState.CLEANUP_RETIRED, terminal.state)
-                assertEquals(acknowledgedAtMillis, terminal.cleanupAcknowledgedAtMillis)
+                assertTrue(requireNotNull(terminal.cleanupAcknowledgedAtMillis) > 0L)
                 assertEquals(directive.localEvidenceRevision + 1, terminal.cleanupEvidenceRevision)
             } finally {
                 afterAcknowledgement.close()
             }
         } finally {
             context.deleteDatabase(databaseName)
+        }
+    }
+
+    private class RecordingGamingCleanupDeviceApi(
+        private val acknowledgement: GamingCleanupReconciliation,
+    ) : GamingCleanupDeviceApi {
+        var acknowledgeCallCount = 0
+            private set
+        var lastReconciliationId: String? = null
+            private set
+        var lastBody: GamingCleanupAcknowledgeBody? = null
+            private set
+        var lastInstallationId: String? = null
+            private set
+        var lastRequestScope: RemoteRequestScopeTag? = null
+            private set
+
+        override suspend fun reportCleanupCandidate(
+            body: GamingCleanupReportBody,
+            installationId: String,
+            requestScope: RemoteRequestScopeTag,
+        ): GamingCleanupReconciliation = error("The restart sweep must not report a new candidate")
+
+        override suspend fun acknowledgeCleanupCandidate(
+            id: String,
+            body: GamingCleanupAcknowledgeBody,
+            installationId: String,
+            requestScope: RemoteRequestScopeTag,
+        ): GamingCleanupReconciliation {
+            acknowledgeCallCount += 1
+            lastReconciliationId = id
+            lastBody = body
+            lastInstallationId = installationId
+            lastRequestScope = requestScope
+            return acknowledgement
+        }
+    }
+
+    private class CleanScopeDataPurger : ScopeDataPurger {
+        override suspend fun hasUnresolvedWork(): Boolean = false
+        override suspend fun purgeIfClean(): Boolean = true
+    }
+
+    private class FixedCacheScopeMarker(initial: CacheScope) : CacheScopeMarker {
+        private var stored: CacheScope? = initial
+
+        override fun current(): CacheScope? = stored
+
+        override fun remember(scope: CacheScope): Boolean {
+            stored = scope
+            return true
+        }
+
+        override fun clear(): Boolean {
+            stored = null
+            return true
         }
     }
 }

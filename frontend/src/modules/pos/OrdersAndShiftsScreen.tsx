@@ -26,7 +26,7 @@ import { profileMembershipMoneyLabel } from '@/lib/product-profile';
 import {
   orders, receipts, shifts,
   type OrderListItemDTO, type ReceiptHistoryDTO, type ShiftDTO,
-  type ShiftRecoveryCloseDTO,
+  type ShiftRecoveryCandidateDTO, type ShiftRecoveryCloseDTO,
 } from '@/lib/erp-api';
 import Modal from '@/components/ui/Modal';
 import { useNotifications } from '@/components/ui/Notifications';
@@ -54,6 +54,11 @@ import {
   type DirectOrderRecoveryFailure,
   type DirectOrderRecoveryPayload,
 } from './order-recovery-policy';
+import {
+  formatShiftBusinessDateTime,
+  formatShiftBusinessTime,
+  groupShiftsByBusinessDay,
+} from './shift-business-days';
 
 type Tab = 'orders' | 'shifts';
 
@@ -974,6 +979,19 @@ interface ShiftPermissionIdentity {
   effective_permissions?: string[];
 }
 
+export interface ShiftRecoveryTarget {
+  id: string;
+  opened_at: string;
+  opened_by: string;
+  opened_by_name: string | null;
+  opened_by_email?: string | null;
+}
+
+interface RecoveringShift {
+  shift: ShiftRecoveryTarget;
+  workspaceName: string;
+}
+
 /** HTTP responses are definitive; transport failures can hide a committed write. */
 export function isUnknownShiftMutationOutcome(error: unknown): boolean {
   const status = (error as { status?: unknown } | null)?.status;
@@ -989,6 +1007,15 @@ export function isUnknownShiftMutationOutcome(error: unknown): boolean {
   return true;
 }
 
+export function isShiftRecoveryAuthorizationRejection(error: unknown): boolean {
+  const status = (error as { status?: unknown } | null)?.status;
+  return status === 401 || status === 403;
+}
+
+export function recoveryFailureRequiresExactReplay(error: unknown): boolean {
+  return isUnknownShiftMutationOutcome(error);
+}
+
 /** Prefer the server's exact post-override permission; retain old-server compatibility. */
 export function canUseShiftPermission(
   identity: ShiftPermissionIdentity | null | undefined,
@@ -1002,7 +1029,7 @@ export function canUseShiftPermission(
   return identity.roles?.some((role) => LEGACY_SHIFT_OPERATOR_ROLES.has(role)) ?? false;
 }
 
-export function shiftOpenerLabel(shift: ShiftDTO): string {
+export function shiftOpenerLabel(shift: ShiftRecoveryTarget): string {
   return shift.opened_by_name?.trim()
     || shift.opened_by_email?.trim()
     || `Employee ${shift.opened_by.slice(0, 8)}`;
@@ -1033,12 +1060,39 @@ export function isAndroidOriginShift(shift: ShiftDTO): boolean {
     && shift.opening_client_platform === 'android';
 }
 
+export function canReviewAndroidShiftRecoveryCandidates(
+  identity: ShiftPermissionIdentity | null | undefined,
+): boolean {
+  return Boolean(
+    identity?.audit_access
+    && canUseShiftPermission(identity, 'pos.shift.close'),
+  );
+}
+
 /** This last-resort path is narrower than general protected operational access. */
 export function canRecoverAndroidShift(
   identity: ShiftPermissionIdentity | null | undefined,
   shift: ShiftDTO,
 ): boolean {
-  return Boolean(identity?.audit_access && isAndroidOriginShift(shift));
+  return canReviewAndroidShiftRecoveryCandidates(identity) && isAndroidOriginShift(shift);
+}
+
+export async function refreshShiftRecoverySurfaces(
+  refreshHistory: () => Promise<ShiftDTO[] | null>,
+  refreshCandidates: () => Promise<ShiftRecoveryCandidateDTO[] | null>,
+  includeCandidates: boolean,
+): Promise<{
+  history: ShiftDTO[] | null;
+  candidates: ShiftRecoveryCandidateDTO[] | null;
+}> {
+  if (!includeCandidates) {
+    return { history: await refreshHistory(), candidates: [] };
+  }
+  const [history, candidates] = await Promise.all([
+    refreshHistory(),
+    refreshCandidates(),
+  ]);
+  return { history, candidates };
 }
 
 /** Turn server/business-rule failures into a next action a new employee can follow. */
@@ -1190,6 +1244,118 @@ export function OpenShiftStatusPanel({
   );
 }
 
+export function AndroidShiftRecoveryCandidatesPanel({
+  authorized,
+  currentTerminalId,
+  candidates,
+  loading = false,
+  error = null,
+  recoveringShiftId = null,
+  onRecover,
+}: {
+  authorized: boolean;
+  currentTerminalId: string | null;
+  candidates: readonly ShiftRecoveryCandidateDTO[];
+  loading?: boolean;
+  error?: string | null;
+  recoveringShiftId?: string | null;
+  onRecover: (candidate: ShiftRecoveryCandidateDTO) => void;
+}) {
+  if (!authorized) return null;
+  const otherTerminalCandidates = candidates.filter(
+    (candidate) => candidate.terminal_id !== currentTerminalId,
+  );
+  if (!loading && !error && otherTerminalCandidates.length === 0) return null;
+
+  return (
+    <section
+      className="mb-4 rounded-2xl border border-accent-bad/45 bg-accent-bad/5 p-4"
+      aria-label="Other-terminal Android shift recovery"
+    >
+      <div className="flex items-start gap-2 text-accent-bad">
+        <ShieldCheck size={18} className="mt-0.5 shrink-0" aria-hidden="true"/>
+        <div>
+          <h3 className="font-semibold">Other-terminal Android shifts need review</h3>
+          <p className="mt-1 text-xs text-fg-muted">
+            Protected recovery only. These shifts belong to another register and do not become
+            this register&apos;s active shift or part of its business-day history.
+          </p>
+        </div>
+      </div>
+
+      {error && (
+        <div className="mt-3 rounded-xl border border-accent-bad/45 bg-accent-bad/10 p-3 text-sm text-accent-bad" role="alert">
+          {error}
+        </div>
+      )}
+      {loading && (
+        <p className="mt-3 inline-flex items-center gap-2 text-sm text-fg-muted" role="status">
+          <Loader2 size={14} className="animate-spin" aria-hidden="true"/>
+          Checking branch recovery candidates…
+        </p>
+      )}
+
+      {otherTerminalCandidates.length > 0 && (
+        <div className="mt-3 space-y-3">
+          {otherTerminalCandidates.map((candidate) => {
+            const opener = shiftOpenerLabel(candidate);
+            return (
+              <article
+                key={candidate.id}
+                className="rounded-xl border border-accent-bad/30 bg-bg-raised/45 p-3"
+              >
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="chip border-accent-bad/45 text-accent-bad">Other terminal</span>
+                      {!candidate.terminal_is_active && (
+                        <span className="chip border-accent-gold/45 text-accent-gold">Workspace inactive</span>
+                      )}
+                    </div>
+                    <p className="mt-2 font-semibold text-fg">{candidate.terminal_name}</p>
+                    <p className="mt-1 text-sm text-fg-muted">
+                      Opened by <strong className="text-fg">{opener}</strong> at{' '}
+                      <strong className="text-fg">{formatShiftBusinessDateTime(candidate.opened_at)}</strong>
+                    </p>
+                    <p className="mt-1 break-all text-xs text-fg-muted">
+                      Workspace {candidate.terminal_name} · Source Android app
+                      {candidate.opening_client_installation_recorded
+                        ? ' · Installation identity recorded'
+                        : ' · Installation identity not recorded'}
+                      {candidate.terminal_device_id
+                        ? ` · Registered device ${candidate.terminal_device_id}`
+                        : ' · Registered device identity not recorded'}
+                    </p>
+                    <p className="mt-2 text-xs font-medium text-accent-bad">
+                      This is another terminal&apos;s shift. Isolate its originating tablet before recovery.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-ghost shrink-0 border border-accent-bad/45 text-accent-bad"
+                    onClick={() => onRecover(candidate)}
+                    disabled={Boolean(error) || recoveringShiftId !== null}
+                    aria-label={`Recover other-terminal Android shift on ${candidate.terminal_name} opened by ${opener}`}
+                  >
+                    {recoveringShiftId === candidate.id
+                      ? <Loader2 className="animate-spin" size={14}/>
+                      : <ShieldCheck size={14}/>}
+                    Recover Android shift
+                  </button>
+                </div>
+                <div className="mt-3 grid grid-cols-2 gap-3 border-t border-bg-border/60 pt-3">
+                  <Stat label="Opening float" value={inr(candidate.opening_float_minor)}/>
+                  <Stat label="Expected cash" value={inr(candidate.expected_minor)}/>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+}
+
 export function ExistingShiftFeedback({
   shift,
   workspaceName,
@@ -1219,16 +1385,22 @@ function ShiftsTab() {
   const { me, terminalId, terminalReady, terminalOptions } = useAuth();
   const notifications = useNotifications();
   const [rows, setRows] = useState<ShiftDTO[]>([]);
+  const [recoveryCandidates, setRecoveryCandidates] = useState<ShiftRecoveryCandidateDTO[]>([]);
+  const [recoveryCandidatesLoading, setRecoveryCandidatesLoading] = useState(false);
+  const [recoveryCandidatesError, setRecoveryCandidatesError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [closing, setClosing] = useState<ShiftDTO | null>(null);
-  const [recovering, setRecovering] = useState<ShiftDTO | null>(null);
+  const [recovering, setRecovering] = useState<RecoveringShift | null>(null);
   const [opening, setOpening] = useState(false);
   const requestSequence = useRef(0);
+  const recoveryCandidateSequence = useRef(0);
   const initialLoadComplete = useRef(false);
+  const recoveryCandidateInitialLoadComplete = useRef(false);
   const canOpenShift = canUseShiftPermission(me, 'pos.shift.open');
   const canCloseShift = canUseShiftPermission(me, 'pos.shift.close');
+  const canReviewRecoveryCandidates = canReviewAndroidShiftRecoveryCandidates(me);
 
   const load = useCallback(async (showRefreshProgress = false): Promise<ShiftDTO[] | null> => {
     const sequence = ++requestSequence.current;
@@ -1255,20 +1427,91 @@ function ShiftsTab() {
       if (sequence === requestSequence.current) {
         initialLoadComplete.current = true;
         setLoading(false);
-        setRefreshing(false);
+        if (showRefreshProgress) setRefreshing(false);
       }
     }
   }, [terminalId, terminalReady]);
-  useEffect(() => { void load(false); }, [load]);
+
+  const loadRecoveryCandidates = useCallback(async (): Promise<ShiftRecoveryCandidateDTO[] | null> => {
+    const sequence = ++recoveryCandidateSequence.current;
+    if (!canReviewRecoveryCandidates) {
+      setRecoveryCandidates([]);
+      setRecoveryCandidatesError(null);
+      setRecoveryCandidatesLoading(false);
+      recoveryCandidateInitialLoadComplete.current = false;
+      return [];
+    }
+    if (!LIVE_MODE || !terminalReady || !terminalId) {
+      setRecoveryCandidates([]);
+      setRecoveryCandidatesLoading(false);
+      return [];
+    }
+    if (!recoveryCandidateInitialLoadComplete.current) setRecoveryCandidatesLoading(true);
+    try {
+      const nextCandidates = await shifts.listRecoveryCandidates();
+      if (sequence === recoveryCandidateSequence.current) {
+        setRecoveryCandidates(nextCandidates);
+        setRecoveryCandidatesError(null);
+      }
+      return nextCandidates;
+    } catch (error) {
+      if (sequence === recoveryCandidateSequence.current) {
+        const authorizationRejected = isShiftRecoveryAuthorizationRejection(error);
+        if (authorizationRejected) {
+          setRecoveryCandidates([]);
+          setRecovering(null);
+        }
+        const detail = error instanceof Error && error.message.trim()
+          ? ` ${error.message.trim()}`
+          : '';
+        setRecoveryCandidatesError(
+          authorizationRejected
+            ? 'Android shift recovery access is no longer available. Protected candidates and any open recovery were cleared.'
+            : `Other-terminal Android shift recovery candidates could not be refreshed.${detail} Retry Refresh before attempting recovery.`,
+        );
+      }
+      return null;
+    } finally {
+      if (sequence === recoveryCandidateSequence.current) {
+        recoveryCandidateInitialLoadComplete.current = true;
+        setRecoveryCandidatesLoading(false);
+      }
+    }
+  }, [canReviewRecoveryCandidates, terminalId, terminalReady]);
+
+  const refreshShiftSurfaces = useCallback(() => refreshShiftRecoverySurfaces(
+    () => load(false),
+    loadRecoveryCandidates,
+    canReviewRecoveryCandidates,
+  ), [canReviewRecoveryCandidates, load, loadRecoveryCandidates]);
+
+  useEffect(() => {
+    if (canReviewRecoveryCandidates) return;
+    // A logout or role switch must discard previously fetched protected data
+    // and invalidate any response that was already in flight.
+    recoveryCandidateSequence.current += 1;
+    recoveryCandidateInitialLoadComplete.current = false;
+    setRecoveryCandidates([]);
+    setRecoveryCandidatesError(null);
+    setRecoveryCandidatesLoading(false);
+    setRecovering(null);
+  }, [canReviewRecoveryCandidates]);
+
+  useEffect(() => { void refreshShiftSurfaces(); }, [refreshShiftSurfaces]);
 
   const refreshManually = useCallback(async () => {
-    const refreshed = await load(true);
-    if (refreshed) {
-      notifications.success('The latest opener, totals and shift status are now shown.', {
+    setRefreshing(true);
+    const refreshed = await refreshShiftSurfaces();
+    setRefreshing(false);
+    if (
+      refreshed.history
+      && (!canReviewRecoveryCandidates || refreshed.candidates)
+    ) {
+      notifications.success('The latest opener, totals, shift status and recovery candidates are now shown.', {
         title: 'Shift information updated',
       });
     }
-  }, [load, notifications]);
+  }, [canReviewRecoveryCandidates, notifications, refreshShiftSurfaces]);
 
   // Whether a shift is open, and who has it open, is shared across every
   // device on this terminal. Real-time push means a shift opened elsewhere
@@ -1278,11 +1521,11 @@ function ShiftsTab() {
   // safety net for a missed push.
   useEffect(() => {
     if (!LIVE_MODE || !terminalReady || !terminalId) return;
-    const refresh = () => { void load(false); };
+    const refresh = () => { void refreshShiftSurfaces(); };
     const unsubscribe = subscribeRealtime('shifts', refresh);
     const id = setInterval(refresh, OPERATIONS_POLL_MS);
     return () => { unsubscribe(); clearInterval(id); };
-  }, [load, terminalReady, terminalId]);
+  }, [refreshShiftSurfaces, terminalReady, terminalId]);
 
   if (!LIVE_MODE) return <div className="card text-fg-muted text-sm">Shift management is live-mode only.</div>;
   if (loading) return <SkeletonCard />;
@@ -1316,12 +1559,17 @@ function ShiftsTab() {
     const refreshedRows = await load(false);
     return refreshedRows?.find((shift) => shift.id === shiftId) ?? null;
   };
+  const refreshAfterRecoveryFailure = async (): Promise<void> => {
+    await refreshShiftSurfaces();
+  };
+  const businessDays = groupShiftsByBusinessDay(rows);
 
   return (
     <div>
       <div className="flex justify-between items-center mb-3 flex-wrap gap-2">
         <p className="text-sm text-fg-muted">
-          {rows.length} shift{rows.length === 1 ? '' : 's'} ·{' '}
+          {businessDays.length} business day{businessDays.length === 1 ? '' : 's'} ·{' '}
+          {rows.length} shift record{rows.length === 1 ? '' : 's'} ·{' '}
           {openShift
             ? <span className="text-accent-good">Open shift active</span>
             : <span>No shift currently open</span>}
@@ -1345,6 +1593,14 @@ function ShiftsTab() {
         </div>
       </div>
 
+      {rows.length >= 200 && (
+        <div
+          className="mb-3 rounded-xl border border-accent-gold/35 bg-accent-gold/10 p-3 text-xs text-accent-gold"
+          role="status"
+        >
+          Showing the latest 200 shift records. Older records are still preserved, but the oldest business day shown here may be incomplete.
+        </div>
+      )}
       {err && <div className="card border-accent-bad/40 bg-accent-bad/10 text-accent-bad text-sm mb-3 flex items-center gap-2">
         <AlertCircle size={14}/> {err}
       </div>}
@@ -1358,6 +1614,19 @@ function ShiftsTab() {
         </div>
       )}
 
+      <AndroidShiftRecoveryCandidatesPanel
+        authorized={canReviewRecoveryCandidates}
+        currentTerminalId={terminalId}
+        candidates={recoveryCandidates}
+        loading={recoveryCandidatesLoading}
+        error={recoveryCandidatesError}
+        recoveringShiftId={recovering?.shift.id ?? null}
+        onRecover={(candidate) => setRecovering({
+          shift: candidate,
+          workspaceName: candidate.terminal_name,
+        })}
+      />
+
       {openShift && (
         <OpenShiftStatusPanel
           shift={openShift}
@@ -1365,9 +1634,12 @@ function ShiftsTab() {
           currentUserId={me?.user_id}
           canClose={canCloseShift}
           canRecover={canRecoverAndroidShift(me, openShift)}
-          closing={closing?.id === openShift.id || recovering?.id === openShift.id}
+          closing={closing?.id === openShift.id || recovering?.shift.id === openShift.id}
           onClose={() => setClosing(openShift)}
-          onRecover={() => setRecovering(openShift)}
+          onRecover={() => setRecovering({
+            shift: openShift,
+            workspaceName: shiftWorkspaceLabel(openShift, terminalOptions),
+          })}
         />
       )}
 
@@ -1377,94 +1649,164 @@ function ShiftsTab() {
         </div>
       ) : (
         <div className="space-y-3">
-          {rows.map((s) => {
+          {businessDays.map((day) => {
             const legacyRevenueLabel = profileMembershipMoneyLabel(
               'revenue',
-              s.membership_sales_minor ?? 0,
-            );
-            const legacyRefundLabel = profileMembershipMoneyLabel(
-              'refund',
-              s.settled_membership_refunds_minor ?? 0,
+              day.membershipCollectionsMinor,
             );
             return (
-            <div key={s.id} className="card">
+            <section key={day.businessDate} className="card" aria-label={`Business day ${day.dateLabel}`}>
               <div className="flex justify-between items-start gap-3 flex-wrap">
                 <div>
                   <div className="font-bold flex items-center gap-2">
-                    {s.status === 'open'
+                    {day.hasOpenShift
                       ? <span className="chip border-accent-good/40 text-accent-good">Open</span>
-                      : <span className="chip border-fg-muted/40 text-fg-muted">Closed</span>}
-                    {new Date(s.opened_at).toLocaleString('en-IN')}
+                      : day.hasIncompleteClose
+                        ? <span className="chip border-accent-gold/40 text-accent-gold">Needs review</span>
+                        : <span className="chip border-fg-muted/40 text-fg-muted">Closed</span>}
+                    {day.dateLabel}
                   </div>
-                  <div className="text-xs text-fg-muted">
-                    Opened by <span className="text-fg font-medium">
-                      {shiftOpenerLabel(s)}
-                      {s.opened_by_email ? ` · ${s.opened_by_email}` : ''}
-                    </span>
-                  </div>
-                  <div className="text-xs text-fg-muted">
-                    Workspace <span className="text-fg font-medium">{shiftWorkspaceLabel(s, terminalOptions)}</span>
-                  </div>
-                  {s.closed_at && (
-                    <div className="text-xs text-fg-muted">
-                      Closed {new Date(s.closed_at).toLocaleString('en-IN')} by{' '}
-                      <span className="text-fg font-medium">{shiftCloserLabel(s)}</span>
-                    </div>
-                  )}
+                  <p className="mt-1 text-xs text-fg-muted">
+                    First opened <strong className="text-fg">{formatShiftBusinessDateTime(day.firstOpenedAt)}</strong>
+                    {' '}by <strong className="text-fg">{shiftOpenerLabel(day.firstShift)}</strong>
+                  </p>
+                  <p className="text-xs text-fg-muted">
+                    {day.hasOpenShift
+                      ? <span className="text-accent-good">Still open</span>
+                      : day.hasIncompleteClose
+                        ? <span className="text-accent-gold">Needs review · close time missing</span>
+                        : day.finalClosedAt
+                      ? <>
+                          Final close <strong className="text-fg">{formatShiftBusinessDateTime(day.finalClosedAt)}</strong>
+                          {' '}by <strong className="text-fg">{shiftCloserLabel(day.finalShift)}</strong>
+                        </>
+                      : <span className="text-accent-gold">Needs review · close time unavailable</span>}
+                  </p>
                 </div>
-                {s.status === 'open' && canCloseShift && !isAndroidOriginShift(s) && (
-                  <button
-                    type="button"
-                    className="btn btn-primary"
-                    onClick={() => setClosing(s)}
-                    disabled={Boolean(closing)}
-                    aria-label={`Close shift opened by ${shiftOpenerLabel(s)}`}
-                  >
-                    <Lock size={14}/> Close shift
-                  </button>
-                )}
-                {canRecoverAndroidShift(me, s) && (
-                  <button
-                    type="button"
-                    className="btn btn-ghost border border-accent-bad/45 text-accent-bad"
-                    onClick={() => setRecovering(s)}
-                    disabled={Boolean(closing || recovering)}
-                    aria-label={`Recover Android shift opened by ${shiftOpenerLabel(s)}`}
-                  >
-                    <ShieldCheck size={14}/> Recover Android shift
-                  </button>
-                )}
+                <span className="chip border-accent-gold/35 text-accent-gold">
+                  {day.shifts.length} shift record{day.shifts.length === 1 ? '' : 's'}
+                </span>
               </div>
 
               <div className="grid grid-cols-3 gap-3 mt-3 pt-3 border-t border-bg-border/60">
-                <Stat label="POS collections" value={inr(s.pos_sales_minor ?? 0)}/>
+                <Stat label="POS collections" value={inr(day.posCollectionsMinor)}/>
                 {legacyRevenueLabel && (
-                  <Stat label={legacyRevenueLabel} value={inr(s.membership_sales_minor ?? 0)}/>
+                  <Stat label={legacyRevenueLabel} value={inr(day.membershipCollectionsMinor)}/>
                 )}
-                <Stat label="Gross collections" value={inr(s.gross_collections_minor ?? 0)}/>
+                <Stat label="Gross collections" value={inr(day.grossCollectionsMinor)}/>
               </div>
               <p className="mt-1 text-[10px] text-fg-muted">
-                Payment receipts before refunds; opening float is excluded.
+                Combined once for this business day. Payment receipts before refunds; opening float is excluded.
               </p>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3 pt-3 border-t border-bg-border/60">
-                <Stat label="POS refunds" value={inr(s.settled_pos_refunds_minor ?? 0)}/>
-                {legacyRefundLabel && (
-                  <Stat label={legacyRefundLabel} value={inr(s.settled_membership_refunds_minor ?? 0)}/>
+              <div className="grid grid-cols-2 gap-3 mt-3 pt-3 border-t border-bg-border/60">
+                <Stat label="Total refunds" value={inr(day.totalRefundsMinor)}/>
+                <Stat label="Net collections" value={inr(day.netCollectionsMinor)} tone="good"/>
+              </div>
+
+              <details className="mt-3 border-t border-bg-border/60 pt-3">
+                <summary className="cursor-pointer text-sm font-medium text-accent-gold">
+                  Review {day.shifts.length} shift record{day.shifts.length === 1 ? '' : 's'} and drawer count{day.shifts.length === 1 ? '' : 's'}
+                </summary>
+                {day.shifts.length > 1 && (
+                  <p className="mt-2 text-xs text-fg-muted">
+                    Staff closed and reopened the drawer during this day. The records stay separate for audit, while the collection above counts the full day once.
+                  </p>
                 )}
-                <Stat label="Total refunds" value={inr(s.total_refunds_minor ?? 0)}/>
-                <Stat label="Net collections" value={inr(s.net_collections_minor ?? 0)} tone="good"/>
-              </div>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3 pt-3 border-t border-bg-border/60">
-                <Stat label="Opening float" value={inr(s.opening_float_minor)}/>
-                <Stat label="Expected cash" value={s.expected_minor != null ? inr(s.expected_minor) : '—'}/>
-                <Stat label="Counted cash"  value={s.counted_minor != null ? inr(s.counted_minor) : '—'}/>
-                <Stat label="Variance"
-                  value={s.variance_minor != null ? inr(s.variance_minor) : '—'}
-                  tone={s.variance_minor == null ? 'default' :
-                        s.variance_minor === 0 ? 'good' :
-                        Math.abs(s.variance_minor) < 5000 ? 'gold' : 'bad'}/>
-              </div>
-            </div>
+                <div className="mt-3 space-y-3">
+                  {day.shifts.map((s) => {
+                    const shiftLegacyRevenueLabel = profileMembershipMoneyLabel(
+                      'revenue',
+                      s.membership_sales_minor ?? 0,
+                    );
+                    const shiftLegacyRefundLabel = profileMembershipMoneyLabel(
+                      'refund',
+                      s.settled_membership_refunds_minor ?? 0,
+                    );
+                    return (
+                    <div key={s.id} className="rounded-xl border border-bg-border/70 bg-bg/30 p-3">
+                      <div className="flex justify-between items-start gap-3 flex-wrap">
+                        <div>
+                          <p className="font-semibold">
+                            {formatShiftBusinessTime(s.opened_at)}
+                            {' → '}
+                            {s.closed_at
+                              ? formatShiftBusinessTime(s.closed_at)
+                              : s.status === 'open'
+                                ? 'Open'
+                                : 'Needs review · close time missing'}
+                          </p>
+                          <p className="text-xs text-fg-muted">
+                            Opened by <span className="text-fg font-medium">{shiftOpenerLabel(s)}</span>
+                            {s.closed_at && <>
+                              {' · '}Closed by <span className="text-fg font-medium">{shiftCloserLabel(s)}</span>
+                            </>}
+                          </p>
+                          <p className="text-xs text-fg-muted">
+                            Workspace <span className="text-fg font-medium">{shiftWorkspaceLabel(s, terminalOptions)}</span>
+                          </p>
+                          {s.status !== 'open' && !s.closed_at && (
+                            <p className="mt-1 text-xs text-accent-gold">
+                              Saved status is closed, but its close time is missing. Review this historical record; it is not an open shift.
+                            </p>
+                          )}
+                        </div>
+                        {s.status === 'open' && canCloseShift && !isAndroidOriginShift(s) && (
+                          <button
+                            type="button"
+                            className="btn btn-primary"
+                            onClick={() => setClosing(s)}
+                            disabled={Boolean(closing)}
+                            aria-label={`Close shift opened by ${shiftOpenerLabel(s)}`}
+                          >
+                            <Lock size={14}/> Close shift
+                          </button>
+                        )}
+                        {canRecoverAndroidShift(me, s) && (
+                          <button
+                            type="button"
+                            className="btn btn-ghost border border-accent-bad/45 text-accent-bad"
+                            onClick={() => setRecovering({
+                              shift: s,
+                              workspaceName: shiftWorkspaceLabel(s, terminalOptions),
+                            })}
+                            disabled={Boolean(closing || recovering)}
+                            aria-label={`Recover Android shift opened by ${shiftOpenerLabel(s)}`}
+                          >
+                            <ShieldCheck size={14}/> Recover Android shift
+                          </button>
+                        )}
+                      </div>
+                      <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mt-3 pt-3 border-t border-bg-border/60">
+                        <Stat label="POS collections" value={inr(s.pos_sales_minor ?? 0)}/>
+                        {shiftLegacyRevenueLabel && (
+                          <Stat label={shiftLegacyRevenueLabel} value={inr(s.membership_sales_minor ?? 0)}/>
+                        )}
+                        <Stat label="Gross collections" value={inr(s.gross_collections_minor ?? 0)}/>
+                      </div>
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3 pt-3 border-t border-bg-border/60">
+                        <Stat label="POS refunds" value={inr(s.settled_pos_refunds_minor ?? 0)}/>
+                        {shiftLegacyRefundLabel && (
+                          <Stat label={shiftLegacyRefundLabel} value={inr(s.settled_membership_refunds_minor ?? 0)}/>
+                        )}
+                        <Stat label="Total refunds" value={inr(s.total_refunds_minor ?? 0)}/>
+                        <Stat label="Net collections" value={inr(s.net_collections_minor ?? 0)} tone="good"/>
+                      </div>
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3 pt-3 border-t border-bg-border/60">
+                        <Stat label="Opening float" value={inr(s.opening_float_minor)}/>
+                        <Stat label="Expected cash" value={s.expected_minor != null ? inr(s.expected_minor) : '—'}/>
+                        <Stat label="Counted cash" value={s.counted_minor != null ? inr(s.counted_minor) : '—'}/>
+                        <Stat label="Variance"
+                          value={s.variance_minor != null ? inr(s.variance_minor) : '—'}
+                          tone={s.variance_minor == null ? 'default' :
+                                s.variance_minor === 0 ? 'good' :
+                                Math.abs(s.variance_minor) < 5000 ? 'gold' : 'bad'}/>
+                      </div>
+                    </div>
+                    );
+                  })}
+                </div>
+              </details>
+            </section>
             );
           })}
         </div>
@@ -1492,13 +1834,13 @@ function ShiftsTab() {
       )}
       {recovering && (
         <RecoverAndroidShiftForm
-          shift={recovering}
+          shift={recovering.shift}
           currentUserId={me?.user_id}
           currentStaffName={me?.name || me?.email || 'Protected audit owner'}
-          workspaceName={shiftWorkspaceLabel(recovering, terminalOptions)}
+          workspaceName={recovering.workspaceName}
           onClose={() => setRecovering(null)}
-          onSuccess={() => { setRecovering(null); void load(false); }}
-          onError={() => refreshAfterCloseFailure(recovering.id)}
+          onSuccess={() => { setRecovering(null); void refreshShiftSurfaces(); }}
+          onError={refreshAfterRecoveryFailure}
         />
       )}
     </div>
@@ -1911,13 +2253,13 @@ export function RecoverAndroidShiftForm({
   onSuccess,
   onError,
 }: {
-  shift: ShiftDTO;
+  shift: ShiftRecoveryTarget;
   currentUserId: string | undefined;
   currentStaffName: string;
   workspaceName: string;
   onClose: () => void;
   onSuccess: () => void;
-  onError: () => Promise<ShiftDTO | null>;
+  onError: () => Promise<void>;
 }) {
   const notifications = useNotifications();
   const [counted, setCounted] = useState('');
@@ -2003,31 +2345,19 @@ export function RecoverAndroidShiftForm({
         { title: 'Android shift recovered' },
       );
     } catch (error) {
-      const refreshedShift = await onError();
-      if (
-        refreshedShift?.status === 'closed'
-        && refreshedShift.counted_minor === attempt.payload.counted_minor
-      ) {
-        intent.confirmSuccess(attempt);
-        setAmbiguousPayload(null);
-        setResult({
-          variance_minor: refreshedShift.variance_minor ?? 0,
-          closed_by: refreshedShift.closed_by,
-          closed_by_name: refreshedShift.closed_by_name,
-        });
-        notifications.success(
-          'The response was interrupted, but a refresh confirmed the protected recovery with the same cash count.',
-          { title: 'Android shift recovery confirmed' },
-        );
-      } else {
-        const unknown = isUnknownShiftMutationOutcome(error);
-        if (unknown) setAmbiguousPayload(attempt.payload);
-        const message = shiftActionErrorMessage(error, 'recovery-close');
-        setErr(message);
-        notifications.error(message, {
-          title: unknown ? 'Recovery needs confirmation' : 'Recovery was blocked',
-        });
-      }
+      // A generic ShiftRead row cannot prove which close path won a race. An
+      // ordinary Android close can have the same cash count without recording
+      // this protected reason and quarantine attestation. Refresh the surfaces,
+      // but confirm recovery only from this endpoint's idempotent response.
+      await onError();
+      const requiresExactReplay = recoveryFailureRequiresExactReplay(error);
+      if (requiresExactReplay) setAmbiguousPayload(attempt.payload);
+      else setAmbiguousPayload(null);
+      const message = shiftActionErrorMessage(error, 'recovery-close');
+      setErr(message);
+      notifications.error(message, {
+        title: requiresExactReplay ? 'Recovery needs confirmation' : 'Recovery was blocked',
+      });
     } finally {
       submissionInFlight.current = false;
       setBusy(false);

@@ -99,6 +99,8 @@ BUILD_SNAPSHOT_ROOT=/var/lib/dcompany-erp/build-snapshots
 SECURITY_EVIDENCE_ROOT=/var/lib/dcompany-erp/container-security
 SYFT_IMAGE='anchore/syft:v1.42.3@sha256:5999d209a342e55e9edf70bf8930fb5b86d8f2a783fa401178372c50e21b1d36'
 GRYPE_IMAGE='anchore/grype:v0.118.0@sha256:8a93fc48da96bd6ec5981279d099b69de11541dc68fdf222fb9161f8ff284af7'
+# Root tar otherwise preserves archive mode bits instead of applying this mask;
+# every Git-archive extraction below therefore uses --no-same-permissions.
 umask 077
 # Bash redirections cannot request O_NOFOLLOW. A small reviewed bootstrap opens
 # /run and the lock dir relative to verified descriptors, opens the file with
@@ -154,7 +156,8 @@ if [ -z "$CANDIDATE_BUILD_ROOT" ]; then
   CANDIDATE_SOURCE_ARCHIVE_SHA256=$(sha256sum "$CANDIDATE_SOURCE_ARCHIVE" \
     | awk '{print $1}')
   tar -tf "$CANDIDATE_SOURCE_ARCHIVE" >/dev/null
-  tar -xf "$CANDIDATE_SOURCE_ARCHIVE" -C "$CANDIDATE_BUILD_ROOT"
+  tar --no-same-permissions -xf "$CANDIDATE_SOURCE_ARCHIVE" \
+    -C "$CANDIDATE_BUILD_ROOT"
   rm -f "$CANDIDATE_SOURCE_ARCHIVE"
   test ! -e "$CANDIDATE_BUILD_ROOT/.git"
   test -f "$CANDIDATE_BUILD_ROOT/infra/scripts/install-on-vm.sh"
@@ -182,17 +185,37 @@ EMULATOR_QUARANTINE_VERIFIER="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-code30-
 EMULATOR_QUARANTINE_EVIDENCE="$CANDIDATE_BUILD_ROOT/releases/evidence/code30-2-emulator-quarantine.json"
 POST_CLEANUP_STATE_VERIFIER="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-code30-2-post-cleanup-state.py"
 POST_CLEANUP_STATE_SQL="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-code30-2-post-cleanup-state.sql"
+BUSINESS_QUIESCENCE_VERIFIER="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-production-business-quiescence.py"
+BUSINESS_QUIESCENCE_SQL="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-production-business-quiescence.sql"
 CLEANUP_RUNNER="$REPO_DIR/infra/scripts/cleanup-code30-production-trial-data.sh"
 for release_input in \
   "$RELEASE_COMPOSE_FILE" "$CANDIDATE_PARITY_TOOL" \
   "$PREPARE_ENV_TOOL" "$CAPACITY_CHECK_TOOL" "$HARDENED_SCANNER_TOOL" \
   "$EMULATOR_QUARANTINE_VERIFIER" "$EMULATOR_QUARANTINE_EVIDENCE" \
-  "$POST_CLEANUP_STATE_VERIFIER" "$POST_CLEANUP_STATE_SQL"; do
+  "$POST_CLEANUP_STATE_VERIFIER" "$POST_CLEANUP_STATE_SQL" \
+  "$BUSINESS_QUIESCENCE_VERIFIER" "$BUSINESS_QUIESCENCE_SQL"; do
   if [ ! -f "$release_input" ] || [ -L "$release_input" ]; then
     echo "Frozen production release snapshot is incomplete or linked." >&2
     exit 1
   fi
 done
+
+verify_production_business_quiescence() {
+  local phase=$1
+  local evidence
+  if ! evidence=$(docker exec -i "$EXISTING_POSTGRES_CONTAINER" \
+    psql -X --no-psqlrc --quiet -U erp -d erp --tuples-only --no-align \
+    < "$BUSINESS_QUIESCENCE_SQL"); then
+    echo "Cannot read production business state ($phase); refusing migration." >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$evidence" \
+    | python3 "$BUSINESS_QUIESCENCE_VERIFIER" --quiet; then
+    echo "Production business state is not quiescent ($phase); refusing migration." >&2
+    return 1
+  fi
+  echo "==> Production business state is quiescent ($phase)."
+}
 if [ -f .env ] && [ "$MAINTENANCE_CONFIRMED" != true ]; then
   echo "Upgrade requires a scheduled write outage." >&2
   echo "Stop staff activity, sync every tablet outbox, then rerun with --maintenance-confirmed." >&2
@@ -438,7 +461,8 @@ if [ -f .env ]; then
   fi
   PRIOR_SOURCE_ARCHIVE_SHA256=$(sha256sum "$PRIOR_SOURCE_ARCHIVE" | awk '{print $1}')
   tar -tf "$PRIOR_SOURCE_ARCHIVE" >/dev/null
-  tar -xf "$PRIOR_SOURCE_ARCHIVE" -C "$PRIOR_SOURCE_ROOT"
+  tar --no-same-permissions -xf "$PRIOR_SOURCE_ARCHIVE" \
+    -C "$PRIOR_SOURCE_ROOT"
   chmod 400 "$PRIOR_SOURCE_ARCHIVE"
   if [ ! -f "$PRIOR_SOURCE_ROOT/docker-compose.prod.yml" ] || \
      [ -L "$PRIOR_SOURCE_ROOT/docker-compose.prod.yml" ]; then
@@ -729,7 +753,8 @@ handle_install_failure() {
       if [ -e "$PRIOR_RUNTIME_SOURCE_ROOT" ] || \
          ! mkdir -m 0700 "$PRIOR_RUNTIME_SOURCE_ROOT" || \
          ! tar -tf "$UPGRADE_SNAPSHOT/prior-source.tar" >/dev/null || \
-         ! tar -xf "$UPGRADE_SNAPSHOT/prior-source.tar" \
+         ! tar --no-same-permissions -xf \
+           "$UPGRADE_SNAPSHOT/prior-source.tar" \
            -C "$PRIOR_RUNTIME_SOURCE_ROOT" || \
          [ ! -f "$PRIOR_RUNTIME_SOURCE_ROOT/docker-compose.prod.yml" ] || \
          [ -L "$PRIOR_RUNTIME_SOURCE_ROOT/docker-compose.prod.yml" ]; then
@@ -1130,11 +1155,15 @@ if [ -n "$EXISTING_POSTGRES_CONTAINER" ]; then
     echo "Existing Postgres is not running; recover it and take a backup before upgrade." >&2
     exit 1
   fi
+  verify_production_business_quiescence "before maintenance"
   echo "==> Entering scheduled maintenance and draining application writers…"
   MAINTENANCE_ACTIVE=true
   "${candidate_compose[@]}" --env-file .env stop -t 30 caddy
   "${candidate_compose[@]}" --env-file .env stop -t 60 backend
   "${candidate_compose[@]}" --env-file .env stop -t 30 frontend
+  # Re-read from a new database snapshot after every application writer has
+  # stopped. This closes the race between the live preflight and maintenance.
+  verify_production_business_quiescence "after writer stop"
   pending_outbox_count=$(docker exec "$EXISTING_POSTGRES_CONTAINER" \
     psql -U erp -d erp -Atc \
     "SELECT COALESCE(SUM(pending_outbox_count), 0) FROM client_installations")

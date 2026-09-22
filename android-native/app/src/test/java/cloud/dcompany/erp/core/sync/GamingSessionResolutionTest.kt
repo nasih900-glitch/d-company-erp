@@ -56,6 +56,26 @@ class GamingSessionResolutionTest {
     }
 
     @Test
+    fun `cleanup action hashes require exact lowercase sha256 encoding`() {
+        assertEquals(
+            true,
+            gamingCleanupActionHashesAreCanonical("a".repeat(64), "0".repeat(64)),
+        )
+        assertEquals(
+            false,
+            gamingCleanupActionHashesAreCanonical("a".repeat(63), "0".repeat(64)),
+        )
+        assertEquals(
+            false,
+            gamingCleanupActionHashesAreCanonical("A".repeat(64), "0".repeat(64)),
+        )
+        assertEquals(
+            false,
+            gamingCleanupActionHashesAreCanonical("a".repeat(64), "g".repeat(64)),
+        )
+    }
+
+    @Test
     fun `start and stop request hashes use exact ApiClient JSON order and defaults`() {
         val snapshot = GamingCleanupLocalSnapshot(
             shiftId = "77777777-7777-4777-8777-777777777777",

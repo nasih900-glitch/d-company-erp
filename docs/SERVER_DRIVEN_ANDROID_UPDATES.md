@@ -48,7 +48,7 @@ signer, and APK bytes. All earlier release identities and candidate ledgers also
 remain immutable history.
 
 Code30.3 is the `v3.1.30` / version code `38` source candidate at Room schema
-`52` and Alembic head `0079`. A local build, emulator run, version bump, or green
+`52` and Alembic head `0081`. A local build, emulator run, version bump, or green
 source suite does not make it signed, deployed, staged, active, offered, or
 partner-installable. Its complete scope and gates are in
 [`CODE30_3_PATCH_CANDIDATE.md`](CODE30_3_PATCH_CANDIDATE.md); immutable Code30.2
@@ -56,9 +56,10 @@ evidence remains in
 [`CODE30_2_PATCH_CANDIDATE.md`](CODE30_2_PATCH_CANDIDATE.md).
 
 The candidate preserves Code30.2 finance, receipt and Sheet behavior and adds
-owner-reviewed recovery of an exact stale Gaming overlay. The build-38 tablet
-must reconnect, apply the matching directive and acknowledge it. Web cannot
-rewrite an offline Room database and provides no broad clear-all.
+owner-reviewed recovery of an exact stale Gaming overlay, atomic split tender,
+Web station-transfer parity, and business-day shift timing. The build-38 tablet
+must reconnect, apply a matching cleanup directive and acknowledge it. Web
+cannot rewrite an offline Room database and provides no broad clear-all.
 
 Only the exact APK and release manifest produced together by a green protected
 `v3.1.30` workflow may advance. Verify the package, version, build, source,
@@ -129,7 +130,7 @@ responses and network uncertainty remain blocked. The APK itself must return:
    approval, supersession, tablet apply/acknowledgement, lost-ack retry and the
    inherited shift/Gaming/POS/finance regression flows.
 2. Coordinate the source at `3.1.30` / code `38`, Room `52`, and migration
-   `0079`. Build and sign only through the protected tagged release workflow.
+   `0081`. Build and sign only through the protected tagged release workflow.
 3. Download the direct APK and `release-manifest.json` from the same workflow
    without renaming or modifying them. Run a verification-only plan:
 
@@ -151,7 +152,7 @@ responses and network uncertainty remain blocked. The APK itself must return:
    migration to Room `52`, cleanup report/apply/acknowledgement, normal
    offline replay, shifts, Gaming, POS and preserved Code30.2 finance behavior.
 5. Deploy the matching backend/Web source with the guarded installer, a fresh
-   quiesced backup, restore proof, migration through `0079`, rollback readiness,
+   quiesced backup, restore proof, migration through `0081`, rollback readiness,
    and authenticated production smoke checks. Confirm all tablets are paused
    and their outboxes are empty immediately before maintenance.
 6. Review the staging plan and stage the exact same inputs inactive:

@@ -129,13 +129,14 @@ separately identified prototype, not another supported ERP app.
 Tagging a release that exactly matches the Android `versionName` triggers
 `.github/workflows/release.yml`. The current local candidate is the additive
 Code30.3 patch, technical version `3.1.30` with Android installation build `38`,
-Room schema `52`, and backend migration head `0079`. It preserves Code30.2
+Room schema `52`, and backend migration head `0081`. It preserves Code30.2
 manual finance, private receipt evidence and the optional durable
 `ERP Mirror v1` Google Sheets backup. Code30.3 adds owner-reviewed,
-exact-candidate recovery for a stale tablet Gaming overlay after the
-authoritative server session is gone. The build-38 tablet must reconnect,
-apply the matching directive and acknowledge it; Web cannot rewrite an offline
-Room database and exposes no broad clear-all action. Authorized users retain
+exact-candidate recovery for a stale tablet Gaming overlay, atomic split
+tender, Web station-transfer parity, and business-day shift opening/closing
+times. The build-38 tablet must reconnect, apply a matching cleanup directive
+and acknowledge it; Web cannot rewrite an offline Room database and exposes no
+broad clear-all action. Authorized users retain
 eligible same-branch cross-user shift, POS and Gaming workflows while actor
 attribution and sensitive-operation permissions remain intact.
 PostgreSQL remains authoritative. An unconfigured Sheet mirror is disabled;

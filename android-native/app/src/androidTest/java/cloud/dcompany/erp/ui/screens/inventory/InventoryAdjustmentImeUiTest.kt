@@ -1141,21 +1141,42 @@ class InventoryAdjustmentImeUiTest {
         return compose.runOnIdle {
             val view = root.view
             val visibleFrame = AndroidRect().also(view::getWindowVisibleDisplayFrame)
+            val rootInsets = checkNotNull(ViewCompat.getRootWindowInsets(view))
+            val gestures = rootInsets.getInsets(WindowInsetsCompat.Type.systemGestures())
+            val rootOrigin = IntArray(2).also(view::getLocationOnScreen)
             val dialogBounds = node.visualBoundsOnScreen()
             val margin = 4f * view.resources.displayMetrics.density
+            val safeLeft = maxOf(
+                visibleFrame.left.toFloat(),
+                (rootOrigin[0] + gestures.left).toFloat(),
+            ) + margin
+            val safeTop = maxOf(
+                visibleFrame.top.toFloat(),
+                (rootOrigin[1] + gestures.top).toFloat(),
+            ) + margin
+            val safeRight = minOf(
+                visibleFrame.right.toFloat(),
+                (rootOrigin[0] + view.width - gestures.right).toFloat(),
+            ) - margin
+            val safeBottom = minOf(
+                visibleFrame.bottom.toFloat(),
+                (rootOrigin[1] + view.height - gestures.bottom).toFloat(),
+            ) - margin
+            check(safeLeft <= safeRight && safeTop <= safeBottom) {
+                "System gestures leave no tappable dialog window area: " +
+                    "frame=$visibleFrame gestures=$gestures"
+            }
             val candidates = listOf(
-                Offset(visibleFrame.left + margin, dialogBounds.center.y),
-                Offset(visibleFrame.right - margin, dialogBounds.center.y),
-                Offset(dialogBounds.center.x, visibleFrame.top + margin),
-                Offset(dialogBounds.center.x, visibleFrame.bottom - margin),
+                Offset(safeLeft, dialogBounds.center.y.coerceIn(safeTop, safeBottom)),
+                Offset(safeRight, dialogBounds.center.y.coerceIn(safeTop, safeBottom)),
+                Offset(dialogBounds.center.x.coerceIn(safeLeft, safeRight), safeTop),
+                Offset(dialogBounds.center.x.coerceIn(safeLeft, safeRight), safeBottom),
             )
-            candidates.firstOrNull { point ->
-                point.x >= visibleFrame.left && point.x <= visibleFrame.right &&
-                    point.y >= visibleFrame.top && point.y <= visibleFrame.bottom &&
-                    !dialogBounds.contains(point)
-            } ?: error(
-                "No tappable backdrop point outside dialog=$dialogBounds frame=$visibleFrame",
-            )
+            candidates.firstOrNull { !dialogBounds.contains(it) }
+                ?: error(
+                    "No system-gesture-safe backdrop point outside " +
+                        "dialog=$dialogBounds frame=$visibleFrame gestures=$gestures",
+                )
         }
     }
 

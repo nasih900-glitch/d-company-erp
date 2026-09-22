@@ -92,6 +92,26 @@ internal data class ShiftLegacyMoneyRow(
     val isRefund: Boolean,
 )
 
+internal data class ShiftStatusCopy(val value: String, val detail: String)
+
+/** Staff-facing lifecycle wording: a saved close remains open until acknowledged by the server. */
+internal fun shiftStatusCopy(
+    hasOpenShift: Boolean,
+    localState: String?,
+    confirmingOpen: Boolean,
+    offlineGamingSupported: Boolean,
+): ShiftStatusCopy = when {
+    !hasOpenShift -> ShiftStatusCopy("No open shift", "Open a shift before billing")
+    localState == ShiftState.CLOSE_PENDING ->
+        ShiftStatusCopy("Waiting for server", "Not closed until server confirms")
+    localState == ShiftState.CLOSE_REJECTED ->
+        ShiftStatusCopy("Open — action needed", "Close rejected; shift remains open")
+    confirmingOpen && offlineGamingSupported ->
+        ShiftStatusCopy("Saved", "Offline work can continue")
+    confirmingOpen -> ShiftStatusCopy("Saved", "Gaming needs server confirmation")
+    else -> ShiftStatusCopy("Open", "Billing is available")
+}
+
 internal fun shiftLegacyMoneyRows(
     accounting: ShiftAccountingBreakdown,
     presentation: WorkspacePresentationPolicy,
@@ -219,23 +239,27 @@ fun ShiftScreen(
             shape = cloud.dcompany.erp.ui.theme.Radius.shapeLg,
             onDismissRequest = vm::dismissResult,
             confirmButton = { TextButton(onClick = vm::dismissResult) { Text("OK") } },
-            title = { Text(if (remotelyReconciled) "Shift closed elsewhere" else "Shift closed") },
-            text = {
-                Text(
-                    when {
-                        remotelyReconciled ->
-                            r.lastError ?: "Live server reconciliation confirmed that this shift closed elsewhere."
-                        r.varianceMinor == null -> "Closed. The drawer count is with the server — variance " +
-                            "will show here once it syncs."
-                        r.varianceMinor == 0L -> "The drawer balanced exactly."
-                        r.varianceMinor > 0 -> "Over by ${r.varianceMinor.asRupees()} — more cash than expected."
-                        else -> "Short by ${(-r.varianceMinor).asRupees()} — less cash than expected."
-                    },
-                )
+            title = {
+                Text(if (remotelyReconciled) "Shift closed elsewhere" else "Shift closed — server confirmed")
             },
+            text = { Text(shiftCloseResultMessage(r)) },
         )
     }
 }
+
+internal fun shiftCloseResultMessage(shift: LocalShiftEntity): String =
+    when {
+        shiftCloseResultKind(shift) == ShiftCloseResultKind.REMOTE_RECONCILED ->
+            shift.lastError ?: "Live server reconciliation confirmed that this shift closed elsewhere."
+        shift.varianceMinor == null ->
+            "The server confirmed this shift is closed. Final variance is not available on this tablet yet; refresh shift history."
+        shift.varianceMinor == 0L ->
+            "The server confirmed this shift is closed. The drawer balanced exactly."
+        shift.varianceMinor > 0 ->
+            "The server confirmed this shift is closed. Over by ${shift.varianceMinor.asRupees()} — more cash than expected."
+        else ->
+            "The server confirmed this shift is closed. Short by ${(-shift.varianceMinor).asRupees()} — less cash than expected."
+    }
 
 /**
  * The target tablet is wide (1280dp) but only 800dp tall. The shell, summary
@@ -290,31 +314,37 @@ internal fun CompactShiftPanels(
 @Composable
 private fun ShiftSummaryRow(state: ShiftUiState) {
     val open = state.open
+    val localState = open?.local?.state
     val confirming = open != null && open.server == null && open.local?.serverShiftId == null
+    val statusCopy = shiftStatusCopy(
+        hasOpenShift = open != null,
+        localState = localState,
+        confirmingOpen = confirming,
+        offlineGamingSupported = state.offlineGamingSupported,
+    )
     val opener = open?.openedByName?.takeIf(String::isNotBlank)
         ?: open?.openedByEmail?.takeIf(String::isNotBlank)
     val cards: List<@Composable (Modifier) -> Unit> = listOf(
         { modifier ->
             CompactStatCard(
                 label = "Shift status",
-                value = if (open == null) "Closed" else if (confirming) "Saved" else "Open",
-                detail = when {
-                    open == null -> "Billing requires a shift"
-                    confirming && state.offlineGamingSupported -> "Offline work can continue"
-                    confirming -> "Gaming needs server confirmation"
-                    else -> "Billing is available"
-                },
+                value = statusCopy.value,
+                detail = statusCopy.detail,
                 icon = Icons.Filled.LockClock,
-                tone = if (open == null || confirming) UiTone.Warning else UiTone.Success,
+                tone = when {
+                    localState == ShiftState.CLOSE_REJECTED -> UiTone.Danger
+                    open == null || confirming || localState == ShiftState.CLOSE_PENDING -> UiTone.Warning
+                    else -> UiTone.Success
+                },
                 modifier = modifier,
             )
         },
         { modifier ->
             CompactStatCard(
-                label = if (open == null) "Closed shift history" else "Opened by",
-                value = if (open == null) state.history.size.toString() else (opener ?: "Verifying"),
+                label = if (open == null) "Business-day collections" else "Opened by",
+                value = if (open == null) state.businessDayHistory.size.toString() else (opener ?: "Verifying"),
                 detail = if (open == null) {
-                    "Loaded for this device"
+                    "IST days loaded for this device"
                 } else {
                     formatHistoryDate(open.openedAtMillis)
                 },
@@ -368,34 +398,35 @@ private fun ShiftSummaryRow(state: ShiftUiState) {
 @Composable
 private fun PastShiftsPanel(state: ShiftUiState, modifier: Modifier = Modifier) {
     SectionCard(
-        title = "Past shifts",
-        subtitle = "Latest closed shifts for this device",
+        title = "Business-day collections",
+        subtitle = "One IST day total, with every shift segment kept for review",
         icon = Icons.Filled.History,
         modifier = modifier,
     ) {
         state.historyMessage?.let { message ->
             Text(message, color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelSmall)
         }
-        if (state.history.isEmpty()) {
+        val businessDays = state.businessDayHistory
+        if (businessDays.isEmpty()) {
             if (state.historyRefreshing) {
                 Box(Modifier.fillMaxWidth().heightIn(min = 160.dp), Alignment.Center) {
                     CircularProgressIndicator(color = Brand.Gold)
                 }
             } else {
                 DesignedEmptyState(
-                    title = "No closed shifts yet",
-                    body = "Completed shifts from this device will remain available here for reconciliation.",
+                    title = "No closed business days yet",
+                    body = "Completed shifts will appear as one IST business-day collection with their original segments retained.",
                     icon = Icons.Filled.History,
                     modifier = Modifier.heightIn(min = 170.dp),
                 )
             }
         } else {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                items(state.history, key = { it.stableId }) { s -> HistoryRow(s) }
+                items(businessDays, key = { it.stableId }) { day -> BusinessDayHistoryRow(day) }
             }
         }
         Text(
-            "Showing up to the latest 200 shifts for this device.",
+            "Built from up to the latest 200 immutable shift segments for this device.",
             color = Brand.ForegroundFaint,
             style = MaterialTheme.typography.labelSmall,
         )
@@ -629,8 +660,8 @@ private fun CloseShiftCard(
             }
             OperationalStatusBadge(
                 label = when {
-                    closing -> "Close pending"
-                    closeRejected -> "Close rejected"
+                    closing -> "Awaiting server"
+                    closeRejected -> "Still open"
                     else -> "Open"
                 },
                 tone = when {
@@ -917,7 +948,7 @@ private fun CloseShiftCard(
             )
             Spacer(Modifier.weight(1f))
             ErpButton(
-                text = "Close shift",
+                text = if (closing) "Waiting for server" else "Close shift",
                 onClick = {
                     closePresentation.displayedCountedMinor?.let { counted ->
                         confirmation = ShiftCloseConfirmation(shiftIdentity, counted)
@@ -1336,23 +1367,102 @@ private fun formatHistoryDate(epochMillis: Long): String =
     epochMillis.businessDateTime()
 
 @Composable
+private fun BusinessDayHistoryRow(day: ShiftBusinessDaySummary) {
+    var expanded by remember(day.stableId) { mutableStateOf(false) }
+    val totalsAvailable = day.grossCollectionsMinor != null &&
+        day.totalRefundsMinor != null && day.netCollectionsMinor != null
+    Column(
+        Modifier.fillMaxWidth().clip(Radius.shapeSm)
+            .background(Brand.SurfaceRaised).padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            day.dateLabel,
+            color = Brand.Foreground,
+            fontWeight = FontWeight.Bold,
+        )
+        Text(
+            "First open ${formatShiftBusinessTime(day.firstOpenedAtMillis)} by ${day.firstOpenerLabel}",
+            color = Brand.ForegroundMuted,
+            style = MaterialTheme.typography.labelSmall,
+        )
+        Text(
+            when {
+                day.hasOpenSegment -> "Business day still open"
+                day.finalClosedAtMillis != null ->
+                    "Final close ${formatShiftBusinessTime(day.finalClosedAtMillis)} by ${day.finalCloserLabel}"
+                else -> "Final close time unavailable — review the shift segments"
+            },
+            color = if (day.finalClosedAtMillis == null) Brand.Warning else Brand.ForegroundMuted,
+            style = MaterialTheme.typography.labelSmall,
+        )
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            CollectionMetric(
+                label = "Gross",
+                value = day.grossCollectionsMinor?.asRupees() ?: "Pending",
+                modifier = Modifier.weight(1f),
+            )
+            CollectionMetric(
+                label = "Refunds",
+                value = day.totalRefundsMinor?.asRupees() ?: "Pending",
+                modifier = Modifier.weight(1f),
+                valueColor = if ((day.totalRefundsMinor ?: 0L) > 0L) Brand.Danger else Brand.Foreground,
+            )
+            CollectionMetric(
+                label = "Net",
+                value = day.netCollectionsMinor?.asRupees() ?: "Pending",
+                modifier = Modifier.weight(1f),
+            )
+        }
+        if (!totalsAvailable) {
+            Text(
+                "Combined totals will appear after every segment has authoritative server accounting.",
+                color = Brand.Warning,
+                style = MaterialTheme.typography.labelSmall,
+            )
+        }
+        TextButton(onClick = { expanded = !expanded }) {
+            Text(
+                if (expanded) {
+                    "Hide ${day.segments.size} shift segment${if (day.segments.size == 1) "" else "s"}"
+                } else {
+                    "Review ${day.segments.size} shift segment${if (day.segments.size == 1) "" else "s"}"
+                },
+            )
+        }
+        if (expanded) {
+            PanelDivider()
+            day.segments.forEachIndexed { index, segment ->
+                Text(
+                    "Shift segment ${index + 1}",
+                    color = Brand.ForegroundMuted,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                HistoryRow(segment)
+            }
+        }
+    }
+}
+
+@Composable
 private fun HistoryRow(s: ShiftHistoryRow) {
-    val opener = s.openedByName?.takeIf(String::isNotBlank)
-        ?: s.openedByEmail?.takeIf(String::isNotBlank)
-        ?: "Unknown staff — refresh"
+    val opener = shiftHistoryOpenerLabel(s)
     Column(
         Modifier.fillMaxWidth().clip(Radius.shapeSm)
             .background(Brand.SurfaceRaised).padding(10.dp),
     ) {
-        Text(formatHistoryDate(s.openedAtMillis), color = Brand.Foreground)
         Text(
-            "Opened by $opener",
+            "Opened ${formatHistoryDate(s.openedAtMillis)} by $opener",
             color = Brand.ForegroundMuted,
             style = MaterialTheme.typography.labelSmall,
         )
         if (s.closedAtMillis != null) {
             Text(
-                "Closed by ${shiftHistoryCloserLabel(s)}",
+                "Closed ${formatHistoryDate(s.closedAtMillis)} by ${shiftHistoryCloserLabel(s)}",
                 color = Brand.ForegroundMuted,
                 style = MaterialTheme.typography.labelSmall,
             )
@@ -1421,12 +1531,3 @@ internal fun shiftCloseHandoverMessage(
             "You may close this shift even though $opener opened it. $opener remains the opener; your signed-in account will be recorded as the closer."
     }
 }
-
-internal fun shiftHistoryCloserLabel(shift: ShiftHistoryRow): String =
-    shift.closedByName?.takeIf(String::isNotBlank)
-        ?: shift.closedByEmail?.takeIf(String::isNotBlank)
-        ?: if (shift.source == ShiftHistorySource.LOCAL) {
-            "waiting for server confirmation"
-        } else {
-            "not provided by the server"
-        }

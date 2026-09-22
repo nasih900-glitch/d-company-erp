@@ -12,6 +12,8 @@ import {
   receiptDocumentTitle,
   type ReceiptBusinessDetails,
 } from './receipt-business';
+import { paymentMethodLabel } from './receipt-history';
+import type { SplitPaymentReceiptLeg } from './split-payment-receipt';
 
 const invoiceDateTime = (iso: string, timezone: string) => {
   // A legacy bad value in Settings must not throw here — this renders after
@@ -34,9 +36,11 @@ const invoiceDateTime = (iso: string, timezone: string) => {
 export default function LiveReceipt({
   order,
   business,
+  splitPayments,
 }: {
   order: OrderDTO;
   business: ReceiptBusinessDetails;
+  splitPayments?: readonly SplitPaymentReceiptLeg[];
 }) {
   const issuedAt = order.invoice_issued_at ?? order.closed_at;
   const isPlatformDelivery = order.type === 'delivery' && !!order.delivery_via && order.delivery_via !== 'inhouse';
@@ -138,6 +142,31 @@ export default function LiveReceipt({
           <span>GRAND TOTAL</span><span>{inr(order.total_minor)}</span>
         </div>
       </div>
+
+      {splitPayments && splitPayments.length > 0 && (
+        <>
+          <Dashed/>
+          <section aria-label="Payment split details">
+            <div className="font-bold mb-1">PAYMENT SPLIT</div>
+            <div className="space-y-0.5">
+              {splitPayments.map((payment) => (
+                <div key={payment.id}>
+                  <Row label={paymentMethodLabel(payment.method)} v={payment.amount_minor}/>
+                  {payment.method === 'cash' && payment.tendered_minor !== null && (
+                    <Row label="Cash tendered" v={payment.tendered_minor}/>
+                  )}
+                  {payment.method === 'cash' && payment.change_minor !== null && (
+                    <Row label="Change given" v={payment.change_minor}/>
+                  )}
+                  {payment.ref_external && (
+                    <TextRow label="Reference" value={payment.ref_external}/>
+                  )}
+                </div>
+              ))}
+            </div>
+          </section>
+        </>
+      )}
 
       <Dashed/>
 

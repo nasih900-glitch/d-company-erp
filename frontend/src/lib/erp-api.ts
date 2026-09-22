@@ -206,7 +206,7 @@ export interface PosPaymentDTO {
   id: string;
   order_id: string;
   shift_id: string;
-  method: 'cash' | 'card' | 'upi' | 'qr' | 'wallet';
+  method: PosPaymentMethodDTO;
   /** Total actually collected/banked, including tip. */
   amount_minor: number;
   /** Bill settlement amount before the separately recorded tip. */
@@ -216,6 +216,37 @@ export interface PosPaymentDTO {
   change_minor: number | null;
   ref_external: string | null;
   paid_at: string;
+  order_status: string;
+  invoice_no: string | null;
+  fiscal_year: string | null;
+  invoice_issued_at: string | null;
+}
+
+export interface PosPaymentBundleRequest {
+  payments: Array<{
+    method: PosPaymentMethodDTO;
+    amount_minor: number;
+    tendered_minor?: number;
+    ref_external?: string;
+  }>;
+  expected_order_total_minor?: number;
+  expected_due_minor?: number;
+}
+
+export interface PosPaymentBundleDTO {
+  order_id: string;
+  shift_id: string;
+  payments: Array<{
+    id: string;
+    method: PosPaymentMethodDTO;
+    amount_minor: number;
+    tendered_minor: number | null;
+    change_minor: number | null;
+    ref_external: string | null;
+    paid_at: string;
+  }>;
+  total_amount_minor: number;
+  payment_breakdown_minor: Record<string, number>;
   order_status: string;
   invoice_no: string | null;
   fiscal_year: string | null;
@@ -523,6 +554,24 @@ export const pos = {
     api
       .post<PosPaymentDTO>(
         `/pos/orders/${orderId}/payments`,
+        body,
+        {
+          headers: {
+            'Idempotency-Key': idempotencyKey,
+            ...(checkoutClaimToken ? { 'X-Checkout-Claim': checkoutClaimToken } : {}),
+          },
+        },
+      )
+      .then((r) => r.data),
+  recordPaymentBundle: (
+    orderId: string,
+    body: PosPaymentBundleRequest,
+    idempotencyKey: string,
+    checkoutClaimToken?: string,
+  ) =>
+    api
+      .post<PosPaymentBundleDTO>(
+        `/pos/orders/${orderId}/payment-bundle`,
         body,
         {
           headers: {
@@ -1334,6 +1383,8 @@ export interface GamingCleanupReconciliationDTO {
   is_current: boolean;
   reported_local_state: string;
   local_evidence_revision: number;
+  reported_app_version_name: string;
+  reported_app_version_code: number;
   local_snapshot_sha256: string;
   start_request_hash: string;
   stop_request_hash: string;
@@ -2905,6 +2956,23 @@ export interface ShiftRecoveryCloseDTO {
   acknowledge_origin_tablet_quarantined: true;
 }
 
+export interface ShiftRecoveryCandidateDTO {
+  id: string;
+  branch_id: string;
+  terminal_id: string;
+  terminal_name: string;
+  terminal_device_id: string | null;
+  terminal_is_active: boolean;
+  opened_at: string;
+  opened_by: string;
+  opened_by_name: string | null;
+  opening_float_minor: number;
+  expected_minor: number;
+  opening_protocol_revision: number;
+  opening_client_platform: 'android';
+  opening_client_installation_recorded: boolean;
+}
+
 export const orders = {
   list: (params?: {
     from_date?: string; to_date?: string; limit?: number;
@@ -2930,7 +2998,13 @@ export const receipts = {
 
 export const shifts = {
   list: (only_open = false) =>
-    api.get<ShiftDTO[]>('/pos/shifts', { params: { only_open } }).then((r) => r.data),
+    // The business-day view groups immutable drawer segments. Request the
+    // server's supported maximum so an older day is not silently shown with
+    // only part of its shift history.
+    api.get<ShiftDTO[]>('/pos/shifts', { params: { only_open, limit: 200 } }).then((r) => r.data),
+  listRecoveryCandidates: () =>
+    api.get<ShiftRecoveryCandidateDTO[]>('/pos/shifts/recovery-candidates')
+      .then((r) => r.data),
   open: (opening_float_minor: number) =>
     api.post<{ id: string; status: string }>('/pos/shifts/open', { opening_float_minor })
       .then((r) => r.data),
@@ -3503,6 +3577,17 @@ export const gaming = {
     api.post<GameSessionDTO>(`/gaming/sessions/${id}/resume`, body, {
       headers: { 'Idempotency-Key': idempotencyKey },
     }).then((r) => r.data),
+  transferSession: (
+    id: string,
+    expectedSourceStationId: string,
+    targetStationId: string,
+    idempotencyKey: string,
+  ) => api.post<GameSessionDTO>(`/gaming/sessions/${id}/transfer`, {
+    expected_source_station_id: expectedSourceStationId,
+    target_station_id: targetStationId,
+  }, {
+    headers: { 'Idempotency-Key': idempotencyKey },
+  }).then((r) => r.data),
   extendSessionTimer: (
     id: string,
     expectedTimerMinutes: number | null,

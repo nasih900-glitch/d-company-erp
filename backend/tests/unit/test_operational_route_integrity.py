@@ -1846,7 +1846,12 @@ async def test_shift_summary_keeps_pos_and_membership_receipts_explicit() -> Non
         )
     )
 
-    rows = await pos_router.list_shifts(session, tenant, only_open=True)
+    rows = await pos_router.list_shifts(
+        session,
+        request=None,
+        tenant=tenant,
+        only_open=True,
+    )
 
     assert len(rows) == 1
     statement_sql = str(session.statements[0].compile(dialect=postgresql.dialect()))

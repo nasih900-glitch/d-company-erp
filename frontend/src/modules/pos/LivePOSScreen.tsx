@@ -76,6 +76,7 @@ import {
 } from '@/lib/product-profile';
 import {
   applyCanonicalCheckoutBalance,
+  buildCheckoutPaymentBundleSubmission,
   buildCheckoutPaymentSubmission,
   buildCheckoutZeroFinalization,
   createOperationKey,
@@ -86,6 +87,8 @@ import {
   isCartStageDiscountAlreadyApplied,
   isCartStagePointsAlreadyApplied,
   isCheckoutClaimRejection,
+  inspectSplitPaymentEditorJournal,
+  inspectSplitPaymentPlan,
   normalizePosRetryDraft,
   reconcileCartStageBenefitsAfterReload,
   retireAppliedCartStageBenefit,
@@ -93,6 +96,8 @@ import {
   type CheckoutDeliveryVia,
   type CheckoutOrderType,
   type CheckoutPaymentMethod,
+  type CheckoutSplitPaymentLeg,
+  type CheckoutSplitPaymentMethod,
   type PosCheckoutRetry,
   type PosRetryDraft,
 } from '@/lib/retry-drafts';
@@ -118,6 +123,10 @@ import {
   receiptConfigurationIssue,
   type ReceiptBusinessDetails,
 } from './receipt-business';
+import {
+  verifiedSplitPaymentReceipt,
+  type SplitPaymentReceiptLeg,
+} from './split-payment-receipt';
 import { PosMoneyInput } from './PosMoneyInput';
 import {
   adjustPosCart,
@@ -150,6 +159,33 @@ type DraftLeaseState = {
   key: string | null;
   status: 'checking' | 'owned' | 'blocked' | 'unsupported';
 };
+type PrintableReceipt = {
+  order: OrderDTO;
+  splitPayments: SplitPaymentReceiptLeg[] | null;
+};
+type CompletedCheckout = PrintableReceipt;
+
+const SPLIT_PAYMENT_OPTIONS: ReadonlyArray<{
+  method: CheckoutSplitPaymentMethod;
+  label: string;
+}> = [
+  { method: 'cash', label: 'Cash' },
+  { method: 'upi', label: 'UPI' },
+  { method: 'card', label: 'Card' },
+  { method: 'qr', label: 'QR' },
+  { method: 'wallet', label: 'Wallet' },
+];
+
+function newSplitPaymentPlan(): CheckoutSplitPaymentLeg[] {
+  return [
+    { method: 'cash', amountMinor: 0 },
+    { method: 'upi', amountMinor: 0 },
+  ];
+}
+
+function splitPaymentLabel(method: CheckoutSplitPaymentMethod): string {
+  return SPLIT_PAYMENT_OPTIONS.find((option) => option.method === method)?.label ?? method;
+}
 
 const CATEGORY_FROM_TYPE: Record<string, string> = {
   food: 'Food', drink: 'Drinks', dessert: 'Desserts', gaming: 'Gaming', event: 'Events',
@@ -275,7 +311,7 @@ export default function LivePOSScreen() {
   const [showCart, setShowCart] = useState(false);
   const [showPay, setShowPay] = useState(false);
   const [paying, setPaying] = useState(false);
-  const [receipt, setReceipt] = useState<OrderDTO | null>(null);
+  const [receipt, setReceipt] = useState<PrintableReceipt | null>(null);
   const [receiptBusiness, setReceiptBusiness] = useState<ReceiptBusinessDetails | null>(null);
   const [receiptSettingsError, setReceiptSettingsError] = useState<string | null>(null);
   const [checkoutRetry, setCheckoutRetry] = useState<PosCheckoutRetry | null>(null);
@@ -333,6 +369,13 @@ export default function LivePOSScreen() {
   // persisted before submission, and sent as tendered_minor so the receipt and
   // reconciliation record the same change the cashier sees here.
   const [cashTenderedInput, setCashTenderedInput] = useState('');
+  // Keep editable decimal text locally so typing "10.50" is natural, while
+  // every valid value is immediately checkpointed as integer paise in the
+  // durable checkout journal below.
+  const [splitAmountInputs, setSplitAmountInputs] = useState<
+    Partial<Record<CheckoutSplitPaymentMethod, string>>
+  >({});
+  const [splitCashTenderedInput, setSplitCashTenderedInput] = useState('');
   const lastHeldAlarmAtRef = useRef(0);
   const shiftRefreshGenerationRef = useRef(0);
   const shiftIdRef = useRef(shiftId);
@@ -341,6 +384,7 @@ export default function LivePOSScreen() {
   const draftStorageTokenRef = useRef<string | null>(null);
   const draftLeaseOwnedKeyRef = useRef<string | null>(null);
   const draftLeaseReleaseRef = useRef<(() => void) | null>(null);
+  const splitInputsHydratedKeyRef = useRef<string | null>(null);
   const heldOrderScopeRef = useRef(draftKey);
   heldOrderScopeRef.current = draftKey;
 
@@ -463,8 +507,22 @@ export default function LivePOSScreen() {
   // tendered field — never let a previous bill's typed amount linger and
   // produce a misleading change figure for a different bill.
   useEffect(() => {
+    const recoveryKey = checkoutRetry?.key ?? null;
+    if (splitInputsHydratedKeyRef.current === recoveryKey) return;
+    splitInputsHydratedKeyRef.current = recoveryKey;
     setCashTenderedInput('');
-  }, [checkoutRetry?.key]);
+    const splitLegs = checkoutRetry?.splitPaymentLegs ?? [];
+    setSplitAmountInputs(Object.fromEntries(splitLegs.map((leg) => [
+      leg.method,
+      leg.amountMinor > 0 ? (leg.amountMinor / 100).toFixed(2) : '',
+    ])));
+    const cashLeg = splitLegs.find((leg) => leg.method === 'cash');
+    setSplitCashTenderedInput(
+      cashLeg?.tenderedMinor !== undefined
+        ? (cashLeg.tenderedMinor / 100).toFixed(2)
+        : '',
+    );
+  }, [checkoutRetry?.key, checkoutRetry?.splitPaymentLegs]);
 
   // Reward menu for whichever customer is attached — their balance doesn't
   // change mid-checkout (points are only reserved, not spent, until final
@@ -692,7 +750,7 @@ export default function LivePOSScreen() {
                 && pendingOrder.invoice_no
                 && pendingOrder.invoice_issued_at
               ) {
-                setReceipt(pendingOrder);
+                setReceipt({ order: pendingOrder, splitPayments: null });
                 setCart([]);
                 setResumingOrder(null);
                 setUnresolvedResumingOrderId(null);
@@ -720,7 +778,7 @@ export default function LivePOSScreen() {
                 setCheckoutRetry(null);
                 setLocalWorkShiftId(null);
                 clearPosDraft(activeDraftKey);
-                setReceipt(pendingOrder);
+                setReceipt({ order: pendingOrder, splitPayments: null });
                 setError('This order was already refunded; no further payment was recorded.');
                 setHydratedDraftKey(activeDraftKey);
                 return;
@@ -1539,6 +1597,60 @@ export default function LivePOSScreen() {
     return persisted;
   }
 
+  function persistSplitPaymentLegs(nextLegs: CheckoutSplitPaymentLeg[]): boolean {
+    const current = checkoutRetry;
+    if (!current || !current.splitPaymentLegs || current.phase !== 'awaiting_payment') {
+      setError('The split payment plan is no longer editable. Resume the saved settlement instead.');
+      return false;
+    }
+    const methods = new Set(nextLegs.map((leg) => leg.method));
+    const structurallyValid = nextLegs.length >= 2
+      && nextLegs.length <= SPLIT_PAYMENT_OPTIONS.length
+      && methods.size === nextLegs.length
+      && nextLegs.every((leg) => (
+        SPLIT_PAYMENT_OPTIONS.some((option) => option.method === leg.method)
+        && Number.isInteger(leg.amountMinor)
+        && leg.amountMinor >= 0
+        && (leg.tenderedMinor === undefined
+          || (leg.method === 'cash'
+            && Number.isInteger(leg.tenderedMinor)
+            && leg.tenderedMinor >= 0))
+        && (leg.refExternal === undefined || leg.refExternal.length <= 200)
+      ));
+    if (!structurallyValid) {
+      setError('The split payment plan is invalid and was not saved. Review its methods and amounts.');
+      return false;
+    }
+    const next: PosCheckoutRetry = {
+      ...current,
+      splitPaymentLegs: nextLegs,
+      // The bundle endpoint intentionally settles bill rails only. A tip or a
+      // single-cash tender must never leak into this different contract.
+      tipMinor: undefined,
+      cashTenderedMinor: undefined,
+    };
+    if (!persistCheckoutRetry(next)) {
+      setError(
+        'The split payment plan could not be saved safely. Nothing was submitted; restore POS recovery storage first.',
+      );
+      return false;
+    }
+    setError(null);
+    return true;
+  }
+
+  function updateSplitPaymentLeg(
+    index: number,
+    update: (leg: CheckoutSplitPaymentLeg) => CheckoutSplitPaymentLeg,
+  ): boolean {
+    const legs = checkoutRetry?.splitPaymentLegs;
+    if (!legs?.[index]) return false;
+    const next = legs.map((leg, candidateIndex) => (
+      candidateIndex === index ? update(leg) : leg
+    ));
+    return persistSplitPaymentLegs(next);
+  }
+
   /**
    * Acquire the exclusive checkout lease only after all server-side edits.
    * Discounts, points, rewards and lines bump the bill version, so each such
@@ -1654,9 +1766,12 @@ export default function LivePOSScreen() {
     throw new Error(failureMessage);
   }
 
-  function finishCheckout(paidOrder: OrderDTO) {
+  function finishCheckout(
+    paidOrder: OrderDTO,
+    splitPayments: SplitPaymentReceiptLeg[] | null = null,
+  ) {
     setError(null);
-    setReceipt(paidOrder);
+    setReceipt({ order: paidOrder, splitPayments });
     setCheckoutRetry(null);
     setShowPay(false);
     setCart([]);
@@ -1831,14 +1946,20 @@ export default function LivePOSScreen() {
     }
   }
 
-  async function prepareCheckout(method: PayMethod) {
+  async function prepareCheckout(
+    method: PayMethod,
+    splitPaymentLegs?: CheckoutSplitPaymentLeg[],
+  ) {
     await runCheckoutFlow(
-      () => prepareCheckoutInternal(method),
+      () => prepareCheckoutInternal(method, splitPaymentLegs),
       'A bill is already being prepared. Wait for it to finish; no second bill was created.',
     );
   }
 
-  async function prepareCheckoutInternal(method: PayMethod) {
+  async function prepareCheckoutInternal(
+    method: PayMethod,
+    splitPaymentLegs?: CheckoutSplitPaymentLeg[],
+  ) {
     if (checkoutMutationInFlightRef.current) {
       setError('Wait for the current discount or benefit adjustment to finish before continuing to payment.');
       return;
@@ -1890,6 +2011,7 @@ export default function LivePOSScreen() {
       key: createOperationKey(),
       phase: 'preparing_order',
       paymentMethod: method,
+      ...(splitPaymentLegs ? { splitPaymentLegs } : {}),
       resumingOrderId: resumingOrder?.id,
       snapshot: {
         shiftId: resolvePosAccountableShiftId({
@@ -2043,7 +2165,7 @@ export default function LivePOSScreen() {
         setCart([]);
         setResumingOrder(null);
         setUnresolvedResumingOrderId(null);
-        setReceipt(order);
+        setReceipt({ order, splitPayments: null });
         if (draftKey) clearPosDraft(draftKey);
         setError('This order was already refunded; no new payment was recorded.');
         return;
@@ -2306,6 +2428,36 @@ export default function LivePOSScreen() {
     let confirmed = current;
     if (
       current.phase === 'awaiting_payment'
+      && current.splitPaymentLegs
+      && hasCollectibleCheckoutBalance(current)
+    ) {
+      const editorStatus = inspectSplitPaymentEditorJournal(
+        current.splitPaymentLegs,
+        splitAmountInputs,
+        splitCashTenderedInput,
+      );
+      if (!editorStatus.valid) {
+        setError(editorStatus.message ?? 'Review every visible split payment amount before confirming payment.');
+        return;
+      }
+      const splitStatus = inspectSplitPaymentPlan(
+        current.splitPaymentLegs,
+        current.paymentAmountMinor,
+      );
+      if (!splitStatus.valid) {
+        const balanceDetail = splitStatus.remainingMinor === 0
+          ? ''
+          : splitStatus.remainingMinor > 0
+            ? ` ${inr(splitStatus.remainingMinor)} remains.`
+            : ` Reduce the split by ${inr(Math.abs(splitStatus.remainingMinor))}.`;
+        setError(`${splitStatus.message ?? 'Review the split payment plan.'}${balanceDetail}`);
+        return;
+      }
+      confirmed = { ...current, tipMinor: undefined, cashTenderedMinor: undefined };
+    }
+    if (
+      current.phase === 'awaiting_payment'
+      && !current.splitPaymentLegs
       && current.paymentMethod === 'cash'
       && hasCollectibleCheckoutBalance(current)
     ) {
@@ -2326,8 +2478,9 @@ export default function LivePOSScreen() {
         ? confirmed
         : { ...confirmed, phase: 'recording_payment' };
     const paymentSubmission = buildCheckoutPaymentSubmission(retry);
+    const paymentBundleSubmission = buildCheckoutPaymentBundleSubmission(retry);
     const zeroFinalization = buildCheckoutZeroFinalization(retry);
-    if (!paymentSubmission && !zeroFinalization) {
+    if (!paymentSubmission && !paymentBundleSubmission && !zeroFinalization) {
       setError('The checkout journal has an invalid settlement amount. Ask a protected owner to reconcile it before collecting money.');
       return;
     }
@@ -2341,26 +2494,49 @@ export default function LivePOSScreen() {
     setPaying(true);
     setError(null);
 
-    async function submitSettlement(attempt: PosCheckoutRetry): Promise<OrderDTO> {
+    async function submitSettlement(attempt: PosCheckoutRetry): Promise<CompletedCheckout> {
       const payment = buildCheckoutPaymentSubmission(attempt);
+      const paymentBundle = buildCheckoutPaymentBundleSubmission(attempt);
       const zero = buildCheckoutZeroFinalization(attempt);
-      if (!payment && !zero) {
+      if (!payment && !paymentBundle && !zero) {
         throw new Error(
           'The checkout journal has an invalid settlement amount. Ask a protected owner to reconcile it before collecting money.',
         );
       }
-      const settlement = zero
-        ? await pos.finalizeZero(
+      let settlement: { order_status: string; invoice_no: string | null };
+      let splitPayments: SplitPaymentReceiptLeg[] | null = null;
+      if (zero) {
+        settlement = await pos.finalizeZero(
           zero.orderId,
           zero.idempotencyKey,
           attempt.checkoutClaimToken,
-        )
-        : await pos.recordPayment(
+        );
+      } else if (paymentBundle) {
+        const bundleResult = await pos.recordPaymentBundle(
+          paymentBundle.orderId,
+          paymentBundle.body,
+          paymentBundle.idempotencyKey,
+          attempt.checkoutClaimToken,
+        );
+        splitPayments = verifiedSplitPaymentReceipt(
+          bundleResult,
+          paymentBundle,
+          attempt.snapshot.shiftId,
+        );
+        if (!splitPayments) {
+          throw new Error(
+            'The split payment was accepted, but its receipt details could not be verified. Resume this same recovery; do not charge again.',
+          );
+        }
+        settlement = bundleResult;
+      } else {
+        settlement = await pos.recordPayment(
           payment!.orderId,
           payment!.body,
           payment!.idempotencyKey,
           attempt.checkoutClaimToken,
         );
+      }
       if (settlement.order_status !== 'paid' || !settlement.invoice_no) {
         throw new Error(
           zero
@@ -2368,11 +2544,17 @@ export default function LivePOSScreen() {
             : 'The payment attempt did not finalize an invoice. Do not collect payment again.',
         );
       }
-      const paidOrder = await pos.getOrder(zero?.orderId ?? payment!.orderId);
+      const paidOrder = await pos.getOrder(
+        zero?.orderId ?? paymentBundle?.orderId ?? payment!.orderId,
+      );
       if (
         paidOrder.status !== 'paid'
         || !paidOrder.invoice_no
         || !paidOrder.invoice_issued_at
+        || (paymentBundle && (
+          paidOrder.id !== paymentBundle.orderId
+          || paidOrder.invoice_no !== settlement.invoice_no
+        ))
       ) {
         throw new Error(
           zero
@@ -2380,11 +2562,12 @@ export default function LivePOSScreen() {
             : 'Payment was accepted, but the final invoice could not be loaded. Resume this same recovery; do not charge again.',
         );
       }
-      return paidOrder;
+      return { order: paidOrder, splitPayments };
     }
 
     try {
-      finishCheckout(await submitSettlement(retry));
+      const completed = await submitSettlement(retry);
+      finishCheckout(completed.order, completed.splitPayments);
     } catch (caught) {
       let error = caught;
       let activeRetry = retry;
@@ -2444,7 +2627,8 @@ export default function LivePOSScreen() {
             );
             return;
           }
-          finishCheckout(await submitSettlement(activeRetry));
+          const completed = await submitSettlement(activeRetry);
+          finishCheckout(completed.order, completed.splitPayments);
           return;
         } catch (recoveryError) {
           error = recoveryError;
@@ -2817,7 +3001,7 @@ export default function LivePOSScreen() {
         setResumingOrder(null);
         setUnresolvedResumingOrderId(null);
         clearCustomer();
-        setReceipt(order);
+        setReceipt({ order, splitPayments: null });
         setError('This order was already refunded; no new payment or cancellation was recorded.');
         return;
       }
@@ -3649,6 +3833,15 @@ export default function LivePOSScreen() {
             <PayButton icon={<Smartphone size={28}/>} label="UPI"  sub="Prepare exact QR"   disabled={paying || checkoutAdjustmentBusy || localWorkNeedsReconciliation} onClick={() => prepareCheckout('upi')} />
             <PayButton icon={<CreditCard size={28}/>} label="Card" sub="Prepare exact bill" disabled={paying || checkoutAdjustmentBusy || localWorkNeedsReconciliation} onClick={() => prepareCheckout('card')} />
             <PayButton icon={<QrCode size={28}/>}     label="QR"   sub="Prepare exact QR"   disabled={paying || checkoutAdjustmentBusy || localWorkNeedsReconciliation} onClick={() => prepareCheckout('qr')} />
+            <div className="col-span-2">
+              <PayButton
+                icon={<span className="flex items-center gap-1"><Banknote size={24}/><Smartphone size={24}/></span>}
+                label="Split payment"
+                sub="Cash + UPI, card, QR or wallet"
+                disabled={paying || checkoutAdjustmentBusy || localWorkNeedsReconciliation}
+                onClick={() => prepareCheckout('cash', newSplitPaymentPlan())}
+              />
+            </div>
           </div>
         </Modal>
       )}
@@ -3670,17 +3863,28 @@ export default function LivePOSScreen() {
             const tipMinor = checkoutRetry.tipMinor ?? 0;
             const collectibleBalance = hasCollectibleCheckoutBalance(checkoutRetry);
             const benefitCoveredZero = hasBenefitCoveredZeroBalance(checkoutRetry);
+            const splitLegs = checkoutRetry.splitPaymentLegs;
+            const isSplitPayment = Boolean(splitLegs);
+            const splitStatus = inspectSplitPaymentPlan(splitLegs, amount);
+            const splitEditorStatus = inspectSplitPaymentEditorJournal(
+              splitLegs,
+              splitAmountInputs,
+              splitCashTenderedInput,
+            );
             const parsedCashTendered = parseRupeesToMinor(cashTenderedInput);
             const cashCollectedMinor = collectibleBalance
               ? checkoutRetry.paymentAmountMinor + tipMinor
               : 0;
-            const cashTenderReady = checkoutRetry.paymentMethod !== 'cash'
-              || benefitCoveredZero
-              || (parsedCashTendered !== null && parsedCashTendered >= cashCollectedMinor);
+            const cashTenderReady = isSplitPayment
+              ? splitStatus.valid && splitEditorStatus.valid
+              : checkoutRetry.paymentMethod !== 'cash'
+                || benefitCoveredZero
+                || (parsedCashTendered !== null && parsedCashTendered >= cashCollectedMinor);
             const isGenuineRestore = checkoutRetry.key === restoredRetryKey;
             const checkoutClaimReady = hasUsableCheckoutClaim(checkoutRetry);
-            const scanMethod = checkoutRetry.paymentMethod === 'upi'
-              || checkoutRetry.paymentMethod === 'qr';
+            const scanMethod = !isSplitPayment && (
+              checkoutRetry.paymentMethod === 'upi' || checkoutRetry.paymentMethod === 'qr'
+            );
             const upiLink = checkoutRetry.phase === 'awaiting_payment'
               && checkoutClaimReady
               && scanMethod
@@ -3691,6 +3895,8 @@ export default function LivePOSScreen() {
               : null;
             const methodLabel = benefitCoveredZero
               ? `${PREPAID_ALLOWANCE_LABEL} · no payment`
+              : isSplitPayment
+                ? `Split · ${splitLegs!.map((leg) => splitPaymentLabel(leg.method)).join(' + ')}`
               : {
                 cash: 'Cash',
                 upi: 'UPI',
@@ -3759,7 +3965,7 @@ export default function LivePOSScreen() {
                     {discountError && <p className="text-xs text-accent-bad">{discountError}</p>}
                   </div>
                 )}
-                {checkoutRetry.phase === 'awaiting_payment' && !benefitCoveredZero && collectibleBalance && !localWorkNeedsReconciliation && (
+                {checkoutRetry.phase === 'awaiting_payment' && !isSplitPayment && !benefitCoveredZero && collectibleBalance && !localWorkNeedsReconciliation && (
                   <div className="space-y-2 rounded-xl border border-border-base px-3 py-2">
                     <div className="flex items-center justify-between text-xs text-fg-muted">
                       <span>Tip</span>
@@ -3790,8 +3996,268 @@ export default function LivePOSScreen() {
                     {tipError && <p className="text-xs text-accent-bad">{tipError}</p>}
                   </div>
                 )}
+                {checkoutRetry.phase === 'awaiting_payment' && isSplitPayment && splitLegs
+                  && !benefitCoveredZero && collectibleBalance && !localWorkNeedsReconciliation
+                  && amount !== undefined && (
+                  <div className="space-y-3 rounded-xl border border-border-base px-3 py-3">
+                    <div>
+                      <div className="text-sm font-semibold text-fg">Split tender plan</div>
+                      <p className="mt-1 text-xs text-fg-muted">
+                        Use 2–5 different methods. Split payments settle the bill only; tips are not included.
+                      </p>
+                    </div>
+                    {splitLegs.map((leg, index) => {
+                      const splitFieldId = `split-payment-${index + 1}`;
+                      const amountInput = splitAmountInputs[leg.method]
+                        ?? (leg.amountMinor > 0 ? (leg.amountMinor / 100).toFixed(2) : '');
+                      const cashChangeMinor = leg.method === 'cash'
+                        && leg.tenderedMinor !== undefined
+                        ? leg.tenderedMinor - leg.amountMinor
+                        : null;
+                      return (
+                        <div key={`${index}:${leg.method}`} className="space-y-2 rounded-lg bg-bg-elevated/60 p-3">
+                          <div className="flex items-center gap-2">
+                            <select
+                              id={`${splitFieldId}-method`}
+                              aria-label={`Payment ${index + 1} method`}
+                              className="input min-w-0 flex-1"
+                              value={leg.method}
+                              disabled={paying || checkoutAdjustmentBusy}
+                              onChange={(event) => {
+                                const nextMethod = event.target.value as CheckoutSplitPaymentMethod;
+                                const previousMethod = leg.method;
+                                if (nextMethod === previousMethod) return;
+                                const saved = updateSplitPaymentLeg(index, () => ({
+                                  method: nextMethod,
+                                  amountMinor: leg.amountMinor,
+                                }));
+                                if (!saved) return;
+                                setSplitAmountInputs((current) => {
+                                  const next = { ...current };
+                                  delete next[previousMethod];
+                                  next[nextMethod] = amountInput;
+                                  return next;
+                                });
+                                if (previousMethod === 'cash' || nextMethod === 'cash') {
+                                  setSplitCashTenderedInput('');
+                                }
+                              }}
+                            >
+                              {SPLIT_PAYMENT_OPTIONS.map((option) => (
+                                <option
+                                  key={option.method}
+                                  value={option.method}
+                                  disabled={splitLegs.some((candidate, candidateIndex) => (
+                                    candidateIndex !== index && candidate.method === option.method
+                                  ))}
+                                >
+                                  {option.label}
+                                </option>
+                              ))}
+                            </select>
+                            <PosMoneyInput
+                              id={`${splitFieldId}-amount`}
+                              purpose="splitPayment"
+                              accessibleName={`${splitPaymentLabel(leg.method)} split payment amount in rupees`}
+                              min="0"
+                              step="0.01"
+                              inputMode="decimal"
+                              placeholder="₹ amount"
+                              value={amountInput}
+                              disabled={paying || checkoutAdjustmentBusy}
+                              onChange={(event) => {
+                                const raw = event.target.value;
+                                setSplitAmountInputs((current) => ({ ...current, [leg.method]: raw }));
+                                const parsed = parseRupeesToMinor(raw);
+                                if (parsed === null && raw.trim() !== '') return;
+                                if (!updateSplitPaymentLeg(index, (current) => ({
+                                  ...current,
+                                  amountMinor: parsed ?? 0,
+                                }))) {
+                                  setSplitAmountInputs((current) => ({
+                                    ...current,
+                                    [leg.method]: leg.amountMinor > 0
+                                      ? (leg.amountMinor / 100).toFixed(2)
+                                      : '',
+                                  }));
+                                }
+                              }}
+                              className="input min-w-0 flex-1 font-mono"
+                            />
+                            <button
+                              type="button"
+                              className="btn btn-ghost !min-h-[42px] !px-3 text-xs disabled:opacity-40"
+                              aria-label={`Set ${splitPaymentLabel(leg.method)} to the remaining balance`}
+                              disabled={paying || checkoutAdjustmentBusy}
+                              onClick={() => {
+                                const allocatedElsewhere = splitLegs.reduce((sum, candidate, candidateIndex) => (
+                                  candidateIndex === index ? sum : sum + candidate.amountMinor
+                                ), 0);
+                                const remainder = Math.max(0, amount - allocatedElsewhere);
+                                if (updateSplitPaymentLeg(index, (current) => ({
+                                  ...current,
+                                  amountMinor: remainder,
+                                }))) {
+                                  setSplitAmountInputs((current) => ({
+                                    ...current,
+                                    [leg.method]: (remainder / 100).toFixed(2),
+                                  }));
+                                }
+                              }}
+                            >
+                              Remainder
+                            </button>
+                            {splitLegs.length > 2 && (
+                              <button
+                                type="button"
+                                aria-label={`Remove ${splitPaymentLabel(leg.method)} payment`}
+                                className="btn btn-ghost !min-h-[42px] !px-3 text-accent-bad disabled:opacity-40"
+                                disabled={paying || checkoutAdjustmentBusy}
+                                onClick={() => {
+                                  if (!persistSplitPaymentLegs(splitLegs.filter((_, candidateIndex) => candidateIndex !== index))) return;
+                                  setSplitAmountInputs((current) => {
+                                    const next = { ...current };
+                                    delete next[leg.method];
+                                    return next;
+                                  });
+                                  if (leg.method === 'cash') setSplitCashTenderedInput('');
+                                }}
+                              >
+                                <Trash2 size={15}/>
+                              </button>
+                            )}
+                          </div>
+                          {leg.method === 'cash' ? (
+                            <div className="space-y-1">
+                              <PosMoneyInput
+                                id={`${splitFieldId}-cash-received`}
+                                purpose="splitCashTendered"
+                                accessibleName="Cash received for the cash portion in rupees"
+                                min="0"
+                                step="0.01"
+                                inputMode="decimal"
+                                placeholder="₹ cash received"
+                                value={splitCashTenderedInput}
+                                disabled={paying || checkoutAdjustmentBusy}
+                                onChange={(event) => {
+                                  const raw = event.target.value;
+                                  setSplitCashTenderedInput(raw);
+                                  const parsed = parseRupeesToMinor(raw);
+                                  if (parsed === null && raw.trim() !== '') return;
+                                  if (!updateSplitPaymentLeg(index, (current) => ({
+                                    ...current,
+                                    ...(parsed === null
+                                      ? { tenderedMinor: undefined }
+                                      : { tenderedMinor: parsed }),
+                                  }))) {
+                                    setSplitCashTenderedInput(
+                                      leg.tenderedMinor !== undefined
+                                        ? (leg.tenderedMinor / 100).toFixed(2)
+                                        : '',
+                                    );
+                                  }
+                                }}
+                                className="input w-full font-mono"
+                              />
+                              {cashChangeMinor !== null && (
+                                <div className={cashChangeMinor >= 0 ? 'text-xs text-accent-good' : 'text-xs text-accent-bad'}>
+                                  {cashChangeMinor >= 0
+                                    ? `Change to return: ${inr(cashChangeMinor)}`
+                                    : `More cash needed: ${inr(Math.abs(cashChangeMinor))}`}
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            <input
+                              id={`${splitFieldId}-reference`}
+                              aria-label={`${splitPaymentLabel(leg.method)} payment reference`}
+                              className="input w-full font-mono text-sm"
+                              maxLength={200}
+                              placeholder={`${splitPaymentLabel(leg.method)} reference (optional)`}
+                              value={leg.refExternal ?? ''}
+                              disabled={paying || checkoutAdjustmentBusy}
+                              onChange={(event) => {
+                                const refExternal = event.target.value;
+                                updateSplitPaymentLeg(index, (current) => ({
+                                  ...current,
+                                  ...(refExternal ? { refExternal } : { refExternal: undefined }),
+                                }));
+                              }}
+                            />
+                          )}
+                        </div>
+                      );
+                    })}
+                    {splitLegs.length < SPLIT_PAYMENT_OPTIONS.length && (
+                      <button
+                        type="button"
+                        className="btn btn-ghost w-full text-xs disabled:opacity-40"
+                        disabled={paying || checkoutAdjustmentBusy}
+                        onClick={() => {
+                          const used = new Set(splitLegs.map((leg) => leg.method));
+                          const option = SPLIT_PAYMENT_OPTIONS.find(({ method }) => !used.has(method));
+                          if (!option) return;
+                          if (persistSplitPaymentLegs([
+                            ...splitLegs,
+                            { method: option.method, amountMinor: 0 },
+                          ])) {
+                            setSplitAmountInputs((current) => ({
+                              ...current,
+                              [option.method]: '',
+                            }));
+                          }
+                        }}
+                      >
+                        <Plus size={15}/> Add payment method
+                      </button>
+                    )}
+                    <div className="flex items-center justify-between rounded-lg border border-border-base px-3 py-2 text-sm">
+                      <span className="text-fg-muted">Allocated</span>
+                      <span className="font-mono font-semibold">{inr(splitStatus.totalMinor)} / {inr(amount)}</span>
+                    </div>
+                    {!splitStatus.valid && (
+                      <p className="text-xs text-accent-bad">
+                        {splitStatus.message}
+                        {splitStatus.remainingMinor > 0
+                          ? ` ${inr(splitStatus.remainingMinor)} remains.`
+                          : splitStatus.remainingMinor < 0
+                            ? ` Reduce by ${inr(Math.abs(splitStatus.remainingMinor))}.`
+                            : ''}
+                      </p>
+                    )}
+                    {!splitEditorStatus.valid && (
+                      <p className="text-xs text-accent-bad">
+                        {splitEditorStatus.message}
+                      </p>
+                    )}
+                    {splitLegs.filter((leg) => (
+                      (leg.method === 'upi' || leg.method === 'qr') && leg.amountMinor > 0
+                    )).map((leg) => {
+                      const link = receiptBusiness
+                        ? buildUpiPayLink(receiptBusiness, leg.amountMinor, receiptBusiness.brandName)
+                        : null;
+                      return (
+                        <div key={`split-qr:${leg.method}`} className="flex flex-col items-center gap-2 rounded-lg border border-border-base p-3">
+                          <div className="text-xs text-fg-muted">
+                            {splitPaymentLabel(leg.method)} · {inr(leg.amountMinor)}
+                          </div>
+                          {link ? (
+                            <div className="rounded-lg bg-white p-2">
+                              <QRCodeSVG value={link} size={160} marginSize={2} level="M" />
+                            </div>
+                          ) : (
+                            <div className="rounded-lg border border-accent-bad/40 bg-accent-bad/10 px-3 py-2 text-xs text-accent-bad">
+                              The {splitPaymentLabel(leg.method)} QR could not be created. Verify this leg externally before confirming payment.
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
                 {checkoutRetry.phase === 'awaiting_payment' && !benefitCoveredZero && collectibleBalance
                   && !localWorkNeedsReconciliation
+                  && !isSplitPayment
                   && checkoutRetry.paymentMethod === 'cash' && amount !== undefined && (() => {
                   const dueMinor = amount + tipMinor;
                   const tenderedMinor = parsedCashTendered;
@@ -3935,7 +4401,11 @@ export default function LivePOSScreen() {
 
       {receipt && receiptBusiness && (
         <Modal title="Receipt" onClose={() => setReceipt(null)} wide>
-          <LiveReceipt order={receipt} business={receiptBusiness} />
+          <LiveReceipt
+            order={receipt.order}
+            business={receiptBusiness}
+            splitPayments={receipt.splitPayments ?? undefined}
+          />
           <div className="flex gap-2 mt-4 print:hidden">
             <button onClick={() => window.print()} className="btn btn-primary flex-1"><ReceiptIcon size={16}/> Print</button>
             <button onClick={() => setReceipt(null)} className="btn btn-ghost"><Check size={16}/> Done</button>

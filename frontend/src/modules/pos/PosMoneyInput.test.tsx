@@ -19,4 +19,19 @@ describe('PosMoneyInput', () => {
       expect(markup).toContain(`aria-label="${accessibleName}"`);
     },
   );
+
+  it('allows a specific accessible name for repeated split-payment fields', () => {
+    const markup = renderToStaticMarkup(
+      <PosMoneyInput
+        id="split-payment-1-amount"
+        purpose="splitPayment"
+        accessibleName="Cash split payment amount in rupees"
+        value="17.00"
+        onChange={() => undefined}
+      />,
+    );
+
+    expect(markup).toContain('id="split-payment-1-amount"');
+    expect(markup).toContain('aria-label="Cash split payment amount in rupees"');
+  });
 });

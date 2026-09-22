@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import re
 import sys
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
@@ -21,8 +21,46 @@ from uuid import UUID
 EXPECTED_COMPANY_ID = "8f323fba-4358-45fe-9d3b-a8e0fae52993"
 EXPECTED_ACTOR_USER_ID = "7016c42c-11c9-48fa-a30a-5d66a8c970b7"
 EXPECTED_TERMINAL_ID = "789353a8-09e4-4ef2-9fa8-ac73c426bfc8"
-EXPECTED_INSTALLATION_ROW_SHA256 = (
-    "530ff69bd8e040457755bc0268216c8347442ebae858d5ce1152fb1fbfc65a71"
+EXPECTED_CLEANUP_RECEIPT_ID = 28204
+EXPECTED_CLEANUP_RECEIPT_AT = datetime(2026, 9, 20, 14, 34, 47, 822128, tzinfo=UTC)
+EXPECTED_STATE_FINGERPRINT = (
+    "3759003a82dd2f731219d15bf33502d1162fe7a2694b746965b05778ccb5509c"
+)
+EXPECTED_BACKUP_SHA256 = (
+    "50601f8b7df409494a29b39fca5e2e15d2ae2a6910e43c4596f59ea607a51f65"
+)
+EXPECTED_PRE_RECEIPT_LOGIN_SUFFIX_COUNT = 1
+EXPECTED_PRE_RECEIPT_LOGIN_SUFFIX_SHA256 = (
+    "e893913f7529f18d82674d1cdf65df8fb6e4fda0dd74a2688b612d1a07fd7e33"
+)
+EXPECTED_PRE_RECEIPT_LOGIN_SUFFIX_MAX_ID = 28203
+EXPECTED_SOURCE_GIT_SHA = "3ea84be4718a794d5a2e8efc7ac9bcacbc0cee01"
+EXPECTED_BACKEND_IMAGE_ID = (
+    "sha256:60210090ab5ebdaf362e39317a97887633f1b9f600932edf25014fe32f8d1009"
+)
+EXPECTED_INSTALLATION_IDENTITY_SHA256 = (
+    "78ca810cea80109b50fa226622ea12531979d3e20e4dcdbe3cc4fe692859f747"
+)
+EXPECTED_RETAINED_REMOTE_KEYS_IDENTITY_SHA256 = (
+    "12b89ad13334515c0d943fbac2c1bebbd4bddd0a5d2845225564fa7b0b2546b0"
+)
+EXPECTED_CLIENT_INSTALLATION_GUARD_FUNCTION_SHA256 = (
+    "5e19e5e24daa5ef6de4d51f479e158f29981a01defded0c3f56a4d42a615f575"
+)
+EXPECTED_CLIENT_INSTALLATION_GUARD_FUNCTION_DEFINITION_SHA256 = (
+    "e04d616ebcd1c53e04424bd4071b881e1e6e439a6f2fda56419b6bcc2e3d6084"
+)
+EXPECTED_CLIENT_INSTALLATION_GUARD_TRIGGER_DEFINITION_SHA256 = (
+    "dcd3cdf560b382ab046934d824c29a3a90af5ba56a86fe56c87e78716e190ae7"
+)
+EXPECTED_REMOTE_DEVICE_KEY_GUARD_FUNCTION_SHA256 = (
+    "93fbbce17b8f62657054d019deef4c8963ad4c7680be9fbc1acae781c433d999"
+)
+EXPECTED_REMOTE_DEVICE_KEY_GUARD_FUNCTION_DEFINITION_SHA256 = (
+    "831c79f1f5e8a89edf391709e0f171d37ec8ef14dd8382567343a2354e9cdd37"
+)
+EXPECTED_REMOTE_DEVICE_KEY_GUARD_TRIGGER_DEFINITION_SHA256 = (
+    "23c0907ae06aa7213082cf1cdbc55c3588c0ef5c1d9e738892b2520d0017265b"
 )
 EXPECTED_REMOTE_KEYS_SHA256 = (
     "301905b96650f3f06fc6b3378a1450cc000159a9909f33af3b951a665eca2696"
@@ -282,9 +320,6 @@ EXPECTED_REASON = (
     "AVDs were separately wiped, and no direct AVD identity link is claimed."
 )
 
-HEX_40 = re.compile(r"^[0-9a-f]{40}$")
-HEX_64 = re.compile(r"^[0-9a-f]{64}$")
-
 
 class StateError(ValueError):
     """Raised when post-cleanup database evidence is incomplete or changed."""
@@ -305,6 +340,23 @@ def _require_keys(value: Any, expected: set[str], label: str) -> dict[str, Any]:
     return value
 
 
+def _strict_equal(actual: Any, expected: Any) -> bool:
+    """Compare pinned JSON evidence without Python's bool/int/float coercion."""
+
+    if type(actual) is not type(expected):
+        return False
+    if isinstance(expected, dict):
+        return set(actual) == set(expected) and all(
+            _strict_equal(actual[key], expected[key]) for key in expected
+        )
+    if isinstance(expected, list):
+        return len(actual) == len(expected) and all(
+            _strict_equal(actual_item, expected_item)
+            for actual_item, expected_item in zip(actual, expected, strict=True)
+        )
+    return actual == expected
+
+
 def _require_uuid(value: Any, label: str) -> str:
     if not isinstance(value, str):
         raise StateError(f"{label} must be a UUID string")
@@ -317,7 +369,7 @@ def _require_uuid(value: Any, label: str) -> str:
     return value
 
 
-def _require_timestamp(value: Any, label: str) -> None:
+def _require_timestamp(value: Any, label: str) -> datetime:
     if not isinstance(value, str):
         raise StateError(f"{label} must be a timestamp")
     try:
@@ -326,16 +378,18 @@ def _require_timestamp(value: Any, label: str) -> None:
         raise StateError(f"{label} must be an ISO-8601 timestamp") from exc
     if parsed.tzinfo is None:
         raise StateError(f"{label} must include a timezone")
+    return parsed
 
 
 def _require_exact_list(value: Any, expected: set[Any], label: str) -> None:
     if not isinstance(value, list) or len(value) != len(expected):
         raise StateError(f"{label} does not match the reviewed allowlist")
     try:
-        actual = set(value)
+        actual = {(type(item), item) for item in value}
+        typed_expected = {(type(item), item) for item in expected}
     except TypeError as exc:
         raise StateError(f"{label} contains a non-scalar value") from exc
-    if actual != expected:
+    if actual != typed_expected:
         raise StateError(f"{label} does not match the reviewed allowlist")
 
 
@@ -365,8 +419,8 @@ def _verify_receipt(receipt: Any, audit_integrity: dict[str, Any]) -> int:
         },
         "cleanup receipt",
     )
-    if type(receipt["id"]) is not int or receipt["id"] <= 0:
-        raise StateError("cleanup receipt id is invalid")
+    if not _strict_equal(receipt["id"], EXPECTED_CLEANUP_RECEIPT_ID):
+        raise StateError("cleanup receipt id is not the retained receipt")
     expected_identity = {
         "actor_user_id": EXPECTED_ACTOR_USER_ID,
         "company_id": EXPECTED_COMPANY_ID,
@@ -386,7 +440,7 @@ def _verify_receipt(receipt: Any, audit_integrity: dict[str, Any]) -> int:
         "reason": EXPECTED_REASON,
     }
     for key, expected in expected_identity.items():
-        if receipt[key] != expected:
+        if not _strict_equal(receipt[key], expected):
             raise StateError(f"cleanup receipt {key} is not the reviewed value")
 
     before = _require_keys(
@@ -401,19 +455,17 @@ def _verify_receipt(receipt: Any, audit_integrity: dict[str, Any]) -> int:
         },
         "cleanup receipt before",
     )
-    if before["schema_revision"] != "0078":
+    if not _strict_equal(before["schema_revision"], "0078"):
         raise StateError("cleanup receipt schema revision is not 0078")
-    if not isinstance(before["state_fingerprint"], str) or not HEX_64.fullmatch(
-        before["state_fingerprint"]
+    if not _strict_equal(before["state_fingerprint"], EXPECTED_STATE_FINGERPRINT):
+        raise StateError("cleanup receipt state fingerprint changed")
+    if not _strict_equal(before["backup_sha256"], EXPECTED_BACKUP_SHA256):
+        raise StateError("cleanup receipt backup hash changed")
+    if not _strict_equal(
+        before["quarantine_evidence_sha256"], EXPECTED_QUARANTINE_SHA256
     ):
-        raise StateError("cleanup receipt state fingerprint is invalid")
-    if not isinstance(before["backup_sha256"], str) or not HEX_64.fullmatch(
-        before["backup_sha256"]
-    ):
-        raise StateError("cleanup receipt backup hash is invalid")
-    if before["quarantine_evidence_sha256"] != EXPECTED_QUARANTINE_SHA256:
         raise StateError("cleanup receipt quarantine evidence changed")
-    if before["counts"] != EXPECTED_PRE_COUNTS:
+    if not _strict_equal(before["counts"], EXPECTED_PRE_COUNTS):
         raise StateError("cleanup receipt pre-cleanup counts changed")
     audit_before = _require_keys(
         before["audit_log"],
@@ -427,33 +479,36 @@ def _verify_receipt(receipt: Any, audit_integrity: dict[str, Any]) -> int:
         },
         "cleanup receipt audit-log evidence",
     )
-    if audit_before["baseline_max_id"] != EXPECTED_AUDIT_BASELINE_MAX_ID:
+    if not _strict_equal(
+        audit_before["baseline_max_id"], EXPECTED_AUDIT_BASELINE_MAX_ID
+    ):
         raise StateError("cleanup receipt audit baseline boundary changed")
-    if audit_before["baseline_count"] != EXPECTED_AUDIT_BASELINE_COUNT:
+    if not _strict_equal(audit_before["baseline_count"], EXPECTED_AUDIT_BASELINE_COUNT):
         raise StateError("cleanup receipt audit baseline count changed")
-    if audit_before["baseline_sha256"] != EXPECTED_AUDIT_BASELINE_SHA256:
+    if not _strict_equal(
+        audit_before["baseline_sha256"], EXPECTED_AUDIT_BASELINE_SHA256
+    ):
         raise StateError("cleanup receipt audit baseline hash changed")
     suffix_count = audit_before["login_success_suffix_count"]
     suffix_hash = audit_before["login_success_suffix_sha256"]
     suffix_max_id = audit_before["login_success_suffix_max_id"]
-    if type(suffix_count) is not int or suffix_count < 0:
-        raise StateError("cleanup receipt login suffix count is invalid")
-    if not isinstance(suffix_hash, str) or not HEX_64.fullmatch(suffix_hash):
-        raise StateError("cleanup receipt login suffix hash is invalid")
-    if suffix_count == 0:
-        if suffix_max_id is not None:
-            raise StateError("empty cleanup receipt login suffix has a maximum id")
-    elif (
-        type(suffix_max_id) is not int
-        or suffix_max_id <= EXPECTED_AUDIT_BASELINE_MAX_ID
-        or suffix_max_id >= receipt["id"]
+    if not _strict_equal(suffix_count, EXPECTED_PRE_RECEIPT_LOGIN_SUFFIX_COUNT):
+        raise StateError("cleanup receipt login suffix count changed")
+    if not _strict_equal(suffix_hash, EXPECTED_PRE_RECEIPT_LOGIN_SUFFIX_SHA256):
+        raise StateError("cleanup receipt login suffix hash changed")
+    if not _strict_equal(suffix_max_id, EXPECTED_PRE_RECEIPT_LOGIN_SUFFIX_MAX_ID):
+        raise StateError("cleanup receipt login suffix maximum id changed")
+    if not _strict_equal(
+        audit_integrity["pre_receipt_login_success_count"], suffix_count
     ):
-        raise StateError("cleanup receipt login suffix maximum id is invalid")
-    if audit_integrity["pre_receipt_login_success_count"] != suffix_count:
         raise StateError("pre-receipt login suffix count changed")
-    if audit_integrity["pre_receipt_login_success_sha256"] != suffix_hash:
+    if not _strict_equal(
+        audit_integrity["pre_receipt_login_success_sha256"], suffix_hash
+    ):
         raise StateError("pre-receipt login suffix hash changed")
-    if audit_integrity["pre_receipt_login_success_max_id"] != suffix_max_id:
+    if not _strict_equal(
+        audit_integrity["pre_receipt_login_success_max_id"], suffix_max_id
+    ):
         raise StateError("pre-receipt login suffix maximum id changed")
 
     after = _require_keys(
@@ -479,20 +534,26 @@ def _verify_receipt(receipt: Any, audit_integrity: dict[str, Any]) -> int:
         "cleanup receipt after",
     )
     source_git_sha = after["source_git_sha"]
-    if not isinstance(source_git_sha, str) or not HEX_40.fullmatch(source_git_sha):
-        raise StateError("cleanup receipt source Git SHA is invalid")
+    if not _strict_equal(source_git_sha, EXPECTED_SOURCE_GIT_SHA):
+        raise StateError("cleanup receipt source Git SHA changed")
     backend_image_id = after["backend_image_id"]
-    if not isinstance(backend_image_id, str) or not re.fullmatch(
-        r"sha256:[0-9a-f]{64}", backend_image_id
-    ):
-        raise StateError("cleanup receipt backend image identity is invalid")
-    if after["executor"] != f"install-on-vm:{source_git_sha}":
+    if not _strict_equal(backend_image_id, EXPECTED_BACKEND_IMAGE_ID):
+        raise StateError("cleanup receipt backend image identity changed")
+    if not _strict_equal(after["executor"], f"install-on-vm:{source_git_sha}"):
         raise StateError("cleanup receipt executor does not match its source Git SHA")
-    _require_timestamp(after["executed_at"], "cleanup receipt executed_at")
-    if after["deleted_counts"] != EXPECTED_DELETED_COUNTS:
+    executed_at = _require_timestamp(
+        after["executed_at"], "cleanup receipt executed_at"
+    )
+    if executed_at != EXPECTED_CLEANUP_RECEIPT_AT:
+        raise StateError("cleanup receipt execution time changed")
+    if not _strict_equal(after["deleted_counts"], EXPECTED_DELETED_COUNTS):
         raise StateError("cleanup receipt deleted counts changed")
-    _require_exact_list(after["deleted_shift_ids"], EXPECTED_SHIFT_IDS, "deleted shifts")
-    _require_exact_list(after["deleted_order_ids"], EXPECTED_ORDER_IDS, "deleted orders")
+    _require_exact_list(
+        after["deleted_shift_ids"], EXPECTED_SHIFT_IDS, "deleted shifts"
+    )
+    _require_exact_list(
+        after["deleted_order_ids"], EXPECTED_ORDER_IDS, "deleted orders"
+    )
     _require_exact_list(
         after["deleted_order_line_ids"], EXPECTED_ORDER_LINE_IDS, "deleted order lines"
     )
@@ -509,20 +570,27 @@ def _verify_receipt(receipt: Any, audit_integrity: dict[str, Any]) -> int:
         EXPECTED_IDEMPOTENCY_KEYS,
         "deleted idempotency keys",
     )
-    _require_exact_list(after["deleted_audit_ids"], EXPECTED_AUDIT_IDS, "deleted audit rows")
-    if after["retired_test_installation"] != EXPECTED_RETIRED_INSTALLATION:
+    _require_exact_list(
+        after["deleted_audit_ids"], EXPECTED_AUDIT_IDS, "deleted audit rows"
+    )
+    if not _strict_equal(
+        after["retired_test_installation"], EXPECTED_RETIRED_INSTALLATION
+    ):
         raise StateError("cleanup receipt retained installation snapshot changed")
-    if after["local_avd_quarantine"] != {
-        "evidence_sha256": EXPECTED_QUARANTINE_SHA256,
-        "avd_count": 18,
-        "direct_installation_identity_link_proven": False,
-    }:
+    if not _strict_equal(
+        after["local_avd_quarantine"],
+        {
+            "evidence_sha256": EXPECTED_QUARANTINE_SHA256,
+            "avd_count": 18,
+            "direct_installation_identity_link_proven": False,
+        },
+    ):
         raise StateError("cleanup receipt AVD quarantine evidence changed")
     expected_post_counts = {
         **EXPECTED_POST_COUNTS,
         "audit_log": EXPECTED_AUDIT_BASELINE_COUNT + suffix_count - 37 + 1,
     }
-    if after["expected_post_counts"] != expected_post_counts:
+    if not _strict_equal(after["expected_post_counts"], expected_post_counts):
         raise StateError("cleanup receipt expected post-cleanup counts changed")
 
     fence = after["replay_fence"]
@@ -550,7 +618,7 @@ def _verify_receipt(receipt: Any, audit_integrity: dict[str, Any]) -> int:
             raise StateError("cleanup replay fence action key is invalid")
         action_keys.append(action_key)
         expected_entry = expected_fence_by_key.get(action_key)
-        if expected_entry is None or entry != expected_entry:
+        if expected_entry is None or not _strict_equal(entry, expected_entry):
             raise StateError("cleanup replay fence action identity changed")
     if action_keys != sorted(action_keys) or len(action_keys) != len(set(action_keys)):
         raise StateError("cleanup replay fence keys are duplicate or out of order")
@@ -567,17 +635,35 @@ def verify_state(document: Any) -> int:
             "database_revision",
             "pending_outbox_count",
             "nonzero_installation_count",
+            "cleanup_receipt_created_at",
             "retired_installation_count",
-            "retired_installation_row_sha256",
-            "remote_assistance_device_key_count",
-            "remote_assistance_device_keys_sha256",
+            "retired_installation_identity_sha256",
+            "retired_installation_invalid_telemetry_count",
+            "client_installation_guard_trigger_count",
+            "client_installation_guard_function_sha256",
+            "client_installation_guard_function_definition_sha256",
+            "client_installation_guard_trigger_definition_sha256",
+            "retained_remote_assistance_device_key_count",
+            "retained_remote_assistance_device_keys_identity_sha256",
+            "retained_remote_assistance_device_key_invalid_count",
+            "post_cleanup_remote_assistance_device_key_count",
+            "post_cleanup_remote_assistance_device_key_expired_count",
+            "post_cleanup_remote_assistance_device_key_pending_count",
+            "post_cleanup_remote_assistance_device_key_invalid_count",
+            "post_cleanup_remote_assistance_device_key_enrollment_audit_count",
+            "post_cleanup_remote_assistance_device_key_expiration_audit_count",
+            "post_cleanup_remote_assistance_device_key_invalid_audit_count",
+            "remote_assistance_device_key_guard_trigger_count",
+            "remote_assistance_device_key_guard_function_sha256",
+            "remote_assistance_device_key_guard_function_definition_sha256",
+            "remote_assistance_device_key_guard_trigger_definition_sha256",
             "audit_integrity",
             "surviving_deleted_targets",
             "cleanup_receipts",
         },
         "post-cleanup state",
     )
-    if type(document["schema_version"]) is not int or document["schema_version"] != 1:
+    if type(document["schema_version"]) is not int or document["schema_version"] != 2:
         raise StateError("unsupported post-cleanup state schema")
     revision = document["database_revision"]
     if not isinstance(revision, str) or not re.fullmatch(r"[0-9]{4}", revision):
@@ -588,15 +674,94 @@ def verify_state(document: Any) -> int:
         "pending_outbox_count": 1,
         "nonzero_installation_count": 1,
         "retired_installation_count": 1,
-        "remote_assistance_device_key_count": 29,
+        "retired_installation_invalid_telemetry_count": 0,
+        "client_installation_guard_trigger_count": 1,
+        "retained_remote_assistance_device_key_count": 29,
+        "retained_remote_assistance_device_key_invalid_count": 0,
+        "post_cleanup_remote_assistance_device_key_invalid_count": 0,
+        "post_cleanup_remote_assistance_device_key_invalid_audit_count": 0,
+        "remote_assistance_device_key_guard_trigger_count": 1,
     }
     for key, expected in expected_scalars.items():
         if type(document[key]) is not int or document[key] != expected:
             raise StateError(f"{key} does not match the retained historical state")
-    if document["retired_installation_row_sha256"] != EXPECTED_INSTALLATION_ROW_SHA256:
-        raise StateError("retained installation row changed")
-    if document["remote_assistance_device_keys_sha256"] != EXPECTED_REMOTE_KEYS_SHA256:
-        raise StateError("retained remote-assistance key rows changed")
+    receipt_created_at = _require_timestamp(
+        document["cleanup_receipt_created_at"], "cleanup receipt created_at"
+    )
+    if receipt_created_at != EXPECTED_CLEANUP_RECEIPT_AT:
+        raise StateError("cleanup receipt creation time changed")
+    if (
+        document["retired_installation_identity_sha256"]
+        != EXPECTED_INSTALLATION_IDENTITY_SHA256
+    ):
+        raise StateError("retained installation identity changed")
+    if (
+        document["client_installation_guard_function_sha256"]
+        != EXPECTED_CLIENT_INSTALLATION_GUARD_FUNCTION_SHA256
+    ):
+        raise StateError("client installation guard changed")
+    if (
+        document["client_installation_guard_function_definition_sha256"]
+        != EXPECTED_CLIENT_INSTALLATION_GUARD_FUNCTION_DEFINITION_SHA256
+    ):
+        raise StateError("client installation guard function definition changed")
+    if (
+        document["client_installation_guard_trigger_definition_sha256"]
+        != EXPECTED_CLIENT_INSTALLATION_GUARD_TRIGGER_DEFINITION_SHA256
+    ):
+        raise StateError("client installation guard trigger definition changed")
+    if (
+        document["retained_remote_assistance_device_keys_identity_sha256"]
+        != EXPECTED_RETAINED_REMOTE_KEYS_IDENTITY_SHA256
+    ):
+        raise StateError("retained remote-assistance key identities changed")
+    if (
+        document["remote_assistance_device_key_guard_function_sha256"]
+        != EXPECTED_REMOTE_DEVICE_KEY_GUARD_FUNCTION_SHA256
+    ):
+        raise StateError("remote-assistance device-key guard changed")
+    if (
+        document["remote_assistance_device_key_guard_function_definition_sha256"]
+        != EXPECTED_REMOTE_DEVICE_KEY_GUARD_FUNCTION_DEFINITION_SHA256
+    ):
+        raise StateError(
+            "remote-assistance device-key guard function definition changed"
+        )
+    if (
+        document["remote_assistance_device_key_guard_trigger_definition_sha256"]
+        != EXPECTED_REMOTE_DEVICE_KEY_GUARD_TRIGGER_DEFINITION_SHA256
+    ):
+        raise StateError(
+            "remote-assistance device-key guard trigger definition changed"
+        )
+
+    post_count_names = (
+        "post_cleanup_remote_assistance_device_key_count",
+        "post_cleanup_remote_assistance_device_key_expired_count",
+        "post_cleanup_remote_assistance_device_key_pending_count",
+        "post_cleanup_remote_assistance_device_key_enrollment_audit_count",
+        "post_cleanup_remote_assistance_device_key_expiration_audit_count",
+    )
+    for key in post_count_names:
+        if type(document[key]) is not int or document[key] < 0:
+            raise StateError(f"{key} is invalid")
+    post_count = document["post_cleanup_remote_assistance_device_key_count"]
+    expired_count = document["post_cleanup_remote_assistance_device_key_expired_count"]
+    pending_count = document["post_cleanup_remote_assistance_device_key_pending_count"]
+    if pending_count > 1:
+        raise StateError("more than one post-cleanup remote-assistance key is pending")
+    if post_count != expired_count + pending_count:
+        raise StateError("post-cleanup remote-assistance key totals do not reconcile")
+    if (
+        document["post_cleanup_remote_assistance_device_key_enrollment_audit_count"]
+        != post_count
+    ):
+        raise StateError("post-cleanup key enrollment audits do not reconcile")
+    if (
+        document["post_cleanup_remote_assistance_device_key_expiration_audit_count"]
+        != expired_count
+    ):
+        raise StateError("post-cleanup key expiration audits do not reconcile")
     audit_integrity = _require_keys(
         document["audit_integrity"],
         {
@@ -610,19 +775,21 @@ def verify_state(document: Any) -> int:
         },
         "post-cleanup audit integrity",
     )
-    if audit_integrity["baseline_max_id"] != EXPECTED_AUDIT_BASELINE_MAX_ID:
+    if not _strict_equal(
+        audit_integrity["baseline_max_id"], EXPECTED_AUDIT_BASELINE_MAX_ID
+    ):
         raise StateError("post-cleanup audit baseline boundary changed")
-    if (
-        audit_integrity["retained_baseline_count"]
-        != EXPECTED_RETAINED_AUDIT_BASELINE_COUNT
+    if not _strict_equal(
+        audit_integrity["retained_baseline_count"],
+        EXPECTED_RETAINED_AUDIT_BASELINE_COUNT,
     ):
         raise StateError("retained audit baseline count changed")
-    if (
-        audit_integrity["retained_baseline_sha256"]
-        != EXPECTED_RETAINED_AUDIT_BASELINE_SHA256
+    if not _strict_equal(
+        audit_integrity["retained_baseline_sha256"],
+        EXPECTED_RETAINED_AUDIT_BASELINE_SHA256,
     ):
         raise StateError("retained audit baseline rows changed")
-    if audit_integrity["invalid_pre_receipt_suffix_count"] != 0:
+    if not _strict_equal(audit_integrity["invalid_pre_receipt_suffix_count"], 0):
         raise StateError("audit suffix before the cleanup receipt is not login-only")
     survivors = document["surviving_deleted_targets"]
     expected_survivors = {
@@ -634,7 +801,7 @@ def verify_state(document: Any) -> int:
         "idempotency_keys": 0,
         "audit_log": 0,
     }
-    if survivors != expected_survivors:
+    if not _strict_equal(survivors, expected_survivors):
         raise StateError("one or more reviewed cleanup targets reappeared")
     receipts = document["cleanup_receipts"]
     if not isinstance(receipts, list) or len(receipts) != 1:

@@ -1,6 +1,8 @@
 package cloud.dcompany.erp.ui.screens
 
 import cloud.dcompany.erp.core.db.PosReceiptEntity
+import cloud.dcompany.erp.core.checkout.SplitPaymentLeg
+import cloud.dcompany.erp.core.checkout.SplitPaymentPolicy
 import cloud.dcompany.erp.core.net.OrderLine
 import cloud.dcompany.erp.core.net.OrderModifierSnapshot
 import cloud.dcompany.erp.core.net.OrderVariantSnapshot
@@ -49,6 +51,32 @@ class PosReceiptPrintTest {
         assertTrue(html.contains("27 Aug 2026 · 11:30 PM IST"))
         assertFalse(html.contains("2026-08-27T18:00:00Z"))
         assertFalse(html.contains("Coffee <large>"))
+    }
+
+    @Test
+    fun printableSplitReceiptShowsEveryRailAndCashChangeWithoutEncodedStorageText() {
+        val stored = SplitPaymentPolicy.encode(
+            SplitPaymentPolicy.create(
+                35_000,
+                listOf(
+                    SplitPaymentLeg("cash", 10_000, 20_000),
+                    SplitPaymentLeg("upi", 25_000),
+                ),
+            ),
+        )
+        val html = posReceiptPrintHtml(
+            receipt("[]").copy(
+                method = stored,
+                tenderedMinor = 20_000,
+                changeMinor = 10_000,
+            ),
+        )
+
+        assertTrue(html.contains("Split · Cash ₹100 + UPI ₹250"))
+        assertTrue(html.contains("Cash received"))
+        assertTrue(html.contains("₹200.00"))
+        assertTrue(html.contains("₹100.00"))
+        assertFalse(html.contains("split:v1"))
     }
 
     private fun receipt(linesJson: String) = PosReceiptEntity(

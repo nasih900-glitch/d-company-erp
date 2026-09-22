@@ -381,7 +381,15 @@ interface GamingDao {
     suspend fun cleanupRetiredSessions(): List<LocalGamingSessionEntity>
 
     @Query(
-        "UPDATE local_gaming_sessions SET cleanupAcknowledgedAtMillis = :acknowledgedAtMillis " +
+        "SELECT * FROM local_gaming_sessions WHERE state = 'cleanup_retired' " +
+            "AND cleanupAcknowledgedAtMillis IS NULL " +
+            "ORDER BY cleanupRetiredAtMillis, localId",
+    )
+    fun observeCleanupRetirementsAwaitingAcknowledgement(): Flow<List<LocalGamingSessionEntity>>
+
+    @Query(
+        "UPDATE local_gaming_sessions SET cleanupAcknowledgedAtMillis = :acknowledgedAtMillis, " +
+            "lastError = NULL " +
             "WHERE localId = :localId AND state = 'cleanup_retired' " +
             "AND cleanupReconciliationId = :reconciliationId " +
             "AND cleanupCandidateSha256 = :candidateSha256 " +
@@ -392,6 +400,43 @@ interface GamingDao {
         reconciliationId: String,
         candidateSha256: String,
         acknowledgedAtMillis: Long,
+    ): Int
+
+    /**
+     * Operator feedback for a still-current candidate. This intentionally
+     * leaves cleanupEvidenceRevision unchanged so the candidate hash and the
+     * owner's exact review identity remain stable across retries.
+     */
+    @Query(
+        "UPDATE local_gaming_sessions SET lastError = :message " +
+            "WHERE localId = :localId AND serverId = :serverSessionId " +
+            "AND state = :expectedState AND orderId IS NULL " +
+            "AND legacyResolution IS NULL AND legacyResolutionAttemptState IS NULL " +
+            "AND cleanupReconciliationId IS NULL AND cleanupReceiptAuditId IS NULL " +
+            "AND cleanupCandidateSha256 IS NULL AND cleanupRetiredAtMillis IS NULL " +
+            "AND cleanupEvidenceRevision = :expectedEvidenceRevision " +
+            "AND lastError IS NOT :message",
+    )
+    suspend fun noteCleanupWorkflowStatusCas(
+        localId: String,
+        serverSessionId: String,
+        expectedState: String,
+        expectedEvidenceRevision: Long,
+        message: String,
+    ): Int
+
+    @Query(
+        "UPDATE local_gaming_sessions SET lastError = :message " +
+            "WHERE localId = :localId AND state = 'cleanup_retired' " +
+            "AND cleanupReconciliationId = :reconciliationId " +
+            "AND cleanupCandidateSha256 = :candidateSha256 " +
+            "AND cleanupAcknowledgedAtMillis IS NULL AND lastError IS NOT :message",
+    )
+    suspend fun noteCleanupAcknowledgementPendingCas(
+        localId: String,
+        reconciliationId: String,
+        candidateSha256: String,
+        message: String,
     ): Int
 
     /** Local lifecycle overlays, including ended sessions still waiting for POS. */

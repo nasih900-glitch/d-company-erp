@@ -92,6 +92,9 @@ _VERSION_NAME_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._+-]{0,79}$")
 _MAX_FUTURE_SKEW = timedelta(hours=24)
 _CLIENT_TELEMETRY_LOCK_PREFIX = "dcompany-client-telemetry:"
 MAX_GAMING_CLEANUP_REVISIONS_PER_ACTION = 32
+MIN_GAMING_CLEANUP_VERSION_CODE = 38
+MAX_GAMING_CLEANUP_EPOCH_MILLIS = 253_402_300_799_999
+MAX_GAMING_CLEANUP_EVIDENCE_REVISION = 9_223_372_036_854_775_807
 
 # Keep the API literals and database/model allowlists mechanically aligned.
 assert set(get_args(DistributionChannel)) == set(CLIENT_DISTRIBUTION_CHANNELS)
@@ -246,17 +249,25 @@ class GamingCleanupLocalSnapshot(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     shift_id: UUID
-    started_at_millis: int = Field(ge=1)
-    ended_at_millis: int = Field(ge=1)
+    started_at_millis: int = Field(ge=1, le=MAX_GAMING_CLEANUP_EPOCH_MILLIS)
+    ended_at_millis: int = Field(ge=1, le=MAX_GAMING_CLEANUP_EPOCH_MILLIS)
     timer_minutes: int | None = Field(default=None, ge=1, le=1440)
-    timer_ends_at_millis: int | None = Field(default=None, ge=1)
+    timer_ends_at_millis: int | None = Field(
+        default=None,
+        ge=1,
+        le=MAX_GAMING_CLEANUP_EPOCH_MILLIS,
+    )
     billable_minutes: int | None = Field(default=None, ge=0)
     amount_minor: int | None = Field(default=None, ge=0, le=9_999_999_999)
     rate_per_hour_minor: int = Field(ge=0, le=9_999_999_999)
     customer_id: UUID | None = None
     customer_name: str | None = Field(default=None, max_length=200)
     customer_phone: str | None = Field(default=None, max_length=20)
-    customer_directory_revision: int | None = Field(default=None, ge=0)
+    customer_directory_revision: int | None = Field(
+        default=None,
+        ge=0,
+        le=MAX_GAMING_CLEANUP_EVIDENCE_REVISION,
+    )
     customer_directory_company_id: UUID | None = None
     package_id: UUID | None = None
     billing_mode: Literal["hourly", "package", "legacy_ambiguous"] | None = None
@@ -267,7 +278,7 @@ class GamingCleanupLocalSnapshot(BaseModel):
     package_pricing_tier_snapshot: str | None = Field(default=None, max_length=20)
     extra_controllers: int = Field(ge=0, le=8)
     player_count: int | None = Field(default=None, ge=1, le=10)
-    evidence_revision: int = Field(ge=0)
+    evidence_revision: int = Field(ge=0, le=MAX_GAMING_CLEANUP_EVIDENCE_REVISION)
 
     @model_validator(mode="after")
     def validate_chronology_and_catalogue_evidence(self) -> GamingCleanupLocalSnapshot:
@@ -364,6 +375,8 @@ class GamingCleanupReconciliationRead(BaseModel):
     is_current: bool
     reported_local_state: str
     local_evidence_revision: int
+    reported_app_version_name: str
+    reported_app_version_code: int
     local_snapshot_sha256: str
     start_request_hash: str
     stop_request_hash: str
@@ -513,6 +526,8 @@ def _cleanup_read(
         is_current=row.status != "superseded",
         reported_local_state=row.reported_local_state,
         local_evidence_revision=int(row.local_evidence_revision),
+        reported_app_version_name=row.reported_app_version_name,
+        reported_app_version_code=int(row.reported_app_version_code),
         local_snapshot_sha256=row.local_snapshot_sha256,
         start_request_hash=row.start_request_hash,
         stop_request_hash=row.stop_request_hash,
@@ -587,12 +602,15 @@ async def _authenticate_cleanup_device(
         or request.headers.get("X-Installation-Id") != str(installation_id)
         or request.headers.get("X-Client-Platform", "").strip().lower() != "android"
         or version_code is None
-        or version_code < 37
+        or version_code < MIN_GAMING_CLEANUP_VERSION_CODE
+        or installation.version_code < MIN_GAMING_CLEANUP_VERSION_CODE
+        or version_code != installation.version_code
         or installation.platform != "android"
         or installation.last_user_id != tenant.user_id
     ):
         raise BusinessRuleError(
-            "Cleanup recovery requires the current authenticated Android installation."
+            "Cleanup recovery requires the current authenticated Android installation "
+            "on build 38 or later with matching device status."
         )
     await authenticate_device_request(
         request=request,
@@ -1080,6 +1098,8 @@ async def report_gaming_cleanup_reconciliation(
         revision=next_revision,
         reported_local_state=payload.reported_local_state,
         local_evidence_revision=payload.local_snapshot.evidence_revision,
+        reported_app_version_name=installation.version_name,
+        reported_app_version_code=installation.version_code,
         local_snapshot=payload.local_snapshot.model_dump(mode="json"),
         local_snapshot_sha256=payload.local_snapshot_sha256,
         start_request_hash=payload.start_request_hash,
@@ -1172,6 +1192,12 @@ async def approve_gaming_cleanup_reconciliation(
                 "This cleanup candidate was already approved with different evidence."
             )
         return _cleanup_read(row, installation_id)
+    snapshot = GamingCleanupLocalSnapshot.model_validate(row.local_snapshot)
+    if snapshot.amount_minor is None or snapshot.billable_minutes is None:
+        raise BusinessRuleError(
+            "The tablet cleanup evidence is incomplete. "
+            "Amount and billable duration are required before approval."
+        )
     if row.unresolved_child_count != 0:
         raise BusinessRuleError(
             "Saved Gaming add-on or extension work must be resolved before approval."

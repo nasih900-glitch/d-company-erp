@@ -138,6 +138,34 @@ describe('gaming paid-extension API contract', () => {
     expect(api.post).toHaveBeenCalledWith(`/gaming/sessions/session-1/${action}`, body, { headers: { 'Idempotency-Key': 'pause-intent-1' } });
   });
 
+  it('transfers with the exact source-station snapshot and caller-owned key', async () => {
+    const response = {
+      id: 'session-1',
+      station_id: 'station-2',
+      shift_id: 'shift-1',
+      status: 'active',
+      start_at: '2026-08-25T10:00:00Z',
+      timer_minutes: 60,
+      amount_minor: 12_000,
+    };
+    vi.mocked(api.post).mockResolvedValue({ data: response });
+
+    await expect(gaming.transferSession(
+      'session-1',
+      'station-1',
+      'station-2',
+      'gaming-transfer:attempt-1',
+    )).resolves.toEqual(response);
+    expect(api.post).toHaveBeenCalledWith(
+      '/gaming/sessions/session-1/transfer',
+      {
+        expected_source_station_id: 'station-1',
+        target_station_id: 'station-2',
+      },
+      { headers: { 'Idempotency-Key': 'gaming-transfer:attempt-1' } },
+    );
+  });
+
   it('loads active and voided add-ons for one Gaming session', async () => {
     const response = [{
       id: 'addon-1',

@@ -58,6 +58,12 @@ data class HeldOrderCacheEntity(
 data class LocalHeldOrderPaymentEntity(
     @PrimaryKey val localId: String,
     val targetOrderId: String,
+    /**
+     * Plain rail for historical single payments, or the versioned canonical
+     * `split:v1|...` envelope for one atomic payment bundle. Keeping the whole
+     * plan in this single durable row prevents restart/retry from creating
+     * sequential partial-payment work.
+     */
     val method: String,
     /** Exact bill balance collected; never the cash handed over. */
     val amountMinor: Long,

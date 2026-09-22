@@ -7,17 +7,24 @@ from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID, uuid4
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from pydantic import ValidationError
 from sqlalchemy import inspect
 from sqlalchemy.orm.attributes import set_committed_value
 
 from app.api.v1.client_installations import router as cleanup_router
 from app.api.v1.client_installations.router import (
+    MAX_GAMING_CLEANUP_EPOCH_MILLIS,
+    MAX_GAMING_CLEANUP_EVIDENCE_REVISION,
     MAX_GAMING_CLEANUP_REVISIONS_PER_ACTION,
     GamingCleanupAcknowledgeWrite,
     GamingCleanupApprovalWrite,
     GamingCleanupLocalSnapshot,
     GamingCleanupReportWrite,
     _cleanup_read,
+    _java_instant,
+    _millis_datetime,
     acknowledge_gaming_cleanup_reconciliation,
     approve_gaming_cleanup_reconciliation,
     gaming_cleanup_action_hashes,
@@ -194,6 +201,8 @@ def _ledger_row(
         revision=1,
         reported_local_state=payload.reported_local_state,
         local_evidence_revision=payload.local_snapshot.evidence_revision,
+        reported_app_version_name="3.1.30",
+        reported_app_version_code=38,
         local_snapshot=payload.local_snapshot.model_dump(mode="json"),
         local_snapshot_sha256=payload.local_snapshot_sha256,
         start_request_hash=payload.start_request_hash,
@@ -231,6 +240,8 @@ def _guarded_model_row(*, status: str) -> ClientGamingCleanupReconciliation:
         revision=1,
         reported_local_state="stop_pending",
         local_evidence_revision=7,
+        reported_app_version_name="3.1.30",
+        reported_app_version_code=38,
         local_snapshot={"evidence_revision": 7},
         local_snapshot_sha256="a" * 64,
         start_request_hash="b" * 64,
@@ -318,9 +329,31 @@ def test_model_guard_allows_supersession_only_with_exact_approval_tuple(status: 
     ) == expected_approval
 
 
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("reported_app_version_name", "3.1.31"),
+        ("reported_app_version_code", 39),
+    ],
+)
+def test_model_guard_rejects_report_time_app_identity_mutation(
+    field: str,
+    replacement: object,
+) -> None:
+    row = _guarded_model_row(status="reported")
+    setattr(row, field, replacement)
+
+    with pytest.raises(ValueError, match="identity is immutable"):
+        _guard_cleanup_reconciliation(None, None, row)
+
+
 def _stub_device_and_receipt(monkeypatch, payload: GamingCleanupReportWrite):
     installation = SimpleNamespace(
-        id=uuid4(), installation_id=payload.installation_id, platform="android"
+        id=uuid4(),
+        installation_id=payload.installation_id,
+        platform="android",
+        version_name="3.1.30",
+        version_code=38,
     )
     original_user_id = uuid4()
     monkeypatch.setattr(
@@ -452,6 +485,131 @@ def test_candidate_hash_binds_full_snapshot_and_action_hashes() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "field",
+    [
+        "started_at_millis",
+        "ended_at_millis",
+        "timer_ends_at_millis",
+    ],
+)
+def test_cleanup_snapshot_rejects_epoch_millis_above_datetime_limit(field: str) -> None:
+    values: dict[str, object] = {
+        "shift_id": uuid4(),
+        "started_at_millis": 1_795_000_000_123,
+        "ended_at_millis": 1_795_003_600_456,
+        "timer_ends_at_millis": 1_795_003_600_123,
+        "rate_per_hour_minor": 15_000,
+        "extra_controllers": 0,
+        "evidence_revision": 7,
+    }
+    values[field] = MAX_GAMING_CLEANUP_EPOCH_MILLIS + 1
+
+    with pytest.raises(ValidationError) as error:
+        GamingCleanupLocalSnapshot.model_validate(values)
+
+    assert any(
+        issue["loc"] == (field,) and issue["type"] == "less_than_equal"
+        for issue in error.value.errors()
+    )
+
+
+@pytest.mark.parametrize("field", ["evidence_revision", "customer_directory_revision"])
+def test_cleanup_snapshot_rejects_revision_above_signed_bigint(field: str) -> None:
+    values: dict[str, object] = {
+        "shift_id": uuid4(),
+        "started_at_millis": 1_795_000_000_123,
+        "ended_at_millis": 1_795_003_600_456,
+        "rate_per_hour_minor": 15_000,
+        "extra_controllers": 0,
+        "evidence_revision": 7,
+    }
+    if field == "customer_directory_revision":
+        values["customer_directory_company_id"] = uuid4()
+    values[field] = MAX_GAMING_CLEANUP_EVIDENCE_REVISION + 1
+
+    with pytest.raises(ValidationError) as error:
+        GamingCleanupLocalSnapshot.model_validate(values)
+
+    assert any(
+        issue["loc"] == (field,) and issue["type"] == "less_than_equal"
+        for issue in error.value.errors()
+    )
+
+
+def test_cleanup_snapshot_accepts_and_serializes_maximum_epoch_millis() -> None:
+    snapshot = GamingCleanupLocalSnapshot(
+        shift_id=uuid4(),
+        started_at_millis=MAX_GAMING_CLEANUP_EPOCH_MILLIS,
+        ended_at_millis=MAX_GAMING_CLEANUP_EPOCH_MILLIS,
+        timer_ends_at_millis=MAX_GAMING_CLEANUP_EPOCH_MILLIS,
+        rate_per_hour_minor=15_000,
+        extra_controllers=0,
+        evidence_revision=MAX_GAMING_CLEANUP_EVIDENCE_REVISION,
+    )
+
+    assert _java_instant(snapshot.started_at_millis) == "9999-12-31T23:59:59.999Z"
+    assert _millis_datetime(snapshot.ended_at_millis) == datetime(
+        9999, 12, 31, 23, 59, 59, 999_000, tzinfo=UTC
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("started_at_millis", MAX_GAMING_CLEANUP_EPOCH_MILLIS + 1),
+        ("ended_at_millis", MAX_GAMING_CLEANUP_EPOCH_MILLIS + 1),
+        ("timer_ends_at_millis", MAX_GAMING_CLEANUP_EPOCH_MILLIS + 1),
+        ("evidence_revision", MAX_GAMING_CLEANUP_EVIDENCE_REVISION + 1),
+    ],
+)
+def test_cleanup_report_http_validation_returns_422_for_unserializable_evidence(
+    field: str,
+    value: int,
+) -> None:
+    app = FastAPI()
+
+    @app.post("/report")
+    async def validate_report(payload: GamingCleanupReportWrite) -> dict[str, bool]:
+        return {"accepted": payload is not None}
+
+    snapshot = {
+        "shift_id": str(uuid4()),
+        "started_at_millis": 1_795_000_000_123,
+        "ended_at_millis": 1_795_003_600_456,
+        "timer_ends_at_millis": 1_795_003_600_123,
+        "rate_per_hour_minor": 15_000,
+        "extra_controllers": 0,
+        "evidence_revision": 7,
+    }
+    snapshot[field] = value
+    response = TestClient(app).post(
+        "/report",
+        json={
+            "installation_id": str(uuid4()),
+            "local_action_id": str(uuid4()),
+            "server_session_id": str(uuid4()),
+            "branch_id": str(uuid4()),
+            "terminal_id": str(uuid4()),
+            "station_id": str(uuid4()),
+            "reported_local_state": "stop_pending",
+            "local_snapshot": snapshot,
+            "local_snapshot_sha256": "a" * 64,
+            "start_request_hash": "b" * 64,
+            "stop_request_hash": "c" * 64,
+            "candidate_sha256": "d" * 64,
+            "unresolved_child_count": 0,
+        },
+    )
+
+    assert response.status_code == 422
+    assert any(
+        error["loc"] == ["body", "local_snapshot", field]
+        and error["type"] == "less_than_equal"
+        for error in response.json()["detail"]
+    )
+
+
 def test_locked_android_backend_cleanup_protocol_vector() -> None:
     snapshot = GamingCleanupLocalSnapshot(
         shift_id=UUID("77777777-7777-4777-8777-777777777777"),
@@ -507,6 +665,8 @@ def test_owner_review_projection_excludes_customer_identity() -> None:
         "started_at": "2026-11-18T11:06:40.123000Z",
         "ended_at": "2026-11-18T12:06:40.456000Z",
     }
+    assert encoded["reported_app_version_name"] == "3.1.30"
+    assert encoded["reported_app_version_code"] == 38
     serialized = str(encoded).lower()
     assert "reviewed customer" not in serialized
     assert "customer_name" not in serialized
@@ -528,6 +688,33 @@ async def test_report_repeat_is_idempotent(monkeypatch) -> None:
     assert repeated.id == row.id
     assert repeated.installation_id == installation.installation_id
     session.add.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_new_report_captures_authenticated_installation_version(monkeypatch) -> None:
+    tenant = _tenant()
+    payload = _payload(tenant)
+    installation, _original_user_id = _stub_device_and_receipt(monkeypatch, payload)
+    session = AsyncMock()
+    session.add = MagicMock()
+    session.execute.side_effect = [_result(scalar=None), _result(scalar=0), _result(scalar=None)]
+
+    async def flush() -> None:
+        added = session.add.call_args.args[0]
+        added.id = uuid4()
+        added.created_at = datetime.now(UTC)
+        added.updated_at = added.created_at
+
+    session.flush.side_effect = flush
+    reported = await report_gaming_cleanup_reconciliation(
+        MagicMock(), payload, session, tenant
+    )
+    persisted = session.add.call_args.args[0]
+
+    assert persisted.reported_app_version_name == installation.version_name
+    assert persisted.reported_app_version_code == installation.version_code
+    assert reported.reported_app_version_name == "3.1.30"
+    assert reported.reported_app_version_code == 38
 
 
 @pytest.mark.asyncio

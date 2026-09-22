@@ -16,6 +16,7 @@ import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performClick
@@ -293,12 +294,14 @@ class PosEmptyCatalogueUiTest {
                         onConfirmDirectZero = {},
                         onRedeemDirectPoints = {},
                         onCapture = { _, _, _ -> },
+                        onCaptureSplit = { _, _ -> },
                         onRetryRejectedSale = {},
                         onRetryHeldPayment = {},
                         onPrepareHeldOrder = {},
                         onUpdateHeldOrderDiscount = onUpdateHeldOrderDiscount,
                         onContinueHeldOrder = {},
                         onConfirmHeldOrder = { _, _, _ -> },
+                        onConfirmHeldOrderSplit = { _, _ -> },
                         onConfirmHeldOrderZero = {},
                         onVoidOrder = { _, _ -> },
                         onDismissHeldOrderReview = {},
@@ -352,9 +355,16 @@ class PosEmptyCatalogueUiTest {
             onDismissNotice = { state.value = state.value.copy(notice = null) },
         )
 
-        compose.onNode(hasSetTextAction()).performClick().performTextReplacement("20")
-        compose.onNode(hasSetTextAction()).performImeAction()
-        compose.onNode(hasSetTextAction()).assertIsNotFocused()
+        // This helper verifies how the success notice and refreshed held-bill
+        // review layer. Exercise the entry's touch fallback so the assertion
+        // does not race a still-opening platform IME; keyboard Done/focus is
+        // covered independently by the held-bill input test above.
+        compose.onNodeWithContentDescription("Clear Manual discount (₹)")
+            .performScrollTo().assertIsEnabled().performClick()
+        compose.onNodeWithContentDescription("Digit 2")
+            .performScrollTo().assertIsEnabled().performClick()
+        compose.onNodeWithContentDescription("Digit 0")
+            .performScrollTo().assertIsEnabled().performClick()
         compose.onNodeWithText("Apply discount").performScrollTo()
             .assertIsDisplayed().assertIsEnabled().performClick()
         compose.runOnIdle {

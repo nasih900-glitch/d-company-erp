@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   applyCanonicalCheckoutBalance,
   beginTableRetryOperation,
+  buildCheckoutPaymentBundleSubmission,
   buildCheckoutPaymentSubmission,
   buildCheckoutZeroFinalization,
   clearTableRetryOperation,
@@ -17,6 +18,8 @@ import {
   retireAppliedCartStageBenefit,
   isStaleCheckoutBalanceRejection,
   isTableDraftHydratedForKey,
+  inspectSplitPaymentEditorJournal,
+  inspectSplitPaymentPlan,
   normalizePosRetryDraft,
   normalizeTableCartDraft,
   replaceTableDraftLines,
@@ -665,6 +668,184 @@ describe('POS checkout retry drafts', () => {
       ...recording,
       paymentAmountMinor: 0,
     })).toBe(false);
+  });
+
+  it('round-trips an editable 2–5 rail split plan before any money is confirmed', () => {
+    const splitDraft = {
+      ...JSON.parse(JSON.stringify(retryDraft)),
+      retry: {
+        ...JSON.parse(JSON.stringify(retryDraft.retry)),
+        splitPaymentLegs: [
+          { method: 'cash', amountMinor: 0 },
+          { method: 'upi', amountMinor: 42_000, refExternal: ' UPI-REF-1 ' },
+        ],
+      },
+    };
+
+    expect(normalizePosRetryDraft(splitDraft)?.retry?.splitPaymentLegs).toEqual([
+      { method: 'cash', amountMinor: 0 },
+      { method: 'upi', amountMinor: 42_000, refExternal: 'UPI-REF-1' },
+    ]);
+    expect(inspectSplitPaymentPlan(splitDraft.retry.splitPaymentLegs, 42_000)).toEqual({
+      valid: false,
+      totalMinor: 42_000,
+      remainingMinor: 0,
+      message: 'Enter a positive amount for every payment method.',
+    });
+
+    const withFiveRails = JSON.parse(JSON.stringify(splitDraft));
+    withFiveRails.retry.splitPaymentLegs = [
+      { method: 'cash', amountMinor: 8_000 },
+      { method: 'upi', amountMinor: 8_000 },
+      { method: 'card', amountMinor: 8_000 },
+      { method: 'qr', amountMinor: 8_000 },
+      { method: 'wallet', amountMinor: 10_000 },
+    ];
+    expect(normalizePosRetryDraft(withFiveRails)?.retry?.splitPaymentLegs).toHaveLength(5);
+  });
+
+  it('fails closed on malformed split plans instead of silently falling back to one rail', () => {
+    const mutations: Array<(draft: any) => void> = [
+      (draft) => { draft.retry.splitPaymentLegs = [{ method: 'cash', amountMinor: 42_000 }]; },
+      (draft) => { draft.retry.splitPaymentLegs = [
+        { method: 'cash', amountMinor: 10_000 },
+        { method: 'cash', amountMinor: 32_000 },
+      ]; },
+      (draft) => { draft.retry.splitPaymentLegs = [
+        { method: 'cash', amountMinor: 10_000 },
+        { method: 'upi', amountMinor: -1 },
+      ]; },
+      (draft) => { draft.retry.splitPaymentLegs = [
+        { method: 'cash', amountMinor: 10_000 },
+        { method: 'upi', amountMinor: 32_000, tenderedMinor: 32_000 },
+      ]; },
+      (draft) => { draft.retry.splitPaymentLegs = [
+        { method: 'cash', amountMinor: 10_000 },
+        { method: 'upi', amountMinor: 32_000, refExternal: 'x'.repeat(201) },
+      ]; },
+    ];
+
+    for (const mutate of mutations) {
+      const corrupt = JSON.parse(JSON.stringify(retryDraft));
+      mutate(corrupt);
+      expect(normalizePosRetryDraft(corrupt)).toBeNull();
+    }
+  });
+
+  it('builds one exact atomic bundle replay with cash tender and per-rail references', () => {
+    const recording = {
+      ...retryDraft.retry!,
+      phase: 'recording_payment' as const,
+      paymentMethod: 'cash' as const,
+      orderTotalMinor: 50_000,
+      paymentAmountMinor: 42_000,
+      splitPaymentLegs: [
+        { method: 'cash' as const, amountMinor: 17_000, tenderedMinor: 20_000 },
+        { method: 'upi' as const, amountMinor: 25_000, refExternal: ' upi-ref-1 ' },
+      ],
+    };
+
+    expect(inspectSplitPaymentPlan(recording.splitPaymentLegs, 42_000)).toEqual({
+      valid: true,
+      totalMinor: 42_000,
+      remainingMinor: 0,
+      message: null,
+    });
+    const expectedSubmission = {
+      orderId: 'order-1',
+      idempotencyKey: 'payment-bundle:checkout-1',
+      body: {
+        payments: [
+          { method: 'cash', amount_minor: 17_000, tendered_minor: 20_000 },
+          { method: 'upi', amount_minor: 25_000, ref_external: 'upi-ref-1' },
+        ],
+        expected_order_total_minor: 50_000,
+        expected_due_minor: 42_000,
+      },
+    };
+    expect(buildCheckoutPaymentBundleSubmission(recording)).toEqual(expectedSubmission);
+    expect(inspectSplitPaymentEditorJournal(
+      recording.splitPaymentLegs,
+      { cash: '170.00', upi: '250.00' },
+      '200.00',
+    )).toEqual({ valid: true, message: null });
+    expect(buildCheckoutPaymentSubmission(recording)).toBeNull();
+    const restored = normalizePosRetryDraft(JSON.parse(JSON.stringify({
+      ...retryDraft,
+      retry: recording,
+    })))?.retry;
+    expect(restored).toMatchObject({
+      phase: 'recording_payment',
+      splitPaymentLegs: [
+        { method: 'cash', amountMinor: 17_000, tenderedMinor: 20_000 },
+        { method: 'upi', amountMinor: 25_000, refExternal: 'upi-ref-1' },
+      ],
+    });
+    expect(buildCheckoutPaymentBundleSubmission(restored!)).toEqual(expectedSubmission);
+  });
+
+  it.each([
+    ['a negative amount', { cash: '-170.00', upi: '250.00' }, '200.00'],
+    ['an exponent amount', { cash: '1.7e2', upi: '250.00' }, '200.00'],
+    ['an amount with more than two decimals', { cash: '170.001', upi: '250.00' }, '200.00'],
+    ['an exponent cash tender', { cash: '170.00', upi: '250.00' }, '2e2'],
+  ])('blocks confirmation when the editor shows %s instead of the journaled value', (
+    _case,
+    visibleAmounts,
+    visibleCashTendered,
+  ) => {
+    const legs = [
+      { method: 'cash' as const, amountMinor: 17_000, tenderedMinor: 20_000 },
+      { method: 'upi' as const, amountMinor: 25_000 },
+    ];
+
+    expect(inspectSplitPaymentPlan(legs, 42_000).valid).toBe(true);
+    expect(inspectSplitPaymentEditorJournal(
+      legs,
+      visibleAmounts,
+      visibleCashTendered,
+    )).toMatchObject({ valid: false });
+  });
+
+  it('rejects incomplete, over-allocated, tipped, or under-tendered split submissions', () => {
+    const base = {
+      ...retryDraft.retry!,
+      phase: 'recording_payment' as const,
+      paymentMethod: 'cash' as const,
+      orderTotalMinor: 42_000,
+      paymentAmountMinor: 42_000,
+      splitPaymentLegs: [
+        { method: 'cash' as const, amountMinor: 17_000, tenderedMinor: 17_000 },
+        { method: 'upi' as const, amountMinor: 25_000 },
+      ],
+    };
+
+    expect(buildCheckoutPaymentBundleSubmission({
+      ...base,
+      splitPaymentLegs: [
+        { method: 'cash', amountMinor: 17_000, tenderedMinor: 17_000 },
+        { method: 'upi', amountMinor: 24_999 },
+      ],
+    })).toBeNull();
+    expect(buildCheckoutPaymentBundleSubmission({
+      ...base,
+      splitPaymentLegs: [
+        { method: 'cash', amountMinor: 17_000, tenderedMinor: 17_000 },
+        { method: 'upi', amountMinor: 25_001 },
+      ],
+    })).toBeNull();
+    expect(buildCheckoutPaymentBundleSubmission({ ...base, tipMinor: 100 })).toBeNull();
+    expect(buildCheckoutPaymentBundleSubmission({
+      ...base,
+      splitPaymentLegs: [
+        { method: 'cash', amountMinor: 17_000, tenderedMinor: 16_999 },
+        { method: 'upi', amountMinor: 25_000 },
+      ],
+    })).toBeNull();
+    expect(inspectSplitPaymentPlan(base.splitPaymentLegs, 42_001)).toMatchObject({
+      valid: false,
+      remainingMinor: 1,
+    });
   });
 
   it('finalizes only a benefit-backed exact-zero bill and never invents a payment', () => {

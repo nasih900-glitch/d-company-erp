@@ -409,6 +409,69 @@ class PaymentRead(BaseModel):
     invoice_issued_at: datetime | None
 
 
+class PaymentBundleLegCreate(BaseModel):
+    """One immutable tender rail in an atomic split settlement."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    method: PosPaymentMethod
+    amount_minor: int = Field(gt=0, strict=True)
+    tendered_minor: int | None = Field(default=None, ge=0, strict=True)
+    ref_external: str | None = Field(default=None, max_length=200)
+
+    @model_validator(mode="after")
+    def validate_tender_contract(self) -> PaymentBundleLegCreate:
+        if self.method == "cash":
+            if self.tendered_minor is None:
+                raise ValueError("cash tendered amount is required")
+            if self.tendered_minor < self.amount_minor:
+                raise ValueError("cash tendered amount must cover the payment")
+        elif self.tendered_minor is not None:
+            raise ValueError("cash tendered amount is only valid for cash payments")
+        return self
+
+
+class PaymentBundleCreate(BaseModel):
+    """A complete multi-rail settlement committed as one transaction."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    payments: list[PaymentBundleLegCreate] = Field(min_length=2, max_length=5)
+    expected_order_total_minor: int | None = Field(default=None, ge=0, strict=True)
+    expected_due_minor: int | None = Field(default=None, ge=0, strict=True)
+
+    @model_validator(mode="after")
+    def validate_unique_payment_methods(self) -> PaymentBundleCreate:
+        methods = [payment.method for payment in self.payments]
+        if len(set(methods)) != len(methods):
+            raise ValueError("payment methods must be unique within a bundle")
+        return self
+
+
+class PaymentBundleLegRead(BaseModel):
+    id: UUID
+    method: PosPaymentMethod
+    amount_minor: int
+    tendered_minor: int | None
+    change_minor: int | None
+    ref_external: str | None
+    paid_at: datetime
+
+
+class PaymentBundleRead(BaseModel):
+    """Authoritative receipt for one atomic multi-rail settlement."""
+
+    order_id: UUID
+    shift_id: UUID
+    payments: list[PaymentBundleLegRead]
+    total_amount_minor: int
+    payment_breakdown_minor: dict[str, int]
+    order_status: str
+    invoice_no: str | None
+    fiscal_year: str | None
+    invoice_issued_at: datetime | None
+
+
 class ReceiptLineHistoryRead(BaseModel):
     """Immutable sold-line snapshot; decimal values stay exact as strings."""
 
@@ -1447,6 +1510,29 @@ def _android_shift_close_identity_matches(
     return close_key == f"{_ANDROID_SHIFT_CLOSE_KEY_PREFIX}{suffix}"
 
 
+def _shift_read_installation_id(
+    shift: Shift,
+    request: Request | None,
+) -> UUID | None:
+    """Echo the installation UUID only to the exact installation that supplied it.
+
+    The UUID is part of Android's retained causal-close proof. Returning it to
+    an ordinary browser would let that browser copy the value into forged
+    Android headers and bypass the protected recovery attestation. A matching
+    tablet already knows the value, so echoing it there preserves its
+    fail-closed offline ownership check without disclosing the proof.
+    """
+
+    installation_id = shift.opening_client_installation_id
+    if installation_id is None or request is None:
+        return None
+    platform = request.headers.get("X-Client-Platform", "").strip().lower()
+    supplied = _canonical_installation_id(request)
+    if platform != "android" or supplied != installation_id:
+        return None
+    return installation_id
+
+
 def _require_idempotency(request: Request) -> tuple[str, str]:
     key = getattr(request.state, "idempotency_key", None)
     request_hash = getattr(request.state, "idempotency_request_hash", None)
@@ -1677,6 +1763,50 @@ class ShiftRecoveryCloseRequest(BaseModel):
         return normalized
 
 
+class ShiftRecoveryCandidateRead(BaseModel):
+    """Exact branch-scoped Android shift eligible for protected recovery."""
+
+    id: UUID
+    branch_id: UUID
+    terminal_id: UUID
+    terminal_name: str
+    terminal_device_id: str | None
+    terminal_is_active: bool
+    opened_at: datetime
+    opened_by: UUID
+    opened_by_name: str | None
+    opening_float_minor: int
+    expected_minor: int
+    opening_protocol_revision: int
+    opening_client_platform: Literal["android"]
+    opening_client_installation_recorded: bool
+
+
+def _is_new_protocol_android_shift(shift: Shift) -> bool:
+    return (
+        shift.opening_protocol_revision == _SHIFT_OPENING_PROTOCOL_REVISION
+        and shift.opening_client_platform == "android"
+    )
+
+
+def _require_recovery_shift_scope(
+    shift: Shift | None,
+    *,
+    tenant: TenantContext,
+) -> Shift:
+    """Allow an audit recovery to cross terminals, never tenants or branches."""
+
+    if tenant.branch_id is None:
+        raise BusinessRuleError(
+            "This account has no branch assigned. Assign one before recovering a shift."
+        )
+    if shift is None or shift.company_id != tenant.company_id:
+        raise NotFoundError("Shift not found for this company.")
+    if shift.branch_id != tenant.branch_id:
+        raise BusinessRuleError("Shift belongs to a different branch.")
+    return shift
+
+
 async def _paid_total(session, order_id: UUID) -> int:
     return int(
         (
@@ -1760,6 +1890,48 @@ async def _final_payment_breakdown(
             raise BusinessRuleError("Stored POS payments do not match the order's paid balance")
 
     breakdown[current_method] += current_amount_minor
+    return _canonical_pos_payment_breakdown(
+        breakdown,
+        expected_total_minor=expected_total_minor,
+    )
+
+
+async def _final_payment_bundle_breakdown(
+    session,
+    *,
+    order_id: UUID,
+    already_paid_minor: int,
+    payments: list[PaymentBundleLegCreate],
+    expected_total_minor: int,
+) -> dict[str, int]:
+    """Build the complete five-rail breakdown before any bundle row is added."""
+
+    breakdown = _empty_pos_payment_breakdown()
+    if already_paid_minor:
+        existing_rows = (
+            await session.execute(
+                select(
+                    Payment.method,
+                    func.coalesce(func.sum(Payment.amount_minor), 0),
+                )
+                .where(Payment.order_id == order_id)
+                .group_by(Payment.method)
+            )
+        ).all()
+        existing_total = 0
+        for method, amount in existing_rows:
+            if method not in breakdown:
+                raise BusinessRuleError("POS payment uses an unsupported rail")
+            rail_amount = int(amount or 0)
+            if rail_amount < 0:
+                raise BusinessRuleError("POS payment rail total cannot be negative")
+            breakdown[method] += rail_amount
+            existing_total += rail_amount
+        if existing_total != already_paid_minor:
+            raise BusinessRuleError("Stored POS payments do not match the order's paid balance")
+
+    for payment in payments:
+        breakdown[payment.method] += payment.amount_minor
     return _canonical_pos_payment_breakdown(
         breakdown,
         expected_total_minor=expected_total_minor,
@@ -2166,6 +2338,33 @@ def _validate_confirmed_payment_balance(
     if due_minor > 0 and payload.amount_minor != due_minor:
         raise BusinessRuleError(
             "Split payments are not enabled. Payment must equal the exact amount due."
+        )
+
+
+def _validate_confirmed_payment_bundle_balance(
+    payload: PaymentBundleCreate,
+    *,
+    order_total_minor: int,
+    due_minor: int,
+) -> None:
+    """Reject stale or incomplete multi-rail collection before writing money."""
+
+    if (
+        payload.expected_order_total_minor is not None
+        and payload.expected_order_total_minor != order_total_minor
+    ):
+        raise BusinessRuleError(
+            "Order total changed before payment. Reload the exact bill before collecting money."
+        )
+    if payload.expected_due_minor is not None and payload.expected_due_minor != due_minor:
+        raise BusinessRuleError(
+            "Order balance changed before payment. Reload the exact amount due "
+            "before collecting money."
+        )
+    bundle_total = sum(payment.amount_minor for payment in payload.payments)
+    if bundle_total != due_minor:
+        raise BusinessRuleError(
+            "Payment bundle must equal the exact amount due across all tender methods."
         )
 
 
@@ -5073,10 +5272,10 @@ class ShiftRead(BaseModel):
     # Web uses this to explain why an Android-origin shift must normally be
     # closed from its retained tablet lifecycle.
     opening_client_platform: Literal["web", "android", "ios"] | None = None
-    # Random app-install discriminator, not an authentication credential or a
-    # hardware identifier. Native clients persist it only to decide whether a
-    # cached shift may safely accept another offline drawer write. All normal
-    # permission, company, branch and terminal checks remain authoritative.
+    # Random app-install discriminator used by Android's retained causal-close
+    # proof. It is echoed only when this request already presents the exact
+    # Android installation UUID; browsers and other installations receive
+    # NULL. Native clients use it for a fail-closed offline ownership check.
     opening_client_installation_id: UUID | None = None
     # NULL on open shifts and on historical shifts closed before migration
     # 0066. New closes preserve the first authenticated closer permanently.
@@ -5155,6 +5354,7 @@ async def _shift_feedback_error(
 @router.get("/shifts", response_model=list[ShiftRead])
 async def list_shifts(
     session: SessionDep,
+    request: Request,
     tenant: TenantContext = Depends(requires("pos.read")),
     only_open: bool = False,
     limit: int = 50,
@@ -5301,13 +5501,84 @@ async def list_shifts(
                 opening_receipt_recorded=s.opening_action_id is not None,
                 opening_protocol_revision=s.opening_protocol_revision,
                 opening_client_platform=s.opening_client_platform,
-                opening_client_installation_id=s.opening_client_installation_id,
+                opening_client_installation_id=_shift_read_installation_id(s, request),
                 closed_by=s.closed_by,
                 closed_by_name=closer_name,
                 closed_by_email=closer_email,
             )
         )
     return result
+
+
+@router.get(
+    "/shifts/recovery-candidates",
+    response_model=list[ShiftRecoveryCandidateRead],
+)
+async def list_android_shift_recovery_candidates(
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("pos.shift.close")),
+) -> list[ShiftRecoveryCandidateRead]:
+    """List only same-branch Android shifts for the protected recovery flow.
+
+    Ordinary shift history remains terminal-scoped. This separate surface is
+    available only to the protected audit owner because it reveals open shifts
+    from other terminals and is intended solely to select a last-resort
+    recovery target.
+    """
+
+    if not tenant.audit_access:
+        raise ForbiddenError(
+            "Only the protected audit owner can review Android shift recovery candidates."
+        )
+    if tenant.branch_id is None:
+        raise BusinessRuleError(
+            "This account has no branch assigned. Assign one before recovering a shift."
+        )
+
+    opener = aliased(User, name="recovery_shift_opener")
+    rows = (
+        await session.execute(
+            select(Shift, Terminal, opener.name)
+            .join(
+                Terminal,
+                (Terminal.id == Shift.terminal_id) & (Terminal.branch_id == Shift.branch_id),
+            )
+            .outerjoin(
+                opener,
+                (opener.id == Shift.opened_by) & (opener.company_id == Shift.company_id),
+            )
+            .where(
+                Shift.company_id == tenant.company_id,
+                Shift.branch_id == tenant.branch_id,
+                Shift.status == "open",
+                Shift.opening_protocol_revision == _SHIFT_OPENING_PROTOCOL_REVISION,
+                Shift.opening_client_platform == "android",
+            )
+            .order_by(Shift.opened_at, Shift.id)
+            .limit(200)
+        )
+    ).all()
+    return [
+        ShiftRecoveryCandidateRead(
+            id=shift.id,
+            branch_id=shift.branch_id,
+            terminal_id=shift.terminal_id,
+            terminal_name=terminal.name,
+            terminal_device_id=terminal.device_id,
+            terminal_is_active=terminal.is_active,
+            opened_at=shift.opened_at,
+            opened_by=shift.opened_by,
+            opened_by_name=opened_by_name,
+            opening_float_minor=int(shift.opening_float_minor or 0),
+            expected_minor=int(shift.expected_minor or 0),
+            opening_protocol_revision=int(shift.opening_protocol_revision),
+            opening_client_platform="android",
+            opening_client_installation_recorded=(
+                shift.opening_client_installation_id is not None
+            ),
+        )
+        for shift, terminal, opened_by_name in rows
+    ]
 
 
 def _zero_total_finalization_response(order: Order) -> dict:
@@ -5600,6 +5871,178 @@ async def record_payment(
     # Consumed in the same transaction as Payment + invoice finalization.  If
     # any later flush/commit fails the delete rolls back with the sale, so the
     # cashier can safely retry using the same idempotency key and claim.
+    await consume_checkout_claim(session, checkout_claim)
+    await store_response(
+        session,
+        key=idempotency_key,
+        status_code=status.HTTP_201_CREATED,
+        body=response.model_dump(mode="json"),
+    )
+    return response
+
+
+@router.post(
+    "/orders/{order_id}/payment-bundle",
+    response_model=PaymentBundleRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def record_payment_bundle(
+    order_id: UUID,
+    payload: PaymentBundleCreate,
+    session: SessionDep,
+    request: Request,
+    tenant: TenantContext = Depends(requires("pos.write")),
+    checkout_claim_token: Annotated[
+        str | None,
+        Header(alias="X-Checkout-Claim"),
+    ] = None,
+) -> PaymentBundleRead:
+    """Settle one bill across distinct tender rails as one atomic operation."""
+
+    if tenant.terminal_id is None:
+        raise BusinessRuleError("X-Terminal-Id header required for POS writes")
+    if tenant.branch_id is None:
+        raise BusinessRuleError("token has no branch_id")
+    idempotency_key, request_hash = _require_idempotency(request)
+    existing_response = await check_or_reserve(
+        session,
+        key=idempotency_key,
+        request_hash=request_hash,
+        user_id=tenant.user_id,
+        terminal_id=tenant.terminal_id,
+    )
+    if existing_response:
+        return PaymentBundleRead.model_validate(existing_response["body"])
+
+    order = (
+        await session.execute(select(Order).where(Order.id == order_id).with_for_update())
+    ).scalar_one_or_none()
+    order = require_operational_order(
+        order,
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        terminal_id=tenant.terminal_id,
+        operation="recording a split payment",
+    )
+    _require_private_direct_draft_creator(
+        order,
+        tenant,
+        operation="paid",
+    )
+    if order.status in {"paid", "void", "refunded"}:
+        raise BusinessRuleError(f"cannot pay an order in status={order.status}")
+
+    shift = (
+        await session.execute(select(Shift).where(Shift.id == order.shift_id).with_for_update())
+    ).scalar_one_or_none()
+    shift = require_open_operational_shift(
+        shift,
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        terminal_id=tenant.terminal_id,
+        operation="recording a split payment",
+    )
+    if order.branch_id != shift.branch_id or order.terminal_id != shift.terminal_id:
+        raise BusinessRuleError("Order branch or terminal does not match its shift.")
+
+    already_paid = await _paid_total(session, order_id)
+    due_minor = max(0, int(order.total_minor or 0) - already_paid)
+    checkout_claim = await validate_checkout_claim(
+        session,
+        order=order,
+        claimant_user_id=tenant.user_id,
+        terminal_id=tenant.terminal_id,
+        paid_minor=already_paid,
+        token=checkout_claim_token,
+    )
+    if due_minor <= 0:
+        raise BusinessRuleError(
+            "Order balance is zero. Finalize it with the zero-total settlement action; "
+            "do not record a payment."
+        )
+    _validate_confirmed_payment_bundle_balance(
+        payload,
+        order_total_minor=int(order.total_minor or 0),
+        due_minor=due_minor,
+    )
+    payment_breakdown_minor = await _final_payment_bundle_breakdown(
+        session,
+        order_id=order_id,
+        already_paid_minor=already_paid,
+        payments=payload.payments,
+        expected_total_minor=int(order.total_minor or 0),
+    )
+
+    paid_at = datetime.now(timezone.utc)
+    payments = [
+        Payment(
+            id=uuid4(),
+            order_id=order_id,
+            shift_id=order.shift_id,
+            recorded_by=tenant.user_id,
+            method=leg.method,
+            amount_minor=leg.amount_minor,
+            tendered_minor=leg.tendered_minor,
+            change_minor=(leg.tendered_minor - leg.amount_minor)
+            if leg.method == "cash" and leg.tendered_minor is not None
+            else None,
+            ref_external=leg.ref_external,
+            paid_at=paid_at,
+        )
+        for leg in payload.payments
+    ]
+    cash_amount_minor = sum(
+        leg.amount_minor for leg in payload.payments if leg.method == "cash"
+    )
+    if cash_amount_minor:
+        # A cashier may receive more notes and return change, but the drawer's
+        # net increase is the cash leg applied to the bill.
+        shift.expected_minor = int(shift.expected_minor or 0) + cash_amount_minor
+
+    await _finalize_order(
+        session,
+        order=order,
+        company_id=tenant.company_id,
+        actor_user_id=tenant.user_id,
+        at=paid_at,
+        payment_method="split",
+        payment_breakdown_minor=payment_breakdown_minor,
+    )
+    # Persist the issued-paid order before inserting any bundle leg. The
+    # database insert guard reads the order row and requires paid status plus
+    # the exact invoice timestamp. Relying on SQLAlchemy to order unrelated
+    # Order UPDATE and Payment INSERT statements happens to work today, but is
+    # not a stable correctness contract across ORM upgrades. Both flushes stay
+    # inside this request transaction, so a later leg/claim/receipt failure
+    # still rolls the entire settlement back.
+    await session.flush()
+    session.add_all(payments)
+    await session.flush()
+    response = PaymentBundleRead(
+        order_id=order.id,
+        shift_id=order.shift_id,
+        payments=[
+            PaymentBundleLegRead(
+                id=payment.id,
+                method=payment.method,
+                amount_minor=payment.amount_minor,
+                tendered_minor=payment.tendered_minor,
+                change_minor=payment.change_minor,
+                ref_external=payment.ref_external,
+                paid_at=payment.paid_at,
+            )
+            for payment in payments
+        ],
+        total_amount_minor=sum(payment.amount_minor for payment in payments),
+        payment_breakdown_minor=payment_breakdown_minor,
+        order_status=order.status,
+        invoice_no=order.invoice_no,
+        fiscal_year=order.fiscal_year,
+        invoice_issued_at=order.invoice_issued_at,
+    )
+    # Claim consumption, every tender row, invoice finalization, outbox event,
+    # and the replay receipt share this transaction. Any failure rolls all of
+    # them back and leaves the bill payable with the same claim.
     await consume_checkout_claim(session, checkout_claim)
     await store_response(
         session,
@@ -8473,16 +8916,25 @@ async def _close_shift_impl(
     *,
     recovery: ShiftRecoveryCloseRequest | None = None,
 ) -> dict:
+    shift_query = select(Shift).where(Shift.id == shift_id)
+    if recovery is not None:
+        # Do not let a guessed foreign-tenant UUID acquire even a transient
+        # row lock. Branch validation remains separate so a same-company,
+        # wrong-branch recovery receives the actionable business error below.
+        shift_query = shift_query.where(Shift.company_id == tenant.company_id)
     shift = (
-        await session.execute(select(Shift).where(Shift.id == shift_id).with_for_update())
+        await session.execute(shift_query.with_for_update())
     ).scalar_one_or_none()
-    shift = require_operational_shift_scope(
-        shift,
-        company_id=tenant.company_id,
-        branch_id=tenant.branch_id,
-        terminal_id=tenant.terminal_id,
-        operation="closing a shift",
-    )
+    if recovery is None:
+        shift = require_operational_shift_scope(
+            shift,
+            company_id=tenant.company_id,
+            branch_id=tenant.branch_id,
+            terminal_id=tenant.terminal_id,
+            operation="closing a shift",
+        )
+    else:
+        shift = _require_recovery_shift_scope(shift, tenant=tenant)
     # ``pos.shift.close`` is the authority for this transition. In the active
     # single-workspace operation, another authorised employee must be able to
     # complete the day if the opener has left. ``opened_by`` remains unchanged,
@@ -8539,10 +8991,7 @@ async def _close_shift_impl(
             message=f"This shift is {shift.status} and cannot be closed again.",
             next_action="Open Shift history and use the existing shift record.",
         )
-    is_android_origin = (
-        shift.opening_protocol_revision == _SHIFT_OPENING_PROTOCOL_REVISION
-        and shift.opening_client_platform == "android"
-    )
+    is_android_origin = _is_new_protocol_android_shift(shift)
     if recovery is not None and not is_android_origin:
         raise await _shift_feedback_error(
             session,
@@ -8857,6 +9306,7 @@ async def _close_shift_impl(
                 entity_id=str(shift.id),
                 before={
                     "status": "open",
+                    "terminal_id": str(shift.terminal_id),
                     "opened_by": str(shift.opened_by),
                     "opened_at": shift.opened_at.isoformat(),
                     "opening_protocol_revision": shift.opening_protocol_revision,
@@ -8873,6 +9323,8 @@ async def _close_shift_impl(
                     "variance_minor": int(shift.variance_minor),
                     "server_blockers_checked": True,
                     "origin_tablet_quarantined": True,
+                    "recovery_actor_terminal_id": str(tenant.terminal_id),
+                    "cross_terminal_recovery": shift.terminal_id != tenant.terminal_id,
                 },
                 terminal_id=tenant.terminal_id,
                 reason=recovery.reason,
@@ -8919,6 +9371,8 @@ async def recover_android_shift_close(
             "Only the protected audit owner can recover an Android-origin shift. "
             "Use the tablet's ordinary Close shift action or ask the protected owner."
         )
+    if tenant.terminal_id is None:
+        raise BusinessRuleError("X-Terminal-Id header required before recovering a shift.")
     idempotency_key, request_hash = _require_idempotency(request)
     existing_response = await check_or_reserve(
         session,

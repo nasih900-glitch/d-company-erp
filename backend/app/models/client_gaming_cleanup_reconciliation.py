@@ -60,6 +60,11 @@ class ClientGamingCleanupReconciliation(Base, TimestampMixin, TenantMixin):
             name="ck_client_gaming_cleanup_revisions",
         ),
         CheckConstraint(
+            "reported_app_version_code BETWEEN 1 AND 2147483647 AND "
+            "reported_app_version_name ~ '^[0-9A-Za-z][0-9A-Za-z._+-]{0,79}$'",
+            name="ck_client_gaming_cleanup_reported_app_version",
+        ),
+        CheckConstraint(
             "reported_local_state IN ('stop_pending', 'stop_rejected', "
             "'ended_unbilled', 'send_pending', 'send_rejected')",
             name="ck_client_gaming_cleanup_reported_state",
@@ -134,6 +139,8 @@ class ClientGamingCleanupReconciliation(Base, TimestampMixin, TenantMixin):
     revision: Mapped[int] = mapped_column(Integer, nullable=False)
     reported_local_state: Mapped[str] = mapped_column(String(32), nullable=False)
     local_evidence_revision: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    reported_app_version_name: Mapped[str] = mapped_column(String(80), nullable=False)
+    reported_app_version_code: Mapped[int] = mapped_column(Integer, nullable=False)
     local_snapshot: Mapped[dict[str, object]] = mapped_column(
         JSONB,
         nullable=False,
@@ -180,6 +187,8 @@ def _guard_cleanup_reconciliation(_mapper: object, _connection: object, target: 
         "revision",
         "reported_local_state",
         "local_evidence_revision",
+        "reported_app_version_name",
+        "reported_app_version_code",
         "local_snapshot",
         "local_snapshot_sha256",
         "start_request_hash",

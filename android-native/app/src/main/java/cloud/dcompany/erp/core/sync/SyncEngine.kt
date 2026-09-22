@@ -16,6 +16,8 @@ import cloud.dcompany.erp.core.checkout.CheckoutClientInstancePolicy
 import cloud.dcompany.erp.core.checkout.CheckoutClientInstanceUnavailableException
 import cloud.dcompany.erp.core.checkout.DirectOrderPublishPolicy
 import cloud.dcompany.erp.core.checkout.HeldOrderClaimPolicy
+import cloud.dcompany.erp.core.checkout.SplitPaymentPolicy
+import cloud.dcompany.erp.core.checkout.requireAuthoritativeSplitSettlement
 import cloud.dcompany.erp.core.db.ErpDatabase
 import cloud.dcompany.erp.core.db.CafeTableEntity
 import cloud.dcompany.erp.core.db.CanonicalReceiptSyncStateEntity
@@ -52,6 +54,7 @@ import cloud.dcompany.erp.core.db.GamingSessionAddonActionState
 import cloud.dcompany.erp.core.db.GamingSessionAddonActionType
 import cloud.dcompany.erp.core.db.GamingSessionAddonCacheEntity
 import cloud.dcompany.erp.core.db.GamingSessionState
+import cloud.dcompany.erp.core.db.GamingCleanupWorkflowStatus
 import cloud.dcompany.erp.core.db.cleanupSnapshotOrNull
 import cloud.dcompany.erp.core.db.gamingCleanupSnapshotSha256
 import cloud.dcompany.erp.core.db.GamingPackageCacheEntity
@@ -94,6 +97,7 @@ import cloud.dcompany.erp.core.db.PosReceiptSource
 import cloud.dcompany.erp.core.db.RECEIPT_HISTORY_PAGE_SIZE
 import cloud.dcompany.erp.core.db.decodeModifierSelections
 import cloud.dcompany.erp.core.db.paymentReceipt
+import cloud.dcompany.erp.core.db.paymentBundleReceipt
 import cloud.dcompany.erp.core.db.toCacheEntity
 import cloud.dcompany.erp.core.db.OnShiftEntity
 import cloud.dcompany.erp.core.db.ReportSnapshotEntity
@@ -119,9 +123,12 @@ import cloud.dcompany.erp.core.net.ModifierSelectionRequest
 import cloud.dcompany.erp.core.net.CreateOrderRequest
 import cloud.dcompany.erp.core.net.OrderLineRequest
 import cloud.dcompany.erp.core.net.PaymentRequest
+import cloud.dcompany.erp.core.net.PaymentBundleLegRequest
+import cloud.dcompany.erp.core.net.PaymentBundleRequest
 import cloud.dcompany.erp.core.net.PublishDirectCheckoutClaimRequest
 import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.core.net.outboxProvenanceHeaders
+import cloud.dcompany.erp.core.remote.RemoteRequestScopeTag
 import cloud.dcompany.erp.ui.screens.customers.CustomerUpdateBody
 import cloud.dcompany.erp.ui.screens.customers.CustomerUpsertBody
 import cloud.dcompany.erp.ui.screens.customers.requireCustomerDirectorySnapshot
@@ -842,6 +849,12 @@ internal fun gamingCleanupCandidateSha256(body: GamingCleanupReportBody): String
         .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
 }
 
+internal fun gamingCleanupActionHashesAreCanonical(
+    startRequestHash: String,
+    stopRequestHash: String,
+): Boolean = startRequestHash.matches(Regex("^[0-9a-f]{64}$")) &&
+    stopRequestHash.matches(Regex("^[0-9a-f]{64}$"))
+
 internal fun cleanupAcknowledgementMatches(
     acknowledgement: GamingCleanupReconciliation,
     installationId: String,
@@ -957,22 +970,73 @@ internal fun requireShiftInstallationId(provider: () -> String?): String = try {
  * queued sale is priced against the menu it was actually taken on rather than
  * against a menu that changed while the tablet was offline.
  */
-class SyncEngine(
+class SyncEngine private constructor(
     private val db: ErpDatabase,
     private val scope: CoroutineScope,
     private val outboxSafety: OutboxSafetyGate,
     private val cacheIsolation: CacheIsolationCoordinator,
     private val checkoutClientInstance: () -> String?,
     private val scheduleDurableSync: () -> Unit,
+    gamingCleanupApiFactory: () -> GamingCleanupDeviceApi,
+    private val gamingCleanupProofTagProvider: () -> RemoteRequestScopeTag?,
+    private val afterGamingCleanupAcknowledgeResponse: suspend () -> Unit,
 ) {
+
+    constructor(
+        db: ErpDatabase,
+        scope: CoroutineScope,
+        outboxSafety: OutboxSafetyGate,
+        cacheIsolation: CacheIsolationCoordinator,
+        checkoutClientInstance: () -> String?,
+        scheduleDurableSync: () -> Unit,
+    ) : this(
+        db = db,
+        scope = scope,
+        outboxSafety = outboxSafety,
+        cacheIsolation = cacheIsolation,
+        checkoutClientInstance = checkoutClientInstance,
+        scheduleDurableSync = scheduleDurableSync,
+        gamingCleanupApiFactory = {
+            DCompanyApp.instance.remoteAssistance.createInstallationProofApi(
+                GamingCleanupDeviceApi::class.java,
+            )
+        },
+        gamingCleanupProofTagProvider = {
+            DCompanyApp.instance.remoteAssistance.currentInstallationProofTag()
+        },
+        afterGamingCleanupAcknowledgeResponse = {},
+    )
+
+    /**
+     * Narrow instrumentation seam for the restart boundary between durable
+     * cleanup retirement and its server acknowledgement. Production callers
+     * always use the public constructor above.
+     */
+    internal constructor(
+        db: ErpDatabase,
+        scope: CoroutineScope,
+        outboxSafety: OutboxSafetyGate,
+        cacheIsolation: CacheIsolationCoordinator,
+        checkoutClientInstance: () -> String?,
+        scheduleDurableSync: () -> Unit,
+        gamingCleanupApi: GamingCleanupDeviceApi,
+        gamingCleanupProofTagProvider: () -> RemoteRequestScopeTag?,
+        afterGamingCleanupAcknowledgeResponse: suspend () -> Unit = {},
+    ) : this(
+        db = db,
+        scope = scope,
+        outboxSafety = outboxSafety,
+        cacheIsolation = cacheIsolation,
+        checkoutClientInstance = checkoutClientInstance,
+        scheduleDurableSync = scheduleDurableSync,
+        gamingCleanupApiFactory = { gamingCleanupApi },
+        gamingCleanupProofTagProvider = gamingCleanupProofTagProvider,
+        afterGamingCleanupAcknowledgeResponse = afterGamingCleanupAcknowledgeResponse,
+    )
 
     private val shiftApi = ApiClient.create<ShiftApi>()
     private val gamingApi = ApiClient.create<GamingApi>()
-    private val gamingCleanupApi by lazy {
-        DCompanyApp.instance.remoteAssistance.createInstallationProofApi(
-            GamingCleanupDeviceApi::class.java,
-        )
-    }
+    private val gamingCleanupApi by lazy(gamingCleanupApiFactory)
     private val kitchenApi = ApiClient.create<KitchenApi>()
     private val tablesApi = ApiClient.create<TablesApi>()
     private val cafeOrderSync = CafeOrderSyncCoordinator(db, db.cafeOrderDao(), tablesApi)
@@ -1717,7 +1781,10 @@ class SyncEngine(
                 return precondition.toVerificationResult()
             }
 
-            val rows = shiftApi.shifts(onlyOpen = true)
+            val rows = shiftApi.shifts(
+                onlyOpen = true,
+                installationId = checkoutClientInstance(),
+            )
             if (rows.size > 1) {
                 return RejectedShiftOpenVerificationResult(
                     RejectedShiftOpenVerificationStatus.BLOCKED,
@@ -2544,7 +2611,10 @@ class SyncEngine(
     private suspend fun pullOpenShift() {
         val lease = cacheIsolation.currentLease() ?: return
         val terminalId = DCompanyApp.instance.terminalStore.terminalId() ?: return
-        val rows = shiftApi.shifts(onlyOpen = true)
+        val rows = shiftApi.shifts(
+            onlyOpen = true,
+            installationId = checkoutClientInstance(),
+        )
         if (rows.size > 1) {
             commitToCurrentScope(lease) {
                 db.shiftDao().deleteServerOpen(terminalId)
@@ -2608,7 +2678,11 @@ class SyncEngine(
         val branchId = DCompanyApp.instance.shiftCache.profile.value?.branchId ?: return
         if (!cacheIsolation.commitIfCurrent(lease) { _shiftHistoryRefreshing.value = true }) return
         try {
-            val rows = shiftApi.shifts(onlyOpen = false, limit = 200)
+            val rows = shiftApi.shifts(
+                onlyOpen = false,
+                limit = 200,
+                installationId = checkoutClientInstance(),
+            )
             if (rows.any { it.terminalId != terminalId || it.branchId != branchId }) {
                 cacheIsolation.commitIfCurrent(lease) {
                     _shiftHistoryError.value =
@@ -3397,7 +3471,6 @@ class SyncEngine(
     ) {
         val branchId = lease.scope.branchId ?: return
         val terminalId = lease.scope.terminalId ?: return
-        val installationId = checkoutClientInstance()?.takeIf(String::isNotBlank) ?: return
         val dao = db.gamingDao()
         val row = dao.localSessionByEitherId(serverId) ?: return
         if (row.serverId != serverId || row.orderId != null ||
@@ -3414,17 +3487,43 @@ class SyncEngine(
         // A report is immutable by design. Wait until dependent work is clear
         // so a transient child cannot permanently strand this candidate.
         if (childCount != 0) return
-        val snapshot = row.cleanupSnapshotOrNull() ?: return
+        val snapshot = row.cleanupSnapshotOrNull()
+        if (snapshot == null) {
+            noteCleanupWorkflowStatus(
+                lease, row, serverId, row.cleanupEvidenceRevision,
+                GamingCleanupWorkflowStatus.EVIDENCE_INCOMPLETE,
+            )
+            return
+        }
+        val installationId = checkoutClientInstance()?.takeIf(String::isNotBlank)
+        if (installationId == null) {
+            noteCleanupWorkflowStatus(
+                lease, row, serverId, snapshot.evidenceRevision,
+                GamingCleanupWorkflowStatus.REPORT_RETRY_REQUIRED,
+            )
+            return
+        }
         val snapshotHash = gamingCleanupSnapshotSha256(snapshot)
-        val startBody = cleanupStartBody(row, snapshot.shiftId) ?: return
+        val startBody = cleanupStartBody(row, snapshot.shiftId)
+        if (startBody == null) {
+            noteCleanupWorkflowStatus(
+                lease, row, serverId, snapshot.evidenceRevision,
+                GamingCleanupWorkflowStatus.EVIDENCE_INCOMPLETE,
+            )
+            return
+        }
         val computedStartHash = gamingStartRequestHash(row.localId, startBody)
         val stopBody = SessionStopBody(Instant.ofEpochMilli(snapshot.endedAtMillis).toString())
         val computedStopHash = gamingStopRequestHash(row.localId, serverId, stopBody)
         val startHash = row.startRequestHash ?: computedStartHash
         val stopHash = row.stopRequestHash ?: computedStopHash
-        if (!startHash.matches(Regex("^[0-9a-f]{64}$")) ||
-            !stopHash.matches(Regex("^[0-9a-f]{64}$"))
-        ) return
+        if (!gamingCleanupActionHashesAreCanonical(startHash, stopHash)) {
+            noteCleanupWorkflowStatus(
+                lease, row, serverId, snapshot.evidenceRevision,
+                GamingCleanupWorkflowStatus.EVIDENCE_INCOMPLETE,
+            )
+            return
+        }
         val unsigned = GamingCleanupReportBody(
             installationId = installationId,
             localActionId = row.localId,
@@ -3441,18 +3540,29 @@ class SyncEngine(
             unresolvedChildCount = childCount,
         )
         val body = unsigned.copy(candidateSha256 = gamingCleanupCandidateSha256(unsigned))
-        val proofTag = DCompanyApp.instance.remoteAssistance.currentInstallationProofTag() ?: return
+        val proofTag = gamingCleanupProofTagProvider()
+        if (proofTag == null) {
+            noteCleanupWorkflowStatus(
+                lease, row, serverId, snapshot.evidenceRevision,
+                GamingCleanupWorkflowStatus.REPORT_RETRY_REQUIRED,
+            )
+            return
+        }
         val directive = try {
             gamingCleanupApi.reportCleanupCandidate(body, installationId, proofTag)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
+            noteCleanupWorkflowStatus(
+                lease, row, serverId, snapshot.evidenceRevision,
+                GamingCleanupWorkflowStatus.REPORT_RETRY_REQUIRED,
+            )
             return
         }
         if (directive.status == "applied" || directive.deviceDirective == "already_applied") {
-            dao.noteCleanupDiagnostic(
-                row.localId,
-                "Server recorded this cleanup as applied, but this tablet has no matching local directive evidence. Owner review is required.",
+            noteCleanupWorkflowStatus(
+                lease, row, serverId, snapshot.evidenceRevision,
+                GamingCleanupWorkflowStatus.REVIEW_REQUIRED,
             )
             return
         }
@@ -3466,10 +3576,41 @@ class SyncEngine(
             directive.localSnapshotSha256 == snapshotHash &&
             directive.candidateSha256 == body.candidateSha256 &&
             directive.unresolvedChildCount == childCount
-        if (!exact || directive.status != "approved" ||
-            directive.deviceDirective != "cleanup_retire" || childCount != 0 ||
-            directive.cleanupReceiptAuditId <= 0L || directive.approvalReason.isNullOrBlank()
-        ) return
+        if (!exact) {
+            noteCleanupWorkflowStatus(
+                lease, row, serverId, snapshot.evidenceRevision,
+                GamingCleanupWorkflowStatus.REVIEW_REQUIRED,
+            )
+            return
+        }
+        if (directive.status == "reported" && directive.deviceDirective == "wait_for_owner") {
+            noteCleanupWorkflowStatus(
+                lease, row, serverId, snapshot.evidenceRevision,
+                GamingCleanupWorkflowStatus.WAITING_FOR_OWNER,
+            )
+            return
+        }
+        if (directive.status == "superseded" || directive.deviceDirective == "superseded") {
+            noteCleanupWorkflowStatus(
+                lease, row, serverId, snapshot.evidenceRevision,
+                GamingCleanupWorkflowStatus.REVIEW_REQUIRED,
+            )
+            return
+        }
+        if (directive.status != "approved" || directive.deviceDirective != "cleanup_retire" ||
+            childCount != 0 || directive.cleanupReceiptAuditId <= 0L ||
+            directive.approvalReason.isNullOrBlank()
+        ) {
+            noteCleanupWorkflowStatus(
+                lease, row, serverId, snapshot.evidenceRevision,
+                GamingCleanupWorkflowStatus.REVIEW_REQUIRED,
+            )
+            return
+        }
+        noteCleanupWorkflowStatus(
+            lease, row, serverId, snapshot.evidenceRevision,
+            GamingCleanupWorkflowStatus.APPROVED_WAITING_FOR_APPLY,
+        )
         var applied = false
         val committed = commitToCurrentScope(lease) {
             applied = dao.applyCleanupRetirement(
@@ -3495,7 +3636,25 @@ class SyncEngine(
         )
     }
 
-    private suspend fun acknowledgeCleanupRetirements(lease: CacheScopeLease) {
+    private suspend fun noteCleanupWorkflowStatus(
+        lease: CacheScopeLease,
+        row: LocalGamingSessionEntity,
+        serverId: String,
+        expectedEvidenceRevision: Long,
+        status: GamingCleanupWorkflowStatus,
+    ) {
+        commitToCurrentScope(lease) {
+            db.gamingDao().noteCleanupWorkflowStatusCas(
+                localId = row.localId,
+                serverSessionId = serverId,
+                expectedState = row.state,
+                expectedEvidenceRevision = expectedEvidenceRevision,
+                message = status.persistedMessage,
+            )
+        }
+    }
+
+    internal suspend fun acknowledgeCleanupRetirements(lease: CacheScopeLease) {
         val installationId = checkoutClientInstance()?.takeIf(String::isNotBlank) ?: return
         db.gamingDao().cleanupRetiredSessions().forEach { row ->
             if (row.cleanupBranchId != lease.scope.branchId ||
@@ -3518,7 +3677,14 @@ class SyncEngine(
         reconciliationId: String,
         candidateSha256: String,
     ) {
-        val proofTag = DCompanyApp.instance.remoteAssistance.currentInstallationProofTag() ?: return
+        val proofTag = gamingCleanupProofTagProvider()
+        if (proofTag == null) {
+            noteCleanupAcknowledgementStatus(
+                lease, localId, reconciliationId, candidateSha256,
+                GamingCleanupWorkflowStatus.ACKNOWLEDGEMENT_PENDING,
+            )
+            return
+        }
         try {
             val acknowledged = gamingCleanupApi.acknowledgeCleanupCandidate(
                 reconciliationId,
@@ -3526,9 +3692,16 @@ class SyncEngine(
                 installationId,
                 proofTag,
             )
-            check(cleanupAcknowledgementMatches(
+            afterGamingCleanupAcknowledgeResponse()
+            if (!cleanupAcknowledgementMatches(
                 acknowledged, installationId, localId, reconciliationId, candidateSha256,
-            )) { "Cleanup acknowledgement did not match the retired local evidence." }
+            )) {
+                noteCleanupAcknowledgementStatus(
+                    lease, localId, reconciliationId, candidateSha256,
+                    GamingCleanupWorkflowStatus.ACKNOWLEDGEMENT_REVIEW_REQUIRED,
+                )
+                return
+            }
             commitToCurrentScope(lease) {
                 db.gamingDao().markCleanupAcknowledgedCas(
                     localId = localId,
@@ -3540,7 +3713,27 @@ class SyncEngine(
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
-            // The retained directive evidence makes acknowledgement retryable.
+            noteCleanupAcknowledgementStatus(
+                lease, localId, reconciliationId, candidateSha256,
+                GamingCleanupWorkflowStatus.ACKNOWLEDGEMENT_PENDING,
+            )
+        }
+    }
+
+    private suspend fun noteCleanupAcknowledgementStatus(
+        lease: CacheScopeLease,
+        localId: String,
+        reconciliationId: String,
+        candidateSha256: String,
+        status: GamingCleanupWorkflowStatus,
+    ) {
+        commitToCurrentScope(lease) {
+            db.gamingDao().noteCleanupAcknowledgementPendingCas(
+                localId = localId,
+                reconciliationId = reconciliationId,
+                candidateSha256 = candidateSha256,
+                message = status.persistedMessage,
+            )
         }
     }
 
@@ -4627,42 +4820,117 @@ class SyncEngine(
         var reacquisitions = 0
         val paymentNeedsClaim = DirectOrderPublishPolicy.paymentNeedsClaim(row)
         val sourceLabel = db.heldOrderDao().orderForAlarm(row.targetOrderId)?.sourceLabel
+        // A malformed versioned split plan must fail closed here. Falling
+        // through to /payments with the encoded storage value would turn one
+        // atomic settlement into an invalid or partially recoverable request.
+        val splitPlan = SplitPaymentPolicy.decodeStoredMethod(row.method)
+        if (splitPlan != null) {
+            check(splitPlan.totalMinor == row.amountMinor) {
+                "The saved split-payment total no longer matches its durable settlement row."
+            }
+            check(row.tenderedMinor == null) {
+                "A split-payment cash tender must stay inside its immutable bundle plan."
+            }
+        }
         while (true) {
             if (paymentNeedsClaim && token == null) {
                 token = acquireMatchingClaimForConfirmedPayment(row)
             }
             try {
-                val paid = ApiClient.api.recordPayment(
-                    row.targetOrderId,
-                    PaymentRequest(
-                        method = row.method,
-                        amountMinor = row.amountMinor,
-                        tenderedMinor = row.tenderedMinor,
-                        expectedTotalMinor = row.expectedTotalMinor,
-                        expectedDueMinor = row.expectedDueMinor,
-                    ),
-                    idempotencyKey = HeldOrderClaimPolicy.paymentIdempotencyKey(row.localId),
-                    checkoutClaimToken = token,
-                    provenance = outboxProvenanceHeaders(
-                        row.createdAtMillis,
-                        HeldOrderClaimPolicy.paymentIdempotencyKey(row.localId),
-                    ),
-                )
+                val idempotencyKey = HeldOrderClaimPolicy.paymentIdempotencyKey(row.localId)
+                val provenance = outboxProvenanceHeaders(row.createdAtMillis, idempotencyKey)
+                val splitPaid = splitPlan?.let { plan ->
+                    ApiClient.api.recordPaymentBundle(
+                        row.targetOrderId,
+                        PaymentBundleRequest(
+                            payments = plan.legs.map { leg ->
+                                PaymentBundleLegRequest(
+                                    method = leg.method,
+                                    amountMinor = leg.amountMinor,
+                                    tenderedMinor = leg.tenderedMinor,
+                                )
+                            },
+                            expectedTotalMinor = row.expectedTotalMinor,
+                            expectedDueMinor = row.expectedDueMinor,
+                        ),
+                        idempotencyKey = idempotencyKey,
+                        checkoutClaimToken = token,
+                        provenance = provenance,
+                    )
+                }
+                val singlePaid = if (splitPlan == null) {
+                    ApiClient.api.recordPayment(
+                        row.targetOrderId,
+                        PaymentRequest(
+                            method = row.method,
+                            amountMinor = row.amountMinor,
+                            tenderedMinor = row.tenderedMinor,
+                            expectedTotalMinor = row.expectedTotalMinor,
+                            expectedDueMinor = row.expectedDueMinor,
+                        ),
+                        idempotencyKey = idempotencyKey,
+                        checkoutClaimToken = token,
+                        provenance = provenance,
+                    )
+                } else {
+                    null
+                }
                 // Fetch the authoritative post-payment order before resolving
                 // the outbox. If this GET is interrupted, the same idempotent
                 // payment replay remains pending and the receipt is never lost.
-                val finalOrder = ApiClient.api.order(row.targetOrderId)
+                val finalOrder = try {
+                    ApiClient.api.order(row.targetOrderId)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (failure: Exception) {
+                    if (splitPaid != null) {
+                        // The bundle POST returned an authoritative receipt,
+                        // so even a definitive-looking failure from this
+                        // follow-up read cannot prove that no money committed.
+                        // Convert it to an app reconciliation failure: the
+                        // outer outbox loop keeps the one durable row pending
+                        // and replays the same body and idempotency key.
+                        throw IllegalStateException(
+                            "The split payment may already be committed, but its final invoice " +
+                                "could not be verified yet. Do not collect again.",
+                            failure,
+                        )
+                    }
+                    throw failure
+                }
+                if (splitPaid != null) {
+                    requireAuthoritativeSplitSettlement(
+                        row = row,
+                        plan = requireNotNull(splitPlan),
+                        result = splitPaid,
+                        finalOrder = finalOrder,
+                    )
+                }
                 db.posReceiptDao().storeAndMarkSettlementSynced(
-                    receipt = paymentReceipt(
-                        order = finalOrder,
-                        payment = paid,
-                        sourceKind = if (row.requiresCheckoutClaim) {
-                            PosReceiptSource.HELD
-                        } else {
-                            PosReceiptSource.DIRECT
-                        },
-                        sourceLabel = sourceLabel,
-                    ),
+                    receipt = if (splitPaid != null) {
+                        paymentBundleReceipt(
+                            order = finalOrder,
+                            payment = splitPaid,
+                            storedMethod = row.method,
+                            sourceKind = if (row.requiresCheckoutClaim) {
+                                PosReceiptSource.HELD
+                            } else {
+                                PosReceiptSource.DIRECT
+                            },
+                            sourceLabel = sourceLabel,
+                        )
+                    } else {
+                        paymentReceipt(
+                            order = finalOrder,
+                            payment = requireNotNull(singlePaid),
+                            sourceKind = if (row.requiresCheckoutClaim) {
+                                PosReceiptSource.HELD
+                            } else {
+                                PosReceiptSource.DIRECT
+                            },
+                            sourceLabel = sourceLabel,
+                        )
+                    },
                     localPaymentId = row.localId,
                 )
                 // The order this just paid is no longer held — drop it from

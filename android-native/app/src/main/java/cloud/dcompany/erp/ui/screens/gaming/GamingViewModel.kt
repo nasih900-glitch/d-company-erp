@@ -24,7 +24,9 @@ import cloud.dcompany.erp.core.db.GamingPackageCacheEntity
 import cloud.dcompany.erp.core.db.GamingPackageExtensionState
 import cloud.dcompany.erp.core.db.GamingLegacyResolution
 import cloud.dcompany.erp.core.db.GamingLegacyResolutionAttemptState
+import cloud.dcompany.erp.core.db.GamingCleanupWorkflowStatus
 import cloud.dcompany.erp.core.db.GamingSessionState
+import cloud.dcompany.erp.core.db.gamingCleanupWorkflowMessageOrNull
 import cloud.dcompany.erp.core.db.GamingStationEntity
 import cloud.dcompany.erp.core.db.LocalGamingSessionEntity
 import cloud.dcompany.erp.core.db.LocalGamingPackageExtensionEntity
@@ -108,6 +110,8 @@ data class GamingUiState(
     /** Server receipts merged with durable local Add/Void overlays. */
     val sessionAddons: List<GamingSessionAddonUi> = emptyList(),
     val sessionAddonActions: List<SessionAddonActionUi> = emptyList(),
+    /** Retired locally, but the exact server acknowledgement has not landed yet. */
+    val cleanupAcknowledgementsPending: List<GamingCleanupAcknowledgementUi> = emptyList(),
 ) {
     val initialLoading: Boolean
         get() = !everSynced && stations.isEmpty() && refreshing
@@ -125,12 +129,14 @@ data class GamingUiState(
 
     val readyForPos: List<GameSession>
         get() = sessions.filter { session ->
-            session.canSendToPos(hasActiveAddons(session))
+            gamingCleanupWorkflowMessageOrNull(session.lastError) == null &&
+                session.canSendToPos(hasActiveAddons(session))
         }
 
     val needsCancellation: List<GameSession>
         get() = sessions.filter {
-            it.canCancelUnbilled() && it.amountMinor == 0L && !hasActiveAddons(it)
+            gamingCleanupWorkflowMessageOrNull(it.lastError) == null &&
+                it.canCancelUnbilled() && it.amountMinor == 0L && !hasActiveAddons(it)
         }
 
     /** Start/Stop refusals remain station work; Send refusals already belong to the POS queue. */
@@ -170,6 +176,11 @@ data class GamingUiState(
             it.serverSessionId == session.id || it.localSessionId == session.id
         }
 }
+
+data class GamingCleanupAcknowledgementUi(
+    val stationId: String,
+    val detail: String,
+)
 
 data class GamingSessionAddonUi(
     val id: String,
@@ -1015,7 +1026,11 @@ class GamingViewModel : ViewModel() {
     val state: StateFlow<GamingUiState> = combine(
         referenceState,
         db.gamingDao().observeSessionCache(),
-        db.gamingDao().observeActiveLocalSessions(),
+        combine(
+            db.gamingDao().observeActiveLocalSessions(),
+            db.gamingDao().observeCleanupRetirementsAwaitingAcknowledgement(),
+            ::Pair,
+        ),
         (combine(
             combine(
                 combine(busyStationId, error, notice) { busy, actionError, actionNotice ->
@@ -1048,7 +1063,8 @@ class GamingViewModel : ViewModel() {
             Triple(actionState, currentShift, addons)
         }),
         combine(db.syncMetaDao().observe("gaming"), appCtx.connectivity.online, activeTerminal, ::Triple),
-    ) { references, cache, local, ui, syncState ->
+    ) { references, cache, localState, ui, syncState ->
+        val (local, cleanupAcknowledgementsPending) = localState
         val (actionState, currentShift, addons) = ui
         val (meta, online, terminal) = syncState
         val categoriesById = references.categories.associateBy { it.id }
@@ -1134,6 +1150,18 @@ class GamingViewModel : ViewModel() {
                     lastError = it.lastError,
                 )
             },
+            cleanupAcknowledgementsPending = cleanupAcknowledgementsPending
+                .filter { row ->
+                    terminal != null && row.cleanupBranchId == terminal.branchId &&
+                        row.cleanupTerminalId == terminal.terminalId
+                }
+                .map { row ->
+                    GamingCleanupAcknowledgementUi(
+                        stationId = row.stationId,
+                        detail = gamingCleanupWorkflowMessageOrNull(row.lastError)
+                            ?: GamingCleanupWorkflowStatus.ACKNOWLEDGEMENT_PENDING.persistedMessage,
+                    )
+                },
         )
     }
         // Room rows, local overlays and add-on catalogue policy are UI

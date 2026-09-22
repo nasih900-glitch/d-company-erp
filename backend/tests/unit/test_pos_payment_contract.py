@@ -8,7 +8,12 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
-from app.api.v1.pos.router import PaymentCreate, PaymentRead
+from app.api.v1.pos.router import (
+    PaymentBundleCreate,
+    PaymentBundleLegCreate,
+    PaymentCreate,
+    PaymentRead,
+)
 
 
 def test_cash_requires_tendered_amount() -> None:
@@ -81,3 +86,66 @@ def test_payment_read_is_receipt_grade_and_json_serializable() -> None:
     assert body["change_minor"] == 300
     assert body["paid_at"] == paid_at.isoformat().replace("+00:00", "Z")
     assert body["invoice_no"] == "MN/2026-27/000001"
+
+
+def test_payment_bundle_requires_two_to_five_unique_rails() -> None:
+    with pytest.raises(ValidationError, match="at least 2 items"):
+        PaymentBundleCreate(payments=[PaymentBundleLegCreate(method="upi", amount_minor=1_000)])
+
+    with pytest.raises(ValidationError, match="payment methods must be unique"):
+        PaymentBundleCreate(
+            payments=[
+                PaymentBundleLegCreate(method="upi", amount_minor=500),
+                PaymentBundleLegCreate(method="upi", amount_minor=500),
+            ]
+        )
+
+    with pytest.raises(ValidationError, match="at most 5 items"):
+        PaymentBundleCreate.model_validate(
+            {
+                "payments": [
+                    {"method": method, "amount_minor": 100}
+                    for method in ("card", "upi", "qr", "wallet", "cash", "upi")
+                ]
+            }
+        )
+
+
+def test_payment_bundle_cash_change_and_non_cash_tender_contract() -> None:
+    cash = PaymentBundleLegCreate(
+        method="cash",
+        amount_minor=700,
+        tendered_minor=1_000,
+    )
+    assert cash.tendered_minor - cash.amount_minor == 300
+
+    with pytest.raises(ValidationError, match="cash tendered amount must cover"):
+        PaymentBundleLegCreate(
+            method="cash",
+            amount_minor=700,
+            tendered_minor=699,
+        )
+
+    with pytest.raises(ValidationError, match="only valid for cash"):
+        PaymentBundleLegCreate(
+            method="upi",
+            amount_minor=700,
+            tendered_minor=700,
+        )
+
+
+def test_payment_bundle_rejects_coerced_or_unknown_fields() -> None:
+    with pytest.raises(ValidationError):
+        PaymentBundleLegCreate.model_validate(
+            {"method": "cash", "amount_minor": "700", "tendered_minor": 700}
+        )
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        PaymentBundleCreate.model_validate(
+            {
+                "payments": [
+                    {"method": "upi", "amount_minor": 500},
+                    {"method": "card", "amount_minor": 500},
+                ],
+                "tip_minor": 100,
+            }
+        )

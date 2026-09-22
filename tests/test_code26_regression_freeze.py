@@ -182,7 +182,7 @@ def test_pos_notice_dynamic_state_host_normalises_only_the_approved_bytes() -> N
         "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/"
         "PosEmptyCatalogueUiTest.kt"
     )
-    current = (ROOT / path).read_text(encoding="utf-8")
+    current = _git_object_bytes(CODE30_2_BASE, path).decode("utf-8")
     baseline = subprocess.run(
         ["git", "show", f"{CODE25_BASE}:{path}"],
         cwd=ROOT,

@@ -165,7 +165,14 @@ describe('Orders & Shifts staff-facing shift feedback', () => {
     });
     expect(isAndroidOriginShift(androidShift)).toBe(true);
     expect(canRecoverAndroidShift({ audit_access: false }, androidShift)).toBe(false);
-    expect(canRecoverAndroidShift({ audit_access: true }, androidShift)).toBe(true);
+    expect(canRecoverAndroidShift({
+      audit_access: true,
+      effective_permissions: ['pos.shift.close'],
+    }, androidShift)).toBe(true);
+    expect(canRecoverAndroidShift({
+      audit_access: true,
+      effective_permissions: ['pos.read'],
+    }, androidShift)).toBe(false);
     expect(isAndroidOriginShift(shift({ opening_client_platform: 'web' }))).toBe(false);
 
     const staffMarkup = renderToStaticMarkup(

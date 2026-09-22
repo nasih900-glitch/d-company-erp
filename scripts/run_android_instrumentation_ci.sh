@@ -7,6 +7,17 @@ diagnostics_dir="${android_root}/app/build/outputs/ci-diagnostics"
 app_metadata="${android_root}/app/build/outputs/apk/debug/output-metadata.json"
 test_metadata="${android_root}/app/build/outputs/apk/androidTest/debug/output-metadata.json"
 app_package='cloud.dcompany.erp'
+test_package='cloud.dcompany.erp.test'
+test_runner="${test_package}/androidx.test.runner.AndroidJUnitRunner"
+connected_results_dir="${android_root}/app/build/outputs/androidTest-results/connected/debug"
+connected_report_dir="${android_root}/app/build/reports/androidTests/connected/debug"
+shard_evidence_root="${diagnostics_dir}/instrumentation-shards"
+discovered_tests_file="${shard_evidence_root}/discovered-tests.txt"
+shard_verifier="${repo_root}/scripts/verify_android_instrumentation_shards.py"
+functional_shard_count=4
+stress_class='cloud.dcompany.erp.ui.PhysicalComponentFrameStressUiTest'
+expected_notification_skip='cloud.dcompany.erp.core.alarm.AlarmLifecycleDeviceTest#grantedNotificationCanBePostedWithPrivateVisibilityAndCancelled'
+expected_exact_alarm_skip='cloud.dcompany.erp.core.alarm.AlarmLifecycleDeviceTest#exactAlarmReachesFailClosedReceiverDuringEmulatedDeepIdle'
 device_serial=''
 deep_idle_initial_state=''
 display_size_override_initial=''
@@ -94,6 +105,49 @@ configure_tablet_viewport() {
   [[ "$(adb -s "${device_serial}" shell settings get system user_rotation | tr -d '\r')" == '0' ]]
 }
 
+reassert_tablet_viewport() {
+  local effective_size=''
+  local effective_density=''
+
+  adb -s "${device_serial}" shell wm size 2560x1600 >/dev/null
+  adb -s "${device_serial}" shell wm density 320 >/dev/null
+  adb -s "${device_serial}" shell settings put system accelerometer_rotation 0 >/dev/null
+  adb -s "${device_serial}" shell settings put system user_rotation 0 >/dev/null
+  effective_size="$(adb -s "${device_serial}" shell wm size | tr -d '\r' | awk -F': ' '/Physical size:/{value=$2} /Override size:/{value=$2} END{print value}')"
+  effective_density="$(adb -s "${device_serial}" shell wm density | tr -d '\r' | awk -F': ' '/Physical density:/{value=$2} /Override density:/{value=$2} END{print value}')"
+  [[ "${effective_size}" == '2560x1600' ]]
+  [[ "${effective_density}" == '320' ]]
+  [[ "$(adb -s "${device_serial}" shell settings get system user_rotation | tr -d '\r')" == '0' ]]
+}
+
+wait_for_launcher_focus() {
+  local attempt
+  local focused_window=''
+  for attempt in {1..40}; do
+    focused_window="$(adb -s "${device_serial}" shell dumpsys window | tr -d '\r' | sed -n 's/.*mCurrentFocus=//p' | head -n 1)"
+    if [[ "${focused_window}" == *launcher* ]]; then
+      return 0
+    fi
+    sleep 0.25
+  done
+  echo "Launcher did not regain focus before the next instrumentation lane: ${focused_window:-unknown}." >&2
+  return 1
+}
+
+reset_emulator_for_instrumentation_lane() {
+  # Every lane starts outside the prior app/test process and with the exact
+  # tablet geometry. This prevents hundreds of Compose dialogs, IME windows,
+  # and frame-stress surfaces from accumulating in one instrumentation run.
+  adb -s "${device_serial}" shell am force-stop "${test_package}" >/dev/null
+  adb -s "${device_serial}" shell am force-stop "${app_package}" >/dev/null
+  adb -s "${device_serial}" shell input keyevent KEYCODE_WAKEUP >/dev/null
+  adb -s "${device_serial}" shell input keyevent KEYCODE_HOME >/dev/null
+  adb -s "${device_serial}" shell cmd statusbar collapse >/dev/null 2>&1 || true
+  wait_for_launcher_focus
+  adb -s "${device_serial}" shell am wait-for-broadcast-idle >/dev/null
+  reassert_tablet_viewport
+}
+
 read_deep_idle_enabled() {
   adb -s "${device_serial}" shell dumpsys deviceidle enabled deep | tr -d '[:space:]'
 }
@@ -156,6 +210,94 @@ print((metadata.parent / outputs[0]).resolve())
 PY
 }
 
+install_discovery_test_apks() {
+  local app_apk
+  local test_apk
+  app_apk="$(resolve_apk_from_metadata "${app_metadata}")" || return 1
+  test_apk="$(resolve_apk_from_metadata "${test_metadata}")" || return 1
+  [[ -f "${app_apk}" && -f "${test_apk}" ]] || {
+    echo "Instrumentation discovery APKs are missing after assembly." >&2
+    return 1
+  }
+  adb -s "${device_serial}" install -r -t "${app_apk}" >/dev/null
+  adb -s "${device_serial}" install -r -t "${test_apk}" >/dev/null
+  adb -s "${device_serial}" shell pm clear "${app_package}" >/dev/null
+}
+
+discover_instrumentation_tests() {
+  local discovery_log="${shard_evidence_root}/discovery.log"
+  local discovery_status=0
+
+  mkdir -p "${shard_evidence_root}"
+  : > "${discovery_log}"
+  : > "${discovered_tests_file}"
+
+  if ! install_discovery_test_apks; then
+    discovery_status=1
+  elif ! adb -s "${device_serial}" shell am instrument -w -r \
+    -e log true "${test_runner}" | tee "${discovery_log}"; then
+    discovery_status=1
+  fi
+
+  if [[ "${discovery_status}" -eq 0 ]] \
+    && ! python3 "${shard_verifier}" discover \
+      --log "${discovery_log}" \
+      --expected-tests "${discovered_tests_file}"; then
+    discovery_status=1
+  fi
+
+  adb -s "${device_serial}" shell am force-stop "${test_package}" >/dev/null 2>&1 || true
+  adb -s "${device_serial}" shell am force-stop "${app_package}" >/dev/null 2>&1 || true
+  adb -s "${device_serial}" uninstall "${test_package}" >/dev/null 2>&1 || true
+  adb -s "${device_serial}" uninstall "${app_package}" >/dev/null 2>&1 || true
+  return "${discovery_status}"
+}
+
+clear_connected_outputs() {
+  [[ "${connected_results_dir}" == "${android_root}/app/build/"* ]]
+  [[ "${connected_report_dir}" == "${android_root}/app/build/"* ]]
+  rm -rf -- "${connected_results_dir}" "${connected_report_dir}"
+}
+
+preserve_instrumentation_lane() {
+  local lane_dir=$1
+  local preserved=0
+  mkdir -p "${lane_dir}/results" "${lane_dir}/report"
+  if [[ -d "${connected_results_dir}" ]]; then
+    cp -R "${connected_results_dir}/." "${lane_dir}/results/"
+  else
+    echo "Instrumentation lane produced no connected test results: ${lane_dir##*/}." >&2
+    preserved=1
+  fi
+  if [[ -d "${connected_report_dir}" ]]; then
+    cp -R "${connected_report_dir}/." "${lane_dir}/report/"
+  else
+    echo "Instrumentation lane produced no connected HTML report: ${lane_dir##*/}." >&2
+    preserved=1
+  fi
+  return "${preserved}"
+}
+
+run_connected_instrumentation_lane() {
+  local lane_name=$1
+  shift
+  local lane_dir="${shard_evidence_root}/${lane_name}"
+  local lane_status=0
+
+  mkdir -p "${lane_dir}"
+  clear_connected_outputs
+  if ! reset_emulator_for_instrumentation_lane 2>&1 | tee "${lane_dir}/reset.log"; then
+    lane_status=1
+  elif ! ./gradlew --no-daemon --max-workers=2 --stacktrace \
+    "$@" :app:connectedDebugAndroidTest 2>&1 | tee "${lane_dir}/gradle.log"; then
+    lane_status=1
+  fi
+  if ! preserve_instrumentation_lane "${lane_dir}"; then
+    lane_status=1
+  fi
+  return "${lane_status}"
+}
+
 install_alarm_test_apks() {
   local app_apk
   local test_apk
@@ -207,7 +349,52 @@ export ANDROID_SERIAL="${device_serial}"
 configure_tablet_viewport
 
 status=0
-./gradlew --no-daemon --max-workers=2 --stacktrace :app:connectedDebugAndroidTest || status=$?
+[[ "${shard_evidence_root}" == "${android_root}/app/build/"* ]]
+rm -rf -- "${shard_evidence_root}"
+mkdir -p "${shard_evidence_root}"
+
+# Discover the exact runner inventory once, without executing test bodies. The
+# later verifier rejects a missing, duplicated or unexpected test across all
+# functional shards and the isolated physical-frame stress lane.
+if ! ./gradlew --no-daemon --max-workers=2 --stacktrace \
+  :app:assembleDebug :app:assembleDebugAndroidTest \
+  2>&1 | tee "${shard_evidence_root}/assemble.log"; then
+  status=1
+elif ! discover_instrumentation_tests; then
+  status=1
+fi
+
+if [[ "${status}" -eq 0 ]]; then
+  for ((shard_index = 0; shard_index < functional_shard_count; shard_index++)); do
+    if ! run_connected_instrumentation_lane \
+      "functional-shard-${shard_index}" \
+      "-Pandroid.testInstrumentationRunnerArguments.numShards=${functional_shard_count}" \
+      "-Pandroid.testInstrumentationRunnerArguments.shardIndex=${shard_index}" \
+      "-Pandroid.testInstrumentationRunnerArguments.notClass=${stress_class}"; then
+      status=1
+    fi
+  done
+
+  # These long render-cadence tests intentionally create sustained physical
+  # frame load. Run them last in their own fresh instrumentation process so
+  # they cannot poison functional Compose/IME/window tests that follow.
+  if ! run_connected_instrumentation_lane \
+    'physical-frame-stress' \
+    "-Pandroid.testInstrumentationRunnerArguments.class=${stress_class}"; then
+    status=1
+  fi
+
+  if ! python3 "${shard_verifier}" verify \
+    --expected-tests "${discovered_tests_file}" \
+    --evidence-root "${shard_evidence_root}" \
+    --functional-shards "${functional_shard_count}" \
+    --stress-class "${stress_class}" \
+    --expected-skip "${expected_notification_skip}" \
+    --expected-skip "${expected_exact_alarm_skip}" \
+    --summary "${shard_evidence_root}/summary.txt"; then
+    status=1
+  fi
+fi
 
 # The ordinary suite deliberately exercises the denied-permission path on a
 # fresh API-35 emulator. Its two positive alarm tests use assumptions, so a
@@ -231,7 +418,10 @@ if [[ "${status}" -eq 0 ]]; then
   elif [[ "${deep_idle_initial_state}" != '0' && "${deep_idle_initial_state}" != '1' ]]; then
     echo "Unexpected deep-idle state: ${deep_idle_initial_state:-empty}." | tee "${alarm_setup_report}" >&2
     alarm_setup_status=1
-  elif ! install_alarm_test_apks 2>&1 | tee "${alarm_setup_report}"; then
+  elif ! {
+    reset_emulator_for_instrumentation_lane
+    install_alarm_test_apks
+  } 2>&1 | tee "${alarm_setup_report}"; then
     alarm_setup_status=1
   fi
   if [[ "${alarm_setup_status}" -ne 0 ]]; then

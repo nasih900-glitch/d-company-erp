@@ -13,7 +13,7 @@ import {
   Play, Square, Pause, PlayCircle, Gamepad2, Glasses, CarFront, Tv,
   Plus, Edit2, Trash2, Loader2, AlertCircle, RefreshCw, Settings, Flame,
   Timer, TimerOff, X, BellRing, BellOff, Bell, Send,
-  Ban,
+  Ban, ArrowRightLeft,
 } from 'lucide-react';
 
 import {
@@ -90,6 +90,12 @@ import {
   SessionAddonVoidModal,
 } from './GamingAddonControls';
 import { GamingStopConfirmation } from './GamingStopConfirmation';
+import {
+  GamingTransferModal,
+  applyConfirmedGamingTransfer,
+  eligibleGamingTransferTargets,
+  gamingTransferFailureGuidance,
+} from './GamingTransfer';
 import {
   availableGamingAddonItems,
   createClientLineId,
@@ -343,6 +349,17 @@ type PendingPosHandoff = {
   targets: GamingPosTargetShiftDTO[];
 };
 
+type PendingTransfer = {
+  source: StationDTO;
+  sessionId: string;
+  expectedSourceStationId: string;
+};
+
+type GamingTransferAttempt = PendingTransfer & {
+  targetStationId: string;
+  idempotencyKey: string;
+};
+
 type SendFailure = {
   message: string;
   code?: string;
@@ -526,6 +543,11 @@ export default function GamingScreen() {
   const [pendingExtension, setPendingExtension] = useState<PendingExtension | null>(null);
   const [pendingReconciliation, setPendingReconciliation] = useState<PendingReconciliation | null>(null);
   const [pendingPosHandoff, setPendingPosHandoff] = useState<PendingPosHandoff | null>(null);
+  const [pendingTransfer, setPendingTransfer] = useState<PendingTransfer | null>(null);
+  const [transferAttempt, setTransferAttempt] = useState<GamingTransferAttempt | null>(null);
+  const [transferError, setTransferError] = useState<string | null>(null);
+  const [transferringSession, setTransferringSession] = useState<string | null>(null);
+  const [transferBoardStale, setTransferBoardStale] = useState(false);
   const [pendingStopTarget, setPendingStopTarget] = useState<StationDTO | null>(null);
   const [pendingPauseTarget, setPendingPauseTarget] = useState<StationDTO | null>(null);
   const [changingPause, setChangingPause] = useState<string | null>(null);
@@ -560,6 +582,7 @@ export default function GamingScreen() {
   const startBusyRef = useRef(false);
   const timerMutationBusyRef = useRef(false);
   const pauseBusyRef = useRef(false);
+  const transferBusyRef = useRef(false);
   const pauseAttemptRef = useRef<{ fingerprint: string; key: string } | null>(null);
   const refreshGenerationRef = useRef(0);
   const hasVerifiedBoardRef = useRef(false);
@@ -934,6 +957,7 @@ export default function GamingScreen() {
           }
           return next;
         });
+        setTransferBoardStale(false);
         hasVerifiedBoardRef.current = true;
         setError(null);
       } else {
@@ -969,6 +993,52 @@ export default function GamingScreen() {
     const id = setInterval(() => { void loadRef.current('background'); }, GAMING_SESSIONS_POLL_MS);
     return () => { unsubscribe(); clearInterval(id); };
   }, []);
+
+  // A transfer POST may commit even when its response is lost. Once a fresh
+  // board locates that exact session at the retained target, clear the receipt
+  // and close the stale source dialog without asking staff to send a new move.
+  useEffect(() => {
+    if (!transferAttempt || transferringSession) return;
+    const located = Object.entries(sessions).find(
+      ([, session]) => session.backend_session_id === transferAttempt.sessionId,
+    );
+    const locatedStationId = located?.[0];
+    if (
+      locatedStationId === transferAttempt.expectedSourceStationId
+      && (located?.[1].status === 'active' || located?.[1].status === 'paused')
+    ) return;
+    // Do not clear an uncertain receipt until a post-failure board refresh has
+    // completed. Before that point, absence from the current map is not proof.
+    if (transferBoardStale) return;
+    setTransferAttempt(null);
+    setTransferError(null);
+    setPendingTransfer(null);
+    if (locatedStationId === transferAttempt.targetStationId) {
+      const targetName = stations.find((station) => station.id === locatedStationId)?.name
+        ?? 'the target station';
+      notifications.success(
+        `The refreshed board confirms the session at ${targetName}. Its locked billing and timer were kept.`,
+        { title: 'Transfer confirmed' },
+      );
+      return;
+    }
+    const currentStationName = locatedStationId
+      ? stations.find((station) => station.id === locatedStationId)?.name
+      : null;
+    notifications.info(
+      currentStationName
+        ? `The refreshed board shows the session at ${currentStationName}, so the interrupted transfer receipt was retired. Review the current station before moving it again.`
+        : 'The refreshed board no longer shows this as a transferable session, so the interrupted transfer receipt was retired.',
+      { title: 'Transfer state refreshed' },
+    );
+  }, [
+    notifications,
+    sessions,
+    stations,
+    transferAttempt,
+    transferBoardStale,
+    transferringSession,
+  ]);
 
   // Live ticking timer + alarm check. One interval drives both the countdown
   // re-render and the "has any timer just expired" scan, using refs so it
@@ -1700,6 +1770,200 @@ export default function GamingScreen() {
     return packages.filter((p) => p.station_type === stationType && p.kind === kind && (
       !requiresFixedGamingTariff(stationType) || Boolean(p.code)
     ));
+  }
+
+  function prepareSessionTransfer(source: StationDTO) {
+    const write = requireGamingWrite('Cannot transfer session');
+    if (!write.allowed) return;
+    if (!LIVE_MODE) {
+      notifications.info('Station transfer is available on the live Gaming board.', {
+        title: 'Live session required',
+      });
+      return;
+    }
+    if (transferBoardStale) {
+      notifications.error(
+        'The last transfer result still needs an authoritative station refresh. Use Refresh before another transfer.',
+        { title: 'Refresh required' },
+      );
+      return;
+    }
+    const session = sessions[source.id];
+    if (
+      !session?.backend_session_id
+      || session.station_id !== source.id
+      || (session.status !== 'active' && session.status !== 'paused')
+    ) {
+      notifications.info(
+        'This session has changed. Refresh Gaming and review its current station before transferring it.',
+        { title: 'Session changed' },
+      );
+      return;
+    }
+    if (!requireCurrentShiftOwnership(session, 'transfer it')) return;
+    if (!requirePaidExtensionResolved(session, 'transferred')) return;
+    if (!navigator.onLine) {
+      notifications.error(
+        'Station transfer needs a server connection so every device sees the same station. Reconnect and try again.',
+        { title: 'Online connection required' },
+      );
+      return;
+    }
+    if (transferAttempt && transferAttempt.sessionId !== session.backend_session_id) {
+      notifications.error(
+        'Another transfer has an interrupted response. Resolve that exact saved transfer before moving a different session.',
+        { title: 'Transfer confirmation pending' },
+      );
+      return;
+    }
+    setTransferError(transferAttempt
+      ? 'The earlier response was interrupted. Select the retained target and retry this exact transfer; the same receipt key will be used.'
+      : null);
+    setPendingTransfer(transferAttempt ?? {
+      source,
+      sessionId: session.backend_session_id,
+      expectedSourceStationId: session.station_id,
+    });
+  }
+
+  async function confirmSessionTransfer(target: StationDTO) {
+    const pending = pendingTransfer;
+    if (!pending || transferBusyRef.current) return;
+    const write = requireGamingWrite('Cannot transfer session');
+    if (!write.allowed) return;
+    if (transferBoardStale) {
+      setTransferError(
+        'The station board could not be refreshed after the last transfer result. Use Refresh before retrying.',
+      );
+      return;
+    }
+    if (!navigator.onLine) {
+      setTransferError('Reconnect before transferring. The station has not been changed by this browser.');
+      return;
+    }
+
+    const current = sessions[pending.expectedSourceStationId];
+    if (
+      !current
+      || current.backend_session_id !== pending.sessionId
+      || current.station_id !== pending.expectedSourceStationId
+      || (current.status !== 'active' && current.status !== 'paused')
+    ) {
+      setTransferError(
+        'The session is no longer at the source station you reviewed. Gaming is refreshing before another transfer.',
+      );
+      setTransferBoardStale(true);
+      await load('foreground');
+      return;
+    }
+    if (!requireCurrentShiftOwnership(current, 'transfer it')) return;
+    if (!requirePaidExtensionResolved(current, 'transferred')) return;
+
+    const eligibleTargets = eligibleGamingTransferTargets(pending.source, stations, sessions);
+    if (!eligibleTargets.some((candidate) => candidate.id === target.id)) {
+      setTransferError(
+        'That station is no longer an active, available target of the same type. Gaming is refreshing; choose again from the updated list.',
+      );
+      setTransferBoardStale(true);
+      await load('foreground');
+      return;
+    }
+
+    const exactRetainedAttempt = transferAttempt
+      && transferAttempt.sessionId === pending.sessionId
+      && transferAttempt.expectedSourceStationId === pending.expectedSourceStationId
+      && transferAttempt.targetStationId === target.id
+      ? transferAttempt
+      : null;
+    if (transferAttempt && !exactRetainedAttempt) {
+      setTransferError(
+        'An interrupted transfer can only be retried with its original source and target. Cancel and review the refreshed board.',
+      );
+      return;
+    }
+    const attempt: GamingTransferAttempt = exactRetainedAttempt ?? {
+      ...pending,
+      targetStationId: target.id,
+      idempotencyKey: `gaming-transfer:${createOperationKey()}`,
+    };
+
+    if (!enterGamingMutation(transferBusyRef)) return;
+    setTransferAttempt(attempt);
+    setTransferError(null);
+    setTransferringSession(pending.sessionId);
+    invalidateGamingRefresh(refreshGenerationRef);
+    try {
+      const response = await write.dispatch(
+        'transferSession',
+        pending.sessionId,
+        // Exact immutable source snapshot: never derive this from a later
+        // station lookup or from the employee's selected target.
+        pending.expectedSourceStationId,
+        target.id,
+        attempt.idempotencyKey,
+      );
+      if (
+        response.id !== pending.sessionId
+        || response.station_id !== target.id
+        || (response.status !== 'active' && response.status !== 'paused')
+      ) {
+        const guidance = gamingTransferFailureGuidance({
+          message: 'The server returned an unexpected transfer receipt.',
+          ambiguous: true,
+        });
+        setTransferError(guidance.message);
+        setTransferBoardStale(true);
+        notifications.error(guidance.message, { title: guidance.title });
+        await load('foreground');
+        return;
+      }
+
+      setSessions((all) => applyConfirmedGamingTransfer(
+        all,
+        pending.sessionId,
+        pending.expectedSourceStationId,
+        response.station_id,
+      ));
+      setMutedStations((all) => {
+        const next = { ...all };
+        const wasMuted = Boolean(next[pending.expectedSourceStationId]);
+        delete next[pending.expectedSourceStationId];
+        delete next[target.id];
+        if (wasMuted) next[target.id] = true;
+        return next;
+      });
+      const lastAlarmAt = lastAlarmAtRef.current[pending.expectedSourceStationId];
+      delete lastAlarmAtRef.current[pending.expectedSourceStationId];
+      delete lastAlarmAtRef.current[target.id];
+      if (lastAlarmAt !== undefined) lastAlarmAtRef.current[target.id] = lastAlarmAt;
+      setTransferAttempt(null);
+      setTransferError(null);
+      setPendingTransfer(null);
+      notifications.success(
+        `${pending.source.name} was transferred to ${target.name}. The locked price, package, timer and shift are unchanged.`,
+        { title: 'Session transferred' },
+      );
+      await load('background');
+    } catch (failure) {
+      const apiFailure = failure as ApiError;
+      const guidance = gamingTransferFailureGuidance({
+        message: failure instanceof Error
+          ? failure.message
+          : 'The transfer request could not be completed.',
+        status: apiFailure.status,
+        ambiguous: isAmbiguousApiError(failure),
+      });
+      if (!guidance.retainExactAttempt) setTransferAttempt(null);
+      setTransferError(guidance.message);
+      notifications.error(guidance.message, { title: guidance.title });
+      if (guidance.refreshRequired) {
+        setTransferBoardStale(true);
+        await load('foreground');
+      }
+    } finally {
+      leaveGamingMutation(transferBusyRef);
+      setTransferringSession(null);
+    }
   }
 
   async function changeSessionPause(st: StationDTO, action: 'pause' | 'resume', rawReason: string) {
@@ -3293,6 +3557,34 @@ export default function GamingScreen() {
                         </div>
                       )}
                     </div>
+                    {LIVE_MODE && (
+                      <GamingMutationButton
+                        canManageSessions={canManageStations}
+                        className="btn btn-ghost mb-2 w-full"
+                        disabled={Boolean(
+                          !sessionOwned
+                          || !backendSessionId
+                          || legacyPauseTimingGap
+                          || paidExtensionLifecycleBlocked
+                          || addonMutationPending
+                          || transferBoardStale
+                          || transferringSession !== null
+                          || stoppingSession !== null
+                          || changingPause !== null
+                          || (transferAttempt && transferAttempt.sessionId !== backendSessionId)
+                        )}
+                        title={transferBoardStale
+                          ? 'Refresh Gaming before another station transfer'
+                          : transferAttempt?.sessionId === backendSessionId
+                            ? 'Retry the exact interrupted station transfer'
+                            : 'Move this live session to an available station of the same type'}
+                        onClick={() => prepareSessionTransfer(st)}
+                      >
+                        {transferringSession === backendSessionId
+                          ? <Loader2 size={14} className="animate-spin"/>
+                          : <ArrowRightLeft size={14}/>} Transfer station
+                      </GamingMutationButton>
+                    )}
                     <div className="flex gap-2">
                       {session.status === 'active' ? (
                         <GamingMutationButton
@@ -3599,6 +3891,36 @@ export default function GamingScreen() {
             onCancel={() => { if (!extendingSession) setPendingExtension(null); }}
           />
         )}
+        {pendingTransfer && (() => {
+          const retryTargetId = transferAttempt?.sessionId === pendingTransfer.sessionId
+            ? transferAttempt.targetStationId
+            : null;
+          const availableTargets = eligibleGamingTransferTargets(
+            pendingTransfer.source,
+            stations,
+            sessions,
+          );
+          const displayedTargets = retryTargetId
+            ? availableTargets.filter((target) => target.id === retryTargetId)
+            : availableTargets;
+          return (
+            <GamingTransferModal
+              key={`${pendingTransfer.sessionId}:${retryTargetId ?? 'new'}`}
+              source={pendingTransfer.source}
+              targets={displayedTargets}
+              busy={transferringSession === pendingTransfer.sessionId}
+              error={transferError}
+              retryTargetId={retryTargetId}
+              onConfirm={(target) => { void confirmSessionTransfer(target); }}
+              onCancel={() => {
+                if (!transferringSession) {
+                  setPendingTransfer(null);
+                  setTransferError(null);
+                }
+              }}
+            />
+          );
+        })()}
         {pendingPauseTarget && (
           <PromptModal
             title={`Pause ${pendingPauseTarget.name}`}

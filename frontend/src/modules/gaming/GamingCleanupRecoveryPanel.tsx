@@ -19,26 +19,83 @@ export function gamingCleanupStationLabel(station: StationDTO | undefined): stri
   return station ? `${station.name} (${station.code})` : 'Station record unavailable';
 }
 
+export function gamingCleanupTerminalName(
+  device: ClientInstallationDTO | undefined,
+  candidateTerminalId: string,
+): string {
+  if (device?.terminal_id !== candidateTerminalId) return 'Unavailable for this candidate';
+  return device.terminal_name?.trim() || 'Unavailable for this candidate';
+}
+
+export function gamingCleanupAppVersion(
+  row: Pick<
+    GamingCleanupReconciliationDTO,
+    'reported_app_version_name' | 'reported_app_version_code'
+  >,
+): string {
+  return `v${row.reported_app_version_name} · build ${row.reported_app_version_code}`;
+}
+
+function currentGamingCleanupAppVersion(device: ClientInstallationDTO | undefined): string {
+  return device
+    ? `v${device.version_name} · build ${device.version_code}`
+    : 'Unavailable from installation report';
+}
+
+export function gamingCleanupIdentityRows(
+  row: GamingCleanupReconciliationDTO,
+  device: ClientInstallationDTO | undefined,
+): Array<{ label: string; value: string }> {
+  return [
+    { label: 'Branch ID', value: row.branch_id },
+    { label: 'Terminal name', value: gamingCleanupTerminalName(device, row.terminal_id) },
+    { label: 'Terminal ID', value: row.terminal_id },
+    { label: 'Tablet installation ID', value: row.installation_id },
+    { label: 'Report-time app version / build', value: gamingCleanupAppVersion(row) },
+    { label: 'Candidate record ID', value: row.id },
+  ];
+}
+
+export function gamingCleanupStatusLabel(
+  row: Pick<GamingCleanupReconciliationDTO, 'status' | 'unresolved_child_count'>,
+): string {
+  if (row.status === 'superseded') return 'Superseded by newer tablet evidence';
+  if (row.unresolved_child_count > 0) return 'Blocked';
+  if (row.status === 'reported') return 'Evidence verified · owner review required';
+  if (row.status === 'approved') return 'Approved · waiting for tablet';
+  return 'Applied · tablet acknowledged';
+}
+
 export function gamingCleanupApprovalConfirmation(
   row: GamingCleanupReconciliationDTO,
   station: StationDTO | undefined,
+  device: ClientInstallationDTO | undefined,
 ): string {
   const amount = row.review.amount_minor == null
-    ? 'billing amount unavailable'
-    : inr(row.review.amount_minor);
+    ? 'tablet-reported amount unavailable'
+    : `tablet-reported amount ${inr(row.review.amount_minor)}`;
   const duration = row.review.billable_minutes == null
-    ? 'billable duration unavailable'
-    : `${row.review.billable_minutes} billable min`;
+    ? 'tablet-reported billable duration unavailable'
+    : `tablet-reported billable duration ${row.review.billable_minutes} min`;
   return `Approve retiring only ${gamingCleanupStationLabel(station)} (${row.station_id}) `
-    + `for ${amount}, ${duration}? The exact tablet action is ${row.local_action_id}.`;
+    + `from branch ${row.branch_id}, terminal ${gamingCleanupTerminalName(device, row.terminal_id)} `
+    + `(${row.terminal_id}), installation ${row.installation_id} reported by ${gamingCleanupAppVersion(row)}? `
+    + `The local evidence is ${amount} and ${duration}. Candidate ${row.id}, revision ${row.revision}, `
+    + `SHA-256 ${row.candidate_sha256}. The exact tablet action is ${row.local_action_id}; `
+    + `the server session is ${row.server_session_id}.`;
 }
 
 export function canApproveGamingCleanupCandidate(
-  row: Pick<GamingCleanupReconciliationDTO, 'status' | 'unresolved_child_count'>,
+  row: Pick<GamingCleanupReconciliationDTO, 'status' | 'unresolved_child_count' | 'review'>,
   reason: string,
 ): boolean {
   const length = reason.trim().length;
-  return row.status === 'reported' && row.unresolved_child_count === 0 && length >= 3 && length <= 500;
+  return row.status === 'reported'
+    && row.unresolved_child_count === 0
+    && row.review.amount_minor !== null
+    && row.review.billable_minutes !== null
+    && length >= 3
+    && length <= 500;
 }
 
 export type GamingCleanupApprovalAttempt = { reason: string; key: string };
@@ -121,11 +178,19 @@ export default function GamingCleanupRecoveryPanel({
 
   async function approve(row: GamingCleanupReconciliationDTO) {
     const reason = (reasons[row.id] ?? '').trim();
+    if (row.review.amount_minor === null || row.review.billable_minutes === null) {
+      setError('Approval requires a tablet-reported amount and billable duration. Refresh after the tablet reports complete evidence.');
+      return;
+    }
     if (!canApproveGamingCleanupCandidate(row, reason)) {
       setError('Enter a review reason between 3 and 500 characters.');
       return;
     }
-    const confirmation = gamingCleanupApprovalConfirmation(row, stationsById.get(row.station_id));
+    const confirmation = gamingCleanupApprovalConfirmation(
+      row,
+      stationsById.get(row.station_id),
+      devicesById.get(row.installation_id),
+    );
     const confirmed = confirmApproval
       ? confirmApproval(confirmation)
       : globalThis.confirm(confirmation);
@@ -181,34 +246,39 @@ export default function GamingCleanupRecoveryPanel({
           const device = devicesById.get(row.installation_id);
           const station = stationsById.get(row.station_id);
           const blocked = row.unresolved_child_count > 0;
+          const incompleteBillingEvidence = row.review.amount_minor === null
+            || row.review.billable_minutes === null;
           return (
             <article key={row.id} className="rounded-xl border border-bg-border bg-bg-raised/40 p-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <p className="font-medium">{gamingCleanupStationLabel(station)}</p>
                   <p className="mt-1 text-xs text-fg-muted">
-                    App {device ? `v${device.version_name} · build ${device.version_code}` : 'build unavailable'} · last seen {when(device?.last_seen_at ?? null)} · last Sync {when(device?.last_successful_sync_at ?? null)}
+                    Reported by {gamingCleanupAppVersion(row)} · current device {currentGamingCleanupAppVersion(device)} · last seen {when(device?.last_seen_at ?? null)} · last sync {when(device?.last_successful_sync_at ?? null)}
                   </p>
                 </div>
                 <span className={`chip ${row.status === 'applied' ? 'text-accent-good' : row.status === 'approved' ? 'text-accent' : 'text-accent-gold'}`}>
-                  {row.status === 'superseded' ? 'Superseded by newer tablet evidence' : blocked ? 'Blocked' : row.status === 'reported' ? 'Verified · review needed' : row.status === 'approved' ? 'Approved · waiting for tablet' : 'Applied · tablet acknowledged'}
+                  {gamingCleanupStatusLabel(row)}
                 </span>
               </div>
               <dl className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
+                {gamingCleanupIdentityRows(row, device).map(({ label, value }) => (
+                  <CopyableIdentifier key={label} label={label} value={value} />
+                ))}
                 <CopyableIdentifier label="Station ID" value={row.station_id} />
                 <CopyableIdentifier label="Server session ID" value={row.server_session_id} />
-                <CopyableIdentifier label="Tablet installation ID" value={row.installation_id} />
                 <CopyableIdentifier label="Local action ID" value={row.local_action_id} />
-                <div><dt className="text-fg-muted">Local evidence</dt><dd className="font-mono">revision {row.revision} · {row.reported_local_state}</dd></div>
+                <div><dt className="text-fg-muted">Candidate revision / local state</dt><dd className="font-mono">revision {row.revision} · {row.reported_local_state}</dd></div>
                 <div><dt className="text-fg-muted">Verified receipt</dt><dd className="font-mono">audit #{row.cleanup_receipt_audit_id}</dd></div>
-                <div><dt className="text-fg-muted">Reviewed amount</dt><dd>{row.review.amount_minor == null ? 'Unavailable' : inr(row.review.amount_minor)}</dd></div>
-                <div><dt className="text-fg-muted">Billable duration</dt><dd>{row.review.billable_minutes == null ? 'Unavailable' : `${row.review.billable_minutes} min`}</dd></div>
+                <div><dt className="text-fg-muted">Tablet-reported local amount</dt><dd>{row.review.amount_minor == null ? 'Unavailable' : inr(row.review.amount_minor)}</dd></div>
+                <div><dt className="text-fg-muted">Tablet-reported billable duration</dt><dd>{row.review.billable_minutes == null ? 'Unavailable' : `${row.review.billable_minutes} min`}</dd></div>
                 <div><dt className="text-fg-muted">Started / ended</dt><dd>{when(row.review.started_at)} / {when(row.review.ended_at)}</dd></div>
                 <CopyableIdentifier label="Original action actor" value={row.original_action_user_id} />
                 <div><dt className="text-fg-muted">Candidate hash</dt><dd className="break-all font-mono">{row.candidate_sha256}</dd></div>
                 <div><dt className="text-fg-muted">Saved child work</dt><dd>{row.unresolved_child_count || 'None'}</dd></div>
               </dl>
               {blocked && <p className="mt-3 text-sm text-accent-bad">Resolve the tablet's saved add-on or extension work before approval.</p>}
+              {incompleteBillingEvidence && <p className="mt-3 text-sm text-accent-bad">Approval is blocked until the tablet reports both the local amount and billable duration.</p>}
               {row.status === 'reported' && !blocked && (
                 <div className="mt-3 flex flex-col gap-2 sm:flex-row">
                   <input
@@ -218,7 +288,7 @@ export default function GamingCleanupRecoveryPanel({
                     placeholder="Reviewed reason for retiring this exact stale overlay"
                     onChange={(event) => setReasons((current) => ({ ...current, [row.id]: event.target.value }))}
                   />
-                  <button type="button" className="btn btn-primary" disabled={busy !== null} onClick={() => void approve(row)}>
+                  <button type="button" className="btn btn-primary" disabled={busy !== null || incompleteBillingEvidence} onClick={() => void approve(row)}>
                     {busy === row.id ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />} Approve exact candidate
                   </button>
                 </div>

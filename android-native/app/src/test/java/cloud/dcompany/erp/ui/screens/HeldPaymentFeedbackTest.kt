@@ -2,6 +2,9 @@ package cloud.dcompany.erp.ui.screens
 
 import cloud.dcompany.erp.core.db.HeldOrderPaymentState
 import cloud.dcompany.erp.core.db.LocalHeldOrderPaymentEntity
+import cloud.dcompany.erp.core.checkout.SplitPaymentLeg
+import cloud.dcompany.erp.core.checkout.SplitPaymentPolicy
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -48,6 +51,25 @@ class HeldPaymentFeedbackTest {
         val message = duplicateHeldPaymentNotice(null)
         assertTrue(message.contains("already saved"))
         assertTrue(message.contains("Do not collect again"))
+    }
+
+    @Test
+    fun splitMethodEnvelopeHasSafeReadableLabelsInPendingAndRecoveryRows() {
+        val stored = SplitPaymentPolicy.encode(
+            SplitPaymentPolicy.create(
+                12_500,
+                listOf(
+                    SplitPaymentLeg("cash", 5_000, 10_000),
+                    SplitPaymentLeg("upi", 7_500),
+                ),
+            ),
+        )
+
+        assertEquals("Split · Cash ₹50 + UPI ₹75", stored.paymentMethodLabel())
+        assertEquals("Split payment", "split:v99|private-corrupt-data".paymentMethodLabel())
+        val rejected = payment(HeldOrderPaymentState.REJECTED, "Network receipt mismatch")
+            .copy(method = stored)
+        assertTrue(heldPaymentOutcomeNotice(rejected).orEmpty().contains("Do not collect again"))
     }
 
     private fun payment(state: String, error: String? = null) = LocalHeldOrderPaymentEntity(
