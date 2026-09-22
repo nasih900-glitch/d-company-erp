@@ -458,7 +458,7 @@ REVIEWED_CODE30_3_SHA256 = {
     'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/shift/ShiftClosePresentationTest.kt': '6f63ecc420822b8fbfc030311a817f4f8cf0f8229ca48d2aacd6a7a437c48d5d',
     'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/shift/ShiftResultDismissalTest.kt': 'ed666a1689bffcce9069b50f3811890d4c58f6b1e29affff30da79d6ca0b3a46',
     'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/shift/ShiftStaffFeedbackTest.kt': '196596b3c56575e3f7b7a05c57de77097d9570f80831d1debfc60cf4285f8694',
-    'android-native/audit-driver/plans/code26-gaming-finance-physical.json': 'fcff4b9f80581d035190619f3c0f73a10a660075a11674706670d4110e04aebd',
+    'android-native/audit-driver/plans/code26-gaming-finance-physical.json': '40c4177e7d65d53dc8bf83baae58a45185c3eeb755de3225a622b27ca62cf6ca',
     'backend/alembic/versions/0079_client_gaming_cleanup_reconciliation.py': '34a6e9c2e3be8bb97caec261fb116bdfb7ac88a53f2c7be0092a03d0b97508a6',
     'backend/alembic/versions/0080_atomic_split_payment_bundles.py': '9d69cf68e9b8df826683d8b0b1b7f34bf3479efa61d8e75befec6dcd076bf799',
     'backend/alembic/versions/0081_gaming_cleanup_report_app_identity.py': '4510f6ff361364cdb6a25f33f20efe5bf661d6709ee9ed5d074e21b01d4823cb',
@@ -539,7 +539,7 @@ REVIEWED_CODE30_3_SHA256 = {
     'scripts/verify_android_instrumentation_shards.py': '0cc074c0a65e4b18754fb4077d2f0198f001bfa0cb11917f94292014b31cf669',
     'tests/test_android_instrumentation_shards.py': '7fc9b7984d1abb008ab4e6255aeee7fdd5f8ae71bab27352cf8d1af90601888a',
     'tests/test_android_release_version.py': '20e146e4b53d42785cf17c81bce6b324f503467485b58b2129031f5d28b2e8ca',
-    'tests/test_code26_physical_audit_lane.py': '0e42f48753dae3ccf22c4689863fae414817ae229375f2917ec3c68ed7971ab0',
+    'tests/test_code26_physical_audit_lane.py': '36aeefefd491939040c12162682bd711d5e157be93e9a4c0faaefad4f1a61084',
     'tests/test_code30_2_post_cleanup_installer_guard.py': 'de3b8c2676d3efdb3e998069b9b62b19c69447d7b8ba3fb7d1eb51659ec1221f',
     'tests/test_production_installer_safety.py': '14cbb1dfd6906426756427eb6741eec6a45ba4d6905eecfe90f17e0673c718f8',
 }

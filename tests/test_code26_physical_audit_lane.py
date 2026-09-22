@@ -568,7 +568,9 @@ def test_physical_plan_covers_recovery_finance_receipts_and_cleanup() -> None:
         "Financial controls",
         "Profit and loss",
         "Daily P&L",
-        "Closed by Audit Employee 1",
+        "^Final close [0-9]{1,2}:[0-9]{2} [AP]M IST by Audit Employee 1$",
+        "Review 1 shift segment",
+        "^Closed [0-9]{1,2} [A-Z][a-z]{2} [0-9]{4} · [0-9]{1,2}:[0-9]{2} [AP]M IST by Audit Employee 1$",
         "counted ₹780.00 · balanced",
     ):
         assert evidence in rendered
