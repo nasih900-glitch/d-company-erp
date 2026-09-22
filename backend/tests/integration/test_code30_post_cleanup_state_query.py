@@ -87,6 +87,8 @@ def _insert_key(
     status: str,
     suffix: int,
     audited: bool,
+    expiration_client_platform: str = "android",
+    expiration_client_version_code: int | None = 37,
 ) -> UUID:
     key_id = uuid4()
     spki = b"0" * 89 + bytes([suffix % 256])
@@ -162,7 +164,7 @@ def _insert_key(
                 NULL, %s, 'remote_assistance.device_key.expired',
                 'RemoteAssistanceDeviceKey', %s, %s, %s,
                 '127.0.0.1', 'postgres-lifecycle-fixture', %s, %s,
-                'android', 37, false, %s
+                %s, %s, false, %s
             )
             """,
             (
@@ -172,6 +174,8 @@ def _insert_key(
                 Jsonb({**after_enrollment, "status": "expired"}),
                 _TERMINAL_ID,
                 f"expire-{suffix}",
+                expiration_client_platform,
+                expiration_client_version_code,
                 pending_expires_at + timedelta(microseconds=1),
             ),
         )
@@ -258,6 +262,10 @@ def _seed_state(connection: psycopg.Connection) -> None:
             status=status,
             suffix=index,
             audited=True,
+            # The protected Web device list is allowed to discover one
+            # server-owned expiration. It has no native client version.
+            expiration_client_platform="web" if index == 100 else "android",
+            expiration_client_version_code=None if index == 100 else 37,
         )
         enrolled_at += timedelta(minutes=11)
 
@@ -286,6 +294,15 @@ def _seed_state(connection: psycopg.Connection) -> None:
     )
 
 
+def _require_production_owner(connection: psycopg.Connection) -> None:
+    # The verifier pins guard-function owner `erp`; migrating as any other
+    # role would otherwise surface only as an unexplained zero trigger count.
+    role = connection.execute("SELECT current_user").fetchone()
+    assert role == ("erp",), (
+        f"run this proof with DATABASE_URL role 'erp' (as CI does), not {role!r}"
+    )
+
+
 def _state(connection: psycopg.Connection) -> dict[str, object]:
     connection.execute("SET LOCAL TIME ZONE 'UTC'")
     connection.execute("SET LOCAL bytea_output = 'hex'")
@@ -305,6 +322,7 @@ def test_post_cleanup_query_accepts_only_guarded_audited_key_churn() -> None:
         assert upgraded.returncode == 0, upgraded.stdout + upgraded.stderr
         dsn = database_url.replace("postgresql+psycopg://", "postgresql://", 1)
         with psycopg.connect(dsn) as connection:
+            _require_production_owner(connection)
             _seed_state(connection)
             connection.commit()
 
@@ -345,6 +363,24 @@ def test_post_cleanup_query_accepts_only_guarded_audited_key_churn() -> None:
                 document["remote_assistance_device_key_guard_trigger_definition_sha256"]
                 == "23c0907ae06aa7213082cf1cdbc55c3588c0ef5c1d9e738892b2520d0017265b"
             )
+
+            # Web expiration is accepted only with the exact server-owned
+            # audit shape. A Web row carrying a forged native version remains
+            # unexplained and blocks the installer.
+            _insert_key(
+                connection,
+                enrolled_at=_RECEIPT_AT + timedelta(minutes=45),
+                status="expired",
+                suffix=199,
+                audited=True,
+                expiration_client_platform="web",
+                expiration_client_version_code=37,
+            )
+            invalid_web_expiry = _state(connection)
+            assert invalid_web_expiry[
+                "post_cleanup_remote_assistance_device_key_invalid_count"
+            ] == 1
+            connection.rollback()
 
             # A structurally valid key without its exact enrollment audit must
             # remain visible as unexplained evidence rather than being accepted.
@@ -409,6 +445,7 @@ def test_post_cleanup_query_rejects_weakened_or_rebound_guard_triggers() -> None
         assert upgraded.returncode == 0, upgraded.stdout + upgraded.stderr
         dsn = database_url.replace("postgresql+psycopg://", "postgresql://", 1)
         with psycopg.connect(dsn) as connection:
+            _require_production_owner(connection)
             expected = _state(connection)
             assert expected["client_installation_guard_trigger_count"] == 1
             assert expected["remote_assistance_device_key_guard_trigger_count"] == 1

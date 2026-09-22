@@ -41,7 +41,7 @@ CODE30_2_FREEZE_SCRIPT_SHA256 = (
 CODE30_2_FREEZE_TEST_SHA256 = (
     "303c44945334417d810b27c07982a8582220f08642183b4107dcda8e67568a14"
 )
-CODE30_3_FREEZE_SCRIPT_SHA256 = "c34b5ff9327bc3a48031b96a2f7d89093b3ac7ff20bdf61b05414a1a4425a428"
+CODE30_3_FREEZE_SCRIPT_SHA256 = "57d2875f58c43a41bb260202b2209f7a6aaefac9ab624470551f079c89c46360"
 OPERATOR_RECORD_SHA256 = {
     "docs/CODE29_RELEASE_CANDIDATE.md": "8f15d3f031daef79ecd1a5680b8bf9f527598d558a004ea198225919898821e4",
     "docs/DISTRIBUTION.md": "601007e7eaca4b700c82e5e70ffd139a6ff9c9921e5c53581284491808710b1e",
@@ -2646,7 +2646,7 @@ def test_operator_records_are_frozen_and_trial_precedes_production() -> None:
         "Room schema `51`",
         "v3.1.30",
         "build `38`",
-        "Alembic head `0081`",
+        "Alembic head `0082`",
         "Room schema `52`",
         "Physical Redmi Pad 2 acceptance",
     ):

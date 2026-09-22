@@ -2,7 +2,7 @@
 
 Code30.3 is an additive patch to the existing Code30 application. It does not
 rebuild the ERP. Its coordinated identity is `v3.1.30`, Android installation
-build `38`, Room schema `52`, and Alembic head `0081`. Its immutable base is
+build `38`, Room schema `52`, and Alembic head `0082`. Its immutable base is
 Code30.2 commit `3ea84be4718a794d5a2e8efc7ac9bcacbc0cee01`
 (`v3.1.29`, build `37`, Room `51`, Alembic `0078`).
 
@@ -11,8 +11,10 @@ an old local Gaming overlay after the authoritative server session is gone. It
 also adds atomic split tender, Web Gaming station-transfer parity, a
 business-day shift view with exact opening and closing times, and protected
 same-branch recovery for an eligible stale Android-origin shift on another
-terminal. These are narrow changes to the existing system. The patch does not
-add a generic station reset, database clear, or broad deletion control.
+terminal. It also permits at most one second of tablet/server clock skew for a
+durably captured shift opening while rejecting timestamps further in the
+future. These are narrow changes to the existing system. The patch does not add
+a generic station reset, database clear, or broad deletion control.
 
 ## Atomic payment and client parity
 
@@ -132,6 +134,11 @@ from `0080`. An unexpected populated legacy `0079` ledger fails closed because
 its historical report-time build cannot be reconstructed from a later device
 heartbeat without fabricating audit evidence.
 
+Alembic `0082` aligns the database with the captured-shift API's bounded
+one-second clock-skew allowance. It does not rebase the tablet timestamp. A
+timestamp beyond that limit is rejected, and downgrade refuses to rewrite an
+immutable shift that used the allowance.
+
 Room `52` adds cleanup evidence, directive and acknowledgement fields and the
 `51 -> 52` migration. Upgrade acceptance must install build `38` over the
 same-signed build `37` without uninstalling or clearing app data.
@@ -157,9 +164,9 @@ of nested JSON types, receipt provenance, triggers/functions, lifecycle churn,
 legacy database heads, both quiescence gates and pre-promotion rollback. That
 focused review recorded 84 passes and one expected macOS skip.
 
-The current reviewed working tree passed **1,647 backend tests** with 21
-intentional isolated-audit skips on a fresh PostgreSQL database migrated from
-`0001` through `0081`; **579 Web tests** across 95 files plus TypeScript,
+The current reviewed working tree passed **1,652 backend tests** with 21
+intentional isolated-audit skips and no failures on a fresh PostgreSQL database
+owned by role `erp`, as in CI, and migrated from `0001` through `0082`; **579 Web tests** across 95 files plus TypeScript,
 zero-warning ESLint and the verified production build; and **1,136 Android JVM
 tests** on each of debug, release and direct-release. Release/direct-release
 lint, unsigned Play APK/AAB and unsigned direct-update APK builds also passed.
@@ -182,6 +189,14 @@ the full `PosEmptyCatalogueUiTest` class passed **6/6**. Production POS behavior
 was not changed. The earlier cleanup-only counts remain useful baseline
 evidence but do not cover the expanded patch.
 
+Isolated rendered split-payment acceptance also passed on Web and Android for
+one ₹50 sale split into ₹20 cash and ₹30 UPI, including ₹50 tendered, ₹30
+change, exact receipt rows, stock and shift reconciliation, idempotent replay,
+hard reload/app restart, and cleanup of the disposable fixtures. Those runs
+used candidate `dca27bc`; later verifier, evidence-analyzer and shift-clock
+corrections still require a new exact-head CI run, but did not change the split
+payment implementation.
+
 These results complete the local full Android instrumentation gate. They do
 not replace the release commit, exact-SHA hosted CI, protected signing, the
 same-signer in-place upgrade, production reconciliation, deployment/staging/
@@ -194,10 +209,13 @@ freeze-path safety tests, 64 root Android release-contract tests with 124
 subtests, and 53 physical-audit-lane contract tests. These results also overlap;
 they are contract/source evidence rather than CI, package, deployment or device
 proof. After the final harness and documentation edits stopped, the regenerated
-Code30.3 map froze 138 reviewed delta files, the standalone verifier preserved
-all 491 baseline test files, the focused release-control suite passed **711**
-tests with one expected macOS skip, and the complete root release suite passed
-**1,135** tests with two expected skips. `git diff --check` also passed.
+Code30.3 map froze 138 reviewed delta files, the focused release-control suite
+passed **711** tests with one expected macOS skip, and the complete root release
+suite passed **1,135** tests with two expected skips. After the later clock-skew,
+post-cleanup verifier and evidence-analyzer corrections, the refreshed Code30.3
+map freezes **143** reviewed delta files, the standalone verifier preserved all
+491 baseline test files, and the complete root release suite passed **1,145**
+tests with two expected skips. `git diff --check` also passed.
 
 The following remain separate pending gates at this candidate phase:
 
@@ -205,10 +223,8 @@ The following remain separate pending gates at this candidate phase:
 - protected `v3.1.30` tag workflow;
 - signed build-38 APK and manifest verification;
 - same-signer build-37-to-38 in-place upgrade without data clearing;
-- isolated rendered Web and Android split-tender acceptance through payment,
-  receipt and reload;
 - five production image scans and runtime identity checks;
-- guarded backend/Web deployment through Alembic `0081`;
+- guarded backend/Web deployment through Alembic `0082`;
 - inactive APK staging and bound-owner activation;
 - authenticated production smoke and exact stale-station recovery;
 - physical Redmi Pad 2, printer, alarm, battery-management and shop-day
@@ -230,7 +246,7 @@ preflight for tablet sync/outboxes, open shifts, Gaming sessions, held orders,
 Sheet delivery state, current runtime identity and database head. Deploy only
 the exact reviewed commit with the guarded installer, fresh backup, disposable
 restore, rollback evidence and authenticated smoke checks. Confirm backend/Web
-`3.1.30` and Alembic `0081`.
+`3.1.30` and Alembic `0082`.
 
 The installer independently repeats a global business-quiescence query before
 maintenance and after Caddy, backend and frontend stop. Any open shift,

@@ -40,7 +40,7 @@ Live at: <https://dcompany.duckdns.org>
 | **Frontend** | React 18, TypeScript strict, Vite, TailwindCSS, React Router (Hash router), axios, React Query, Recharts |
 | **Deploy** | Docker Compose · Caddy reverse proxy (auto-HTTPS via Let's Encrypt) · DigitalOcean or any VM |
 | **Domain** | `dcompany.duckdns.org` (DuckDNS, free) |
-| **DB migrations** | Alembic — current Code30.3 candidate head `0081` |
+| **DB migrations** | Alembic — current Code30.3 candidate head `0082` |
 | **Android DB** | Room — current Code30.3 candidate schema `52` |
 | **Tax engine** | India GST · Kerala intra-state CGST+SGST · Section 9(5) for delivery aggregators · FY April→March |
 
@@ -113,7 +113,7 @@ backend/
       email/mailer.py                SMTP mailer (env-driven)
     workers/
       daily_pnl.py                   Cron-target for 8am IST P&L email
-  alembic/versions/                  migrations chained through current head 0081
+  alembic/versions/                  migrations chained through current head 0082
   scripts/seed.py                    Idempotent seed (company, accounts, ingredients, tiers)
   tests/                             full pytest unit + integration suite
   entrypoint.sh                      Runs alembic + seed + uvicorn
@@ -212,8 +212,9 @@ disconnected only after its current pending, leased and quarantined business
 events have drained; retry quarantined events through the owner control.
 
 Code30.3 is an additive operational patch at `v3.1.30`, Android build `38`,
-Room `52`, and Alembic `0081`. It includes exact stale-Gaming recovery, atomic
-split tender, Web station-transfer parity, and business-day shift presentation.
+Room `52`, and Alembic `0082`. It includes exact stale-Gaming recovery, atomic
+split tender, Web station-transfer parity, business-day shift presentation,
+and a one-second captured-shift clock-skew boundary shared by API and database.
 Its immutable base is Code30.2
 commit `3ea84be4718a794d5a2e8efc7ac9bcacbc0cee01`. Preserve every existing
 `REVIEWED_CODE30_2_SHA256` key and value. The current freeze reads those bytes

@@ -18,7 +18,7 @@ Code30.2 `v3.1.29` / Android build `37` at commit
 `3ea84be4718a794d5a2e8efc7ac9bcacbc0cee01` is the immutable predecessor for
 this patch. Preserve its exact source, manifest, checksums, signer and APK
 bytes. The current Code30.3 candidate is `v3.1.30` / build `38`, Room schema
-`52`, and Alembic head `0081`:
+`52`, and Alembic head `0082`:
 
 ```
 freeze and verify exact 3.1.30/build-38 source
@@ -202,7 +202,7 @@ minimum-supported compatibility floor. An optional Code30.3 offer does not
 authorize changing that floor.
 
 Code30.2 `v3.1.29` / build `37` is the current immutable direct-channel release
-predecessor. Code30.3 is `v3.1.30` / build `38`, Room `52`, and migration `0081`.
+predecessor. Code30.3 is `v3.1.30` / build `38`, Room `52`, and migration `0082`.
 It is not signed, deployed, staged, active, offered, installed, or approved by
 the version bump alone.
 
@@ -218,7 +218,7 @@ the version bump alone.
    representative Room/outbox state, and install the signed build `38` with
    normal update semantics. Do not uninstall or clear data.
 5. Deploy the matching backend and Web source through the guarded production
-   installer with a quiesced backup, restore proof, migration through `0081`,
+   installer with a quiesced backup, restore proof, migration through `0082`,
    rollback readiness and authenticated smoke checks. The old one-time
    Code30.2 cleanup bridge is predecessor history and is not a substitute for
    this fresh preflight.

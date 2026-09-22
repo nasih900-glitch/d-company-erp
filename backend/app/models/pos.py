@@ -38,7 +38,8 @@ class Shift(Base, TimestampMixin, TenantMixin):
             name="ck_shift_opening_receipt",
         ),
         CheckConstraint(
-            "opening_received_at IS NULL OR opened_at <= opening_received_at",
+            "opening_received_at IS NULL OR "
+            "opened_at <= opening_received_at + INTERVAL '1 second'",
             name="ck_shift_capture_not_future",
         ),
         CheckConstraint(

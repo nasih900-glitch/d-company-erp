@@ -7,6 +7,11 @@ claim Android ``gfxinfo framestats`` evidence. This module
 validates those exact artifacts against the copied plan; unrelated PNG/XML
 files and a longer, stale ``steps.json`` cannot make a run pass.
 
+Physical-device timing always uses complete frames. An emulator may use its
+app-owned render-submission interval only when every frame window carries
+Android's explicit invalid GPU-completion sentinel; complete-frame timing stays
+visible and continues to enforce the frozen-frame limit.
+
 Pixel-perfect screenshot comparison is deliberately not claimed. Stable
 layout is checked from accessibility bounds so changing timer digits are
 tolerated while a banner/card jump is rejected. The Firebase lane still
@@ -27,7 +32,7 @@ import xml.etree.ElementTree as ET
 import zlib
 from collections import defaultdict
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -64,6 +69,17 @@ SEVERE_FRAME_MS = 250.0
 P95_FRAME_LIMIT_MS = 50.0
 JANK_FRAME_MS = 50.0
 MAX_JANK_RATIO = 0.05
+FROZEN_FRAME_MS = 700.0
+# Android's emulator graphics stack uses the final 4,950 ms histogram bucket as
+# an invalid/unknown GPU-completion sentinel on affected hosts. A real long GPU
+# frame can also land in that bucket, so the fallback below additionally
+# requires every reported GPU percentile to be the sentinel value.
+INVALID_GPU_SENTINEL_MS = 4950
+GPU_PERCENTILE = re.compile(
+    r"^(50th|90th|95th|99th) gpu percentile:\s*(\d+)ms$",
+    re.IGNORECASE,
+)
+GPU_HISTOGRAM_SENTINEL = re.compile(r"(?:^|\s)4950ms=(\d+)(?:\s|$)")
 LAYOUT_MOVE_RATIO = 0.20
 LAYOUT_COUNT_DELTA_RATIO = 0.20
 LAYOUT_MATCH_RATIO = 0.70
@@ -497,6 +513,9 @@ class FrameParse:
     valid: bool
     durations_ms: list[float]
     error: str | None = None
+    submission_durations_ms: list[float] = field(default_factory=list)
+    invalid_gpu_completion: bool = False
+    invalid_gpu_completion_reason: str | None = None
 
 
 def _frame_durations(path: Path) -> FrameParse:
@@ -505,10 +524,26 @@ def _frame_durations(path: Path) -> FrameParse:
     except (OSError, UnicodeDecodeError) as exc:
         return FrameParse(False, [], f"unreadable ({type(exc).__name__})")
     durations: list[float] = []
+    submission_durations: list[float] = []
     header: list[str] | None = None
     saw_data_line = False
+    gpu_percentiles: dict[str, int] = {}
+    sentinel_bucket_samples = 0
     for raw_line in lines:
         line = raw_line.strip()
+        percentile_match = GPU_PERCENTILE.fullmatch(line)
+        if percentile_match:
+            gpu_percentiles[percentile_match.group(1).lower()] = int(
+                percentile_match.group(2)
+            )
+        if line.startswith("GPU HISTOGRAM:"):
+            sentinel_match = GPU_HISTOGRAM_SENTINEL.search(line)
+            if sentinel_match:
+                # dumpsys prints both an aggregate and a per-window copy. Keep
+                # the largest reported bucket instead of double counting it.
+                sentinel_bucket_samples = max(
+                    sentinel_bucket_samples, int(sentinel_match.group(1))
+                )
         if line.startswith("Flags,"):
             header = [part.strip() for part in line.split(",")]
             if "IntendedVsync" not in header or "FrameCompleted" not in header:
@@ -530,11 +565,56 @@ def _frame_durations(path: Path) -> FrameParse:
             return FrameParse(False, [], "framestats row has non-integer timestamps")
         if intended > 0 and completed >= intended:
             durations.append((completed - intended) / 1_000_000.0)
+        if "HandleInputStart" in row and "SwapBuffers" in row:
+            try:
+                handle_input_start = int(row["HandleInputStart"])
+                swap_buffers = int(row["SwapBuffers"])
+            except ValueError:
+                return FrameParse(
+                    False,
+                    [],
+                    "framestats row has non-integer render-submission timestamps",
+                )
+            if handle_input_start > 0 and swap_buffers >= handle_input_start:
+                submission_durations.append(
+                    (swap_buffers - handle_input_start) / 1_000_000.0
+                )
     if header is None:
         return FrameParse(False, [], "framestats header was not found")
     if saw_data_line and not durations:
         return FrameParse(False, [], "framestats rows contained no valid completed frame")
-    return FrameParse(True, durations)
+    invalid_gpu_completion = sentinel_bucket_samples > 0 and all(
+        gpu_percentiles.get(percentile) == INVALID_GPU_SENTINEL_MS
+        for percentile in ("50th", "90th", "95th", "99th")
+    )
+    invalid_reason = None
+    if invalid_gpu_completion:
+        invalid_reason = (
+            "all GPU percentiles are the emulator 4950 ms sentinel and the "
+            f"sentinel histogram bucket contains {sentinel_bucket_samples} samples"
+        )
+    return FrameParse(
+        True,
+        durations,
+        submission_durations_ms=submission_durations,
+        invalid_gpu_completion=invalid_gpu_completion,
+        invalid_gpu_completion_reason=invalid_reason,
+    )
+
+
+def _duration_summary(durations_ms: list[float]) -> dict[str, int | float | None]:
+    jank = [duration for duration in durations_ms if duration > JANK_FRAME_MS]
+    severe = [duration for duration in durations_ms if duration > SEVERE_FRAME_MS]
+    frozen = [duration for duration in durations_ms if duration > FROZEN_FRAME_MS]
+    return {
+        "samples": len(durations_ms),
+        "jank_over_50_ms": len(jank),
+        "jank_ratio": round(len(jank) / len(durations_ms), 4) if durations_ms else None,
+        "severe_over_250_ms": len(severe),
+        "frozen_over_700_ms": len(frozen),
+        "p95_ms": _percentile(durations_ms, 0.95),
+        "max_ms": round(max(durations_ms), 3) if durations_ms else None,
+    }
 
 
 def _junit_counts(root: Path) -> tuple[int, int, int, int, list[str]]:
@@ -1190,6 +1270,8 @@ def analyze(root: Path, *, expected_steps: int, expected_frames: int, lane: str)
 
     frame_paths: list[str] = []
     frame_durations: list[float] = []
+    frame_submission_durations: list[float] = []
+    frame_window_telemetry: list[dict[str, Any]] = []
     frame_failures: list[dict[str, Any]] = []
     dynamic_frame_failures: list[dict[str, Any]] = []
     layout_windows: list[dict[str, Any]] = []
@@ -1234,6 +1316,17 @@ def analyze(root: Path, *, expected_steps: int, expected_frames: int, lane: str)
             parsed = next((result for result in parsed_results if result.valid), parsed_results[0])
             frame_paths.extend(str(path) for path in frame_candidates)
             frame_durations.extend(parsed.durations_ms)
+            frame_submission_durations.extend(parsed.submission_durations_ms)
+            frame_window_telemetry.append(
+                {
+                    "step": index,
+                    "artifact": frame_name,
+                    "completion_samples": len(parsed.durations_ms),
+                    "render_submission_samples": len(parsed.submission_durations_ms),
+                    "invalid_gpu_completion": parsed.invalid_gpu_completion,
+                    "reason": parsed.invalid_gpu_completion_reason,
+                }
+            )
         dynamic = any(
             token in str(step.get("name", "")).lower() for token in ("timer", "active")
         )
@@ -1375,11 +1468,58 @@ def analyze(root: Path, *, expected_steps: int, expected_frames: int, lane: str)
             }
         )
 
-    severe_frames = [duration for duration in frame_durations if duration > SEVERE_FRAME_MS]
-    jank_frames = [duration for duration in frame_durations if duration > JANK_FRAME_MS]
-    frozen_frames = [duration for duration in frame_durations if duration > 700.0]
-    frame_p95 = _percentile(frame_durations, 0.95)
-    jank_ratio = len(jank_frames) / len(frame_durations) if frame_durations else 1.0
+    invalid_gpu_windows = [
+        window for window in frame_window_telemetry if window["invalid_gpu_completion"]
+    ]
+    timing_basis = "frame_completion"
+    timing_basis_reason = (
+        "FrameCompleted minus IntendedVsync is required for physical-device evidence "
+        "and for emulator evidence with valid GPU-completion telemetry."
+    )
+    timing_basis_error: str | None = None
+    gated_frame_durations = frame_durations
+    if lane == "emulator" and invalid_gpu_windows:
+        all_windows_invalid = (
+            len(frame_window_telemetry) == len(frame_steps)
+            and len(invalid_gpu_windows) == len(frame_steps)
+        )
+        submissions_complete = (
+            bool(frame_durations)
+            and len(frame_submission_durations) == len(frame_durations)
+        )
+        if all_windows_invalid and submissions_complete:
+            timing_basis = "render_submission"
+            timing_basis_reason = (
+                "Every emulator frame window reports the 4950 ms invalid GPU-completion "
+                "sentinel; percentile, jank and severe-frame gates therefore use "
+                "SwapBuffers minus HandleInputStart. Frame-completion timing remains "
+                "reported and is still used for the frozen-frame gate."
+            )
+            gated_frame_durations = frame_submission_durations
+        else:
+            timing_basis_error = (
+                "invalid emulator GPU-completion telemetry was not consistent across "
+                "every frame window or did not have one render-submission sample per "
+                "completed frame"
+            )
+
+    severe_frames = [
+        duration for duration in gated_frame_durations if duration > SEVERE_FRAME_MS
+    ]
+    jank_frames = [
+        duration for duration in gated_frame_durations if duration > JANK_FRAME_MS
+    ]
+    frozen_frames = [
+        duration for duration in frame_durations if duration > FROZEN_FRAME_MS
+    ]
+    frame_p95 = _percentile(gated_frame_durations, 0.95)
+    jank_ratio = (
+        len(jank_frames) / len(gated_frame_durations)
+        if gated_frame_durations
+        else 1.0
+    )
+    completion_summary = _duration_summary(frame_durations)
+    submission_summary = _duration_summary(frame_submission_durations)
 
     junit_tests, junit_failures, junit_errors, junit_skips, junit_paths = _junit_counts(root)
     instrumentation_ok = any(
@@ -1429,12 +1569,14 @@ def analyze(root: Path, *, expected_steps: int, expected_frames: int, lane: str)
         "exact_per_step_artifacts": not artifact_failures,
         "idle_phase_artifacts_complete": not idle_artifact_failures,
         "all_frame_windows_parseable": not frame_failures and len(frame_paths) >= expected_frames,
-        "frame_samples_present": bool(frame_durations),
+        "frame_samples_present": bool(frame_durations) and bool(gated_frame_durations),
         "dynamic_frame_samples_present": not dynamic_frame_failures,
+        "frame_timing_basis_valid": timing_basis_error is None,
         "no_severe_jank": not severe_frames,
         "frame_p95_within_50_ms": frame_p95 is not None and frame_p95 <= P95_FRAME_LIMIT_MS,
-        "jank_over_50_ms_within_5_percent": bool(frame_durations)
+        "jank_over_50_ms_within_5_percent": bool(gated_frame_durations)
         and jank_ratio <= MAX_JANK_RATIO,
+        "no_frozen_frames": not frozen_frames,
         "no_accessibility_layout_jump": bool(layout_windows)
         and all(window["stable"] for window in layout_windows),
         "exact_idle_semantics_stable": len(semantic_steps) == 1
@@ -1495,14 +1637,29 @@ def analyze(root: Path, *, expected_steps: int, expected_frames: int, lane: str)
             "paths": junit_paths,
         },
         "frames": {
+            "timing_basis": timing_basis,
+            "timing_basis_reason": timing_basis_reason,
+            "timing_basis_error": timing_basis_error,
             "windows": len(frame_paths),
-            "samples": len(frame_durations),
+            "samples": len(gated_frame_durations),
             "jank_over_50_ms": len(jank_frames),
             "jank_ratio": round(jank_ratio, 4),
             "severe_over_250_ms": len(severe_frames),
             "frozen_over_700_ms": len(frozen_frames),
             "p95_ms": frame_p95,
-            "max_ms": round(max(frame_durations), 3) if frame_durations else None,
+            "max_ms": (
+                round(max(gated_frame_durations), 3)
+                if gated_frame_durations
+                else None
+            ),
+            "frame_completion": completion_summary,
+            "render_submission": submission_summary,
+            "gpu_completion_telemetry": {
+                "invalid_sentinel_detected": bool(invalid_gpu_windows),
+                "invalid_windows": len(invalid_gpu_windows),
+                "parsed_windows": len(frame_window_telemetry),
+                "windows": frame_window_telemetry,
+            },
             "paths": frame_paths,
             "failures": frame_failures,
             "dynamic_failures": dynamic_frame_failures,

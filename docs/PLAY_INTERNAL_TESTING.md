@@ -18,7 +18,7 @@ Current direct-channel release candidate:
 
 Code30.2 `v3.1.29` / build `37` is the current immutable direct-channel
 predecessor. Code30.3 `v3.1.30` / build `38`, Room schema `52`, and Alembic head
-`0081` is still a source candidate: there is no signed build-38 artifact,
+`0082` is still a source candidate: there is no signed build-38 artifact,
 same-signer build-37-to-38 upgrade proof, production cutover, active update
 offer, or physical Redmi Pad 2 acceptance yet. Do not
 upload, stage or activate a local build. Earlier codes `14` through `29`, their

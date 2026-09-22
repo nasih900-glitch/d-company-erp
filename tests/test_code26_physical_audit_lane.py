@@ -1091,11 +1091,47 @@ def _semantic_hierarchy(path: Path, values: list[str]) -> None:
     path.write_text(f"<hierarchy>{nodes}</hierarchy>", encoding="utf-8")
 
 
-def _frames(path: Path, durations_ms: list[float]) -> None:
-    lines = ["Flags,IntendedVsync,FrameCompleted"]
+def _frames(
+    path: Path,
+    durations_ms: list[float],
+    *,
+    submission_durations_ms: list[float] | None = None,
+    invalid_gpu_completion: bool = False,
+) -> None:
+    if submission_durations_ms is not None and len(submission_durations_ms) != len(
+        durations_ms
+    ):
+        raise ValueError("submission durations must match completion durations")
+    lines: list[str] = []
+    if invalid_gpu_completion:
+        lines.extend(
+            [
+                "50th gpu percentile: 4950ms",
+                "90th gpu percentile: 4950ms",
+                "95th gpu percentile: 4950ms",
+                "99th gpu percentile: 4950ms",
+                f"GPU HISTOGRAM: 8ms=0 4950ms={len(durations_ms)}",
+            ]
+        )
+    if submission_durations_ms is None:
+        lines.append("Flags,IntendedVsync,FrameCompleted")
+    else:
+        lines.append(
+            "Flags,IntendedVsync,HandleInputStart,SwapBuffers,FrameCompleted"
+        )
     intended = 1_000_000_000
-    for duration in durations_ms:
-        lines.append(f"0,{intended},{intended + int(duration * 1_000_000)}")
+    for index, duration in enumerate(durations_ms):
+        completed = intended + int(duration * 1_000_000)
+        if submission_durations_ms is None:
+            lines.append(f"0,{intended},{completed}")
+        else:
+            handle_input_start = intended + 1_000_000
+            swap_buffers = handle_input_start + int(
+                submission_durations_ms[index] * 1_000_000
+            )
+            lines.append(
+                f"0,{intended},{handle_input_start},{swap_buffers},{completed}"
+            )
         intended += 20_000_000
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -1540,6 +1576,129 @@ def test_evidence_analyzer_rejects_six_hundred_ms_severe_jank(tmp_path: Path) ->
     assert not result["passed"]
     assert result["gates"]["no_severe_jank"] is False
     assert result["frames"]["severe_over_250_ms"] == 1
+
+
+def test_emulator_analyzer_uses_submission_timing_for_proven_invalid_gpu_completion(
+    tmp_path: Path,
+) -> None:
+    plan, frame_paths = _synthetic_evidence(tmp_path)
+    _frames(
+        frame_paths["active"],
+        [300.0] * 40,
+        submission_durations_ms=[10.0] * 40,
+        invalid_gpu_completion=True,
+    )
+
+    result = _analyze(tmp_path, plan, lane="emulator")
+
+    assert result["passed"], result
+    assert result["frames"]["timing_basis"] == "render_submission"
+    assert result["frames"]["p95_ms"] == 10.0
+    assert result["frames"]["frame_completion"]["p95_ms"] == 300.0
+    assert result["frames"]["frame_completion"]["severe_over_250_ms"] == 40
+    assert result["frames"]["render_submission"]["severe_over_250_ms"] == 0
+    assert result["frames"]["gpu_completion_telemetry"] == {
+        "invalid_sentinel_detected": True,
+        "invalid_windows": 1,
+        "parsed_windows": 1,
+        "windows": [
+            {
+                "step": 2,
+                "artifact": "frames-002-Measure-active-timer-frames.txt",
+                "completion_samples": 40,
+                "render_submission_samples": 40,
+                "invalid_gpu_completion": True,
+                "reason": (
+                    "all GPU percentiles are the emulator 4950 ms sentinel and "
+                    "the sentinel histogram bucket contains 40 samples"
+                ),
+            }
+        ],
+    }
+
+
+def test_physical_analyzer_keeps_completion_timing_when_gpu_sentinel_is_present(
+    tmp_path: Path,
+) -> None:
+    plan, frame_paths = _synthetic_evidence(tmp_path)
+    _frames(
+        frame_paths["active"],
+        [300.0] * 40,
+        submission_durations_ms=[10.0] * 40,
+        invalid_gpu_completion=True,
+    )
+
+    result = _analyze(tmp_path, plan, lane="firebase")
+
+    assert result["frames"]["timing_basis"] == "frame_completion"
+    assert result["frames"]["p95_ms"] == 300.0
+    assert result["gates"]["no_severe_jank"] is False
+    assert result["gates"]["frame_p95_within_50_ms"] is False
+
+
+def test_emulator_submission_fallback_still_rejects_total_frozen_frame(
+    tmp_path: Path,
+) -> None:
+    plan, frame_paths = _synthetic_evidence(tmp_path)
+    _frames(
+        frame_paths["active"],
+        [10.0] * 39 + [800.0],
+        submission_durations_ms=[10.0] * 40,
+        invalid_gpu_completion=True,
+    )
+
+    result = _analyze(tmp_path, plan, lane="emulator")
+
+    assert not result["passed"]
+    assert result["frames"]["timing_basis"] == "render_submission"
+    assert result["gates"]["no_severe_jank"] is True
+    assert result["gates"]["no_frozen_frames"] is False
+    assert result["frames"]["frozen_over_700_ms"] == 1
+    assert result["frames"]["frame_completion"]["frozen_over_700_ms"] == 1
+
+
+def test_emulator_analyzer_does_not_fallback_for_an_unproven_sentinel_bucket(
+    tmp_path: Path,
+) -> None:
+    plan, frame_paths = _synthetic_evidence(tmp_path)
+    _frames(
+        frame_paths["active"],
+        [300.0] * 40,
+        submission_durations_ms=[10.0] * 40,
+    )
+    contents = frame_paths["active"].read_text(encoding="utf-8")
+    frame_paths["active"].write_text(
+        "GPU HISTOGRAM: 8ms=39 4950ms=1\n" + contents,
+        encoding="utf-8",
+    )
+
+    result = _analyze(tmp_path, plan, lane="emulator")
+
+    assert result["frames"]["timing_basis"] == "frame_completion"
+    assert result["frames"]["gpu_completion_telemetry"][
+        "invalid_sentinel_detected"
+    ] is False
+    assert result["gates"]["no_severe_jank"] is False
+
+
+def test_emulator_analyzer_fails_closed_without_render_submission_samples(
+    tmp_path: Path,
+) -> None:
+    plan, frame_paths = _synthetic_evidence(tmp_path)
+    _frames(
+        frame_paths["active"],
+        [300.0] * 40,
+        invalid_gpu_completion=True,
+    )
+
+    result = _analyze(tmp_path, plan, lane="emulator")
+
+    assert not result["passed"]
+    assert result["frames"]["timing_basis"] == "frame_completion"
+    assert result["gates"]["frame_timing_basis_valid"] is False
+    assert "did not have one render-submission sample" in result["frames"][
+        "timing_basis_error"
+    ]
 
 
 def test_evidence_analyzer_rejects_missing_or_misnamed_step_artifact(tmp_path: Path) -> None:

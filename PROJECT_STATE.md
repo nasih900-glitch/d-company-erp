@@ -38,7 +38,7 @@ Code30.2 hash map as immutable predecessor evidence.
 | Candidate tag | `v3.1.30` |
 | Product / Android identity | `3.1.30` / build `38` / `cloud.dcompany.erp` |
 | Android database | Room schema `52`, migrating from `51` |
-| Backend database | Alembic head `0081`, preserving published cleanup migration `0079` and chaining through split-payment migration `0080` |
+| Backend database | Alembic head `0082`, preserving published cleanup migration `0079` and chaining through split-payment migration `0080` |
 | Compatibility defaults | minimum `8`, latest offered `8`, policy revision `1` |
 | Local freeze status | The final reviewed Code30.3 byte set passed the whole-delta review, regenerated hash map, freeze verifier and repository release-control suites. The release commit and its exact-head CI remain pending; check Git and PR 16 live rather than relying on this snapshot. |
 | Exact future release source | The final reviewed commit recorded by the protected `v3.1.30` workflow manifest |
@@ -175,6 +175,10 @@ receipt field.
   day may be incomplete. Android retains the same 200-row boundary in its
   scoped history cache. A shift crossing midnight is grouped by its opening
   date; daily finance reports remain transaction-time based.
+- Captured Android shift openings allow at most one second of positive
+  tablet/server clock skew without rebasing the saved timestamp. Alembic
+  `0082` enforces the same boundary; larger future timestamps fail closed, and
+  downgrade refuses to rewrite a shift that used the allowance.
 
 ### Protected other-terminal Android shift recovery
 
@@ -208,8 +212,11 @@ run recorded 84 passes and one expected macOS-only skip.
 
 The current reviewed working tree has passed these local source gates:
 
-- backend: **1,647 passed, 21 intentionally skipped** on a new disposable
-  PostgreSQL database migrated from `0001` through `0081`;
+- backend: **1,652 passed, 21 intentionally skipped, 0 failed** on a new
+  disposable PostgreSQL database owned by role `erp` (as CI) and migrated from
+  `0001` through `0082`. An earlier local run as a different database role
+  failed only the two post-cleanup verifier proofs, because the verifier pins
+  guard-function owner `erp`; those proofs now assert the role up front;
 - focused backend recovery/security: **24 passed** on another fresh database;
 - Web: **95 files / 579 tests passed**, followed by TypeScript, zero-warning
   ESLint and verified Vite production build;
@@ -245,11 +252,15 @@ test files; 369 layered freeze tests; 190 historical installer/freeze guards;
 two freeze-path safety tests; 64 root Android release-contract tests with 124
 subtests; and 53 physical-audit-lane contract tests. These overlap and must not
 be summed. After the final Android harness and documentation edits stopped, the
-regenerated Code30.3 map froze 138 reviewed delta files, the standalone freeze
-verifier preserved all 491 baseline test files, the focused release-control
-suite passed **711** tests with one expected macOS skip, and the complete root
-release suite passed **1,135** tests with two expected skips. `git diff --check`
-also passed. A passing local test remains source evidence only.
+regenerated Code30.3 map froze 138 reviewed delta files, the focused
+release-control suite passed **711** tests with one expected macOS skip, and the
+complete root release suite passed **1,135** tests with two expected skips.
+After the later clock-skew, post-cleanup verifier and evidence-analyzer
+corrections, the refreshed Code30.3 map freezes **143** reviewed delta files, the
+standalone freeze verifier preserved all 491 baseline test files, and the
+complete root release suite passed **1,145** tests with two expected skips.
+`git diff --check` also passed. A passing local test remains source evidence
+only.
 
 The initial PR commit passed repository-wide protected CI, but the final
 post-review commit has not. The release commit, exact-head CI, signed APK,
@@ -297,7 +308,7 @@ gates.
    must report zero blockers both before and after writer shutdown.
 5. Deploy the exact reviewed backend/Web source through the guarded installer,
    fresh backup and restore proof; verify runtime `3.1.30`, exact Git SHA,
-   Alembic `0081`, health and authenticated smoke checks.
+   Alembic `0082`, health and authenticated smoke checks.
 6. Stage the exact APK **inactive**. The owner then reviews and selects
    **Offer update**. An active record correctly shows **Withdraw**.
 7. Update/reconnect the affected tablet, approve the exact stale candidate,

@@ -170,6 +170,23 @@ async def test_captured_shift_drives_offline_session_chain_and_durable_replay(
 
 
 @pytest.mark.asyncio
+async def test_subsecond_future_capture_opens_shift_without_rebasing(
+    client, session, seed_owner
+):
+    captured = datetime.now(UTC) + timedelta(milliseconds=750)
+    response = await client.post(
+        "/api/v1/pos/shifts/open",
+        json={"opening_float_minor": 12_300},
+        headers=headers(seed_owner, captured),
+    )
+    assert response.status_code == 201, response.text
+    shift = await session.get(Shift, UUID(response.json()["id"]))
+    assert shift is not None
+    assert shift.opened_at == captured
+    assert shift.opening_was_offline is True
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("offset", [timedelta(seconds=2)])
 async def test_invalid_captured_clock_keeps_action_unwritten(client, session, seed_owner, offset):
     response = await client.post(

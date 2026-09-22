@@ -432,12 +432,25 @@ post_cleanup_remote_keys AS (
                          AND audit.terminal_id =
                              '789353a8-09e4-4ef2-9fa8-ac73c426bfc8'::uuid
                          AND audit.request_id IS NOT NULL
-                         AND audit.client_platform = 'android'
-                         AND audit.client_version_code >= 36
-                         AND EXISTS (
-                             SELECT 1 FROM android_releases release
-                              WHERE release.channel = 'direct'
-                                AND release.version_code = audit.client_version_code
+                         -- Expiry is server-owned and may be discovered by the
+                         -- Android status path or by the protected Web device
+                         -- list. Keep Android bound to a registered release;
+                         -- Web has no native version and must report NULL.
+                         AND (
+                             (
+                                 audit.client_platform = 'android'
+                                 AND audit.client_version_code >= 36
+                                 AND EXISTS (
+                                     SELECT 1 FROM android_releases release
+                                      WHERE release.channel = 'direct'
+                                        AND release.version_code =
+                                            audit.client_version_code
+                                 )
+                             )
+                             OR (
+                                 audit.client_platform = 'web'
+                                 AND audit.client_version_code IS NULL
+                             )
                          )
                          AND audit.client_action_id IS NULL
                          AND audit.client_reported_at IS NULL
