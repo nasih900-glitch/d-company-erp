@@ -2159,7 +2159,8 @@ function CloseShiftForm({
         </div>
         <p className="text-sm text-fg-muted">
           Count all the cash in the drawer (notes + coins), then enter the total below.
-          The system compares it with the expected amount (opening float + cash sales − cash refunds).
+          The system compares it with the recorded opening float and cash drawer movements,
+          including cash sales, manual collections, refunds, expenses and corrections.
         </p>
         <Field label="Opening float">
           <input className="input font-mono text-right" disabled

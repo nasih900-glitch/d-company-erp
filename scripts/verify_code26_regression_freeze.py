@@ -521,7 +521,7 @@ REVIEWED_CODE30_3_SHA256 = {
     'frontend/src/modules/pos/LiveReceipt.test.tsx': '97c23fe5f104f55f0be70d71aa83b5056bc509d76a9f81c5e44838478f8a1a4a',
     'frontend/src/modules/pos/LiveReceipt.tsx': '3ecad94760c70d876eca712947d441b6c7ffe5e483b7ab16e6945b8d0918decd',
     'frontend/src/modules/pos/OrdersAndShiftsScreen.test.tsx': '43d0c8eef53bb81f718e2cddcc451ac846aaefa4b10b32e702b0f9be5c1c306e',
-    'frontend/src/modules/pos/OrdersAndShiftsScreen.tsx': 'b7a6480c47e1d484820d53e3eea8caeaba60b89e527448aa441991faecda5017',
+    'frontend/src/modules/pos/OrdersAndShiftsScreen.tsx': 'd8a0be1e1d1d386092af2dee59fcc28154ab3291f5948521ce2bdb0bc2996339',
     'frontend/src/modules/pos/PosMoneyInput.test.tsx': 'e09d9bfb01180dbbec2c9aa348cde6b5014fdd60a165f2f8ccf17fb5c19c39dd',
     'frontend/src/modules/pos/PosMoneyInput.tsx': '08fb6a936bd557eac6f03691864eea85ef5d837fb09e5f3f81084ede85c11e23',
     'frontend/src/modules/pos/ShiftRecoveryCandidates.test.tsx': '428d1f63329ff63d6c7b4cb0ca715fc8d81e0a070cdfc5d6b59df2d93a7f1003',
