@@ -558,6 +558,24 @@ REVIEWED_CODE30_3_PRODUCTION_PATHS = frozenset(
     if path.startswith(("backend/app/", "frontend/src/", "android-native/app/src/main/"))
 )
 
+# Separate from the signed Code30.3 release inventory: these are reviewed
+# post-release maintenance tools only. Their exact bytes must be pinned before
+# they can coexist with the immutable v3.1.30 application in this checkout.
+REVIEWED_POST_CODE30_3_MAINTENANCE_SHA256 = {
+    'docs/CODE30_3_COMBINED_CLEANUP_HANDOFF.md': '9c9b2038fd9d60b39efe2daee8f12ae3e29cfa02cd5089cb8cb24f0d5efac849',
+    'infra/scripts/apply-code30-3-combined-cleanup.sh': 'dd634125bd4547f4577568d6ae3c9f79bc0d805f345aa4202b18cb408d1906c7',
+    'infra/scripts/apply-code30-3-combined-cleanup.sql': 'fe4f9617577f5c9c8e3b94d9e41cfa4507ed15604699b6de8c7c915761e772ea',
+    'infra/scripts/code30-3-combined-cleanup-body.sql': '76f7cbb82366705a5a2b2bc4346b0c7a6f9735ddb8ba0acc2965cea67ee799db',
+    'infra/scripts/code30-3-combined-cleanup-runtime.sh': '62bae3a063181f1fbe6efc9e600861a379f75020791b34dfadb0fe4a05c4ea61',
+    'infra/scripts/generate-code30-3-combined-cleanup-candidate.py': 'ed1e86fc08c072e81a5622f8cc8451ca2f9e17dfa9c575a897c6e35ebd746cd4',
+    'infra/scripts/postcheck-code30-3-combined-cleanup.sh': 'bfef405f5094161cc53f6508e6b4bb68177eb4b6b6b79ac87eb79adef887d6e0',
+    'infra/scripts/postcheck-code30-3-combined-cleanup.sql': '9bf08364de1c12158f6829d4c269d49eea5d31bfa4d65641286f8e5bc3cf7668',
+    'infra/scripts/prepare-code30-3-combined-cleanup.py': 'c597cdac38b1b6ae09acfa0b7c1f066b585aebafeae1e1cc0d397f2904c8e983',
+    'infra/scripts/rehearse-code30-3-combined-cleanup.sh': 'a0d31c840662cbd38d19b81da09ab79d92d3e28581586a991cbe187afd7f53ab',
+    'infra/scripts/rehearse-code30-3-combined-cleanup.sql': '661afcb57c2f53d8904bfa6ffe4b890e1c18cb0fb2ad91f3c4cae8e7a61b7200',
+    'tests/test_code30_3_combined_cleanup_preparation.py': 'd8cf574d017622eaaa3befb97fcb9ae68d084cf9a38b789ea6afc22c4bf9d0f7',
+}
+
 RELEASE_IDENTITY_TESTS = {
     "android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt",
     "backend/tests/unit/test_client_compatibility.py",
@@ -1085,7 +1103,7 @@ def _verify_code30_2_exact_delta(root: Path, errors: list[str]) -> None:
 def _verify_code30_3_exact_delta(root: Path, errors: list[str]) -> None:
     expected_paths = set(REVIEWED_CODE30_3_SHA256) | set(
         CODE30_3_FREEZE_CONTROL_PATHS
-    )
+    ) | set(REVIEWED_POST_CODE30_3_MAINTENANCE_SHA256)
     current_paths = _code30_3_delta_paths(root)
     for path in sorted(expected_paths - current_paths):
         errors.append(f"reviewed Code30.3 delta path disappeared: {path}")
@@ -1107,6 +1125,22 @@ def _verify_code30_3_exact_delta(root: Path, errors: list[str]) -> None:
         if not _is_canonical_regular_file(root / path):
             errors.append(
                 f"Code30.3 freeze control was removed, linked, or non-regular: {path}"
+            )
+
+    _verify_post_code30_3_maintenance_bytes(root, errors)
+
+
+def _verify_post_code30_3_maintenance_bytes(root: Path, errors: list[str]) -> None:
+    for path, expected_sha256 in REVIEWED_POST_CODE30_3_MAINTENANCE_SHA256.items():
+        candidate_path = root / path
+        if not _is_canonical_regular_file(candidate_path):
+            errors.append(
+                f"reviewed post-Code30.3 maintenance file was removed, linked, or non-regular: {path}"
+            )
+            continue
+        if hashlib.sha256(candidate_path.read_bytes()).hexdigest() != expected_sha256:
+            errors.append(
+                f"reviewed post-Code30.3 maintenance file differs from its approved bytes: {path}"
             )
 
 

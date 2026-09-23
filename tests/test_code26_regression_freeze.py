@@ -23,6 +23,7 @@ from scripts.verify_code26_regression_freeze import (
     REVIEWED_CODE30_2_SHA256,
     REVIEWED_CODE30_3_PRODUCTION_PATHS,
     REVIEWED_CODE30_3_SHA256,
+    REVIEWED_POST_CODE30_3_MAINTENANCE_SHA256,
     REVIEWED_CODE30_PRODUCTION_PATHS,
     REVIEWED_CODE30_TEST_SHA256,
     REVIEWED_PACKAGING_TEST_SHA256,
@@ -36,6 +37,7 @@ from scripts.verify_code26_regression_freeze import (
     _normalise_audit_reader_locator,
     _normalise_android_release_pipeline,
     _normalise_realtime_api_mock,
+    _verify_post_code30_3_maintenance_bytes,
     verify_repository,
 )
 
@@ -402,8 +404,30 @@ def test_code30_point3_delta_inventory_is_exact() -> None:
         ).stdout.splitlines()
     )
     assert {path for path in changed if path} == (
-        set(REVIEWED_CODE30_3_SHA256) | set(CODE30_3_FREEZE_CONTROL_PATHS)
+        set(REVIEWED_CODE30_3_SHA256)
+        | set(CODE30_3_FREEZE_CONTROL_PATHS)
+        | set(REVIEWED_POST_CODE30_3_MAINTENANCE_SHA256)
     )
+
+
+def test_post_code30_point3_maintenance_bytes_reject_a_mutation(tmp_path: Path) -> None:
+    for path in REVIEWED_POST_CODE30_3_MAINTENANCE_SHA256:
+        destination = tmp_path / path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes((ROOT / path).read_bytes())
+
+    errors: list[str] = []
+    _verify_post_code30_3_maintenance_bytes(tmp_path, errors)
+    assert not errors
+
+    changed_path = "infra/scripts/apply-code30-3-combined-cleanup.sql"
+    changed_file = tmp_path / changed_path
+    changed_file.write_bytes(changed_file.read_bytes() + b"\n")
+    _verify_post_code30_3_maintenance_bytes(tmp_path, errors)
+    assert errors == [
+        "reviewed post-Code30.3 maintenance file differs from its approved bytes: "
+        + changed_path
+    ]
 
 
 def test_audit_reader_migration_only_normalises_one_locator() -> None:
