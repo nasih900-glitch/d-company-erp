@@ -2,8 +2,9 @@
 """Generate an unapproved Code30.3 cleanup candidate from one offline restore snapshot.
 
 The generated file is evidence for human review, not authority to run cleanup.
-It deliberately fails the approved-manifest validator until the owner decision,
-approval evidence, and committed maintenance identity are independently checked.
+It deliberately fails the reviewed-manifest validator until the owner
+classification, tablet replay evidence, operator review, and committed
+maintenance identity are independently checked.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ import json
 import re
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -22,7 +24,7 @@ from uuid import UUID
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 VALIDATOR = SCRIPT_DIR / "prepare-code30-3-combined-cleanup.py"
-REHEARSAL_SQL = SCRIPT_DIR / "rehearse-code30-3-combined-cleanup.sql"
+TRANSACTION_BODY = SCRIPT_DIR / "code30-3-combined-cleanup-body.sql"
 RESTORE_NAME = re.compile(r"code30_combined_restore_[0-9]+_[0-9]+")
 TABLE_NAME = re.compile(r"[a-z][a-z0-9_]*")
 COMPANY_ID = "8f323fba-4358-45fe-9d3b-a8e0fae52993"
@@ -59,6 +61,18 @@ def canonical_uuid(raw: str, label: str) -> str:
         raise CandidateError(f"{label} is not a UUID") from exc
     if value != raw:
         raise CandidateError(f"{label} must be a lowercase canonical UUID")
+    return value
+
+
+def timestamp(raw: object, label: str) -> datetime:
+    if not isinstance(raw, str):
+        raise CandidateError(f"{label} is not a timezone-aware timestamp")
+    try:
+        value = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise CandidateError(f"{label} is not a timezone-aware timestamp") from exc
+    if value.utcoffset() is None:
+        raise CandidateError(f"{label} is not a timezone-aware timestamp")
     return value
 
 
@@ -202,7 +216,44 @@ SELECT jsonb_build_object(
     AND company_id = '{COMPANY_ID}'::uuid AND status = 'active' AND deleted_at IS NULL),
   'terminal_count', (SELECT count(*) FROM terminals t JOIN branches b ON b.id = t.branch_id
     WHERE t.id = '{TERMINAL_ID}'::uuid AND t.is_active
-      AND b.company_id = '{COMPANY_ID}'::uuid)
+      AND b.company_id = '{COMPANY_ID}'::uuid),
+  'later_shift_installation_id', (SELECT opening_client_installation_id::text
+    FROM shifts WHERE id = '{later_id}'::uuid AND status = 'closed' AND closed_at IS NOT NULL),
+  'later_final_business_closed_at', (SELECT max(event_at) FROM (
+    SELECT closed_at AS event_at FROM shifts WHERE id = '{later_id}'::uuid
+    UNION ALL
+    SELECT CASE WHEN status = 'paid' THEN greatest(closed_at, invoice_issued_at)
+                ELSE updated_at END FROM orders WHERE shift_id = '{later_id}'::uuid
+    UNION ALL
+    SELECT p.paid_at FROM payments p JOIN orders o ON o.id = p.order_id
+      WHERE o.shift_id = '{later_id}'::uuid AND o.status = 'paid'
+    UNION ALL
+    SELECT l.voided_at FROM order_lines l JOIN orders o ON o.id = l.order_id
+      WHERE o.shift_id = '{later_id}'::uuid AND o.status = 'void' AND l.voided_at IS NOT NULL
+    UNION ALL
+    SELECT CASE WHEN status = 'ended' THEN greatest(end_at, sent_to_pos_at, updated_at)
+                ELSE greatest(cancelled_at, updated_at) END
+      FROM gaming_sessions WHERE shift_id = '{later_id}'::uuid
+  ) final_events),
+  'later_invalid_order_count', (SELECT count(*) FROM orders
+    WHERE shift_id = '{later_id}'::uuid AND (status NOT IN ('paid', 'void')
+      OR (status = 'paid' AND (closed_at IS NULL OR invoice_issued_at IS NULL)))),
+  'later_invalid_session_count', (SELECT count(*) FROM gaming_sessions
+    WHERE shift_id = '{later_id}'::uuid AND (status NOT IN ('ended', 'cancelled')
+      OR (status = 'ended' AND end_at IS NULL)
+      OR (status = 'cancelled' AND cancelled_at IS NULL))),
+  'current_installation_count', (SELECT count(*) FROM client_installations ci
+    JOIN shifts s ON s.opening_client_installation_id = ci.installation_id
+    WHERE s.id = '{later_id}'::uuid AND ci.company_id = s.company_id),
+  'current_installation_pending', (SELECT ci.pending_outbox_count FROM client_installations ci
+    JOIN shifts s ON s.opening_client_installation_id = ci.installation_id
+    WHERE s.id = '{later_id}'::uuid AND ci.company_id = s.company_id),
+  'current_installation_last_successful_sync_at', (SELECT ci.last_successful_sync_at FROM client_installations ci
+    JOIN shifts s ON s.opening_client_installation_id = ci.installation_id
+    WHERE s.id = '{later_id}'::uuid AND ci.company_id = s.company_id),
+  'current_installation_last_seen_at', (SELECT ci.last_seen_at FROM client_installations ci
+    JOIN shifts s ON s.opening_client_installation_id = ci.installation_id
+    WHERE s.id = '{later_id}'::uuid AND ci.company_id = s.company_id)
 )::text;
 WITH {ctes}
 {row_queries(target_tables)}
@@ -259,7 +310,9 @@ def expect_int(value: object, label: str) -> int:
 def build_candidate(rows: list[dict[str, Any]], tagged: dict[str, set[str]],
                     tagged_digests: dict[str, tuple[int, str]], later_id: str,
                     decision: str, backup_sha: str, maintenance_sha: str,
-                    sql_sha: str, target_tables: tuple[str, ...],
+                    sql_sha: str, tablet_replay_sha: str,
+                    tablet_replay: dict[str, Any],
+                    target_tables: tuple[str, ...],
                     public_tables: list[str]) -> dict[str, Any]:
     groups: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
@@ -288,6 +341,36 @@ def build_candidate(rows: list[dict[str, Any]], tagged: dict[str, set[str]],
                 "undelivered_sheets_count", "prior_v2_receipt_count", "company_shift_count",
                 "actor_count", "terminal_count"):
         expect_int(identity[key], key)
+    if identity.get("later_invalid_order_count") != 0:
+        raise CandidateError("later shift contains an unfinished or timestamp-incomplete order")
+    if identity.get("later_invalid_session_count") != 0:
+        raise CandidateError("later shift contains an unfinished or timestamp-incomplete Gaming session")
+    if identity.get("current_installation_count") != 1 \
+            or identity.get("current_installation_pending") != 0:
+        raise CandidateError("later shift installation lacks exact zero-pending telemetry")
+    if identity.get("later_shift_installation_id") != tablet_replay.get("installation_id"):
+        raise CandidateError("tablet replay evidence is not for the later shift installation")
+    observed_threshold = timestamp(
+        tablet_replay.get("final_business_closed_at"), "tablet final business timestamp"
+    )
+    restored_threshold = timestamp(
+        identity.get("later_final_business_closed_at"), "restored final business timestamp"
+    )
+    if observed_threshold != restored_threshold:
+        raise CandidateError("tablet replay threshold differs from restored final business state")
+    restored_sync = timestamp(
+        identity.get("current_installation_last_successful_sync_at"),
+        "restored installation successful sync",
+    )
+    evidence_sync = timestamp(
+        tablet_replay.get("last_successful_sync_at"), "tablet successful sync"
+    )
+    restored_seen = timestamp(
+        identity.get("current_installation_last_seen_at"), "restored installation last seen"
+    )
+    evidence_seen = timestamp(tablet_replay.get("observed_at"), "tablet observed timestamp")
+    if restored_sync != evidence_sync or restored_seen != evidence_seen or restored_sync < restored_threshold:
+        raise CandidateError("tablet replay evidence differs from post-closure installation telemetry")
 
     original_digests = {r["table_name"]: (r["row_count"], r["row_sha256"])
                         for r in groups.get("original_digest", [])}
@@ -352,6 +435,7 @@ def build_candidate(rows: list[dict[str, Any]], tagged: dict[str, set[str]],
         "schema_version": 1,
         "cleanup_id": CLEANUP_ID,
         "classification_evidence_sha256": "",
+        "tablet_replay_evidence_sha256": tablet_replay_sha,
         "operator_reviewed_at": "",
         "operator_review_evidence_sha256": "",
         "later_cohort_decision": decision,
@@ -380,6 +464,7 @@ def main() -> None:
     parser.add_argument("--backup-file", required=True, type=Path)
     parser.add_argument("--later-shift-id", required=True)
     parser.add_argument("--decision", required=True, choices=("delete", "retain"))
+    parser.add_argument("--tablet-replay-evidence", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
     try:
@@ -388,10 +473,14 @@ def main() -> None:
         later_id = canonical_uuid(args.later_shift_id, "later shift ID")
         if not args.backup_file.is_file() or args.backup_file.is_symlink():
             raise CandidateError("backup must be a readable regular file, not a symlink")
+        if not args.tablet_replay_evidence.is_file() or args.tablet_replay_evidence.is_symlink():
+            raise CandidateError("tablet replay evidence must be a regular file, not a symlink")
         backup_sha = sha256_file(args.backup_file)
         if args.output.exists() or args.output.is_symlink():
             raise CandidateError("candidate output already exists")
         validator = load_validator()
+        tablet_replay_sha = sha256_file(args.tablet_replay_evidence)
+        tablet_replay = json.loads(args.tablet_replay_evidence.read_text(encoding="utf-8"))
         tagged, tagged_digests = validator._tagged_targets()
         if later_id in tagged["shifts"]:
             raise CandidateError("later shift ID is already in the immutable five")
@@ -421,9 +510,11 @@ def main() -> None:
             raise CandidateError("maintenance source must be independently committed and clean")
         candidate = build_candidate(
             records, tagged, tagged_digests, later_id, args.decision,
-            backup_sha, revision, sha256_file(REHEARSAL_SQL),
+            backup_sha, revision, sha256_file(TRANSACTION_BODY), tablet_replay_sha,
+            tablet_replay,
             validator.TARGET_TABLES, tables,
         )
+        validator.validate_tablet_replay_evidence(candidate, args.tablet_replay_evidence)
         encoded = (json.dumps(candidate, sort_keys=True, indent=2) + "\n").encode("utf-8")
         if len(encoded) > validator.MAX_MANIFEST_BYTES:
             raise CandidateError("candidate exceeds the approved-manifest size limit")

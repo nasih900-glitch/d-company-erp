@@ -43,6 +43,7 @@ TOP_LEVEL_KEYS = {
     "schema_version",
     "cleanup_id",
     "classification_evidence_sha256",
+    "tablet_replay_evidence_sha256",
     "operator_reviewed_at",
     "operator_review_evidence_sha256",
     "later_cohort_decision",
@@ -73,7 +74,18 @@ OPERATOR_REVIEW_KEYS = {
     "decision",
     "backup_sha256",
     "classification_evidence_sha256",
+    "tablet_replay_evidence_sha256",
     "candidate_manifest_sha256",
+}
+TABLET_REPLAY_KEYS = {
+    "schema_version",
+    "disposition",
+    "installation_id",
+    "final_business_closed_at",
+    "observed_at",
+    "pending_outbox_count",
+    "last_successful_sync_at",
+    "quarantine_reference",
 }
 
 
@@ -154,6 +166,70 @@ def canonical_candidate_sha256(document: dict[str, object]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def canonical_state_fingerprint(document: dict[str, object]) -> str:
+    """Match the SQL fingerprint of sorted table:count:row-hash lines."""
+
+    digests = document["expected_full_table_digests"]
+    assert isinstance(digests, dict)
+    lines = [
+        f"{name}:{digests[name]['row_count']}:{digests[name]['row_sha256']}"
+        for name in sorted(digests)
+    ]
+    return hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()
+
+
+def _timestamp(value: object, label: str) -> datetime:
+    if not isinstance(value, str):
+        raise ManifestError(f"{label} must be a timezone-aware timestamp")
+    try:
+        timestamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ManifestError(f"{label} must be a timezone-aware timestamp") from exc
+    if timestamp.utcoffset() is None:
+        raise ManifestError(f"{label} must include a timezone")
+    return timestamp
+
+
+def validate_tablet_replay_evidence(document: dict[str, object], path: Path) -> None:
+    raw = path.read_bytes()
+    if not raw or len(raw) > MAX_APPROVAL_BYTES:
+        raise ManifestError("tablet replay evidence size is invalid")
+    if hashlib.sha256(raw).hexdigest() != document["tablet_replay_evidence_sha256"]:
+        raise ManifestError("tablet replay evidence hash differs from the manifest")
+    try:
+        evidence = json.loads(raw, object_pairs_hook=_pairs, parse_constant=_constant)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise ManifestError(f"tablet replay evidence is invalid JSON: {exc}") from exc
+    evidence = _exact_keys(evidence, TABLET_REPLAY_KEYS, "tablet replay evidence")
+    if type(evidence["schema_version"]) is not int or evidence["schema_version"] != 1:
+        raise ManifestError("tablet replay evidence schema_version must be 1")
+    _uuid(evidence["installation_id"], "tablet replay evidence installation_id")
+    closed_at = _timestamp(
+        evidence["final_business_closed_at"],
+        "tablet replay evidence final_business_closed_at",
+    )
+    observed_at = _timestamp(evidence["observed_at"], "tablet replay evidence observed_at")
+    if observed_at < closed_at:
+        raise ManifestError("tablet replay evidence predates final business closure")
+    if evidence["disposition"] == "synced":
+        synced_at = _timestamp(
+            evidence["last_successful_sync_at"],
+            "tablet replay evidence last_successful_sync_at",
+        )
+        if (type(evidence["pending_outbox_count"]) is not int
+                or evidence["pending_outbox_count"] != 0
+                or synced_at < closed_at or synced_at > observed_at):
+            raise ManifestError("synced tablet evidence is not post-closure and zero-pending")
+        if evidence["quarantine_reference"] is not None:
+            raise ManifestError("synced tablet evidence cannot include quarantine_reference")
+    elif evidence["disposition"] == "quarantined":
+        raise ManifestError(
+            "quarantine disposition is disabled until a separately hashed retirement proof format is reviewed"
+        )
+    else:
+        raise ManifestError("tablet replay disposition must be synced or quarantined")
+
+
 def validate_review_files(
     document: dict[str, object], classification_path: Path, review_path: Path
 ) -> None:
@@ -181,6 +257,8 @@ def validate_review_files(
         raise ManifestError("operator review backup hash differs from the manifest")
     if review["classification_evidence_sha256"] != document["classification_evidence_sha256"]:
         raise ManifestError("operator review classification hash differs from the manifest")
+    if review["tablet_replay_evidence_sha256"] != document["tablet_replay_evidence_sha256"]:
+        raise ManifestError("operator review tablet replay hash differs from the manifest")
     if review["candidate_manifest_sha256"] != canonical_candidate_sha256(document):
         raise ManifestError("operator review does not bind the canonical candidate manifest")
     if review["reviewed_at"] != document["operator_reviewed_at"]:
@@ -240,20 +318,13 @@ def validate_manifest(document: dict[str, object]) -> None:
         "code30.3-trial-cleanup-20260923",
     }:
         raise ManifestError("cleanup_id reuses an existing receipt identity")
-    reviewed_at = document["operator_reviewed_at"]
-    if not isinstance(reviewed_at, str):
-        raise ManifestError("operator_reviewed_at must be a timezone-aware timestamp")
-    try:
-        timestamp = datetime.fromisoformat(reviewed_at.replace("Z", "+00:00"))
-    except ValueError as exc:
-        raise ManifestError("operator_reviewed_at must be a timezone-aware timestamp") from exc
-    if timestamp.utcoffset() is None:
-        raise ManifestError("operator_reviewed_at must include a timezone")
+    _timestamp(document["operator_reviewed_at"], "operator_reviewed_at")
     _sha(
         document["classification_evidence_sha256"],
         HEX_64,
         "classification_evidence_sha256",
     )
+    _sha(document["tablet_replay_evidence_sha256"], HEX_64, "tablet_replay_evidence_sha256")
     _sha(
         document["operator_review_evidence_sha256"],
         HEX_64,
@@ -432,6 +503,7 @@ def main() -> None:
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--classification-evidence", type=Path)
     parser.add_argument("--operator-review-evidence", type=Path)
+    parser.add_argument("--tablet-replay-evidence", type=Path)
     parser.add_argument(
         "--print-field",
         choices=(
@@ -440,22 +512,36 @@ def main() -> None:
             "maintenance_source_git_sha",
             "classification_evidence_sha256",
             "operator_review_evidence_sha256",
+            "tablet_replay_evidence_sha256",
         ),
     )
+    parser.add_argument("--print-state-fingerprint", action="store_true")
     args = parser.parse_args()
     try:
         document = load_manifest(args.manifest)
         validate_manifest(document)
-        if (args.classification_evidence is None) != (args.operator_review_evidence is None):
-            raise ManifestError("classification and operator review evidence are required together")
+        review_paths = (
+            args.classification_evidence,
+            args.operator_review_evidence,
+            args.tablet_replay_evidence,
+        )
+        if any(path is not None for path in review_paths) and not all(
+            path is not None for path in review_paths
+        ):
+            raise ManifestError(
+                "classification, tablet replay, and operator review evidence are required together"
+            )
         if args.classification_evidence is not None:
+            validate_tablet_replay_evidence(document, args.tablet_replay_evidence)
             validate_review_files(
                 document, args.classification_evidence, args.operator_review_evidence
             )
     except (ManifestError, OSError) as exc:
         print(f"Combined cleanup manifest rejected: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
-    if args.print_field:
+    if args.print_state_fingerprint:
+        print(canonical_state_fingerprint(document))
+    elif args.print_field:
         print(document[args.print_field])
     elif not args.quiet:
         print("Combined cleanup manifest is structurally complete and owner-reviewable.")
