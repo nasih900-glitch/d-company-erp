@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "name": "Code30.2 3.1.29 current-tariff Gaming and Finance emulator acceptance",
+  "name": "Code30.3 3.1.30 current-tariff Gaming and Finance emulator acceptance",
   "fixture": "backend/scripts/physical_audit_fixture.py",
   "expected_sessions": 16,
   "maximum_steps": 500,
@@ -3116,7 +3116,7 @@
       "text": "Close shift",
       "timeoutMs": 60000,
       "then": {
-        "text": "The drawer balanced exactly."
+        "text": "The server confirmed this shift is closed. The drawer balanced exactly."
       }
     },
     {
@@ -3135,14 +3135,17 @@
       "descriptionContains": "Shift. Open",
       "timeoutMs": 60000,
       "then": {
-        "text": "Closed by Audit Employee 1"
+        "textRegex": "^Final close [0-9]{1,2}:[0-9]{2} [AP]M IST by Audit Employee 1$"
       }
     },
     {
       "name": "Closer attribution persisted",
-      "action": "wait",
-      "text": "Closed by Audit Employee 1",
-      "timeoutMs": 60000
+      "action": "click",
+      "text": "Review 1 shift segment",
+      "timeoutMs": 60000,
+      "then": {
+        "textRegex": "^Closed [0-9]{1,2} [A-Z][a-z]{2} [0-9]{4} · [0-9]{1,2}:[0-9]{2} [AP]M IST by Audit Employee 1$"
+      }
     },
     {
       "name": "Final drawer remains balanced",

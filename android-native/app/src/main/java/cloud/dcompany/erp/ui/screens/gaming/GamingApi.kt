@@ -2,10 +2,12 @@ package cloud.dcompany.erp.ui.screens.gaming
 
 import cloud.dcompany.erp.core.db.GamingSessionAddonActionType
 import cloud.dcompany.erp.core.db.GamingSessionAddonCacheEntity
+import cloud.dcompany.erp.core.db.GamingCleanupLocalSnapshot
 import cloud.dcompany.erp.core.db.LocalGamingPackageExtensionEntity
 import cloud.dcompany.erp.core.db.LocalGamingSessionAddonActionEntity
 import cloud.dcompany.erp.core.db.LocalModifierSelectionSnapshot
 import cloud.dcompany.erp.core.db.encodeModifierSelections
+import cloud.dcompany.erp.core.remote.RemoteRequestScopeTag
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
@@ -27,6 +29,7 @@ import retrofit2.http.HeaderMap
 import retrofit2.http.POST
 import retrofit2.http.Path
 import retrofit2.http.Query
+import retrofit2.http.Tag
 
 /** Copied from StationRead / SessionRead in backend/app/api/v1/gaming/router.py. */
 @Serializable
@@ -484,7 +487,69 @@ data class LegacyGamingOutboxResolutionReceipt(
     @SerialName("resolved_at") val resolvedAt: String,
 )
 
-interface GamingApi {
+@Serializable
+data class GamingCleanupReportBody(
+    @SerialName("installation_id") val installationId: String,
+    @SerialName("local_action_id") val localActionId: String,
+    @SerialName("server_session_id") val serverSessionId: String,
+    @SerialName("branch_id") val branchId: String,
+    @SerialName("terminal_id") val terminalId: String,
+    @SerialName("station_id") val stationId: String,
+    @SerialName("reported_local_state") val reportedLocalState: String,
+    @SerialName("local_snapshot") val localSnapshot: GamingCleanupLocalSnapshot,
+    @SerialName("local_snapshot_sha256") val localSnapshotSha256: String,
+    @SerialName("start_request_hash") val startRequestHash: String,
+    @SerialName("stop_request_hash") val stopRequestHash: String,
+    @SerialName("candidate_sha256") val candidateSha256: String,
+    @SerialName("unresolved_child_count") val unresolvedChildCount: Int,
+)
+
+@Serializable
+data class GamingCleanupAcknowledgeBody(
+    @SerialName("installation_id") val installationId: String,
+    @SerialName("expected_candidate_sha256") val expectedCandidateSha256: String,
+)
+
+@Serializable
+data class GamingCleanupReconciliation(
+    val id: String,
+    @SerialName("installation_id") val installationId: String,
+    @SerialName("branch_id") val branchId: String,
+    @SerialName("terminal_id") val terminalId: String,
+    @SerialName("station_id") val stationId: String,
+    @SerialName("local_action_id") val localActionId: String,
+    @SerialName("server_session_id") val serverSessionId: String,
+    val revision: Int,
+    @SerialName("is_current") val isCurrent: Boolean,
+    @SerialName("reported_local_state") val reportedLocalState: String,
+    @SerialName("local_evidence_revision") val localEvidenceRevision: Long,
+    @SerialName("local_snapshot_sha256") val localSnapshotSha256: String,
+    @SerialName("candidate_sha256") val candidateSha256: String,
+    @SerialName("unresolved_child_count") val unresolvedChildCount: Int,
+    @SerialName("cleanup_receipt_audit_id") val cleanupReceiptAuditId: Long,
+    val status: String,
+    @SerialName("approval_reason") val approvalReason: String? = null,
+    @SerialName("device_directive") val deviceDirective: String,
+)
+
+internal interface GamingCleanupDeviceApi {
+    @POST("client-installations/gaming-cleanup-reconciliations/report")
+    suspend fun reportCleanupCandidate(
+        @Body body: GamingCleanupReportBody,
+        @Header("X-Installation-Id") installationId: String,
+        @Tag requestScope: RemoteRequestScopeTag,
+    ): GamingCleanupReconciliation
+
+    @POST("client-installations/gaming-cleanup-reconciliations/{id}/acknowledge")
+    suspend fun acknowledgeCleanupCandidate(
+        @Path("id") id: String,
+        @Body body: GamingCleanupAcknowledgeBody,
+        @Header("X-Installation-Id") installationId: String,
+        @Tag requestScope: RemoteRequestScopeTag,
+    ): GamingCleanupReconciliation
+}
+
+internal interface GamingApi {
 
     @GET("gaming/stations")
     suspend fun stations(): List<Station>

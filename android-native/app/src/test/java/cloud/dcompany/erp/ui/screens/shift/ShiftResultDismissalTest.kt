@@ -35,6 +35,24 @@ class ShiftResultDismissalTest {
         assertEquals(ShiftCloseResultKind.REMOTE_RECONCILED, shiftCloseResultKind(remote))
     }
 
+    @Test
+    fun `local close result says the server confirmed closure`() {
+        val result = closedShift(lastError = null).copy(varianceMinor = 0)
+
+        val message = shiftCloseResultMessage(result)
+
+        assertTrue(message.contains("server confirmed"))
+        assertTrue(message.contains("balanced exactly"))
+    }
+
+    @Test
+    fun `missing variance does not imply another sync is needed to close`() {
+        val message = shiftCloseResultMessage(closedShift(lastError = null))
+
+        assertTrue(message.contains("server confirmed this shift is closed"))
+        assertTrue(message.contains("variance is not available"))
+    }
+
     private fun closedShift(lastError: String?) = LocalShiftEntity(
         localId = "shift-a",
         terminalId = "terminal-a",

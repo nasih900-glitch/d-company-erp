@@ -149,6 +149,16 @@ interface ErpApi {
         @HeaderMap provenance: Map<String, String> = emptyMap(),
     ): PaymentResult
 
+    /** Every leg and invoice finalization commits in one backend transaction. */
+    @POST("pos/orders/{id}/payment-bundle")
+    suspend fun recordPaymentBundle(
+        @Path("id") id: String,
+        @Body body: PaymentBundleRequest,
+        @Header("Idempotency-Key") idempotencyKey: String,
+        @Header("X-Checkout-Claim") checkoutClaimToken: String? = null,
+        @HeaderMap provenance: Map<String, String> = emptyMap(),
+    ): PaymentBundleResult
+
     @POST("pos/orders/{id}/finalize-zero")
     suspend fun finalizeZeroTotalOrder(
         @Path("id") id: String,

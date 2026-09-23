@@ -3,8 +3,11 @@ package cloud.dcompany.erp.core.db
 import androidx.room.Room
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import cloud.dcompany.erp.core.checkout.SplitPaymentLeg
+import cloud.dcompany.erp.core.checkout.SplitPaymentPolicy
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import java.util.UUID
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -98,6 +101,46 @@ class HeldOrderDaoRecoveryTest {
         assertEquals(listOf(order), dao.allForAlarms())
         assertEquals(order, dao.orderForAlarm(order.id))
         assertEquals(listOf(order.id), dao.confirmedTargetIdsForAlarms())
+    }
+
+    @Test
+    fun splitPaymentPlanSurvivesDatabaseCloseAndReopenAsOneRetryRow() {
+        runBlocking {
+            val context = InstrumentationRegistry.getInstrumentation().targetContext
+            val name = "split-payment-restart-${UUID.randomUUID()}.db"
+            val storedPlan = SplitPaymentPolicy.encode(
+                SplitPaymentPolicy.create(
+                    12_500,
+                    listOf(
+                        SplitPaymentLeg("cash", 5_000, 10_000),
+                        SplitPaymentLeg("upi", 7_500),
+                    ),
+                ),
+            )
+            try {
+                val first = Room.databaseBuilder(context, ErpDatabase::class.java, name).build()
+                assertTrue(
+                    first.heldOrderDao().insertPayment(
+                        payment("split-payment", "order-split").copy(method = storedPlan),
+                    ) >= 0L,
+                )
+                first.close()
+
+                val reopened = Room.databaseBuilder(context, ErpDatabase::class.java, name).build()
+                val rows = reopened.heldOrderDao().pushablePayments()
+                assertEquals(1, rows.size)
+                assertEquals("split-payment", rows.single().localId)
+                assertEquals(storedPlan, rows.single().method)
+                val decoded = requireNotNull(
+                    SplitPaymentPolicy.decodeStoredMethod(rows.single().method),
+                )
+                assertEquals(12_500L, decoded.totalMinor)
+                assertEquals(10_000L, decoded.cashTenderedMinor)
+                reopened.close()
+            } finally {
+                context.deleteDatabase(name)
+            }
+        }
     }
 
     private fun payment(localId: String, targetOrderId: String) = LocalHeldOrderPaymentEntity(

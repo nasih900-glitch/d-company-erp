@@ -50,6 +50,7 @@ import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.ViewRootForTest
 import androidx.compose.ui.platform.testTag
@@ -1391,11 +1392,13 @@ class GamingDialogUiTest {
             assertEquals(0, dismissals)
             assertEquals(0, submissions)
         }
-        val root = titleNode.root as ViewRootForTest
-        val frame = compose.runOnIdle {
-            android.graphics.Rect().also(root.view::getWindowVisibleDisplayFrame)
-        }
-        injectAndroidTap(frame.left + 2f, frame.top + 2f)
+        val dialog = compose.onNode(
+            SemanticsMatcher.expectValue(
+                SemanticsProperties.PaneTitle,
+                "Resolve rejected gaming start",
+            ),
+        ).assertIsDisplayed()
+        injectAndroidTap(backdropPointOutsideSystemGestures(dialog))
         compose.waitForIdle()
         compose.runOnIdle {
             assertEquals(1, dismissals)
@@ -2102,6 +2105,60 @@ class GamingDialogUiTest {
             } finally {
                 event.recycle()
             }
+        }
+    }
+
+    private fun injectAndroidTap(point: Offset) = injectAndroidTap(point.x, point.y)
+
+    private fun backdropPointOutsideSystemGestures(
+        dialog: SemanticsNodeInteraction,
+    ): Offset {
+        val node = dialog.fetchSemanticsNode()
+        val root = node.root as ViewRootForTest
+        return compose.runOnIdle {
+            val view = root.view
+            val visibleFrame = android.graphics.Rect().also(view::getWindowVisibleDisplayFrame)
+            val rootInsets = checkNotNull(ViewCompat.getRootWindowInsets(view))
+            val gestures = rootInsets.getInsets(WindowInsetsCompat.Type.systemGestures())
+            val rootOrigin = IntArray(2).also(view::getLocationOnScreen)
+            val margin = 4f * view.resources.displayMetrics.density
+            val safeLeft = maxOf(
+                visibleFrame.left.toFloat(),
+                (rootOrigin[0] + gestures.left).toFloat(),
+            ) + margin
+            val safeTop = maxOf(
+                visibleFrame.top.toFloat(),
+                (rootOrigin[1] + gestures.top).toFloat(),
+            ) + margin
+            val safeRight = minOf(
+                visibleFrame.right.toFloat(),
+                (rootOrigin[0] + view.width - gestures.right).toFloat(),
+            ) - margin
+            val safeBottom = minOf(
+                visibleFrame.bottom.toFloat(),
+                (rootOrigin[1] + view.height - gestures.bottom).toFloat(),
+            ) - margin
+            check(safeLeft <= safeRight && safeTop <= safeBottom) {
+                "System gestures leave no tappable dialog window area: " +
+                    "frame=$visibleFrame gestures=$gestures"
+            }
+            val dialogBounds = Rect(
+                node.positionOnScreen.x,
+                node.positionOnScreen.y,
+                node.positionOnScreen.x + node.size.width,
+                node.positionOnScreen.y + node.size.height,
+            )
+            val candidates = listOf(
+                Offset(safeLeft, dialogBounds.center.y.coerceIn(safeTop, safeBottom)),
+                Offset(safeRight, dialogBounds.center.y.coerceIn(safeTop, safeBottom)),
+                Offset(dialogBounds.center.x.coerceIn(safeLeft, safeRight), safeTop),
+                Offset(dialogBounds.center.x.coerceIn(safeLeft, safeRight), safeBottom),
+            )
+            candidates.firstOrNull { !dialogBounds.contains(it) }
+                ?: error(
+                    "No system-gesture-safe backdrop point outside " +
+                        "dialog=$dialogBounds frame=$visibleFrame gestures=$gestures",
+                )
         }
     }
 

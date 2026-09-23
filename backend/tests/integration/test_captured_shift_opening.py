@@ -3,11 +3,23 @@
 import asyncio
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
+
 import pytest
-from sqlalchemy import func, select, text
+from sqlalchemy import func, insert, select, text
 from sqlalchemy.exc import DBAPIError
+
 from app.core.security import hash_password, issue_access_token
-from app.models import AuditLog, Role, Shift, Station, User, UserRole
+from app.models import (
+    AuditLog,
+    Branch,
+    Company,
+    Role,
+    Shift,
+    Station,
+    Terminal,
+    User,
+    UserRole,
+)
 from app.services.audit.recorder import install_audit_listeners
 
 
@@ -32,6 +44,47 @@ def headers(seed, captured, key=None):
         "X-Client-Version-Code": "24",
         "X-Installation-Id": str(uuid4()),
     }
+
+
+def android_origin_shift(*, company, branch, terminal, opener, amount_minor=0):
+    now = datetime.now(UTC) - timedelta(minutes=5)
+    return Shift(
+        id=uuid4(),
+        company_id=company.id,
+        branch_id=branch.id,
+        terminal_id=terminal.id,
+        opened_by=opener.id,
+        opened_at=now,
+        opening_action_id=f"shift-open:{uuid4()}",
+        opening_request_hash=uuid4().hex + uuid4().hex,
+        opening_received_at=now + timedelta(seconds=1),
+        opening_was_offline=True,
+        opening_protocol_revision=1,
+        opening_client_platform="android",
+        opening_client_installation_id=uuid4(),
+        opening_float_minor=amount_minor,
+        expected_minor=amount_minor,
+        status="open",
+    )
+
+
+def protected_headers(seed, *, key=None):
+    owner = seed["owner"]
+    token = issue_access_token(
+        user_id=owner.id,
+        company_id=seed["company"].id,
+        branch_id=seed["branch"].id,
+        roles=["super_owner"],
+        auth_version=owner.auth_version,
+        extra={"protected_access": True, "audit_access": True},
+    )
+    result = {
+        "Authorization": f"Bearer {token}",
+        "X-Terminal-Id": str(seed["terminal"].id),
+    }
+    if key is not None:
+        result |= {"Idempotency-Key": key, "X-Client-Action-Id": key}
+    return result
 
 
 @pytest.mark.asyncio
@@ -61,6 +114,17 @@ async def test_captured_shift_drives_offline_session_chain_and_durable_replay(
     assert listed.json()[0]["opening_protocol_revision"] == 1
     assert listed.json()[0]["opening_client_platform"] == "android"
     assert listed.json()[0]["opening_client_installation_id"] == h["X-Installation-Id"]
+    browser_headers = {
+        key: value
+        for key, value in h.items()
+        if key not in {"X-Installation-Id", "X-Client-Platform"}
+    }
+    browser_view = await client.get(
+        "/api/v1/pos/shifts?only_open=true",
+        headers=browser_headers,
+    )
+    assert browser_view.status_code == 200, browser_view.text
+    assert browser_view.json()[0]["opening_client_installation_id"] is None
     station = Station(
         id=uuid4(),
         company_id=seed_owner["company"].id,
@@ -103,6 +167,23 @@ async def test_captured_shift_drives_offline_session_chain_and_durable_replay(
         )
     ).scalar_one()
     assert audit.client_reported_at == captured and audit.client_was_offline
+
+
+@pytest.mark.asyncio
+async def test_subsecond_future_capture_opens_shift_without_rebasing(
+    client, session, seed_owner
+):
+    captured = datetime.now(UTC) + timedelta(milliseconds=750)
+    response = await client.post(
+        "/api/v1/pos/shifts/open",
+        json={"opening_float_minor": 12_300},
+        headers=headers(seed_owner, captured),
+    )
+    assert response.status_code == 201, response.text
+    shift = await session.get(Shift, UUID(response.json()["id"]))
+    assert shift is not None
+    assert shift.opened_at == captured
+    assert shift.opening_was_offline is True
 
 
 @pytest.mark.asyncio
@@ -564,3 +645,296 @@ async def test_protected_owner_can_auditably_recover_quarantined_android_shift(
     assert audits[0].reason == recovery_payload["reason"]
     assert audits[0].after["server_blockers_checked"] is True
     assert audits[0].after["origin_tablet_quarantined"] is True
+
+
+@pytest.mark.asyncio
+async def test_protected_recovery_lists_and_closes_same_branch_other_terminal_only(
+    client, session, seed_owner
+):
+    install_audit_listeners()
+    origin_terminal = Terminal(
+        id=uuid4(),
+        branch_id=seed_owner["branch"].id,
+        name="Quarantined Android till",
+        device_id=f"quarantined-{uuid4()}",
+        purpose="hybrid",
+        is_active=False,
+    )
+    shift = android_origin_shift(
+        company=seed_owner["company"],
+        branch=seed_owner["branch"],
+        terminal=origin_terminal,
+        opener=seed_owner["owner"],
+        amount_minor=8_250,
+    )
+    session.add(origin_terminal)
+    await session.flush()
+    session.add(shift)
+    await session.commit()
+
+    # Ordinary history remains scoped to the selected terminal even for the
+    # protected owner.
+    protected = protected_headers(seed_owner)
+    ordinary = await client.get("/api/v1/pos/shifts?only_open=true", headers=protected)
+    assert ordinary.status_code == 200, ordinary.text
+    assert str(shift.id) not in {row["id"] for row in ordinary.json()}
+
+    ordinary_owner = headers(seed_owner, datetime.now(UTC))
+    denied_candidates = await client.get(
+        "/api/v1/pos/shifts/recovery-candidates",
+        headers=ordinary_owner,
+    )
+    assert denied_candidates.status_code == 403, denied_candidates.text
+
+    candidates = await client.get(
+        "/api/v1/pos/shifts/recovery-candidates",
+        headers=protected,
+    )
+    assert candidates.status_code == 200, candidates.text
+    candidate = next(row for row in candidates.json() if row["id"] == str(shift.id))
+    assert candidate == {
+        "id": str(shift.id),
+        "branch_id": str(seed_owner["branch"].id),
+        "terminal_id": str(origin_terminal.id),
+        "terminal_name": origin_terminal.name,
+        "terminal_device_id": origin_terminal.device_id,
+        "terminal_is_active": False,
+        "opened_at": shift.opened_at.isoformat().replace("+00:00", "Z"),
+        "opened_by": str(seed_owner["owner"].id),
+        "opened_by_name": seed_owner["owner"].name,
+        "opening_float_minor": 8_250,
+        "expected_minor": 8_250,
+        "opening_protocol_revision": 1,
+        "opening_client_platform": "android",
+        "opening_client_installation_recorded": True,
+    }
+
+    # The ordinary close endpoint keeps its exact-terminal boundary.
+    ordinary_close = await client.post(
+        f"/api/v1/pos/shifts/{shift.id}/close",
+        json={"counted_minor": 8_250},
+        headers=protected,
+    )
+    assert ordinary_close.status_code == 422, ordinary_close.text
+    assert "different terminal" in ordinary_close.text.lower()
+
+    recovery_key = f"shift-recovery-close:{uuid4()}"
+    payload = {
+        "counted_minor": 8_250,
+        "reason": "The origin Android app was quarantined after sync recovery failed.",
+        "acknowledge_origin_tablet_quarantined": True,
+    }
+    recovered = await client.post(
+        f"/api/v1/pos/shifts/{shift.id}/recover-close",
+        json=payload,
+        headers=protected_headers(seed_owner, key=recovery_key),
+    )
+    assert recovered.status_code == 200, recovered.text
+    assert recovered.json()["recovery_close"] is True
+    await session.refresh(shift)
+    assert shift.status == "closed"
+    assert shift.closed_by == seed_owner["owner"].id
+    assert shift.counted_minor == 8_250
+
+    audit = (
+        await session.execute(
+            select(AuditLog).where(
+                AuditLog.action == "shift_android_origin_recovery_close",
+                AuditLog.entity_id == str(shift.id),
+            )
+        )
+    ).scalar_one()
+    assert audit.terminal_id == seed_owner["terminal"].id
+    assert audit.before["terminal_id"] == str(origin_terminal.id)
+    assert audit.after["recovery_actor_terminal_id"] == str(seed_owner["terminal"].id)
+    assert audit.after["cross_terminal_recovery"] is True
+
+    after_close = await client.get(
+        "/api/v1/pos/shifts/recovery-candidates",
+        headers=protected,
+    )
+    assert str(shift.id) not in {row["id"] for row in after_close.json()}
+
+
+@pytest.mark.asyncio
+async def test_protected_recovery_rejects_cross_branch_and_cross_company_targets(
+    client, session, seed_owner
+):
+    other_branch = Branch(
+        id=uuid4(),
+        company_id=seed_owner["company"].id,
+        name=f"Other branch {uuid4().hex[:6]}",
+        code=f"B{uuid4().hex[:4]}",
+        invoice_series_code=uuid4().hex[:2].upper(),
+        state_code="32",
+    )
+    other_branch_terminal = Terminal(
+        id=uuid4(),
+        branch_id=other_branch.id,
+        name="Other branch Android till",
+        device_id=f"other-branch-{uuid4()}",
+        purpose="hybrid",
+        is_active=True,
+    )
+    cross_branch_shift = android_origin_shift(
+        company=seed_owner["company"],
+        branch=other_branch,
+        terminal=other_branch_terminal,
+        opener=seed_owner["owner"],
+    )
+
+    other_company = Company(name=f"Other company {uuid4()}")
+    session.add_all([other_branch, other_company])
+    await session.flush()
+    other_company_branch = Branch(
+        id=uuid4(),
+        company_id=other_company.id,
+        name="Other company branch",
+        code=f"B{uuid4().hex[:4]}",
+        invoice_series_code=uuid4().hex[:2].upper(),
+        state_code="32",
+    )
+    other_company_user = User(
+        id=uuid4(),
+        company_id=other_company.id,
+        email=f"other-company-{uuid4()}@test.local",
+        name="Other company owner",
+        password_hash=hash_password("password1234"),
+        status="active",
+    )
+    session.add_all([other_branch_terminal, other_company_branch])
+    await session.flush()
+    session.add(cross_branch_shift)
+    await session.flush()
+    other_company_terminal = Terminal(
+        id=uuid4(),
+        branch_id=other_company_branch.id,
+        name="Other company Android till",
+        device_id=f"other-company-{uuid4()}",
+        purpose="hybrid",
+        is_active=True,
+    )
+    cross_company_shift = android_origin_shift(
+        company=other_company,
+        branch=other_company_branch,
+        terminal=other_company_terminal,
+        opener=other_company_user,
+    )
+    web_terminal = Terminal(
+        id=uuid4(),
+        branch_id=seed_owner["branch"].id,
+        name="Inactive web till",
+        device_id=f"same-branch-web-{uuid4()}",
+        purpose="hybrid",
+        is_active=False,
+    )
+    legacy_terminal = Terminal(
+        id=uuid4(),
+        branch_id=seed_owner["branch"].id,
+        name="Inactive legacy Android till",
+        device_id=f"same-branch-legacy-{uuid4()}",
+        purpose="hybrid",
+        is_active=False,
+    )
+    web_shift = android_origin_shift(
+        company=seed_owner["company"],
+        branch=seed_owner["branch"],
+        terminal=web_terminal,
+        opener=seed_owner["owner"],
+    )
+    web_shift.opening_client_platform = "web"
+    web_shift.opening_client_installation_id = None
+    legacy_shift_id = uuid4()
+    legacy_opened_at = datetime.now(UTC) - timedelta(minutes=5)
+    session.add_all(
+        [
+            other_company_user,
+            other_company_terminal,
+            web_terminal,
+            legacy_terminal,
+        ]
+    )
+    await session.flush()
+    session.add_all([cross_company_shift, web_shift])
+    await session.flush()
+    await session.execute(
+        insert(Shift).values(
+            id=legacy_shift_id,
+            company_id=seed_owner["company"].id,
+            branch_id=seed_owner["branch"].id,
+            terminal_id=legacy_terminal.id,
+            opened_by=seed_owner["owner"].id,
+            opened_at=legacy_opened_at,
+            opening_action_id=None,
+            opening_request_hash=None,
+            opening_received_at=None,
+            opening_was_offline=False,
+            opening_protocol_revision=None,
+            opening_client_platform=None,
+            opening_client_installation_id=None,
+            opening_float_minor=0,
+            expected_minor=0,
+            counted_minor=None,
+            variance_minor=None,
+            status="open",
+        )
+    )
+    await session.commit()
+    legacy_shift = await session.get(Shift, legacy_shift_id)
+    assert legacy_shift is not None
+
+    candidates = await client.get(
+        "/api/v1/pos/shifts/recovery-candidates",
+        headers=protected_headers(seed_owner),
+    )
+    assert candidates.status_code == 200, candidates.text
+    candidate_ids = {row["id"] for row in candidates.json()}
+    assert str(cross_branch_shift.id) not in candidate_ids
+    assert str(cross_company_shift.id) not in candidate_ids
+    assert str(web_shift.id) not in candidate_ids
+    assert str(legacy_shift.id) not in candidate_ids
+
+    payload = {
+        "counted_minor": 0,
+        "reason": "The origin Android app was quarantined after sync recovery failed.",
+        "acknowledge_origin_tablet_quarantined": True,
+    }
+    cross_branch = await client.post(
+        f"/api/v1/pos/shifts/{cross_branch_shift.id}/recover-close",
+        json=payload,
+        headers=protected_headers(
+            seed_owner,
+            key=f"shift-recovery-close:{uuid4()}",
+        ),
+    )
+    assert cross_branch.status_code == 422, cross_branch.text
+    assert "different branch" in cross_branch.text.lower()
+
+    cross_company = await client.post(
+        f"/api/v1/pos/shifts/{cross_company_shift.id}/recover-close",
+        json=payload,
+        headers=protected_headers(
+            seed_owner,
+            key=f"shift-recovery-close:{uuid4()}",
+        ),
+    )
+    assert cross_company.status_code == 404, cross_company.text
+    for ineligible in (web_shift, legacy_shift):
+        rejected = await client.post(
+            f"/api/v1/pos/shifts/{ineligible.id}/recover-close",
+            json=payload,
+            headers=protected_headers(
+                seed_owner,
+                key=f"shift-recovery-close:{uuid4()}",
+            ),
+        )
+        assert rejected.status_code == 422, rejected.text
+        assert "not applicable" in rejected.text.lower()
+    await session.refresh(cross_branch_shift)
+    await session.refresh(cross_company_shift)
+    await session.refresh(web_shift)
+    await session.refresh(legacy_shift)
+    assert cross_branch_shift.status == "open"
+    assert cross_company_shift.status == "open"
+    assert web_shift.status == "open"
+    assert legacy_shift.status == "open"

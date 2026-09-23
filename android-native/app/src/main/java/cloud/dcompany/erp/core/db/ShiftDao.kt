@@ -312,7 +312,7 @@ interface ShiftDao {
           (SELECT COUNT(*) FROM local_table_orders WHERE shiftId = :localShiftId) +
           (SELECT COUNT(*) FROM local_cafe_bills WHERE shiftId = :localShiftId) +
           (SELECT COUNT(*) FROM local_gaming_sessions
-            WHERE shiftId = :localShiftId AND state != 'legacy_resolved') +
+            WHERE shiftId = :localShiftId AND state NOT IN ('legacy_resolved', 'cleanup_retired')) +
           (SELECT COUNT(*) FROM local_gaming_package_extensions
             WHERE shiftId = :localShiftId AND state NOT IN ('confirmed', 'discarded')) +
           (SELECT COUNT(*) FROM local_refunds WHERE shiftId = :localShiftId) +

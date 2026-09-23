@@ -96,6 +96,7 @@ interface ShiftApi {
     suspend fun shifts(
         @Query("only_open") onlyOpen: Boolean,
         @Query("limit") limit: Int = 200,
+        @Header("X-Installation-Id") installationId: String? = null,
     ): List<ShiftDetail>
 
     @POST("pos/shifts/open")

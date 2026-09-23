@@ -109,6 +109,63 @@ describe('POS checkout-claim API contract', () => {
     });
   });
 
+  it('submits one atomic split-payment bundle with the stable key and checkout claim', async () => {
+    const response = {
+      order_id: 'order-1',
+      shift_id: 'shift-1',
+      payments: [
+        {
+          id: 'payment-cash',
+          method: 'cash' as const,
+          amount_minor: 1_700,
+          tendered_minor: 2_000,
+          change_minor: 300,
+          ref_external: null,
+          paid_at: '2026-08-25T20:20:00Z',
+        },
+        {
+          id: 'payment-upi',
+          method: 'upi' as const,
+          amount_minor: 2_500,
+          tendered_minor: null,
+          change_minor: null,
+          ref_external: 'upi-ref-1',
+          paid_at: '2026-08-25T20:20:00Z',
+        },
+      ],
+      total_amount_minor: 4_200,
+      payment_breakdown_minor: { cash: 1_700, upi: 2_500 },
+      order_status: 'paid',
+      invoice_no: 'INV-1',
+      fiscal_year: '2026-27',
+      invoice_issued_at: '2026-08-25T20:20:00Z',
+    };
+    vi.mocked(api.post).mockResolvedValue({ data: response });
+    const body = {
+      payments: [
+        { method: 'cash' as const, amount_minor: 1_700, tendered_minor: 2_000 },
+        { method: 'upi' as const, amount_minor: 2_500, ref_external: 'upi-ref-1' },
+      ],
+      expected_order_total_minor: 4_200,
+      expected_due_minor: 4_200,
+    };
+
+    await expect(
+      pos.recordPaymentBundle(
+        'order-1',
+        body,
+        'payment-bundle:attempt-1',
+        claim.claim_token,
+      ),
+    ).resolves.toEqual(response);
+    expect(api.post).toHaveBeenCalledWith('/pos/orders/order-1/payment-bundle', body, {
+      headers: {
+        'Idempotency-Key': 'payment-bundle:attempt-1',
+        'X-Checkout-Claim': claim.claim_token,
+      },
+    });
+  });
+
   it('submits zero-value finalization with the same two recovery credentials', async () => {
     const response = {
       order_id: 'order-1',

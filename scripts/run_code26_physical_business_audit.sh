@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run the current Code30.2 business acceptance lane against a disposable backend.
+# Run the current Code30.3 business acceptance lane against a disposable backend.
 #
 # This script is deliberately explicit: it never defaults to a cloud device,
 # never accepts a non-loopback database, never uses production credentials and
@@ -148,7 +148,7 @@ ARTIFACT_DIR="$EVIDENCE_DIR/artifacts"
 
 # Physical evidence may only name an immutable, clean commit. A dirty source
 # tree can otherwise build bytes that are absent from source_commit and make
-# an older HEAD look like a Code30.2 result.
+# an older HEAD look like a Code30.3 result.
 SOURCE_COMMIT="$(git -C "$REPO_ROOT" rev-parse --verify 'HEAD^{commit}')"
 SOURCE_TREE="$(git -C "$REPO_ROOT" rev-parse --verify 'HEAD^{tree}')"
 SOURCE_BRANCH="$(git -C "$REPO_ROOT" symbolic-ref --quiet --short HEAD || printf 'DETACHED')"
@@ -160,8 +160,8 @@ if [[ -n "$SOURCE_DIRTY" ]]; then
 fi
 VERSION_CODE="$(sed -nE 's/^[[:space:]]*versionCode[[:space:]]*=[[:space:]]*([0-9]+).*/\1/p' "$ANDROID_DIR/app/build.gradle.kts" | head -1)"
 VERSION_NAME="$(sed -nE 's/^[[:space:]]*versionName[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' "$ANDROID_DIR/app/build.gradle.kts" | head -1)"
-if [[ "$VERSION_CODE" != "37" || "$VERSION_NAME" != "3.1.29" ]]; then
-  printf 'Refusing non-Code30.2 source identity: versionCode=%s versionName=%s\n' \
+if [[ "$VERSION_CODE" != "38" || "$VERSION_NAME" != "3.1.30" ]]; then
+  printf 'Refusing non-Code30.3 source identity: versionCode=%s versionName=%s\n' \
     "$VERSION_CODE" "$VERSION_NAME" >&2
   exit 65
 fi
@@ -601,7 +601,7 @@ record_apk_identity() {
       source_commit:$source_commit,signature_verified:true,copied_hash_verified:true}' \
     >> "$APK_IDENTITIES_NDJSON"
 }
-record_apk_identity "$ERP_APK" cloud.dcompany.erp.physicalaudit 37 3.1.29-physical-audit
+record_apk_identity "$ERP_APK" cloud.dcompany.erp.physicalaudit 38 3.1.30-physical-audit
 record_apk_identity "$DRIVER_APK"
 record_apk_identity "$DRIVER_TEST_APK"
 jq -s --arg commit "$SOURCE_COMMIT" --arg tree "$SOURCE_TREE" \

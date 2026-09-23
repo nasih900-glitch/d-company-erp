@@ -62,7 +62,7 @@ class ShiftStaffFeedbackTest {
     fun `server history names the closer while local history explains pending attribution`() {
         assertEquals("Sameer", shiftHistoryCloserLabel(history(source = ShiftHistorySource.SERVER, closer = "Sameer")))
         assertEquals(
-            "waiting for server confirmation",
+            "closer attribution pending",
             shiftHistoryCloserLabel(history(source = ShiftHistorySource.LOCAL, closer = null)),
         )
         assertEquals(

@@ -56,10 +56,13 @@ internal fun canonicalRemoteRequestStatement(
 ): ByteArray {
     val canonicalMethod = method.uppercase(Locale.ROOT)
     require(canonicalMethod.matches(HTTP_METHOD)) { "HTTP method is not canonical" }
+    val cleanupTarget = rawTarget ==
+        "/api/v1/client-installations/gaming-cleanup-reconciliations/report" ||
+        CLEANUP_ACK_TARGET.matches(rawTarget)
     require(
-        rawTarget.startsWith("/api/v1/remote-assistance/device/") &&
+        (rawTarget.startsWith("/api/v1/remote-assistance/device/") || cleanupTarget) &&
             '\n' !in rawTarget && '\r' !in rawTarget,
-    ) { "Remote request target is outside the signed device API" }
+    ) { "Device request target is outside the signed device API" }
     require(contentSha256.matches(LOWERCASE_SHA256)) { "Content hash must be lowercase SHA-256" }
     require(signedAtEpochSeconds >= 0L) { "signedAtEpochSeconds must be non-negative" }
     requireCanonicalRemoteUuid(nonce, "nonce")
@@ -87,4 +90,8 @@ private fun requireCanonicalRemoteUuid(value: String, label: String) {
 
 private val LOWERCASE_SHA256 = Regex("[0-9a-f]{64}")
 private val HTTP_METHOD = Regex("[A-Z]+")
+private val CLEANUP_ACK_TARGET = Regex(
+    "/api/v1/client-installations/gaming-cleanup-reconciliations/" +
+        "[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/acknowledge",
+)
 private val PAIRING_CODE = Regex("[0-9A-HJKMNP-TV-Z]{12}")

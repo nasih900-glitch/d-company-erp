@@ -1,281 +1,341 @@
 # D Company ERP — current project state
 
-Updated 2026-09-20. This handover describes the Code30.2 patch release line.
-The immutable Code30.1 scope and completed evidence remain in
-[`docs/CODE30_1_PATCH_CANDIDATE.md`](docs/CODE30_1_PATCH_CANDIDATE.md). Earlier
-release records remain historical evidence and must not be rewritten as
-Code30.2 proof. The canonical Code30.2 release identity is the immutable
-`v3.1.29` tag together with the protected workflow's `release-manifest.json`;
-local branch names, working-tree state and manually built packages are not
-release identity.
+Updated 2026-09-22. This is the handover for the additive Code30.3 operational
+patch. Read
+[`docs/CODE30_3_PATCH_CANDIDATE.md`](docs/CODE30_3_PATCH_CANDIDATE.md) before
+changing release identity, cleanup behavior or updater controls. Preserve
+[`docs/CODE30_2_PATCH_CANDIDATE.md`](docs/CODE30_2_PATCH_CANDIDATE.md) and the
+Code30.2 hash map as immutable predecessor evidence.
 
-## Architecture and supported applications
+## Architecture
 
-- **Backend:** FastAPI/Pydantic 2, async SQLAlchemy, PostgreSQL 16, Alembic and
-  Redis. Financial writes use integer minor units, tenant and branch scope,
-  audit records and idempotency.
-- **Web:** React 18, TypeScript and Vite against the shared backend API. The Web
-  client requires a live connection and has no Android-style offline queue.
-- **Android:** native Kotlin/Jetpack Compose in `android-native`, with Room,
-  durable queued writes, reconciliation and the direct-install updater. This is
-  the only supported Android source.
+- **Backend:** FastAPI, Pydantic 2, async SQLAlchemy, PostgreSQL 16, Redis and
+  Alembic. Business records are tenant-scoped, audited and idempotent; money is
+  integer minor units.
+- **Web ERP:** React 18, TypeScript and Vite against the shared backend. It is
+  the owner control and review surface and does not have Android's offline
+  queue.
+- **Android:** native Kotlin/Jetpack Compose in `android-native`, Room,
+  durable offline writes, conflict-aware replay and direct-install updates.
 - **Operations:** Docker Compose runs PostgreSQL, Redis, backend, frontend and
-  Caddy. The guarded installer performs provenance checks, quiesced backup and
-  restore verification, migrations, health checks and rollback preparation.
-- **Outside this release:** the archived Capacitor Android/iOS shells and Tauri
-  wrapper are not supported clients. There is no supported native iOS
-  distribution in Code30.2.
+  Caddy. The guarded installer owns backup, restore proof, migrations, health
+  checks and rollback preparation.
+- **Unsupported clients:** the archived Capacitor Android/iOS shells and Tauri
+  wrapper are not release clients. There is no supported native iOS release in
+  Code30.3.
+- **Google Sheets:** PostgreSQL remains authoritative. The optional append-only
+  `ERP Mirror v1` is a backup/reconciliation surface and never receives
+  receipt bytes, secrets or customer personal data.
 
-## Repository and release identity
+## Repository state and release identity
 
 | Item | Current value |
-|---|---|
-| Authoritative checkout | `/Users/mohammednasih/.codex/worktrees/d-company-erp-code30-trial-patches-20260914` |
-| Branch | `codex/code30-2-finance-sheets` |
-| Release base | `3b534fdc76a5463475d58f44686f91608e1e2601` (`v3.1.28`, Code30.1) |
-| Release tag | `v3.1.29` |
-| Public label | Code30.2 |
-| Product / Android identity | `3.1.29` / build `37` / package `cloud.dcompany.erp` |
-| Android database | Room schema `51` |
-| Backend database | Alembic head `0078` |
-| Immutable release predecessor | Code30.1 `v3.1.28` / build `36` |
-| Exact release source | `release-manifest.json.git_sha`, which must equal the commit resolved by `v3.1.29` |
-| Exact Android artifact | The APK hash, size, signer, package, build, version, workflow run and release ref in that same manifest |
+| --- | --- |
+| Authoritative checkout | `/Users/mohammednasih/.codex/worktrees/d-company-erp-code30-2-stale-session-reconcile` |
+| Branch | `codex/code30-3-stale-gaming-recovery` |
+| Immutable Code30.2 base | `3ea84be4718a794d5a2e8efc7ac9bcacbc0cee01` / `v3.1.29` |
+| Current public label | Code30.3 |
+| Candidate tag | `v3.1.30` |
+| Product / Android identity | `3.1.30` / build `38` / `cloud.dcompany.erp` |
+| Android database | Room schema `52`, migrating from `51` |
+| Backend database | Alembic head `0082`, preserving published cleanup migration `0079` and chaining through split-payment migration `0080` |
+| Compatibility defaults | minimum `8`, latest offered `8`, policy revision `1` |
+| Local freeze status | The final reviewed Code30.3 byte set passed the whole-delta review, regenerated hash map, freeze verifier and repository release-control suites. The release commit and its exact-head CI remain pending; check Git and PR 16 live rather than relying on this snapshot. |
+| Exact future release source | The final reviewed commit recorded by the protected `v3.1.30` workflow manifest |
 
-The branch contains the cumulative Code30.2 implementation, runtime-image
-security correction, business-audit corrections, guarded production
-trial-cleanup tooling and the fail-closed future-upgrade verifier for the
-retained historical outbox counter. The exact delta is protected by the
-Code30.2 source-freeze map. This file deliberately does not embed the commit
-that contains itself: the protected release workflow records that source in
-the manifest and must prove that `release_ref` is `v3.1.29` and `git_sha`
-matches the live immutable tag before any artifact is trusted.
+The release freeze is layered. `REVIEWED_CODE30_2_SHA256` is validated against
+the immutable Code30.2 Git object and must never be regenerated. The separate
+`REVIEWED_CODE30_3_SHA256` map covers the current intended delta. Its control
+files are excluded only to avoid the established self-hash cycle.
 
-The 20 September read-only production preflight found the immutable Code30.1
-source `v3.1.28`, backend `3.1.28`, database `0073` and Android offer build
-`36`. A local build, emulator installation or passing source test cannot change
-production or create an update offer; deployment, cleanup, staging and owner
-activation require their separate recorded gates.
+PR 16's first hosted run, `35620190613`, passed backend, frontend, Android and
+both Docker lanes at commit `b1f08b1502ce626e3fd0cead92b647f26df36ab4`.
+That run is historical evidence only: post-review hardening changes require a
+new exact-head run before merge or tagging.
 
 ## Completed and known-good foundation
 
-The inherited ERP includes authentication and permissions; POS orders,
-payments, receipts and refunds; inventory and stock; shifts and cash
-reconciliation; gaming sessions, extensions, pause/resume, POS handoff and
-billing; finance, accounting, reports, staff, audit, diagnostics and the Android
-updater.
+The inherited ERP provides authentication and role permissions; branch and
+terminal-scoped shifts; POS orders, payments, receipts and refunds; Gaming
+sessions, package extensions, pause/resume, transfer, stop, POS handoff and
+billing; inventory and stock; finance, accounting and reports; staff, audit and
+diagnostics; durable Android sync; private expense receipt evidence; manual
+finance entries; the optional Google Sheets mirror; and the owner-controlled
+Android updater.
 
-Code30.1 established the preserved baseline for saved customer lookup, customer
-playtime, deletion-replay protection, five pricing-card modes, exact
-branch/terminal shift resolution and authorized cross-user routine operation.
-An authorized user may continue, bill or complete another authorized user's POS
-or gaming work and may close the exact branch/terminal shift. Refund, void,
-privileged discount and release controls retain their separate permissions.
-Reward redemption and WhatsApp messaging remain inactive.
+Authorized routine cross-user operation is intentional. An authorized user may
+continue, stop, bill or complete another user's Gaming/POS work and may close
+the exact eligible branch/terminal shift. Original actor, current actor,
+session, drawer and audit attribution remain preserved. Refund, void,
+privileged discount, stale-cleanup approval and release activation keep their
+separate permissions.
 
-## Code30.2 release scope
+Code30.2 remains the immutable finance/receipt/Sheets predecessor. Reward
+redemption and WhatsApp automation remain inactive. SMTP delivery is
+provider-blocked and unverified and must not be described as working.
 
-### Manual finance and receipt evidence
+## Code30.3 implementation
 
-- Authorized users can create manual expenses and manual collections in Web and
-  Android with the applicable business date, category, amount, payment method,
-  vendor or payer reference, invoice reference and note.
-- A manual expense may retain up to five private JPEG, PNG, WebP or PDF evidence
-  files, each no larger than 10 MiB. Android supports the system camera and file
-  picker; Web supports browser camera/file selection.
-- The backend verifies file bytes instead of trusting a filename or declared
-  content type, stores immutable evidence and records append-only review
-  history. Receipt bytes and private review notes remain behind ERP
-  authentication and are never copied to Google Sheets.
-- Android stores a pending expense and its receipt chunks atomically in Room,
-  then synchronizes the parent before its attachments. Retry, restart,
-  disconnection and acknowledgement loss must not duplicate the expense or a
-  receipt. Rejected evidence remains visible for a deliberate retry or removal.
-- Cash expenses, cash manual collections, cash tip payouts and cash supplier
-  payments name the exact open same-branch shift drawer and apply one atomic
-  cash effect. Authorized cross-user operation is supported on an eligible
-  drawer; the actor and original drawer owner remain attributable.
-- An ordinary void is allowed while the source drawer is open. Once that shift
-  is closed, Web uses the authorized closed-shift correction flow instead of
-  rewriting its saved closing cash. The immutable original stays in history; a
-  full reversal is dated now, posted in the current reporting period and
-  applied to a selected current same-branch drawer. Android displays corrected
-  history and excludes it from active totals; correction entry is performed in
-  Web ERP.
+Code30.3 keeps the exact stale-Gaming recovery protocol and adds three requested
+operational fixes without rebuilding the application: one atomic multi-rail
+payment, Web/Android Gaming transfer parity, one-business-day shift
+presentation with exact opening and closing times, and protected recovery for
+an eligible stale Android-origin shift on another terminal in the same branch.
 
-### Optional Google Sheets mirror
+### Stale Gaming recovery
 
-- `ERP Mirror v1` is a secondary append-only transaction mirror. PostgreSQL
-  remains the authority and recovery source.
-- Eligible committed POS, membership and manual-finance transactions and their
-  reversals create tenant-scoped delivery events in the same database
-  transaction as the business change.
-- Each event is bound permanently to one configuration generation. Business
-  events recorded before verification are held durably until a connection-test
-  event for that exact generation succeeds.
-- Delivery uses signed requests, stable event hashes, leasing, bounded retry and
-  quarantine. Formula-like values are forced to text, and receipt bytes,
-  customer personal information, private review notes and secrets are excluded.
-- Correcting an unverified URL keeps its held generation and requires a fresh
-  test. Once a connection is verified, URL/secret rotation or disconnect is
-  refused while that generation has pending, leased or quarantined business
-  events. Operators must let pending work drain and retry quarantined work
-  before rotating or disconnecting.
-- Old events are never silently retargeted to a new URL or secret. Replaying the
-  same business fact returns its original immutable event rather than creating
-  a duplicate in the new generation.
-- The integration writes only to the separate `ERP Mirror v1` tab. It does not
-  edit existing workbook tabs, import Sheet edits, backfill old records or
-  replace database backup and restore.
+An Android tablet that retains a local Gaming overlay after the authoritative
+server session is already gone uses this exact-candidate protocol.
 
-Alembic `0074` through `0078` add receipt evidence, the Sheet outbox and
-generation-bound configuration, modern cash drawer provenance, and immutable
-closed-shift finance corrections. Room `49` through `51` add durable finance
-evidence, drawer/correction state and compatibility handling.
+- Room `52` stores immutable cleanup evidence, revision, directive and
+  acknowledgement state.
+- A build-38 tablet reports an exact candidate only after normal authoritative
+  reconciliation cannot find the server session.
+- Cleanup report and acknowledgement requests require a build-38-or-later
+  installation whose signed request version exactly matches its persisted
+  installation status. Ordinary heartbeats keep their existing compatibility.
+- The report binds installation, tenant, branch, terminal, station, local
+  action, server session, original actor, start/stop hashes, local snapshot,
+  price, duration, amount, unresolved-child count and candidate SHA-256.
+- Alembic `0079` adds an append-preserving reconciliation ledger with unique
+  current-candidate indexes, immutable evidence guards, transition guards and
+  downgrade refusal after evidence exists.
+- Alembic `0081` adds immutable report-time app version/build evidence as a
+  forward migration after `0080`; published `0079` history remains unchanged.
+- Owner Web Gaming shows the exact station name/code, amount, duration and
+  candidate evidence. The final approval surface also shows the branch,
+  terminal, tablet installation and build; it labels the amount and duration
+  as tablet evidence and refuses approval when either value is unavailable.
+  The owner approves one candidate and records a reason.
+- The tablet must reconnect. It applies only the matching directive with a
+  compare-and-set retirement, retains evidence, then acknowledges the backend.
+  A lost acknowledgement retries; an acknowledged result stops retrying.
+- The tablet presents durable, non-sensitive states for incomplete evidence,
+  report retry, owner review, approval/application and acknowledgement. While
+  protected cleanup owns the row, ordinary station, add-on, void and POS
+  actions are disabled so they cannot race the approved retirement.
+- Changed evidence supersedes the preserved old report/approval and produces a
+  new review revision. Unresolved children block cleanup and invalid reports
+  are bounded.
+- There is no generic **clear all**, direct database edit, remote Room rewrite
+  or broad station reset. No bill, payment, receipt, customer or genuine
+  business record is deleted by this protocol.
+- `protocol-fixtures/gaming_cleanup_full_flow_v1.json` binds the same
+  cross-language report, approval, directive and acknowledgement contract.
 
-### Guarded production trial cleanup
+The owner procedure is: update and reconnect exact build `38`, review the
+candidate in Web Gaming, confirm branch/terminal/tablet/build plus
+station/session/price/duration/hash, approve with a reason, keep the tablet
+online until acknowledgement, then verify both surfaces show the station
+available. Web cannot repair an offline tablet by itself.
 
-The repository now contains a one-time, rollback-by-default cleanup for the
-exact audited Code30.1 production test rows. It pins the full-table and target
-fingerprints, primary-key allowlists, migration `0078`, dependency graph and
-expected counts; locks every public table without waiting; and verifies every
-retained row and unrelated table after the attempted mutation. Apply mode also
-requires a fresh dry-run fingerprint, the fresh backup file itself, the
-canonical tracked 18-AVD quarantine evidence JSON and its independently
-computed hash, a stopped immutable backend image, a completely clean checkout
-at the exact deployed Git SHA and a named executor. Apply also binds the live
-PostgreSQL and stopped backend containers to the canonical services of the
-same Docker Compose project and refuses any running backend service container
-in that project. It restores and dry-runs that backup in a disposable database,
-then drops the restore on every exit. Normal owner sign-ins after the reviewed
-snapshot are accepted only when every new pre-cleanup audit row has the exact
-`login_success` shape and resolves to an active user. The frozen 1,271-row audit
-prefix, exact 37-row deletion target and dynamic login-suffix hash remain
-independently guarded and are bound into the durable receipt. The future
-read-only verifier checks the retained prefix and that pre-receipt suffix while
-allowing later normal business audit rows. The durable audit receipt fences all
-deleted offline actions against replay. The exact retired Code30.1 test
-installation remains fully unchanged with its one stale historical saved-action
-report because the server UUID cannot be tied to an AVD. Its device
-heartbeat/sync timestamps and all 29 immutable expired remote-assistance keys
-remain historical evidence. The receipt records the unchanged snapshot with
-null offline and sync markers and fences the 13 exact known deleted actions.
-All 18 local AVDs are wiped, but that quarantine is not attributed to the
-server installation identity. Future installers may accept the retained count
-of one only when a read-only verifier proves the single canonical cleanup
-receipt, exact retained installation and 29-key hashes, all 13 exact replay
-fences, absence of every allowlisted deleted row, and no other pending device.
-Any missing, changed, duplicate or partial evidence remains a hard deployment
-failure. The cleanup has not been run in apply mode against production.
+The guarded production installer now performs a global, fail-closed business
+quiescence query immediately before maintenance and repeats it from a new
+database snapshot after Caddy, backend and frontend stop. It blocks open
+shifts, open/held orders, active/paused or ended-unsettled Gaming sessions,
+unacknowledged kitchen cancellation work, unresolved POS or membership refund
+and payment workflows, and pending/leased/quarantined Sheets deliveries. The
+second check closes the race between the live preflight and writer shutdown.
+The separate historical Code30.2 outbox verifier accepts only the exact cleanup
+receipt and preserved installation evidence while allowing audited lifecycle
+telemetry; trigger definitions and cleanup provenance are pinned exactly. Its
+bounded JSON parser rejects duplicate keys, non-finite values, booleans or
+floats substituted for integers, type drift and schema drift at every nested
+receipt field.
 
-Detailed scope and release boundaries are in
-[`docs/CODE30_2_PATCH_CANDIDATE.md`](docs/CODE30_2_PATCH_CANDIDATE.md), and the
-Sheet contract is in [`docs/GOOGLE_SHEETS.md`](docs/GOOGLE_SHEETS.md).
+### Atomic split tender
 
-## Current verification state
+- Web and Android support two to five distinct rails from cash, UPI, card, QR
+  and wallet after the backend has supplied the exact payable balance.
+- `POST /pos/orders/{order_id}/payment-bundle` commits every leg, invoice,
+  checkout-claim consumption, idempotent response and Google Sheets outbox
+  event in one database transaction. Alembic `0080` permits intermediate rows
+  only inside that transaction while the deferred exact-balance guard still
+  rejects any partial or overpaid commit.
+- Cash received and change belong only to the cash leg; only its bill amount
+  increases the expected drawer. Split mode deliberately excludes tips.
+- A lost response replays the same complete plan and idempotency key. Android
+  persists the canonical plan in the existing settlement outbox and never
+  offers split tender offline.
+- Mixed-payment refunds require the existing explicit cash refund flow; an
+  ambiguous `original` provider refund fails closed.
 
-The last clean committed source completed the full emulator business audit with
-390 checks: 16 sessions/orders/payments, four extensions, two add-ons, two
-pauses, split cash/UPI settlement, discount/COGS/profit reconciliation,
-cross-user operation, offline/reconnect and process restart. It ended with no
-active session, blocked station or unbalanced drawer. The measured 30-frame UI
-sample had 35.378 ms p95, 40.559 ms maximum and no frame above 50 ms, crash,
-ANR or layout jump.
+### Web Gaming transfer and shift-day presentation
 
-The cumulative Code30.2 source has recorded passes for 1,572 backend tests with
-21 expected isolated-audit skips on Python 3.14.7 against a fresh PostgreSQL
-database migrated from zero through `0078`; 526 Web tests, lint, type checking
-and a production build; and 4,406 Android JVM tests, lint and from-scratch debug
-builds. The repository-level release, installer, security, freeze and contract
-suite passed 950 tests, two expected skips and 322 subtests. The canonical
-API-35 tablet-profile lane passed its 333 ordinary device
-tests plus two explicit granted-notification/deep-idle alarm proofs. A direct
-Gradle run at the AVD's 2560x1800 default had first failed the intentionally
-profile-sensitive inventory keyboard threshold; the canonical lane set and
-verified the required 2560x1600, 320-dpi (1280x800 dp) profile and passed the
-same test. The final audit-drift guard's cleanup and future-upgrade focus passed
-28 tests, and the source-freeze verifier passed. The earlier baseline
-post-cleanup query executed successfully on PostgreSQL 16 while correctly
-rejecting a database without the required cleanup receipt; the final dynamic
-guard must still pass the installer's fresh-backup restore dry run before any
-live cleanup can apply.
+- Web Gaming can move an active or paused session to an available active
+  station of the same type and branch. The backend rechecks the exact source,
+  target, shift and session under locks; price, package, timer, customer and
+  staged items remain unchanged.
+- Web and Android present all immutable shift segments opened on one IST date
+  as one business-day collection. They show the first opening time/opener and
+  the final confirmed closing time/closer, while retaining every raw shift for
+  drawer and audit review. If any segment remains open, no earlier close is
+  mislabelled as the final close.
+- Web requests the latest 200 shift rows and warns when its oldest displayed
+  day may be incomplete. Android retains the same 200-row boundary in its
+  scoped history cache. A shift crossing midnight is grouped by its opening
+  date; daily finance reports remain transaction-time based.
+- Captured Android shift openings allow at most one second of positive
+  tablet/server clock skew without rebasing the saved timestamp. Alembic
+  `0082` enforces the same boundary; larger future timestamps fail closed, and
+  downgrade refuses to rewrite a shift that used the allowance.
 
-An earlier hosted container run exposed Python 3.13.15 `CVE-2026-82049` and
-Alpine zlib 1.3.2-r0 `CVE-2026-85091`. The committed correction moves the
-backend and CI to Python 3.14.7, builds and attests Redis locally, and overlays
-zlib 1.3.2 built from the official source plus the complete upstream chain
-`e3dc0a85b7032e98380dec011bc8f2c2ee0d8fca`,
-`bbc2ccf3d0de267576b524b875c769a724a513b0`,
-`df84af25dc1942490e1d1c899a07619152a46148`, and
-`7235b0a581227c56a79a43ff828f8ef6794194c8` in backend, frontend, Caddy,
-PostgreSQL and Redis. Each exact image gets a narrowly scoped OpenVEX document;
-all other High/Critical findings still fail closed.
+### Protected other-terminal Android shift recovery
 
-Protected CI run `35504974966` passed backend, Web, Android and both production
-image lanes for the source immediately before the final audit-log drift guard.
-The drift guard then passed its focused cleanup, future-upgrade, replay-fence,
-freeze and PostgreSQL-16 query checks. The `v3.1.29` tag workflow remains the
-authoritative final rerun because it rebuilds and verifies the exact source and
-artifact recorded in the release manifest.
+- Ordinary shift listing and closing remain scoped to the signed-in terminal.
+  Recovery candidates use a separate endpoint and never become the current
+  terminal's active shift or enter its business-day totals.
+- Only an open protocol-1 Android-origin shift in the same company and branch
+  is eligible. The reviewer must have both audit access and
+  `pos.shift.close`; Web/legacy shifts and cross-company/cross-branch rows fail
+  closed.
+- Recovery requires the exact counted cash, a reason and explicit attestation
+  that the origin tablet is quarantined. The server reuses the normal blocker,
+  cash, accounting and audit path while recording origin and recovery-actor
+  terminal identities.
+- Browser responses reveal only whether an installation identity was recorded.
+  The raw installation UUID is echoed solely to the matching Android
+  installation, and the locking query is tenant-scoped before `FOR UPDATE`.
+- A lost or ambiguous response keeps the payload and idempotency key locked for
+  exact replay. Generic shift history cannot be mistaken for proof that the
+  protected recovery ran. HTTP 401/403 and permission loss discard protected
+  rows and close the modal; transport/5xx errors retain disabled rows for safe
+  retry.
 
-## Known release gaps
+### Versioned trial-cleanup replay receipt
 
-- Repeat the 390-step business audit on the final frozen commit.
-- Build and scan all five exact production images in both hosted Docker-store
-  lanes; retain SBOM, Grype, VEX, image-identity and runtime-probe evidence.
-- Repeat the business trial with two authorized users across shift open/close,
-  Gaming start/pause/extend/stop/handoff, POS settlement/refund, split payment,
-  manual finance, receipt capture/upload/retry, restart, offline/reconnect,
-  closed-shift correction, reports, Sheet reconciliation and cleanup.
-- Create `v3.1.29` only from the exact reviewed clean source and require its
-  protected workflow to pass every source, app and production-image lane.
-- Produce the signed build-37 APK through that protected tag workflow and
-  independently verify the manifest's release ref, Git source, checksum, size,
-  package, version, build, workflow provenance and expected signer.
-- Prove a normal same-signer in-place upgrade from exact signed
-  `v3.1.28` / build `36` to build `37` without uninstalling or clearing
-  Room/outbox state.
-- Deploy backend/Web and Alembic `0078` through the guarded cutover with a
-  verified production backup, disposable restore, rollback evidence and
-  authenticated smoke checks.
-- While all writers remain stopped, run the exact production cleanup dry run,
-  review its fresh fingerprint, apply it once with the verified backup and
-  emulator-quarantine evidence, then reconcile every final count.
-- Deploy and authorize the bound Apps Script, enter the one-time secret, deliver
-  the current-generation connection test and reconcile an actual mirror row.
-- Stage the exact verified APK inactive, then use the bound owner release
-  control to activate it only after the coordinated production gates pass.
-- Record physical Redmi Pad 2 installation, keyboard, printer, alarms, battery
-  management and shop-day acceptance when the tablet is available.
+- A later trial cleanup that deletes shifts records a v2
+  `verified_trial_cleanup` / `TrialCleanupReceipt` audit receipt. Keyed shift
+  openings check it after the unchanged Code30.1 fence and before any shift
+  lookup, so a reconnecting tablet cannot recreate a deleted shift. The full
+  contract is in `docs/CODE30_3_PATCH_CANDIDATE.md`.
+- Malformed or duplicated v2 receipts fail closed for keyed shift openings.
+  The receipt identity is invisible to the Code30.2 post-cleanup installer
+  gate. Existing idempotency receipts and the Code30.1 receipt behave exactly
+  as before.
+- `infra/scripts/cleanup-code30-3-trial-data.{sh,sql}` is the one-time,
+  owner-approved removal of the pinned 20 September trial cohort. It runs after
+  the `0082` deployment with the backend stopped and uses a guarded
+  four-trigger exception proven byte-identical before commit. It retains audit,
+  idempotency, delivered Sheets ledger rows and the invoice counter. Local
+  rehearsal on a restored production backup passed dry run, apply, ten
+  fail-closed cases, backend receipt validation and the Code30.2 installer gate.
+  The production run has not happened.
 
-## Regression protections and decisions to preserve
+## Verification status
 
-- Resolve shifts by company, branch and terminal. Never select an arbitrary
-  first open shift.
-- Keep authorized routine cross-user operations available while preserving the
-  separate permissions for refund, void, privileged discount and release
-  control.
-- Keep money as integer minor units and preserve GST, rounding, drawer,
-  double-entry, immutable snapshot and idempotency contracts.
-- Never mutate a closed shift's saved cash. Record a reasoned, append-only
-  current-period correction against a selected open same-branch drawer.
-- Do not let receipt retry, offline replay or acknowledgement loss create a
-  second expense, drawer movement, Sheet event or evidence file.
-- Keep receipt bytes private. Do not place customer identity, private review
-  notes, secrets or executable spreadsheet formulas in Sheets.
-- Preserve each Sheet event's immutable configuration generation. Drain current
-  work before rotating or disconnecting and never retarget superseded events.
-- Preserve tenant/branch/terminal isolation, RBAC, audit rows, tombstones,
-  captured offline time and customer deletion revisions.
-- Do not activate rewards, WhatsApp, the compatibility minimum, an update offer
-  or Google Sheets merely by deploying source.
-- Never rebuild or overwrite `v3.1.28` or another signed predecessor. Every
-  successor requires a higher build and same-signer upgrade proof.
+The post-review hardening is complete. Independent installer review passed
+after adversarial verification of nested JSON types, exact cleanup provenance,
+trigger/function identity, historical lifecycle rules, legacy database heads,
+the two quiescence checkpoints and rollback before promotion. Its final focused
+run recorded 84 passes and one expected macOS-only skip.
 
-## Release readiness and priorities
+The current reviewed working tree has passed these local source gates:
 
-Code30.2 is not live until the exact `v3.1.29` tag and its protected release
-manifest pass, the signed build-37 APK is independently verified, the in-place
-upgrade is proven, and the coordinated production, cleanup and Sheet cutover
-complete. Inactive staging and owner activation follow those gates.
-Physical-tablet acceptance remains separate.
+- backend: **1,705 passed, 21 intentionally skipped, 0 failed** on a new
+  disposable PostgreSQL database owned by role `erp` (as CI) and migrated from
+  `0001` through `0082`. An earlier local run as a different database role
+  failed only the two post-cleanup verifier proofs, because the verifier pins
+  guard-function owner `erp`; those proofs now assert the role up front;
+- focused backend recovery/security: **24 passed** on another fresh database;
+- Web: **95 files / 579 tests passed**, followed by TypeScript, zero-warning
+  ESLint and verified Vite production build;
+- Android JVM: **1,136 passed** for debug, release and direct-release variants;
+- Android build: release/direct-release lint, unsigned Play APK/AAB and unsigned
+  direct-update APK builds passed; and
+- Android emulator: the fail-closed sharded run discovered **339** exact runner
+  identities and executed the same **339 exactly once**: **336 functional**
+  tests across four fresh shards and all **3 physical-frame stress** tests in a
+  separate fresh process. It recorded no failures or errors, only the two
+  expected permission-dependent alarm assumption skips. The separate
+  permission-granted alarm lane then passed **2/2**, and the complete harness
+  exited `0`.
+
+The instrumentation harness now discovers the runner inventory before test
+execution, resets the app/test processes and tablet viewport between lanes,
+archives each lane's XML/log/report evidence, and rejects any missing,
+duplicate, unexpected, failed or errored test, unexpected skip, or stress test
+leaking into a functional shard. The exact post-response/pre-CAS Gaming cleanup
+restart path remains covered. A test-only POS notice-layer assertion now enters
+the discount through the visible touch keypad instead of racing the platform
+IME while it opens; the complete `PosEmptyCatalogueUiTest` class passed
+**6/6**. That stabilization does not change production POS behavior.
+
+The earlier stale-recovery-only counts remain historical baseline evidence.
+The current local results are source/build/emulator evidence only; the release
+commit, exact-SHA hosted CI, protected signing, same-signer upgrade and
+production/physical acceptance remain separate.
+
+The earlier release-control phase also passed the coordinated `v3.1.30` /
+build-38 validator; the layered verifier preserving all 491 Code25 baseline
+test files; 369 layered freeze tests; 190 historical installer/freeze guards;
+two freeze-path safety tests; 64 root Android release-contract tests with 124
+subtests; and 53 physical-audit-lane contract tests. These overlap and must not
+be summed. After the final Android harness and documentation edits stopped, the
+regenerated Code30.3 map froze 138 reviewed delta files, the focused
+release-control suite passed **711** tests with one expected macOS skip, and the
+complete root release suite passed **1,135** tests with two expected skips.
+After the later clock-skew, post-cleanup verifier and evidence-analyzer
+corrections and the versioned trial-cleanup replay receipt and trial cleanup, the refreshed Code30.3 map freezes **147** reviewed delta files, the
+standalone freeze verifier preserved all 491 baseline test files, and the
+complete root release suite passed **1,149** tests with two expected skips.
+`git diff --check` also passed. A passing local test remains source evidence
+only.
+
+The initial PR commit passed repository-wide protected CI, but the final
+post-review commit has not. The release commit, exact-head CI, signed APK,
+same-signer build-37-to-38 upgrade, production deployment, inactive staging,
+active offer, and physical tablet/printer acceptance remain separate pending
+gates.
+
+## Known risks and regression protections
+
+- Never select `openShifts[0]`; resolve company, branch and terminal exactly.
+- Never change a closed shift's saved cash. Use append-only corrections.
+- Keep money in integer minor units and preserve GST, rounding, double-entry,
+  idempotency and immutable snapshot contracts.
+- Never retire a tablet overlay from station name alone. Require exact scoped
+  evidence, receipt binding, candidate hash, owner approval and tablet
+  acknowledgement.
+- Never delete or mutate cleanup reconciliation evidence. A changed snapshot
+  creates a new revision and supersedes the old record.
+- Do not raise `ANDROID_LATEST_VERSION_CODE` when building or deploying.
+  Staging and owner activation are separate operations.
+- Never uninstall or clear the tablet while it has unsynced work.
+- Treat the automated split-payment contract, backend and helper coverage as
+  source evidence. Exercise the rendered Web and Android editor, confirmation,
+  receipt and reload flow against the isolated release backend before the
+  production offer.
+- Preserve Code30.2 tag, source, APK, manifest, hashes and candidate document.
+- Do not claim Google Sheets delivery until the configured generation has a
+  delivered connection test and a reconciled mirror row.
+- Do not claim SMTP, printer, physical tablet, deployment or active offer from
+  source/emulator evidence.
+
+## Outstanding release gates
+
+1. Commit the reviewed frozen candidate and run protected CI on that exact
+   clean SHA.
+2. Create `v3.1.30` only from the accepted commit and verify the protected
+   signed build-38 manifest, APK, hash, size, package, version, source and
+   signing certificate.
+3. Prove a same-signer build-37-to-38 in-place upgrade without uninstalling or
+   clearing Room/outbox state, then exercise the rendered Web and Android split
+   tender editor through payment, receipt and reload against the isolated
+   release backend.
+4. Pause business writes and run a fresh production preflight. Historical
+   preflight results cannot authorize this cutover; the global quiescence gate
+   must report zero blockers both before and after writer shutdown.
+5. Deploy the exact reviewed backend/Web source through the guarded installer,
+   fresh backup and restore proof; verify runtime `3.1.30`, exact Git SHA,
+   Alembic `0082`, health and authenticated smoke checks.
+6. Stage the exact APK **inactive**. The owner then reviews and selects
+   **Offer update**. An active record correctly shows **Withdraw**.
+7. Update/reconnect the affected tablet, approve the exact stale candidate,
+    wait for its acknowledgement, and verify Station 1 is available without
+    changing genuine business data.
+9. Record physical Redmi Pad 2, printer, alarms, OEM battery handling and
+   shop-day acceptance when the hardware is available.
+
+No tag, package, deployment, staged offer or production mutation has been
+performed by the current identity/freeze/documentation phase.

@@ -36,6 +36,7 @@ from app.models import (
     Batch,
     Branch,
     CapitalEntry,
+    ClientGamingCleanupReconciliation,
     Company,
     Customer,
     CustomerMembership,
@@ -120,21 +121,32 @@ from app.models import (
 # Set by middleware at request start; read by the event hooks.
 # ---------------------------------------------------------------------------
 actor_ctx: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
-    "audit_actor", default=None,
+    "audit_actor",
+    default=None,
 )
 request_ctx: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
-    "audit_request", default=None,
+    "audit_request",
+    default=None,
 )
 
 
-def set_actor(*, user_id: UUID | None, company_id: UUID,
-              terminal_id: UUID | None = None,
-              ip: str | None = None, user_agent: str | None = None) -> None:
-    actor_ctx.set({
-        "user_id": user_id, "company_id": company_id,
-        "terminal_id": terminal_id,
-        "ip": ip, "user_agent": user_agent,
-    })
+def set_actor(
+    *,
+    user_id: UUID | None,
+    company_id: UUID,
+    terminal_id: UUID | None = None,
+    ip: str | None = None,
+    user_agent: str | None = None,
+) -> None:
+    actor_ctx.set(
+        {
+            "user_id": user_id,
+            "company_id": company_id,
+            "terminal_id": terminal_id,
+            "ip": ip,
+            "user_agent": user_agent,
+        }
+    )
 
 
 def clear_actor() -> None:
@@ -156,15 +168,17 @@ def set_request_context(
     timestamp is retained only as evidence for later offline reconciliation;
     accounting and ordering logic must never depend on it.
     """
-    request_ctx.set({
-        "request_id": request_id,
-        "client_platform": client_platform,
-        "client_version_code": client_version_code,
-        "client_action_id": client_action_id,
-        "client_reported_at": client_reported_at,
-        "client_was_offline": client_was_offline,
-        "synced_at": datetime.now(UTC) if client_was_offline else None,
-    })
+    request_ctx.set(
+        {
+            "request_id": request_id,
+            "client_platform": client_platform,
+            "client_version_code": client_version_code,
+            "client_action_id": client_action_id,
+            "client_reported_at": client_reported_at,
+            "client_was_offline": client_was_offline,
+            "synced_at": datetime.now(UTC) if client_was_offline else None,
+        }
+    )
 
 
 def clear_request_context() -> None:
@@ -175,37 +189,91 @@ def clear_request_context() -> None:
 # Tracked models — every write to one of these writes an audit row.
 # ---------------------------------------------------------------------------
 TRACKED: set[type] = {
-    Account, Asset, Attendance, CustomerSpendReconciliation,
-    Batch, Branch, Company, Customer, CustomerMembership,
-    Event, EventTicket,
-    Expense, ExpenseCategory,
-    Floor, GRN, GRNLine, GamingBooking, GamingPackage, GamingPlaytimeProgramSettings, GamingSession,
+    Account,
+    Asset,
+    Attendance,
+    CustomerSpendReconciliation,
+    Batch,
+    Branch,
+    Company,
+    Customer,
+    CustomerMembership,
+    ClientGamingCleanupReconciliation,
+    Event,
+    EventTicket,
+    Expense,
+    ExpenseCategory,
+    Floor,
+    GRN,
+    GRNLine,
+    GamingBooking,
+    GamingPackage,
+    GamingPlaytimeProgramSettings,
+    GamingSession,
     GamingSessionExtension,
-    Ingredient, JournalEntry, JournalLine,
-    ManualCollection, MembershipBenefitReservation, MembershipCustomerSpendApplication,
-    MembershipEvidenceReconciliation, MembershipPayment,
-    MembershipPaymentCashCollection, MembershipPaymentCompletion,
+    Ingredient,
+    JournalEntry,
+    JournalLine,
+    ManualCollection,
+    MembershipBenefitReservation,
+    MembershipCustomerSpendApplication,
+    MembershipEvidenceReconciliation,
+    MembershipPayment,
+    MembershipPaymentCashCollection,
+    MembershipPaymentCompletion,
     MembershipPaymentAttemptResolution,
     MembershipPaymentProviderAction,
-    MembershipPaymentRequest, MembershipPaymentRequestResolution, MembershipRefund,
-    MembershipRefundAttemptRecovery, MembershipRefundAttemptResolution,
+    MembershipPaymentRequest,
+    MembershipPaymentRequestResolution,
+    MembershipRefund,
+    MembershipRefundAttemptRecovery,
+    MembershipRefundAttemptResolution,
     MembershipRefundCashHandoff,
     MembershipRefundCompletion,
     MembershipRefundProviderAction,
-    MembershipRefundResolution, MembershipRefundSettlement, MembershipTier,
-    MenuCategory, MenuItem, MenuModifier, MenuModifierGroup, MenuVariant,
-    OcrExtraction, OcrUpload, OcrVerification,
-    Order, OrderCheckoutClaim, OrderLine, Partner, CapitalEntry,
-    Payment, PayrollEntry, PosRefundCashHandoff, PosRefundCashHandoffCompletion,
+    MembershipRefundResolution,
+    MembershipRefundSettlement,
+    MembershipTier,
+    MenuCategory,
+    MenuItem,
+    MenuModifier,
+    MenuModifierGroup,
+    MenuVariant,
+    OcrExtraction,
+    OcrUpload,
+    OcrVerification,
+    Order,
+    OrderCheckoutClaim,
+    OrderLine,
+    Partner,
+    CapitalEntry,
+    Payment,
+    PayrollEntry,
+    PosRefundCashHandoff,
+    PosRefundCashHandoffCompletion,
     PosRefundEvidenceReconciliation,
     PosRefundProviderPayoutStart,
     PosRefundProviderSettlement,
-    PosRefundRequest, PosRefundWithdrawal,
-    PurchaseOrder, PurchaseOrderLine,
-    Recipe, RecipeLine, Refund, Reservation,
+    PosRefundRequest,
+    PosRefundWithdrawal,
+    PurchaseOrder,
+    PurchaseOrderLine,
+    Recipe,
+    RecipeLine,
+    Refund,
+    Reservation,
     RolePermissionOverride,
-    Shift, Station, StockMovement, Supplier, SupplierPayment,
-    Table, Terminal, TipPayout, Tournament, User, UserRole,
+    Shift,
+    Station,
+    StockMovement,
+    Supplier,
+    SupplierPayment,
+    Table,
+    Terminal,
+    TipPayout,
+    Tournament,
+    User,
+    UserRole,
 }
 
 
@@ -221,6 +289,19 @@ _REDACT = {
     "token_hash",
 }
 
+_REDACTION_MARKER = "***REDACTED***"
+
+
+def _is_redacted_column(column: Any) -> bool:
+    """Return whether one mapped column must never enter generic audit JSON.
+
+    The global names cover credentials wherever they occur. A model can also
+    opt one exact column into redaction through SQLAlchemy ``Column.info``.
+    Keeping the declaration beside the model avoids hiding same-named fields on
+    unrelated models while preserving safe sibling evidence such as hashes.
+    """
+    return column.key in _REDACT or column.info.get("audit_redact") is True
+
 
 def _serialize(obj: Any) -> dict | None:
     """Snapshot the row's column values as JSON-safe dict."""
@@ -232,8 +313,8 @@ def _serialize(obj: Any) -> dict | None:
         return None
     out: dict[str, Any] = {}
     for col in mapper.columns:
-        if col.key in _REDACT:
-            out[col.key] = "***REDACTED***"
+        if _is_redacted_column(col):
+            out[col.key] = _REDACTION_MARKER
             continue
         val = getattr(obj, col.key, None)
         if isinstance(val, UUID):
@@ -262,11 +343,17 @@ def _captured_diff(obj: Any) -> dict[str, dict]:
         history = attr.history
         if not history.has_changes():
             continue
+        # Decide redaction before reading either history value. Besides keeping
+        # the resulting JSON safe, this avoids handing a nested private payload
+        # to any future normalization/logging added below.
+        if _is_redacted_column(col):
+            out[col.key] = {
+                "before": _REDACTION_MARKER,
+                "after": _REDACTION_MARKER,
+            }
+            continue
         before = history.deleted[0] if history.deleted else None
         after = history.added[0] if history.added else getattr(obj, col.key, None)
-        if col.key in _REDACT:
-            out[col.key] = {"before": "***REDACTED***", "after": "***REDACTED***"}
-            continue
 
         def _safe(v):
             if isinstance(v, UUID):
@@ -364,9 +451,7 @@ def install_audit_listeners() -> None:
     @event.listens_for(Session, "before_flush")
     def _before_flush(session: Session, flush_context, instances):
         for obj in session.dirty:
-            if isinstance(obj, AuditLog) and session.is_modified(
-                obj, include_collections=False
-            ):
+            if isinstance(obj, AuditLog) and session.is_modified(obj, include_collections=False):
                 raise ValueError("audit log is append-only and cannot be updated")
         for obj in session.deleted:
             if isinstance(obj, AuditLog):
@@ -392,16 +477,18 @@ def install_audit_listeners() -> None:
             row_company = _company_id_of(obj) or company_id
             if row_company is None:
                 continue
-            rows_to_add.append(AuditLog(
-                actor_user_id=actor_user,
-                company_id=row_company,
-                action="create",
-                entity_type=_entity_type(obj),
-                entity_id=_entity_id(obj),
-                before=None,
-                after=_serialize(obj),
-                **_audit_context_fields(obj),
-            ))
+            rows_to_add.append(
+                AuditLog(
+                    actor_user_id=actor_user,
+                    company_id=row_company,
+                    action="create",
+                    entity_type=_entity_type(obj),
+                    entity_id=_entity_id(obj),
+                    before=None,
+                    after=_serialize(obj),
+                    **_audit_context_fields(obj),
+                )
+            )
 
         # Updates
         for obj in list(session.dirty):
@@ -423,16 +510,18 @@ def install_audit_listeners() -> None:
                 and diff["deleted_at"]["before"] is None
                 and diff["deleted_at"]["after"] is not None
             )
-            rows_to_add.append(AuditLog(
-                actor_user_id=actor_user,
-                company_id=row_company,
-                action="delete" if is_soft_delete else "update",
-                entity_type=_entity_type(obj),
-                entity_id=_entity_id(obj),
-                before={k: v["before"] for k, v in diff.items()},
-                after={k: v["after"] for k, v in diff.items()},
-                **_audit_context_fields(obj),
-            ))
+            rows_to_add.append(
+                AuditLog(
+                    actor_user_id=actor_user,
+                    company_id=row_company,
+                    action="delete" if is_soft_delete else "update",
+                    entity_type=_entity_type(obj),
+                    entity_id=_entity_id(obj),
+                    before={k: v["before"] for k, v in diff.items()},
+                    after={k: v["after"] for k, v in diff.items()},
+                    **_audit_context_fields(obj),
+                )
+            )
 
         # Hard deletes
         for obj in list(session.deleted):
@@ -441,16 +530,18 @@ def install_audit_listeners() -> None:
             row_company = _company_id_of(obj) or company_id
             if row_company is None:
                 continue
-            rows_to_add.append(AuditLog(
-                actor_user_id=actor_user,
-                company_id=row_company,
-                action="delete",
-                entity_type=_entity_type(obj),
-                entity_id=_entity_id(obj),
-                before=_serialize(obj),
-                after=None,
-                **_audit_context_fields(obj),
-            ))
+            rows_to_add.append(
+                AuditLog(
+                    actor_user_id=actor_user,
+                    company_id=row_company,
+                    action="delete",
+                    entity_type=_entity_type(obj),
+                    entity_id=_entity_id(obj),
+                    before=_serialize(obj),
+                    after=None,
+                    **_audit_context_fields(obj),
+                )
+            )
 
         for row in rows_to_add:
             session.add(row)

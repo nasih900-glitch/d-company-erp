@@ -124,11 +124,13 @@ import cloud.dcompany.erp.core.auth.TerminalPurpose
 import cloud.dcompany.erp.core.db.GamingLegacyResolution
 import cloud.dcompany.erp.core.db.GamingLegacyResolutionAttemptState
 import cloud.dcompany.erp.core.db.GamingPackageExtensionState
+import cloud.dcompany.erp.core.db.GamingCleanupWorkflowStatus
 import cloud.dcompany.erp.core.db.GamingSessionAddonActionState
 import cloud.dcompany.erp.core.db.GamingSessionAddonActionType
 import cloud.dcompany.erp.core.db.MenuItemEntity
 import cloud.dcompany.erp.core.db.GamingSessionState
 import cloud.dcompany.erp.core.db.LEGACY_PACKAGE_START_REVIEW_ERROR
+import cloud.dcompany.erp.core.db.gamingCleanupWorkflowMessageOrNull
 import cloud.dcompany.erp.core.money.parseRupeesToMinor
 import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.ui.components.ActionIntent
@@ -398,6 +400,7 @@ fun GamingScreen(
     val gridHeaderCount = 3 + // alarm, metrics, filters
         (if (!access.canManageSessions) 1 else 0) +
         (if (startTerminalBlockMessage != null) 1 else 0) +
+        (if (state.cleanupAcknowledgementsPending.isNotEmpty()) 1 else 0) +
         (if (focusSessionId != null && focusStationId != null) 1 else 0) +
         (if (state.refreshError != null) 1 else 0) +
         orphanedExtensionActions.size +
@@ -424,7 +427,9 @@ fun GamingScreen(
     }
 
     Box(Modifier.fillMaxSize()) {
-        if (state.stations.isEmpty() && orphanedExtensionActions.isEmpty()) {
+        if (state.stations.isEmpty() && orphanedExtensionActions.isEmpty() &&
+            state.cleanupAcknowledgementsPending.isEmpty()
+        ) {
             GamingEmptyState(state = state, onRefresh = vm::load)
         } else {
             BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -520,6 +525,12 @@ fun GamingScreen(
             }
             item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
                 GamingAlarmPermissionCard()
+            }
+
+            if (state.cleanupAcknowledgementsPending.isNotEmpty()) {
+                item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
+                    GamingCleanupAcknowledgementBanner(state, vm::load)
+                }
             }
 
             if (focusSessionId != null && focusStationId != null) {
@@ -1050,8 +1061,8 @@ fun GamingScreen(
                 actionLabel = { session ->
                     when {
                         session.authority(state.activeShiftId) == GamingSessionAuthority.CURRENT_SHIFT -> "Send"
-                        access.canReconcileLegacySessions && state.activeShiftId != null -> "Reconcile"
-                        else -> "Other terminal"
+                        access.canReconcileLegacySessions && state.activeShiftId != null -> "Reconcile closed shift"
+                        else -> "Unavailable"
                     }
                 },
                 actionEnabled = { session ->
@@ -1065,7 +1076,8 @@ fun GamingScreen(
                     if (state.unresolvedAddonsFor(session).isNotEmpty()) {
                         "Saved Gaming item actions must finish syncing or be reviewed before POS handoff."
                     } else {
-                        null
+                        sessionAuthorityMessage(session, state.activeShiftId)
+                            ?: "Open the session's shift on its recorded terminal before POS handoff."
                     }
                 },
                 actionIntent = ActionIntent.Primary,
@@ -1472,6 +1484,9 @@ private fun GamingCommandWorkspace(
         // notification. Every other status is consolidated into one action
         // centre below so the station floor stays above the fold.
         GamingAlarmPermissionCard()
+        if (state.cleanupAcknowledgementsPending.isNotEmpty()) {
+            GamingCleanupAcknowledgementBanner(state, onRefresh)
+        }
         GamingCommandMetrics(state)
         // This status rail deliberately remains in the layout when an error is
         // cleared or a payment is resolved. Inserting/removing the whole row
@@ -2283,7 +2298,14 @@ internal fun GamingStationCard(
         260.dp
     }
     val stationIcon = stationTypeIcon(station.type)
-    val actionsEnabled = canWrite && !actionInProgress
+    // Once the exact stale-session protocol owns this row, ordinary session,
+    // item, void, and POS actions must not race its protected owner review.
+    // Refresh remains available at the board level and is the only retry path.
+    val actionsEnabled = gamingSessionActionsEnabled(
+        canWrite = canWrite,
+        actionInProgress = actionInProgress,
+        lastError = session?.lastError,
+    )
     val authority = session?.authority(activeShiftId)
     val ownsSession = authority == GamingSessionAuthority.CURRENT_SHIFT
     val canStopSession = session?.resolvedStopShiftId(
@@ -2651,7 +2673,16 @@ internal fun GamingStationCard(
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                val crossTerminalBlocked = !ownsSession &&
+                    !(canReconcileLegacy && activeShiftId != null)
+                if (!ownsSession) {
+                    Text(
+                        CROSS_TERMINAL_PAYMENT_GUIDANCE,
+                        color = Brand.Warning,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
+                if (!crossTerminalBlocked) Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
                     OutlinedButton(
                         onClick = { session?.let(onCancelUnbilled) },
                         enabled = actionsEnabled && session != null &&
@@ -2665,8 +2696,8 @@ internal fun GamingStationCard(
                         text = when {
                             ownsSession && presentation.state == StationVisualState.SendRejected -> "Retry send"
                             ownsSession -> "Send to POS"
-                            canReconcileLegacy && activeShiftId != null -> "Reconcile to POS"
-                            else -> "Other terminal"
+                            canReconcileLegacy && activeShiftId != null -> "Reconcile closed shift"
+                            else -> "Reconciliation unavailable"
                         },
                         onClick = {
                             session?.let { if (ownsSession) onSend(it) else onReconcile(it) }
@@ -2908,6 +2939,58 @@ internal fun OrphanPackageExtensionBanner(
 }
 
 @Composable
+private fun GamingCleanupAcknowledgementBanner(
+    state: GamingUiState,
+    onRefresh: () -> Unit,
+) {
+    val content = gamingCleanupAcknowledgementBannerContent(state)
+    OperationalBanner(
+        title = content.title,
+        detail = content.detail,
+        tone = if (content.requiresOwnerReview) UiTone.Danger else UiTone.Warning,
+        icon = if (content.requiresOwnerReview) Icons.Filled.Warning else Icons.Filled.CloudUpload,
+    ) {
+        ErpButton(
+            text = if (state.refreshing) "Checking…" else "Retry acknowledgement",
+            onClick = onRefresh,
+            enabled = !state.refreshing,
+            busy = state.refreshing,
+            intent = ActionIntent.Secondary,
+            leadingIcon = Icons.Filled.Refresh,
+        )
+    }
+}
+
+internal data class GamingCleanupAcknowledgementBannerContent(
+    val title: String,
+    val detail: String,
+    val requiresOwnerReview: Boolean,
+)
+
+internal fun gamingCleanupAcknowledgementBannerContent(
+    state: GamingUiState,
+): GamingCleanupAcknowledgementBannerContent {
+    val pending = state.cleanupAcknowledgementsPending
+    val ownerReview = pending.firstOrNull {
+        it.detail == GamingCleanupWorkflowStatus.ACKNOWLEDGEMENT_REVIEW_REQUIRED.persistedMessage
+    }
+    val singleStationName = pending.singleOrNull()?.let { row ->
+        state.stations.firstOrNull { it.id == row.stationId }?.name
+    }
+    return GamingCleanupAcknowledgementBannerContent(
+        title = when {
+            ownerReview != null -> "Cleanup acknowledgement needs owner review"
+            singleStationName != null -> "$singleStationName cleanup receipt is pending"
+            else -> "${pending.size} cleanup receipts are pending"
+        },
+        detail = ownerReview?.detail
+            ?: pending.firstOrNull()?.detail
+            ?: GamingCleanupWorkflowStatus.ACKNOWLEDGEMENT_PENDING.persistedMessage,
+        requiresOwnerReview = ownerReview != null,
+    )
+}
+
+@Composable
 private fun PackageExtensionBlockingActions(
     action: PackageExtensionActionUi,
     actionsEnabled: Boolean,
@@ -2972,6 +3055,7 @@ private fun StationBody(
             }
         }.ifEmpty { "Session in progress" }
     }
+    val cleanupWorkflowMessage = gamingCleanupWorkflowMessageOrNull(session?.lastError)
     when (presentation.state) {
         StationVisualState.Available -> {
             Text("Ready for a new session", color = Brand.Foreground, style = MaterialTheme.typography.bodyMedium)
@@ -3051,7 +3135,7 @@ private fun StationBody(
                 style = MaterialTheme.typography.labelSmall,
             )
             Text(
-                when (presentation.state) {
+                cleanupWorkflowMessage ?: when (presentation.state) {
                     StationVisualState.Starting ->
                         "Saved on this tablet and waiting to sync. Play time and the booked timer use the captured start time."
                     StationVisualState.Overtime -> if (session?.isPackageBilling() == true) {
@@ -3089,16 +3173,18 @@ private fun StationBody(
                         "Final elapsed-time charge is calculated by the server when stopped."
                     }
                 },
-                color = if (presentation.state in setOf(StationVisualState.Overtime, StationVisualState.StopFailed)) {
+                color = if (cleanupWorkflowMessage != null) {
+                    Brand.Warning
+                } else if (presentation.state in setOf(StationVisualState.Overtime, StationVisualState.StopFailed)) {
                     Brand.Danger
                 } else {
                     Brand.ForegroundFaint
                 },
                 style = MaterialTheme.typography.labelSmall,
                 maxLines = if (
-                    presentation.state == StationVisualState.StopFailed ||
+                    cleanupWorkflowMessage != null || presentation.state == StationVisualState.StopFailed ||
                     session?.legacyOriginalCapturedStopAt != session?.endAt
-                ) 3 else 1,
+                ) 4 else 1,
                 overflow = TextOverflow.Ellipsis,
             )
             sessionCustomerLabel(session)?.let { customer ->
@@ -3204,7 +3290,8 @@ private fun StationBody(
                 style = MaterialTheme.typography.labelSmall,
             )
             Text(
-                "Refresh Gaming. If the amount remains missing, ask the protected owner to repair the source record.",
+                cleanupWorkflowMessage
+                    ?: "Refresh Gaming. If the amount remains missing, ask the protected owner to repair the source record.",
                 color = Brand.Warning,
                 style = MaterialTheme.typography.labelSmall,
             )
@@ -3294,20 +3381,33 @@ internal fun stationPresentation(
     return StationPresentation(StationVisualState.Unavailable, "Unavailable", UiTone.Danger, Icons.Filled.Error)
 }
 
-internal fun unbilledSessionDetail(state: StationVisualState, session: GameSession?): String = when (state) {
-    StationVisualState.PaymentDue,
-    StationVisualState.SendPending,
-    StationVisualState.SendRejected,
-    -> if (session?.hasUnverifiedLegacyBillingMode() == true) {
-        "Older session · billing mode unverified. The server amount is retained and POS excludes package benefits."
-    } else when (state) {
-        StationVisualState.SendPending -> "POS handoff saved and waiting for confirmation."
-        StationVisualState.SendRejected -> session?.lastError?.takeIf(String::isNotBlank)
-            ?: "POS refused the handoff. Check the shift and connection, then retry."
-        else -> "Send to POS before the next session."
+internal const val CROSS_TERMINAL_PAYMENT_GUIDANCE =
+    "This payment belongs to another terminal. Finish it there while its source shift is open. " +
+        "After that source shift closes, ask the protected owner to reconcile it into a current POS shift."
+
+internal fun gamingSessionActionsEnabled(
+    canWrite: Boolean,
+    actionInProgress: Boolean,
+    lastError: String?,
+): Boolean = canWrite && !actionInProgress && gamingCleanupWorkflowMessageOrNull(lastError) == null
+
+internal fun unbilledSessionDetail(state: StationVisualState, session: GameSession?): String {
+    gamingCleanupWorkflowMessageOrNull(session?.lastError)?.let { return it }
+    return when (state) {
+        StationVisualState.PaymentDue,
+        StationVisualState.SendPending,
+        StationVisualState.SendRejected,
+        -> if (session?.hasUnverifiedLegacyBillingMode() == true) {
+            "Older session · billing mode unverified. The server amount is retained and POS excludes package benefits."
+        } else when (state) {
+            StationVisualState.SendPending -> "POS handoff saved and waiting for confirmation."
+            StationVisualState.SendRejected -> session?.lastError?.takeIf(String::isNotBlank)
+                ?: "POS refused the handoff. Check the shift and connection, then retry."
+            else -> "Send to POS before the next session."
+        }
+        StationVisualState.CancellationRequired -> "No billable amount. Cancel with a reason before reuse."
+        else -> "Review this session before continuing."
     }
-    StationVisualState.CancellationRequired -> "No billable amount. Cancel with a reason before reuse."
-    else -> "Review this session before continuing."
 }
 
 internal fun sessionCustomerLabel(session: GameSession?): String? {
@@ -3400,13 +3500,15 @@ private fun GamingQueueDialog(
                                     }
                                 }
                             }
-                            ErpButton(
-                                text = actionLabel(session),
-                                onClick = { onSelect(session) },
-                                intent = actionIntent,
-                                enabled = busyStationId == null && actionEnabled(session),
-                                busy = busyStationId == session.stationId,
-                            )
+                            if (actionEnabled(session)) {
+                                ErpButton(
+                                    text = actionLabel(session),
+                                    onClick = { onSelect(session) },
+                                    intent = actionIntent,
+                                    enabled = busyStationId == null,
+                                    busy = busyStationId == session.stationId,
+                                )
+                            }
                         }
                     }
                 }

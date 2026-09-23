@@ -50,13 +50,22 @@ class GamingDaoRecoveryTest {
             ),
         )
 
-        dao.notePendingSessionError("uncertain-stop", "Waiting to confirm the original stop")
+        assertEquals(1, dao.notePendingSessionError(
+            "uncertain-stop", "Waiting to confirm the original stop",
+        ))
 
         val retained = dao.localSessionById("uncertain-stop")!!
         assertEquals(GamingSessionState.STOP_PENDING, retained.state)
         assertEquals(61_000L, retained.endAtMillis)
         assertEquals("server-session", retained.serverId)
         assertEquals("Waiting to confirm the original stop", retained.lastError)
+        assertEquals(0, dao.notePendingSessionError(
+            "uncertain-stop", "Waiting to confirm the original stop",
+        ))
+        assertEquals(
+            retained.cleanupEvidenceRevision,
+            dao.localSessionById("uncertain-stop")?.cleanupEvidenceRevision,
+        )
         dao.markSessionSent("uncertain-stop", "order-1", 100)
         dao.notePendingSessionError("uncertain-stop", "stale failure")
         assertNull(dao.localSessionById("uncertain-stop")?.lastError)
@@ -1426,6 +1435,220 @@ class GamingDaoRecoveryTest {
         val cached = dao.observeSessionCache().first().single()
         assertEquals("order-1", cached.orderId)
         assertEquals(15_750L, cached.amountMinor)
+    }
+
+    @Test
+    fun exactCleanupDirectiveRetiresOneRowAndPreservesBillingEvidence() = runBlocking {
+        val localId = "11111111-1111-4111-8111-111111111111"
+        val serverId = "22222222-2222-4222-8222-222222222222"
+        val stationId = "33333333-3333-4333-8333-333333333333"
+        val row = LocalGamingSessionEntity(
+            localId = localId,
+            serverId = serverId,
+            stationId = stationId,
+            shiftId = "shift-audit",
+            customerName = "Retained customer",
+            startedAtMillis = 1_000,
+            state = GamingSessionState.STOP_PENDING,
+            status = "stopping",
+            endAtMillis = 61_000,
+            timerMinutes = 60,
+            amountMinor = 15_000,
+            ratePerHourMinor = 15_000,
+        )
+        dao.insertLocalSession(row)
+        dao.insertLocalSession(
+            row.copy(
+                localId = "44444444-4444-4444-8444-444444444444",
+                serverId = "55555555-5555-4555-8555-555555555555",
+                stationId = "66666666-6666-4666-8666-666666666666",
+            ),
+        )
+        dao.upsertSessionCache(listOf(serverRow(serverId, "active", 15_000).copy(stationId = stationId)))
+
+        assertTrue(dao.applyCleanupRetirement(
+            localId = localId,
+            serverSessionId = serverId,
+            stationId = stationId,
+            expectedState = GamingSessionState.STOP_PENDING,
+            reconciliationId = "77777777-7777-4777-8777-777777777777",
+            receiptAuditId = 28204,
+            candidateSha256 = "ab".repeat(32),
+            reason = "Verified production cleanup receipt",
+            retiredAtMillis = 10_000,
+            branchId = "88888888-8888-4888-8888-888888888888",
+            terminalId = "99999999-9999-4999-8999-999999999999",
+            expectedEvidenceRevision = row.cleanupEvidenceRevision,
+            expectedSnapshotSha256 = gamingCleanupSnapshotSha256(
+                requireNotNull(row.cleanupSnapshotOrNull()),
+            ),
+        ))
+
+        val retained = dao.localSessionById(localId)!!
+        assertEquals(GamingSessionState.CLEANUP_RETIRED, retained.state)
+        assertEquals("Retained customer", retained.customerName)
+        assertEquals(1_000L, retained.startedAtMillis)
+        assertEquals(15_000L, retained.amountMinor)
+        assertTrue(dao.observeSessionCache().first().none { it.id == serverId })
+        assertEquals(GamingSessionState.STOP_PENDING, dao.localSessionById(
+            "44444444-4444-4444-8444-444444444444",
+        )?.state)
+        assertTrue(dao.observeActiveLocalSessions().first().none { it.localId == localId })
+        val remainingBlocker = db.outboxSafetyDao().unresolvedGroups().single()
+        assertEquals("gaming_sessions", remainingBlocker.resource)
+        assertEquals(GamingSessionState.STOP_PENDING, remainingBlocker.state)
+        assertEquals(1, remainingBlocker.count)
+        assertEquals(localId, dao.cleanupRetiredSessions().single().localId)
+        assertEquals(0, dao.markCleanupAcknowledgedCas(
+            localId = localId,
+            reconciliationId = "77777777-7777-4777-8777-777777777777",
+            candidateSha256 = "cd".repeat(32),
+            acknowledgedAtMillis = 11_000,
+        ))
+        assertEquals(localId, dao.cleanupRetiredSessions().single().localId)
+        assertEquals(1, dao.markCleanupAcknowledgedCas(
+            localId = localId,
+            reconciliationId = "77777777-7777-4777-8777-777777777777",
+            candidateSha256 = "ab".repeat(32),
+            acknowledgedAtMillis = 12_000,
+        ))
+        assertEquals(12_000L, dao.localSessionById(localId)?.cleanupAcknowledgedAtMillis)
+        assertTrue(dao.cleanupRetiredSessions().isEmpty())
+        assertEquals(0, dao.markCleanupAcknowledgedCas(
+            localId = localId,
+            reconciliationId = "77777777-7777-4777-8777-777777777777",
+            candidateSha256 = "ab".repeat(32),
+            acknowledgedAtMillis = 13_000,
+        ))
+        assertTrue(dao.applyCleanupRetirement(
+            localId, serverId, stationId, GamingSessionState.STOP_PENDING,
+            "77777777-7777-4777-8777-777777777777", 28204, "ab".repeat(32),
+            "Verified production cleanup receipt", 10_000,
+            "88888888-8888-4888-8888-888888888888",
+            "99999999-9999-4999-8999-999999999999",
+            row.cleanupEvidenceRevision,
+            gamingCleanupSnapshotSha256(requireNotNull(row.cleanupSnapshotOrNull())),
+        ))
+    }
+
+    @Test
+    fun cleanupDirectiveRejectsChangedOrAbaSnapshotAndUnresolvedChildren() = runBlocking {
+        val row = LocalGamingSessionEntity(
+            localId = "11111111-1111-4111-8111-111111111111",
+            serverId = "22222222-2222-4222-8222-222222222222",
+            stationId = "33333333-3333-4333-8333-333333333333",
+            shiftId = "44444444-4444-4444-8444-444444444444",
+            customerName = "Retained customer",
+            startedAtMillis = 1_000,
+            state = GamingSessionState.STOP_PENDING,
+            status = "stopping",
+            endAtMillis = 61_000,
+            amountMinor = 15_000,
+            ratePerHourMinor = 15_000,
+            lastError = "original",
+        )
+        dao.insertLocalSession(row)
+        val approvedSnapshot = requireNotNull(row.cleanupSnapshotOrNull())
+        val approvedHash = gamingCleanupSnapshotSha256(approvedSnapshot)
+        dao.noteCleanupDiagnostic(row.localId, "changed")
+        dao.noteCleanupDiagnostic(row.localId, "original")
+
+        assertFalse(dao.applyCleanupRetirement(
+            row.localId, requireNotNull(row.serverId), row.stationId, row.state,
+            "55555555-5555-4555-8555-555555555555", 28204, "ab".repeat(32),
+            "Verified production cleanup receipt", 10_000,
+            "66666666-6666-4666-8666-666666666666",
+            "77777777-7777-4777-8777-777777777777",
+            approvedSnapshot.evidenceRevision,
+            approvedHash,
+        ))
+        assertEquals(GamingSessionState.STOP_PENDING, dao.localSessionById(row.localId)?.state)
+
+        val current = requireNotNull(dao.localSessionById(row.localId))
+        val currentSnapshot = requireNotNull(current.cleanupSnapshotOrNull())
+        dao.insertSessionAddonAction(
+            LocalGamingSessionAddonActionEntity(
+                actionId = "88888888-8888-4888-8888-888888888888",
+                actionType = GamingSessionAddonActionType.ADD,
+                ownerCompanyId = "company",
+                ownerUserId = "user",
+                branchId = "branch",
+                terminalId = "terminal",
+                localSessionId = row.localId,
+                serverSessionId = row.serverId,
+                shiftId = requireNotNull(row.shiftId),
+                clientLineId = "99999999-9999-4999-8999-999999999999",
+                menuItemId = "menu",
+                menuItemName = "Water",
+                menuItemType = "drink",
+                qty = 1,
+                expectedUnitPriceMinor = 100,
+                createdAtMillis = 2_000,
+            ),
+        )
+        assertFalse(dao.applyCleanupRetirement(
+            row.localId, requireNotNull(row.serverId), row.stationId, row.state,
+            "55555555-5555-4555-8555-555555555555", 28204, "ab".repeat(32),
+            "Verified production cleanup receipt", 10_000,
+            "66666666-6666-4666-8666-666666666666",
+            "77777777-7777-4777-8777-777777777777",
+            currentSnapshot.evidenceRevision,
+            gamingCleanupSnapshotSha256(currentSnapshot),
+        ))
+        assertEquals(GamingSessionState.STOP_PENDING, dao.localSessionById(row.localId)?.state)
+    }
+
+    @Test
+    fun cleanupAcknowledgementIsTerminalAcrossDatabaseRestart() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val name = "cleanup-ack-restart-${System.nanoTime()}.db"
+        context.deleteDatabase(name)
+        val localId = "11111111-1111-4111-8111-111111111111"
+        val reconciliationId = "77777777-7777-4777-8777-777777777777"
+        val candidate = "ab".repeat(32)
+        try {
+            val first = Room.databaseBuilder(context, ErpDatabase::class.java, name).build()
+            try {
+                first.gamingDao().insertLocalSession(
+                    LocalGamingSessionEntity(
+                        localId = localId,
+                        serverId = "22222222-2222-4222-8222-222222222222",
+                        stationId = "33333333-3333-4333-8333-333333333333",
+                        shiftId = "44444444-4444-4444-8444-444444444444",
+                        startedAtMillis = 1_000,
+                        state = GamingSessionState.CLEANUP_RETIRED,
+                        status = "retired",
+                        endAtMillis = 61_000,
+                        ratePerHourMinor = 12_000,
+                        cleanupReconciliationId = reconciliationId,
+                        cleanupReceiptAuditId = 28_204,
+                        cleanupCandidateSha256 = candidate,
+                        cleanupRetirementReason = "Verified exact cleanup evidence",
+                        cleanupRetiredAtMillis = 10_000,
+                        cleanupBranchId = "55555555-5555-4555-8555-555555555555",
+                        cleanupTerminalId = "66666666-6666-4666-8666-666666666666",
+                    ),
+                )
+                assertEquals(localId, first.gamingDao().cleanupRetiredSessions().single().localId)
+                assertEquals(1, first.gamingDao().markCleanupAcknowledgedCas(
+                    localId, reconciliationId, candidate, 12_000,
+                ))
+            } finally {
+                first.close()
+            }
+            val reopened = Room.databaseBuilder(context, ErpDatabase::class.java, name).build()
+            try {
+                assertTrue(reopened.gamingDao().cleanupRetiredSessions().isEmpty())
+                assertEquals(
+                    12_000L,
+                    reopened.gamingDao().localSessionById(localId)?.cleanupAcknowledgedAtMillis,
+                )
+            } finally {
+                reopened.close()
+            }
+        } finally {
+            context.deleteDatabase(name)
+        }
     }
 
     @Test

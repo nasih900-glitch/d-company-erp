@@ -32,6 +32,15 @@ import {
 type ReleaseAction = 'activate' | 'withdraw';
 type PendingReleaseAction = { action: ReleaseAction; release: AndroidReleaseDTO };
 
+export function currentPendingOutboxCount(
+  installations: ReadonlyArray<Pick<ClientInstallationDTO, 'is_stale' | 'pending_outbox_count'>>,
+): number {
+  return installations.reduce(
+    (total, item) => total + (item.is_stale ? 0 : item.pending_outbox_count),
+    0,
+  );
+}
+
 export interface ReleaseEvidenceRow {
   key: string;
   label: string;
@@ -224,10 +233,7 @@ export default function DevicesUpdatesTab() {
   }
 
   const liveInstallations = installations.items.filter((item) => !item.is_stale).length;
-  const pendingOutbox = installations.items.reduce(
-    (total, item) => total + item.pending_outbox_count,
-    0,
-  );
+  const pendingOutbox = currentPendingOutboxCount(installations.items);
   const activeRelease = releases.find((release) => release.status === 'active') ?? null;
   const stagedReleases = releases.filter((release) => release.status === 'staged');
   const withdrawnReleases = releases.filter((release) => release.status === 'withdrawn');
@@ -529,13 +535,22 @@ function InstallationCard({
             : 'Not reported yet'}
         />
         <InfoItem
-          label="Saved actions waiting"
+          label={installation.is_stale ? 'Last reported queue' : 'Saved actions waiting'}
           value={installation.pending_outbox_count
-            ? `${installation.pending_outbox_count} pending`
+            ? installation.is_stale
+              ? `${installation.pending_outbox_count} last reported`
+              : `${installation.pending_outbox_count} pending`
             : 'Queue clear'}
-          valueClass={installation.pending_outbox_count ? 'text-accent-gold' : 'text-accent-good'}
+          valueClass={installation.is_stale
+            ? 'text-fg-muted'
+            : installation.pending_outbox_count ? 'text-accent-gold' : 'text-accent-good'}
           mono
         />
+        {installation.is_stale && installation.pending_outbox_count > 0 ? (
+          <p className="col-span-2 text-xs text-fg-muted">
+            Last reported before this installation stopped checking in; this is historical telemetry, not a current pending count.
+          </p>
+        ) : null}
         <InfoItem label="Last employee" value={installation.last_user_name || 'Not reported'} />
         <InfoItem label="Workspace" value={installation.terminal_name || 'No workspace header'} />
       </dl>

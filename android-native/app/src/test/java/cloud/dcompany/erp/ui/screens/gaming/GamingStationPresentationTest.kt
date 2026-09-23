@@ -6,7 +6,9 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.structuralEqualityPolicy
 import cloud.dcompany.erp.core.db.GamingSessionState
 import cloud.dcompany.erp.core.db.GamingLegacyResolution
+import cloud.dcompany.erp.core.db.GamingCleanupWorkflowStatus
 import cloud.dcompany.erp.core.db.LEGACY_PACKAGE_START_REVIEW_ERROR
+import cloud.dcompany.erp.core.db.gamingCleanupWorkflowMessageOrNull
 import cloud.dcompany.erp.ui.components.VOID_REASON_OTHER_ID
 import java.time.Instant
 import org.junit.Assert.assertEquals
@@ -158,6 +160,90 @@ class GamingStationPresentationTest {
             ),
         )
         assertNull(resolveGamingCommandStationId(emptyList(), "station-2"))
+    }
+
+    @Test
+    fun `cleanup workflow messages are fixed non-sensitive operator guidance`() {
+        GamingCleanupWorkflowStatus.entries.forEach { status ->
+            assertEquals(
+                status.persistedMessage,
+                gamingCleanupWorkflowMessageOrNull(status.persistedMessage),
+            )
+            assertFalse(status.persistedMessage.contains("session-"))
+            assertFalse(status.persistedMessage.contains("customer", ignoreCase = true))
+        }
+        assertNull(gamingCleanupWorkflowMessageOrNull("server exception with private details"))
+    }
+
+    @Test
+    fun `payment due card surfaces protected cleanup state before ordinary POS guidance`() {
+        val status = GamingCleanupWorkflowStatus.WAITING_FOR_OWNER.persistedMessage
+        val stopped = session(
+            status = "ended",
+            amountMinor = 12_000,
+            billableMinutes = 60,
+            localState = GamingSessionState.ENDED_UNBILLED,
+            lastError = status,
+        )
+
+        assertEquals(status, unbilledSessionDetail(StationVisualState.PaymentDue, stopped))
+        assertFalse(
+            gamingSessionActionsEnabled(
+                canWrite = true,
+                actionInProgress = false,
+                lastError = status,
+            ),
+        )
+        assertTrue(
+            gamingSessionActionsEnabled(
+                canWrite = true,
+                actionInProgress = false,
+                lastError = "An ordinary rejected action can still be retried.",
+            ),
+        )
+    }
+
+    @Test
+    fun `cross terminal payment guidance distinguishes source shift from closed shift recovery`() {
+        assertEquals(
+            "This payment belongs to another terminal. Finish it there while its source shift is open. " +
+                "After that source shift closes, ask the protected owner to reconcile it into a current POS shift.",
+            CROSS_TERMINAL_PAYMENT_GUIDANCE,
+        )
+    }
+
+    @Test
+    fun `retired cleanup acknowledgement remains visible and escalates mismatches`() {
+        val pending = gamingCleanupAcknowledgementBannerContent(
+            GamingUiState(
+                stations = listOf(station),
+                cleanupAcknowledgementsPending = listOf(
+                    GamingCleanupAcknowledgementUi(
+                        stationId = station.id,
+                        detail = GamingCleanupWorkflowStatus.ACKNOWLEDGEMENT_PENDING.persistedMessage,
+                    ),
+                ),
+            ),
+        )
+        assertEquals("PS5 Station 1 cleanup receipt is pending", pending.title)
+        assertEquals(
+            GamingCleanupWorkflowStatus.ACKNOWLEDGEMENT_PENDING.persistedMessage,
+            pending.detail,
+        )
+        assertFalse(pending.requiresOwnerReview)
+
+        val mismatch = gamingCleanupAcknowledgementBannerContent(
+            GamingUiState(
+                cleanupAcknowledgementsPending = listOf(
+                    GamingCleanupAcknowledgementUi(
+                        stationId = station.id,
+                        detail = GamingCleanupWorkflowStatus.ACKNOWLEDGEMENT_REVIEW_REQUIRED.persistedMessage,
+                    ),
+                ),
+            ),
+        )
+        assertEquals("Cleanup acknowledgement needs owner review", mismatch.title)
+        assertTrue(mismatch.requiresOwnerReview)
     }
 
     @Test

@@ -132,6 +132,7 @@ describe('gaming write access boundary', () => {
     }, 'legacy-pause-key');
     dispatcher.dispatch('pauseSession', 'session-1', { reason: 'Controller issue', expected_pause_version: 0 }, 'pause-key');
     dispatcher.dispatch('resumeSession', 'session-1', { reason: 'Continue session', expected_pause_version: 1 }, 'resume-key');
+    dispatcher.dispatch('transferSession', 'session-1', 'station-1', 'station-2', 'transfer-key');
     dispatcher.dispatch('repairSessionBilling', 'session-1', 10_000, 'Verified bill', 'repair-key');
     dispatcher.dispatch('cancelSession', 'session-1', 'Customer left');
     dispatcher.dispatch('sendToPos', 'session-1');

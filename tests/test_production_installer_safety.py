@@ -3,6 +3,7 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import importlib.util
+import json
 import os
 import re
 import shutil
@@ -18,6 +19,12 @@ ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "infra" / "scripts" / "install-on-vm.sh"
 LOCK_HELPER = ROOT / "infra" / "scripts" / "production_install_lock.py"
 HARDENED_SCANNER = ROOT / "infra" / "scripts" / "run-hardened-image-scanners.sh"
+BUSINESS_QUIESCENCE_VERIFIER = (
+    ROOT / "infra" / "scripts" / "verify-production-business-quiescence.py"
+)
+BUSINESS_QUIESCENCE_SQL = (
+    ROOT / "infra" / "scripts" / "verify-production-business-quiescence.sql"
+)
 
 
 def _load_lock_helper():
@@ -28,11 +35,28 @@ def _load_lock_helper():
     return module
 
 
+def _load_business_quiescence_verifier():
+    spec = importlib.util.spec_from_file_location(
+        "production_business_quiescence", BUSINESS_QUIESCENCE_VERIFIER
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _quiescent_document(module) -> dict[str, int]:
+    return {
+        "schema_version": module.SCHEMA_VERSION,
+        **{field: 0 for field in module.COUNT_FIELDS},
+    }
+
+
 def test_candidate_build_uses_a_private_immutable_git_archive() -> None:
     source = INSTALLER.read_text(encoding="utf-8")
 
     archive = 'git archive --format=tar "$CURRENT_REVISION"'
-    extract = 'tar -xf "$CANDIDATE_SOURCE_ARCHIVE" -C "$CANDIDATE_BUILD_ROOT"'
+    extract = 'tar --no-same-permissions -xf "$CANDIDATE_SOURCE_ARCHIVE"'
     reexec = 'exec /bin/bash "$CANDIDATE_BUILD_ROOT/infra/scripts/install-on-vm.sh"'
     docker_step = "# ----- 1. Docker -----"
     assert source.index(archive) < source.index(extract) < source.index(reexec)
@@ -49,6 +73,145 @@ def test_candidate_build_uses_a_private_immutable_git_archive() -> None:
     assert 'docker compose -f docker-compose.prod.yml --env-file "$ENV_CANDIDATE" build' not in source
     assert "BUILD_SNAPSHOT_ROOT=/var/lib/dcompany-erp/build-snapshots" in source
     assert "candidate_source_archive_sha256=%s" in source
+
+
+def test_every_git_archive_extraction_honours_the_private_installer_umask() -> None:
+    source = INSTALLER.read_text(encoding="utf-8")
+    private_umask = source.index("umask 077")
+    extractions = (
+        'tar --no-same-permissions -xf "$CANDIDATE_SOURCE_ARCHIVE"',
+        'tar --no-same-permissions -xf "$PRIOR_SOURCE_ARCHIVE"',
+        'tar --no-same-permissions -xf \\\n           "$UPGRADE_SNAPSHOT/prior-source.tar"',
+    )
+
+    assert source.count("tar --no-same-permissions -xf") == len(extractions)
+    for extraction in extractions:
+        assert private_umask < source.index(extraction)
+
+
+def test_business_quiescence_verifier_requires_exact_zero_evidence() -> None:
+    verifier = _load_business_quiescence_verifier()
+    verifier.verify_state(_quiescent_document(verifier))
+
+    for field in verifier.COUNT_FIELDS:
+        active = _quiescent_document(verifier)
+        active[field] = 1
+        with pytest.raises(
+            verifier.QuiescenceError,
+            match=rf"production still has in-flight business work: {field}=1",
+        ):
+            verifier.verify_state(active)
+
+    malformed = _quiescent_document(verifier)
+    malformed["open_shifts"] = True
+    with pytest.raises(verifier.QuiescenceError, match="non-negative integer"):
+        verifier.verify_state(malformed)
+
+    unexpected = _quiescent_document(verifier)
+    unexpected["ignored_future_blocker"] = 0
+    with pytest.raises(verifier.QuiescenceError, match="fields changed"):
+        verifier.verify_state(unexpected)
+
+    boolean_version = _quiescent_document(verifier)
+    boolean_version["schema_version"] = True
+    with pytest.raises(verifier.QuiescenceError, match="schema version changed"):
+        verifier.verify_state(boolean_version)
+
+
+def test_business_quiescence_second_snapshot_closes_live_preflight_race() -> None:
+    verifier = _load_business_quiescence_verifier()
+    first_live_snapshot = _quiescent_document(verifier)
+    verifier.verify_state(first_live_snapshot)
+
+    # A transaction committed after the live preflight but before application
+    # writers stop must be caught by the independent second database snapshot.
+    after_writer_stop = json.loads(json.dumps(first_live_snapshot))
+    after_writer_stop["ended_gaming_awaiting_pos_or_void"] = 1
+    with pytest.raises(
+        verifier.QuiescenceError,
+        match="ended_gaming_awaiting_pos_or_void=1",
+    ):
+        verifier.verify_state(after_writer_stop)
+
+
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        (b'{"schema_version":1,"schema_version":1}', "duplicate JSON key"),
+        (b'{"schema_version":NaN}', "invalid JSON constant"),
+        (b"x" * (64 * 1024 + 1), "evidence size is invalid"),
+    ],
+)
+def test_business_quiescence_cli_rejects_ambiguous_or_oversized_json(
+    payload: bytes, message: str
+) -> None:
+    result = subprocess.run(
+        ["python3", str(BUSINESS_QUIESCENCE_VERIFIER), "--quiet"],
+        input=payload,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert message.encode() in result.stderr
+
+
+def test_business_quiescence_query_is_global_complete_and_read_only() -> None:
+    query = BUSINESS_QUIESCENCE_SQL.read_text(encoding="utf-8")
+    verifier = _load_business_quiescence_verifier()
+
+    assert "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;" in query
+    assert "company_id =" not in query
+    assert "branch_id =" not in query
+    assert "to_regclass('public.google_sheets_deliveries')" in query
+    assert "\\if :sheets_delivery_table_present" in query
+    assert "UPDATE " not in query.upper()
+    assert "DELETE FROM" not in query.upper()
+    for field in verifier.COUNT_FIELDS:
+        assert f"'{field}'" in query
+
+    assert "status NOT IN ('open', 'closed', 'reconciled')" in query
+    assert "status NOT IN ('open', 'paid', 'void', 'refunded', 'held')" in query
+    assert "status NOT IN ('active', 'paused', 'ended', 'cancelled')" in query
+    assert "status = 'ended' AND order_id IS NULL" in query
+    assert "refund.request_id = request.id" in query
+    assert "withdrawal.refund_request_id = request.id" in query
+    assert "resolution.recovery_id = recovery.id" in query
+
+
+def test_business_quiescence_is_checked_before_and_after_stopping_writers() -> None:
+    source = INSTALLER.read_text(encoding="utf-8")
+    preflight = 'verify_production_business_quiescence "before maintenance"'
+    maintenance = 'echo "==> Entering scheduled maintenance and draining application writers…"'
+    stop_caddy = '"${candidate_compose[@]}" --env-file .env stop -t 30 caddy'
+    stop_backend = '"${candidate_compose[@]}" --env-file .env stop -t 60 backend'
+    stop_frontend = '"${candidate_compose[@]}" --env-file .env stop -t 30 frontend'
+    recheck = 'verify_production_business_quiescence "after writer stop"'
+    outbox = 'pending_outbox_count=$(docker exec "$EXISTING_POSTGRES_CONTAINER"'
+    backup = 'echo "==> Creating final quiesced pre-upgrade PostgreSQL backup…"'
+
+    assert source.count(preflight) == 1
+    assert source.count(recheck) == 1
+    preflight_at = source.index(preflight)
+    maintenance_at = source.index(maintenance, preflight_at)
+    stop_caddy_at = source.index(stop_caddy, maintenance_at)
+    stop_backend_at = source.index(stop_backend, stop_caddy_at)
+    stop_frontend_at = source.index(stop_frontend, stop_backend_at)
+    recheck_at = source.index(recheck, stop_frontend_at)
+    outbox_at = source.index(outbox, recheck_at)
+    backup_at = source.index(backup, outbox_at)
+    assert preflight_at < maintenance_at < stop_caddy_at
+    assert stop_caddy_at < stop_backend_at < stop_frontend_at
+    assert stop_frontend_at < recheck_at < outbox_at < backup_at
+    assert 'python3 "$BUSINESS_QUIESCENCE_VERIFIER" --quiet' in source
+    assert '< "$BUSINESS_QUIESCENCE_SQL"' in source
+    frozen_inputs = source[
+        source.index("for release_input in") : source.index(
+            "verify_production_business_quiescence()"
+        )
+    ]
+    assert '"$BUSINESS_QUIESCENCE_VERIFIER"' in frozen_inputs
+    assert '"$BUSINESS_QUIESCENCE_SQL"' in frozen_inputs
 
 
 def test_exact_candidate_images_are_scanned_before_maintenance() -> None:

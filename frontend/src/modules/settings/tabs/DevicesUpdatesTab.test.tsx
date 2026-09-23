@@ -5,6 +5,7 @@ import { ConfirmModal } from '@/components/ui/ConfirmDialog';
 import type { AndroidReleaseDTO } from '@/lib/erp-api';
 import {
   canConfirmReleaseAction,
+  currentPendingOutboxCount,
   hasReviewableReleaseEvidence,
   releaseEvidenceRows,
   ReleaseActionConfirmation,
@@ -36,6 +37,12 @@ const release: AndroidReleaseDTO = {
 };
 
 describe('Android release owner evidence', () => {
+  it('excludes stale last-reported queues from the current pending summary', () => {
+    expect(currentPendingOutboxCount([
+      { is_stale: false, pending_outbox_count: 2 },
+      { is_stale: true, pending_outbox_count: 9 },
+    ])).toBe(2);
+  });
   it('keeps every approval field complete and copyable without losing a 64-bit run id', () => {
     const rows = releaseEvidenceRows(release);
     expect(rows.map((row) => row.key)).toEqual([

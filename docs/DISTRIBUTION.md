@@ -14,13 +14,14 @@ immutable history. Do not rebuild, move, reuse, relabel, stage, or activate any
 of those tags or APKs. Their candidate ledgers remain the authoritative record
 for the release attempt they describe.
 
-Code30.1 `v3.1.28` / Android build `36` is the immutable signed predecessor for
-this patch. Preserve its exact source, manifest, checksums, signer and APK bytes.
-The current Code30.2 candidate is `v3.1.29` / build `37`, Room schema `51`, and
-Alembic head `0078`:
+Code30.2 `v3.1.29` / Android build `37` at commit
+`3ea84be4718a794d5a2e8efc7ac9bcacbc0cee01` is the immutable predecessor for
+this patch. Preserve its exact source, manifest, checksums, signer and APK
+bytes. The current Code30.3 candidate is `v3.1.30` / build `38`, Room schema
+`52`, and Alembic head `0082`:
 
 ```
-freeze and verify exact 3.1.29/build-37 source
+freeze and verify exact 3.1.30/build-38 source
         │
         ▼
 backend + Web + Android suites and full business trial
@@ -28,11 +29,11 @@ backend + Web + Android suites and full business trial
         ▼
 tag, protected CI build/sign, independent artifact verification
         │
-        ▼ same-signer in-place upgrade from exact v3.1.28/build 36
+        ▼ same-signer in-place upgrade from exact v3.1.29/build 37
 coordinated backend/Web migration and authenticated production smoke
         │
         ▼
-optional Apps Script live connection test and mirror reconciliation
+update/reconnect tablet; owner reviews the exact stale-session candidate
         │
         ▼
 stage the same APK inactive; owner activation remains a separate action
@@ -40,23 +41,36 @@ stage the same APK inactive; owner activation remains a separate action
 
 A source version, local APK, green emulator run, signed GitHub draft, production
 deployment, staged registry row, active offer, and physical-tablet acceptance
-are separate gates. None may be inferred from another. Code30.2 remains a source
+are separate gates. None may be inferred from another. Code30.3 remains a source
 candidate until every preceding gate has recorded evidence. Its scope is in
-[`CODE30_2_PATCH_CANDIDATE.md`](CODE30_2_PATCH_CANDIDATE.md). Code30.1 evidence
+[`CODE30_3_PATCH_CANDIDATE.md`](CODE30_3_PATCH_CANDIDATE.md). Code30.2 evidence
 remains unchanged in
-[`CODE30_1_PATCH_CANDIDATE.md`](CODE30_1_PATCH_CANDIDATE.md).
+[`CODE30_2_PATCH_CANDIDATE.md`](CODE30_2_PATCH_CANDIDATE.md).
 
-The patch includes manual finance entries, up to five private camera/file
-receipt attachments per expense, durable Android offline/retry, explicit cash
-drawer selection and current-period corrections for closed-shift cash sources.
-It also adds a generation-bound Sheet outbox whose unverified events remain
-held and whose verified connection must drain before rotation or disconnect.
-Receipt bytes, customer identity and private review notes never enter Sheets.
+The patch preserves Code30.2 manual finance, private receipt evidence and
+generation-bound Sheet outbox behavior. It adds exact, owner-reviewed recovery
+for a stale Android Gaming overlay. The build-38 tablet must reconnect, apply
+the matching directive and acknowledge it. There is no broad clear-all or
+remote edit of an offline Room database.
+
+The production installer refuses cutover unless a global database check shows
+no in-flight business work. It runs once before maintenance and again from a
+fresh snapshot after Web/API writers stop, before the final backup or migration.
+Open shifts, open/held orders, active/paused or ended-unsettled Gaming sessions,
+unresolved refund/payment work, kitchen cancellation acknowledgements and
+unresolved Sheets deliveries all block the upgrade.
+
+The owner recovery control is in Web **Gaming**. It can approve only the exact
+device-reported candidate after showing branch, terminal, tablet installation,
+build, station, session, local amount, duration and cryptographic identity. It
+cannot edit an offline Room database: the same build-38-or-later tablet must
+reconnect, apply the exact directive and acknowledge it. This boundary avoids a
+broad reset that could discard an unsynced bill or payment.
 
 The Tauri desktop and iOS projects are not built or published by the supported
 release workflow.
 
-Code30.2 also treats backend, frontend, Caddy, PostgreSQL and Redis as five
+Code30.3 also treats backend, frontend, Caddy, PostgreSQL and Redis as five
 locally built release images. The protected CI and release workflows build the
 exact source twice, attest the immutable image IDs, exercise runtime health,
 retain SBOMs and scan each image. The narrowly scoped zlib OpenVEX correction
@@ -79,7 +93,7 @@ superseded Code 26 ledger remains historical in
 Code 24 scope and audit evidence remain historical in
 [`CODE24_RELEASE_CANDIDATE.md`](CODE24_RELEASE_CANDIDATE.md) and
 [`CODE24_PRODUCTION_AUDIT.md`](CODE24_PRODUCTION_AUDIT.md); none is proof for a
-Code30.2 artifact or rollout.
+Code30.3 artifact or rollout.
 
 ## Android signing and Play Store setup
 
@@ -136,7 +150,7 @@ minimum supported version until that proof passes. See
 Choose one version and apply it consistently. For the current candidate:
 
 ```bash
-CURRENT_RELEASE_VERSION=3.1.29
+CURRENT_RELEASE_VERSION=3.1.30
 
 # Update the coordinated product version in:
 # - android-native/app/build.gradle.kts (versionName; normally also a new
@@ -156,14 +170,14 @@ CURRENT_RELEASE_VERSION=3.1.29
 python3 scripts/verify_android_release_version.py --tag "v$CURRENT_RELEASE_VERSION"
 ```
 
-That command validates the coordinated Code30.2 build-`37` identity; it does
+That command validates the coordinated Code30.3 build-`38` identity; it does
 not authorise tagging, publishing, advertising, registering, staging, or
 activating the artifact. Every earlier tag and signed artifact remains
 immutable. In particular,
-Code30.1 `v3.1.28` / build `36` is the exact same-channel predecessor for this
-release. Tag `v3.1.29` may be created only after every product-version field,
+Code30.2 `v3.1.29` / build `37` is the exact same-channel predecessor for this
+release. Tag `v3.1.30` may be created only after every product-version field,
 Room schema, migration head, final test result and source-freeze record agree.
-Code30.2 uses build `37`; never reuse build `36` or rebuild `v3.1.28` with new
+Code30.3 uses build `38`; never reuse build `37` or rebuild `v3.1.29` with new
 bytes. Isolated debug installations are test evidence, not distribution.
 Never use a blanket version replacement: dependency versions and Android
 compatibility policy intentionally differ from the product version.
@@ -180,53 +194,48 @@ than the last published one; the repository cannot verify Play's remote history,
 so increment it for every release. A manual workflow dispatch must target an
 existing tag. Dispatches from branches are rejected.
 
-## Version-code-8 floor, immutable predecessors, and Code30.2 candidate
+## Version-code-8 floor, immutable predecessors, and Code30.3 candidate
 
 Version `3.0.7` with version code `8` introduced the terminal and Gaming-to-POS
 contract that older clients do not understand, so code `8` remains the
-minimum-supported compatibility floor. An optional Code30.2 offer does not
+minimum-supported compatibility floor. An optional Code30.3 offer does not
 authorize changing that floor.
 
-Code30.1 `v3.1.28` / build `36` is the current immutable direct-channel release
-predecessor. Code30.2 is `v3.1.29` / build `37`, Room `51`, and migration `0078`.
+Code30.2 `v3.1.29` / build `37` is the current immutable direct-channel release
+predecessor. Code30.3 is `v3.1.30` / build `38`, Room `52`, and migration `0082`.
 It is not signed, deployed, staged, active, offered, installed, or approved by
 the version bump alone.
 
-### Current Code30.2 rollout sequence
+### Current Code30.3 rollout sequence
 
 1. Finish the exact source review, clean full suites, migration proof and
-   business trial described in `CODE30_2_PATCH_CANDIDATE.md`.
-2. Freeze the reviewed source and create `v3.1.29` only after all local gates
+   business trial described in `CODE30_3_PATCH_CANDIDATE.md`.
+2. Freeze the reviewed source and create `v3.1.30` only after all local gates
    pass. Build and sign only through the protected tagged workflow.
-3. Verify the exact CI APK and manifest: package, build `37`, version `3.1.29`,
+3. Verify the exact CI APK and manifest: package, build `38`, version `3.1.30`,
    byte size, SHA-256, source revision and independently preserved signer.
-4. On an isolated emulator, install exact signed `v3.1.28` / build `36`, retain
-   representative Room/outbox state, and install the signed build `37` with
+4. On an isolated emulator, install exact signed `v3.1.29` / build `37`, retain
+   representative Room/outbox state, and install the signed build `38` with
    normal update semantics. Do not uninstall or clear data.
 5. Deploy the matching backend and Web source through the guarded production
-   installer with a quiesced backup, restore proof, migration through `0078`,
-   rollback readiness and authenticated smoke checks.
-   The one-time Code30.2 bridge accepts the exact retired test installation's
-   single stale pending heartbeat only when the prior database is `0073`, the
-   candidate is `3.1.29`, its reviewed identity/version/outbox/last-seen fields
-   and the aggregate `1|1|1` stale-outbox signature match, and the frozen
-   18-AVD quarantine record has exact SHA-256
-   `379c6368936d03223e19482cc840c2a9d2483dc9a96909fba22cd9f59911eec8`.
-   It makes no database change before the verified backup. The archived clear
-   Room snapshot is supporting evidence and is not attributed to that server
-   installation identity.
-6. Deploy and authorize the bound Apps Script, configure its one-time secret,
-   deliver the current-generation connection test, and reconcile an actual
-   `ERP Mirror v1` row. This is a separate production-configuration gate.
-7. Stage the same verified APK inactive. Staging must not advertise an offer.
-8. The bound owner release-controller may activate the exact staged candidate
+   installer with a quiesced backup, restore proof, migration through `0082`,
+   rollback readiness and authenticated smoke checks. The old one-time
+   Code30.2 cleanup bridge is predecessor history and is not a substitute for
+   this fresh preflight.
+6. Stage the same verified APK inactive. Staging must not advertise an offer.
+7. The bound owner release-controller may activate the exact staged candidate
    only after the preceding evidence passes. Android still requires the user to
    accept the installer; physical-tablet acceptance remains separate.
+8. After the tablet user accepts build `38`, reconnect the affected tablet.
+   In Web Gaming, review the exact station/session/amount/duration/hash
+   candidate, approve it with a reason, wait for tablet acknowledgement, and
+   confirm the station becomes available. There is no broad clear-all and Web
+   cannot edit an offline Room database.
 
 ### Historical Code 14 rollout record (do not execute for current releases)
 
 The following sequence is retained to explain prior provenance. It is not the
-current Code30.2 rollout procedure; use the current sequence above.
+current Code30.3 rollout procedure; use the current sequence above.
 
 1. Preserve the exact signed version-code-13 predecessor and version-code-14
    partner APKs, verify their signer, and never replace either immutable
@@ -467,8 +476,9 @@ immutable signed history after the image-identity gate failed before the
 authorized installer entered maintenance/cutover or any production/partner
 install or offer. Original signed Code `29` (`3.1.19`) is immutable after its
 installer lock gate failed. The `v3.1.20` run was cancelled before build or
-signing. Code30.1 `v3.1.28` / build `36` is the immutable signed predecessor.
-Code30.2 `v3.1.29` / build `37` requires its own complete gates and protected
+signing. Code30.1 `v3.1.28` / build `36` is immutable signed history.
+Code30.2 `v3.1.29` / build `37` is immutable predecessor evidence. Code30.3
+`v3.1.30` / build `38` requires its own complete gates and protected
 workflow output. After final-source trials, signed in-place upgrade continuity,
 and production verification, only the bound owner release-controller may
 activate the staged offer. The offer reaches all eligible direct-channel
@@ -494,8 +504,9 @@ registered or offered. Signed Code `26` is immutable superseded history after
 its deployment-only installer failure and must not be relabelled or reused.
 Code `27` is immutable signed history and must not be staged or activated.
 Code `28` is immutable signed history after its image-identity gate failure and
-must not be staged or activated. Code30.1 build `36` is immutable predecessor
-history. Code30.2 build `37` must first pass the complete backend migration/test,
+must not be staged or activated. Code30.1 build `36` and Code30.2 build `37`
+are immutable predecessor history. Code30.3 build `38` must first pass the
+complete backend migration/test,
 Web lint/typecheck/test/build, Android release lint/JVM/instrumentation/build,
 and signature-verification gates. The resulting
 draft release contains:

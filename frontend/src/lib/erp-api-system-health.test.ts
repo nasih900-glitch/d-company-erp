@@ -31,6 +31,8 @@ const health: SystemHealthDTO = {
     with_pending_sync: 0,
     sync_stalled: 0,
     max_pending_outbox_count: 0,
+    stale_with_last_reported_pending: 0,
+    stale_max_last_reported_pending: 0,
     latest_supported_version_code: 15,
     outdated_installations: 0,
   },

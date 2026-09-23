@@ -367,6 +367,45 @@ class MigrationTest {
     }
 
     @Test
+    fun migrate51To52PreservesEndedGamingEvidenceAndAddsNullCleanupDirective() {
+        helper.createDatabase(dbName, 51).apply {
+            execSQL(
+                "INSERT INTO local_gaming_sessions " +
+                    "(localId, serverId, stationId, shiftId, customerName, startedAtMillis, " +
+                    "state, status, endAtMillis, billableMinutes, amountMinor, ratePerHourMinor, " +
+                    "extraControllers) VALUES " +
+                    "('ended-action', 'server-session', 'station-1', 'shift-1', 'Amina', 1000, " +
+                    "'ended_unbilled', 'ended', 61000, 1, 250, 15000, 0)",
+            )
+            close()
+        }
+
+        val migrated = helper.runMigrationsAndValidate(dbName, 52, true, MIGRATION_51_52)
+        migrated.query(
+            "SELECT serverId, shiftId, customerName, startedAtMillis, endAtMillis, " +
+                "amountMinor, ratePerHourMinor, state, cleanupEvidenceRevision, " +
+                "startRequestHash, stopRequestHash, cleanupReconciliationId, " +
+                "cleanupReceiptAuditId, cleanupCandidateSha256, cleanupRetirementReason, " +
+                "cleanupRetiredAtMillis, cleanupAcknowledgedAtMillis, cleanupBranchId, " +
+                "cleanupTerminalId " +
+                "FROM local_gaming_sessions WHERE localId = 'ended-action'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("server-session", cursor.getString(0))
+            assertEquals("shift-1", cursor.getString(1))
+            assertEquals("Amina", cursor.getString(2))
+            assertEquals(1000L, cursor.getLong(3))
+            assertEquals(61000L, cursor.getLong(4))
+            assertEquals(250L, cursor.getLong(5))
+            assertEquals(15000L, cursor.getLong(6))
+            assertEquals("ended_unbilled", cursor.getString(7))
+            assertEquals(0L, cursor.getLong(8))
+            for (index in 9..18) assertTrue(cursor.isNull(index))
+        }
+        migrated.close()
+    }
+
+    @Test
     fun migrate48Through50PreservesLegacyExpensesAndIntermediateReceiptChunks() {
         helper.createDatabase(dbName, 48).apply {
             execSQL(

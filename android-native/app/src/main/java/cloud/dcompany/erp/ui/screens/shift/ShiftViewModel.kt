@@ -17,6 +17,7 @@ import cloud.dcompany.erp.core.db.ShiftState
 import cloud.dcompany.erp.core.db.observeShiftForManagement
 import cloud.dcompany.erp.core.net.MeResponse
 import cloud.dcompany.erp.core.sync.RejectedShiftOpenVerificationStatus
+import cloud.dcompany.erp.ui.screens.businessDateTime
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -67,7 +68,11 @@ data class ShiftUiState(
      * screen just reset to "no shift open" with zero explanation.
      */
     val rejectedShift: LocalShiftEntity? = null,
-)
+) {
+    /** One staff-facing IST business-day collection; raw shifts remain immutable segments. */
+    internal val businessDayHistory: List<ShiftBusinessDaySummary>
+        get() = groupShiftHistoryByBusinessDay(history, open)
+}
 
 internal data class RejectedOpenRecoveryActions(
     val retryEnabled: Boolean,
@@ -722,8 +727,7 @@ internal fun shiftAlreadyOpenMessage(
 }
 
 private fun formatShiftFeedbackDate(epochMillis: Long): String =
-    java.text.SimpleDateFormat("dd MMM, HH:mm", java.util.Locale.getDefault())
-        .format(java.util.Date(epochMillis))
+    epochMillis.businessDateTime()
 
 internal fun shouldShowShiftResult(
     itemId: String,

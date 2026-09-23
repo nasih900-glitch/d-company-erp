@@ -9,6 +9,7 @@ import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.Transaction
 import cloud.dcompany.erp.core.net.Order
+import cloud.dcompany.erp.core.net.PaymentBundleResult
 import cloud.dcompany.erp.core.net.PaymentResult
 import cloud.dcompany.erp.core.net.ZeroTotalFinalizationResult
 import kotlinx.coroutines.flow.Flow
@@ -202,6 +203,53 @@ fun paymentReceipt(
     linesJson = POS_RECEIPT_JSON.encodeToString(order.lines),
     createdAtMillis = createdAtMillis,
 )
+
+/**
+ * One local receipt for one atomic split settlement. The versioned method
+ * value retains the exact rail allocation for display/printing without adding
+ * another mutable child table to the durable payment outbox.
+ */
+fun paymentBundleReceipt(
+    order: Order,
+    payment: PaymentBundleResult,
+    storedMethod: String,
+    sourceKind: String,
+    sourceLabel: String? = null,
+    createdAtMillis: Long = System.currentTimeMillis(),
+): PosReceiptEntity {
+    val cash = payment.payments.singleOrNull { it.method == "cash" }
+    return PosReceiptEntity(
+        receiptId = "bundle:${payment.orderId}",
+        orderId = payment.orderId,
+        paymentId = null,
+        shiftId = payment.shiftId,
+        sourceKind = sourceKind,
+        sourceLabel = sourceLabel ?: order.sourceLabel,
+        customerName = order.customerName,
+        customerPhone = order.customerPhone,
+        orderNote = order.notes,
+        subtotalMinor = order.subtotalMinor,
+        discountMinor = order.discountMinor,
+        taxMinor = order.taxMinor,
+        roundOffMinor = order.roundOffMinor,
+        totalMinor = order.totalMinor,
+        dueBeforePaymentMinor = payment.totalAmountMinor,
+        method = storedMethod,
+        amountMinor = payment.totalAmountMinor,
+        billAmountMinor = payment.totalAmountMinor,
+        tipMinor = 0,
+        tenderedMinor = cash?.tenderedMinor,
+        changeMinor = cash?.changeMinor,
+        refExternal = null,
+        paidAt = payment.payments.firstOrNull()?.paidAt,
+        orderStatus = payment.orderStatus,
+        invoiceNo = payment.invoiceNo ?: order.invoiceNo,
+        fiscalYear = payment.fiscalYear,
+        invoiceIssuedAt = payment.invoiceIssuedAt,
+        linesJson = POS_RECEIPT_JSON.encodeToString(order.lines),
+        createdAtMillis = createdAtMillis,
+    )
+}
 
 fun zeroTotalReceipt(
     order: Order,

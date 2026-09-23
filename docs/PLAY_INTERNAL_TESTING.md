@@ -11,20 +11,20 @@ Current direct-channel release candidate:
 | --- | --- |
 | App name | `D Company` |
 | Package name | `cloud.dcompany.erp` |
-| Version name | `3.1.29` |
-| Version code | `37` |
+| Version name | `3.1.30` |
+| Version code | `38` |
 | Minimum compatible client code | `8` |
 | Production API | `https://dcompany.duckdns.org/api/v1/` |
 
-Code30.1 `v3.1.28` / build `36` is the current immutable signed direct-channel
-predecessor. Code30.2 `v3.1.29` / build `37`, Room schema `51`, and Alembic head
-`0078` is still a source candidate: there is no signed build-37 artifact,
-same-signer build-36-to-37 upgrade proof, production cutover, Apps Script live
-acceptance, active update offer, or physical Redmi Pad 2 acceptance yet. Do not
+Code30.2 `v3.1.29` / build `37` is the current immutable direct-channel
+predecessor. Code30.3 `v3.1.30` / build `38`, Room schema `52`, and Alembic head
+`0082` is still a source candidate: there is no signed build-38 artifact,
+same-signer build-37-to-38 upgrade proof, production cutover, active update
+offer, or physical Redmi Pad 2 acceptance yet. Do not
 upload, stage or activate a local build. Earlier codes `14` through `29`, their
 failed or superseded attempts and any signed artifacts remain immutable
 historical records in their candidate ledgers; none may be rebuilt or used as
-Code30.2 evidence.
+Code30.3 evidence.
 
 The rest of this document is a future Play-channel playbook; it is not an
 instruction to upload the current direct candidate. Do not mix direct delivery
@@ -59,7 +59,7 @@ API-35 emulator installation and a signed same-channel in-place upgrade are
 required, but they are not physical Redmi Pad proof.
 Uploading to an internal track also does not deploy the backend or web ERP to
 production. Keep client code `8` as the compatibility floor. The current signed
-direct-channel predecessor is Code30.1 build `36`; historical code `14` remains
+direct-channel predecessor is Code30.2 build `37`; historical code `14` remains
 a manual-install record and must never be advertised as a server update. A Play
 rollout uses Play delivery rather than the direct APK URL; do not configure both
 channels for one active fleet. GST validation is outside the current Android
@@ -146,7 +146,7 @@ Never commit review credentials or real customer data. Internal-test artifacts
 may receive lighter listing treatment, but privacy and access answers must still
 be accurate before any broader rollout.
 
-## 5. Upload a future Play build (not the current direct Code30.2 candidate)
+## 5. Upload a future Play build (not the current direct Code30.3 candidate)
 
 Do not perform this section for the current direct-channel candidate. First
 choose Play as the fleet's deliberate future delivery channel, assign a version code
@@ -161,11 +161,11 @@ the full same-channel upgrade gate.
 4. Confirm Play reads package `cloud.dcompany.erp` and the exact newly assigned
    version name/code from the bundle. It must be greater than every code already
    used by direct or Play delivery; for the current history, that means greater
-   than code `37`.
+   than code `38`.
 5. Use a release name that exactly records that version name and code.
 6. Add concise notes that describe the exact future Play release. Do not reuse
-   Code30.2 notes or claim private receipt capture, offline recovery, or finance
-   correction acceptance unless those behaviors passed on that exact artifact.
+   Code30.3 notes or claim stale-session recovery, offline recovery, or finance
+   behavior acceptance unless those behaviors passed on that exact artifact.
 7. Review all warnings, then start the rollout to **Internal testing only**.
 
 If Play reports that the version code was already used, increment `versionCode`

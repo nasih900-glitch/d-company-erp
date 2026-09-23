@@ -13,6 +13,8 @@ import cloud.dcompany.erp.core.checkout.DirectOrderPublishPolicy
 import cloud.dcompany.erp.core.checkout.HeldCheckoutInteractionPolicy
 import cloud.dcompany.erp.core.checkout.HeldOrderClaimPolicy
 import cloud.dcompany.erp.core.checkout.PreparedHeldCheckoutAction
+import cloud.dcompany.erp.core.checkout.SplitPaymentPlan
+import cloud.dcompany.erp.core.checkout.SplitPaymentPolicy
 import cloud.dcompany.erp.core.auth.CacheScopeLease
 import cloud.dcompany.erp.core.auth.PosAccess
 import cloud.dcompany.erp.core.auth.VIEW_ONLY_MESSAGE
@@ -2030,6 +2032,35 @@ class PosViewModel : ViewModel() {
             captureOfflineSale(method, tenderedMinor, confirmation)
             return
         }
+        captureVerifiedDirectSettlement(method, tenderedMinor, confirmation)
+    }
+
+    /** Split tender is available only after the server bill and claim are durable. */
+    fun captureSplitSale(
+        plan: SplitPaymentPlan,
+        confirmation: DirectPaymentConfirmation,
+    ) {
+        if (!requireWrite()) return
+        if (!app.connectivity.online.value) {
+            notice.value = "Reconnect before taking a split payment. No money was saved."
+            return
+        }
+        val storedMethod = runCatching {
+            SplitPaymentPolicy.encode(
+                SplitPaymentPolicy.create(confirmation.dueMinor, plan.legs),
+            )
+        }.getOrElse { failure ->
+            notice.value = failure.message ?: "Review the split amounts before confirming."
+            return
+        }
+        captureVerifiedDirectSettlement(storedMethod, 0L, confirmation)
+    }
+
+    private fun captureVerifiedDirectSettlement(
+        storedMethod: String,
+        tenderedMinor: Long,
+        confirmation: DirectPaymentConfirmation,
+    ) {
         val prepared = state.value.preparedDirectCheckout
         if (prepared == null) {
             notice.value = "The live bill has not been verified yet. Wait for the exact server total before collecting."
@@ -2061,12 +2092,26 @@ class PosViewModel : ViewModel() {
             prepareDirectCheckout()
             return
         }
-        if (method !in setOf("cash", "upi", "card")) {
-            notice.value = "Choose Cash, UPI, or Card."
+        val splitPlan = runCatching {
+            SplitPaymentPolicy.decodeStoredMethod(storedMethod)
+        }.getOrElse { failure ->
+            notice.value = failure.message ?: "The split-payment plan could not be verified."
             return
         }
-        if (prepared.dueMinor <= 0L || (method == "cash" && tenderedMinor < prepared.dueMinor)) {
-            notice.value = "Enter enough cash to cover the verified total."
+        if (splitPlan == null) {
+            if (storedMethod !in setOf("cash", "upi", "card")) {
+                notice.value = "Choose Cash, UPI, or Card."
+                return
+            }
+            if (
+                prepared.dueMinor <= 0L ||
+                (storedMethod == "cash" && tenderedMinor < prepared.dueMinor)
+            ) {
+                notice.value = "Enter enough cash to cover the verified total."
+                return
+            }
+        } else if (prepared.dueMinor <= 0L || splitPlan.totalMinor != prepared.dueMinor) {
+            notice.value = "Split amounts must equal the current verified bill total."
             return
         }
         val terminalId = app.terminalStore.confirmedTerminalId()
@@ -2084,9 +2129,9 @@ class PosViewModel : ViewModel() {
         val payment = LocalHeldOrderPaymentEntity(
             localId = prepared.localId,
             targetOrderId = prepared.orderId,
-            method = method,
+            method = storedMethod,
             amountMinor = prepared.dueMinor,
-            tenderedMinor = tenderedMinor.takeIf { method == "cash" },
+            tenderedMinor = tenderedMinor.takeIf { splitPlan == null && storedMethod == "cash" },
             expectedTotalMinor = prepared.totalMinor,
             expectedDueMinor = prepared.dueMinor,
             claimToken = prepared.claimToken,
@@ -2640,6 +2685,34 @@ class PosViewModel : ViewModel() {
      * retries replay one stable idempotency key and never ask for money again.
      */
     fun confirmHeldOrderPayment(orderId: String, method: String, tenderedMinor: Long) {
+        confirmHeldOrderSettlement(orderId, method, tenderedMinor)
+    }
+
+    fun confirmHeldOrderSplitPayment(orderId: String, plan: SplitPaymentPlan) {
+        if (!requireWrite()) return
+        if (!app.connectivity.online.value) {
+            notice.value = "Reconnect before taking a split payment. No money was saved."
+            return
+        }
+        val prepared = preparedHeldCheckout.value
+        if (prepared == null || prepared.orderId != orderId) {
+            notice.value = "The selected bill changed before split payment. Review it again."
+            return
+        }
+        val storedMethod = runCatching {
+            SplitPaymentPolicy.encode(SplitPaymentPolicy.create(prepared.dueMinor, plan.legs))
+        }.getOrElse { failure ->
+            notice.value = failure.message ?: "Review the split amounts before confirming."
+            return
+        }
+        confirmHeldOrderSettlement(orderId, storedMethod, 0L)
+    }
+
+    private fun confirmHeldOrderSettlement(
+        orderId: String,
+        storedMethod: String,
+        tenderedMinor: Long,
+    ) {
         if (!requireWrite()) return
         val prepared = preparedHeldCheckout.value ?: return
         if (checkoutBusy.value) return
@@ -2695,12 +2768,26 @@ class PosViewModel : ViewModel() {
             if (current != null) prepareHeldOrderReview(current) else refresh()
             return
         }
-        if (method !in setOf("cash", "upi", "card")) {
-            notice.value = "Choose a supported payment method."
+        val splitPlan = runCatching {
+            SplitPaymentPolicy.decodeStoredMethod(storedMethod)
+        }.getOrElse { failure ->
+            notice.value = failure.message ?: "The split-payment plan could not be verified."
             return
         }
-        if (prepared.dueMinor <= 0L || (method == "cash" && tenderedMinor < prepared.dueMinor)) {
-            notice.value = "The payment amount is invalid. Review the live total before confirming."
+        if (splitPlan == null) {
+            if (storedMethod !in setOf("cash", "upi", "card")) {
+                notice.value = "Choose a supported payment method."
+                return
+            }
+            if (
+                prepared.dueMinor <= 0L ||
+                (storedMethod == "cash" && tenderedMinor < prepared.dueMinor)
+            ) {
+                notice.value = "The payment amount is invalid. Review the live total before confirming."
+                return
+            }
+        } else if (prepared.dueMinor <= 0L || splitPlan.totalMinor != prepared.dueMinor) {
+            notice.value = "Split amounts must equal the current verified bill total."
             return
         }
         val scopeLease = app.cacheIsolation.currentLease()
@@ -2717,9 +2804,9 @@ class PosViewModel : ViewModel() {
         val payment = LocalHeldOrderPaymentEntity(
             localId = UUID.randomUUID().toString(),
             targetOrderId = prepared.orderId,
-            method = method,
+            method = storedMethod,
             amountMinor = prepared.dueMinor,
-            tenderedMinor = tenderedMinor.takeIf { method == "cash" },
+            tenderedMinor = tenderedMinor.takeIf { splitPlan == null && storedMethod == "cash" },
             expectedTotalMinor = prepared.totalMinor,
             expectedDueMinor = prepared.dueMinor,
             claimToken = prepared.claimToken,

@@ -9,6 +9,7 @@ export const GAMING_WRITE_OPERATION_NAMES = [
   'startSession',
   'pauseSession',
   'resumeSession',
+  'transferSession',
   'setSessionTimer',
   'extendSessionTimer',
   'extendSessionWithPackage',

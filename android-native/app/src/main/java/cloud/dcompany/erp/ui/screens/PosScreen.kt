@@ -101,8 +101,12 @@ import cloud.dcompany.erp.core.db.SyncState
 import cloud.dcompany.erp.core.db.decodedLines
 import cloud.dcompany.erp.core.checkout.HeldOrderClaimPolicy
 import cloud.dcompany.erp.core.checkout.OneShotHeldPaymentConfirmation
+import cloud.dcompany.erp.core.checkout.SplitPaymentLeg
+import cloud.dcompany.erp.core.checkout.SplitPaymentPlan
+import cloud.dcompany.erp.core.checkout.SplitPaymentPolicy
 import cloud.dcompany.erp.core.auth.PosAccess
 import cloud.dcompany.erp.core.money.minorToRupeesInput
+import cloud.dcompany.erp.core.money.normalizeRupeeInput
 import cloud.dcompany.erp.core.money.parseRupeesToMinor
 import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.core.net.CanonicalReceipt
@@ -166,12 +170,14 @@ fun PosScreen(
     onConfirmDirectZero: () -> Unit,
     onRedeemDirectPoints: (Int) -> Unit,
     onCapture: (String, Long, DirectPaymentConfirmation) -> Unit,
+    onCaptureSplit: (SplitPaymentPlan, DirectPaymentConfirmation) -> Unit,
     onRetryRejectedSale: (String) -> Unit,
     onRetryHeldPayment: (String) -> Unit,
     onPrepareHeldOrder: (HeldOrderCacheEntity) -> Unit,
     onUpdateHeldOrderDiscount: (String, Long) -> Unit,
     onContinueHeldOrder: (String) -> Unit,
     onConfirmHeldOrder: (String, String, Long) -> Unit,
+    onConfirmHeldOrderSplit: (String, SplitPaymentPlan) -> Unit,
     onConfirmHeldOrderZero: (String) -> Unit,
     onVoidOrder: (String, String) -> Unit,
     onDismissHeldOrderReview: () -> Unit,
@@ -613,6 +619,16 @@ fun PosScreen(
                             ),
                         )
                     },
+                    onConfirmSplit = { plan ->
+                        onCaptureSplit(
+                            plan,
+                            DirectPaymentConfirmation(
+                                localId = checkout.localId,
+                                revision = checkout.revision,
+                                dueMinor = checkout.dueMinor,
+                            ),
+                        )
+                    },
                 )
             }
         }
@@ -677,6 +693,9 @@ fun PosScreen(
                     } else null,
                     onConfirm = { method, tendered ->
                         onConfirmHeldOrder(checkout.orderId, method, tendered)
+                    },
+                    onConfirmSplit = { plan ->
+                        onConfirmHeldOrderSplit(checkout.orderId, plan)
                     },
                 )
             }
@@ -3160,9 +3179,19 @@ private fun PayDialog(
     onDismiss: () -> Unit,
     onVoid: (() -> Unit)? = null,
     onConfirm: (String, Long) -> Unit,
+    onConfirmSplit: ((SplitPaymentPlan) -> Unit)? = null,
 ) {
     var method by rememberSaveable(confirmationIdentity) { mutableStateOf("cash") }
     var tendered by rememberSaveable(confirmationIdentity) { mutableStateOf("") }
+    val splitAvailable = verifiedSharedOrder && onConfirmSplit != null
+    var splitMode by rememberSaveable(confirmationIdentity) { mutableStateOf(false) }
+    var splitMethods by remember(confirmationIdentity) {
+        mutableStateOf(setOf("cash", "upi"))
+    }
+    var splitAmounts by remember(confirmationIdentity) {
+        mutableStateOf<Map<String, String>>(emptyMap())
+    }
+    var splitCashTendered by rememberSaveable(confirmationIdentity) { mutableStateOf("") }
     var confirmationConsumed by remember(confirmationIdentity) { mutableStateOf(false) }
     var editingPoints by rememberSaveable(confirmationIdentity) { mutableStateOf(false) }
     var pointsText by rememberSaveable(confirmationIdentity) {
@@ -3175,12 +3204,43 @@ private fun PayDialog(
     val parsedTenderedMinor = remember(tendered) { parseRupeesToMinor(tendered) }
     val tenderedMinor = parsedTenderedMinor ?: 0L
     val changeMinor = tenderedMinor - dueMinor
-    val cashInvalid = method == "cash" && (parsedTenderedMinor == null || changeMinor < 0)
+    val cashInvalid = !splitMode && method == "cash" &&
+        (parsedTenderedMinor == null || changeMinor < 0)
+    val splitPlanResult = remember(
+        dueMinor,
+        splitMode,
+        splitMethods,
+        splitAmounts,
+        splitCashTendered,
+    ) {
+        runCatching {
+            check(splitMode) { "Split tender is not selected." }
+            val cashTender = if ("cash" in splitMethods) {
+                parseRupeesToMinor(splitCashTendered)
+                    ?: error("Enter the cash received.")
+            } else {
+                null
+            }
+            val legs = splitMethods.map { splitMethod ->
+                SplitPaymentLeg(
+                    method = splitMethod,
+                    amountMinor = parseRupeesToMinor(splitAmounts[splitMethod].orEmpty())
+                        ?: error("Enter a valid amount for ${SplitPaymentPolicy.methodLabel(splitMethod)}."),
+                    tenderedMinor = cashTender.takeIf { splitMethod == "cash" },
+                )
+            }
+            SplitPaymentPolicy.create(dueMinor, legs)
+        }
+    }
+    val splitPlan = splitPlanResult.getOrNull()
+    val splitError = splitPlanResult.exceptionOrNull()?.message
     val connectionRequired = !online && !offlineAllowed
     val confirmLabel = when {
         confirmationConsumed -> "Payment submitted once"
         connectionRequired -> "Reconnect to continue"
         dueMinor <= 0L -> "No payable balance"
+        splitMode && splitPlan == null -> splitError ?: "Review the split amounts"
+        splitMode -> "CONFIRM SPLIT · ${dueMinor.asRupees()}"
         method == "cash" && parsedTenderedMinor == null -> "Enter cash received"
         method == "cash" && changeMinor < 0 -> "Cash received is below the total"
         !confirmEnabled -> "Payment unavailable"
@@ -3251,16 +3311,16 @@ private fun PayDialog(
                         PaymentAmountRow("Total", totalMinor, Brand.Foreground, emphasized = true)
                     }
                 }
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
-                ) {
-                    listOf("cash" to "Cash", "upi" to "UPI", "card" to "Card").forEach { (id, label) ->
+                if (splitAvailable) {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                    ) {
                         FilterChip(
-                            selected = method == id,
+                            selected = !splitMode,
                             enabled = !confirmationConsumed && confirmEnabled,
-                            onClick = { method = id },
-                            label = { Text(label) },
+                            onClick = { splitMode = false },
+                            label = { Text("One method") },
                             modifier = Modifier.weight(1f).heightIn(min = 48.dp),
                             shape = Radius.shapePill,
                             colors = FilterChipDefaults.filterChipColors(
@@ -3268,6 +3328,59 @@ private fun PayDialog(
                                 selectedLabelColor = Brand.Foreground,
                             ),
                         )
+                        FilterChip(
+                            selected = splitMode,
+                            enabled = !confirmationConsumed && confirmEnabled && online,
+                            onClick = { splitMode = true },
+                            label = { Text("Split tender") },
+                            modifier = Modifier.weight(1f).heightIn(min = 48.dp),
+                            shape = Radius.shapePill,
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = Brand.InformationMuted,
+                                selectedLabelColor = Brand.Foreground,
+                            ),
+                        )
+                    }
+                }
+                if (splitMode && splitAvailable) {
+                    SplitTenderEditor(
+                        dueMinor = dueMinor,
+                        selectedMethods = splitMethods,
+                        amounts = splitAmounts,
+                        cashTendered = splitCashTendered,
+                        validationMessage = splitError,
+                        enabled = !confirmationConsumed && confirmEnabled && online,
+                        onToggleMethod = { selectedMethod ->
+                            splitMethods = if (selectedMethod in splitMethods) {
+                                splitMethods - selectedMethod
+                            } else {
+                                splitMethods + selectedMethod
+                            }
+                        },
+                        onAmountChange = { changedMethod, value ->
+                            splitAmounts = splitAmounts + (changedMethod to value)
+                        },
+                        onCashTenderedChange = { splitCashTendered = it },
+                    )
+                } else {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                    ) {
+                        listOf("cash" to "Cash", "upi" to "UPI", "card" to "Card").forEach { (id, label) ->
+                            FilterChip(
+                                selected = method == id,
+                                enabled = !confirmationConsumed && confirmEnabled,
+                                onClick = { method = id },
+                                label = { Text(label) },
+                                modifier = Modifier.weight(1f).heightIn(min = 48.dp),
+                                shape = Radius.shapePill,
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = Brand.InformationMuted,
+                                    selectedLabelColor = Brand.Foreground,
+                                ),
+                            )
+                        }
                     }
                 }
                 if (showCustomerBenefits && onApplyPoints != null) {
@@ -3385,7 +3498,7 @@ private fun PayDialog(
                     }
                 }
 
-                if (method == "cash") {
+                if (!splitMode && method == "cash") {
                     // Keep the counter's most important result above the
                     // touch keypad. On a 600dp landscape tablet the keypad is
                     // intentionally scrollable, but staff must see the change
@@ -3446,6 +3559,7 @@ private fun PayDialog(
         confirmButton = {
             PrimaryButton(
                 enabled = !confirmationConsumed && confirmEnabled && !cashInvalid &&
+                    (!splitMode || splitPlan != null) &&
                     !connectionRequired && dueMinor > 0L,
                 onClick = {
                     val consumed = oneShotConfirmation?.tryConsume(requireNotNull(confirmationIdentity))
@@ -3454,7 +3568,11 @@ private fun PayDialog(
                         // Immediate local state disables the button before the
                         // ViewModel/Room round trip can trigger recomposition.
                         confirmationConsumed = true
-                        onConfirm(method, if (method == "cash") tenderedMinor else dueMinor)
+                        if (splitMode) {
+                            onConfirmSplit?.invoke(requireNotNull(splitPlan))
+                        } else {
+                            onConfirm(method, if (method == "cash") tenderedMinor else dueMinor)
+                        }
                     }
                 },
             ) { Text(confirmLabel) }
@@ -3470,6 +3588,146 @@ private fun PayDialog(
             }
         },
     )
+}
+
+@Composable
+private fun SplitTenderEditor(
+    dueMinor: Long,
+    selectedMethods: Set<String>,
+    amounts: Map<String, String>,
+    cashTendered: String,
+    validationMessage: String?,
+    enabled: Boolean,
+    onToggleMethod: (String) -> Unit,
+    onAmountChange: (String, String) -> Unit,
+    onCashTenderedChange: (String) -> Unit,
+) {
+    val orderedMethods = SplitPaymentPolicy.supportedMethods
+    val allocatedMinor = runCatching {
+        selectedMethods.fold(0L) { total, method ->
+            Math.addExact(total, parseRupeesToMinor(amounts[method].orEmpty()) ?: 0L)
+        }
+    }.getOrDefault(Long.MAX_VALUE)
+    val balanceMinor = runCatching { Math.subtractExact(dueMinor, allocatedMinor) }
+        .getOrDefault(Long.MIN_VALUE)
+    val cashAmountMinor = parseRupeesToMinor(amounts["cash"].orEmpty())
+    val cashTenderedMinor = parseRupeesToMinor(cashTendered)
+    val splitCashChangeMinor = if (
+        "cash" in selectedMethods && cashAmountMinor != null && cashTenderedMinor != null
+    ) {
+        cashTenderedMinor - cashAmountMinor
+    } else {
+        null
+    }
+
+    Column(
+        Modifier.fillMaxWidth().clip(Radius.shapeMd)
+            .background(Brand.SurfaceRaised)
+            .border(1.dp, Brand.BorderSubtle, Radius.shapeMd)
+            .padding(Spacing.md),
+        verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+    ) {
+        Text(
+            "Split tender is one atomic bill payment. Choose 2–5 unique methods; " +
+                "the amounts must total ${dueMinor.asRupees()}.",
+            color = Brand.Information,
+            style = MaterialTheme.typography.labelMedium,
+        )
+        Text(
+            "Split mode settles the bill only. An additional tip cannot be added here.",
+            color = Brand.ForegroundMuted,
+            style = MaterialTheme.typography.labelSmall,
+        )
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+            items(orderedMethods, key = { it }) { splitMethod ->
+                FilterChip(
+                    selected = splitMethod in selectedMethods,
+                    enabled = enabled,
+                    onClick = { onToggleMethod(splitMethod) },
+                    label = { Text(SplitPaymentPolicy.methodLabel(splitMethod)) },
+                    shape = Radius.shapePill,
+                )
+            }
+        }
+        orderedMethods.filter { it in selectedMethods }.forEach { splitMethod ->
+            val currentValue = amounts[splitMethod].orEmpty()
+            val otherTotal = orderedMethods
+                .filter { it in selectedMethods && it != splitMethod }
+                .fold(0L) { total, other ->
+                    runCatching {
+                        Math.addExact(
+                            total,
+                            parseRupeesToMinor(amounts[other].orEmpty()) ?: 0L,
+                        )
+                    }.getOrDefault(Long.MAX_VALUE)
+                }
+            val remainingForMethod = (dueMinor - otherTotal).coerceAtLeast(0L)
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                OutlinedTextField(
+                    value = currentValue,
+                    onValueChange = { entered ->
+                        normalizeRupeeInput(entered)?.let { onAmountChange(splitMethod, it) }
+                    },
+                    label = { Text("${SplitPaymentPolicy.methodLabel(splitMethod)} amount (₹)") },
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Decimal,
+                        imeAction = ImeAction.Next,
+                    ),
+                    singleLine = true,
+                    enabled = enabled,
+                    modifier = Modifier.weight(1f),
+                )
+                ErpButton(
+                    text = "Balance",
+                    onClick = {
+                        onAmountChange(splitMethod, minorToRupeesInput(remainingForMethod))
+                    },
+                    intent = ActionIntent.Quiet,
+                    enabled = enabled && remainingForMethod > 0L,
+                )
+            }
+        }
+        if ("cash" in selectedMethods) {
+            OutlinedTextField(
+                value = cashTendered,
+                onValueChange = { entered ->
+                    normalizeRupeeInput(entered)?.let(onCashTenderedChange)
+                },
+                label = { Text("Cash received (₹)") },
+                supportingText = { Text("This may exceed only the cash part; change is calculated below.") },
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Decimal,
+                    imeAction = ImeAction.Done,
+                ),
+                singleLine = true,
+                enabled = enabled,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            splitCashChangeMinor?.let { change ->
+                Text(
+                    if (change >= 0L) "Cash change due  ${change.asRupees()}"
+                    else "Cash short by  ${(-change).asRupees()}",
+                    color = if (change >= 0L) Brand.Good else Brand.Danger,
+                    style = MaterialTheme.typography.titleMedium,
+                )
+            }
+        }
+        Text(
+            when {
+                validationMessage == null -> "Exact split total confirmed."
+                balanceMinor > 0L -> "Still to allocate: ${balanceMinor.asRupees()}"
+                balanceMinor < 0L && balanceMinor != Long.MIN_VALUE ->
+                    "Allocated too much by ${(-balanceMinor).asRupees()}"
+                else -> validationMessage
+            },
+            color = if (validationMessage == null) Brand.Good else Brand.Warning,
+            style = MaterialTheme.typography.labelMedium,
+        )
+    }
 }
 
 @Composable
@@ -3749,9 +4007,9 @@ private fun Long.asPosTime(): String =
         .withZone(ZoneId.systemDefault())
         .format(Instant.ofEpochMilli(this))
 
-internal fun String.paymentMethodLabel(): String = when (lowercase(Locale.ROOT)) {
-    "cash" -> "Cash"
-    "upi" -> "UPI"
-    "card" -> "Card"
-    else -> replaceFirstChar { char -> char.titlecase(Locale.getDefault()) }
+internal fun String.paymentMethodLabel(): String {
+    val split = runCatching { SplitPaymentPolicy.decodeStoredMethod(this) }.getOrNull()
+    if (split != null) return "Split · ${split.displayLabel()}"
+    if (SplitPaymentPolicy.isSplitStorageValue(this)) return "Split payment"
+    return SplitPaymentPolicy.methodLabel(this)
 }

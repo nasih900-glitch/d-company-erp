@@ -17,6 +17,40 @@ import org.junit.Test
 class ShiftClosePresentationTest {
 
     @Test
+    fun `queued and rejected closes are never presented as closed`() {
+        val queued = shiftStatusCopy(
+            hasOpenShift = true,
+            localState = ShiftState.CLOSE_PENDING,
+            confirmingOpen = false,
+            offlineGamingSupported = true,
+        )
+        val rejected = shiftStatusCopy(
+            hasOpenShift = true,
+            localState = ShiftState.CLOSE_REJECTED,
+            confirmingOpen = false,
+            offlineGamingSupported = true,
+        )
+
+        assertEquals("Waiting for server", queued.value)
+        assertTrue(queued.detail.contains("Not closed"))
+        assertTrue(rejected.value.contains("Open"))
+        assertTrue(rejected.detail.contains("remains open"))
+    }
+
+    @Test
+    fun `absence of a current shift is stated without implying a close succeeded`() {
+        val status = shiftStatusCopy(
+            hasOpenShift = false,
+            localState = null,
+            confirmingOpen = false,
+            offlineGamingSupported = false,
+        )
+
+        assertEquals("No open shift", status.value)
+        assertFalse(status.value.contains("Closed"))
+    }
+
+    @Test
     fun `gaming centre hides zero legacy rows but preserves nonzero legacy money`() {
         val presentation = WorkspaceFeatureProfiles.GamingCentre.presentationPolicy()
         val zero = accounting()

@@ -96,6 +96,22 @@ describe('gaming session shift ownership policy', () => {
     })).toBe(false);
   });
 
+  it('authorizes cross-user session actions by exact open shift, not by the employee who started it', () => {
+    // The policy deliberately has no starter-user input. Any account with
+    // gaming.write may act when its verified terminal shift is the source
+    // session shift; a different or absent shift remains fail-closed.
+    expect(isGamingSessionOwnedByCurrentShift({
+      liveMode: true,
+      currentShiftId: 'shared-open-shift',
+      sessionShiftId: 'shared-open-shift',
+    })).toBe(true);
+    expect(isGamingSessionOwnedByCurrentShift({
+      liveMode: true,
+      currentShiftId: 'other-open-shift',
+      sessionShiftId: 'shared-open-shift',
+    })).toBe(false);
+  });
+
   it('permits only the server-known legacy null-shift stop fallback', () => {
     expect(resolveGamingStopShiftId({
       liveMode: true,

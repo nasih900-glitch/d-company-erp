@@ -102,7 +102,7 @@ d-company-erp/
 ## Release status
 
 The current local candidate is documented in
-[`docs/CODE30_2_PATCH_CANDIDATE.md`](docs/CODE30_2_PATCH_CANDIDATE.md). That file
+[`docs/CODE30_3_PATCH_CANDIDATE.md`](docs/CODE30_3_PATCH_CANDIDATE.md). That file
 separates source/test evidence from signing, hosted-update, physical-device, and
 production-deployment approval.
 
@@ -127,14 +127,18 @@ separately identified prototype, not another supported ERP app.
   links only to the live web ERP and verified artifacts from the official GitHub repository.
 
 Tagging a release that exactly matches the Android `versionName` triggers
-`.github/workflows/release.yml`. The current local candidate is the cumulative
-Code30.2 patch, technical version `3.1.29` with Android installation build `37`,
-Room schema `51`, and backend migration head `0078`. It adds manual expenses and
-collections, up to five private camera/file receipt attachments per expense,
-offline receipt retry, exact cash-drawer provenance, append-only current-period
-closed-shift corrections, and the optional durable `ERP Mirror v1` Google
-Sheets backup. Authorized users can use an eligible same-branch drawer and
-continue the inherited cross-user shift, POS and gaming workflows while actor
+`.github/workflows/release.yml`. The current local candidate is the additive
+Code30.3 patch, technical version `3.1.30` with Android installation build `38`,
+Room schema `52`, and backend migration head `0082`. It preserves Code30.2
+manual finance, private receipt evidence and the optional durable
+`ERP Mirror v1` Google Sheets backup. Code30.3 adds owner-reviewed,
+exact-candidate recovery for a stale tablet Gaming overlay, atomic split
+tender, Web station-transfer parity, and business-day shift opening/closing
+times, plus a bounded captured-shift clock-skew correction. The build-38 tablet
+must reconnect, apply a matching cleanup directive and acknowledge it; Web
+cannot rewrite an offline Room database and exposes no broad clear-all action.
+Authorized users retain
+eligible same-branch cross-user shift, POS and Gaming workflows while actor
 attribution and sensitive-operation permissions remain intact.
 PostgreSQL remains authoritative. An unconfigured Sheet mirror is disabled;
 saving configuration enables it as verification pending, and the ERP calls it
@@ -145,9 +149,11 @@ rotation or disconnect; old events are never retargeted. Reward activation and
 WhatsApp messaging remain disabled. Android code `8` remains the
 minimum-compatible floor.
 
-Code30.1 `v3.1.28` / build `36` is the immutable signed release predecessor.
+Code30.2 `v3.1.29` / build `37` at commit
+`3ea84be4718a794d5a2e8efc7ac9bcacbc0cee01` is the immutable release
+predecessor.
 Its exact scope and evidence remain in
-[`docs/CODE30_1_PATCH_CANDIDATE.md`](docs/CODE30_1_PATCH_CANDIDATE.md). Code30.2
+[`docs/CODE30_2_PATCH_CANDIDATE.md`](docs/CODE30_2_PATCH_CANDIDATE.md). Code30.3
 must pass a same-signer in-place upgrade from that exact predecessor without
 clearing data. A source change, green local build, or emulator run does not sign,
 deploy, stage, activate, offer, install, or approve the update. The public status
@@ -156,7 +162,7 @@ contract remains
 Android still requires the employee to approve installation, and emulator proof
 is not physical Redmi Pad 2 acceptance.
 
-See [`docs/CODE30_2_PATCH_CANDIDATE.md`](docs/CODE30_2_PATCH_CANDIDATE.md) for
+See [`docs/CODE30_3_PATCH_CANDIDATE.md`](docs/CODE30_3_PATCH_CANDIDATE.md) for
 the current scope, evidence boundaries, and remaining delivery gates.
 
 ## License

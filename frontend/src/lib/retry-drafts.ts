@@ -1,6 +1,17 @@
+import { parseRupeesToMinor } from './money-input';
+
 export type DraftLine = { itemId: string; qty: number; note?: string };
 
 export type CheckoutPaymentMethod = 'cash' | 'upi' | 'card' | 'qr';
+export type CheckoutSplitPaymentMethod = CheckoutPaymentMethod | 'wallet';
+export interface CheckoutSplitPaymentLeg {
+  method: CheckoutSplitPaymentMethod;
+  amountMinor: number;
+  /** Required for cash once payment is confirmed; absent for every other rail. */
+  tenderedMinor?: number;
+  /** Optional processor/reference identifier for non-cash rails. */
+  refExternal?: string;
+}
 export type CheckoutPhase =
   | 'preparing_order'
   | 'awaiting_payment'
@@ -60,6 +71,12 @@ export interface PosCheckoutRetry {
   tipMinor?: number;
   /** Actual cash handed to the cashier, used for receipt/change audit. */
   cashTenderedMinor?: number;
+  /**
+   * Present only for an atomic multi-rail settlement. The complete plan is
+   * journalled before submission so a response-loss recovery replays exactly
+   * the same legs under the same idempotency key.
+   */
+  splitPaymentLegs?: CheckoutSplitPaymentLeg[];
   // Combined membership + custom-discount + points figure — kept for the
   // final receipt/reconciliation math. For the cashier-facing "applied so
   // far" confirmation, use orderManualDiscountMinor/orderPointsRedeemedMinor
@@ -88,6 +105,21 @@ export interface CheckoutPaymentSubmission {
     expected_order_total_minor: number;
     expected_due_minor: number;
     tip_minor: number;
+  };
+}
+
+export interface CheckoutPaymentBundleSubmission {
+  orderId: string;
+  idempotencyKey: string;
+  body: {
+    payments: Array<{
+      method: CheckoutSplitPaymentMethod;
+      amount_minor: number;
+      tendered_minor?: number;
+      ref_external?: string;
+    }>;
+    expected_order_total_minor: number;
+    expected_due_minor: number;
   };
 }
 
@@ -132,6 +164,13 @@ const DELIVERY_VIAS = new Set<CheckoutDeliveryVia>([
   'other_aggregator',
 ]);
 const PAYMENT_METHODS = new Set<CheckoutPaymentMethod>(['cash', 'upi', 'card', 'qr']);
+const SPLIT_PAYMENT_METHODS = new Set<CheckoutSplitPaymentMethod>([
+  'cash',
+  'upi',
+  'card',
+  'qr',
+  'wallet',
+]);
 const CHECKOUT_PHASES = new Set<CheckoutPhase>([
   'preparing_order',
   'awaiting_payment',
@@ -324,6 +363,36 @@ function normalizeSnapshot(value: unknown): PosCheckoutSnapshot | undefined {
   };
 }
 
+function normalizeSplitPaymentLegs(value: unknown): CheckoutSplitPaymentLeg[] | null | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length < 2 || value.length > 5) return null;
+  const methods = new Set<CheckoutSplitPaymentMethod>();
+  const normalized: CheckoutSplitPaymentLeg[] = [];
+  for (const candidate of value) {
+    if (!isRecord(candidate)) return null;
+    const method = candidate.method as CheckoutSplitPaymentMethod;
+    if (!SPLIT_PAYMENT_METHODS.has(method) || methods.has(method)) return null;
+    methods.add(method);
+    if (!isNonNegativeInteger(candidate.amountMinor)) return null;
+    if (hasInvalidOptionalNonNegativeInteger(candidate.tenderedMinor)) return null;
+    if (method !== 'cash' && candidate.tenderedMinor !== undefined) return null;
+    if (candidate.refExternal !== undefined && typeof candidate.refExternal !== 'string') return null;
+    const refExternal = typeof candidate.refExternal === 'string'
+      ? candidate.refExternal.trim()
+      : '';
+    if (refExternal.length > 200) return null;
+    normalized.push({
+      method,
+      amountMinor: candidate.amountMinor,
+      ...(candidate.tenderedMinor !== undefined
+        ? { tenderedMinor: candidate.tenderedMinor as number }
+        : {}),
+      ...(refExternal ? { refExternal } : {}),
+    });
+  }
+  return normalized;
+}
+
 function normalizeCheckoutRetry(value: unknown): PosCheckoutRetry | undefined {
   if (!isRecord(value)) return undefined;
   const key = nonEmptyString(value.key);
@@ -368,6 +437,9 @@ function normalizeCheckoutRetry(value: unknown): PosCheckoutRetry | undefined {
       : undefined;
   if (!phase) return undefined;
 
+  const splitPaymentLegs = normalizeSplitPaymentLegs(value.splitPaymentLegs);
+  if (splitPaymentLegs === null) return undefined;
+
   const amount = value.paymentAmountMinor as number | undefined;
   const orderTotal = value.orderTotalMinor as number | undefined;
   const tip = value.tipMinor as number | undefined;
@@ -411,6 +483,7 @@ function normalizeCheckoutRetry(value: unknown): PosCheckoutRetry | undefined {
     ...(amount !== undefined ? { paymentAmountMinor: amount } : {}),
     ...(tip !== undefined ? { tipMinor: tip } : {}),
     ...(cashTendered !== undefined ? { cashTenderedMinor: cashTendered } : {}),
+    ...(splitPaymentLegs ? { splitPaymentLegs } : {}),
     ...(orderDiscount !== undefined ? { orderDiscountMinor: orderDiscount } : {}),
     ...(orderManualDiscount !== undefined ? { orderManualDiscountMinor: orderManualDiscount } : {}),
     ...(orderPointsRedeemed !== undefined ? { orderPointsRedeemedMinor: orderPointsRedeemed } : {}),
@@ -434,12 +507,18 @@ function normalizeCheckoutRetry(value: unknown): PosCheckoutRetry | undefined {
   ) return undefined;
   if (phase === 'recording_payment') {
     if (!amount || amount <= 0) return undefined;
-    if (normalized.paymentMethod === 'cash' && cashTendered !== undefined) {
-      if (cashTendered < amount + (tip ?? 0)) return undefined;
-    } else if (normalized.paymentMethod !== 'cash' && cashTendered !== undefined) {
-      return undefined;
+    if (splitPaymentLegs) {
+      if ((tip ?? 0) !== 0 || cashTendered !== undefined) return undefined;
+      if (!inspectSplitPaymentPlan(splitPaymentLegs, amount).valid) return undefined;
+    } else {
+      if (normalized.paymentMethod === 'cash' && cashTendered !== undefined) {
+        if (cashTendered < amount + (tip ?? 0)) return undefined;
+      } else if (normalized.paymentMethod !== 'cash' && cashTendered !== undefined) {
+        return undefined;
+      }
     }
   }
+  if (splitPaymentLegs && ((tip ?? 0) !== 0 || cashTendered !== undefined)) return undefined;
   if (phase === 'finalizing_zero') {
     if (
       orderTotal !== 0
@@ -754,6 +833,147 @@ export function hasCollectibleCheckoutBalance(
   );
 }
 
+export interface SplitPaymentPlanStatus {
+  valid: boolean;
+  totalMinor: number;
+  remainingMinor: number;
+  message: string | null;
+}
+
+export interface SplitPaymentEditorJournalStatus {
+  valid: boolean;
+  message: string | null;
+}
+
+function visibleMoneyMatchesJournal(raw: string, expectedMinor: number | undefined): boolean {
+  if (!raw.trim()) return expectedMinor === undefined || expectedMinor === 0;
+  return parseRupeesToMinor(raw) === expectedMinor;
+}
+
+/**
+ * Prove that every amount currently visible to the cashier is the same amount
+ * already checkpointed in the durable settlement journal. HTML number inputs
+ * can display values such as negatives, exponents, or excess decimal places
+ * even though our exact paise parser rejects them; those intermediate strings
+ * must disable confirmation instead of silently submitting the prior value.
+ */
+export function inspectSplitPaymentEditorJournal(
+  legs: readonly CheckoutSplitPaymentLeg[] | undefined,
+  amountInputs: Readonly<Partial<Record<CheckoutSplitPaymentMethod, string>>>,
+  cashTenderedInput: string,
+): SplitPaymentEditorJournalStatus {
+  if (!legs) {
+    return { valid: false, message: 'The saved split payment plan is unavailable.' };
+  }
+  for (const leg of legs) {
+    const visibleAmount = amountInputs[leg.method]
+      ?? (leg.amountMinor > 0 ? (leg.amountMinor / 100).toFixed(2) : '');
+    if (!visibleMoneyMatchesJournal(visibleAmount, leg.amountMinor)) {
+      return {
+        valid: false,
+        message: `The visible ${leg.method.toUpperCase()} amount is invalid or does not match the saved split plan. Enter it again before confirming payment.`,
+      };
+    }
+    if (
+      leg.method === 'cash'
+      && !visibleMoneyMatchesJournal(cashTenderedInput, leg.tenderedMinor)
+    ) {
+      return {
+        valid: false,
+        message: 'The visible cash received amount is invalid or does not match the saved split plan. Enter it again before confirming payment.',
+      };
+    }
+  }
+  return { valid: true, message: null };
+}
+
+/** Validate the cashier's complete multi-rail plan against the frozen due. */
+export function inspectSplitPaymentPlan(
+  legs: readonly CheckoutSplitPaymentLeg[] | undefined,
+  expectedDueMinor: number | undefined,
+): SplitPaymentPlanStatus {
+  if (!Number.isInteger(expectedDueMinor) || (expectedDueMinor ?? 0) <= 0) {
+    return {
+      valid: false,
+      totalMinor: 0,
+      remainingMinor: 0,
+      message: 'The exact server balance is unavailable.',
+    };
+  }
+  if (!legs || legs.length < 2 || legs.length > 5) {
+    return {
+      valid: false,
+      totalMinor: 0,
+      remainingMinor: expectedDueMinor!,
+      message: 'Choose between 2 and 5 payment methods.',
+    };
+  }
+  const totalMinor = legs.reduce((sum, leg) => (
+    Number.isInteger(leg.amountMinor) && leg.amountMinor >= 0
+      ? sum + leg.amountMinor
+      : sum
+  ), 0);
+  const remainingMinor = expectedDueMinor! - totalMinor;
+  const methods = new Set<CheckoutSplitPaymentMethod>();
+  for (const leg of legs) {
+    if (!SPLIT_PAYMENT_METHODS.has(leg.method) || methods.has(leg.method)) {
+      return {
+        valid: false,
+        totalMinor,
+        remainingMinor,
+        message: 'Each payment method can be used only once.',
+      };
+    }
+    methods.add(leg.method);
+    if (!Number.isInteger(leg.amountMinor) || leg.amountMinor <= 0) {
+      return {
+        valid: false,
+        totalMinor,
+        remainingMinor,
+        message: 'Enter a positive amount for every payment method.',
+      };
+    }
+    if (
+      leg.refExternal !== undefined
+      && (typeof leg.refExternal !== 'string' || leg.refExternal.trim().length > 200)
+    ) {
+      return {
+        valid: false,
+        totalMinor,
+        remainingMinor,
+        message: 'A payment reference is invalid or too long.',
+      };
+    }
+    if (leg.method === 'cash') {
+      if (!Number.isInteger(leg.tenderedMinor) || (leg.tenderedMinor as number) < leg.amountMinor) {
+        return {
+          valid: false,
+          totalMinor,
+          remainingMinor,
+          message: 'Cash received must cover the cash portion.',
+        };
+      }
+    } else if (leg.tenderedMinor !== undefined) {
+      return {
+        valid: false,
+        totalMinor,
+        remainingMinor,
+        message: 'Cash received is valid only for the cash portion.',
+      };
+    }
+  }
+  return {
+    valid: remainingMinor === 0,
+    totalMinor,
+    remainingMinor,
+    message: remainingMinor === 0
+      ? null
+      : remainingMinor > 0
+        ? 'Allocate the remaining balance.'
+        : 'The split exceeds the exact amount due.',
+  };
+}
+
 export function buildCheckoutPaymentSubmission(
   retry: PosCheckoutRetry,
 ): CheckoutPaymentSubmission | null {
@@ -762,6 +982,7 @@ export function buildCheckoutPaymentSubmission(
     retry.phase !== 'recording_payment'
     || !orderId
     || !hasCollectibleCheckoutBalance(retry)
+    || retry.splitPaymentLegs !== undefined
   ) {
     return null;
   }
@@ -794,6 +1015,37 @@ export function buildCheckoutPaymentSubmission(
       expected_order_total_minor: total,
       expected_due_minor: amount,
       tip_minor: tip,
+    },
+  };
+}
+
+export function buildCheckoutPaymentBundleSubmission(
+  retry: PosCheckoutRetry,
+): CheckoutPaymentBundleSubmission | null {
+  const orderId = nonEmptyString(retry.pendingOrderId);
+  if (
+    retry.phase !== 'recording_payment'
+    || !orderId
+    || !hasCollectibleCheckoutBalance(retry)
+    || !retry.splitPaymentLegs
+    || (retry.tipMinor ?? 0) !== 0
+    || retry.cashTenderedMinor !== undefined
+    || !inspectSplitPaymentPlan(retry.splitPaymentLegs, retry.paymentAmountMinor).valid
+  ) {
+    return null;
+  }
+  return {
+    orderId,
+    idempotencyKey: `payment-bundle:${retry.key}`,
+    body: {
+      payments: retry.splitPaymentLegs.map((leg) => ({
+        method: leg.method,
+        amount_minor: leg.amountMinor,
+        ...(leg.method === 'cash' ? { tendered_minor: leg.tenderedMinor } : {}),
+        ...(leg.refExternal?.trim() ? { ref_external: leg.refExternal.trim() } : {}),
+      })),
+      expected_order_total_minor: retry.orderTotalMinor,
+      expected_due_minor: retry.paymentAmountMinor,
     },
   };
 }
