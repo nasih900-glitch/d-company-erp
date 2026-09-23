@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+import types
 from hashlib import sha256
 from pathlib import Path
 
@@ -407,6 +408,86 @@ finally:
         capture_output=True, text=True, check=False,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_contended_installer_lock_is_a_clean_operator_refusal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    spec = importlib.util.spec_from_file_location("combined_cleanup_lock_contention", LOCK_BOOTSTRAP)
+    assert spec and spec.loader
+    bootstrap = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bootstrap)
+    monkeypatch.setattr(bootstrap, "CANONICAL_CHECKOUT", ROOT)
+    monkeypatch.setattr(
+        bootstrap,
+        "TAGGED_APP_SHA",
+        subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
+    )
+    signed = bootstrap.load_tagged_lock_helper()
+    uid, gid = os.geteuid(), os.getegid()
+    lock_arguments = {
+        "runtime_parent": tmp_path,
+        "runtime_directory_name": "runtime",
+        "expected_uid": uid,
+        "expected_gid": gid,
+    }
+    held_fd, _ = signed.acquire_lock(**lock_arguments)
+    try:
+        monkeypatch.setattr(bootstrap, "_validate_runner", lambda _path: None)
+        monkeypatch.setattr(bootstrap, "load_tagged_lock_helper", lambda: types.SimpleNamespace(
+            ProductionInstallLockError=signed.ProductionInstallLockError,
+            acquire_lock=lambda: signed.acquire_lock(**lock_arguments),
+        ))
+        monkeypatch.setattr(bootstrap.os, "geteuid", lambda: 0)
+        monkeypatch.setattr(bootstrap.sys, "argv", ["lock-bootstrap", str(POSTCHECK_RUNNER)])
+        assert bootstrap.main() == 2
+        captured = capsys.readouterr()
+        assert "REFUSED: combined-cleanup installer lock" in captured.err
+        assert "Another D Company production install or upgrade is already running" in captured.err
+        assert "Traceback" not in captured.err
+    finally:
+        os.close(held_fd)
+
+
+def test_receipt_preflight_rejects_duplicates_before_apply_sql() -> None:
+    source = APPLY_RUNNER.read_text(encoding="utf-8")
+    assert source.index('c3c_require_no_existing_receipt "$cleanup_id"') < source.index(
+        "container_dir_candidate="
+    ) < source.index("apply_output=$(docker exec")
+    assert source.rindex("c3c_resolve_stopped_runtime") < source.index(
+        "apply_output=$(docker exec"
+    )
+    assert "cleanup COMMITTED but psql verification failed" in source
+    script = r'''
+set -Eeuo pipefail
+source "$1"
+c3c_require_install_lock() { :; }
+C3C_POSTGRES_CONTAINER=postgres-id
+C3C_DATABASE=erp
+docker() {
+  [[ "$1" == exec && "$2" == postgres-id &&
+     "$*" == *'default_transaction_read_only=on'* &&
+     "$*" == *'SELECT count(*) FROM audit_log'* ]] || return 77
+  [[ "${MOCK_DB_FAIL:-0}" != 1 ]] || return 78
+  printf '%s\n' "$MOCK_RECEIPT_COUNT"
+}
+c3c_require_no_existing_receipt code30.3-combined-cleanup-20260923
+'''
+    for count, failure, accepted, expected in (
+        ("0", False, True, ""),
+        ("1", False, False, "cleanup receipt already exists"),
+        ("2", False, False, "cleanup receipt already exists"),
+        ("invalid", False, False, "invalid count"),
+        ("0", True, False, "read-only cleanup receipt preflight failed"),
+    ):
+        result = subprocess.run(
+            ["bash", "-c", script, "preflight-test", str(RUNTIME)],
+            env={**os.environ, "MOCK_RECEIPT_COUNT": count,
+                 "MOCK_DB_FAIL": "1" if failure else "0"},
+            capture_output=True, text=True, check=False,
+        )
+        assert (result.returncode == 0) is accepted
+        assert expected in result.stderr
 
 
 def test_runtime_rejects_disagreeing_compose_working_directory_labels(tmp_path: Path) -> None:

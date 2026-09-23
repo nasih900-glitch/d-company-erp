@@ -35,6 +35,24 @@ c3c_require_install_lock() {
   flock -n 9 || c3c_die "another production installer or maintenance run holds the lock"
 }
 
+c3c_require_no_existing_receipt() {
+  local cleanup_id=$1 receipt_count
+  c3c_require_install_lock
+  receipt_count=$(docker exec "$C3C_POSTGRES_CONTAINER" sh -eu -c '
+    : "${POSTGRES_USER:?}"
+    printf "%s\n" "SELECT count(*) FROM audit_log WHERE action = '\''verified_trial_cleanup'\'' AND entity_type = '\''TrialCleanupReceipt'\'' AND entity_id = :'\''cleanup_id'\'';" | \
+      PGOPTIONS="-c default_transaction_read_only=on" \
+      psql -X --no-psqlrc --set=ON_ERROR_STOP=1 --quiet --tuples-only --no-align \
+        --username "$POSTGRES_USER" --dbname "$1" --set="cleanup_id=$2" \
+        --file=-
+  ' preflight "$C3C_DATABASE" "$cleanup_id") ||
+    c3c_die "read-only cleanup receipt preflight failed; no cleanup SQL started"
+  [[ "$receipt_count" =~ ^[0-9]+$ ]] ||
+    c3c_die "read-only cleanup receipt preflight returned an invalid count; no cleanup SQL started"
+  [[ "$receipt_count" == 0 ]] ||
+    c3c_die "cleanup receipt already exists for this ID; no cleanup SQL started and this cleanup must not be retried"
+}
+
 c3c_require_clean_ops_checkout() {
   local script_dir=$1 expected_source=$2
   local path relative actual_blob expected_blob

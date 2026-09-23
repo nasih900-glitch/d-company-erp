@@ -102,6 +102,11 @@ PY
 
 c3c_require_clean_ops_checkout "$SCRIPT_DIR" "$expected_source_sha"
 c3c_resolve_stopped_runtime
+cleanup_id=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["cleanup_id"])' "$manifest_file") ||
+  c3c_die "validated manifest cleanup ID is unreadable"
+[[ "$(c3c_hash_file "$manifest_file")" == "$manifest_sha" ]] ||
+  c3c_die "manifest changed before receipt preflight"
+c3c_require_no_existing_receipt "$cleanup_id"
 
 container_dir_candidate="/tmp/code30-combined-apply-${$}-$(date -u +%s)"
 container_dir=
@@ -162,7 +167,6 @@ apply_status=$?
 set -e
 printf '%s\n' "$apply_output"
 if ((apply_status != 0)); then
-  cleanup_id=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["cleanup_id"])' "$manifest_file")
   set +e
   receipt_count=$(docker exec "$C3C_POSTGRES_CONTAINER" sh -eu -c '
     : "${POSTGRES_USER:?}"

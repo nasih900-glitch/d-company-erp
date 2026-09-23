@@ -75,7 +75,10 @@ def exec_locked_runner(script: Path, arguments: list[str]) -> NoReturn:
         raise MaintenanceLockError("production maintenance lock requires root")
     _validate_runner(script)
     helper = load_tagged_lock_helper()
-    lock_fd, metadata = helper.acquire_lock()
+    try:
+        lock_fd, metadata = helper.acquire_lock()
+    except helper.ProductionInstallLockError as exc:
+        raise MaintenanceLockError(str(exc)) from exc
     inherited_descriptor_ready = False
     try:
         if lock_fd != helper.INHERITED_LOCK_FD:
