@@ -213,6 +213,14 @@ receipt field.
   The receipt identity is invisible to the Code30.2 post-cleanup installer
   gate. Existing idempotency receipts and the Code30.1 receipt behave exactly
   as before.
+- `infra/scripts/cleanup-code30-3-trial-data.{sh,sql}` is the one-time,
+  owner-approved removal of the pinned 20 September trial cohort. It runs after
+  the `0082` deployment with the backend stopped and uses a guarded
+  four-trigger exception proven byte-identical before commit. It retains audit,
+  idempotency, delivered Sheets ledger rows and the invoice counter. Local
+  rehearsal on a restored production backup passed dry run, apply, ten
+  fail-closed cases, backend receipt validation and the Code30.2 installer gate.
+  The production run has not happened.
 
 ## Verification status
 
@@ -268,9 +276,9 @@ regenerated Code30.3 map froze 138 reviewed delta files, the focused
 release-control suite passed **711** tests with one expected macOS skip, and the
 complete root release suite passed **1,135** tests with two expected skips.
 After the later clock-skew, post-cleanup verifier and evidence-analyzer
-corrections and the versioned trial-cleanup replay receipt, the refreshed Code30.3 map freezes **145** reviewed delta files, the
+corrections and the versioned trial-cleanup replay receipt and trial cleanup, the refreshed Code30.3 map freezes **147** reviewed delta files, the
 standalone freeze verifier preserved all 491 baseline test files, and the
-complete root release suite passed **1,147** tests with two expected skips.
+complete root release suite passed **1,149** tests with two expected skips.
 `git diff --check` also passed. A passing local test remains source evidence
 only.
 

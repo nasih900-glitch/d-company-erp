@@ -115,7 +115,9 @@ separate permissions.
 
 Reward redemption and WhatsApp automation remain inactive. This patch does not
 claim SMTP delivery; production SMTP is still provider-blocked and unverified.
-It does not delete live business data or the historical Code30.2 evidence.
+It does not delete genuine business data or the historical Code30.2 evidence;
+the separate owner-approved trial cleanup below removes only its pinned trial
+cohort.
 
 ## Database changes
 
@@ -177,6 +179,41 @@ The fence fails closed: if any row carrying the v2 action or entity type is
 malformed, or two share a cleanup id, every keyed shift opening in that company
 is refused with HTTP 422 until an owner repairs the receipt. Nothing is
 written. The cleanup runner must therefore validate the receipt before commit.
+
+## One-time Code30.3 trial-data cleanup
+
+`infra/scripts/cleanup-code30-3-trial-data.{sh,sql}` removes the owner-confirmed
+trial cohort: the five shifts opened from 20 September 2026 and their 49
+orders, 49 order lines, 47 payments, 61 Gaming sessions and 12 extensions,
+pinned by exact ID and row hash from a fresh backup. It does not modify the
+immutable Code30.1 cleanup. It keeps audit rows, idempotency receipts, the 47
+delivered Sheets ledger rows (so they are never resent) and the invoice counter.
+Invoice numbers `00024`–`00070` are retired and never reused; the next invoice is
+`00071`. The owner deletes the matching 47 `ERP Mirror v1` rows by event ID,
+which are listed in the receipt evidence.
+
+Paid sales are protected by append-only triggers. The owner approved one
+guarded exception. Inside a single SERIALIZABLE transaction the script
+disables exactly `trg_payments_immutable`, `trg_orders_paid_source_integrity`,
+`trg_order_lines_paid_source_integrity` and
+`trg_gaming_session_extensions_immutable`, deletes the pinned rows, re-enables
+the triggers and proves every trigger and trigger function on those tables is
+byte-identical before commit. Any failed check rolls everything back.
+
+Before deleting, it requires the pinned rows and business totals to be
+unchanged, whole-database quiescence, no new foreign-key dependency, the
+reviewed invoice counter, and a whole-database fingerprint equal to the value
+rehearsed on a restored copy of a fresh backup. Afterwards it proves that
+every retained row and unrelated table is unchanged and that exactly one v2
+replay receipt was added. The default mode is a dry run that rolls back.
+
+Operator order: pause business and quiesce tablets; deploy Code30.3 to `0082`
+with the guarded installer; stop the backend; take a fresh backup; run the
+runner's dry run and record its fingerprint; run `--apply` with that fingerprint
+and backup; start the backend; reconcile DB, Web, Android and Sheets. The runner
+refuses unless the live database and the restored backup are both at `0082`
+and the stopped backend's image revision equals `--source-git-sha`. If any
+trial row changes after these pins, regenerate and re-review the SQL.
 
 The compatibility policy remains
 `ANDROID_MIN_SUPPORTED_VERSION_CODE=8`,
@@ -247,9 +284,9 @@ proof. After the final harness and documentation edits stopped, the regenerated
 Code30.3 map froze 138 reviewed delta files, the focused release-control suite
 passed **711** tests with one expected macOS skip, and the complete root release
 suite passed **1,135** tests with two expected skips. After the later clock-skew,
-post-cleanup verifier and evidence-analyzer corrections and the versioned trial-cleanup replay receipt, the refreshed Code30.3
-map freezes **145** reviewed delta files, the standalone verifier preserved all
-491 baseline test files, and the complete root release suite passed **1,147**
+post-cleanup verifier and evidence-analyzer corrections and the versioned trial-cleanup replay receipt and trial cleanup, the refreshed Code30.3
+map freezes **147** reviewed delta files, the standalone verifier preserved all
+491 baseline test files, and the complete root release suite passed **1,149**
 tests with two expected skips. `git diff --check` also passed.
 
 The following remain separate pending gates at this candidate phase:
