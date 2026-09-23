@@ -394,3 +394,219 @@ async def refuse_retired_action_replay(
                     "identity_matches_retired_action": identity_matches,
                 },
             )
+
+
+# Versioned trial-cleanup receipts (v2). These rows deliberately avoid every
+# identity the Code30.2 post-cleanup verifier treats as a cleanup receipt
+# candidate, because that installer gate requires exactly the one Code30.1
+# receipt above.
+VERSIONED_CLEANUP_ACTION = "verified_trial_cleanup"
+VERSIONED_CLEANUP_ENTITY_TYPE = "TrialCleanupReceipt"
+VERSIONED_CLEANUP_RECEIPT_VERSION = 2
+_VERSIONED_CLEANUP_ID = re.compile(r"[a-z0-9][a-z0-9.-]{7,63}")
+_V1_RECEIPT_IDENTITIES = frozenset(
+    {
+        _CLEANUP_ENTITY_ID,
+        "code30.1-production-trial-cleanup-20260920",
+        "production-trial-cleanup-20260920",
+    }
+)
+_MAX_ACTION_KEY_LENGTH = 160
+
+
+def _canonical_uuid_text(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        return str(UUID(value)) == value
+    except ValueError:
+        return False
+
+
+def _timestamp_with_zone(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return parsed.utcoffset() is not None
+
+
+def _hex(value: object, length: int) -> bool:
+    return isinstance(value, str) and re.fullmatch(f"[0-9a-f]{{{length}}}", value) is not None
+
+
+def _versioned_shift_opening_fence(receipt: object) -> dict[str, dict[str, Any]] | None:
+    """Return the exact shift-opening fence of one valid v2 receipt, else None."""
+    cleanup_id = getattr(receipt, "entity_id", None)
+    before = getattr(receipt, "before", None)
+    after = getattr(receipt, "after", None)
+    if (
+        getattr(receipt, "action", None) != VERSIONED_CLEANUP_ACTION
+        or getattr(receipt, "entity_type", None) != VERSIONED_CLEANUP_ENTITY_TYPE
+        or not isinstance(cleanup_id, str)
+        or _VERSIONED_CLEANUP_ID.fullmatch(cleanup_id) is None
+        or cleanup_id in _V1_RECEIPT_IDENTITIES
+        or getattr(receipt, "request_id", None) != cleanup_id
+        or getattr(receipt, "client_action_id", None) is not None
+        or getattr(receipt, "client_was_offline", None) is not None
+        or getattr(receipt, "synced_at", None) is not None
+        or getattr(receipt, "actor_user_id", None) is None
+        or getattr(receipt, "terminal_id", None) is None
+    ):
+        return None
+    if not _exact_keys(before, {"schema_revision", "state_fingerprint", "backup_sha256"}):
+        return None
+    if (
+        not isinstance(before["schema_revision"], str)
+        or re.fullmatch(r"[0-9]{4}", before["schema_revision"]) is None
+        or not _hex(before["state_fingerprint"], 64)
+        or not _hex(before["backup_sha256"], 64)
+    ):
+        return None
+    if not _exact_keys(
+        after,
+        {
+            "receipt_version",
+            "cleanup_id",
+            "source_git_sha",
+            "executor",
+            "executed_at",
+            "deleted_counts",
+            "deleted_shift_ids",
+            "replay_fence",
+            "evidence",
+        },
+    ):
+        return None
+    executor = after["executor"]
+    if (
+        type(after["receipt_version"]) is not int
+        or after["receipt_version"] != VERSIONED_CLEANUP_RECEIPT_VERSION
+        or after["cleanup_id"] != cleanup_id
+        or not _hex(after["source_git_sha"], 40)
+        or not isinstance(executor, str)
+        or not 1 <= len(executor) <= 100
+        or not _timestamp_with_zone(after["executed_at"])
+        or not isinstance(after["evidence"], dict)
+    ):
+        return None
+    counts = after["deleted_counts"]
+    if not isinstance(counts, dict) or any(
+        not isinstance(name, str) or type(count) is not int or count < 0
+        for name, count in counts.items()
+    ):
+        return None
+    deleted_shift_ids = _canonical_uuid_list(after["deleted_shift_ids"])
+    if deleted_shift_ids is None or counts.get("shifts") != len(deleted_shift_ids):
+        return None
+    deleted_shift_texts = {str(shift_id) for shift_id in deleted_shift_ids}
+
+    fence = after["replay_fence"]
+    if not isinstance(fence, list):
+        return None
+    entries: dict[str, dict[str, Any]] = {}
+    ordered_keys: list[str] = []
+    fenced_sources: set[str] = set()
+    for raw in fence:
+        if not _exact_keys(
+            raw,
+            {
+                "action_type",
+                "action_key",
+                "request_hash",
+                "user_id",
+                "terminal_id",
+                "source_entity_id",
+            },
+        ):
+            return None
+        action_key = raw["action_key"]
+        source = raw["source_entity_id"]
+        if (
+            raw["action_type"] != "shift_open"
+            or not isinstance(action_key, str)
+            or not 1 <= len(action_key) <= _MAX_ACTION_KEY_LENGTH
+            or action_key != action_key.strip()
+            or not _hex(raw["request_hash"], 64)
+            or not _canonical_uuid_text(raw["user_id"])
+            or not _canonical_uuid_text(raw["terminal_id"])
+            or source not in deleted_shift_texts
+            or source in fenced_sources
+        ):
+            return None
+        fenced_sources.add(source)
+        entries[action_key] = raw
+        ordered_keys.append(action_key)
+    if ordered_keys != sorted(ordered_keys) or len(entries) != len(fence):
+        return None
+    return entries
+
+
+async def refuse_versioned_shift_opening_replay(
+    session: AsyncSession,
+    *,
+    company_id: UUID,
+    action_key: str,
+    request_hash: str | None,
+    user_id: UUID | None,
+    terminal_id: UUID | None,
+) -> None:
+    """Refuse a keyed shift opening retired by any verified v2 cleanup receipt.
+
+    Every row claiming the v2 identity must validate. A malformed or duplicated
+    receipt blocks keyed shift openings instead of silently dropping a fence.
+    """
+    from app.models.audit import AuditLog  # local import avoids model cycles
+
+    receipts = (
+        (
+            await session.execute(
+                select(AuditLog)
+                .where(
+                    AuditLog.company_id == company_id,
+                    (AuditLog.action == VERSIONED_CLEANUP_ACTION)
+                    | (AuditLog.entity_type == VERSIONED_CLEANUP_ENTITY_TYPE),
+                )
+                .order_by(AuditLog.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not receipts:
+        return
+
+    fences: list[dict[str, dict[str, Any]]] = []
+    cleanup_ids: set[str] = set()
+    for receipt in receipts:
+        fence = _versioned_shift_opening_fence(receipt)
+        cleanup_id = getattr(receipt, "entity_id", None)
+        if fence is None or cleanup_id in cleanup_ids:
+            raise BusinessRuleError(
+                "A trial-cleanup receipt is malformed or duplicated, so saved shift "
+                "openings are blocked. Nothing was changed; ask an owner to review "
+                "the cleanup receipt."
+            )
+        cleanup_ids.add(cleanup_id)
+        fences.append(fence)
+
+    for fence in fences:
+        entry = fence.get(action_key)
+        if entry is None:
+            continue
+        identity_matches = (
+            entry["request_hash"] == request_hash
+            and entry["user_id"] == _identity_text(user_id)
+            and entry["terminal_id"] == _identity_text(terminal_id)
+        )
+        raise IdempotencyConflict(
+            "This saved action was permanently retired during verified test-data "
+            "cleanup and cannot be replayed.",
+            details={
+                "key": action_key,
+                "issue": "retired_cleanup_action",
+                "identity_matches_retired_action": identity_matches,
+            },
+        )

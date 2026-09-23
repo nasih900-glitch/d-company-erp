@@ -37,7 +37,10 @@ from sqlalchemy import func, or_, select
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.orm import aliased
 
-from app.core.cleanup_replay_fence import refuse_retired_action_replay
+from app.core.cleanup_replay_fence import (
+    refuse_retired_action_replay,
+    refuse_versioned_shift_opening_replay,
+)
 from app.core.db import SessionDep
 from app.core.errors import (
     BusinessRuleError,
@@ -8764,6 +8767,16 @@ async def open_shift(
         # retired opening key and bypass the durable cleanup receipt.
         await refuse_retired_action_replay(
             session,
+            action_key=capture.key,
+            request_hash=capture.request_hash,
+            user_id=tenant.user_id,
+            terminal_id=tenant.terminal_id,
+        )
+        # Later cleanups delete shifts whose opening key lives only on the
+        # shift row, so no retained idempotency receipt can absorb a replay.
+        await refuse_versioned_shift_opening_replay(
+            session,
+            company_id=tenant.company_id,
             action_key=capture.key,
             request_hash=capture.request_hash,
             user_id=tenant.user_id,

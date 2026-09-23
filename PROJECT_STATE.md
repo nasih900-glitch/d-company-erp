@@ -202,6 +202,18 @@ receipt field.
   rows and close the modal; transport/5xx errors retain disabled rows for safe
   retry.
 
+### Versioned trial-cleanup replay receipt
+
+- A later trial cleanup that deletes shifts records a v2
+  `verified_trial_cleanup` / `TrialCleanupReceipt` audit receipt. Keyed shift
+  openings check it after the unchanged Code30.1 fence and before any shift
+  lookup, so a reconnecting tablet cannot recreate a deleted shift. The full
+  contract is in `docs/CODE30_3_PATCH_CANDIDATE.md`.
+- Malformed or duplicated v2 receipts fail closed for keyed shift openings.
+  The receipt identity is invisible to the Code30.2 post-cleanup installer
+  gate. Existing idempotency receipts and the Code30.1 receipt behave exactly
+  as before.
+
 ## Verification status
 
 The post-review hardening is complete. Independent installer review passed
@@ -212,7 +224,7 @@ run recorded 84 passes and one expected macOS-only skip.
 
 The current reviewed working tree has passed these local source gates:
 
-- backend: **1,652 passed, 21 intentionally skipped, 0 failed** on a new
+- backend: **1,705 passed, 21 intentionally skipped, 0 failed** on a new
   disposable PostgreSQL database owned by role `erp` (as CI) and migrated from
   `0001` through `0082`. An earlier local run as a different database role
   failed only the two post-cleanup verifier proofs, because the verifier pins
@@ -256,9 +268,9 @@ regenerated Code30.3 map froze 138 reviewed delta files, the focused
 release-control suite passed **711** tests with one expected macOS skip, and the
 complete root release suite passed **1,135** tests with two expected skips.
 After the later clock-skew, post-cleanup verifier and evidence-analyzer
-corrections, the refreshed Code30.3 map freezes **143** reviewed delta files, the
+corrections and the versioned trial-cleanup replay receipt, the refreshed Code30.3 map freezes **145** reviewed delta files, the
 standalone freeze verifier preserved all 491 baseline test files, and the
-complete root release suite passed **1,145** tests with two expected skips.
+complete root release suite passed **1,147** tests with two expected skips.
 `git diff --check` also passed. A passing local test remains source evidence
 only.
 

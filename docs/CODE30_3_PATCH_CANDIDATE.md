@@ -143,6 +143,41 @@ Room `52` adds cleanup evidence, directive and acknowledgement fields and the
 `51 -> 52` migration. Upgrade acceptance must install build `38` over the
 same-signed build `37` without uninstalling or clearing app data.
 
+## Versioned trial-cleanup replay receipt
+
+A later trial cleanup that deletes shifts must also record one v2 receipt in
+`audit_log`, in the same transaction as the deletion, before the backend is
+restarted. A shift's opening key lives only on the shift row, so no retained
+idempotency receipt can absorb a delayed tablet replay once that row is gone.
+Keyed `POST /pos/shifts/open` checks the Code30.1 receipt first (unchanged), then
+every v2 receipt of the caller's company, before any shift lookup or write. It
+refuses a fenced key regardless of payload with the same 409
+`retired_cleanup_action` response as Code30.1. No migration is required.
+
+The receipt row uses `action = 'verified_trial_cleanup'`,
+`entity_type = 'TrialCleanupReceipt'`, `entity_id = request_id = cleanup_id`
+(lower-case `[a-z0-9][a-z0-9.-]{7,63}`), a non-null actor and terminal, and
+NULL `client_action_id`, `client_was_offline` and `synced_at`. These values
+differ from every identity the Code30.2 post-cleanup installer gate treats as a
+cleanup receipt, so that gate still sees exactly the one Code30.1 receipt. The
+receipt's audit id must be greater than `28202`, which holds naturally in
+production because the sequence is already past that. `before` holds exactly
+`schema_revision` (four digits), `state_fingerprint` and `backup_sha256`.
+`after` holds exactly `receipt_version = 2`, `cleanup_id`, `source_git_sha`,
+`executor` (1–100 characters), `executed_at` (with time zone),
+`deleted_counts` (non-negative integers, with `shifts` equal to the number of
+deleted shift ids), `deleted_shift_ids` (sorted, unique, canonical UUIDs),
+`replay_fence` and `evidence` (an object for invoices, Sheets event ids and
+other records; the fence does not interpret it). Each fence entry has exactly
+`action_type = 'shift_open'`, `action_key`, the shift's `opening_request_hash`,
+`user_id`, `terminal_id` and `source_entity_id`. Entries are sorted by key,
+unique, and each names a different deleted shift.
+
+The fence fails closed: if any row carrying the v2 action or entity type is
+malformed, or two share a cleanup id, every keyed shift opening in that company
+is refused with HTTP 422 until an owner repairs the receipt. Nothing is
+written. The cleanup runner must therefore validate the receipt before commit.
+
 The compatibility policy remains
 `ANDROID_MIN_SUPPORTED_VERSION_CODE=8`,
 `ANDROID_LATEST_VERSION_CODE=8`, and policy revision `1` until the owner
@@ -164,7 +199,7 @@ of nested JSON types, receipt provenance, triggers/functions, lifecycle churn,
 legacy database heads, both quiescence gates and pre-promotion rollback. That
 focused review recorded 84 passes and one expected macOS skip.
 
-The current reviewed working tree passed **1,652 backend tests** with 21
+The current reviewed working tree passed **1,705 backend tests** with 21
 intentional isolated-audit skips and no failures on a fresh PostgreSQL database
 owned by role `erp`, as in CI, and migrated from `0001` through `0082`; **579 Web tests** across 95 files plus TypeScript,
 zero-warning ESLint and the verified production build; and **1,136 Android JVM
@@ -212,9 +247,9 @@ proof. After the final harness and documentation edits stopped, the regenerated
 Code30.3 map froze 138 reviewed delta files, the focused release-control suite
 passed **711** tests with one expected macOS skip, and the complete root release
 suite passed **1,135** tests with two expected skips. After the later clock-skew,
-post-cleanup verifier and evidence-analyzer corrections, the refreshed Code30.3
-map freezes **143** reviewed delta files, the standalone verifier preserved all
-491 baseline test files, and the complete root release suite passed **1,145**
+post-cleanup verifier and evidence-analyzer corrections and the versioned trial-cleanup replay receipt, the refreshed Code30.3
+map freezes **145** reviewed delta files, the standalone verifier preserved all
+491 baseline test files, and the complete root release suite passed **1,147**
 tests with two expected skips. `git diff --check` also passed.
 
 The following remain separate pending gates at this candidate phase:
