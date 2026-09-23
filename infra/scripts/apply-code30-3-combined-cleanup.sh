@@ -2,6 +2,19 @@
 set -Eeuo pipefail
 
 SCRIPT_DIR=$(unset CDPATH; cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+LOCK_BOOTSTRAP="$SCRIPT_DIR/code30-3-combined-cleanup-lock.py"
+if [[ "${DCOMPANY_PRODUCTION_INSTALL_LOCK_FD:-}" != 9 ]]; then
+  [[ -f "$LOCK_BOOTSTRAP" && -r "$LOCK_BOOTSTRAP" && ! -L "$LOCK_BOOTSTRAP" ]] || {
+    printf 'REFUSED: tracked installer-lock bootstrap is missing, unreadable, or linked\n' >&2; exit 2;
+  }
+  bootstrap_rel=$(git -C "$SCRIPT_DIR" ls-files --full-name "$LOCK_BOOTSTRAP")
+  bootstrap_actual=$(git hash-object "$LOCK_BOOTSTRAP")
+  bootstrap_expected=$(git -C "$SCRIPT_DIR" rev-parse "HEAD:$bootstrap_rel" 2>/dev/null || true)
+  [[ -n "$bootstrap_rel" && "$bootstrap_actual" == "$bootstrap_expected" ]] || {
+    printf 'REFUSED: installer-lock bootstrap is not the tracked HEAD version\n' >&2; exit 2;
+  }
+  exec python3 "$LOCK_BOOTSTRAP" "$SCRIPT_DIR/apply-code30-3-combined-cleanup.sh" "$@"
+fi
 RUNTIME_HELPER="$SCRIPT_DIR/code30-3-combined-cleanup-runtime.sh"
 [[ -f "$RUNTIME_HELPER" && -r "$RUNTIME_HELPER" && ! -L "$RUNTIME_HELPER" ]] || {
   printf 'REFUSED: tracked runtime helper is missing, unreadable, or linked\n' >&2; exit 2;
@@ -14,6 +27,7 @@ runtime_expected=$(git -C "$SCRIPT_DIR" rev-parse "HEAD:$runtime_rel" 2>/dev/nul
   }
 # shellcheck source=code30-3-combined-cleanup-runtime.sh
 source "$RUNTIME_HELPER"
+c3c_require_install_lock
 VALIDATOR="$SCRIPT_DIR/prepare-code30-3-combined-cleanup.py"
 BODY="$SCRIPT_DIR/code30-3-combined-cleanup-body.sql"
 APPLY_SQL="$SCRIPT_DIR/apply-code30-3-combined-cleanup.sql"
@@ -130,6 +144,8 @@ for pair in \
   [[ "$actual" == "$expected" ]] || c3c_die "staged container file hash differs: $staged_path"
 done
 
+c3c_require_install_lock
+c3c_resolve_stopped_runtime
 set +e
 apply_output=$(docker exec "$C3C_POSTGRES_CONTAINER" sh -eu -c '
   : "${POSTGRES_USER:?}"

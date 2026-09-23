@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import subprocess
+import sys
 from hashlib import sha256
 from pathlib import Path
 
@@ -17,6 +19,9 @@ APPLY = ROOT / "infra" / "scripts" / "apply-code30-3-combined-cleanup.sql"
 POSTCHECK = ROOT / "infra" / "scripts" / "postcheck-code30-3-combined-cleanup.sql"
 RUNTIME = ROOT / "infra" / "scripts" / "code30-3-combined-cleanup-runtime.sh"
 RUNNER = ROOT / "infra" / "scripts" / "rehearse-code30-3-combined-cleanup.sh"
+APPLY_RUNNER = ROOT / "infra" / "scripts" / "apply-code30-3-combined-cleanup.sh"
+POSTCHECK_RUNNER = ROOT / "infra" / "scripts" / "postcheck-code30-3-combined-cleanup.sh"
+LOCK_BOOTSTRAP = ROOT / "infra" / "scripts" / "code30-3-combined-cleanup-lock.py"
 spec = importlib.util.spec_from_file_location("combined_cleanup_validator", VALIDATOR)
 assert spec and spec.loader
 validator = importlib.util.module_from_spec(spec)
@@ -276,6 +281,132 @@ def test_runtime_is_pinned_to_canonical_checkout_project_and_frozen_snapshot() -
     assert "C3C_SNAPSHOT_ROOT=/var/lib/dcompany-erp/build-snapshots" in runtime
     assert "stat -Lc '%u:%g:%a:%F'" in runtime
     assert "frozen production Compose bytes differ from the tagged checkout" in runtime
+
+
+def test_apply_and_standalone_postcheck_take_install_lock_before_runtime() -> None:
+    runtime = RUNTIME.read_text(encoding="utf-8")
+    assert "c3c_require_install_lock()" in runtime
+    assert "0:0:600:1:8180:$lock_id" in runtime
+    assert '"$path_metadata" == "$fd_metadata"' in runtime
+    assert "flock -n 9" in runtime
+    assert '"$script_dir/code30-3-combined-cleanup-lock.py"' in runtime
+    for runner, final_command in (
+        (APPLY_RUNNER, "apply_output=$(docker exec"),
+        (POSTCHECK_RUNNER, "output=$(docker exec"),
+    ):
+        source = runner.read_text(encoding="utf-8")
+        assert source.index('exec python3 "$LOCK_BOOTSTRAP"') < source.index(
+            'source "$RUNTIME_HELPER"'
+        )
+        assert source.index('source "$RUNTIME_HELPER"') < source.index(
+            "c3c_require_install_lock"
+        )
+        assert source.count("c3c_require_install_lock") == 2
+        assert source.count("c3c_resolve_stopped_runtime") == 2
+        assert source.rindex("c3c_require_install_lock") < source.index(final_command)
+        assert source.rindex("c3c_resolve_stopped_runtime") < source.index(final_command)
+    assert POSTCHECK_RUNNER.name in APPLY_RUNNER.read_text(encoding="utf-8")
+
+
+def test_maintenance_bootstrap_only_executes_exact_signed_lock_helper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = importlib.util.spec_from_file_location("combined_cleanup_lock", LOCK_BOOTSTRAP)
+    assert spec and spec.loader
+    bootstrap = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bootstrap)
+    helper = ROOT / "infra" / "scripts" / "production_install_lock.py"
+    assert sha256(helper.read_bytes()).hexdigest() == bootstrap.TAGGED_LOCK_HELPER_SHA256
+    monkeypatch.setattr(bootstrap, "CANONICAL_CHECKOUT", ROOT)
+    monkeypatch.setattr(
+        bootstrap,
+        "TAGGED_APP_SHA",
+        subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
+    )
+    assert callable(bootstrap.load_tagged_lock_helper().acquire_lock)
+    monkeypatch.setattr(bootstrap, "TAGGED_LOCK_HELPER_SHA256", "0" * 64)
+    with pytest.raises(bootstrap.MaintenanceLockError, match="signed bytes"):
+        bootstrap.load_tagged_lock_helper()
+
+
+def test_maintenance_lock_blocks_competitor_and_survives_child_exec(tmp_path: Path) -> None:
+    # Isolate fd 9 in a subprocess so the test cannot replace a pytest descriptor.
+    probe = r'''
+import fcntl, importlib.util, os, pathlib, subprocess, sys, types
+bootstrap_path, working_dir, project_root = map(pathlib.Path, sys.argv[1:])
+spec = importlib.util.spec_from_file_location("combined_cleanup_lock_probe", bootstrap_path)
+bootstrap = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(bootstrap)
+bootstrap.CANONICAL_CHECKOUT = project_root
+bootstrap.TAGGED_APP_SHA = subprocess.check_output(
+    ["git", "rev-parse", "HEAD"], cwd=project_root, text=True
+).strip()
+signed = bootstrap.load_tagged_lock_helper()
+runtime = working_dir / "runtime"
+uid, gid = os.geteuid(), os.getegid()
+fixture_bootstrap = working_dir / "bootstrap.py"
+fixture_bootstrap.write_text("# test location\n", encoding="utf-8")
+bootstrap.__file__ = str(fixture_bootstrap)
+runner = working_dir / "postcheck-code30-3-combined-cleanup.sh"
+runner.write_text('#!/bin/bash\nexec "$1" -c "$2"\n', encoding="utf-8")
+bootstrap.load_tagged_lock_helper = lambda: types.SimpleNamespace(
+    acquire_lock=lambda: signed.acquire_lock(
+        runtime_parent=working_dir, runtime_directory_name="runtime",
+        expected_uid=uid, expected_gid=gid,
+    ),
+    INHERITED_LOCK_FD=signed.INHERITED_LOCK_FD,
+    LOCK_FD_ENV=signed.LOCK_FD_ENV,
+    LOCK_ID_ENV=signed.LOCK_ID_ENV,
+)
+bootstrap.os.geteuid = lambda: 0
+class StoppedExec(Exception):
+    pass
+def fake_execve(executable, args, environment):
+    assert executable == "/bin/bash"
+    assert args[1] == str(runner)
+    fd = signed.INHERITED_LOCK_FD
+    metadata = os.fstat(fd)
+    assert os.get_inheritable(fd)
+    assert environment[signed.LOCK_FD_ENV] == "9"
+    assert environment[signed.LOCK_ID_ENV] == f"{metadata.st_dev}:{metadata.st_ino}"
+    competitor = os.open(runtime / signed.LOCK_FILE_NAME, os.O_RDWR)
+    try:
+        try:
+            fcntl.flock(competitor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            pass
+        else:
+            raise AssertionError("concurrent installer acquired the maintenance lock")
+    finally:
+        os.close(competitor)
+    child = subprocess.run(
+        ["/bin/bash", str(runner), sys.executable, "import os,fcntl; "
+         "fd=9; m=os.fstat(fd); "
+         "assert os.environ['DCOMPANY_PRODUCTION_INSTALL_LOCK_ID']=="
+         "f'{m.st_dev}:{m.st_ino}'; "
+         "fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)"],
+        env=environment, close_fds=False, capture_output=True, text=True,
+    )
+    assert child.returncode == 0, child.stderr
+    raise StoppedExec()
+bootstrap.os.execve = fake_execve
+try:
+    bootstrap.exec_locked_runner(runner, [])
+except StoppedExec:
+    pass
+else:
+    raise AssertionError("test exec should have been intercepted")
+competitor = os.open(runtime / signed.LOCK_FILE_NAME, os.O_RDWR)
+try:
+    fcntl.flock(competitor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+finally:
+    os.close(competitor)
+'''
+    result = subprocess.run(
+        [sys.executable, "-c", probe, str(LOCK_BOOTSTRAP), str(tmp_path), str(ROOT)],
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_runtime_rejects_disagreeing_compose_working_directory_labels(tmp_path: Path) -> None:

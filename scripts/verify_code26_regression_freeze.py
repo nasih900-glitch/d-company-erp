@@ -562,18 +562,19 @@ REVIEWED_CODE30_3_PRODUCTION_PATHS = frozenset(
 # post-release maintenance tools only. Their exact bytes must be pinned before
 # they can coexist with the immutable v3.1.30 application in this checkout.
 REVIEWED_POST_CODE30_3_MAINTENANCE_SHA256 = {
-    'docs/CODE30_3_COMBINED_CLEANUP_HANDOFF.md': '9c9b2038fd9d60b39efe2daee8f12ae3e29cfa02cd5089cb8cb24f0d5efac849',
-    'infra/scripts/apply-code30-3-combined-cleanup.sh': 'dd634125bd4547f4577568d6ae3c9f79bc0d805f345aa4202b18cb408d1906c7',
+    'docs/CODE30_3_COMBINED_CLEANUP_HANDOFF.md': 'd9477f880b06bd58e8ae3478b01a8c3f72478e8455587edaf6478fa96c734717',
+    'infra/scripts/apply-code30-3-combined-cleanup.sh': '11d1c834cc0456f67724bbaded06342f32f70d5ff925dcf44b63bf7a329225ce',
     'infra/scripts/apply-code30-3-combined-cleanup.sql': 'fe4f9617577f5c9c8e3b94d9e41cfa4507ed15604699b6de8c7c915761e772ea',
     'infra/scripts/code30-3-combined-cleanup-body.sql': '76f7cbb82366705a5a2b2bc4346b0c7a6f9735ddb8ba0acc2965cea67ee799db',
-    'infra/scripts/code30-3-combined-cleanup-runtime.sh': '62bae3a063181f1fbe6efc9e600861a379f75020791b34dfadb0fe4a05c4ea61',
+    'infra/scripts/code30-3-combined-cleanup-lock.py': '4c24c23b0b233d55211b83b811c0a9d7bb10fb69d76337e503e1da08d49f590e',
+    'infra/scripts/code30-3-combined-cleanup-runtime.sh': 'be5a43997e7141539f0cbc5be22eeb261b98e00021fd823b27a6111fcb7e04e3',
     'infra/scripts/generate-code30-3-combined-cleanup-candidate.py': 'ed1e86fc08c072e81a5622f8cc8451ca2f9e17dfa9c575a897c6e35ebd746cd4',
-    'infra/scripts/postcheck-code30-3-combined-cleanup.sh': 'bfef405f5094161cc53f6508e6b4bb68177eb4b6b6b79ac87eb79adef887d6e0',
+    'infra/scripts/postcheck-code30-3-combined-cleanup.sh': 'f598cbd1ad91bf80fb13b6bce3a9c3e2fb5a6d5c7e0dd36166f8cc070c0076c4',
     'infra/scripts/postcheck-code30-3-combined-cleanup.sql': '9bf08364de1c12158f6829d4c269d49eea5d31bfa4d65641286f8e5bc3cf7668',
     'infra/scripts/prepare-code30-3-combined-cleanup.py': 'c597cdac38b1b6ae09acfa0b7c1f066b585aebafeae1e1cc0d397f2904c8e983',
     'infra/scripts/rehearse-code30-3-combined-cleanup.sh': 'a0d31c840662cbd38d19b81da09ab79d92d3e28581586a991cbe187afd7f53ab',
     'infra/scripts/rehearse-code30-3-combined-cleanup.sql': '661afcb57c2f53d8904bfa6ffe4b890e1c18cb0fb2ad91f3c4cae8e7a61b7200',
-    'tests/test_code30_3_combined_cleanup_preparation.py': 'd8cf574d017622eaaa3befb97fcb9ae68d084cf9a38b789ea6afc22c4bf9d0f7',
+    'tests/test_code30_3_combined_cleanup_preparation.py': '38cb06a91e8248d08186503b74bf8afc3214ba46501e7df978375ebab264d7ec',
 }
 
 RELEASE_IDENTITY_TESTS = {

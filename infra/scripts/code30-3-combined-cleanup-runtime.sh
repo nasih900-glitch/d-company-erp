@@ -15,6 +15,26 @@ c3c_hash_file() {
 c3c_regular_file() { [[ "$1" == /* && -f "$1" && -r "$1" && ! -L "$1" ]]; }
 c3c_safe_name() { [[ "$1" =~ ^[a-z0-9][a-z0-9_.-]*$ ]]; }
 
+c3c_require_install_lock() {
+  local lock_file=/run/d-company-erp/production-install.lock
+  local lock_id=${DCOMPANY_PRODUCTION_INSTALL_LOCK_ID:-}
+  local fd_metadata path_metadata
+  [[ "$(id -u)" == 0 && "${DCOMPANY_PRODUCTION_INSTALL_LOCK_FD:-}" == 9 &&
+     "$lock_id" =~ ^[0-9]+:[0-9]+$ ]] ||
+    c3c_die "root-owned production installer lock descriptor is required"
+  [[ -d /run/d-company-erp && ! -L /run/d-company-erp &&
+     -f "$lock_file" && ! -L "$lock_file" ]] ||
+    c3c_die "canonical production installer lock path is absent or linked"
+  fd_metadata=$(stat -Lc '%u:%g:%a:%h:%f:%d:%i' "/proc/$$/fd/9" 2>/dev/null) ||
+    c3c_die "inherited production installer lock descriptor is unavailable"
+  path_metadata=$(stat -Lc '%u:%g:%a:%h:%f:%d:%i' "$lock_file" 2>/dev/null) ||
+    c3c_die "canonical production installer lock is unavailable"
+  [[ "$fd_metadata" == "0:0:600:1:8180:$lock_id" &&
+     "$path_metadata" == "$fd_metadata" ]] ||
+    c3c_die "inherited production installer lock failed identity, mode, or path validation"
+  flock -n 9 || c3c_die "another production installer or maintenance run holds the lock"
+}
+
 c3c_require_clean_ops_checkout() {
   local script_dir=$1 expected_source=$2
   local path relative actual_blob expected_blob
@@ -29,6 +49,7 @@ c3c_require_clean_ops_checkout() {
     "$script_dir/apply-code30-3-combined-cleanup.sql" \
     "$script_dir/code30-3-combined-cleanup-body.sql" \
     "$script_dir/code30-3-combined-cleanup-runtime.sh" \
+    "$script_dir/code30-3-combined-cleanup-lock.py" \
     "$script_dir/postcheck-code30-3-combined-cleanup.sh" \
     "$script_dir/postcheck-code30-3-combined-cleanup.sql" \
     "$script_dir/prepare-code30-3-combined-cleanup.py" \

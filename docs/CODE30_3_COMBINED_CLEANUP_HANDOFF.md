@@ -58,11 +58,28 @@ live database fingerprint and the rehearsed fingerprint. It commits one
 SERIALIZABLE transaction and one v2 receipt. The zero-v2-receipt guard makes a
 second pass invalid.
 
+The apply runner and its nested independent postcheck hold the same
+root-private `/run/d-company-erp/production-install.lock` as the tagged
+installer. A standalone postcheck acquires that lock itself. Neither runner
+may inspect or change the production runtime when another install or
+maintenance run owns the lock. Both recheck that Caddy and the backend are
+stopped immediately before their database query.
+
 Database quiescence alone does not prove tablet replay safety. The exact
 installation recorded on the later shift must report a successful sync with
 zero pending outbox work after the shift closes and after the final order,
 payment, void, Gaming end/cancel, and POS handoff timestamp. Earlier
-zero-pending observations are insufficient. Free-text quarantine assertions
+zero-pending observations are insufficient. The partner must then open Sync
+on that physical originating tablet, confirm **0 pending** and **no open local
+shift**, record the observed installation and time, turn its Wi-Fi off, and
+keep it disconnected until maintenance is reconciled. Server telemetry is a
+cross-check; because the tablet supplies its own heartbeat time, server data
+alone cannot satisfy this physical gate. Preserve the partner's observed
+installation ID, time, Sync=0 screen, no-open-local-shift screen, and Wi-Fi-off
+confirmation in root-private classification/operator evidence. Hash that
+physical record before the operator review is signed; server-only tablet JSON
+is insufficient. If the partner cannot confirm and preserve these conditions,
+do not run cleanup. Free-text quarantine assertions
 are rejected; quarantine stays disabled until a separately hashed physical
 retirement/reset proof format is reviewed. Keep all tablets disconnected
 throughout maintenance. An in-place
