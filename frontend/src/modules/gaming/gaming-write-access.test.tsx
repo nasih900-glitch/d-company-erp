@@ -83,6 +83,9 @@ describe('gaming write access boundary', () => {
 
   it('does not dispatch any Gaming write API when gaming.write is absent', () => {
     const denied = vi.fn();
+    expect(GAMING_WRITE_OPERATION_NAMES).toEqual(expect.arrayContaining([
+      'amendSessionPackage', 'joinSessionParticipant', 'leaveSessionParticipant',
+    ]));
     const writeSpies = GAMING_WRITE_OPERATION_NAMES.map((operation) =>
       vi.spyOn(gaming, operation),
     );
@@ -113,8 +116,30 @@ describe('gaming write access boundary', () => {
     }, {
       timer_minutes: 30,
       amount_minor: 10_000,
+      billing_revision: 1,
     }, 'extension-key');
-    dispatcher.dispatch('stopSession', 'session-1', 'stop-key');
+    dispatcher.dispatch('amendSessionPackage', 'session-1', {
+      target_package_id: 'ps5-single-30',
+      expected_timer_minutes: 60,
+      expected_amount_minor: 12_000,
+      expected_pause_version: 0,
+      expected_participant_revision: 0,
+      expected_billing_revision: 0,
+      expected_target_price_minor: 8_000,
+      expected_target_duration_minutes: 30,
+      expected_target_variant: 'single',
+    }, 'amend-key');
+    dispatcher.dispatch('joinSessionParticipant', 'session-1', {
+      customer_id: 'customer-1',
+      expected_participant_revision: 0,
+      customer_directory_revision: 1,
+      customer_directory_company_id: 'company-1',
+    }, 'join-key');
+    dispatcher.dispatch('leaveSessionParticipant', 'session-1', 'participant-1', 1, 'leave-key');
+    dispatcher.dispatch('stopSession', 'session-1', 'stop-key', {
+      participant_revision: 2,
+      billing_revision: 1,
+    });
     dispatcher.dispatch('resolveLegacyPausedSession', 'session-1', {
       expected_status: 'paused',
       expected_paused_at: null,

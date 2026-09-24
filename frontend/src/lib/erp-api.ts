@@ -3370,6 +3370,46 @@ export interface GameSessionDTO {
   /** Absent only when talking to a pre-Code22 backend during a coordinated rollout. */
   package_pricing_tier_snapshot?: 'standard' | 'premium' | null;
   extra_controllers: number;
+  participant_revision?: number;
+  billing_revision?: number;
+  effective_package_id?: string | null;
+  effective_package_price_minor?: number | null;
+  effective_package_duration_minutes?: number | null;
+  effective_package_variant?: string | null;
+  effective_package_station_type?: string | null;
+  effective_package_pricing_tier?: 'standard' | 'premium' | null;
+}
+
+export interface GamingParticipantDTO {
+  id: string;
+  customer_id: string;
+  joined_at: string;
+  joined_play_elapsed_ms: number;
+  left_at: string | null;
+  left_play_elapsed_ms: number | null;
+  join_revision: number;
+  leave_revision: number | null;
+}
+
+export interface GamingParticipantStateDTO {
+  session_id: string;
+  participant_revision: number;
+  active_friend_count: number;
+  current_player_count: number;
+  max_player_count: number;
+  participants: GamingParticipantDTO[];
+}
+
+export interface GamingPackageAmendBody {
+  target_package_id: string;
+  expected_timer_minutes: number;
+  expected_amount_minor: number;
+  expected_pause_version: number;
+  expected_participant_revision: number;
+  expected_billing_revision: number;
+  expected_target_price_minor: number;
+  expected_target_duration_minutes: number;
+  expected_target_variant: string;
 }
 
 /**
@@ -3607,7 +3647,7 @@ export const gaming = {
       GamingPackageDTO,
       'id' | 'price_minor' | 'duration_minutes' | 'variant'
     >,
-    expectedSession: { timer_minutes: number; amount_minor: number },
+    expectedSession: { timer_minutes: number; amount_minor: number; billing_revision?: number },
     idempotencyKey: string,
   ) =>
     api.post<GameSessionDTO>(`/gaming/sessions/${id}/extend`, {
@@ -3617,13 +3657,45 @@ export const gaming = {
       expected_package_variant: selectedPackage.variant,
       expected_timer_minutes: expectedSession.timer_minutes,
       expected_amount_minor: expectedSession.amount_minor,
+      ...(expectedSession.billing_revision === undefined
+        ? {} : { expected_billing_revision: expectedSession.billing_revision }),
     }, {
       headers: { 'Idempotency-Key': idempotencyKey },
     }).then((r) => r.data),
-  stopSession: (id: string, idempotencyKey: string) =>
-    api.post<GameSessionDTO>(`/gaming/sessions/${id}/stop`, undefined, {
+  stopSession: (id: string, idempotencyKey: string, expected?: {
+    participant_revision: number;
+    billing_revision: number;
+  }) =>
+    api.post<GameSessionDTO>(`/gaming/sessions/${id}/stop`, expected ? {
+      expected_participant_revision: expected.participant_revision,
+      expected_billing_revision: expected.billing_revision,
+    } : undefined, {
       headers: { 'Idempotency-Key': idempotencyKey },
     }).then((r) => r.data),
+  amendSessionPackage: (id: string, body: GamingPackageAmendBody, idempotencyKey: string) =>
+    api.post<GameSessionDTO>(`/gaming/sessions/${id}/amend-package`, body, {
+      headers: { 'Idempotency-Key': idempotencyKey },
+    }).then((r) => r.data),
+  listSessionParticipants: (id: string) =>
+    api.get<GamingParticipantStateDTO>(`/gaming/sessions/${id}/participants`).then((r) => r.data),
+  joinSessionParticipant: (
+    id: string,
+    body: { customer_id: string; expected_participant_revision: number;
+      customer_directory_revision?: number; customer_directory_company_id?: string },
+    idempotencyKey: string,
+  ) => api.post<GamingParticipantStateDTO>(`/gaming/sessions/${id}/participants/join`, body, {
+    headers: { 'Idempotency-Key': idempotencyKey },
+  }).then((r) => r.data),
+  leaveSessionParticipant: (
+    id: string,
+    participantId: string,
+    expectedParticipantRevision: number,
+    idempotencyKey: string,
+  ) => api.post<GamingParticipantStateDTO>(
+    `/gaming/sessions/${id}/participants/${participantId}/leave`,
+    { expected_participant_revision: expectedParticipantRevision },
+    { headers: { 'Idempotency-Key': idempotencyKey } },
+  ).then((r) => r.data),
   resolveLegacyPausedSession: (
     id: string,
     body: LegacyPausedSessionResolutionDTO,

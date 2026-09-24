@@ -18,10 +18,29 @@ describe('GamingStopConfirmation', () => {
     );
 
     expect(markup).toContain('End PS5 Station 1?');
-    expect(markup).toContain('fixed session charge is ₹120.00');
+    expect(markup).toContain('fixed package charge is ₹120.00');
     expect(markup).toContain('approximately 42 min');
     expect(markup).toContain('moves this session to Payment Due');
     expect(markup).toContain('End session');
+  });
+
+  it('separates estimated friend fees from the fixed package before final server settlement', () => {
+    const markup = renderToStaticMarkup(
+      <GamingStopConfirmation stationName="PS5 Station 1" elapsedMinutes={29}
+        estimatedAmountMinor={8_000} estimatedFriendMinor={3_000} fixedPrice
+        busy={false} onConfirm={vi.fn()} onCancel={vi.fn()}/>);
+    expect(markup).toContain('fixed package charge is ₹80.00');
+    expect(markup).toContain('estimated ₹30.00 controller charge');
+    expect(markup).toContain('server confirms their actual presence and final total');
+  });
+
+  it('warns when friend attendance cannot be read before final settlement', () => {
+    const markup = renderToStaticMarkup(
+      <GamingStopConfirmation stationName="PS5" elapsedMinutes={20}
+        estimatedAmountMinor={8_000} estimatedFriendMinor={null} friendChargesUnverified
+        fixedPrice busy={false} onConfirm={vi.fn()} onCancel={vi.fn()}/>);
+    expect(markup).toContain('Friend attendance could not be loaded');
+    expect(markup).toContain('may increase the final server total');
   });
 
   it('disables both decisions while the stop request is in progress', () => {

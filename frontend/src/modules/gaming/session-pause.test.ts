@@ -58,4 +58,15 @@ describe('authoritative shared gaming pause clock', () => {
     expect(mayApplyRunningSessionReceipt({ backend_session_id: 'session-a', status: 'active', pause_version: 2 }, { ...receipt, status: 'ended' })).toBe(false);
     expect(mayApplyRunningSessionReceipt({ backend_session_id: 'session-a', status: 'paused', pause_version: 1 }, receipt)).toBe(true);
   });
+
+  it('rejects older receipt snapshots after a friend or package revision advances', () => {
+    const current = { backend_session_id: 'session-a', status: 'active', pause_version: 2,
+      participant_revision: 2, billing_revision: 1 };
+    const receipt = { id: 'session-a', status: 'active' as const, pause_version: 2,
+      participant_revision: 2, billing_revision: 1 };
+    expect(mayApplyRunningSessionReceipt(current, receipt)).toBe(true);
+    expect(mayApplyRunningSessionReceipt(current, { ...receipt, participant_revision: 1 })).toBe(false);
+    expect(mayApplyRunningSessionReceipt(current, { ...receipt, billing_revision: 0 })).toBe(false);
+    expect(mayApplyRunningSessionReceipt(current, { ...receipt, billing_revision: undefined })).toBe(false);
+  });
 });

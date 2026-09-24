@@ -29,11 +29,14 @@ export function playedSessionMilliseconds(session: {
 
 /** A delayed timer/pause receipt cannot revive an ended or newer pause cycle. */
 export function mayApplyRunningSessionReceipt(
-  current: { backend_session_id?: string; status: string; pause_version?: number } | undefined,
-  response: Pick<GameSessionDTO, 'id' | 'status' | 'pause_version'>,
+  current: { backend_session_id?: string; status: string; pause_version?: number;
+    participant_revision?: number; billing_revision?: number } | undefined,
+  response: Pick<GameSessionDTO, 'id' | 'status' | 'pause_version' | 'participant_revision' | 'billing_revision'>,
 ): boolean {
   return current?.backend_session_id === response.id
     && current.status !== 'ended'
     && ['active', 'paused'].includes(response.status)
-    && (current.pause_version ?? -1) <= (response.pause_version ?? -1);
+    && (current.pause_version ?? -1) <= (response.pause_version ?? -1)
+    && (current.participant_revision ?? -1) <= (response.participant_revision ?? -1)
+    && (current.billing_revision ?? -1) <= (response.billing_revision ?? -1);
 }
