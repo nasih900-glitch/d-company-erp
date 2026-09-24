@@ -20,6 +20,7 @@ from scripts.verify_code26_regression_freeze import (
     REVIEWED_CODE30_3_SHA256,
     REVIEWED_CODE30_4_PRODUCTION_PATHS,
     REVIEWED_CODE30_4_SHA256,
+    REVIEWED_POST_CODE30_3_MAINTENANCE_SHA256,
 )
 
 
@@ -46,7 +47,13 @@ CODE30_2_FREEZE_TEST_SHA256 = (
     "303c44945334417d810b27c07982a8582220f08642183b4107dcda8e67568a14"
 )
 CODE30_3_FREEZE_SCRIPT_SHA256 = "fc217427931f0dc9a6fb711f8475b5bced2770145f94d42c3dfd104cc5829c81"
-CODE30_4_FREEZE_SCRIPT_SHA256 = "c57dd0d3276d0a3f8fbd4ab94c7abebf04af2f68fab62e28e497bda2127a3f18"
+SIGNED_CODE30_3_SOURCE = "ad5adfb93c3488f1f931ca27da53824aa57d3dc5"
+# PR 17 merge commit: the reviewed post-release Code30.3 maintenance overlay.
+POST_CODE30_3_MAINTENANCE_SOURCE = "041b8bfb0855e14d168b7c3c43350d895c063742"
+POST_CODE30_3_MAINTENANCE_FREEZE_SCRIPT_SHA256 = (
+    "437769bbf509f15cc0ef10da98e37ac1a9f5f17657db67f55e6e75ced01970d2"
+)
+CODE30_4_FREEZE_SCRIPT_SHA256 = "73800f6be53d5c57ef135e1b95dc3c03c557aa5a8faa85aea830164d562382c9"
 OPERATOR_RECORD_SHA256 = {
     "docs/CODE29_RELEASE_CANDIDATE.md": "8f15d3f031daef79ecd1a5680b8bf9f527598d558a004ea198225919898821e4",
     "docs/DISTRIBUTION.md": "601007e7eaca4b700c82e5e70ffd139a6ff9c9921e5c53581284491808710b1e",
@@ -644,6 +651,7 @@ def test_live_delta_is_exactly_the_reviewed_code29_correction() -> None:
         | set(CODE30_2_FREEZE_CONTROL_PATHS)
         | set(REVIEWED_CODE30_3_SHA256)
         | set(CODE30_3_FREEZE_CONTROL_PATHS)
+        | set(REVIEWED_POST_CODE30_3_MAINTENANCE_SHA256)
         | set(REVIEWED_CODE30_4_SHA256)
         | set(CODE30_4_FREEZE_CONTROL_PATHS)
     )
@@ -981,11 +989,15 @@ def test_installer_verifier_and_live_workflows_are_exact() -> None:
     assert hashlib.sha256(
         (ROOT / "scripts/verify_code26_regression_freeze.py").read_bytes()
     ).hexdigest() == CODE30_4_FREEZE_SCRIPT_SHA256
+    assert CODE30_3_BASE == SIGNED_CODE30_3_SOURCE
+    assert hashlib.sha256(
+        _historical_bytes(SIGNED_CODE30_3_SOURCE, "scripts/verify_code26_regression_freeze.py")
+    ).hexdigest() == CODE30_3_FREEZE_SCRIPT_SHA256
     assert hashlib.sha256(
         _historical_bytes(
-            CODE30_3_BASE, "scripts/verify_code26_regression_freeze.py"
+            POST_CODE30_3_MAINTENANCE_SOURCE, "scripts/verify_code26_regression_freeze.py"
         )
-    ).hexdigest() == CODE30_3_FREEZE_SCRIPT_SHA256
+    ).hexdigest() == POST_CODE30_3_MAINTENANCE_FREEZE_SCRIPT_SHA256
     assert hashlib.sha256(
         _historical_bytes(
             CODE30_2_BASE, "scripts/verify_code26_regression_freeze.py"
@@ -2515,6 +2527,11 @@ def test_reviewed_code30_point3_delta_files_are_exact() -> None:
 
 def test_reviewed_code30_point4_delta_files_are_exact() -> None:
     for path, expected_sha256 in REVIEWED_CODE30_4_SHA256.items():
+        _assert_sha256(path, (ROOT / path).read_bytes(), expected_sha256)
+
+
+def test_reviewed_post_code30_point3_maintenance_files_are_exact() -> None:
+    for path, expected_sha256 in REVIEWED_POST_CODE30_3_MAINTENANCE_SHA256.items():
         _assert_sha256(path, (ROOT / path).read_bytes(), expected_sha256)
 
 
