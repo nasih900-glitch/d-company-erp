@@ -1,6 +1,6 @@
 # Code 30.4 PS5 participant billing patch
 
-Migration 0083 records friends who join a fixed-price PS5 session after Start. It does not change the booked billing customer, package price, paid extension ledger, or the session's original `extra_controllers` snapshot.
+Migration 0083 records friends who join a fixed-price PS5 session after Start. Forward migration 0084 is the current head and prevents the session's participant revision from decreasing at the database boundary. The patch does not change the booked billing customer, package price, paid extension ledger, or the session's original `extra_controllers` snapshot.
 
 Each Join creates a tenant-scoped presence interval for one live saved customer. Leave closes that interval once. The live count is derived from open intervals under the locked session row; the physical cap is four players including the booked Single or Dual count and any upfront extra controllers. Join requires an active, unbilled, complete-snapshot PS5 package session and open source shift. Leave also works while paused, using the pause-excluding play meter.
 
@@ -21,4 +21,4 @@ Android support is blocked until Room 53 or later implements a per-session FIFO 
 
 The backend phase does not enable Join/Leave for hourly, non-PS5, legacy ambiguous, or incomplete-snapshot sessions. Join while paused is rejected until Resume. Web and Android UI work remains separate.
 
-Rollback before business resumes should restore the pre-migration database snapshot and matching application build. After participant rows or settlements exist, do not run the predecessor application or drop 0083: it cannot validate or bill this evidence. Retire the feature only through a reviewed, audited migration that preserves all interval and settlement history.
+Rollback before business resumes should restore the pre-0083 database snapshot and matching application build. After participant rows or settlements exist, do not run the predecessor application or downgrade below migration 0084: 0083 stores evidence that the predecessor cannot validate or bill, and 0084 protects its monotonic revision. Retire the feature only through a reviewed, audited migration that preserves all interval and settlement history.

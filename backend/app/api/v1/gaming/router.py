@@ -3849,10 +3849,39 @@ async def _settle_participants(
     ))
 
 
+_STOP_REPLAY_IMMUTABLE_FIELDS = (
+    "id",
+    "station_id",
+    "shift_id",
+    "status",
+    "start_at",
+    "end_at",
+    "timer_minutes",
+    "paused_minutes",
+    "paused_at",
+    "paused_duration_ms",
+    "pause_version",
+    "last_pause_transition_at",
+    "billable_minutes",
+    "amount_minor",
+    "rate_per_hour_minor",
+    "billing_mode",
+    "package_price_minor_snapshot",
+    "package_duration_minutes_snapshot",
+    "package_variant_snapshot",
+    "package_station_type_snapshot",
+    "package_pricing_tier_snapshot",
+    "extra_controllers",
+    "participant_revision",
+)
+
+
 def _stop_replay_matches_current(stored: SessionRead, current: SessionRead) -> bool:
-    if stored.order_id is not None and stored.order_id != current.order_id:
-        return False
-    return stored.model_dump(exclude={"order_id"}) == current.model_dump(exclude={"order_id"})
+    """Compare persisted Stop and billing evidence, excluding mutable display data."""
+    return all(
+        getattr(stored, field) == getattr(current, field)
+        for field in _STOP_REPLAY_IMMUTABLE_FIELDS
+    )
 
 
 @router.post("/sessions/{session_id}/stop", response_model=SessionRead)

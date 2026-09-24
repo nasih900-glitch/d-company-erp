@@ -142,8 +142,9 @@ async def _participant_action(client, seed_owner, token, *, path, key, payload, 
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_rejoin_rounds_once_extension_deleted_customer_stop_pos_and_payment(
-    client, session, seed_owner,
+    client, session, seed_owner, monkeypatch,
 ) -> None:
+    monkeypatch.setattr(get_settings(), "gaming_pause_enabled", False)
     token, shift_id, station, friends, packages = await _setup(client, session, seed_owner)
     friend_ids = [friend.id for friend in friends]
     now = datetime.now(UTC)
@@ -416,6 +417,12 @@ async def test_rejoin_rounds_once_extension_deleted_customer_stop_pos_and_paymen
     assert playtime.json()["qualifying_paid_minutes"] == 0
     assert playtime.json()["draft_estimated_reward_minutes"] == 0
     assert playtime.json()["history"][0]["qualification_status"] == "participant_non_qualifying"
+    # Stop replay validates persisted financial/timing evidence. Runtime UI
+    # flags and nullable catalog references may legitimately change later.
+    monkeypatch.setattr(get_settings(), "gaming_pause_enabled", True)
+    ended_session = await session.get(GamingSession, session_id)
+    ended_session.package_id = None
+    await session.commit()
     post_pos_stop_replay = await client.post(
         f"/api/v1/gaming/sessions/{session_id}/stop",
         json={"ended_at": stop_at.isoformat(), "expected_participant_revision": 6},
@@ -423,6 +430,8 @@ async def test_rejoin_rounds_once_extension_deleted_customer_stop_pos_and_paymen
     )
     assert post_pos_stop_replay.status_code == 200, post_pos_stop_replay.text
     assert post_pos_stop_replay.json()["order_id"] == sent.json()["order_id"]
+    assert post_pos_stop_replay.json()["pause_available"] is True
+    assert post_pos_stop_replay.json()["package_id"] is None
     await session.execute(
         text("UPDATE gaming_sessions SET amount_minor=amount_minor+1 WHERE id=:id"),
         {"id": session_id},
