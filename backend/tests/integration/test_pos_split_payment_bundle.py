@@ -19,10 +19,12 @@ from app.core.errors import BusinessRuleError
 from app.core.tenant import TenantContext
 from app.core.timezone import company_timezone
 from app.models import (
+    Customer,
     GoogleSheetsDelivery,
     IdempotencyKey,
     Order,
     OrderCheckoutClaim,
+    OrderLoyaltySettlement,
     Payment,
     Shift,
 )
@@ -684,6 +686,143 @@ async def test_payment_bundle_endpoint_is_atomic_replay_safe_and_claim_scoped(
                         None,
                     )
                 await session.rollback()
+        finally:
+            await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_customer_linked_bundle_records_loyalty_after_both_legs_and_retries_atomically(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with _disposable_database("erp_pos_split_customer") as database_url:
+        upgraded = _run_alembic(database_url, "upgrade", "head")
+        assert upgraded.returncode == 0, upgraded.stdout + upgraded.stderr
+        with psycopg.connect(_sync_dsn(database_url)) as connection:
+            ids = _seed_open_order(connection)
+            customer_id = uuid4()
+            phone = "+919000000304"
+            connection.execute(
+                "INSERT INTO customers "
+                "(id, company_id, name, phone, visit_count, total_spent_minor, "
+                "loyalty_points, lifetime_gaming_points_earned) "
+                "VALUES (%s, %s, 'Split QA customer', %s, 0, 0, 0, 0)",
+                (customer_id, ids["company"], phone),
+            )
+            connection.execute(
+                "UPDATE orders SET customer_id=%s, customer_name='Split QA customer', "
+                "customer_phone=%s WHERE id=%s",
+                (customer_id, phone, ids["order"]),
+            )
+            connection.execute(
+                "UPDATE menu_items SET type='gaming' WHERE id=%s", (ids["item"],)
+            )
+            connection.execute(
+                "UPDATE orders SET status='held', held_at=%s WHERE id=%s",
+                (datetime.now(UTC), ids["order"]),
+            )
+            connection.commit()
+
+        engine = create_async_engine(
+            database_url.replace("postgresql+psycopg://", "postgresql+asyncpg://", 1),
+            pool_pre_ping=True,
+        )
+        sessions = async_sessionmaker(engine, expire_on_commit=False, autoflush=False)
+        try:
+            async with sessions() as session:
+                order = await session.get(Order, ids["order"], with_for_update=True)
+                assert order is not None
+                grant = await acquire_checkout_claim(
+                    session,
+                    order=order,
+                    claimant_user_id=ids["user"],
+                    terminal_id=ids["terminal"],
+                    paid_minor=0,
+                )
+                claim_token = grant.token
+                await session.commit()
+
+            key = f"split-customer:{uuid4()}"
+            payload = _payload()
+            original_enqueue = pos_router._enqueue_paid_order_mirror
+
+            async def fail_after_loyalty_flush(session, **kwargs):
+                # Prove the issued invoice, both tender legs, and loyalty row
+                # still roll back together if a later finalization step fails.
+                await session.flush()
+                raise RuntimeError("injected post-loyalty failure")
+
+            monkeypatch.setattr(
+                pos_router, "_enqueue_paid_order_mirror", fail_after_loyalty_flush
+            )
+            async with sessions() as session:
+                with pytest.raises(RuntimeError, match="post-loyalty failure"):
+                    await pos_router.record_payment_bundle(
+                        ids["order"], payload, session, _request(key),
+                        _tenant(ids), claim_token,
+                    )
+                await session.rollback()
+            async with sessions() as session:
+                order = await session.get(Order, ids["order"])
+                assert order is not None
+                assert order.status == "held"
+                assert order.invoice_no is None
+                assert await session.scalar(
+                    select(func.count()).select_from(Payment).where(
+                        Payment.order_id == ids["order"]
+                    )
+                ) == 0
+                assert await session.scalar(
+                    select(func.count()).select_from(OrderLoyaltySettlement).where(
+                        OrderLoyaltySettlement.order_id == ids["order"]
+                    )
+                ) == 0
+                assert await session.scalar(
+                    select(func.count()).select_from(OrderCheckoutClaim).where(
+                        OrderCheckoutClaim.order_id == ids["order"]
+                    )
+                ) == 1
+
+            monkeypatch.setattr(
+                pos_router, "_enqueue_paid_order_mirror", original_enqueue
+            )
+            async with sessions() as session:
+                response = await pos_router.record_payment_bundle(
+                    ids["order"], payload, session, _request(key),
+                    _tenant(ids), claim_token,
+                )
+                await session.commit()
+            assert response.order_status == "paid"
+            assert response.total_amount_minor == 2_500
+            async with sessions() as session:
+                replay = await pos_router.record_payment_bundle(
+                    ids["order"], payload, session, _request(key),
+                    _tenant(ids), claim_token,
+                )
+                await session.commit()
+            assert replay.model_dump(mode="json") == response.model_dump(mode="json")
+            async with sessions() as session:
+                payments = (
+                    await session.execute(
+                        select(Payment).where(Payment.order_id == ids["order"])
+                    )
+                ).scalars().all()
+                assert sorted((payment.method, payment.amount_minor) for payment in payments) == [
+                    ("cash", 1_000), ("upi", 1_500)
+                ]
+                settlement = (
+                    await session.execute(
+                        select(OrderLoyaltySettlement).where(
+                            OrderLoyaltySettlement.order_id == ids["order"]
+                        )
+                    )
+                ).scalar_one()
+                customer = await session.get(Customer, customer_id)
+                assert settlement.order_paid_minor == 2_500
+                assert settlement.points_earned == 5
+                assert settlement.customer_id == customer_id
+                assert customer is not None
+                assert customer.visit_count == 1
         finally:
             await engine.dispose()
 

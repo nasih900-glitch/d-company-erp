@@ -1693,7 +1693,7 @@ async def _upsert_and_attach_customer(
     at: datetime,
     directory_fence: CustomerDirectoryFence,
     order_lines: list[OrderLine] | None = None,
-) -> Customer | None:
+) -> tuple[Customer, int, int] | None:
     """Find or create customer by phone, bump visit_count + total_spent,
     award loyalty points (1× food, 2× gaming/hookah/streaming/events, × membership tier).
     """
@@ -1786,15 +1786,7 @@ async def _upsert_and_attach_customer(
         if name and not existing.name and directory_fence.allows_identity_mutation:
             existing.name = name
         order.customer_id = existing.id
-        await record_order_loyalty_settlement(
-            session,
-            order=order,
-            customer=existing,
-            points_earned=int(points_earned),
-            rank_bonus_points_awarded=bonus,
-            at=now,
-        )
-        return existing
+        return existing, int(points_earned), bonus
     else:
         bonus = rank_up_bonus_points(old_lifetime=0, new_lifetime=int(points_earned))
         customer = Customer(
@@ -1811,15 +1803,7 @@ async def _upsert_and_attach_customer(
         )
         session.add(customer)
         order.customer_id = customer.id
-        await record_order_loyalty_settlement(
-            session,
-            order=order,
-            customer=customer,
-            points_earned=int(points_earned),
-            rank_bonus_points_awarded=bonus,
-            at=now,
-        )
-        return customer
+        return customer, int(points_earned), bonus
 
 
 class ShiftCloseRequest(BaseModel):
@@ -3176,6 +3160,7 @@ async def _finalize_order(
     at: datetime,
     payment_method: str = "unknown",
     payment_breakdown_minor: dict[str, int] | None = None,
+    final_payment_bundle: list[Payment] | None = None,
 ) -> None:
     """Issue the invoice and run every sale-finalization side effect once.
 
@@ -3269,9 +3254,10 @@ async def _finalize_order(
         branch_id=order.branch_id,
         created_by=actor_user_id,
     )
+    loyalty_facts: tuple[Customer, int, int] | None = None
     if order.customer_phone:
         assert directory_fence is not None
-        await _upsert_and_attach_customer(
+        loyalty_facts = await _upsert_and_attach_customer(
             session,
             company_id=company_id,
             phone=order.customer_phone,
@@ -3280,6 +3266,23 @@ async def _finalize_order(
             order_lines=list(order_lines),
             at=at,
             directory_fence=directory_fence,
+        )
+    if final_payment_bundle is not None:
+        # The payment insert guard needs the issued order row first, while the
+        # loyalty settlement guard needs every payment leg already visible.
+        # Keep both flushes inside the one checkout transaction.
+        await session.flush()
+        session.add_all(final_payment_bundle)
+        await session.flush()
+    if loyalty_facts is not None:
+        customer, points_earned, rank_bonus_points = loyalty_facts
+        await record_order_loyalty_settlement(
+            session,
+            order=order,
+            customer=customer,
+            points_earned=points_earned,
+            rank_bonus_points_awarded=rank_bonus_points,
+            at=at,
         )
     await _enqueue_paid_order_mirror(
         session,
@@ -6091,17 +6094,8 @@ async def record_payment_bundle(
         at=paid_at,
         payment_method="split",
         payment_breakdown_minor=payment_breakdown_minor,
+        final_payment_bundle=payments,
     )
-    # Persist the issued-paid order before inserting any bundle leg. The
-    # database insert guard reads the order row and requires paid status plus
-    # the exact invoice timestamp. Relying on SQLAlchemy to order unrelated
-    # Order UPDATE and Payment INSERT statements happens to work today, but is
-    # not a stable correctness contract across ORM upgrades. Both flushes stay
-    # inside this request transaction, so a later leg/claim/receipt failure
-    # still rolls the entire settlement back.
-    await session.flush()
-    session.add_all(payments)
-    await session.flush()
     response = PaymentBundleRead(
         order_id=order.id,
         shift_id=order.shift_id,
