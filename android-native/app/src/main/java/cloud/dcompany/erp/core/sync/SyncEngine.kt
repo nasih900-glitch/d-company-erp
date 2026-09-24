@@ -1,8 +1,10 @@
 package cloud.dcompany.erp.core.sync
 
 import android.util.Log
+import android.os.SystemClock
 import androidx.room.withTransaction
 import cloud.dcompany.erp.DCompanyApp
+import cloud.dcompany.erp.core.diagnostics.AppHealthRecorder
 import cloud.dcompany.erp.core.alarm.GamingAlarmReconciler
 import cloud.dcompany.erp.core.auth.CacheIsolationCoordinator
 import cloud.dcompany.erp.core.auth.CacheScopeLease
@@ -225,6 +227,7 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.asContextElement
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -777,6 +780,18 @@ internal fun gamingAddonSessionIdsForPull(
     return byStation.values.toList()
 }
 
+/** Keep board fetches bounded so reconnect does not build one request per station in series. */
+internal suspend fun <T, R> mapInBoundedChunks(
+    items: List<T>,
+    concurrency: Int,
+    fetch: suspend (T) -> R,
+): List<R> {
+    require(concurrency > 0)
+    return items.chunked(concurrency).flatMap { chunk ->
+        coroutineScope { chunk.map { item -> async { fetch(item) } }.awaitAll() }
+    }
+}
+
 /**
  * Select the tablet-owned lifecycle rows that disappeared from the ordinary
  * unbilled Gaming board and therefore require an exact authoritative lookup.
@@ -1311,16 +1326,41 @@ class SyncEngine private constructor(
         val key = canonicalRefreshResource(resource)
         val sessionLease = captureSessionWorkLease()
             ?: return ResourceRefreshResult.Skipped(key)
-        return conflatedResourceRefreshes.run(key, sessionLease.cache.generation) {
-            // ConflatedResourceRefreshRunner owns a process-scoped worker, so
-            // explicitly reinstall the caller's session context inside that
-            // worker. Late nested failures can then never leak onto the next
-            // employee's workspace after cancellation/account switching.
-            sessionWorkGuard.withLease(sessionLease) {
-                ensureCurrentSessionWork(sessionLease)
-                withSessionResourceSerialisation(sessionLease, key) {
-                    refreshAlreadyLocked(key, sessionLease.cache)
+        val startedAtMillis = if (AppHealthRecorder.isRecording()) {
+            SystemClock.elapsedRealtime()
+        } else null
+        var outcome = "cancelled"
+        try {
+            val result = conflatedResourceRefreshes.run(key, sessionLease.cache.generation) {
+                // ConflatedResourceRefreshRunner owns a process-scoped worker, so
+                // explicitly reinstall the caller's session context inside that
+                // worker. Late nested failures can then never leak onto the next
+                // employee's workspace after cancellation/account switching.
+                sessionWorkGuard.withLease(sessionLease) {
+                    ensureCurrentSessionWork(sessionLease)
+                    withSessionResourceSerialisation(sessionLease, key) {
+                        refreshAlreadyLocked(key, sessionLease.cache)
+                    }
                 }
+            }
+            outcome = when (result) {
+                is ResourceRefreshResult.Refreshed -> "success"
+                is ResourceRefreshResult.Failed -> "failure"
+                is ResourceRefreshResult.Skipped -> "skipped"
+            }
+            return result
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Throwable) {
+            outcome = "failure"
+            throw failure
+        } finally {
+            if (startedAtMillis != null) {
+                AppHealthRecorder.recordRefresh(
+                    key,
+                    SystemClock.elapsedRealtime() - startedAtMillis,
+                    outcome,
+                )
             }
         }
     }
@@ -3379,9 +3419,12 @@ class SyncEngine private constructor(
     private suspend fun pullGamingData() {
         val lease = cacheIsolation.currentLease() ?: return
         acknowledgeCleanupRetirements(lease)
-        val stations = gamingApi.stations()
-        val packages = gamingApi.packages()
-        val sessions = gamingApi.sessions()
+        val (stations, packages, sessions) = coroutineScope {
+            val stationRequest = async { gamingApi.stations() }
+            val packageRequest = async { gamingApi.packages() }
+            val sessionRequest = async { gamingApi.sessions() }
+            Triple(stationRequest.await(), packageRequest.await(), sessionRequest.await())
+        }
         // An owner can cancel a session from web, or another client can finish
         // its POS handoff, while this tablet retains a pending/rejected local
         // lifecycle. Those terminal rows are deliberately absent from the
@@ -3409,13 +3452,16 @@ class SyncEngine private constructor(
         // scan; immutable local action evidence remains in its outbox table.
         // A partial failure leaves the previous cache intact instead of making
         // an add-on disappear between session and item requests.
-        val sessionAddons = gamingAddonSessionIdsForPull(sessions).flatMap { sessionId ->
+        val sessionAddons = mapInBoundedChunks(
+            items = gamingAddonSessionIdsForPull(sessions),
+            concurrency = 3,
+        ) { sessionId ->
             gamingApi.sessionAddons(sessionId).also { rows ->
                 check(rows.all { it.gamingSessionId == sessionId }) {
                     "Gaming add-on response contained a different session."
                 }
             }
-        }
+        }.flatten()
         commitToCurrentScope(lease) {
             db.withTransaction {
                 db.gamingDao().replaceStations(
