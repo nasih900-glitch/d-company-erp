@@ -171,7 +171,10 @@ def _attempt_overpaid_bundle(
 @pytest.mark.integration
 def test_0080_allows_complete_bundle_but_rejects_partial_and_overpaid_commit() -> None:
     with _disposable_database("erp_pos_split_guard") as database_url:
-        upgraded = _run_alembic(database_url, "upgrade", "head")
+        # This is an 0080 trigger round-trip. Newer Gaming revisions keep
+        # immutable financial evidence and intentionally block downgrade, so
+        # migrating through HEAD would test their rollback policy instead.
+        upgraded = _run_alembic(database_url, "upgrade", "0080")
         assert upgraded.returncode == 0, upgraded.stdout + upgraded.stderr
 
         with psycopg.connect(_sync_dsn(database_url)) as connection:
@@ -214,7 +217,7 @@ def test_0080_allows_complete_bundle_but_rejects_partial_and_overpaid_commit() -
 
         downgraded = _run_alembic(database_url, "downgrade", "0079")
         assert downgraded.returncode == 0, downgraded.stdout + downgraded.stderr
-        reupgraded = _run_alembic(database_url, "upgrade", "head")
+        reupgraded = _run_alembic(database_url, "upgrade", "0080")
         assert reupgraded.returncode == 0, reupgraded.stdout + reupgraded.stderr
 
 
