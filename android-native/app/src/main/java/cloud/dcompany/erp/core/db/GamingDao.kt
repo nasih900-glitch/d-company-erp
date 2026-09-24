@@ -71,6 +71,31 @@ interface GamingDao {
         deleteSessionCacheNotIn(rows.map { it.id }.ifEmpty { listOf("") })
     }
 
+    @Query("SELECT * FROM gaming_session_participant_cache ORDER BY joinedAtMillis, id")
+    fun observeParticipantCache(): Flow<List<GamingSessionParticipantCacheEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertParticipantCache(rows: List<GamingSessionParticipantCacheEntity>)
+
+    @Query("DELETE FROM gaming_session_participant_cache WHERE gamingSessionId = :serverSessionId")
+    suspend fun deleteParticipantCacheForSession(serverSessionId: String)
+
+    @Transaction
+    suspend fun replaceParticipantCacheForSession(
+        serverSessionId: String,
+        rows: List<GamingSessionParticipantCacheEntity>,
+    ) {
+        require(rows.all { it.gamingSessionId == serverSessionId })
+        deleteParticipantCacheForSession(serverSessionId)
+        upsertParticipantCache(rows)
+    }
+
+    @Query(
+        "UPDATE gaming_session_cache SET participantRevision = :participantRevision " +
+            "WHERE id = :serverSessionId",
+    )
+    suspend fun updateCachedParticipantRevision(serverSessionId: String, participantRevision: Int): Int
+
     /** Applies one authoritative mutation response without replacing the full cache. */
     @Transaction
     suspend fun upsertAuthoritativeSession(row: GamingSessionCacheEntity) {
@@ -1242,6 +1267,126 @@ interface GamingDao {
         return true
     }
 
+    @Insert(onConflict = OnConflictStrategy.ABORT)
+    suspend fun insertSessionAction(action: LocalGamingSessionActionEntity)
+
+    @Query("SELECT COALESCE(MAX(sequence), 0) FROM local_gaming_session_actions WHERE sessionKey = :sessionKey")
+    suspend fun maxSessionActionSequence(sessionKey: String): Long
+
+    @Transaction
+    suspend fun captureSessionAction(action: LocalGamingSessionActionEntity): LocalGamingSessionActionEntity {
+        require(action.sequence == 0L)
+        require(action.actionType in setOf(
+            GamingSessionActionType.EXTEND,
+            GamingSessionActionType.AMEND,
+            GamingSessionActionType.PARTICIPANT_JOIN,
+            GamingSessionActionType.PARTICIPANT_LEAVE,
+            GamingSessionActionType.STOP,
+        ))
+        require(action.sessionKey.isNotBlank() && action.shiftId.isNotBlank())
+        require(action.ownerCompanyId.isNotBlank() && action.ownerUserId.isNotBlank())
+        require(action.branchId.isNotBlank() && action.terminalId.isNotBlank())
+        require(action.occurredAtMillis > 0L)
+        require(action.state == GamingSessionActionState.PENDING && action.lastError == null)
+        val sequenced = action.copy(sequence = maxSessionActionSequence(action.sessionKey) + 1L)
+        insertSessionAction(sequenced)
+        return sequenced
+    }
+
+    @Transaction
+    suspend fun captureSequencedPackageExtension(
+        extension: LocalGamingPackageExtensionEntity,
+        queueAction: LocalGamingSessionActionEntity,
+    ): Boolean {
+        if (!capturePackageExtension(extension)) return false
+        captureSessionAction(queueAction)
+        return true
+    }
+
+    @Query(
+        "SELECT * FROM local_gaming_session_actions WHERE state NOT IN ('confirmed','discarded') " +
+            "ORDER BY sessionKey, sequence, actionId",
+    )
+    suspend fun sessionActionsForSync(): List<LocalGamingSessionActionEntity>
+
+    @Query(
+        "SELECT COUNT(*) FROM local_gaming_session_actions " +
+            "WHERE state NOT IN ('confirmed','discarded') AND (" +
+            "serverSessionId = :sessionId OR localSessionId = :sessionId OR sessionKey = :sessionId)",
+    )
+    suspend fun unresolvedSessionActionCount(sessionId: String): Int
+
+    @Query(
+        "SELECT * FROM local_gaming_session_actions WHERE state NOT IN ('confirmed','discarded') " +
+            "ORDER BY sessionKey, sequence, actionId",
+    )
+    fun observeUnresolvedSessionActions(): Flow<List<LocalGamingSessionActionEntity>>
+
+    @Query("SELECT * FROM local_gaming_session_actions WHERE actionId = :actionId LIMIT 1")
+    suspend fun sessionAction(actionId: String): LocalGamingSessionActionEntity?
+
+    @Query(
+        "UPDATE local_gaming_session_actions SET serverSessionId = :serverSessionId " +
+            "WHERE localSessionId = :localSessionId AND serverSessionId IS NULL " +
+            "AND state NOT IN ('confirmed','discarded')",
+    )
+    suspend fun resolveSessionActionServerId(localSessionId: String, serverSessionId: String): Int
+
+    @Query(
+        "UPDATE local_gaming_session_actions SET resultParticipantId = :participantId " +
+            "WHERE actionId = :actionId AND actionType = 'participant_join' " +
+            "AND state IN ('pending','ambiguous')",
+    )
+    suspend fun setJoinedParticipantId(actionId: String, participantId: String): Int
+
+    @Query(
+        "UPDATE local_gaming_session_actions SET state = 'confirmed', lastError = NULL, " +
+            "resolvedAtMillis = :resolvedAtMillis, resultParticipantId = COALESCE(:participantId, resultParticipantId) " +
+            "WHERE actionId = :actionId AND state IN ('pending','ambiguous')",
+    )
+    suspend fun markSessionActionConfirmed(
+        actionId: String,
+        resolvedAtMillis: Long,
+        participantId: String? = null,
+    ): Int
+
+    @Query(
+        "UPDATE local_gaming_session_actions SET state = 'ambiguous', lastError = :error " +
+            "WHERE actionId = :actionId AND state IN ('pending','ambiguous')",
+    )
+    suspend fun markSessionActionAmbiguous(actionId: String, error: String): Int
+
+    @Query(
+        "UPDATE local_gaming_session_actions SET state = 'rejected', lastError = :error " +
+            "WHERE actionId = :actionId AND state IN ('pending','ambiguous')",
+    )
+    suspend fun markSessionActionRejected(actionId: String, error: String): Int
+
+    @Query(
+        "UPDATE local_gaming_session_actions SET state = 'pending', lastError = NULL " +
+            "WHERE actionId = :actionId AND state = 'rejected'",
+    )
+    suspend fun retryRejectedSessionAction(actionId: String): Int
+
+    @Query(
+        "UPDATE local_gaming_session_actions SET state = 'pending', lastError = NULL, " +
+            "occurredAtMillis = :occurredAtMillis, expectedParticipantRevision = :participantRevision, " +
+            "expectedBillingRevision = :billingRevision " +
+            "WHERE actionId = :actionId AND actionType = 'stop' AND state = 'rejected'",
+    )
+    suspend fun recaptureRejectedStopAction(
+        actionId: String,
+        occurredAtMillis: Long,
+        participantRevision: Int,
+        billingRevision: Int,
+    ): Int
+
+    @Query(
+        "UPDATE local_gaming_session_actions SET state = 'discarded', resolvedAtMillis = :resolvedAtMillis " +
+            "WHERE actionId = :actionId AND state = 'rejected'",
+    )
+    suspend fun discardRejectedSessionAction(actionId: String, resolvedAtMillis: Long): Int
+
     @Query("SELECT * FROM local_gaming_package_extensions WHERE actionId = :actionId LIMIT 1")
     suspend fun packageExtensionAction(actionId: String): LocalGamingPackageExtensionEntity?
 
@@ -1302,11 +1447,13 @@ interface GamingDao {
         val normalizedReason = reason.trim()
         require(normalizedReason.length in 3..500)
         require(resolvedAtMillis > 0L)
-        return markRejectedPackageExtensionDiscarded(
+        val changed = markRejectedPackageExtensionDiscarded(
             actionId = actionId,
             reason = normalizedReason,
             resolvedAtMillis = resolvedAtMillis,
         )
+        if (changed == 1) discardRejectedSessionAction(actionId, resolvedAtMillis)
+        return changed
     }
 }
 

@@ -58,7 +58,7 @@ class OutboxSchedulingCoverageTest {
     }
 
     @Test
-    fun `gaming capture paths schedule start stop send and paid extension`() {
+    fun `gaming capture paths schedule lifecycle participant amendment and paid extension`() {
         val source = source("cloud/dcompany/erp/ui/screens/gaming/GamingViewModel.kt")
 
         assertContainsAll(
@@ -80,7 +80,17 @@ class OutboxSchedulingCoverageTest {
         )
         assertContainsAll(
             source.between("fun extendWithPackage(", "fun discardRejectedPackageExtension("),
-            "capturePackageExtension(",
+            "captureSequencedPackageExtension(",
+            "appCtx.sync.requestSync()",
+        )
+        assertContainsAll(
+            source.between("fun amendPackage(", "fun joinParticipant("),
+            "captureSessionAction(",
+            "appCtx.sync.requestSync()",
+        )
+        assertContainsAll(
+            source.between("private fun captureParticipantAction(", "fun discardRejectedSessionAction("),
+            "captureSessionAction(",
             "appCtx.sync.requestSync()",
         )
     }

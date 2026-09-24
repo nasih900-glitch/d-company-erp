@@ -53,6 +53,10 @@ interface OutboxSafetyDao {
               FROM local_gaming_package_extensions
              WHERE state NOT IN ('confirmed', 'discarded')
             UNION ALL
+            SELECT 'gaming_session_actions', state
+              FROM local_gaming_session_actions
+             WHERE state NOT IN ('confirmed', 'discarded')
+            UNION ALL
             SELECT 'gaming_session_addons', state
               FROM local_gaming_session_addon_actions
              WHERE state NOT IN ('confirmed', 'discarded')

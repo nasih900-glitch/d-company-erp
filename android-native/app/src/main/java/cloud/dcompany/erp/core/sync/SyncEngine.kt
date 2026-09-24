@@ -56,6 +56,9 @@ import cloud.dcompany.erp.core.db.GamingSessionAddonActionState
 import cloud.dcompany.erp.core.db.GamingSessionAddonActionType
 import cloud.dcompany.erp.core.db.GamingSessionAddonCacheEntity
 import cloud.dcompany.erp.core.db.GamingSessionState
+import cloud.dcompany.erp.core.db.GamingSessionActionState
+import cloud.dcompany.erp.core.db.GamingSessionActionType
+import cloud.dcompany.erp.core.db.LocalGamingSessionActionEntity
 import cloud.dcompany.erp.core.db.GamingCleanupWorkflowStatus
 import cloud.dcompany.erp.core.db.cleanupSnapshotOrNull
 import cloud.dcompany.erp.core.db.gamingCleanupSnapshotSha256
@@ -159,6 +162,11 @@ import cloud.dcompany.erp.ui.screens.gaming.GamingCleanupReportBody
 import cloud.dcompany.erp.ui.screens.gaming.SessionAddonVoidBody
 import cloud.dcompany.erp.ui.screens.gaming.SessionStartBody
 import cloud.dcompany.erp.ui.screens.gaming.SessionStopBody
+import cloud.dcompany.erp.ui.screens.gaming.SessionPackageAmendBody
+import cloud.dcompany.erp.ui.screens.gaming.SessionPackageExtendBody
+import cloud.dcompany.erp.ui.screens.gaming.SessionParticipantJoinBody
+import cloud.dcompany.erp.ui.screens.gaming.SessionParticipantLeaveBody
+import cloud.dcompany.erp.ui.screens.gaming.SessionParticipantState
 import cloud.dcompany.erp.ui.screens.gaming.sessionAddonReceiptError
 import cloud.dcompany.erp.ui.screens.gaming.toSessionAddonCreateBody
 import cloud.dcompany.erp.ui.screens.gaming.toPackageExtendBody
@@ -2362,8 +2370,7 @@ class SyncEngine private constructor(
                 // may land before/after Stop; POS handoff is last.
                 pushGamingSessions(GamingSessionPushPhase.STARTS)
                 pushGamingSessionAddonActions(GamingSessionAddonActionType.ADD)
-                pushGamingPackageExtensions()
-                pushGamingSessions(GamingSessionPushPhase.STOPS)
+                pushGamingSessionActions()
                 pushGamingSessionAddonActions(GamingSessionAddonActionType.VOID)
                 val changedHeldQueue = pushGamingSessions(GamingSessionPushPhase.SENDS)
                 if (changedHeldQueue && resourceAccess.canPull("orders")) {
@@ -3127,6 +3134,7 @@ class SyncEngine private constructor(
             // Resolve only the dependency identifier. Every add-on selection,
             // actor, workspace, price snapshot and key stays immutable.
             dao.resolveSessionAddonServerId(row.localId, serverId)
+            dao.resolveSessionActionServerId(row.localId, serverId)
             return false
         }
         val current = dao.localSessionById(row.localId) ?: return false
@@ -3411,6 +3419,249 @@ class SyncEngine private constructor(
     }
 
     /**
+     * Drain the Room 53 ledger in exact per-session order. A rejected or
+     * response-ambiguous predecessor blocks every later command for that
+     * session, including Stop. Other sessions continue independently.
+     */
+    private suspend fun pushGamingSessionActions() {
+        val dao = db.gamingDao()
+        val blockedSessions = mutableSetOf<String>()
+        for (saved in dao.sessionActionsForSync()) {
+            if (saved.sessionKey in blockedSessions) continue
+            if (saved.state == GamingSessionActionState.REJECTED) {
+                blockedSessions += saved.sessionKey
+                continue
+            }
+            val localSession = saved.localSessionId?.let { dao.localSessionById(it) }
+            val serverSessionId = saved.serverSessionId ?: localSession?.serverId
+            if (serverSessionId == null) {
+                blockedSessions += saved.sessionKey
+                continue
+            }
+            val action = saved.copy(serverSessionId = serverSessionId)
+            val lease = cacheIsolation.currentLease() ?: return
+            val ownerFields = listOf(
+                action.ownerCompanyId,
+                action.ownerUserId,
+                action.branchId,
+                action.terminalId,
+            )
+            val legacyUnscoped = ownerFields.all(String::isBlank)
+            if (!legacyUnscoped && (
+                    action.ownerCompanyId != lease.scope.companyId ||
+                        action.ownerUserId != lease.scope.userId ||
+                        action.branchId != lease.scope.branchId ||
+                        action.terminalId != lease.scope.terminalId
+                    )
+            ) {
+                blockedSessions += action.sessionKey
+                continue
+            }
+            try {
+                when (action.actionType) {
+                    GamingSessionActionType.EXTEND -> {
+                        val body = SessionPackageExtendBody(
+                            packageId = requireNotNull(action.packageId),
+                            expectedPackagePriceMinor = requireNotNull(action.expectedPackagePriceMinor),
+                            expectedPackageDurationMinutes = requireNotNull(action.expectedPackageDurationMinutes),
+                            expectedPackageVariant = requireNotNull(action.expectedPackageVariant),
+                            expectedTimerMinutes = requireNotNull(action.expectedSessionTimerMinutes),
+                            expectedAmountMinor = requireNotNull(action.expectedSessionAmountMinor),
+                            expectedBillingRevision = action.expectedBillingRevision,
+                        )
+                        val updated = gamingApi.extendWithPackage(
+                            serverSessionId,
+                            body,
+                            action.actionId,
+                            outboxProvenanceHeaders(action.occurredAtMillis, action.actionId),
+                        )
+                        require(updated.id == serverSessionId)
+                        if (!commitToCurrentScope(lease) {
+                                db.withTransaction {
+                                    dao.upsertAuthoritativeSession(updated.toCacheEntity())
+                                    dao.markPackageExtensionConfirmed(action.actionId)
+                                    check(dao.markSessionActionConfirmed(action.actionId, System.currentTimeMillis()) == 1)
+                                }
+                            }
+                        ) return
+                    }
+
+                    GamingSessionActionType.AMEND -> {
+                        val updated = gamingApi.amendPackage(
+                            serverSessionId,
+                            SessionPackageAmendBody(
+                                targetPackageId = requireNotNull(action.packageId),
+                                expectedTimerMinutes = requireNotNull(action.expectedSessionTimerMinutes),
+                                expectedAmountMinor = requireNotNull(action.expectedSessionAmountMinor),
+                                expectedPauseVersion = requireNotNull(action.expectedPauseVersion),
+                                expectedParticipantRevision = requireNotNull(action.expectedParticipantRevision),
+                                expectedBillingRevision = requireNotNull(action.expectedBillingRevision),
+                                expectedTargetPriceMinor = requireNotNull(action.expectedPackagePriceMinor),
+                                expectedTargetDurationMinutes = requireNotNull(action.expectedPackageDurationMinutes),
+                                expectedTargetVariant = requireNotNull(action.expectedPackageVariant),
+                                occurredAt = Instant.ofEpochMilli(action.occurredAtMillis).toString(),
+                                playElapsedMs = requireNotNull(action.playElapsedMs),
+                            ),
+                            action.actionId,
+                            outboxProvenanceHeaders(action.occurredAtMillis, action.actionId),
+                        )
+                        require(updated.id == serverSessionId)
+                        if (!commitToCurrentScope(lease) {
+                                db.withTransaction {
+                                    dao.upsertAuthoritativeSession(updated.toCacheEntity())
+                                    check(dao.markSessionActionConfirmed(action.actionId, System.currentTimeMillis()) == 1)
+                                }
+                            }
+                        ) return
+                    }
+
+                    GamingSessionActionType.PARTICIPANT_JOIN -> {
+                        val response = gamingApi.joinParticipant(
+                            serverSessionId,
+                            SessionParticipantJoinBody(
+                                expectedParticipantRevision = requireNotNull(action.expectedParticipantRevision),
+                                customerId = action.customerId,
+                                customerName = action.customerName,
+                                customerPhone = action.customerPhone,
+                                customerDirectoryRevision = action.customerDirectoryRevision,
+                                customerDirectoryCompanyId = action.customerDirectoryCompanyId,
+                                occurredAt = Instant.ofEpochMilli(action.occurredAtMillis).toString(),
+                                playElapsedMs = requireNotNull(action.playElapsedMs),
+                                expectedPauseVersion = requireNotNull(action.expectedPauseVersion),
+                            ),
+                            action.actionId,
+                            outboxProvenanceHeaders(action.occurredAtMillis, action.actionId),
+                        )
+                        val participantId = response.participants.singleOrNull {
+                            it.joinRevision == response.participantRevision &&
+                                (action.customerId == null || it.customerId == action.customerId)
+                        }?.id ?: error("Participant Join response did not identify the saved friend.")
+                        if (!commitToCurrentScope(lease) {
+                                db.withTransaction {
+                                    persistParticipantState(response)
+                                    check(
+                                        dao.markSessionActionConfirmed(
+                                            action.actionId,
+                                            System.currentTimeMillis(),
+                                            participantId,
+                                        ) == 1,
+                                    )
+                                }
+                            }
+                        ) return
+                    }
+
+                    GamingSessionActionType.PARTICIPANT_LEAVE -> {
+                        val reference = requireNotNull(action.participantReference)
+                        val participantId = dao.sessionAction(reference)?.resultParticipantId ?: reference
+                        val response = gamingApi.leaveParticipant(
+                            serverSessionId,
+                            participantId,
+                            SessionParticipantLeaveBody(
+                                expectedParticipantRevision = requireNotNull(action.expectedParticipantRevision),
+                                occurredAt = Instant.ofEpochMilli(action.occurredAtMillis).toString(),
+                                playElapsedMs = requireNotNull(action.playElapsedMs),
+                                expectedPauseVersion = requireNotNull(action.expectedPauseVersion),
+                            ),
+                            action.actionId,
+                            outboxProvenanceHeaders(action.occurredAtMillis, action.actionId),
+                        )
+                        if (!commitToCurrentScope(lease) {
+                                db.withTransaction {
+                                    persistParticipantState(response)
+                                    check(dao.markSessionActionConfirmed(action.actionId, System.currentTimeMillis()) == 1)
+                                }
+                            }
+                        ) return
+                    }
+
+                    GamingSessionActionType.STOP -> {
+                        val local = requireNotNull(localSession) { "Saved Stop lost its local session evidence." }
+                        if (dao.unresolvedSessionAddCount(local.localId, local.serverId) > 0) {
+                            blockedSessions += action.sessionKey
+                            continue
+                        }
+                        val stopped = gamingApi.stop(
+                            serverSessionId,
+                            SessionStopBody(
+                                endedAt = Instant.ofEpochMilli(action.occurredAtMillis).toString(),
+                                expectedParticipantRevision = action.expectedParticipantRevision,
+                                expectedBillingRevision = action.expectedBillingRevision,
+                            ),
+                            action.actionId,
+                            outboxProvenanceHeaders(action.occurredAtMillis, action.actionId),
+                        )
+                        require(stopped.id == serverSessionId)
+                        if (!commitToCurrentScope(lease) {
+                                db.withTransaction {
+                                    val orderId = stopped.orderId
+                                    if (orderId != null) {
+                                        dao.markSessionSent(
+                                            local.localId,
+                                            orderId,
+                                            requireNotNull(stopped.amountMinor),
+                                        )
+                                    } else {
+                                        dao.markSessionStopped(
+                                            local.localId,
+                                            stopped.status,
+                                            stopped.endAt?.let { Instant.parse(it).toEpochMilli() },
+                                            stopped.billableMinutes,
+                                            stopped.amountMinor,
+                                        )
+                                    }
+                                    dao.upsertAuthoritativeSession(stopped.toCacheEntity())
+                                    check(dao.markSessionActionConfirmed(action.actionId, System.currentTimeMillis()) == 1)
+                                }
+                            }
+                        ) return
+                    }
+
+                    else -> error("Unsupported saved Gaming session action: ${action.actionType}")
+                }
+                GamingAlarmReconciler.reconcile(DCompanyApp.instance)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                val message = when (failure) {
+                    is ApiException -> failure.message ?: "The server refused the saved Gaming action."
+                    else -> "Gaming action confirmation is pending because the connection ended without a response."
+                }
+                val preserve = failure !is ApiException || failure.mustPreserveOutbox
+                commitToCurrentScope(lease) {
+                    if (preserve) {
+                        dao.markSessionActionAmbiguous(action.actionId, message)
+                        if (action.actionType == GamingSessionActionType.EXTEND) {
+                            dao.markPackageExtensionAmbiguous(action.actionId, message)
+                        }
+                    } else {
+                        dao.markSessionActionRejected(action.actionId, message)
+                        if (action.actionType == GamingSessionActionType.EXTEND) {
+                            dao.markPackageExtensionRejected(action.actionId, message)
+                        }
+                        if (action.actionType == GamingSessionActionType.STOP && action.localSessionId != null) {
+                            dao.markSessionRejected(action.localSessionId, GamingSessionState.STOP_REJECTED, message)
+                        }
+                    }
+                }
+                sessionAwareLastError = message
+                if (preserve) passHadAmbiguousFailure = true
+                blockedSessions += action.sessionKey
+                if (failure is ApiException && failure.status == 426) throw failure
+            }
+        }
+    }
+
+    private suspend fun persistParticipantState(response: SessionParticipantState) {
+        val dao = db.gamingDao()
+        dao.replaceParticipantCacheForSession(
+            response.sessionId,
+            response.participants.map { it.toCacheEntity(response.sessionId) },
+        )
+        dao.updateCachedParticipantRevision(response.sessionId, response.participantRevision)
+    }
+
+    /**
      * Stations + every session on every terminal — a shared floor view, so
      * this always pulls the whole company's sessions, not just this
      * device's. On-demand only (see onDemandPulls): a screen open or a
@@ -3462,6 +3713,16 @@ class SyncEngine private constructor(
                 }
             }
         }.flatten()
+        val participantStates = mapInBoundedChunks(
+            items = authoritativeSessions.filter { it.participantRevision > 0 }.map { it.id },
+            concurrency = 3,
+        ) { sessionId ->
+            gamingApi.participants(sessionId).also { response ->
+                check(response.sessionId == sessionId) {
+                    "Gaming participant response contained a different session."
+                }
+            }
+        }
         commitToCurrentScope(lease) {
             db.withTransaction {
                 db.gamingDao().replaceStations(
@@ -3502,6 +3763,13 @@ class SyncEngine private constructor(
                 db.gamingDao().replaceSessionAddonCache(
                     sessionAddons.map { it.toCacheEntity() },
                 )
+                authoritativeSessions.forEach { session ->
+                    val participantState = participantStates.firstOrNull { it.sessionId == session.id }
+                    db.gamingDao().replaceParticipantCacheForSession(
+                        session.id,
+                        participantState?.participants.orEmpty().map { it.toCacheEntity(session.id) },
+                    )
+                }
                 db.syncMetaDao().put(SyncMetaEntity("gaming", System.currentTimeMillis()))
             }
             // Gaming may be closed while a realtime event reports a stop from

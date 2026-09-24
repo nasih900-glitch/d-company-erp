@@ -127,6 +127,9 @@ interface ShiftCloseSafetyDao {
             (SELECT COUNT(*) FROM local_gaming_package_extensions
               WHERE state = 'pending' AND
                 (shiftId = :localShiftId OR (:serverShiftId IS NOT NULL AND shiftId = :serverShiftId))) +
+            (SELECT COUNT(*) FROM local_gaming_session_actions
+              WHERE state = 'pending' AND actionType IN ('amend','participant_join','participant_leave') AND
+                (shiftId = :localShiftId OR (:serverShiftId IS NOT NULL AND shiftId = :serverShiftId))) +
             (SELECT COUNT(*) FROM local_gaming_session_addon_actions
               WHERE state = 'pending' AND terminalId = :terminalId AND
                 (shiftId = :localShiftId OR (:serverShiftId IS NOT NULL AND shiftId = :serverShiftId))) +
@@ -171,6 +174,10 @@ interface ShiftCloseSafetyDao {
                 (shiftId = :localShiftId OR (:serverShiftId IS NOT NULL AND shiftId = :serverShiftId))) +
             (SELECT COUNT(*) FROM local_gaming_package_extensions
               WHERE state NOT IN ('pending', 'confirmed', 'discarded') AND
+                (shiftId = :localShiftId OR (:serverShiftId IS NOT NULL AND shiftId = :serverShiftId))) +
+            (SELECT COUNT(*) FROM local_gaming_session_actions
+              WHERE state NOT IN ('pending', 'confirmed', 'discarded') AND
+                actionType IN ('amend','participant_join','participant_leave') AND
                 (shiftId = :localShiftId OR (:serverShiftId IS NOT NULL AND shiftId = :serverShiftId))) +
             (SELECT COUNT(*) FROM local_gaming_session_addon_actions
               WHERE state NOT IN ('pending', 'confirmed', 'discarded') AND terminalId = :terminalId AND
@@ -251,6 +258,10 @@ interface ShiftCloseSafetyDao {
             (SELECT COUNT(*) FROM local_gaming_package_extensions
               WHERE state NOT IN ('confirmed', 'discarded') AND
                 (shiftId IS NULL OR trim(shiftId) = '')) +
+            (SELECT COUNT(*) FROM local_gaming_session_actions
+              WHERE state NOT IN ('confirmed', 'discarded') AND
+                (trim(ownerCompanyId) = '' OR trim(ownerUserId) = '' OR trim(branchId) = '' OR
+                 trim(terminalId) = '' OR trim(shiftId) = '')) +
             (SELECT COUNT(*) FROM local_gaming_session_addon_actions
               WHERE state NOT IN ('confirmed', 'discarded') AND
                 (trim(ownerCompanyId) = '' OR trim(ownerUserId) = '' OR trim(branchId) = '' OR
@@ -464,6 +475,11 @@ internal fun installShiftClosingWriteGuards(db: SupportSQLiteDatabase) {
         ),
         GuardedTable(
             "local_gaming_package_extensions",
+            "NEW.shiftId",
+            "NEW.state = 'pending'",
+        ),
+        GuardedTable(
+            "local_gaming_session_actions",
             "NEW.shiftId",
             "NEW.state = 'pending'",
         ),

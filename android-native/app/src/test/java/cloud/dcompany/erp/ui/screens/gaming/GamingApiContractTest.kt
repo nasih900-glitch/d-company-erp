@@ -173,6 +173,7 @@ class GamingApiContractTest {
                 expectedPackageVariant = "dual",
                 expectedTimerMinutes = 60,
                 expectedAmountMinor = 23_000,
+                expectedBillingRevision = 1,
             ),
         )
         val body = ApiClient.json.parseToJsonElement(encoded).jsonObject
@@ -182,6 +183,66 @@ class GamingApiContractTest {
         assertEquals(JsonPrimitive("dual"), body["expected_package_variant"])
         assertEquals(JsonPrimitive(60), body["expected_timer_minutes"])
         assertEquals(JsonPrimitive(23_000), body["expected_amount_minor"])
+        assertEquals(JsonPrimitive(1), body["expected_billing_revision"])
+    }
+
+    @Test
+    fun `offline amendment carries complete clock roster billing and target snapshots`() {
+        val body = ApiClient.json.parseToJsonElement(
+            ApiClient.json.encodeToString(
+                SessionPackageAmendBody(
+                    targetPackageId = "single-30",
+                    expectedTimerMinutes = 60,
+                    expectedAmountMinor = 18_000,
+                    expectedPauseVersion = 3,
+                    expectedParticipantRevision = 0,
+                    expectedBillingRevision = 0,
+                    expectedTargetPriceMinor = 8_000,
+                    expectedTargetDurationMinutes = 30,
+                    expectedTargetVariant = "single",
+                    occurredAt = "2026-09-24T12:29:59Z",
+                    playElapsedMs = 1_799_000,
+                ),
+            ),
+        ).jsonObject
+
+        assertEquals(JsonPrimitive("single-30"), body["target_package_id"])
+        assertEquals(JsonPrimitive(3), body["expected_pause_version"])
+        assertEquals(JsonPrimitive(0), body["expected_participant_revision"])
+        assertEquals(JsonPrimitive(0), body["expected_billing_revision"])
+        assertEquals(JsonPrimitive(1_799_000), body["play_elapsed_ms"])
+    }
+
+    @Test
+    fun `offline participant and stop bodies preserve FIFO revisions and capture clock`() {
+        val join = ApiClient.json.parseToJsonElement(
+            ApiClient.json.encodeToString(
+                SessionParticipantJoinBody(
+                    expectedParticipantRevision = 2,
+                    customerId = "customer-1",
+                    customerDirectoryRevision = 9,
+                    customerDirectoryCompanyId = "company-1",
+                    occurredAt = "2026-09-24T12:10:00Z",
+                    playElapsedMs = 600_000,
+                    expectedPauseVersion = 1,
+                ),
+            ),
+        ).jsonObject
+        val stop = ApiClient.json.parseToJsonElement(
+            ApiClient.json.encodeToString(
+                SessionStopBody(
+                    endedAt = "2026-09-24T12:20:00Z",
+                    expectedParticipantRevision = 3,
+                    expectedBillingRevision = 1,
+                ),
+            ),
+        ).jsonObject
+
+        assertEquals(JsonPrimitive(2), join["expected_participant_revision"])
+        assertEquals(JsonPrimitive(600_000), join["play_elapsed_ms"])
+        assertEquals(JsonPrimitive(1), join["expected_pause_version"])
+        assertEquals(JsonPrimitive(3), stop["expected_participant_revision"])
+        assertEquals(JsonPrimitive(1), stop["expected_billing_revision"])
     }
 
     @Test

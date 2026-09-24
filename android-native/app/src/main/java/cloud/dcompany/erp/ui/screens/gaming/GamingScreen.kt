@@ -49,6 +49,7 @@ import androidx.compose.material.icons.filled.HourglassTop
 import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.PauseCircle
 import androidx.compose.material.icons.filled.Payments
+import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.RestaurantMenu
@@ -127,6 +128,9 @@ import cloud.dcompany.erp.core.db.GamingPackageExtensionState
 import cloud.dcompany.erp.core.db.GamingCleanupWorkflowStatus
 import cloud.dcompany.erp.core.db.GamingSessionAddonActionState
 import cloud.dcompany.erp.core.db.GamingSessionAddonActionType
+import cloud.dcompany.erp.core.db.GamingSessionActionState
+import cloud.dcompany.erp.core.db.GamingSessionActionType
+import cloud.dcompany.erp.core.db.LocalGamingSessionActionEntity
 import cloud.dcompany.erp.core.db.MenuItemEntity
 import cloud.dcompany.erp.core.db.GamingSessionState
 import cloud.dcompany.erp.core.db.LEGACY_PACKAGE_START_REVIEW_ERROR
@@ -351,6 +355,7 @@ fun GamingScreen(
     var configuringAddon by remember { mutableStateOf<AddonConfigurationRequest?>(null) }
     var voidingAddon by remember { mutableStateOf<AddonVoidRequest?>(null) }
     var reviewingRejectedAddon by remember { mutableStateOf<SessionAddonActionUi?>(null) }
+    var managingParticipants by remember { mutableStateOf<GameSession?>(null) }
     var paymentQueueOpen by rememberSaveable { mutableStateOf(false) }
     var cancellationQueueOpen by rememberSaveable { mutableStateOf(false) }
     var attentionCenterOpen by rememberSaveable { mutableStateOf(false) }
@@ -477,6 +482,10 @@ fun GamingScreen(
                         reviewingRejectedAddon = state.sessionAddonActions.firstOrNull {
                             it.actionId == actionId
                         }
+                    },
+                    onManageParticipants = {
+                        vm.refreshCustomersForStart()
+                        managingParticipants = it
                     },
                 )
                 return@BoxWithConstraints
@@ -705,6 +714,10 @@ fun GamingScreen(
                                 it.actionId == actionId
                             }
                         },
+                        onManageParticipants = {
+                            vm.refreshCustomersForStart()
+                            managingParticipants = it
+                        },
                     )
                 }
             }
@@ -725,6 +738,30 @@ fun GamingScreen(
             }
             SnackbarHost(hostState = noticeHostState)
         }
+    }
+
+    managingParticipants?.let { selected ->
+        val current = state.sessions.firstOrNull { it.id == selected.id } ?: selected
+        val target30 = state.packages.firstOrNull { candidate ->
+            candidate.kind == "base" && candidate.stationType == current.packageStationTypeSnapshot &&
+                candidate.pricingTier == current.packagePricingTierSnapshot &&
+                candidate.variant == current.packageVariantSnapshot && candidate.durationMinutes == 30
+        }
+        GamingParticipantsDialog(
+            session = current,
+            participants = state.participantsFor(current),
+            rejectedAction = state.unresolvedSequencedActionsFor(current)
+                .firstOrNull { it.state == GamingSessionActionState.REJECTED },
+            customers = state.customers,
+            online = state.online,
+            amendTarget = target30,
+            onSearchCustomer = vm::searchCustomersForStart,
+            onJoin = { customerId, name, phone -> vm.joinParticipant(current, customerId, name, phone) },
+            onLeave = { reference -> vm.leaveParticipant(current, reference) },
+            onAmend = { target -> vm.amendPackage(current, target) },
+            onDiscardRejected = { actionId -> vm.discardRejectedSessionAction(current, actionId) },
+            onDismiss = { managingParticipants = null },
+        )
     }
 
     if (attentionCenterOpen) {
@@ -1455,6 +1492,7 @@ private fun GamingCommandWorkspace(
     onAddItems: (GameSession) -> Unit,
     onVoidAddon: (GameSession, GamingSessionAddonUi) -> Unit,
     onReviewRejectedAddon: (String) -> Unit,
+    onManageParticipants: (GameSession) -> Unit,
 ) {
     // Resolve synchronously as well as persisting through the effect in the
     // parent. This avoids one empty-detail frame when a filter removes the
@@ -1645,6 +1683,7 @@ private fun GamingCommandWorkspace(
                         onAddItems = onAddItems,
                         onVoidAddon = onVoidAddon,
                         onReviewRejectedAddon = onReviewRejectedAddon,
+                        onManageParticipants = onManageParticipants,
                         pinActiveSessionActions = true,
                         modifier = Modifier.fillMaxSize(),
                     )
@@ -2251,6 +2290,7 @@ internal fun GamingStationCard(
     onAddItems: (GameSession) -> Unit = {},
     onVoidAddon: (GameSession, GamingSessionAddonUi) -> Unit = { _, _ -> },
     onReviewRejectedAddon: (String) -> Unit = {},
+    onManageParticipants: (GameSession) -> Unit = {},
     onPauseResume: (GameSession) -> Unit = {},
     showActiveSessionActions: Boolean = true,
     pinActiveSessionActions: Boolean = false,
@@ -2400,6 +2440,7 @@ internal fun GamingStationCard(
                     onTransfer = onTransfer,
                     onPauseResume = onPauseResume,
                     onStop = onStop,
+                    onManageParticipants = onManageParticipants,
                     modifier = Modifier.fillMaxWidth().padding(top = Spacing.sm),
                 )
             }
@@ -2631,6 +2672,7 @@ internal fun GamingStationCard(
                             onTransfer = onTransfer,
                             onPauseResume = onPauseResume,
                             onStop = onStop,
+                            onManageParticipants = onManageParticipants,
                         )
                     }
                 }
@@ -2808,9 +2850,23 @@ private fun GamingActiveSessionActions(
     onTransfer: (GameSession) -> Unit,
     onPauseResume: (GameSession) -> Unit,
     onStop: (GameSession) -> Unit,
+    onManageParticipants: (GameSession) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+        if (
+            session.status in setOf("active", "paused") &&
+            (session.effectivePackageStationType ?: session.packageStationTypeSnapshot) == "ps5"
+        ) {
+            ErpButton(
+                text = "Players & booking",
+                onClick = { onManageParticipants(session) },
+                enabled = actionsEnabled && ownsSession && session.orderId == null,
+                intent = ActionIntent.Secondary,
+                leadingIcon = Icons.Filled.People,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
         ErpButton(
             text = "Add drinks & snacks",
             onClick = { onAddItems(session) },
@@ -4923,6 +4979,228 @@ private fun gamingPackageChipColors() = FilterChipDefaults.filterChipColors(
     selectedLabelColor = Brand.Background,
 )
 
+@Composable
+private fun GamingParticipantsDialog(
+    session: GameSession,
+    participants: List<GamingParticipantUi>,
+    rejectedAction: LocalGamingSessionActionEntity?,
+    customers: List<GamingCustomerOption>,
+    online: Boolean,
+    amendTarget: GamingPackage?,
+    onSearchCustomer: (String) -> Unit,
+    onJoin: (String?, String?, String?) -> Unit,
+    onLeave: (String) -> Unit,
+    onAmend: (GamingPackage) -> Unit,
+    onDiscardRejected: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var customerMode by rememberSaveable(session.id) { mutableStateOf("search") }
+    var query by rememberSaveable(session.id) { mutableStateOf("") }
+    var selected by remember(session.id) { mutableStateOf<GamingCustomerOption?>(null) }
+    var name by rememberSaveable(session.id) { mutableStateOf("") }
+    var phone by rememberSaveable(session.id) { mutableStateOf("") }
+    val matches = remember(customers, query) { filterGamingCustomerOptions(customers, query).take(8) }
+    val active = participants.filter(GamingParticipantUi::active)
+    val basePlayers = (if ((session.effectivePackageVariant ?: session.packageVariantSnapshot) == "dual") 2 else 1) +
+        session.extraControllers
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Players & booking") },
+        text = {
+            LazyColumn(
+                modifier = Modifier.fillMaxWidth().heightIn(max = 520.dp),
+                verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+            ) {
+                item {
+                    Text(
+                        "Booked players stay fixed. Added friends are ₹30 per started hour each; Leave stops that friend's meter.",
+                        color = Brand.ForegroundMuted,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                rejectedAction?.let { rejected ->
+                    item {
+                        SectionCard(
+                            title = "Saved action needs review",
+                            subtitle = rejected.lastError
+                                ?: "The server refused this saved session action.",
+                        ) {
+                            if (rejected.actionType in setOf(
+                                    GamingSessionActionType.AMEND,
+                                    GamingSessionActionType.PARTICIPANT_JOIN,
+                                    GamingSessionActionType.PARTICIPANT_LEAVE,
+                                )
+                            ) {
+                                TextButton(onClick = { onDiscardRejected(rejected.actionId) }) {
+                                    Text("Remove refused action")
+                                }
+                            }
+                        }
+                    }
+                }
+                if (canAmendGamingPackageTo30(session, amendTarget, System.currentTimeMillis())) {
+                    item {
+                        val target = requireNotNull(amendTarget)
+                        val preservedControllerMinor = ((session.amountMinor ?: 0L) -
+                            (session.packagePriceMinorSnapshot ?: 0L)).coerceAtLeast(0L)
+                        SectionCard(
+                            title = "Change booking to 30 minutes",
+                            subtitle = "Published ${target.priceMinor.asRupees()} base + " +
+                                "${preservedControllerMinor.asRupees()} existing controller fee",
+                        ) {
+                            ErpButton(
+                                text = "Use 30 min · ${(target.priceMinor + preservedControllerMinor).asRupees()}",
+                                onClick = { onAmend(target) },
+                                intent = ActionIntent.Warning,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                    }
+                }
+                item {
+                    Text("Added friends", style = MaterialTheme.typography.titleSmall)
+                }
+                if (participants.isEmpty()) {
+                    item {
+                        Text("No late friends are recorded.", color = Brand.ForegroundMuted)
+                    }
+                } else {
+                    items(participants, key = GamingParticipantUi::reference) { participant ->
+                        SectionCard(
+                            title = participant.name?.takeIf(String::isNotBlank) ?: "Saved customer",
+                            subtitle = listOfNotNull(
+                                participant.phone?.takeIf(String::isNotBlank),
+                                when {
+                                    participant.lastError != null -> "Needs review"
+                                    participant.pending && participant.active -> "Waiting to sync Join"
+                                    participant.pending -> "Waiting to sync Leave"
+                                    participant.active -> "Playing"
+                                    else -> "Left"
+                                },
+                            ).joinToString(" · "),
+                        ) {
+                            if (participant.active) {
+                                TextButton(onClick = { onLeave(participant.reference) }) {
+                                    Text(if (session.status == "paused") "Leave at paused time" else "Leave now")
+                                }
+                            }
+                        }
+                    }
+                }
+                if (session.status == "paused") {
+                    item {
+                        Text(
+                            "Friends may leave while paused. Resume before adding another friend.",
+                            color = Brand.Warning,
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
+                } else if (basePlayers + active.size < 4) {
+                    item {
+                        Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                            FilterChip(
+                                selected = customerMode == "search",
+                                onClick = { customerMode = "search"; selected = null },
+                                label = { Text("Saved customer") },
+                                colors = gamingPackageChipColors(),
+                            )
+                            FilterChip(
+                                selected = customerMode == "add",
+                                onClick = { customerMode = "add"; selected = null },
+                                label = { Text("Add new") },
+                                colors = gamingPackageChipColors(),
+                            )
+                        }
+                    }
+                    if (customerMode == "search") {
+                        item {
+                            OutlinedTextField(
+                                value = query,
+                                onValueChange = { query = it.take(200); selected = null; onSearchCustomer(query) },
+                                label = { Text("Search name or phone") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                        items(matches, key = { it.customerId ?: it.phone }) { option ->
+                            TextButton(
+                                onClick = { selected = option },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text(
+                                    "${option.name?.takeIf(String::isNotBlank) ?: "Saved customer"} · ${option.phone}" +
+                                        if (selected == option) " · selected" else "",
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            }
+                        }
+                    } else {
+                        item {
+                            OutlinedTextField(
+                                value = name,
+                                onValueChange = { name = it.take(200) },
+                                label = { Text("Friend name") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                        item {
+                            OutlinedTextField(
+                                value = phone,
+                                onValueChange = { phone = it.take(20) },
+                                label = { Text("Friend phone") },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                    }
+                    item {
+                        ErpButton(
+                            text = "Add friend",
+                            onClick = {
+                                if (customerMode == "search") {
+                                    selected?.let { onJoin(it.customerId, null, null) }
+                                } else {
+                                    onJoin(null, name, phone)
+                                }
+                            },
+                            enabled = if (customerMode == "search") {
+                                selected?.customerId != null
+                            } else {
+                                name.isNotBlank() && phone.isNotBlank()
+                            },
+                            leadingIcon = Icons.Filled.People,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Text(
+                            if (online) "Saved actions upload in session order." else "Offline: Join/Leave/Stop remain queued in this exact session order.",
+                            color = Brand.ForegroundMuted,
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } },
+    )
+}
+
+internal fun canAmendGamingPackageTo30(
+    session: GameSession,
+    target: GamingPackage?,
+    nowMillis: Long,
+): Boolean =
+    target != null && session.status in setOf("active", "paused") && session.orderId == null &&
+        session.billingRevision == 0 && session.participantRevision == 0 &&
+        session.timerMinutes == 60 && session.packageDurationMinutesSnapshot == 60 &&
+        session.packageVariantSnapshot in setOf("single", "dual") &&
+        target.kind == "base" && target.durationMinutes == 30 &&
+        target.variant == session.packageVariantSnapshot &&
+        target.stationType == session.packageStationTypeSnapshot &&
+        target.pricingTier == session.packagePricingTierSnapshot &&
+        (sessionPlayElapsedMillis(session, nowMillis) ?: Long.MAX_VALUE) < 1_800_000L
+
 private fun Int.asControllerCount(): String =
     "$this extra ${if (this == 1) "controller" else "controllers"}"
 
@@ -4941,7 +5219,7 @@ private fun stationFilters(stations: List<Station>): List<StationFilter> {
     return listOf(StationFilter("all", "All")) + order.filter { it in present }.map { StationFilter(it, labels.getValue(it)) }
 }
 
-private fun stationFilterId(type: String): String {
+internal fun stationFilterId(type: String): String {
     val normalized = type.trim().lowercase(Locale.ROOT)
         .replace('_', ' ')
         .replace('-', ' ')
@@ -5079,16 +5357,20 @@ internal fun matchingPackageExtensions(
     station: Station,
     packages: List<GamingPackage>,
 ): List<GamingPackage> {
-    val lockedVariant = session?.packageVariantSnapshot?.takeIf(String::isNotBlank)
+    val lockedSession = session ?: return emptyList()
+    val lockedVariant = lockedSession.effectivePackageVariant?.takeIf(String::isNotBlank)
+        ?: lockedSession.packageVariantSnapshot?.takeIf(String::isNotBlank)
         ?: return emptyList()
-    val lockedStationType = session.packageStationTypeSnapshot?.takeIf(String::isNotBlank)
+    val lockedStationType = lockedSession.effectivePackageStationType?.takeIf(String::isNotBlank)
+        ?: lockedSession.packageStationTypeSnapshot?.takeIf(String::isNotBlank)
         ?: return emptyList()
     val compatibleTiers = packages.filter {
         it.kind == "extension" && it.stationType == lockedStationType &&
             it.variant == lockedVariant
     }.map(GamingPackage::pricingTier).distinct()
-    val lockedPricingTier = session.packagePricingTierSnapshot?.takeIf(String::isNotBlank)
-        ?: session.packageId?.let { packageId ->
+    val lockedPricingTier = lockedSession.effectivePackagePricingTier?.takeIf(String::isNotBlank)
+        ?: lockedSession.packagePricingTierSnapshot?.takeIf(String::isNotBlank)
+        ?: lockedSession.packageId?.let { packageId ->
         packages.firstOrNull { it.id == packageId && it.kind == "base" }?.pricingTier
     } ?: compatibleTiers.singleOrNull() ?: return emptyList()
     return packages.filter {

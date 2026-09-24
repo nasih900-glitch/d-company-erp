@@ -20,15 +20,19 @@ import cloud.dcompany.erp.core.db.GamingSessionCacheEntity
 import cloud.dcompany.erp.core.db.GamingSessionAddonActionState
 import cloud.dcompany.erp.core.db.GamingSessionAddonActionType
 import cloud.dcompany.erp.core.db.GamingSessionAddonCacheEntity
+import cloud.dcompany.erp.core.db.GamingSessionParticipantCacheEntity
 import cloud.dcompany.erp.core.db.GamingPackageCacheEntity
 import cloud.dcompany.erp.core.db.GamingPackageExtensionState
 import cloud.dcompany.erp.core.db.GamingLegacyResolution
 import cloud.dcompany.erp.core.db.GamingLegacyResolutionAttemptState
 import cloud.dcompany.erp.core.db.GamingCleanupWorkflowStatus
 import cloud.dcompany.erp.core.db.GamingSessionState
+import cloud.dcompany.erp.core.db.GamingSessionActionState
+import cloud.dcompany.erp.core.db.GamingSessionActionType
 import cloud.dcompany.erp.core.db.gamingCleanupWorkflowMessageOrNull
 import cloud.dcompany.erp.core.db.GamingStationEntity
 import cloud.dcompany.erp.core.db.LocalGamingSessionEntity
+import cloud.dcompany.erp.core.db.LocalGamingSessionActionEntity
 import cloud.dcompany.erp.core.db.LocalGamingPackageExtensionEntity
 import cloud.dcompany.erp.core.db.LocalGamingSessionAddonActionEntity
 import cloud.dcompany.erp.core.db.MenuCategoryEntity
@@ -110,6 +114,8 @@ data class GamingUiState(
     /** Server receipts merged with durable local Add/Void overlays. */
     val sessionAddons: List<GamingSessionAddonUi> = emptyList(),
     val sessionAddonActions: List<SessionAddonActionUi> = emptyList(),
+    val participantCache: List<GamingSessionParticipantCacheEntity> = emptyList(),
+    val sessionActions: List<LocalGamingSessionActionEntity> = emptyList(),
     /** Retired locally, but the exact server acknowledgement has not landed yet. */
     val cleanupAcknowledgementsPending: List<GamingCleanupAcknowledgementUi> = emptyList(),
 ) {
@@ -175,6 +181,76 @@ data class GamingUiState(
         sessionAddonActions.filter {
             it.serverSessionId == session.id || it.localSessionId == session.id
         }
+
+    fun participantsFor(session: GameSession): List<GamingParticipantUi> =
+        mergeGamingParticipants(session, participantCache, sessionActions, customers)
+
+    fun unresolvedSequencedActionsFor(session: GameSession): List<LocalGamingSessionActionEntity> {
+        val localId = sessions.firstOrNull { it.id == session.id }?.id
+        return sessionActions.filter {
+            it.serverSessionId == session.id || it.localSessionId == localId || it.sessionKey == session.id
+        }
+    }
+}
+
+data class GamingParticipantUi(
+    val reference: String,
+    val customerId: String?,
+    val name: String?,
+    val phone: String?,
+    val active: Boolean,
+    val pending: Boolean,
+    val lastError: String? = null,
+)
+
+internal fun mergeGamingParticipants(
+    session: GameSession,
+    cache: List<GamingSessionParticipantCacheEntity>,
+    actions: List<LocalGamingSessionActionEntity>,
+    customers: List<GamingCustomerOption>,
+): List<GamingParticipantUi> {
+    val customerById = customers.mapNotNull { it.customerId?.let { id -> id to it } }.toMap()
+    val relevantActions = actions.filter {
+        it.serverSessionId == session.id || it.sessionKey == session.id
+    }.sortedBy(LocalGamingSessionActionEntity::sequence)
+    val pendingLeaveRefs = relevantActions.filter {
+        it.actionType == GamingSessionActionType.PARTICIPANT_LEAVE &&
+            it.state in setOf(GamingSessionActionState.PENDING, GamingSessionActionState.AMBIGUOUS)
+    }.mapNotNull { it.participantReference }.toSet()
+    val rejectedLeaveByRef = relevantActions.filter {
+        it.actionType == GamingSessionActionType.PARTICIPANT_LEAVE &&
+            it.state == GamingSessionActionState.REJECTED
+    }.associateBy { it.participantReference }
+    val serverRows = cache.filter { it.gamingSessionId == session.id }.map { row ->
+        val customer = customerById[row.customerId]
+        val rejectedLeave = rejectedLeaveByRef[row.id]
+        GamingParticipantUi(
+            reference = row.id,
+            customerId = row.customerId,
+            name = customer?.name,
+            phone = customer?.phone,
+            active = row.leftAtMillis == null && row.id !in pendingLeaveRefs,
+            pending = row.id in pendingLeaveRefs || rejectedLeave != null,
+            lastError = rejectedLeave?.lastError,
+        )
+    }
+    val pendingJoins = relevantActions.filter {
+        it.actionType == GamingSessionActionType.PARTICIPANT_JOIN &&
+            it.state !in setOf(GamingSessionActionState.CONFIRMED, GamingSessionActionState.DISCARDED)
+    }.map { action ->
+        val customer = action.customerId?.let(customerById::get)
+        GamingParticipantUi(
+            reference = action.actionId,
+            customerId = action.customerId,
+            name = customer?.name ?: action.customerName,
+            phone = customer?.phone ?: action.customerPhone,
+            active = action.state != GamingSessionActionState.REJECTED &&
+                action.actionId !in pendingLeaveRefs,
+            pending = true,
+            lastError = action.lastError,
+        )
+    }
+    return serverRows + pendingJoins
 }
 
 data class GamingCleanupAcknowledgementUi(
@@ -988,6 +1064,8 @@ class GamingViewModel : ViewModel() {
         val packageExtensions: List<LocalGamingPackageExtensionEntity>,
         val cache: List<GamingSessionAddonCacheEntity>,
         val actions: List<LocalGamingSessionAddonActionEntity>,
+        val participants: List<GamingSessionParticipantCacheEntity>,
+        val sessionActions: List<LocalGamingSessionActionEntity>,
     )
 
     private data class AddonCatalogState(
@@ -1056,8 +1134,10 @@ class GamingViewModel : ViewModel() {
                 db.gamingDao().observeUnresolvedPackageExtensions(),
                 db.gamingDao().observeSessionAddonCache(),
                 db.gamingDao().observeUnresolvedSessionAddonActions(),
-            ) { packageExtensions, addonCache, addonActions ->
-                AddonState(packageExtensions, addonCache, addonActions)
+                db.gamingDao().observeParticipantCache(),
+                db.gamingDao().observeUnresolvedSessionActions(),
+            ) { packageExtensions, addonCache, addonActions, participants, sessionActions ->
+                AddonState(packageExtensions, addonCache, addonActions, participants, sessionActions)
             },
         ) { actionState, currentShift, addons ->
             Triple(actionState, currentShift, addons)
@@ -1088,6 +1168,14 @@ class GamingViewModel : ViewModel() {
                     pauseAvailable = cached.pauseAvailable,
                     lastPauseTransitionAt = cached.lastPauseTransitionAtMillis
                         ?.let { Instant.ofEpochMilli(it).toString() },
+                    participantRevision = cached.participantRevision,
+                    billingRevision = cached.billingRevision,
+                    effectivePackageId = cached.effectivePackageId,
+                    effectivePackagePriceMinor = cached.effectivePackagePriceMinor,
+                    effectivePackageDurationMinutes = cached.effectivePackageDurationMinutes,
+                    effectivePackageVariant = cached.effectivePackageVariant,
+                    effectivePackageStationType = cached.effectivePackageStationType,
+                    effectivePackagePricingTier = cached.effectivePackagePricingTier,
                 )
             } ?: cached.toGameSession()
         }
@@ -1101,7 +1189,9 @@ class GamingViewModel : ViewModel() {
         GamingUiState(
             stations = references.stations.map { it.toStation() },
             packages = references.packages.map { it.toGamingPackage() },
-            sessions = cacheSessions + localOnly,
+            sessions = (cacheSessions + localOnly).map { session ->
+                projectPendingGamingSessionActions(session, addons.sessionActions)
+            },
             customers = references.customers,
             busyStationId = actionState.busyStationId,
             error = actionState.actionError,
@@ -1150,6 +1240,8 @@ class GamingViewModel : ViewModel() {
                     lastError = it.lastError,
                 )
             },
+            participantCache = addons.participants,
+            sessionActions = addons.sessionActions,
             cleanupAcknowledgementsPending = cleanupAcknowledgementsPending
                 .filter { row ->
                     terminal != null && row.cleanupBranchId == terminal.branchId &&
@@ -1351,6 +1443,21 @@ class GamingViewModel : ViewModel() {
                 "${unresolved.size} Gaming item action(s) are waiting for server confirmation. " +
                     "Keep the bill here until Sync finishes before $action."
         }
+        return false
+    }
+
+    private fun requireNoSequencedSessionActions(session: GameSession, action: String): Boolean {
+        val queued = state.value.unresolvedSequencedActionsFor(session)
+        if (queued.isEmpty()) return true
+        error.value = sequencedGamingActionBlockMessage(queued.size, action)
+        return false
+    }
+
+    private fun requireNoRejectedSequencedAction(session: GameSession, action: String): Boolean {
+        val rejected = state.value.unresolvedSequencedActionsFor(session)
+            .firstOrNull { it.state == GamingSessionActionState.REJECTED } ?: return true
+        error.value = rejected.lastError?.let { "$it Resolve the refused saved action before $action." }
+            ?: "A saved session action was refused. Resolve it before $action."
         return false
     }
 
@@ -1562,9 +1669,7 @@ class GamingViewModel : ViewModel() {
         if (!requireIdle()) {
             return
         }
-        if (!requireNoPackageExtension(session, "stopping the session")) {
-            return
-        }
+        if (!requireNoRejectedSequencedAction(session, "stopping this session")) return
         val currentState = state.value
         val resolvedStopShiftId = session.resolvedStopShiftId(
             activeShiftId = currentState.activeShiftId,
@@ -1607,23 +1712,59 @@ class GamingViewModel : ViewModel() {
                         if (existing != null) {
                             // Already an outbox row for this session (this device started
                             // it, possibly still unsynced) — just flag the stop.
-                            changed = dao.requestSessionStop(
-                                existing.localId,
-                                stoppedAtMillis,
-                                resolvedStopShiftId,
-                                correctFutureClockRejection =
-                                    isCorrectableGamingStopClockRejection(
-                                        session.localState,
-                                        session.lastError,
-                                    ),
-                            ) != 0
+                            db.withTransaction {
+                                changed = dao.requestSessionStop(
+                                    existing.localId,
+                                    stoppedAtMillis,
+                                    resolvedStopShiftId,
+                                    correctFutureClockRejection =
+                                        isCorrectableGamingStopClockRejection(
+                                            session.localState,
+                                            session.lastError,
+                                        ),
+                                ) != 0
+                                val stopActionId = "gaming-session-stop:${existing.localId}"
+                                val prior = dao.sessionAction(stopActionId)
+                                if (changed && prior == null) {
+                                    dao.captureSessionAction(
+                                        LocalGamingSessionActionEntity(
+                                            actionId = stopActionId,
+                                            sessionKey = existing.localId,
+                                            actionType = GamingSessionActionType.STOP,
+                                            ownerCompanyId = scopeLease.scope.companyId,
+                                            ownerUserId = scopeLease.scope.userId,
+                                            branchId = requireNotNull(scopeLease.scope.branchId),
+                                            terminalId = requireNotNull(scopeLease.scope.terminalId),
+                                            serverSessionId = existing.serverId,
+                                            localSessionId = existing.localId,
+                                            shiftId = resolvedStopShiftId,
+                                            occurredAtMillis = stoppedAtMillis,
+                                            expectedParticipantRevision = session.participantRevision,
+                                            expectedBillingRevision = session.billingRevision,
+                                        ),
+                                    )
+                                } else if (changed && prior?.state == GamingSessionActionState.REJECTED) {
+                                    if (isCorrectableGamingStopClockRejection(session.localState, session.lastError)) {
+                                        dao.recaptureRejectedStopAction(
+                                            stopActionId,
+                                            stoppedAtMillis,
+                                            session.participantRevision,
+                                            session.billingRevision,
+                                        )
+                                    } else {
+                                        dao.retryRejectedSessionAction(stopActionId)
+                                    }
+                                }
+                            }
                         } else {
                             // A session this device only ever saw via the cache (started
                             // on another terminal). serverId is already known, so
                             // pushGamingSessionOne skips straight to the stop leg.
-                            dao.insertLocalSession(
-                                LocalGamingSessionEntity(
-                                    localId = UUID.randomUUID().toString(),
+                            val localId = UUID.randomUUID().toString()
+                            db.withTransaction {
+                                dao.insertLocalSession(
+                                    LocalGamingSessionEntity(
+                                    localId = localId,
                                     serverId = session.id,
                                     stationId = session.stationId,
                                     startedAtMillis = runCatching { Instant.parse(session.startAt).toEpochMilli() }
@@ -1654,8 +1795,26 @@ class GamingViewModel : ViewModel() {
                                     packagePricingTierSnapshot = session.packagePricingTierSnapshot,
                                     extraControllers = session.extraControllers,
                                     orderId = session.orderId,
-                                ),
-                            )
+                                    ),
+                                )
+                                dao.captureSessionAction(
+                                    LocalGamingSessionActionEntity(
+                                        actionId = "gaming-session-stop:$localId",
+                                        sessionKey = localId,
+                                        actionType = GamingSessionActionType.STOP,
+                                        ownerCompanyId = scopeLease.scope.companyId,
+                                        ownerUserId = scopeLease.scope.userId,
+                                        branchId = requireNotNull(scopeLease.scope.branchId),
+                                        terminalId = requireNotNull(scopeLease.scope.terminalId),
+                                        serverSessionId = session.id,
+                                        localSessionId = localId,
+                                        shiftId = resolvedStopShiftId,
+                                        occurredAtMillis = stoppedAtMillis,
+                                        expectedParticipantRevision = session.participantRevision,
+                                        expectedBillingRevision = session.billingRevision,
+                                    ),
+                                )
+                            }
                         }
                     }
                 ) return@launch
@@ -2636,6 +2795,7 @@ class GamingViewModel : ViewModel() {
 
     /** Reminder-only +time for non-package sessions; final billing stays elapsed-time based. */
     fun extendTimer(session: GameSession, additionalMinutes: Int = 30) {
+        if (!requireNoSequencedSessionActions(session, "changing the timer")) return
         if (session.orderId != null) {
             error.value =
                 "This session is already linked to a paid POS order. Stop it when play ends; do not add more billable time."
@@ -2687,8 +2847,8 @@ class GamingViewModel : ViewModel() {
         }
         if (
             extension.kind != "extension" || station == null || extension.stationType != station.type ||
-            extension.stationType != session.packageStationTypeSnapshot ||
-            extension.variant != session.packageVariantSnapshot
+            extension.stationType != session.effectivePackageStationType ||
+            extension.variant != session.effectivePackageVariant
         ) {
             error.value =
                 "That paid extension does not match this session's locked package variant. Refresh Gaming and choose again."
@@ -2702,6 +2862,7 @@ class GamingViewModel : ViewModel() {
             return
         }
         if (!requireCurrentShiftSession(session, "adding paid time")) return
+        if (!requireNoRejectedSequencedAction(session, "adding paid time")) return
         if (!requireNoPackageExtension(session, "adding another paid extension")) return
         val workspaceMessage = gamingWorkspaceUnavailableMessage(
             action = "the paid extension could be queued",
@@ -2728,8 +2889,10 @@ class GamingViewModel : ViewModel() {
                         val local = dao.localSessionByEitherId(session.id)
                         val serverSessionId = local?.serverId ?: session.id.takeIf { local == null }
                         if (serverSessionId != null) {
-                            captured = dao.capturePackageExtension(
-                                LocalGamingPackageExtensionEntity(
+                            val createdAtMillis = System.currentTimeMillis()
+                            val sessionKey = local?.localId ?: serverSessionId
+                            captured = dao.captureSequencedPackageExtension(
+                                extension = LocalGamingPackageExtensionEntity(
                                     actionId = actionId,
                                     serverSessionId = serverSessionId,
                                     localSessionId = local?.localId,
@@ -2740,7 +2903,28 @@ class GamingViewModel : ViewModel() {
                                     expectedPackageVariant = extension.variant,
                                     expectedSessionTimerMinutes = expectedTimerMinutes,
                                     expectedSessionAmountMinor = expectedAmountMinor,
-                                    createdAtMillis = System.currentTimeMillis(),
+                                    expectedBillingRevision = session.billingRevision,
+                                    createdAtMillis = createdAtMillis,
+                                ),
+                                queueAction = LocalGamingSessionActionEntity(
+                                    actionId = actionId,
+                                    sessionKey = sessionKey,
+                                    actionType = GamingSessionActionType.EXTEND,
+                                    ownerCompanyId = scopeLease.scope.companyId,
+                                    ownerUserId = scopeLease.scope.userId,
+                                    branchId = requireNotNull(scopeLease.scope.branchId),
+                                    terminalId = requireNotNull(scopeLease.scope.terminalId),
+                                    serverSessionId = serverSessionId,
+                                    localSessionId = local?.localId,
+                                    shiftId = requireNotNull(session.shiftId),
+                                    occurredAtMillis = createdAtMillis,
+                                    expectedBillingRevision = session.billingRevision,
+                                    packageId = extension.id,
+                                    expectedPackagePriceMinor = extension.priceMinor,
+                                    expectedPackageDurationMinutes = extension.durationMinutes,
+                                    expectedPackageVariant = extension.variant,
+                                    expectedSessionTimerMinutes = expectedTimerMinutes,
+                                    expectedSessionAmountMinor = expectedAmountMinor,
                                 ),
                             )
                         }
@@ -2756,6 +2940,286 @@ class GamingViewModel : ViewModel() {
                 appCtx.sync.requestSync()
             } catch (_: Exception) {
                 error.value = "The paid extension was not saved on this tablet. No charge was queued; try again."
+            } finally {
+                busyStationId.value = null
+            }
+        }
+    }
+
+    /** Capture the only supported repricing amendment without rewriting the original booking snapshot. */
+    fun amendPackage(session: GameSession, target: GamingPackage) {
+        if (!requireWrite() || !requireIdle()) return
+        val station = state.value.stations.firstOrNull { it.id == session.stationId }
+        val elapsed = sessionPlayElapsedMillis(session, System.currentTimeMillis())
+        val valid = station != null && stationFilterId(station.type) == "ps5" &&
+            session.status in setOf("active", "paused") && session.orderId == null &&
+            session.billingRevision == 0 && session.participantRevision == 0 &&
+            session.timerMinutes == 60 && session.packageDurationMinutesSnapshot == 60 &&
+            session.packageVariantSnapshot in setOf("single", "dual") &&
+            target.kind == "base" && target.stationType == station.type &&
+            target.pricingTier == session.packagePricingTierSnapshot &&
+            target.variant == session.packageVariantSnapshot && target.durationMinutes == 30 &&
+            elapsed != null && elapsed < 1_800_000L
+        if (!valid) {
+            error.value = "This booking is no longer eligible for the 60-to-30 minute change. Refresh Gaming."
+            return
+        }
+        if (!requireCurrentShiftSession(session, "changing the booking")) return
+        if (state.value.unresolvedSequencedActionsFor(session).isNotEmpty()) {
+            error.value = "Finish syncing this session's saved actions before changing its original booking."
+            return
+        }
+        val scopeLease = scopeLeaseOrError(
+            gamingWorkspaceUnavailableMessage(
+                action = "the booking change could be saved",
+                preservedState = "The original 60-minute booking remains unchanged.",
+            ),
+        ) ?: return
+        val capturedAt = System.currentTimeMillis()
+        val capturedElapsed = requireNotNull(sessionPlayElapsedMillis(session, capturedAt))
+        val actionId = UUID.randomUUID().toString()
+        busyStationId.value = session.stationId
+        error.value = null
+        viewModelScope.launch {
+            try {
+                var saved = false
+                if (!appCtx.cacheIsolation.commitIfCurrentOrNotifyStale(scopeLease, onStale = {
+                        error.value = "The workspace changed before the booking change was saved."
+                    }) {
+                        val dao = db.gamingDao()
+                        val local = dao.localSessionByEitherId(session.id)
+                        val serverId = local?.serverId ?: session.id.takeIf { local == null }
+                        if (serverId != null) {
+                            dao.captureSessionAction(
+                                LocalGamingSessionActionEntity(
+                                    actionId = actionId,
+                                    sessionKey = local?.localId ?: serverId,
+                                    actionType = GamingSessionActionType.AMEND,
+                                    ownerCompanyId = scopeLease.scope.companyId,
+                                    ownerUserId = scopeLease.scope.userId,
+                                    branchId = requireNotNull(scopeLease.scope.branchId),
+                                    terminalId = requireNotNull(scopeLease.scope.terminalId),
+                                    serverSessionId = serverId,
+                                    localSessionId = local?.localId,
+                                    shiftId = requireNotNull(session.shiftId),
+                                    occurredAtMillis = capturedAt,
+                                    playElapsedMs = capturedElapsed,
+                                    expectedPauseVersion = session.pauseVersion ?: 0,
+                                    expectedParticipantRevision = session.participantRevision,
+                                    expectedBillingRevision = session.billingRevision,
+                                    packageId = target.id,
+                                    expectedPackagePriceMinor = target.priceMinor,
+                                    expectedPackageDurationMinutes = target.durationMinutes,
+                                    expectedPackageVariant = target.variant,
+                                    expectedSessionTimerMinutes = requireNotNull(session.timerMinutes),
+                                    expectedSessionAmountMinor = requireNotNull(session.amountMinor),
+                                ),
+                            )
+                            saved = true
+                        }
+                    }
+                ) return@launch
+                if (!saved) {
+                    error.value = "Wait for this session's Start to reach the server before changing its booking."
+                    return@launch
+                }
+                notice.value = "30-minute ${gamingModeLabel(target.variant)} price saved for sync."
+                appCtx.sync.requestSync()
+            } catch (_: Exception) {
+                error.value = "The booking change was not saved. The original 60-minute price remains active."
+            } finally {
+                busyStationId.value = null
+            }
+        }
+    }
+
+    fun joinParticipant(
+        session: GameSession,
+        customerId: String?,
+        name: String?,
+        phone: String?,
+    ) {
+        if (!requireWrite() || !requireIdle()) return
+        val station = state.value.stations.firstOrNull { it.id == session.stationId }
+        if (station == null || stationFilterId(station.type) != "ps5" || session.status != "active") {
+            error.value = if (session.status == "paused") {
+                "Resume the session before adding a friend."
+            } else {
+                "Friends can join only a running PS5 session."
+            }
+            return
+        }
+        if (!requireCurrentShiftSession(session, "adding a friend")) return
+        if (!requireNoRejectedSequencedAction(session, "adding a friend")) return
+        val normalizedName = name?.trim()?.takeIf(String::isNotEmpty)
+        val normalizedPhone = phone?.trim()?.takeIf(String::isNotEmpty)
+        if ((customerId == null) != (normalizedName != null && normalizedPhone != null)) {
+            error.value = "Choose one saved customer, or enter both a name and phone number."
+            return
+        }
+        val currentFriends = state.value.participantsFor(session).count(GamingParticipantUi::active)
+        val basePlayers = (if (session.effectivePackageVariant == "dual" || session.packageVariantSnapshot == "dual") 2 else 1) +
+            session.extraControllers
+        if (basePlayers + currentFriends >= 4) {
+            error.value = "This PS5 session already has the maximum four players."
+            return
+        }
+        captureParticipantAction(
+            session = session,
+            actionType = GamingSessionActionType.PARTICIPANT_JOIN,
+            participantReference = null,
+            customerId = customerId,
+            customerName = normalizedName,
+            customerPhone = normalizedPhone,
+        )
+    }
+
+    fun leaveParticipant(session: GameSession, participantReference: String) {
+        if (!requireWrite() || !requireIdle()) return
+        if (session.status !in setOf("active", "paused")) {
+            error.value = "Friends can leave only while the session is running."
+            return
+        }
+        if (!requireCurrentShiftSession(session, "removing a friend")) return
+        if (!requireNoRejectedSequencedAction(session, "removing a friend")) return
+        val participant = state.value.participantsFor(session).firstOrNull {
+            it.reference == participantReference && it.active
+        }
+        if (participant == null) {
+            error.value = "That friend already left or the roster changed. Refresh Gaming."
+            return
+        }
+        captureParticipantAction(
+            session = session,
+            actionType = GamingSessionActionType.PARTICIPANT_LEAVE,
+            participantReference = participantReference,
+        )
+    }
+
+    private fun captureParticipantAction(
+        session: GameSession,
+        actionType: String,
+        participantReference: String?,
+        customerId: String? = null,
+        customerName: String? = null,
+        customerPhone: String? = null,
+    ) {
+        val scopeLease = scopeLeaseOrError(
+            gamingWorkspaceUnavailableMessage(
+                action = "the friend attendance action could be saved",
+                preservedState = "No friend attendance or charge was changed.",
+            ),
+        ) ?: return
+        val capturedAt = System.currentTimeMillis()
+        val playElapsed = sessionPlayElapsedMillis(session, capturedAt)
+        if (playElapsed == null || session.pauseVersion == null) {
+            error.value = "The authoritative play clock is unavailable. Refresh Gaming before changing friends."
+            return
+        }
+        busyStationId.value = session.stationId
+        error.value = null
+        viewModelScope.launch {
+            try {
+                var saved = false
+                if (!appCtx.cacheIsolation.commitIfCurrentOrNotifyStale(scopeLease, onStale = {
+                        error.value = "The workspace changed before friend attendance was saved."
+                    }) {
+                        val dao = db.gamingDao()
+                        val local = dao.localSessionByEitherId(session.id)
+                        val serverId = local?.serverId ?: session.id.takeIf { local == null }
+                        val directory = db.customerDao().directoryState(scopeLease.scope.companyId)
+                        if (serverId != null) {
+                            dao.captureSessionAction(
+                                LocalGamingSessionActionEntity(
+                                    actionId = UUID.randomUUID().toString(),
+                                    sessionKey = local?.localId ?: serverId,
+                                    actionType = actionType,
+                                    ownerCompanyId = scopeLease.scope.companyId,
+                                    ownerUserId = scopeLease.scope.userId,
+                                    branchId = requireNotNull(scopeLease.scope.branchId),
+                                    terminalId = requireNotNull(scopeLease.scope.terminalId),
+                                    serverSessionId = serverId,
+                                    localSessionId = local?.localId,
+                                    shiftId = requireNotNull(session.shiftId),
+                                    occurredAtMillis = capturedAt,
+                                    playElapsedMs = playElapsed,
+                                    expectedPauseVersion = requireNotNull(session.pauseVersion),
+                                    expectedParticipantRevision = session.participantRevision,
+                                    expectedBillingRevision = session.billingRevision,
+                                    customerId = customerId,
+                                    customerName = customerName,
+                                    customerPhone = customerPhone,
+                                    customerDirectoryRevision = directory?.deletionRevision,
+                                    customerDirectoryCompanyId = directory?.companyId,
+                                    participantReference = participantReference,
+                                ),
+                            )
+                            saved = true
+                        }
+                    }
+                ) return@launch
+                if (!saved) {
+                    error.value = "Wait for this session's Start to reach the server before changing friends."
+                    return@launch
+                }
+                notice.value = if (actionType == GamingSessionActionType.PARTICIPANT_JOIN) {
+                    "Friend joined at this play-time. ₹30 per started hour will be added at Stop."
+                } else {
+                    "Friend leave time saved. Their controller charge stopped at this play-time."
+                }
+                appCtx.sync.requestSync()
+            } catch (_: Exception) {
+                error.value = "Friend attendance was not saved. Check storage and try again."
+            } finally {
+                busyStationId.value = null
+            }
+        }
+    }
+
+    fun discardRejectedSessionAction(session: GameSession, actionId: String) {
+        if (!requireWrite() || !requireIdle()) return
+        val actions = state.value.unresolvedSequencedActionsFor(session)
+        val target = actions.firstOrNull { it.actionId == actionId }
+        if (target == null || target.state != GamingSessionActionState.REJECTED ||
+            target.actionType !in setOf(
+                GamingSessionActionType.AMEND,
+                GamingSessionActionType.PARTICIPANT_JOIN,
+                GamingSessionActionType.PARTICIPANT_LEAVE,
+            )
+        ) {
+            error.value = "That saved action cannot be removed here. Refresh Gaming and review it again."
+            return
+        }
+        if (actions.any { it.sequence > target.sequence }) {
+            error.value =
+                "A later saved action depends on this refused action. Keep the session blocked and contact support."
+            return
+        }
+        val lease = scopeLeaseOrError(
+            gamingWorkspaceUnavailableMessage(
+                action = "the refused action could be removed",
+                preservedState = "The retained action is unchanged.",
+            ),
+        ) ?: return
+        busyStationId.value = session.stationId
+        error.value = null
+        viewModelScope.launch {
+            try {
+                var discarded = false
+                if (!appCtx.cacheIsolation.commitIfCurrentOrNotifyStale(lease, onStale = {
+                        error.value = "The workspace changed before the refused action was removed."
+                    }) {
+                        discarded = db.gamingDao().discardRejectedSessionAction(
+                            actionId,
+                            System.currentTimeMillis(),
+                        ) == 1
+                    }
+                ) return@launch
+                if (discarded) {
+                    notice.value = "The refused action was removed. Server attendance and billing were not changed."
+                } else {
+                    error.value = "The saved action changed state. Refresh Gaming before trying again."
+                }
             } finally {
                 busyStationId.value = null
             }
@@ -2844,8 +3308,16 @@ class GamingViewModel : ViewModel() {
                         lease = scopeLease,
                         onStale = { error.value = postRequestWorkspaceMessage },
                     ) {
-                        confirmed = db.gamingDao()
-                            .markPackageExtensionConfirmed(retained.actionId) == 1
+                        db.withTransaction {
+                            confirmed = db.gamingDao()
+                                .markPackageExtensionConfirmed(retained.actionId) == 1
+                            if (confirmed) {
+                                db.gamingDao().markSessionActionConfirmed(
+                                    retained.actionId,
+                                    System.currentTimeMillis(),
+                                )
+                            }
+                        }
                     }
                     if (!confirmationCommitted) {
                         return@launch
@@ -2870,10 +3342,11 @@ class GamingViewModel : ViewModel() {
                             lease = scopeLease,
                             onStale = { error.value = postRequestWorkspaceMessage },
                         ) {
-                            db.gamingDao().markPackageExtensionAmbiguous(
-                                retained.actionId,
-                                packageExtensionFailureMessageForRecovery(failure),
-                            )
+                            db.withTransaction {
+                                val message = packageExtensionFailureMessageForRecovery(failure)
+                                db.gamingDao().markPackageExtensionAmbiguous(retained.actionId, message)
+                                db.gamingDao().markSessionActionAmbiguous(retained.actionId, message)
+                            }
                         }
                         if (!failureStateCommitted) return@launch
                         error.value =
@@ -2955,6 +3428,7 @@ class GamingViewModel : ViewModel() {
     fun resumeSession(session: GameSession) = changePauseState(session, false, "Continue session")
 
     private fun changePauseState(session: GameSession, pause: Boolean, reason: String) {
+        if (!requireNoSequencedSessionActions(session, if (pause) "pausing" else "resuming")) return
         pauseActionError(session, pause, reason)?.let {
             error.value = it
             return
@@ -2980,6 +3454,7 @@ class GamingViewModel : ViewModel() {
     }
 
     fun transfer(session: GameSession, target: Station) {
+        if (!requireNoSequencedSessionActions(session, "transferring the session")) return
         val source = state.value.stations.firstOrNull { it.id == session.stationId }
         if (
             source == null || !target.isActive || source.id == target.id || source.type != target.type ||
@@ -3103,6 +3578,15 @@ class GamingViewModel : ViewModel() {
         notice.value = null
         viewModelScope.launch {
             try {
+                // Flow-backed button state normally closes this path as soon
+                // as an action is captured. Recheck Room immediately before
+                // the request so a rapid Pause/Resume/transfer tap cannot race
+                // that emission and overtake older clock or billing evidence.
+                val unresolved = db.gamingDao().unresolvedSessionActionCount(session.id)
+                if (unresolved > 0) {
+                    error.value = sequencedGamingActionBlockMessage(unresolved, action)
+                    return@launch
+                }
                 val updated = request()
                 if (
                     storeRunningResponse(
@@ -3361,6 +3845,62 @@ class GamingViewModel : ViewModel() {
     }
 }
 
+internal fun projectPendingGamingSessionActions(
+    session: GameSession,
+    actions: List<LocalGamingSessionActionEntity>,
+): GameSession {
+    var projected = session
+    actions.asSequence()
+        .filter {
+            it.state in setOf(GamingSessionActionState.PENDING, GamingSessionActionState.AMBIGUOUS) &&
+                (it.serverSessionId == session.id || it.sessionKey == session.id)
+        }
+        .sortedBy(LocalGamingSessionActionEntity::sequence)
+        .forEach { action ->
+            when (action.actionType) {
+                GamingSessionActionType.AMEND -> {
+                    val originalBase = projected.packagePriceMinorSnapshot ?: return@forEach
+                    val targetPrice = action.expectedPackagePriceMinor ?: return@forEach
+                    projected = projected.copy(
+                        timerMinutes = action.expectedPackageDurationMinutes,
+                        amountMinor = (action.expectedSessionAmountMinor ?: projected.amountMinor ?: 0L) -
+                            originalBase + targetPrice,
+                        billingRevision = (action.expectedBillingRevision ?: projected.billingRevision) + 1,
+                        effectivePackageId = action.packageId,
+                        effectivePackagePriceMinor = targetPrice,
+                        effectivePackageDurationMinutes = action.expectedPackageDurationMinutes,
+                        effectivePackageVariant = action.expectedPackageVariant,
+                        effectivePackageStationType = projected.packageStationTypeSnapshot,
+                        effectivePackagePricingTier = projected.packagePricingTierSnapshot,
+                    )
+                }
+                GamingSessionActionType.EXTEND -> projected = projected.copy(
+                    timerMinutes = Math.addExact(
+                        action.expectedSessionTimerMinutes ?: projected.timerMinutes ?: 0,
+                        action.expectedPackageDurationMinutes ?: 0,
+                    ),
+                    amountMinor = Math.addExact(
+                        action.expectedSessionAmountMinor ?: projected.amountMinor ?: 0L,
+                        action.expectedPackagePriceMinor ?: 0L,
+                    ),
+                )
+                GamingSessionActionType.PARTICIPANT_JOIN,
+                GamingSessionActionType.PARTICIPANT_LEAVE,
+                -> projected = projected.copy(
+                    participantRevision = maxOf(
+                        projected.participantRevision,
+                        (action.expectedParticipantRevision ?: projected.participantRevision) + 1,
+                    ),
+                )
+            }
+        }
+    return projected
+}
+
+internal fun sequencedGamingActionBlockMessage(count: Int, action: String): String =
+    "$count saved session action(s) must sync in order before $action. " +
+        "This protects the captured play clock and billing revisions."
+
 internal fun newGamingPackageStartError(
     station: Station,
     packageId: String?,
@@ -3444,6 +3984,14 @@ internal fun GamingSessionCacheEntity.toGameSession() = GameSession(
     packageStationTypeSnapshot = packageStationTypeSnapshot,
     packagePricingTierSnapshot = packagePricingTierSnapshot,
     extraControllers = extraControllers,
+    participantRevision = participantRevision,
+    billingRevision = billingRevision,
+    effectivePackageId = effectivePackageId,
+    effectivePackagePriceMinor = effectivePackagePriceMinor,
+    effectivePackageDurationMinutes = effectivePackageDurationMinutes,
+    effectivePackageVariant = effectivePackageVariant,
+    effectivePackageStationType = effectivePackageStationType,
+    effectivePackagePricingTier = effectivePackagePricingTier,
     customerId = customerId,
     customerName = customerName,
     customerPhone = customerPhone,
@@ -3475,6 +4023,14 @@ internal fun GameSession.toCacheEntity() = GamingSessionCacheEntity(
     packageStationTypeSnapshot = packageStationTypeSnapshot,
     packagePricingTierSnapshot = packagePricingTierSnapshot,
     extraControllers = extraControllers,
+    participantRevision = participantRevision,
+    billingRevision = billingRevision,
+    effectivePackageId = effectivePackageId,
+    effectivePackagePriceMinor = effectivePackagePriceMinor,
+    effectivePackageDurationMinutes = effectivePackageDurationMinutes,
+    effectivePackageVariant = effectivePackageVariant,
+    effectivePackageStationType = effectivePackageStationType,
+    effectivePackagePricingTier = effectivePackagePricingTier,
     customerId = customerId,
     customerName = customerName,
     customerPhone = customerPhone,
