@@ -81,6 +81,8 @@ class _Session:
             and "gaming_participant_settlements" in rendered
         ):
             return _Result(scalar=False)
+        if "gaming_session_package_amendments" in rendered:
+            return _Result(scalar=None)
         self.statements.append(statement)
         if not self.results:
             raise AssertionError(f"unexpected database statement: {statement}")

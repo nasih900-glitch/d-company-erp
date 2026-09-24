@@ -51,6 +51,7 @@ from app.models import (
     GamingSession,
     GamingSessionAddon,
     GamingSessionExtension,
+    GamingSessionPackageAmendment,
     GamingSessionParticipant,
     IdempotencyKey,
     MenuCategory,
@@ -91,7 +92,10 @@ from app.services.gaming.pause_clock import (
     play_elapsed_ms,
     timer_deadline,
 )
-from app.services.gaming.tariff_catalog import FIXED_TARIFF_STATION_TYPES
+from app.services.gaming.tariff_catalog import (
+    D_COMPANY_GAMING_TARIFF,
+    FIXED_TARIFF_STATION_TYPES,
+)
 from app.services.pos.order_validation import require_operational_order
 from app.services.pos.pricing import (
     LineRequest,
@@ -118,6 +122,18 @@ _SESSION_ITEM_LABEL = {
 }
 _GAMING_SOURCE_TERMINAL_PURPOSES = frozenset({"gaming", "hybrid"})
 _POS_DESTINATION_TERMINAL_PURPOSES = frozenset({"cafe_pos", "hybrid"})
+_PS5_30M_AMENDMENT_TARGETS = {
+    spec.variant: spec
+    for spec in D_COMPANY_GAMING_TARIFF
+    if spec.code
+    in {"standard-single-session-30m", "standard-dual-session-30m"}
+}
+_PS5_60M_AMENDMENT_SOURCES = {
+    spec.variant: spec
+    for spec in D_COMPANY_GAMING_TARIFF
+    if spec.code
+    in {"standard-single-session-60m", "standard-dual-session-60m"}
+}
 
 
 class StationRead(BaseModel):
@@ -248,6 +264,9 @@ class SessionStop(BaseModel):
     # Required once any participant roster event exists. Future offline clients
     # must drain their per-session FIFO outbox before sending Stop.
     expected_participant_revision: int | None = Field(default=None, ge=0)
+    # Optional for untouched sessions so deployed clients remain compatible;
+    # mandatory after a package amendment.
+    expected_billing_revision: int | None = Field(default=None, ge=0)
 
 
 class SessionParticipantJoin(BaseModel):
@@ -359,6 +378,13 @@ class SessionRead(BaseModel):
     package_pricing_tier_snapshot: Literal["standard", "premium"] | None = None
     extra_controllers: int = 0
     participant_revision: int = 0
+    billing_revision: int = 0
+    effective_package_id: UUID | None = None
+    effective_package_price_minor: int | None = None
+    effective_package_duration_minutes: int | None = None
+    effective_package_variant: str | None = None
+    effective_package_station_type: str | None = None
+    effective_package_pricing_tier: Literal["standard", "premium"] | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -393,6 +419,26 @@ class SessionRead(BaseModel):
             }
         if normalized.get("pause_version") is None:
             normalized = {**normalized, "pause_version": 0}
+        if normalized.get("participant_revision") is None:
+            normalized = {**normalized, "participant_revision": 0}
+        if normalized.get("billing_revision") is None:
+            normalized = {**normalized, "billing_revision": 0}
+        effective_fallbacks = {
+            "effective_package_id": "package_id",
+            "effective_package_price_minor": "package_price_minor_snapshot",
+            "effective_package_duration_minutes": "package_duration_minutes_snapshot",
+            "effective_package_variant": "package_variant_snapshot",
+            "effective_package_station_type": "package_station_type_snapshot",
+            "effective_package_pricing_tier": "package_pricing_tier_snapshot",
+        }
+        for effective_field, original_field in effective_fallbacks.items():
+            if int(normalized.get("billing_revision") or 0) == 0 and normalized.get(
+                effective_field
+            ) is None:
+                normalized = {
+                    **normalized,
+                    effective_field: normalized.get(original_field),
+                }
         return normalized
 
 
@@ -417,6 +463,7 @@ class SessionExtend(BaseModel):
     expected_package_price_minor: int = Field(ge=0)
     expected_package_duration_minutes: int = Field(ge=1, le=1440)
     expected_package_variant: str = Field(min_length=1, max_length=20)
+    expected_billing_revision: int | None = Field(default=None, ge=0)
 
     @field_validator("expected_package_variant")
     @classmethod
@@ -425,6 +472,36 @@ class SessionExtend(BaseModel):
         if not normalized:
             raise ValueError("expected package variant cannot be blank")
         return normalized
+
+
+class SessionPackageAmend(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    target_package_id: UUID
+    expected_timer_minutes: int = Field(ge=1, le=1440)
+    expected_amount_minor: int = Field(ge=0, le=9_999_999_999)
+    expected_pause_version: int = Field(ge=0)
+    expected_participant_revision: int = Field(ge=0)
+    expected_billing_revision: int = Field(ge=0)
+    expected_target_price_minor: int = Field(ge=0)
+    expected_target_duration_minutes: int = Field(ge=1, le=1440)
+    expected_target_variant: str = Field(min_length=1, max_length=20)
+    occurred_at: datetime | None = None
+    play_elapsed_ms: int | None = Field(default=None, ge=0)
+
+    @field_validator("expected_target_variant")
+    @classmethod
+    def normalize_target_variant(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("expected target variant cannot be blank")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_capture(self) -> Self:
+        if (self.occurred_at is None) != (self.play_elapsed_ms is None):
+            raise ValueError("captured time and play meter must be supplied together")
+        return self
 
 
 class SessionCancel(BaseModel):
@@ -744,6 +821,24 @@ def _require_complete_package_billing_snapshot(
         )
 
 
+def _billing_revision(gs: GamingSession) -> int:
+    return int(getattr(gs, "billing_revision", 0) or 0)
+
+
+def _effective_package_value(gs: GamingSession, field: str):
+    if _billing_revision(gs) > 0:
+        return getattr(gs, f"effective_{field}", None)
+    return getattr(gs, field, None)
+
+
+def _effective_base_price_minor(gs: GamingSession) -> int:
+    return int(_effective_package_value(gs, "package_price_minor_snapshot") or 0)
+
+
+def _effective_base_duration_minutes(gs: GamingSession) -> int:
+    return int(_effective_package_value(gs, "package_duration_minutes_snapshot") or 0)
+
+
 def session_read(gs: GamingSession) -> SessionRead:
     timer_ends_at = timer_deadline(gs)
     return SessionRead(
@@ -779,6 +874,23 @@ def session_read(gs: GamingSession) -> SessionRead:
         package_pricing_tier_snapshot=getattr(gs, "package_pricing_tier_snapshot", None),
         extra_controllers=int(gs.extra_controllers or 0),
         participant_revision=int(getattr(gs, "participant_revision", 0) or 0),
+        billing_revision=_billing_revision(gs),
+        effective_package_id=_effective_package_value(gs, "package_id"),
+        effective_package_price_minor=_effective_package_value(
+            gs, "package_price_minor_snapshot"
+        ),
+        effective_package_duration_minutes=_effective_package_value(
+            gs, "package_duration_minutes_snapshot"
+        ),
+        effective_package_variant=_effective_package_value(
+            gs, "package_variant_snapshot"
+        ),
+        effective_package_station_type=_effective_package_value(
+            gs, "package_station_type_snapshot"
+        ),
+        effective_package_pricing_tier=_effective_package_value(
+            gs, "package_pricing_tier_snapshot"
+        ),
     )
 
 
@@ -1070,6 +1182,7 @@ async def _require_session_pos_eligible(
     """
     gaming_amount_minor = _require_repaired_ended_amount(gaming_session)
     await _assert_participant_settlement_consistent(session, gaming_session)
+    await _assert_package_amendment_consistent(session, gaming_session)
     # The overwhelmingly common paid-session path needs no add-on lookup.
     # Besides avoiding an unnecessary query on every handoff, this preserves
     # compatibility with callers/tests whose lightweight session adapter only
@@ -3100,6 +3213,479 @@ async def transfer_session(
     return response
 
 
+def _require_expected_billing_revision(
+    gs: GamingSession,
+    expected: int | None,
+    *,
+    operation: str,
+) -> None:
+    current = _billing_revision(gs)
+    if expected is None:
+        if current > 0:
+            raise ConflictError(
+                f"{operation} requires the current billing revision. Refresh Gaming and retry."
+            )
+        return
+    if expected != current:
+        raise ConflictError(
+            f"Session billing changed on another screen before {operation.lower()}. "
+            "Refresh Gaming and retry."
+        )
+
+
+async def _package_amendment_receipt(
+    session,
+    gs: GamingSession,
+    *,
+    lock: bool = False,
+) -> GamingSessionPackageAmendment | None:
+    stmt = select(GamingSessionPackageAmendment).where(
+        GamingSessionPackageAmendment.company_id == gs.company_id,
+        GamingSessionPackageAmendment.gaming_session_id == gs.id,
+    )
+    if lock:
+        stmt = stmt.with_for_update()
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def _assert_package_amendment_consistent(
+    session,
+    gs: GamingSession,
+    *,
+    lock: bool = False,
+) -> GamingSessionPackageAmendment | None:
+    """Validate the one-way session projection against immutable amendment evidence."""
+    receipt = await _package_amendment_receipt(session, gs, lock=lock)
+    revision = _billing_revision(gs)
+    projected = any(
+        getattr(gs, field, None) is not None
+        for field in (
+            "effective_package_id",
+            "effective_package_price_minor_snapshot",
+            "effective_package_duration_minutes_snapshot",
+            "effective_package_variant_snapshot",
+            "effective_package_station_type_snapshot",
+            "effective_package_pricing_tier_snapshot",
+        )
+    )
+    if receipt is None:
+        if revision != 0 or projected:
+            raise GamingBillingRepairRequiredError(
+                "The session's billing amendment projection has no immutable receipt. "
+                "Stop, extension, participant changes, POS, and repair are blocked."
+            )
+        return None
+    if revision != 1:
+        raise GamingBillingRepairRequiredError(
+            "A package amendment receipt exists but the billing revision is missing. "
+            "Stop, extension, participant changes, POS, and repair are blocked."
+        )
+    if (
+        int(receipt.original_package_price_minor)
+        != int(gs.package_price_minor_snapshot or -1)
+        or int(receipt.original_package_duration_minutes)
+        != int(gs.package_duration_minutes_snapshot or -1)
+        or receipt.original_package_variant != gs.package_variant_snapshot
+        or receipt.original_package_station_type != gs.package_station_type_snapshot
+        or receipt.original_package_pricing_tier
+        != gs.package_pricing_tier_snapshot
+        or int(receipt.target_package_price_minor)
+        != int(gs.effective_package_price_minor_snapshot or -1)
+        or int(receipt.target_package_duration_minutes)
+        != int(gs.effective_package_duration_minutes_snapshot or -1)
+        or receipt.target_package_variant != gs.effective_package_variant_snapshot
+        or receipt.target_package_station_type
+        != gs.effective_package_station_type_snapshot
+        or receipt.target_package_pricing_tier
+        != gs.effective_package_pricing_tier_snapshot
+        or int(receipt.extra_controllers) != int(gs.extra_controllers or 0)
+        or int(receipt.billing_revision) != revision
+    ):
+        raise GamingBillingRepairRequiredError(
+            "The session's effective package does not match its immutable amendment receipt."
+        )
+    if (
+        receipt.target_package_id is not None
+        and gs.effective_package_id is not None
+        and receipt.target_package_id != gs.effective_package_id
+    ):
+        raise GamingBillingRepairRequiredError(
+            "The session's effective package identity does not match its amendment receipt."
+        )
+
+    expected_timer = int(receipt.timer_after_minutes)
+    expected_amount = int(receipt.amount_after_minor)
+    extension_rows = list(
+        (
+            await session.execute(
+                select(GamingSessionExtension)
+                .where(
+                    GamingSessionExtension.company_id == gs.company_id,
+                    GamingSessionExtension.gaming_session_id == gs.id,
+                )
+                .order_by(
+                    GamingSessionExtension.created_at,
+                    GamingSessionExtension.id,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for extension in extension_rows:
+        if (
+            int(getattr(extension, "billing_revision", 0) or 0) != revision
+            or int(extension.timer_before_minutes) != expected_timer
+            or int(extension.amount_before_minor) != expected_amount
+        ):
+            raise GamingBillingRepairRequiredError(
+                "The paid extension chain does not follow the effective amended package."
+            )
+        expected_timer = int(extension.timer_after_minutes)
+        expected_amount = int(extension.amount_after_minor)
+    if gs.timer_minutes is None or int(gs.timer_minutes) != expected_timer:
+        raise GamingBillingRepairRequiredError(
+            "The session timer no longer matches its amendment and extension receipts."
+        )
+    if gs.amount_minor is None or int(gs.amount_minor) != expected_amount:
+        settlement = (
+            await session.execute(
+                select(GamingParticipantSettlement).where(
+                    GamingParticipantSettlement.company_id == gs.company_id,
+                    GamingParticipantSettlement.gaming_session_id == gs.id,
+                )
+            )
+        ).scalar_one_or_none()
+        if (
+            settlement is None
+            or int(settlement.base_amount_minor) != expected_amount
+            or int(settlement.amount_after_minor) != int(gs.amount_minor or -1)
+        ):
+            raise GamingBillingRepairRequiredError(
+                "The session amount no longer matches its amendment and settlement receipts."
+            )
+    return receipt
+
+
+def _package_amendment_clock(
+    request: Request,
+    payload: SessionPackageAmend,
+    gs: GamingSession,
+) -> tuple[datetime, int, str]:
+    now = datetime.now(timezone.utc)
+    if payload.expected_pause_version != int(gs.pause_version or 0):
+        raise ConflictError(
+            "Pause state changed before the package amendment. Refresh Gaming and retry."
+        )
+    if gs.status == "paused" and getattr(gs, "paused_at", None) is None:
+        raise GamingBillingRepairRequiredError(
+            "This paused session has no authoritative pause boundary, so it cannot be repriced safely."
+        )
+    if payload.occurred_at is None:
+        return now, play_elapsed_ms(gs, now), "server"
+    occurred_at = _validated_offline_action_time(
+        request=request,
+        captured_at=payload.occurred_at,
+        server_now=now,
+        action_label="package amendment",
+        minimum_at=gs.start_at,
+    )
+    last_pause = getattr(gs, "last_pause_transition_at", None)
+    if last_pause is not None and occurred_at < last_pause:
+        raise ConflictError(
+            "The package amendment predates a later pause or resume. Refresh Gaming."
+        )
+    meter = play_elapsed_ms(gs, occurred_at)
+    if meter != int(payload.play_elapsed_ms):
+        raise ConflictError(
+            "The amendment play meter does not match the authoritative session clock. Refresh Gaming."
+        )
+    return occurred_at, meter, "offline_capture"
+
+
+@router.post("/sessions/{session_id}/amend-package", response_model=SessionRead)
+async def amend_session_package(
+    session_id: UUID,
+    payload: SessionPackageAmend,
+    session: SessionDep,
+    request: Request,
+    tenant: TenantContext = Depends(requires("gaming.write")),
+) -> SessionRead:
+    """Replace one untouched 60-minute PS5 base tariff with its 30-minute tariff."""
+    key, request_hash = _require_idempotency(request)
+    cached = await check_or_reserve(
+        session,
+        key=key,
+        request_hash=request_hash,
+        user_id=tenant.user_id,
+        terminal_id=tenant.terminal_id,
+    )
+    if cached:
+        return SessionRead.model_validate(cached["body"])
+
+    durable = (
+        await session.execute(
+            select(GamingSessionPackageAmendment)
+            .where(
+                GamingSessionPackageAmendment.company_id == tenant.company_id,
+                GamingSessionPackageAmendment.idempotency_key == key,
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if durable is not None:
+        if (
+            durable.gaming_session_id != session_id
+            or durable.request_hash != request_hash
+            or durable.amended_by != tenant.user_id
+            or durable.terminal_id != tenant.terminal_id
+        ):
+            raise ConflictError(
+                "Idempotency-Key already belongs to a different package amendment."
+            )
+        gs = (
+            await session.execute(
+                select(GamingSession)
+                .where(GamingSession.id == session_id)
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if gs is None or gs.company_id != tenant.company_id:
+            raise NotFoundError("session not found")
+        station = await session.get(Station, gs.station_id)
+        shift = await session.get(Shift, gs.shift_id)
+        if (
+            station is None
+            or station.company_id != tenant.company_id
+            or station.branch_id != tenant.branch_id
+            or shift is None
+            or shift.company_id != tenant.company_id
+            or shift.branch_id != tenant.branch_id
+            or shift.terminal_id != tenant.terminal_id
+        ):
+            raise NotFoundError("session not found")
+        await _assert_package_amendment_consistent(session, gs, lock=True)
+        response = session_read(gs)
+        await store_response(
+            session,
+            key=key,
+            status_code=status.HTTP_200_OK,
+            body=response.model_dump(mode="json"),
+        )
+        return response
+
+    gs = (
+        await session.execute(
+            select(GamingSession).where(GamingSession.id == session_id).with_for_update()
+        )
+    ).scalar_one_or_none()
+    if gs is None or gs.company_id != tenant.company_id:
+        raise NotFoundError("session not found")
+    station = await session.get(Station, gs.station_id)
+    shift = (
+        await session.execute(select(Shift).where(Shift.id == gs.shift_id).with_for_update())
+    ).scalar_one_or_none()
+    if station is None or station.company_id != tenant.company_id:
+        raise NotFoundError("station not found")
+    shift = require_operational_shift_scope(
+        shift,
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        terminal_id=tenant.terminal_id,
+        operation="amending a gaming package",
+        resource_branch_id=station.branch_id,
+        resource_name="gaming station",
+    )
+    if shift.status != "open":
+        raise BusinessRuleError("The source shift must be open to amend a package.")
+    if gs.status not in ("active", "paused") or gs.end_at is not None:
+        raise BusinessRuleError("Only a running session can be amended.")
+    if gs.order_id is not None:
+        raise BusinessRuleError("A session already linked to POS cannot be amended.")
+    if station.type != "ps5" or not is_package_billed(gs):
+        raise BusinessRuleError("Only a fixed-price PS5 package can be amended.")
+    _require_complete_package_billing_snapshot(gs, operation="amended")
+    await _assert_package_amendment_consistent(session, gs, lock=True)
+    if (
+        payload.expected_timer_minutes != 60
+        or int(gs.timer_minutes or 0) != payload.expected_timer_minutes
+        or int(gs.amount_minor or -1) != payload.expected_amount_minor
+        or payload.expected_participant_revision != 0
+        or int(gs.participant_revision or 0) != payload.expected_participant_revision
+        or payload.expected_billing_revision != 0
+        or _billing_revision(gs) != payload.expected_billing_revision
+    ):
+        raise ConflictError(
+            "Session time, amount, participant list, or billing revision changed. Refresh Gaming."
+        )
+    if int(gs.package_duration_minutes_snapshot or 0) != 60:
+        raise BusinessRuleError("Only an original 60-minute PS5 booking can be changed to 30 minutes.")
+    original_variant = str(gs.package_variant_snapshot or "")
+    if (
+        original_variant not in _PS5_30M_AMENDMENT_TARGETS
+        or original_variant not in _PS5_60M_AMENDMENT_SOURCES
+        or gs.package_station_type_snapshot != "ps5"
+        or gs.package_pricing_tier_snapshot != "standard"
+        or int(gs.package_price_minor_snapshot or -1)
+        != _PS5_60M_AMENDMENT_SOURCES[original_variant].price_minor
+        or gs.package_id is None
+    ):
+        raise BusinessRuleError("The original package is not an eligible published PS5 tariff.")
+
+    extension_exists = bool(
+        (
+            await session.execute(
+                select(exists().where(
+                    GamingSessionExtension.company_id == tenant.company_id,
+                    GamingSessionExtension.gaming_session_id == gs.id,
+                ))
+            )
+        ).scalar_one()
+    )
+    if extension_exists:
+        raise BusinessRuleError("A session with a paid extension cannot be amended.")
+    if await _has_participant_evidence(session, gs):
+        raise BusinessRuleError("A session with saved friend presence cannot be amended.")
+
+    target = (
+        await session.execute(
+            select(GamingPackage)
+            .where(GamingPackage.id == payload.target_package_id)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if (
+        target is None
+        or target.company_id != tenant.company_id
+        or target.branch_id != station.branch_id
+    ):
+        raise NotFoundError("package not found")
+    spec = _PS5_30M_AMENDMENT_TARGETS[original_variant]
+    if target.deleted_at is not None or not target.is_active:
+        raise BusinessRuleError("The selected 30-minute package is no longer active.")
+    if (
+        target.code != spec.code
+        or target.kind != spec.kind
+        or target.station_type != spec.station_type
+        or target.variant != spec.variant
+        or target.pricing_tier != spec.pricing_tier
+        or int(target.duration_minutes) != spec.duration_minutes
+        or int(target.price_minor) != spec.price_minor
+    ):
+        raise ConflictError(
+            "The selected package no longer matches the published 30-minute tariff."
+        )
+    if (
+        payload.expected_target_price_minor != spec.price_minor
+        or payload.expected_target_duration_minutes != spec.duration_minutes
+        or payload.expected_target_variant != spec.variant
+    ):
+        raise ConflictError(
+            "The selected 30-minute package changed after it was reviewed. Refresh Gaming."
+        )
+
+    occurred_at, meter, timing_source = _package_amendment_clock(request, payload, gs)
+    if meter >= 1_800_000:
+        raise BusinessRuleError(
+            "A 60-minute booking can be changed to 30 minutes only before 30:00 of played time."
+        )
+    controller_surcharge = extra_controller_surcharge_minor(
+        extra_controllers=int(gs.extra_controllers or 0),
+        duration_minutes=30,
+    )
+    original_amount = int(gs.package_price_minor_snapshot) + extra_controller_surcharge_minor(
+        extra_controllers=int(gs.extra_controllers or 0),
+        duration_minutes=60,
+    )
+    if int(gs.amount_minor or -1) != original_amount:
+        raise GamingBillingRepairRequiredError(
+            "The original 60-minute amount does not match its locked package and controller price."
+        )
+    amended_amount = int(target.price_minor) + controller_surcharge
+    receipt = GamingSessionPackageAmendment(
+        id=uuid4(),
+        company_id=tenant.company_id,
+        gaming_session_id=gs.id,
+        original_package_id=gs.package_id,
+        original_package_price_minor=int(gs.package_price_minor_snapshot),
+        original_package_duration_minutes=int(gs.package_duration_minutes_snapshot),
+        original_package_variant=original_variant,
+        original_package_station_type=str(gs.package_station_type_snapshot),
+        original_package_pricing_tier=str(gs.package_pricing_tier_snapshot),
+        target_package_id=target.id,
+        target_package_code=target.code,
+        target_package_name=target.name,
+        target_package_price_minor=int(target.price_minor),
+        target_package_duration_minutes=int(target.duration_minutes),
+        target_package_variant=target.variant,
+        target_package_station_type=target.station_type,
+        target_package_pricing_tier=target.pricing_tier,
+        extra_controllers=int(gs.extra_controllers or 0),
+        controller_surcharge_minor=controller_surcharge,
+        timer_before_minutes=60,
+        timer_after_minutes=30,
+        amount_before_minor=original_amount,
+        amount_after_minor=amended_amount,
+        occurred_at=occurred_at,
+        play_elapsed_ms=meter,
+        timing_source=timing_source,
+        pause_version=int(gs.pause_version or 0),
+        participant_revision=0,
+        billing_revision_before=0,
+        billing_revision=1,
+        idempotency_key=key,
+        request_hash=request_hash,
+        amended_by=tenant.user_id,
+        terminal_id=tenant.terminal_id,
+    )
+    session.add(receipt)
+    # Insert the receipt while the locked session still exposes the exact
+    # pre-amendment state checked by the database scope trigger. The projection
+    # update follows in the same transaction and rolls the receipt back if it fails.
+    await session.flush()
+    gs.billing_revision = 1
+    gs.effective_package_id = target.id
+    gs.effective_package_price_minor_snapshot = int(target.price_minor)
+    gs.effective_package_duration_minutes_snapshot = int(target.duration_minutes)
+    gs.effective_package_variant_snapshot = target.variant
+    gs.effective_package_station_type_snapshot = target.station_type
+    gs.effective_package_pricing_tier_snapshot = target.pricing_tier
+    gs.timer_minutes = 30
+    gs.amount_minor = amended_amount
+    session.add(
+        AuditLog(
+            actor_user_id=tenant.user_id,
+            company_id=tenant.company_id,
+            action="gaming_session_package_amended",
+            entity_type="GamingSessionPackageAmendment",
+            entity_id=str(receipt.id),
+            before={
+                "timer_minutes": 60,
+                "amount_minor": original_amount,
+                "billing_revision": 0,
+            },
+            after={
+                "timer_minutes": 30,
+                "amount_minor": amended_amount,
+                "billing_revision": 1,
+                "target_package_id": str(target.id),
+                "play_elapsed_ms": meter,
+                "timing_source": timing_source,
+            },
+            terminal_id=tenant.terminal_id,
+        )
+    )
+    await session.flush()
+    response = session_read(gs)
+    await store_response(
+        session,
+        key=key,
+        status_code=status.HTTP_200_OK,
+        body=response.model_dump(mode="json"),
+    )
+    return response
+
+
 @router.post("/sessions/{session_id}/extend", response_model=SessionRead)
 async def extend_session_with_package(
     session_id: UUID,
@@ -3151,6 +3737,8 @@ async def extend_session_with_package(
             and int(durable_replay.duration_minutes)
             == payload.expected_package_duration_minutes
             and durable_replay.package_variant == payload.expected_package_variant
+            and int(getattr(durable_replay, "billing_revision", 0) or 0)
+            == int(payload.expected_billing_revision or 0)
             and (
                 durable_replay.package_id is None
                 or durable_replay.package_id == payload.package_id
@@ -3201,6 +3789,14 @@ async def extend_session_with_package(
                 "contains that charge. A protected owner must repair this session; it was "
                 "not charged again."
             )
+        _require_expected_billing_revision(
+            replay_session,
+            payload.expected_billing_revision,
+            operation="Extension",
+        )
+        await _assert_package_amendment_consistent(
+            session, replay_session, lock=True
+        )
         response = session_read(replay_session)
         await store_response(
             session,
@@ -3244,6 +3840,12 @@ async def extend_session_with_package(
             reason_code="session_already_linked_to_pos",
             message="This session is already linked to a POS order.",
         )
+    _require_expected_billing_revision(
+        gs,
+        payload.expected_billing_revision,
+        operation="Extension",
+    )
+    await _assert_package_amendment_consistent(session, gs, lock=True)
     if gs.status not in ("active", "paused"):
         raise _extension_not_applied(
             gs,
@@ -3334,15 +3936,17 @@ async def extend_session_with_package(
             reason_code="package_station_type_incompatible",
             message="The selected extension is not offered for this station type.",
         )
-    if extension.variant != gs.package_variant_snapshot:
+    effective_variant = _effective_package_value(gs, "package_variant_snapshot")
+    effective_tier = _effective_package_value(gs, "package_pricing_tier_snapshot")
+    if extension.variant != effective_variant:
         raise _extension_not_applied(
             gs,
             reason_code="package_variant_incompatible",
             message="The extension does not match the session's original package variant.",
         )
     if (
-        gs.package_pricing_tier_snapshot is not None
-        and extension.pricing_tier != gs.package_pricing_tier_snapshot
+        effective_tier is not None
+        and extension.pricing_tier != effective_tier
     ):
         raise _extension_not_applied(
             gs,
@@ -3395,6 +3999,7 @@ async def extend_session_with_package(
             amount_before_minor=amount_before,
             amount_after_minor=amount_after,
             idempotency_key=idempotency_key,
+            billing_revision=_billing_revision(gs),
             created_by=tenant.user_id,
         )
     )
@@ -3486,7 +4091,8 @@ async def _lock_participant_context(session, *, session_id: UUID, tenant: Tenant
     if station.type != "ps5" or not is_package_billed(gs):
         raise BusinessRuleError("Friends can join only a running fixed-price PS5 package session.")
     _require_complete_package_billing_snapshot(gs, operation="changed")
-    return gs, station, shift
+    amendment = await _assert_package_amendment_consistent(session, gs, lock=True)
+    return gs, station, shift, amendment
 
 
 def _participant_action_clock(request: Request, payload, gs: GamingSession, *, label: str) -> tuple[datetime, int, str]:
@@ -3569,7 +4175,7 @@ async def join_session_participant(
             body=response.model_dump(mode="json"),
         )
         return response
-    gs, _station, _shift = await _lock_participant_context(session, session_id=session_id, tenant=tenant, operation="adding a gaming participant")
+    gs, _station, _shift, amendment = await _lock_participant_context(session, session_id=session_id, tenant=tenant, operation="adding a gaming participant")
     if gs.status != "active":
         if gs.status == "paused":
             raise BusinessRuleError("Resume the session before adding a friend.")
@@ -3598,6 +4204,11 @@ async def join_session_participant(
     if customer.id == gs.customer_id or any(row.customer_id == customer.id and row.left_at is None for row in rows):
         raise BusinessRuleError("This customer is already playing in the session.")
     occurred_at, meter, source = _participant_action_clock(request, payload, gs, label="participant join")
+    if amendment is not None and occurred_at <= amendment.occurred_at:
+        raise ConflictError(
+            "This participant action was captured before the package amendment. "
+            "Upload session actions in order and retry."
+        )
     _require_monotonic_participant_meter(rows, meter)
     gs.participant_revision = int(gs.participant_revision or 0) + 1
     row = GamingSessionParticipant(
@@ -3650,7 +4261,7 @@ async def leave_session_participant(
             body=response.model_dump(mode="json"),
         )
         return response
-    gs, _station, _shift = await _lock_participant_context(session, session_id=session_id, tenant=tenant, operation="removing a gaming participant")
+    gs, _station, _shift, amendment = await _lock_participant_context(session, session_id=session_id, tenant=tenant, operation="removing a gaming participant")
     if gs.status not in ("active", "paused") or gs.order_id is not None:
         raise BusinessRuleError("Friends can leave only while the session is running and unbilled.")
     _require_participant_revision(gs, payload.expected_participant_revision)
@@ -3661,6 +4272,11 @@ async def leave_session_participant(
     if row.left_at is not None:
         raise ConflictError("This friend already left. Refresh Gaming.")
     occurred_at, meter, source = _participant_action_clock(request, payload, gs, label="participant leave")
+    if amendment is not None and occurred_at <= amendment.occurred_at:
+        raise ConflictError(
+            "This participant action was captured before the package amendment. "
+            "Upload session actions in order and retry."
+        )
     _require_monotonic_participant_meter(rows, meter)
     if meter < int(row.joined_play_elapsed_ms):
         raise ConflictError("Leave cannot precede the saved join.")
@@ -3728,9 +4344,9 @@ async def _assert_participant_settlement_consistent(session, gs: GamingSession) 
         GamingSessionExtension.company_id == gs.company_id,
         GamingSessionExtension.gaming_session_id == gs.id,
     ))).scalar_one())
-    expected_base = int(gs.package_price_minor_snapshot or 0) + extra_controller_surcharge_minor(
+    expected_base = _effective_base_price_minor(gs) + extra_controller_surcharge_minor(
         extra_controllers=int(gs.extra_controllers or 0),
-        duration_minutes=int(gs.package_duration_minutes_snapshot or 0),
+        duration_minutes=_effective_base_duration_minutes(gs),
     ) + extension_total
     final_meter = play_elapsed_ms(gs, gs.end_at) if gs.end_at is not None else -1
     max_revision = max(
@@ -3873,6 +4489,12 @@ _STOP_REPLAY_IMMUTABLE_FIELDS = (
     "package_pricing_tier_snapshot",
     "extra_controllers",
     "participant_revision",
+    "billing_revision",
+    "effective_package_price_minor",
+    "effective_package_duration_minutes",
+    "effective_package_variant",
+    "effective_package_station_type",
+    "effective_package_pricing_tier",
 )
 
 
@@ -3938,6 +4560,16 @@ async def stop_session(
         if has_captured_end
         else server_now
     )
+    _require_expected_billing_revision(
+        gs,
+        payload.expected_billing_revision if payload is not None else None,
+        operation="Stop",
+    )
+    amendment = await _assert_package_amendment_consistent(session, gs, lock=True)
+    if amendment is not None and captured_end <= amendment.occurred_at:
+        raise ConflictError(
+            "Stop was captured before the package amendment. Upload session actions in order."
+        )
     participant_rows = await _participant_rows(session, gs, lock=True)
     participant_revision = int(getattr(gs, "participant_revision", 0) or 0)
     settlement = (
@@ -4773,6 +5405,12 @@ async def resolve_legacy_paused_session(
         or station.branch_id != tenant.branch_id
     ):
         raise NotFoundError("session not found")
+    amendment = await _assert_package_amendment_consistent(session, gs, lock=True)
+    if amendment is not None:
+        raise BusinessRuleError(
+            "An amended package session cannot use legacy pause resolution. "
+            "Review its immutable amendment receipt instead."
+        )
 
     if gs.order_id is not None:
         raise ConflictError(
@@ -5084,6 +5722,11 @@ async def repair_session_billing(
         raise BusinessRuleError(
             "The gaming session belongs to a different branch. Select its branch "
             "before repairing billing."
+        )
+    amendment = await _assert_package_amendment_consistent(session, gs, lock=True)
+    if amendment is not None:
+        raise BusinessRuleError(
+            "An amended package session cannot use the legacy missing-bill repair workflow."
         )
     if gs.status != "ended":
         raise BusinessRuleError("Only an ended session can have missing billing repaired.")
@@ -5844,19 +6487,30 @@ async def _session_pos_description(session, gaming_session: GamingSession) -> st
     played_minutes = int(gaming_session.billable_minutes or 0)
     if resolved_billing_mode(gaming_session) == "legacy_ambiguous":
         return f"Legacy session · billing mode unverified · {played_minutes} min played"
-    package_id = getattr(gaming_session, "package_id", None)
     if not is_package_billed(gaming_session):
         return (
             f"{played_minutes} min @ "
             f"{gaming_session.rate_per_hour_minor / 100:.2f}/hr"
         )
 
-    base_package = await session.get(GamingPackage, package_id) if package_id else None
-    if base_package:
+    amendment = await _package_amendment_receipt(session, gaming_session)
+    effective_package_id = _effective_package_value(gaming_session, "package_id")
+    base_package = (
+        await session.get(GamingPackage, effective_package_id)
+        if effective_package_id
+        else None
+    )
+    if amendment is not None:
+        base_label = amendment.target_package_name
+    elif base_package:
         base_label = base_package.name
     else:
-        variant = getattr(gaming_session, "package_variant_snapshot", None)
-        duration = getattr(gaming_session, "package_duration_minutes_snapshot", None)
+        variant = _effective_package_value(
+            gaming_session, "package_variant_snapshot"
+        )
+        duration = _effective_package_value(
+            gaming_session, "package_duration_minutes_snapshot"
+        )
         locked_details = " · ".join(
             part
             for part in (
@@ -5867,6 +6521,12 @@ async def _session_pos_description(session, gaming_session: GamingSession) -> st
         )
         base_label = f"Package session ({locked_details})" if locked_details else "Package session"
     parts = [base_label]
+    if amendment is not None:
+        parts.append(
+            "amended 60→30 min "
+            f"({int(amendment.original_package_price_minor) / 100:.2f}→"
+            f"{int(amendment.target_package_price_minor) / 100:.2f})"
+        )
     extension_rows = (
         await session.execute(
             select(GamingSessionExtension)
@@ -5900,7 +6560,9 @@ async def _session_pos_description(session, gaming_session: GamingSession) -> st
         # derived from the locked timer without inventing package names/prices.
         timer_minutes = int(gaming_session.timer_minutes or 0)
         base_minutes = int(
-            getattr(gaming_session, "package_duration_minutes_snapshot", None)
+            _effective_package_value(
+                gaming_session, "package_duration_minutes_snapshot"
+            )
             or (base_package.duration_minutes if base_package else timer_minutes)
         )
         extension_minutes = max(0, timer_minutes - base_minutes)

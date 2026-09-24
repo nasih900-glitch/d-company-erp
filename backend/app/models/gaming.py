@@ -71,6 +71,22 @@ class GamingSession(Base, TimestampMixin, TenantMixin):
             "participant_revision >= 0",
             name="ck_gaming_sessions_participant_revision",
         ),
+        CheckConstraint(
+            "(billing_revision = 0 "
+            "AND effective_package_id IS NULL "
+            "AND effective_package_price_minor_snapshot IS NULL "
+            "AND effective_package_duration_minutes_snapshot IS NULL "
+            "AND effective_package_variant_snapshot IS NULL "
+            "AND effective_package_station_type_snapshot IS NULL "
+            "AND effective_package_pricing_tier_snapshot IS NULL) "
+            "OR (billing_revision = 1 "
+            "AND effective_package_price_minor_snapshot >= 0 "
+            "AND effective_package_duration_minutes_snapshot = 30 "
+            "AND effective_package_variant_snapshot IN ('single','dual') "
+            "AND effective_package_station_type_snapshot = 'ps5' "
+            "AND effective_package_pricing_tier_snapshot = 'standard')",
+            name="ck_gaming_sessions_billing_amendment_projection",
+        ),
     )
 
     id: Mapped[UUID] = _uuid_pk()
@@ -184,6 +200,19 @@ class GamingSession(Base, TimestampMixin, TenantMixin):
     participant_revision: Mapped[int] = mapped_column(
         Integer, default=0, server_default="0", nullable=False
     )
+    # One-way projection of the immutable package-amendment receipt. Original
+    # Start snapshots above remain unchanged for historical truth.
+    billing_revision: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    effective_package_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("gaming_packages.id", ondelete="SET NULL")
+    )
+    effective_package_price_minor_snapshot: Mapped[int | None] = mapped_column(BigInteger)
+    effective_package_duration_minutes_snapshot: Mapped[int | None] = mapped_column(Integer)
+    effective_package_variant_snapshot: Mapped[str | None] = mapped_column(String(20))
+    effective_package_station_type_snapshot: Mapped[str | None] = mapped_column(String(20))
+    effective_package_pricing_tier_snapshot: Mapped[str | None] = mapped_column(String(20))
 
 
 @event.listens_for(GamingSession, "before_update")
@@ -266,6 +295,10 @@ class GamingSessionExtension(Base, TenantMixin):
             "length(trim(idempotency_key)) > 0",
             name="ck_gaming_session_extension_idempotency_present",
         ),
+        CheckConstraint(
+            "billing_revision IN (0,1)",
+            name="ck_gaming_session_extension_billing_revision",
+        ),
         UniqueConstraint(
             "company_id",
             "idempotency_key",
@@ -297,6 +330,9 @@ class GamingSessionExtension(Base, TenantMixin):
     amount_before_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
     amount_after_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
     idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    billing_revision: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
     created_by: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="RESTRICT"),
@@ -316,6 +352,136 @@ def _guard_gaming_session_extension_update(_mapper, _connection, _row) -> None:
 @event.listens_for(GamingSessionExtension, "before_delete")
 def _guard_gaming_session_extension_delete(_mapper, _connection, _row) -> None:
     raise ValueError("gaming session extension ledger rows cannot be deleted")
+
+
+class GamingSessionPackageAmendment(Base, TenantMixin):
+    """Immutable evidence for the sole supported 60-to-30-minute PS5 reprice."""
+
+    __tablename__ = "gaming_session_package_amendments"
+    __table_args__ = (
+        CheckConstraint(
+            "original_package_duration_minutes = 60 "
+            "AND original_package_station_type = 'ps5' "
+            "AND original_package_pricing_tier = 'standard' "
+            "AND ((original_package_variant = 'single' "
+            "AND original_package_price_minor = 12000) "
+            "OR (original_package_variant = 'dual' "
+            "AND original_package_price_minor = 15000))",
+            name="ck_gaming_package_amendment_original",
+        ),
+        CheckConstraint(
+            "target_package_duration_minutes = 30 "
+            "AND target_package_station_type = 'ps5' "
+            "AND target_package_pricing_tier = 'standard' "
+            "AND target_package_variant = original_package_variant "
+            "AND ((target_package_variant = 'single' "
+            "AND target_package_code = 'standard-single-session-30m' "
+            "AND target_package_price_minor = 8000) "
+            "OR (target_package_variant = 'dual' "
+            "AND target_package_code = 'standard-dual-session-30m' "
+            "AND target_package_price_minor = 10000))",
+            name="ck_gaming_package_amendment_target",
+        ),
+        CheckConstraint(
+            "extra_controllers >= 0 "
+            "AND (original_package_variant <> 'single' OR extra_controllers = 0) "
+            "AND controller_surcharge_minor = extra_controllers * 3000 "
+            "AND timer_before_minutes = 60 AND timer_after_minutes = 30 "
+            "AND amount_before_minor = original_package_price_minor + controller_surcharge_minor "
+            "AND amount_after_minor = target_package_price_minor + controller_surcharge_minor",
+            name="ck_gaming_package_amendment_amounts",
+        ),
+        CheckConstraint(
+            "play_elapsed_ms >= 0 AND play_elapsed_ms < 1800000 "
+            "AND timing_source IN ('server','offline_capture') "
+            "AND pause_version >= 0 AND participant_revision = 0 "
+            "AND billing_revision_before = 0 AND billing_revision = 1",
+            name="ck_gaming_package_amendment_state",
+        ),
+        CheckConstraint(
+            "length(trim(idempotency_key)) > 0 AND length(request_hash) = 64",
+            name="ck_gaming_package_amendment_receipt",
+        ),
+        UniqueConstraint("gaming_session_id", name="uq_gaming_package_amendment_session"),
+        UniqueConstraint("company_id", "idempotency_key", name="uq_gaming_package_amendment_key"),
+        Index("ix_gaming_package_amendments_company_session", "company_id", "gaming_session_id"),
+    )
+
+    id: Mapped[UUID] = _uuid_pk()
+    gaming_session_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("gaming_sessions.id", ondelete="RESTRICT"), nullable=False
+    )
+    original_package_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("gaming_packages.id", ondelete="SET NULL")
+    )
+    original_package_price_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    original_package_duration_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+    original_package_variant: Mapped[str] = mapped_column(String(20), nullable=False)
+    original_package_station_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    original_package_pricing_tier: Mapped[str] = mapped_column(String(20), nullable=False)
+    target_package_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("gaming_packages.id", ondelete="SET NULL")
+    )
+    target_package_code: Mapped[str] = mapped_column(String(80), nullable=False)
+    target_package_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    target_package_price_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    target_package_duration_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+    target_package_variant: Mapped[str] = mapped_column(String(20), nullable=False)
+    target_package_station_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    target_package_pricing_tier: Mapped[str] = mapped_column(String(20), nullable=False)
+    extra_controllers: Mapped[int] = mapped_column(Integer, nullable=False)
+    controller_surcharge_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    timer_before_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+    timer_after_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+    amount_before_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    amount_after_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    play_elapsed_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    timing_source: Mapped[str] = mapped_column(String(20), nullable=False)
+    pause_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    participant_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    billing_revision_before: Mapped[int] = mapped_column(Integer, nullable=False)
+    billing_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    amended_by: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    terminal_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("terminals.id", ondelete="RESTRICT"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+@event.listens_for(GamingSessionPackageAmendment, "before_update")
+def _guard_gaming_package_amendment_update(_mapper, _connection, row) -> None:
+    state = inspect(row)
+    for field in (
+        "company_id", "gaming_session_id", "original_package_price_minor",
+        "original_package_duration_minutes", "original_package_variant",
+        "original_package_station_type", "original_package_pricing_tier",
+        "target_package_code", "target_package_name", "target_package_price_minor",
+        "target_package_duration_minutes", "target_package_variant",
+        "target_package_station_type", "target_package_pricing_tier",
+        "extra_controllers", "controller_surcharge_minor", "timer_before_minutes",
+        "timer_after_minutes", "amount_before_minor", "amount_after_minor",
+        "occurred_at", "play_elapsed_ms", "timing_source", "pause_version",
+        "participant_revision", "billing_revision_before", "billing_revision",
+        "idempotency_key", "request_hash", "amended_by", "terminal_id", "created_at",
+    ):
+        if state.attrs[field].history.has_changes():
+            raise ValueError("gaming package amendment evidence is immutable")
+    for field in ("original_package_id", "target_package_id"):
+        history = state.attrs[field].history
+        if history.has_changes() and (not history.deleted or history.deleted[0] is None):
+            raise ValueError("gaming package amendment catalog identity cannot be changed")
+
+
+@event.listens_for(GamingSessionPackageAmendment, "before_delete")
+def _guard_gaming_package_amendment_delete(_mapper, _connection, _row) -> None:
+    raise ValueError("gaming package amendment evidence cannot be deleted")
 
 
 class GamingSessionParticipant(Base, TenantMixin):

@@ -12,6 +12,7 @@ from app.models import (
     GamingParticipantSettlementLine,
     GamingSession,
     GamingSessionExtension,
+    GamingSessionPackageAmendment,
     MembershipBenefitReservation,
     Order,
     OrderLine,
@@ -105,7 +106,11 @@ def _facts(company_id: UUID):
     )
     played = func.greatest(func.coalesce(GamingSession.billable_minutes, 0), 0)
     package_cap = (
-        func.coalesce(GamingSession.package_duration_minutes_snapshot, 0)
+        func.coalesce(
+            GamingSessionPackageAmendment.target_package_duration_minutes,
+            GamingSession.package_duration_minutes_snapshot,
+            0,
+        )
         + func.coalesce(extensions.c.extension_minutes, 0)
     )
     qualifying_minutes = case(
@@ -178,6 +183,14 @@ def _facts(company_id: UUID):
         )
         .outerjoin(payments, payments.c.order_id == Order.id)
         .outerjoin(refunds, refunds.c.order_id == Order.id)
+        .outerjoin(
+            GamingSessionPackageAmendment,
+            and_(
+                GamingSessionPackageAmendment.gaming_session_id
+                == GamingSession.id,
+                GamingSessionPackageAmendment.company_id == company_id,
+            ),
+        )
         .outerjoin(extensions, extensions.c.gaming_session_id == GamingSession.id)
         .outerjoin(line_flags, line_flags.c.order_id == Order.id)
         .outerjoin(benefits, benefits.c.order_id == Order.id)

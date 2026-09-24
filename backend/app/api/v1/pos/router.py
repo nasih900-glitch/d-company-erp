@@ -62,6 +62,7 @@ from app.models import (
     CustomerSpendReconciliation,
     Floor,
     GamingSession,
+    GamingSessionPackageAmendment,
     MembershipPayment,
     MembershipPaymentRequest,
     MembershipPaymentRequestResolution,
@@ -579,6 +580,17 @@ class ReceiptGamingSessionHistoryRead(BaseModel):
     package_price_minor_snapshot: int | None
     package_duration_minutes_snapshot: int | None
     package_variant_snapshot: str | None
+    billing_revision: int
+    package_amendment_id: UUID | None
+    package_amended_at: datetime | None
+    package_amended_by: UUID | None
+    package_amended_by_name: str | None
+    effective_package_id: UUID | None
+    effective_package_price_minor_snapshot: int | None
+    effective_package_duration_minutes_snapshot: int | None
+    effective_package_variant_snapshot: str | None
+    effective_package_station_type_snapshot: str | None
+    effective_package_pricing_tier_snapshot: str | None
     timer_minutes: int | None
     paused_minutes: int
     billable_minutes: int | None
@@ -746,6 +758,26 @@ async def _receipt_history_reads(
             .order_by(GamingSession.order_id, GamingSession.start_at, GamingSession.id)
         )
     ).all()
+    gaming_session_ids = [gaming_session.id for gaming_session, _station in gaming_rows]
+    amendment_rows = (
+        (
+            await session.execute(
+                select(GamingSessionPackageAmendment).where(
+                    GamingSessionPackageAmendment.company_id == company_id,
+                    GamingSessionPackageAmendment.gaming_session_id.in_(
+                        gaming_session_ids
+                    ),
+                )
+            )
+        )
+        .scalars()
+        .all()
+        if gaming_session_ids
+        else []
+    )
+    amendments_by_session = {
+        amendment.gaming_session_id: amendment for amendment in amendment_rows
+    }
     shift_ids = {order.shift_id for order in orders}
     shifts = (
         (
@@ -781,6 +813,7 @@ async def _receipt_history_reads(
             actor_ids.add(gaming_session.stopped_by)
         if gaming_session.sent_to_pos_by is not None:
             actor_ids.add(gaming_session.sent_to_pos_by)
+    actor_ids.update(amendment.amended_by for amendment in amendment_rows)
     actor_names = dict(
         (
             await session.execute(
@@ -805,6 +838,102 @@ async def _receipt_history_reads(
     for gaming_session, station in gaming_rows:
         assert gaming_session.order_id is not None
         gaming_by_order.setdefault(gaming_session.order_id, []).append((gaming_session, station))
+
+    def gaming_history_read(
+        gaming_session: GamingSession,
+        station: Station,
+    ) -> ReceiptGamingSessionHistoryRead:
+        amendment = amendments_by_session.get(gaming_session.id)
+        return ReceiptGamingSessionHistoryRead(
+            id=gaming_session.id,
+            station_id=gaming_session.station_id,
+            station_code=station.code,
+            station_name=station.name,
+            station_type=station.type,
+            source_shift_id=gaming_session.shift_id,
+            started_by=gaming_session.opened_by,
+            started_by_name=actor_names.get(gaming_session.opened_by),
+            stopped_by=gaming_session.stopped_by,
+            stopped_by_name=(
+                actor_names.get(gaming_session.stopped_by)
+                if gaming_session.stopped_by is not None
+                else None
+            ),
+            sent_to_pos_by=gaming_session.sent_to_pos_by,
+            sent_to_pos_by_name=(
+                actor_names.get(gaming_session.sent_to_pos_by)
+                if gaming_session.sent_to_pos_by is not None
+                else None
+            ),
+            started_at=gaming_session.start_at,
+            stopped_at=gaming_session.end_at,
+            sent_to_pos_at=gaming_session.sent_to_pos_at,
+            billing_mode=gaming_session.billing_mode,
+            rate_per_hour_minor=int(gaming_session.rate_per_hour_minor),
+            package_id=gaming_session.package_id,
+            package_price_minor_snapshot=(
+                int(gaming_session.package_price_minor_snapshot)
+                if gaming_session.package_price_minor_snapshot is not None
+                else None
+            ),
+            package_duration_minutes_snapshot=(
+                int(gaming_session.package_duration_minutes_snapshot)
+                if gaming_session.package_duration_minutes_snapshot is not None
+                else None
+            ),
+            package_variant_snapshot=gaming_session.package_variant_snapshot,
+            billing_revision=int(gaming_session.billing_revision or 0),
+            package_amendment_id=amendment.id if amendment is not None else None,
+            package_amended_at=(amendment.occurred_at if amendment is not None else None),
+            package_amended_by=(amendment.amended_by if amendment is not None else None),
+            package_amended_by_name=(
+                actor_names.get(amendment.amended_by) if amendment is not None else None
+            ),
+            effective_package_id=(
+                amendment.target_package_id
+                if amendment is not None
+                else gaming_session.package_id
+            ),
+            effective_package_price_minor_snapshot=(
+                int(amendment.target_package_price_minor)
+                if amendment is not None
+                else (
+                    int(gaming_session.package_price_minor_snapshot)
+                    if gaming_session.package_price_minor_snapshot is not None
+                    else None
+                )
+            ),
+            effective_package_duration_minutes_snapshot=(
+                int(amendment.target_package_duration_minutes)
+                if amendment is not None
+                else gaming_session.package_duration_minutes_snapshot
+            ),
+            effective_package_variant_snapshot=(
+                amendment.target_package_variant
+                if amendment is not None
+                else gaming_session.package_variant_snapshot
+            ),
+            effective_package_station_type_snapshot=(
+                amendment.target_package_station_type
+                if amendment is not None
+                else gaming_session.package_station_type_snapshot
+            ),
+            effective_package_pricing_tier_snapshot=(
+                amendment.target_package_pricing_tier
+                if amendment is not None
+                else gaming_session.package_pricing_tier_snapshot
+            ),
+            timer_minutes=gaming_session.timer_minutes,
+            paused_minutes=int(gaming_session.paused_minutes or 0),
+            billable_minutes=gaming_session.billable_minutes,
+            amount_minor=(
+                int(gaming_session.amount_minor)
+                if gaming_session.amount_minor is not None
+                else None
+            ),
+            created_at=gaming_session.created_at,
+            updated_at=gaming_session.updated_at,
+        )
 
     results: list[ReceiptHistoryRead] = []
     for order in orders:
@@ -979,55 +1108,7 @@ async def _receipt_history_reads(
                     for refund in order_refunds
                 ],
                 gaming_sessions=[
-                    ReceiptGamingSessionHistoryRead(
-                        id=gaming_session.id,
-                        station_id=gaming_session.station_id,
-                        station_code=station.code,
-                        station_name=station.name,
-                        station_type=station.type,
-                        source_shift_id=gaming_session.shift_id,
-                        started_by=gaming_session.opened_by,
-                        started_by_name=actor_names.get(gaming_session.opened_by),
-                        stopped_by=gaming_session.stopped_by,
-                        stopped_by_name=(
-                            actor_names.get(gaming_session.stopped_by)
-                            if gaming_session.stopped_by is not None
-                            else None
-                        ),
-                        sent_to_pos_by=gaming_session.sent_to_pos_by,
-                        sent_to_pos_by_name=(
-                            actor_names.get(gaming_session.sent_to_pos_by)
-                            if gaming_session.sent_to_pos_by is not None
-                            else None
-                        ),
-                        started_at=gaming_session.start_at,
-                        stopped_at=gaming_session.end_at,
-                        sent_to_pos_at=gaming_session.sent_to_pos_at,
-                        billing_mode=gaming_session.billing_mode,
-                        rate_per_hour_minor=int(gaming_session.rate_per_hour_minor),
-                        package_id=gaming_session.package_id,
-                        package_price_minor_snapshot=(
-                            int(gaming_session.package_price_minor_snapshot)
-                            if gaming_session.package_price_minor_snapshot is not None
-                            else None
-                        ),
-                        package_duration_minutes_snapshot=(
-                            int(gaming_session.package_duration_minutes_snapshot)
-                            if gaming_session.package_duration_minutes_snapshot is not None
-                            else None
-                        ),
-                        package_variant_snapshot=gaming_session.package_variant_snapshot,
-                        timer_minutes=gaming_session.timer_minutes,
-                        paused_minutes=int(gaming_session.paused_minutes or 0),
-                        billable_minutes=gaming_session.billable_minutes,
-                        amount_minor=(
-                            int(gaming_session.amount_minor)
-                            if gaming_session.amount_minor is not None
-                            else None
-                        ),
-                        created_at=gaming_session.created_at,
-                        updated_at=gaming_session.updated_at,
-                    )
+                    gaming_history_read(gaming_session, station)
                     for gaming_session, station in gaming_by_order.get(order.id, [])
                 ],
             )

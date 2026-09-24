@@ -107,7 +107,7 @@ async def test_positive_session_is_pos_eligible_without_addon_query():
     class ParticipantEvidenceOnlySession:
         calls = 0
 
-        async def execute(self, _statement):
+        async def execute(self, statement):
             self.calls += 1
 
             class Result:
@@ -115,8 +115,14 @@ async def test_positive_session_is_pos_eligible_without_addon_query():
                 def scalar_one():
                     return False
 
-            if self.calls > 1:
+                @staticmethod
+                def scalar_one_or_none():
+                    return None
+
+            if self.calls > 2:
                 raise AssertionError("positive gameplay must short-circuit the add-on query")
+            if self.calls == 2:
+                assert "gaming_session_package_amendments" in str(statement)
             return Result()
 
     fake = ParticipantEvidenceOnlySession()
@@ -124,7 +130,7 @@ async def test_positive_session_is_pos_eligible_without_addon_query():
         fake,
         gaming_session=_session(status="ended", amount_minor=1),
     )
-    assert fake.calls == 1
+    assert fake.calls == 2
 
 
 @pytest.mark.asyncio
@@ -142,7 +148,10 @@ async def test_complimentary_session_with_active_addon_is_pos_eligible():
                 def scalar_one(self):
                     return self.value
 
-            return Result(False if self.calls == 1 else 1)
+                def scalar_one_or_none(self):
+                    return self.value
+
+            return Result(False if self.calls == 1 else (None if self.calls == 2 else 1))
 
     await _require_session_pos_eligible(
         AddonCountSession(),
@@ -163,6 +172,9 @@ async def test_zero_session_without_addons_still_requires_reasoned_cancellation(
                     self.value = value
 
                 def scalar_one(self):
+                    return self.value
+
+                def scalar_one_or_none(self):
                     return self.value
 
             return Result(False if self.calls == 1 else None)
@@ -242,7 +254,7 @@ async def test_package_pos_description_identifies_extensions_and_controllers():
             assert row_id == package_id
             return package
 
-        async def execute(self, _statement):
+        async def execute(self, statement):
             self.calls += 1
 
             class EmptyRows:
@@ -256,6 +268,8 @@ async def test_package_pos_description_identifies_extensions_and_controllers():
                 def scalar_one_or_none():
                     return None
 
+            if "gaming_session_package_amendments" in str(statement):
+                return EmptyRows()
             return EmptyRows()
 
     description = await _session_pos_description(
@@ -330,7 +344,7 @@ async def test_package_pos_description_uses_immutable_extension_itemisation():
             assert row_id == package_id
             return package
 
-        async def execute(self, _statement):
+        async def execute(self, statement):
             self.calls += 1
 
             class Result:
@@ -338,13 +352,13 @@ async def test_package_pos_description_uses_immutable_extension_itemisation():
                     return self
 
                 def all(self):
-                    return rows if self_calls == 1 else []
+                    return rows if extension_query else []
 
                 @staticmethod
                 def scalar_one_or_none():
                     return None
 
-            self_calls = self.calls
+            extension_query = "gaming_session_extensions" in str(statement)
             return Result()
 
     description = await _session_pos_description(LedgerSession(), gs)
