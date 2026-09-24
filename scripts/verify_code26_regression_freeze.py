@@ -574,6 +574,7 @@ REVIEWED_CODE30_4_SHA256 = {
     'PROJECT_STATE.md': '0c3dd4ef199a2c0d093ca5bf53276a23aeb3871712db4c39956c840ee89ecf54',
     'android-native/app/build.gradle.kts': '48941fcde2790aa84830257e13f1b43173027a78eb31b2b257b86fc6ea264b2b',
     'android-native/app/schemas/cloud.dcompany.erp.core.db.ErpDatabase/53.json': 'ae270ada72977f1ea7ed17dd088d661a83f0746a4a161e5c593b0aceeebd257b',
+    'android-native/app/src/androidTest/java/cloud/dcompany/erp/core/auth/CacheIsolationRoomTest.kt': '3ee2788671245e639b66b1e9a786b9a226091168d900ef391388dd8812b5b8a3',
     'android-native/app/src/androidTest/java/cloud/dcompany/erp/core/db/GamingSessionActionDaoTest.kt': 'a0604fbb92bfd8f5c02dcdc82d9095d3c6c11ef7edc423d833f2082683bb574d',
     'android-native/app/src/androidTest/java/cloud/dcompany/erp/core/db/MigrationTest.kt': '7e3afc05f10d33092e745be078514832adf41c0db847dcda889f5635acbb41e9',
     'android-native/app/src/main/java/cloud/dcompany/erp/MainActivity.kt': '7315325f1e44fd73fb427e051c0142984bddd0839c9e6ffd3ae5b8809adb65b4',
