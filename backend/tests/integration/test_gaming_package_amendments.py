@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
@@ -410,6 +411,118 @@ async def test_single_offline_amendment_replay_friend_payment_receipt_and_playti
         headers=_headers(seed_owner, token),
     )
     assert deleted_friend_playtime.status_code == 404
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_expired_amendment_replay_and_stop_complete_without_duplicate_billing(
+    client,
+    session,
+    seed_owner,
+) -> None:
+    token, shift_id, station, _primary, _friend, packages = await _setup(
+        client, session, seed_owner
+    )
+    started = await _start(
+        client,
+        seed_owner,
+        token,
+        shift_id,
+        station,
+        packages["standard-single-session-60m"],
+    )
+    session_id = UUID(started["id"])
+    path = f"/api/v1/gaming/sessions/{session_id}/amend-package"
+    key = f"amend:{uuid4()}"
+    payload = _amend_payload(
+        packages["standard-single-session-30m"], amount_minor=12_000
+    )
+    amended = await client.post(path, json=payload, headers=_headers(seed_owner, token, key))
+    assert amended.status_code == 200, amended.text
+    cached = await session.get(IdempotencyKey, key)
+    assert cached is not None
+    await session.delete(cached)
+    await session.commit()
+
+    # Exercise two independent HTTP/DB transactions against the same session.
+    # The immutable amendment receipt and session must be locked in the same
+    # order by both routes; either operation may win, but both must complete.
+    await asyncio.sleep(0.02)
+    replay, stopped = await asyncio.wait_for(
+        asyncio.gather(
+            client.post(path, json=payload, headers=_headers(seed_owner, token, key)),
+            client.post(
+                f"/api/v1/gaming/sessions/{session_id}/stop",
+                json={"expected_billing_revision": 1},
+                headers=_headers(seed_owner, token, f"stop:{uuid4()}"),
+            ),
+        ),
+        timeout=10,
+    )
+    assert replay.status_code == stopped.status_code == 200, (replay.text, stopped.text)
+    assert stopped.json()["status"] == "ended"
+    assert stopped.json()["amount_minor"] == 8_000
+    receipt_count = int(
+        (
+            await session.execute(
+                select(func.count())
+                .select_from(GamingSessionPackageAmendment)
+                .where(GamingSessionPackageAmendment.gaming_session_id == session_id)
+            )
+        ).scalar_one()
+    )
+    assert receipt_count == 1
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_cancelled_amendment_durable_replay_requires_cancellation_evidence(
+    client,
+    session,
+    seed_owner,
+) -> None:
+    token, shift_id, station, _primary, _friend, packages = await _setup(
+        client, session, seed_owner
+    )
+    base = packages["standard-single-session-60m"]
+    target = packages["standard-single-session-30m"]
+    started = await _start(client, seed_owner, token, shift_id, station, base)
+    session_id = UUID(started["id"])
+    path = f"/api/v1/gaming/sessions/{session_id}/amend-package"
+    key = f"amend:{uuid4()}"
+    payload = _amend_payload(target, amount_minor=12_000)
+    amended = await client.post(path, json=payload, headers=_headers(seed_owner, token, key))
+    assert amended.status_code == 200, amended.text
+
+    cancelled = await client.post(
+        f"/api/v1/gaming/sessions/{session_id}/cancel",
+        json={"reason": "Incorrect booking confirmed by staff"},
+        headers=_headers(seed_owner, token),
+    )
+    assert cancelled.status_code == 200, cancelled.text
+    assert cancelled.json()["status"] == "cancelled"
+    assert cancelled.json()["amount_minor"] == 0
+
+    cached = await session.get(IdempotencyKey, key)
+    assert cached is not None
+    await session.delete(cached)
+    await session.commit()
+    replay = await client.post(path, json=payload, headers=_headers(seed_owner, token, key))
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["status"] == "cancelled"
+    assert replay.json()["amount_minor"] == 0
+
+    # A zero amount without the cancellation reason is not a valid adjustment
+    # to the immutable tariff. The durable retry must fail closed.
+    cached = await session.get(IdempotencyKey, key)
+    assert cached is not None
+    await session.delete(cached)
+    gs = await session.get(GamingSession, session_id)
+    gs.cancel_reason = None
+    await session.commit()
+    malformed = await client.post(path, json=payload, headers=_headers(seed_owner, token, key))
+    assert malformed.status_code == 409
+    assert "repair" in malformed.text.lower()
 
 
 @pytest.mark.integration

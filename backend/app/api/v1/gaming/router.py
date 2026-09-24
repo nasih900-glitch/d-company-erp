@@ -3348,6 +3348,22 @@ async def _assert_package_amendment_consistent(
             "The session timer no longer matches its amendment and extension receipts."
         )
     if gs.amount_minor is None or int(gs.amount_minor) != expected_amount:
+        # Cancellation legitimately zeroes an amended, unbilled session. It
+        # does not erase the immutable amendment/extension chain, so durable
+        # retries must recognize the *evidenced* cancellation without treating
+        # an arbitrary zero amount as a valid projection.
+        evidenced_cancellation = (
+            gs.status == "cancelled"
+            and gs.amount_minor == 0
+            and gs.billable_minutes == 0
+            and gs.order_id is None
+            and gs.cancelled_at is not None
+            and gs.cancelled_by is not None
+            and bool((gs.cancel_reason or "").strip())
+            and int(gs.participant_revision or 0) == 0
+        )
+        if evidenced_cancellation and not await _has_participant_evidence(session, gs):
+            return receipt
         settlement = (
             await session.execute(
                 select(GamingParticipantSettlement).where(
@@ -3423,6 +3439,10 @@ async def amend_session_package(
     if cached:
         return SessionRead.model_validate(cached["body"])
 
+    # Read the immutable receipt without locking first so a reused key can be
+    # rejected before consulting a different session. If this is a durable
+    # replay, lock the session *before* the receipt, matching Stop/Extend and
+    # avoiding a receipt->session / session->receipt deadlock.
     durable = (
         await session.execute(
             select(GamingSessionPackageAmendment)
@@ -3430,7 +3450,6 @@ async def amend_session_package(
                 GamingSessionPackageAmendment.company_id == tenant.company_id,
                 GamingSessionPackageAmendment.idempotency_key == key,
             )
-            .with_for_update()
         )
     ).scalar_one_or_none()
     if durable is not None:
@@ -3452,6 +3471,17 @@ async def amend_session_package(
         ).scalar_one_or_none()
         if gs is None or gs.company_id != tenant.company_id:
             raise NotFoundError("session not found")
+        durable = await _package_amendment_receipt(session, gs, lock=True)
+        if (
+            durable is None
+            or durable.idempotency_key != key
+            or durable.request_hash != request_hash
+            or durable.amended_by != tenant.user_id
+            or durable.terminal_id != tenant.terminal_id
+        ):
+            raise ConflictError(
+                "Idempotency-Key already belongs to a different package amendment."
+            )
         station = await session.get(Station, gs.station_id)
         shift = await session.get(Shift, gs.shift_id)
         if (
