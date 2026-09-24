@@ -104,26 +104,45 @@ def test_session_read_includes_source_shift_id():
 
 @pytest.mark.asyncio
 async def test_positive_session_is_pos_eligible_without_addon_query():
-    class NoAddonQuerySession:
-        async def execute(self, _statement):
-            raise AssertionError("positive gameplay must short-circuit the add-on query")
+    class ParticipantEvidenceOnlySession:
+        calls = 0
 
+        async def execute(self, _statement):
+            self.calls += 1
+
+            class Result:
+                @staticmethod
+                def scalar_one():
+                    return False
+
+            if self.calls > 1:
+                raise AssertionError("positive gameplay must short-circuit the add-on query")
+            return Result()
+
+    fake = ParticipantEvidenceOnlySession()
     await _require_session_pos_eligible(
-        NoAddonQuerySession(),
+        fake,
         gaming_session=_session(status="ended", amount_minor=1),
     )
+    assert fake.calls == 1
 
 
 @pytest.mark.asyncio
 async def test_complimentary_session_with_active_addon_is_pos_eligible():
     class AddonCountSession:
-        async def execute(self, _statement):
-            class Result:
-                @staticmethod
-                def scalar_one():
-                    return 1
+        calls = 0
 
-            return Result()
+        async def execute(self, _statement):
+            self.calls += 1
+
+            class Result:
+                def __init__(self, value):
+                    self.value = value
+
+                def scalar_one(self):
+                    return self.value
+
+            return Result(False if self.calls == 1 else 1)
 
     await _require_session_pos_eligible(
         AddonCountSession(),
@@ -134,13 +153,19 @@ async def test_complimentary_session_with_active_addon_is_pos_eligible():
 @pytest.mark.asyncio
 async def test_zero_session_without_addons_still_requires_reasoned_cancellation():
     class EmptyAddonSession:
-        async def execute(self, _statement):
-            class Result:
-                @staticmethod
-                def scalar_one():
-                    return None
+        calls = 0
 
-            return Result()
+        async def execute(self, _statement):
+            self.calls += 1
+
+            class Result:
+                def __init__(self, value):
+                    self.value = value
+
+                def scalar_one(self):
+                    return self.value
+
+            return Result(False if self.calls == 1 else None)
 
     with pytest.raises(BusinessRuleError, match="no play charge or saved items"):
         await _require_session_pos_eligible(
@@ -210,18 +235,26 @@ async def test_package_pos_description_identifies_extensions_and_controllers():
     )
 
     class PackageSession:
+        calls = 0
+
         async def get(self, model, row_id):
             assert model is GamingPackage
             assert row_id == package_id
             return package
 
         async def execute(self, _statement):
+            self.calls += 1
+
             class EmptyRows:
                 def scalars(self):
                     return self
 
                 def all(self):
                     return []
+
+                @staticmethod
+                def scalar_one_or_none():
+                    return None
 
             return EmptyRows()
 
@@ -290,19 +323,28 @@ async def test_package_pos_description_uses_immutable_extension_itemisation():
     ]
 
     class LedgerSession:
+        calls = 0
+
         async def get(self, model, row_id):
             assert model is GamingPackage
             assert row_id == package_id
             return package
 
         async def execute(self, _statement):
+            self.calls += 1
+
             class Result:
                 def scalars(self):
                     return self
 
                 def all(self):
-                    return rows
+                    return rows if self_calls == 1 else []
 
+                @staticmethod
+                def scalar_one_or_none():
+                    return None
+
+            self_calls = self.calls
             return Result()
 
     description = await _session_pos_description(LedgerSession(), gs)

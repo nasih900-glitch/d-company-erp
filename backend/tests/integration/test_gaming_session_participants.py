@@ -312,6 +312,57 @@ async def test_rejoin_rounds_once_extension_deleted_customer_stop_pos_and_paymen
         (3_600_000, 1, 3000, 2),
         (3_600_001, 2, 6000, 1),
     ]
+    settled_revision = int(settlement.participant_revision)
+    await session.execute(text(
+        "ALTER TABLE gaming_sessions DISABLE TRIGGER trg_gaming_sessions_participant_revision"
+    ))
+    await session.execute(
+        text("UPDATE gaming_sessions SET participant_revision=0 WHERE id=:id"),
+        {"id": session_id},
+    )
+    await session.execute(text(
+        "ALTER TABLE gaming_sessions ENABLE TRIGGER trg_gaming_sessions_participant_revision"
+    ))
+    await session.commit()
+    reset_cancel = await client.post(
+        f"/api/v1/gaming/sessions/{session_id}/cancel",
+        json={"reason": "Revision reset must not hide participant evidence"},
+        headers=_headers(seed_owner, token),
+    )
+    assert reset_cancel.status_code == 409
+    assert reset_cancel.json()["error"]["code"] == "gaming_billing_repair_required"
+    reset_repair = await client.post(
+        f"/api/v1/gaming/sessions/{session_id}/repair-billing",
+        json={
+            "expected_amount_minor": 27000,
+            "amount_minor": 27000,
+            "reason": "Revision reset must not hide participant evidence",
+        },
+        headers=_headers(
+            seed_owner,
+            issue_access_token(
+                user_id=seed_owner["owner"].id,
+                company_id=seed_owner["company"].id,
+                branch_id=seed_owner["branch"].id,
+                roles=["super_owner"],
+                auth_version=seed_owner["owner"].auth_version,
+            ),
+            f"repair:{uuid4()}",
+        ),
+    )
+    assert reset_repair.status_code == 409
+    assert reset_repair.json()["error"]["code"] == "gaming_billing_repair_required"
+    reset_pos = await client.post(
+        f"/api/v1/gaming/sessions/{session_id}/send-to-pos",
+        headers=_headers(seed_owner, token, f"pos:{uuid4()}"),
+    )
+    assert reset_pos.status_code == 409
+    assert reset_pos.json()["error"]["code"] == "gaming_billing_repair_required"
+    await session.execute(
+        text("UPDATE gaming_sessions SET participant_revision=:revision WHERE id=:id"),
+        {"revision": settled_revision, "id": session_id},
+    )
+    await session.commit()
     with pytest.raises(DBAPIError, match="immutable"):
         await session.execute(
             text("UPDATE gaming_participant_settlements SET guest_charge_minor=0 WHERE id=:id"),
@@ -365,6 +416,25 @@ async def test_rejoin_rounds_once_extension_deleted_customer_stop_pos_and_paymen
     assert playtime.json()["qualifying_paid_minutes"] == 0
     assert playtime.json()["draft_estimated_reward_minutes"] == 0
     assert playtime.json()["history"][0]["qualification_status"] == "participant_non_qualifying"
+    post_pos_stop_replay = await client.post(
+        f"/api/v1/gaming/sessions/{session_id}/stop",
+        json={"ended_at": stop_at.isoformat(), "expected_participant_revision": 6},
+        headers=_offline_headers(seed_owner, token, stop_key, stop_at),
+    )
+    assert post_pos_stop_replay.status_code == 200, post_pos_stop_replay.text
+    assert post_pos_stop_replay.json()["order_id"] == sent.json()["order_id"]
+    await session.execute(
+        text("UPDATE gaming_sessions SET amount_minor=amount_minor+1 WHERE id=:id"),
+        {"id": session_id},
+    )
+    await session.commit()
+    tampered_stop_replay = await client.post(
+        f"/api/v1/gaming/sessions/{session_id}/stop",
+        json={"ended_at": stop_at.isoformat(), "expected_participant_revision": 6},
+        headers=_offline_headers(seed_owner, token, stop_key, stop_at),
+    )
+    assert tampered_stop_replay.status_code == 409
+    assert tampered_stop_replay.json()["error"]["code"] == "gaming_billing_repair_required"
 
 
 @pytest.mark.integration
@@ -438,6 +508,13 @@ async def test_capacity_revision_replay_cross_user_and_zero_duration_minimum(
     )
     assert durable_replay.status_code == 200
     assert durable_replay.json() == left.json()
+    cached_after_durable_replay = await client.post(
+        f"/api/v1/gaming/sessions/{session_id}/participants/{interval['id']}/leave",
+        json={"expected_participant_revision": 3},
+        headers=_headers(seed_owner, second_token, leave_key),
+    )
+    assert cached_after_durable_replay.status_code == 200
+    assert cached_after_durable_replay.json() == left.json()
 
     missing_revision = await client.post(
         f"/api/v1/gaming/sessions/{session_id}/stop", json={},
@@ -493,14 +570,56 @@ async def test_capacity_revision_replay_cross_user_and_zero_duration_minimum(
         headers=_headers(seed_owner, token, f"join:{uuid4()}"),
     )
     assert blocked.status_code == 422
+    upfront_stop_at = datetime.now(UTC)
+    upfront_stop_key = f"stop:{uuid4()}"
     settled = await client.post(
         f"/api/v1/gaming/sessions/{upfront['id']}/stop",
-        json={"expected_participant_revision": 1},
-        headers=_headers(seed_owner, token, f"stop:{uuid4()}"),
+        json={
+            "ended_at": upfront_stop_at.isoformat(),
+            "expected_participant_revision": 1,
+        },
+        headers=_offline_headers(seed_owner, token, upfront_stop_key, upfront_stop_at),
     )
     assert settled.status_code == 200, settled.text
     # ₹130 includes the original upfront controller once; only the late friend adds ₹30.
     assert settled.json()["amount_minor"] == 16000
+    auto_closed = (await session.execute(select(GamingSessionParticipant).where(
+        GamingSessionParticipant.gaming_session_id == UUID(upfront["id"]),
+    ))).scalar_one()
+    assert auto_closed.leave_timing_source == "offline_capture"
+
+    with pytest.raises(DBAPIError, match="participant revision cannot decrease"):
+        await session.execute(
+            text("UPDATE gaming_sessions SET participant_revision=0 WHERE id=:id"),
+            {"id": UUID(upfront["id"])},
+        )
+    await session.rollback()
+    await session.execute(text(
+        "ALTER TABLE gaming_sessions DISABLE TRIGGER trg_gaming_sessions_participant_revision"
+    ))
+    await session.execute(
+        text("UPDATE gaming_sessions SET participant_revision=0 WHERE id=:id"),
+        {"id": UUID(upfront["id"])},
+    )
+    await session.execute(text(
+        "ALTER TABLE gaming_sessions ENABLE TRIGGER trg_gaming_sessions_participant_revision"
+    ))
+    await session.commit()
+    reset_stop = await client.post(
+        f"/api/v1/gaming/sessions/{upfront['id']}/stop",
+        json={
+            "ended_at": upfront_stop_at.isoformat(),
+            "expected_participant_revision": 0,
+        },
+        headers=_offline_headers(seed_owner, token, f"stop:{uuid4()}", upfront_stop_at),
+    )
+    assert reset_stop.status_code == 409
+    assert reset_stop.json()["error"]["code"] == "gaming_billing_repair_required"
+    await session.execute(
+        text("UPDATE gaming_sessions SET participant_revision=:revision WHERE id=:id"),
+        {"revision": settled.json()["participant_revision"], "id": UUID(upfront["id"])},
+    )
+    await session.commit()
 
 
 @pytest.mark.integration
@@ -516,17 +635,35 @@ async def test_paused_friend_can_leave_but_new_friend_cannot_join(
         "customer_directory_revision": 0,
         "customer_directory_company_id": str(seed_owner["company"].id),
     }
+    join_key = f"join:{uuid4()}"
+    join_payload = {
+        "expected_participant_revision": 0,
+        "customer_name": "New saved friend",
+        "customer_phone": "9876543209",
+        **directory,
+    }
     joined = await client.post(
         f"/api/v1/gaming/sessions/{session_id}/participants/join",
-        json={
-            "expected_participant_revision": 0,
-            "customer_name": "New saved friend",
-            "customer_phone": "9876543209",
-            **directory,
-        },
-        headers=_headers(seed_owner, token, f"join:{uuid4()}"),
+        json=join_payload,
+        headers=_headers(seed_owner, token, join_key),
     )
     assert joined.status_code == 200, joined.text
+    await session.execute(text("DELETE FROM idempotency_keys WHERE key = :key"), {"key": join_key})
+    await session.commit()
+    durable_join_replay = await client.post(
+        f"/api/v1/gaming/sessions/{session_id}/participants/join",
+        json=join_payload,
+        headers=_headers(seed_owner, token, join_key),
+    )
+    assert durable_join_replay.status_code == 200
+    assert durable_join_replay.json() == joined.json()
+    cached_after_durable_join = await client.post(
+        f"/api/v1/gaming/sessions/{session_id}/participants/join",
+        json=join_payload,
+        headers=_headers(seed_owner, token, join_key),
+    )
+    assert cached_after_durable_join.status_code == 200
+    assert cached_after_durable_join.json() == joined.json()
     participant = joined.json()["participants"][0]
     paused = await client.post(
         f"/api/v1/gaming/sessions/{session_id}/pause",

@@ -43,6 +43,21 @@ def upgrade() -> None:
         "gaming_sessions",
         "participant_revision >= 0",
     )
+    op.execute(
+        """
+        CREATE FUNCTION guard_gaming_session_participant_revision() RETURNS trigger AS $$
+        BEGIN
+          IF NEW.participant_revision < OLD.participant_revision THEN
+            RAISE EXCEPTION 'gaming session participant revision cannot decrease';
+          END IF;
+          RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql;
+        CREATE TRIGGER trg_gaming_sessions_participant_revision
+        BEFORE UPDATE OF participant_revision ON gaming_sessions
+        FOR EACH ROW EXECUTE FUNCTION guard_gaming_session_participant_revision();
+        """
+    )
 
     op.create_table(
         "gaming_session_participants",

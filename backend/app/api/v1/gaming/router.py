@@ -17,7 +17,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from sqlalchemy import func, or_, select
+from sqlalchemy import exists, func, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from app.core.config import get_settings
@@ -3561,7 +3561,14 @@ async def join_session_participant(
     if durable is not None:
         if durable.gaming_session_id != session_id or durable.join_request_hash != request_hash or durable.joined_by != tenant.user_id or durable.joined_terminal_id != tenant.terminal_id:
             raise ConflictError("Idempotency key was already used for a different participant action.")
-        return SessionParticipantStateRead.model_validate(durable.join_response)
+        response = SessionParticipantStateRead.model_validate(durable.join_response)
+        await store_response(
+            session,
+            key=key,
+            status_code=status.HTTP_200_OK,
+            body=response.model_dump(mode="json"),
+        )
+        return response
     gs, _station, _shift = await _lock_participant_context(session, session_id=session_id, tenant=tenant, operation="adding a gaming participant")
     if gs.status != "active":
         if gs.status == "paused":
@@ -3635,7 +3642,14 @@ async def leave_session_participant(
     if durable is not None:
         if durable.gaming_session_id != session_id or durable.id != participant_id or durable.leave_request_hash != request_hash or durable.left_by != tenant.user_id or durable.left_terminal_id != tenant.terminal_id:
             raise ConflictError("Idempotency key was already used for a different participant action.")
-        return SessionParticipantStateRead.model_validate(durable.leave_response)
+        response = SessionParticipantStateRead.model_validate(durable.leave_response)
+        await store_response(
+            session,
+            key=key,
+            status_code=status.HTTP_200_OK,
+            body=response.model_dump(mode="json"),
+        )
+        return response
     gs, _station, _shift = await _lock_participant_context(session, session_id=session_id, tenant=tenant, operation="removing a gaming participant")
     if gs.status not in ("active", "paused") or gs.order_id is not None:
         raise BusinessRuleError("Friends can leave only while the session is running and unbilled.")
@@ -3688,6 +3702,11 @@ def _participant_totals(rows: list[GamingSessionParticipant]) -> dict[UUID, tupl
 async def _assert_participant_settlement_consistent(session, gs: GamingSession) -> None:
     revision = int(getattr(gs, "participant_revision", 0) or 0)
     if revision == 0:
+        if await _has_participant_evidence(session, gs):
+            raise GamingBillingRepairRequiredError(
+                "Participant revision is missing despite saved attendance or settlement evidence. "
+                "POS, Stop, cancellation, and repair are blocked."
+            )
         return
     rows = await _participant_rows(session, gs, lock=False)
     settlement = (
@@ -3751,6 +3770,18 @@ async def _assert_participant_settlement_consistent(session, gs: GamingSession) 
         raise GamingBillingRepairRequiredError("Participant settlement total is inconsistent. POS and repair are blocked.")
 
 
+async def _has_participant_evidence(session, gs: GamingSession) -> bool:
+    participant_exists = exists().where(
+        GamingSessionParticipant.company_id == gs.company_id,
+        GamingSessionParticipant.gaming_session_id == gs.id,
+    )
+    settlement_exists = exists().where(
+        GamingParticipantSettlement.company_id == gs.company_id,
+        GamingParticipantSettlement.gaming_session_id == gs.id,
+    )
+    return bool((await session.execute(select(or_(participant_exists, settlement_exists)))).scalar_one())
+
+
 async def _settle_participants(
     session,
     *,
@@ -3762,6 +3793,7 @@ async def _settle_participants(
     terminal_id: UUID,
     stop_key: str,
     stop_hash: str,
+    leave_timing_source: str,
 ) -> None:
     revision_before = int(gs.participant_revision or 0)
     for row in rows:
@@ -3769,7 +3801,7 @@ async def _settle_participants(
             gs.participant_revision = int(gs.participant_revision or 0) + 1
             row.left_at = stopped_at
             row.left_play_elapsed_ms = final_meter
-            row.leave_timing_source = "server"
+            row.leave_timing_source = leave_timing_source
             row.left_by = actor_id
             row.left_terminal_id = terminal_id
             row.leave_revision = gs.participant_revision
@@ -3815,6 +3847,12 @@ async def _settle_participants(
         after={"amount_minor": amount_after, "guest_charge_minor": charge, "participant_revision": int(gs.participant_revision)},
         terminal_id=terminal_id,
     ))
+
+
+def _stop_replay_matches_current(stored: SessionRead, current: SessionRead) -> bool:
+    if stored.order_id is not None and stored.order_id != current.order_id:
+        return False
+    return stored.model_dump(exclude={"order_id"}) == current.model_dump(exclude={"order_id"})
 
 
 @router.post("/sessions/{session_id}/stop", response_model=SessionRead)
@@ -3873,13 +3911,18 @@ async def stop_session(
     )
     participant_rows = await _participant_rows(session, gs, lock=True)
     participant_revision = int(getattr(gs, "participant_revision", 0) or 0)
+    settlement = (
+        await session.execute(select(GamingParticipantSettlement).where(
+            GamingParticipantSettlement.company_id == tenant.company_id,
+            GamingParticipantSettlement.gaming_session_id == gs.id,
+        ))
+    ).scalar_one_or_none()
+    if participant_revision == 0 and (participant_rows or settlement is not None):
+        raise GamingBillingRepairRequiredError(
+            "Participant revision is missing despite saved attendance or settlement evidence. "
+            "Stop is blocked for protected review."
+        )
     if participant_revision > 0:
-        settlement = (
-            await session.execute(select(GamingParticipantSettlement).where(
-                GamingParticipantSettlement.company_id == tenant.company_id,
-                GamingParticipantSettlement.gaming_session_id == gs.id,
-            ))
-        ).scalar_one_or_none()
         expected_revision = payload.expected_participant_revision if payload is not None else None
         required_revision = (
             int(settlement.participant_revision_before)
@@ -3920,7 +3963,10 @@ async def stop_session(
             raise ConflictError("Session was already stopped at a different time. Refresh Gaming.")
         await _assert_participant_settlement_consistent(session, gs)
         response = session_read(gs)
-        if existing_response is not None and SessionRead.model_validate(existing_response["body"]) != response:
+        if existing_response is not None and not _stop_replay_matches_current(
+            SessionRead.model_validate(existing_response["body"]),
+            response,
+        ):
             raise GamingBillingRepairRequiredError("Stored Stop replay does not match the immutable participant settlement.")
         if idempotency_key is not None:
             await store_response(
@@ -4003,6 +4049,7 @@ async def stop_session(
             terminal_id=tenant.terminal_id,
             stop_key=idempotency_key,
             stop_hash=request_hash,
+            leave_timing_source=("offline_capture" if has_captured_end else "server"),
         )
     gs.status = "ended"
     gs.stopped_by = tenant.user_id
@@ -4562,7 +4609,11 @@ async def cancel_session(
     if gs.status == "cancelled":
         # Safe response-loss replay, including after the original shift closes.
         return session_read(gs)
-    if int(getattr(gs, "participant_revision", 0) or 0) > 0:
+    has_participant_evidence = (
+        int(getattr(gs, "participant_revision", 0) or 0) > 0
+        or await _has_participant_evidence(session, gs)
+    )
+    if has_participant_evidence:
         if gs.status == "ended":
             await _assert_participant_settlement_consistent(session, gs)
         raise BusinessRuleError(
@@ -5007,7 +5058,11 @@ async def repair_session_billing(
         )
     if gs.status != "ended":
         raise BusinessRuleError("Only an ended session can have missing billing repaired.")
-    if int(getattr(gs, "participant_revision", 0) or 0) > 0:
+    has_participant_evidence = (
+        int(getattr(gs, "participant_revision", 0) or 0) > 0
+        or await _has_participant_evidence(session, gs)
+    )
+    if has_participant_evidence:
         await _assert_participant_settlement_consistent(session, gs)
         raise BusinessRuleError(
             "Participant-settled sessions cannot use the legacy missing-bill repair workflow."

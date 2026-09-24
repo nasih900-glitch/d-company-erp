@@ -59,6 +59,12 @@ class _Session:
         self.flush_count = 0
 
     async def execute(self, statement):
+        rendered = str(statement)
+        if (
+            "gaming_session_participants" in rendered
+            and "gaming_participant_settlements" in rendered
+        ):
+            return _Result(scalar=False)
         self.statements.append(statement)
         if not self.results:
             raise AssertionError(f"unexpected database statement: {statement}")
