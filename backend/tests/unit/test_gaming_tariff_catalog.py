@@ -1,4 +1,4 @@
-"""Exact regression contract for the 2026-09-13 printed gaming tariff."""
+"""Exact regression contract for the owner-approved D Company gaming tariff."""
 
 from __future__ import annotations
 
@@ -54,7 +54,7 @@ def _money_matrix() -> list[tuple[str, str, str, str, int, int, int, int]]:
     ]
 
 
-def test_tariff_matches_the_printed_card_exactly() -> None:
+def test_tariff_matches_the_owner_approved_catalog_exactly() -> None:
     assert _money_matrix() == [
         ("standard", "ps5", "single", "base", 30, 8_000, 1, 1),
         ("standard", "ps5", "single", "base", 60, 12_000, 1, 1),
@@ -67,20 +67,57 @@ def test_tariff_matches_the_printed_card_exactly() -> None:
         ("standard", "simulator", "simdrive", "base", 15, 7_000, 1, 1),
         ("standard", "simulator", "simdrive", "base", 30, 10_000, 1, 1),
         ("standard", "simulator", "simdrive", "base", 60, 18_000, 1, 1),
+        ("standard", "simulator", "simdrive", "extension", 15, 7_000, 1, 1),
+        ("standard", "simulator", "simdrive", "extension", 30, 10_000, 1, 1),
+        ("standard", "simulator", "simdrive", "extension", 60, 18_000, 1, 1),
         ("standard", "vr", "vr_games", "base", 15, 8_000, 1, 1),
         ("standard", "vr", "vr_games", "base", 30, 12_000, 1, 1),
         ("standard", "vr", "vr_games", "base", 60, 20_000, 1, 1),
+        ("standard", "vr", "vr_games", "extension", 15, 8_000, 1, 1),
+        ("standard", "vr", "vr_games", "extension", 30, 12_000, 1, 1),
+        ("standard", "vr", "vr_games", "extension", 60, 20_000, 1, 1),
         ("standard", "simulator", "vr_racing", "base", 15, 10_000, 1, 1),
         ("standard", "simulator", "vr_racing", "base", 30, 14_000, 1, 1),
         ("standard", "simulator", "vr_racing", "base", 60, 25_000, 1, 1),
+        ("standard", "simulator", "vr_racing", "extension", 15, 10_000, 1, 1),
+        ("standard", "simulator", "vr_racing", "extension", 30, 14_000, 1, 1),
+        ("standard", "simulator", "vr_racing", "extension", 60, 25_000, 1, 1),
     ]
 
 
-def test_tariff_has_17_stable_unique_codes_and_expected_row_kinds() -> None:
+def test_tariff_has_26_stable_unique_codes_and_preserves_original_identities() -> None:
     codes = [row.code for row in D_COMPANY_GAMING_TARIFF]
-    assert len(codes) == 17
-    assert len(set(codes)) == 17
+    assert len(codes) == 26
+    assert len(set(codes)) == 26
     assert codes == [
+        "standard-single-session-30m",
+        "standard-single-session-60m",
+        "standard-single-extension-30m",
+        "standard-single-extension-60m",
+        "standard-dual-session-30m",
+        "standard-dual-session-60m",
+        "standard-dual-extension-30m",
+        "standard-dual-extension-60m",
+        "standard-simdrive-session-15m",
+        "standard-simdrive-session-30m",
+        "standard-simdrive-session-60m",
+        "standard-simdrive-extension-15m",
+        "standard-simdrive-extension-30m",
+        "standard-simdrive-extension-60m",
+        "vr-games-session-15m",
+        "vr-games-session-30m",
+        "vr-games-session-60m",
+        "vr-games-extension-15m",
+        "vr-games-extension-30m",
+        "vr-games-extension-60m",
+        "vr-racing-session-15m",
+        "vr-racing-session-30m",
+        "vr-racing-session-60m",
+        "vr-racing-extension-15m",
+        "vr-racing-extension-30m",
+        "vr-racing-extension-60m",
+    ]
+    assert {
         "standard-single-session-30m",
         "standard-single-session-60m",
         "standard-single-extension-30m",
@@ -98,9 +135,9 @@ def test_tariff_has_17_stable_unique_codes_and_expected_row_kinds() -> None:
         "vr-racing-session-15m",
         "vr-racing-session-30m",
         "vr-racing-session-60m",
-    ]
+    }.issubset(codes)
     assert sum(row.kind == "base" for row in D_COMPANY_GAMING_TARIFF) == 13
-    assert sum(row.kind == "extension" for row in D_COMPANY_GAMING_TARIFF) == 4
+    assert sum(row.kind == "extension" for row in D_COMPANY_GAMING_TARIFF) == 13
     assert {
         "premium-single-session-60m",
         "premium-single-extension-30m",
@@ -111,11 +148,20 @@ def test_tariff_has_17_stable_unique_codes_and_expected_row_kinds() -> None:
     } == RETIRED_PREMIUM_CODES
 
 
-def test_card_retires_premium_and_only_ps5_has_extensions() -> None:
+def test_catalog_retires_premium_and_has_extensions_for_every_fixed_mode() -> None:
     assert not any(row.pricing_tier == "premium" for row in D_COMPANY_GAMING_TARIFF)
-    assert not any(
-        row.station_type != "ps5" and row.kind == "extension" for row in D_COMPANY_GAMING_TARIFF
-    )
+    extension_modes = {
+        (row.station_type, row.variant)
+        for row in D_COMPANY_GAMING_TARIFF
+        if row.kind == "extension"
+    }
+    assert extension_modes == {
+        ("ps5", "single"),
+        ("ps5", "dual"),
+        ("simulator", "simdrive"),
+        ("vr", "vr_games"),
+        ("simulator", "vr_racing"),
+    }
     assert {"ps5", "simulator", "vr"} == FIXED_TARIFF_STATION_TYPES
 
 
@@ -206,7 +252,7 @@ async def test_inactive_canonical_row_is_reactivated_not_misreported_as_created(
 
     assert spec.code in result.updated_codes
     assert spec.code not in result.created_codes
-    assert len(result.created_codes) == 16
+    assert len(result.created_codes) == 25
 
 
 @pytest.mark.asyncio
