@@ -11,11 +11,15 @@ import pytest
 from scripts.verify_code26_regression_freeze import (
     CODE30_2_BASE,
     CODE30_2_FREEZE_CONTROL_PATHS,
+    CODE30_3_BASE,
     CODE30_3_FREEZE_CONTROL_PATHS,
+    CODE30_4_FREEZE_CONTROL_PATHS,
     REVIEWED_CODE30_2_PRODUCTION_PATHS,
     REVIEWED_CODE30_2_SHA256,
     REVIEWED_CODE30_3_PRODUCTION_PATHS,
     REVIEWED_CODE30_3_SHA256,
+    REVIEWED_CODE30_4_PRODUCTION_PATHS,
+    REVIEWED_CODE30_4_SHA256,
 )
 
 
@@ -42,6 +46,7 @@ CODE30_2_FREEZE_TEST_SHA256 = (
     "303c44945334417d810b27c07982a8582220f08642183b4107dcda8e67568a14"
 )
 CODE30_3_FREEZE_SCRIPT_SHA256 = "fc217427931f0dc9a6fb711f8475b5bced2770145f94d42c3dfd104cc5829c81"
+CODE30_4_FREEZE_SCRIPT_SHA256 = "c57dd0d3276d0a3f8fbd4ab94c7abebf04af2f68fab62e28e497bda2127a3f18"
 OPERATOR_RECORD_SHA256 = {
     "docs/CODE29_RELEASE_CANDIDATE.md": "8f15d3f031daef79ecd1a5680b8bf9f527598d558a004ea198225919898821e4",
     "docs/DISTRIBUTION.md": "601007e7eaca4b700c82e5e70ffd139a6ff9c9921e5c53581284491808710b1e",
@@ -537,12 +542,17 @@ def _assert_sha256(path: str, content: bytes, expected: str) -> None:
 
 
 def _current_reviewed_sha256(path: str, fallback: str) -> str:
-    return REVIEWED_CODE30_3_SHA256.get(
-        path, REVIEWED_CODE30_2_SHA256.get(path, fallback)
+    return REVIEWED_CODE30_4_SHA256.get(
+        path,
+        REVIEWED_CODE30_3_SHA256.get(
+            path, REVIEWED_CODE30_2_SHA256.get(path, fallback)
+        ),
     )
 
 
 def _reviewed_sha256(path: str, historical: dict[str, str]) -> str:
+    if path in REVIEWED_CODE30_4_SHA256:
+        return REVIEWED_CODE30_4_SHA256[path]
     return REVIEWED_CODE30_3_SHA256.get(
         path,
         REVIEWED_CODE30_2_SHA256.get(
@@ -634,6 +644,8 @@ def test_live_delta_is_exactly_the_reviewed_code29_correction() -> None:
         | set(CODE30_2_FREEZE_CONTROL_PATHS)
         | set(REVIEWED_CODE30_3_SHA256)
         | set(CODE30_3_FREEZE_CONTROL_PATHS)
+        | set(REVIEWED_CODE30_4_SHA256)
+        | set(CODE30_4_FREEZE_CONTROL_PATHS)
     )
     protected_application_changes = {
         path
@@ -677,10 +689,10 @@ def test_live_delta_is_exactly_the_reviewed_code29_correction() -> None:
         if path.startswith(("backend/app/", "frontend/src/", "android-native/app/src/main/"))
     } | set(REVIEWED_CODE30_2_PRODUCTION_PATHS) | set(
         REVIEWED_CODE30_3_PRODUCTION_PATHS
-    )
+    ) | set(REVIEWED_CODE30_4_PRODUCTION_PATHS)
 
 
-def test_live_coordinated_identity_is_version_name_3_1_30_with_build_38() -> None:
+def test_live_coordinated_identity_is_version_name_3_1_31_with_build_39() -> None:
     for path in (
         "android-native/app/build.gradle.kts",
         "backend/pyproject.toml",
@@ -690,7 +702,11 @@ def test_live_coordinated_identity_is_version_name_3_1_30_with_build_38() -> Non
         "frontend/.env.example",
         "docker-compose.prod.yml",
     ):
-        if path in REVIEWED_CODE30_3_SHA256 or path in REVIEWED_CODE30_2_SHA256:
+        if (
+            path in REVIEWED_CODE30_4_SHA256
+            or path in REVIEWED_CODE30_3_SHA256
+            or path in REVIEWED_CODE30_2_SHA256
+        ):
             _assert_sha256(
                 path,
                 (ROOT / path).read_bytes(),
@@ -700,8 +716,8 @@ def test_live_coordinated_identity_is_version_name_3_1_30_with_build_38() -> Non
             _assert_exact_text(path, _current(path), _identity_expected(path))
 
     build = _current("android-native/app/build.gradle.kts")
-    assert build.count("versionCode = 38") == 1
-    assert build.count('versionName = "3.1.30"') == 1
+    assert build.count("versionCode = 39") == 1
+    assert build.count('versionName = "3.1.31"') == 1
 
     env_replacements = (
         ("APP_VERSION=3.1.19", "APP_VERSION=3.1.30", 1),
@@ -731,7 +747,7 @@ def test_live_coordinated_identity_is_version_name_3_1_30_with_build_38() -> Non
             REVIEWED_CODE30_2_SHA256[".env.production.example"],
         ),
     )
-    assert "APP_VERSION=3.1.30" in actual_env
+    assert "APP_VERSION=3.1.31" in actual_env
     assert "ANDROID_MIN_SUPPORTED_VERSION_CODE=8" in actual_env
     assert "ANDROID_LATEST_VERSION_CODE=8" in actual_env
     assert "CLIENT_COMPATIBILITY_POLICY_REVISION=1" in actual_env
@@ -757,7 +773,11 @@ def test_live_identity_fixtures_are_exact_counted_transformations() -> None:
         "tests/test_code26_physical_audit_lane.py": (("3.1.19", "3.1.21", 2),),
     }
     for path, path_replacements in replacements.items():
-        if path in REVIEWED_CODE30_3_SHA256 or path in REVIEWED_CODE30_2_SHA256:
+        if (
+            path in REVIEWED_CODE30_4_SHA256
+            or path in REVIEWED_CODE30_3_SHA256
+            or path in REVIEWED_CODE30_2_SHA256
+        ):
             _assert_sha256(
                 path,
                 (ROOT / path).read_bytes(),
@@ -960,6 +980,11 @@ def test_installer_verifier_and_live_workflows_are_exact() -> None:
     )
     assert hashlib.sha256(
         (ROOT / "scripts/verify_code26_regression_freeze.py").read_bytes()
+    ).hexdigest() == CODE30_4_FREEZE_SCRIPT_SHA256
+    assert hashlib.sha256(
+        _historical_bytes(
+            CODE30_3_BASE, "scripts/verify_code26_regression_freeze.py"
+        )
     ).hexdigest() == CODE30_3_FREEZE_SCRIPT_SHA256
     assert hashlib.sha256(
         _historical_bytes(
@@ -2483,6 +2508,13 @@ def test_reviewed_code30_point2_delta_files_are_exact() -> None:
 
 def test_reviewed_code30_point3_delta_files_are_exact() -> None:
     for path, expected_sha256 in REVIEWED_CODE30_3_SHA256.items():
+        _assert_sha256(
+            path, _historical_bytes(CODE30_3_BASE, path), expected_sha256
+        )
+
+
+def test_reviewed_code30_point4_delta_files_are_exact() -> None:
+    for path, expected_sha256 in REVIEWED_CODE30_4_SHA256.items():
         _assert_sha256(path, (ROOT / path).read_bytes(), expected_sha256)
 
 
