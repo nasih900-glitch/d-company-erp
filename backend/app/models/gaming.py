@@ -67,6 +67,10 @@ class GamingSession(Base, TimestampMixin, TenantMixin):
             "(customer_identity_provenance = 'start_unlinked' AND customer_id IS NULL)",
             name="ck_gaming_sessions_customer_identity_provenance",
         ),
+        CheckConstraint(
+            "participant_revision >= 0",
+            name="ck_gaming_sessions_participant_revision",
+        ),
     )
 
     id: Mapped[UUID] = _uuid_pk()
@@ -175,6 +179,11 @@ class GamingSession(Base, TimestampMixin, TenantMixin):
     # (e.g. a 3rd/4th player joining a Dual-mode PS5 slot). Surcharge is
     # computed at package-price time, never re-derived from elapsed time.
     extra_controllers: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # Monotonic compare-and-swap token for post-Start participant roster events.
+    # The active count is deliberately derived from open interval rows.
+    participant_revision: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
 
 
 @event.listens_for(GamingSession, "before_update")
@@ -307,6 +316,178 @@ def _guard_gaming_session_extension_update(_mapper, _connection, _row) -> None:
 @event.listens_for(GamingSessionExtension, "before_delete")
 def _guard_gaming_session_extension_delete(_mapper, _connection, _row) -> None:
     raise ValueError("gaming session extension ledger rows cannot be deleted")
+
+
+class GamingSessionParticipant(Base, TenantMixin):
+    """One immutable-presence interval for a saved customer joining after Start."""
+
+    __tablename__ = "gaming_session_participants"
+    __table_args__ = (
+        CheckConstraint(
+            "joined_play_elapsed_ms >= 0 AND "
+            "(left_play_elapsed_ms IS NULL OR (left_play_elapsed_ms >= joined_play_elapsed_ms AND left_at >= joined_at))",
+            name="ck_gaming_session_participant_meter",
+        ),
+        CheckConstraint(
+            "join_revision > 0 AND (leave_revision IS NULL OR leave_revision > join_revision)",
+            name="ck_gaming_session_participant_revision",
+        ),
+        CheckConstraint(
+            "join_timing_source IN ('server','offline_capture') AND "
+            "(leave_timing_source IS NULL OR leave_timing_source IN ('server','offline_capture'))",
+            name="ck_gaming_session_participant_timing_source",
+        ),
+        CheckConstraint(
+            "length(trim(join_idempotency_key)) > 0 AND length(join_request_hash) = 64",
+            name="ck_gaming_session_participant_join_receipt",
+        ),
+        CheckConstraint(
+            "(left_at IS NULL AND left_play_elapsed_ms IS NULL AND leave_revision IS NULL "
+            "AND left_by IS NULL AND left_terminal_id IS NULL AND leave_timing_source IS NULL "
+            "AND leave_idempotency_key IS NULL AND leave_request_hash IS NULL AND leave_response IS NULL) OR "
+            "(left_at IS NOT NULL AND left_play_elapsed_ms IS NOT NULL AND leave_revision IS NOT NULL "
+            "AND left_by IS NOT NULL AND left_terminal_id IS NOT NULL AND leave_timing_source IS NOT NULL "
+            "AND length(trim(leave_idempotency_key)) > 0 AND length(leave_request_hash) = 64 "
+            "AND leave_response IS NOT NULL)",
+            name="ck_gaming_session_participant_leave_receipt",
+        ),
+        UniqueConstraint("company_id", "join_idempotency_key", name="uq_gaming_participant_join_key"),
+        Index(
+            "uq_gaming_participant_leave_key",
+            "company_id",
+            "leave_idempotency_key",
+            unique=True,
+            postgresql_where=text("leave_idempotency_key IS NOT NULL"),
+        ),
+        Index(
+            "uq_gaming_participant_open_customer",
+            "gaming_session_id",
+            "customer_id",
+            unique=True,
+            postgresql_where=text("left_at IS NULL"),
+        ),
+        Index("ix_gaming_participant_session", "company_id", "gaming_session_id"),
+    )
+
+    id: Mapped[UUID] = _uuid_pk()
+    gaming_session_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("gaming_sessions.id", ondelete="RESTRICT"), nullable=False)
+    customer_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("customers.id", ondelete="RESTRICT"), nullable=False, index=True)
+    joined_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    joined_play_elapsed_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    join_timing_source: Mapped[str] = mapped_column(String(20), nullable=False)
+    joined_by: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    joined_terminal_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("terminals.id", ondelete="RESTRICT"), nullable=False)
+    join_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    join_idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    join_request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    join_response: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    left_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    left_play_elapsed_ms: Mapped[int | None] = mapped_column(BigInteger)
+    leave_timing_source: Mapped[str | None] = mapped_column(String(20))
+    left_by: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"))
+    left_terminal_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("terminals.id", ondelete="RESTRICT"))
+    leave_revision: Mapped[int | None] = mapped_column(Integer)
+    leave_idempotency_key: Mapped[str | None] = mapped_column(String(160))
+    leave_request_hash: Mapped[str | None] = mapped_column(String(64))
+    leave_response: Mapped[dict | None] = mapped_column(JSONB)
+
+
+@event.listens_for(GamingSessionParticipant, "before_update")
+def _guard_gaming_session_participant_update(_mapper, _connection, row) -> None:
+    state = inspect(row)
+    immutable = (
+        "company_id", "gaming_session_id", "customer_id", "joined_at",
+        "joined_play_elapsed_ms", "join_timing_source", "joined_by",
+        "joined_terminal_id", "join_revision", "join_idempotency_key",
+        "join_request_hash", "join_response",
+    )
+    if any(state.attrs[field].history.has_changes() for field in immutable):
+        raise ValueError("gaming participant join evidence is immutable")
+    leave_fields = (
+        "left_at", "left_play_elapsed_ms", "leave_timing_source", "left_by",
+        "left_terminal_id", "leave_revision", "leave_idempotency_key",
+        "leave_request_hash", "leave_response",
+    )
+    for field in leave_fields:
+        history = state.attrs[field].history
+        if history.has_changes() and history.deleted and history.deleted[0] is not None:
+            raise ValueError("gaming participant leave evidence cannot be changed")
+
+
+@event.listens_for(GamingSessionParticipant, "before_delete")
+def _guard_gaming_session_participant_delete(_mapper, _connection, _row) -> None:
+    raise ValueError("gaming participant evidence cannot be deleted")
+
+
+class GamingParticipantSettlement(Base, TenantMixin):
+    """Immutable Stop receipt for the post-Start participant surcharge."""
+
+    __tablename__ = "gaming_participant_settlements"
+    __table_args__ = (
+        UniqueConstraint("gaming_session_id", name="uq_gaming_participant_settlement_session"),
+        UniqueConstraint("company_id", "stop_idempotency_key", name="uq_gaming_participant_settlement_stop_key"),
+        CheckConstraint(
+            "base_amount_minor >= 0 AND guest_charge_minor >= 0 AND "
+            "amount_after_minor = base_amount_minor + guest_charge_minor AND "
+            "final_play_elapsed_ms >= 0 AND participant_revision_before > 0 AND "
+            "participant_revision >= participant_revision_before",
+            name="ck_gaming_participant_settlement_amounts",
+        ),
+        CheckConstraint(
+            "length(trim(stop_idempotency_key)) > 0 AND length(stop_request_hash) = 64",
+            name="ck_gaming_participant_settlement_stop_receipt",
+        ),
+    )
+    id: Mapped[UUID] = _uuid_pk()
+    gaming_session_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("gaming_sessions.id", ondelete="RESTRICT"), nullable=False, index=True)
+    base_amount_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    guest_charge_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    amount_after_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    final_play_elapsed_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    participant_revision_before: Mapped[int] = mapped_column(Integer, nullable=False)
+    participant_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    settled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    settled_by: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    terminal_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("terminals.id", ondelete="RESTRICT"), nullable=False)
+    stop_idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    stop_request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
+class GamingParticipantSettlementLine(Base, TenantMixin):
+    __tablename__ = "gaming_participant_settlement_lines"
+    __table_args__ = (
+        UniqueConstraint("settlement_id", "customer_id", name="uq_gaming_participant_settlement_customer"),
+        CheckConstraint(
+            "play_elapsed_ms >= 0 AND interval_count >= 1 "
+            "AND played_minutes = CASE WHEN play_elapsed_ms = 0 THEN 0 "
+            "ELSE (play_elapsed_ms + 59999) / 60000 END "
+            "AND started_hours = greatest(1, (play_elapsed_ms + 3599999) / 3600000) "
+            "AND charge_minor = started_hours * 3000",
+            name="ck_gaming_participant_settlement_line_charge",
+        ),
+    )
+    id: Mapped[UUID] = _uuid_pk()
+    settlement_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("gaming_participant_settlements.id", ondelete="RESTRICT"), nullable=False, index=True)
+    gaming_session_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("gaming_sessions.id", ondelete="RESTRICT"), nullable=False, index=True)
+    customer_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("customers.id", ondelete="RESTRICT"), nullable=False, index=True)
+    play_elapsed_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    played_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+    started_hours: Mapped[int] = mapped_column(Integer, nullable=False)
+    charge_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    interval_count: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+def _guard_gaming_participant_settlement_update(_mapper, _connection, _row) -> None:
+    raise ValueError("gaming participant settlement evidence is immutable")
+
+
+def _guard_gaming_participant_settlement_delete(_mapper, _connection, _row) -> None:
+    raise ValueError("gaming participant settlement evidence cannot be deleted")
+
+
+for _immutable_model in (GamingParticipantSettlement, GamingParticipantSettlementLine):
+    event.listen(_immutable_model, "before_update", _guard_gaming_participant_settlement_update)
+    event.listen(_immutable_model, "before_delete", _guard_gaming_participant_settlement_delete)
 
 
 class GamingSessionAddon(Base, TenantMixin):

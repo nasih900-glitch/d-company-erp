@@ -42,9 +42,12 @@ from app.models.finance import (
 from app.models.gaming import (
     GamingBooking,
     GamingPackage,
+    GamingParticipantSettlement,
+    GamingParticipantSettlementLine,
     GamingSession,
     GamingSessionAddon,
     GamingSessionExtension,
+    GamingSessionParticipant,
     Station,
     Tournament,
 )
@@ -165,6 +168,9 @@ __all__ = [
     "GamingSession",
     "GamingSessionAddon",
     "GamingSessionExtension",
+    "GamingSessionParticipant",
+    "GamingParticipantSettlement",
+    "GamingParticipantSettlementLine",
     "GoogleSheetsDelivery",
     "GRN",
     "GRNLine",

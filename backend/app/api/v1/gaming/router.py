@@ -20,8 +20,8 @@ from pydantic import (
 from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 
-from app.core.db import SessionDep
 from app.core.config import get_settings
+from app.core.db import SessionDep
 from app.core.errors import (
     BusinessRuleError,
     ConflictError,
@@ -46,9 +46,12 @@ from app.models import (
     Customer,
     GamingBooking,
     GamingPackage,
+    GamingParticipantSettlement,
+    GamingParticipantSettlementLine,
     GamingSession,
     GamingSessionAddon,
     GamingSessionExtension,
+    GamingSessionParticipant,
     IdempotencyKey,
     MenuCategory,
     MenuItem,
@@ -64,9 +67,11 @@ from app.models import (
     Terminal,
     User,
 )
+from app.models.gaming import GamingPauseEvent
 from app.services.customers.deletion_fence import (
     MAX_DIRECTORY_REVISION,
     lock_customer_directory,
+    require_current_customer_directory,
 )
 from app.services.customers.identity import (
     get_selected_gaming_customer,
@@ -78,12 +83,12 @@ from app.services.gaming.billing_mode import (
     is_package_billed,
     resolved_billing_mode,
 )
-from app.models.gaming import GamingPauseEvent
 from app.services.gaming.pause_clock import (
     billable_whole_minutes,
     completed_pause_ms,
     duration_ms,
     finish_pause,
+    play_elapsed_ms,
     timer_deadline,
 )
 from app.services.gaming.tariff_catalog import FIXED_TARIFF_STATION_TYPES
@@ -240,6 +245,68 @@ class SessionStop(BaseModel):
     # Only offline outbox replays may supply the time at which Stop was tapped.
     # Online/legacy callers omit the body and retain server-receipt behaviour.
     ended_at: datetime | None = None
+    # Required once any participant roster event exists. Future offline clients
+    # must drain their per-session FIFO outbox before sending Stop.
+    expected_participant_revision: int | None = Field(default=None, ge=0)
+
+
+class SessionParticipantJoin(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_participant_revision: int = Field(ge=0)
+    customer_id: UUID | None = None
+    customer_name: str | None = Field(default=None, min_length=1, max_length=200)
+    customer_phone: str | None = Field(default=None, min_length=1, max_length=20)
+    customer_directory_revision: int | None = Field(default=None, ge=0, le=MAX_DIRECTORY_REVISION, strict=True)
+    customer_directory_company_id: UUID | None = None
+    occurred_at: datetime | None = None
+    play_elapsed_ms: int | None = Field(default=None, ge=0)
+    expected_pause_version: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def validate_identity_and_capture(self) -> Self:
+        if self.customer_id is not None and (self.customer_name or self.customer_phone):
+            raise ValueError("select a customer or enter name and phone, not both")
+        if self.customer_id is None and (not self.customer_name or not self.customer_phone):
+            raise ValueError("a saved customer or name and phone are required")
+        captured = self.occurred_at is not None
+        if captured != (self.play_elapsed_ms is not None) or captured != (self.expected_pause_version is not None):
+            raise ValueError("captured time, play meter, and pause version must be supplied together")
+        return self
+
+
+class SessionParticipantLeave(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_participant_revision: int = Field(ge=0)
+    occurred_at: datetime | None = None
+    play_elapsed_ms: int | None = Field(default=None, ge=0)
+    expected_pause_version: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def validate_capture(self) -> Self:
+        captured = self.occurred_at is not None
+        if captured != (self.play_elapsed_ms is not None) or captured != (self.expected_pause_version is not None):
+            raise ValueError("captured time, play meter, and pause version must be supplied together")
+        return self
+
+
+class SessionParticipantRead(BaseModel):
+    id: UUID
+    customer_id: UUID
+    joined_at: datetime
+    joined_play_elapsed_ms: int
+    left_at: datetime | None = None
+    left_play_elapsed_ms: int | None = None
+    join_revision: int
+    leave_revision: int | None = None
+
+
+class SessionParticipantStateRead(BaseModel):
+    session_id: UUID
+    participant_revision: int
+    active_friend_count: int
+    current_player_count: int
+    max_player_count: int = 4
+    participants: list[SessionParticipantRead]
 
 
 class SessionPauseChange(BaseModel):
@@ -291,6 +358,7 @@ class SessionRead(BaseModel):
     package_station_type_snapshot: str | None = None
     package_pricing_tier_snapshot: Literal["standard", "premium"] | None = None
     extra_controllers: int = 0
+    participant_revision: int = 0
 
     @model_validator(mode="before")
     @classmethod
@@ -710,6 +778,7 @@ def session_read(gs: GamingSession) -> SessionRead:
         package_station_type_snapshot=getattr(gs, "package_station_type_snapshot", None),
         package_pricing_tier_snapshot=getattr(gs, "package_pricing_tier_snapshot", None),
         extra_controllers=int(gs.extra_controllers or 0),
+        participant_revision=int(getattr(gs, "participant_revision", 0) or 0),
     )
 
 
@@ -1000,6 +1069,7 @@ async def _require_session_pos_eligible(
     active item belongs on the reasoned session-cancellation path.
     """
     gaming_amount_minor = _require_repaired_ended_amount(gaming_session)
+    await _assert_participant_settlement_consistent(session, gaming_session)
     # The overwhelmingly common paid-session path needs no add-on lookup.
     # Besides avoiding an unnecessary query on every handoff, this preserves
     # compatibility with callers/tests whose lightweight session adapter only
@@ -2363,6 +2433,7 @@ async def start_session(
     tenant: TenantContext = Depends(requires("gaming.write")),
 ) -> SessionRead:
     idempotency_key, request_hash = _gaming_idempotency_or_legacy_ios(request)
+    existing_response = None
     if idempotency_key is not None:
         assert request_hash is not None
         existing_response = await check_or_reserve(
@@ -3340,6 +3411,412 @@ async def extend_session_with_package(
     return response
 
 
+def _participant_base_player_count(gs: GamingSession) -> int:
+    variant = str(getattr(gs, "package_variant_snapshot", "") or "").lower()
+    if variant == "single":
+        return 1
+    if variant == "dual":
+        return 2 + int(gs.extra_controllers or 0)
+    raise BusinessRuleError("Friends can join only a PS5 Single or Dual package session.")
+
+
+async def _participant_rows(session, gs: GamingSession, *, lock: bool = False):
+    stmt = (
+        select(GamingSessionParticipant)
+        .where(
+            GamingSessionParticipant.company_id == gs.company_id,
+            GamingSessionParticipant.gaming_session_id == gs.id,
+        )
+        .order_by(GamingSessionParticipant.join_revision, GamingSessionParticipant.id)
+    )
+    if lock:
+        stmt = stmt.with_for_update()
+    return list((await session.execute(stmt)).scalars().all())
+
+
+def _participant_state(gs: GamingSession, rows: list[GamingSessionParticipant]) -> SessionParticipantStateRead:
+    active = sum(row.left_at is None for row in rows)
+    base = _participant_base_player_count(gs)
+    return SessionParticipantStateRead(
+        session_id=gs.id,
+        participant_revision=int(gs.participant_revision or 0),
+        active_friend_count=active,
+        current_player_count=base + active,
+        participants=[
+            SessionParticipantRead(
+                id=row.id,
+                customer_id=row.customer_id,
+                joined_at=row.joined_at,
+                joined_play_elapsed_ms=int(row.joined_play_elapsed_ms),
+                left_at=row.left_at,
+                left_play_elapsed_ms=(int(row.left_play_elapsed_ms) if row.left_play_elapsed_ms is not None else None),
+                join_revision=int(row.join_revision),
+                leave_revision=(int(row.leave_revision) if row.leave_revision is not None else None),
+            )
+            for row in rows
+        ],
+    )
+
+
+async def _lock_participant_context(session, *, session_id: UUID, tenant: TenantContext, operation: str):
+    gs = (
+        await session.execute(select(GamingSession).where(GamingSession.id == session_id).with_for_update())
+    ).scalar_one_or_none()
+    if gs is None or gs.company_id != tenant.company_id:
+        raise NotFoundError("session not found")
+    station = await session.get(Station, gs.station_id)
+    if station is None or station.company_id != tenant.company_id:
+        raise NotFoundError("station not found")
+    shift = (
+        await session.execute(select(Shift).where(Shift.id == gs.shift_id).with_for_update())
+    ).scalar_one_or_none()
+    shift = require_operational_shift_scope(
+        shift,
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        terminal_id=tenant.terminal_id,
+        operation=operation,
+        resource_branch_id=station.branch_id,
+        resource_name="gaming station",
+    )
+    if shift.status != "open":
+        raise GamingSourceShiftClosedError(
+            "The source shift is closed. Participant changes are blocked until the session is reconciled."
+        )
+    if station.type != "ps5" or not is_package_billed(gs):
+        raise BusinessRuleError("Friends can join only a running fixed-price PS5 package session.")
+    _require_complete_package_billing_snapshot(gs, operation="changed")
+    return gs, station, shift
+
+
+def _participant_action_clock(request: Request, payload, gs: GamingSession, *, label: str) -> tuple[datetime, int, str]:
+    now = datetime.now(timezone.utc)
+    if payload.occurred_at is None:
+        return now, play_elapsed_ms(gs, now), "server"
+    occurred_at = _validated_offline_action_time(
+        request=request,
+        captured_at=payload.occurred_at,
+        server_now=now,
+        action_label=label,
+        minimum_at=gs.start_at,
+    )
+    if payload.expected_pause_version != int(gs.pause_version or 0):
+        raise ConflictError("Pause state changed after this participant action was captured. Refresh Gaming.")
+    last_pause = getattr(gs, "last_pause_transition_at", None)
+    if last_pause is not None and occurred_at < last_pause:
+        raise ConflictError("Participant action predates a later pause or resume. Refresh Gaming.")
+    meter = play_elapsed_ms(gs, occurred_at)
+    if meter != int(payload.play_elapsed_ms):
+        raise ConflictError("Participant play meter does not match the authoritative session clock. Refresh Gaming.")
+    return occurred_at, meter, "offline_capture"
+
+
+def _require_participant_revision(gs: GamingSession, expected: int) -> None:
+    if int(gs.participant_revision or 0) != expected:
+        raise ConflictError("Participant list changed on another screen. Refresh Gaming and retry.")
+
+
+def _require_monotonic_participant_meter(rows: list[GamingSessionParticipant], meter: int) -> None:
+    latest = max(
+        (
+            int(row.left_play_elapsed_ms if row.left_play_elapsed_ms is not None else row.joined_play_elapsed_ms)
+            for row in rows
+        ),
+        default=0,
+    )
+    if meter < latest:
+        raise ConflictError("Participant action is older than an action already saved. Upload the session outbox in order.")
+
+
+@router.get("/sessions/{session_id}/participants", response_model=SessionParticipantStateRead)
+async def get_session_participants(
+    session_id: UUID,
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("gaming.read")),
+) -> SessionParticipantStateRead:
+    gs = await session.get(GamingSession, session_id)
+    if gs is None or gs.company_id != tenant.company_id:
+        raise NotFoundError("session not found")
+    station = await session.get(Station, gs.station_id)
+    if station is None or station.branch_id != tenant.branch_id:
+        raise NotFoundError("session not found")
+    return _participant_state(gs, await _participant_rows(session, gs))
+
+
+@router.post("/sessions/{session_id}/participants/join", response_model=SessionParticipantStateRead)
+async def join_session_participant(
+    session_id: UUID,
+    payload: SessionParticipantJoin,
+    session: SessionDep,
+    request: Request,
+    tenant: TenantContext = Depends(requires("gaming.write")),
+) -> SessionParticipantStateRead:
+    key, request_hash = _require_idempotency(request)
+    cached = await check_or_reserve(session, key=key, request_hash=request_hash, user_id=tenant.user_id, terminal_id=tenant.terminal_id)
+    if cached:
+        return SessionParticipantStateRead.model_validate(cached["body"])
+    durable = (
+        await session.execute(select(GamingSessionParticipant).where(GamingSessionParticipant.company_id == tenant.company_id, GamingSessionParticipant.join_idempotency_key == key).with_for_update())
+    ).scalar_one_or_none()
+    if durable is not None:
+        if durable.gaming_session_id != session_id or durable.join_request_hash != request_hash or durable.joined_by != tenant.user_id or durable.joined_terminal_id != tenant.terminal_id:
+            raise ConflictError("Idempotency key was already used for a different participant action.")
+        return SessionParticipantStateRead.model_validate(durable.join_response)
+    gs, _station, _shift = await _lock_participant_context(session, session_id=session_id, tenant=tenant, operation="adding a gaming participant")
+    if gs.status != "active":
+        if gs.status == "paused":
+            raise BusinessRuleError("Resume the session before adding a friend.")
+        raise BusinessRuleError("Friends can join only while the session is active and unbilled.")
+    if gs.order_id is not None:
+        raise BusinessRuleError("This session is already linked to POS.")
+    _require_participant_revision(gs, payload.expected_participant_revision)
+    rows = await _participant_rows(session, gs, lock=True)
+    base_count = _participant_base_player_count(gs)
+    active_count = sum(row.left_at is None for row in rows)
+    if base_count + active_count >= 4:
+        raise BusinessRuleError("This PS5 session already has the maximum four players.")
+    _, fence = await lock_customer_directory(
+        session,
+        company_id=tenant.company_id,
+        captured_revision=payload.customer_directory_revision,
+        captured_company_id=payload.customer_directory_company_id,
+    )
+    require_current_customer_directory(fence)
+    if payload.customer_id is not None:
+        customer = await get_selected_gaming_customer(session, company_id=tenant.company_id, customer_id=payload.customer_id)
+    else:
+        customer = await resolve_gaming_customer(session, company_id=tenant.company_id, phone=payload.customer_phone, name=payload.customer_name)
+    if customer is None:
+        raise NotFoundError("customer not found or phone cannot identify one saved customer")
+    if customer.id == gs.customer_id or any(row.customer_id == customer.id and row.left_at is None for row in rows):
+        raise BusinessRuleError("This customer is already playing in the session.")
+    occurred_at, meter, source = _participant_action_clock(request, payload, gs, label="participant join")
+    _require_monotonic_participant_meter(rows, meter)
+    gs.participant_revision = int(gs.participant_revision or 0) + 1
+    row = GamingSessionParticipant(
+        id=uuid4(), company_id=tenant.company_id, gaming_session_id=gs.id,
+        customer_id=customer.id, joined_at=occurred_at, joined_play_elapsed_ms=meter,
+        join_timing_source=source, joined_by=tenant.user_id,
+        joined_terminal_id=tenant.terminal_id, join_revision=gs.participant_revision,
+        join_idempotency_key=key, join_request_hash=request_hash, join_response={},
+    )
+    session.add(row)
+    session.add(AuditLog(
+        actor_user_id=tenant.user_id, company_id=tenant.company_id,
+        action="gaming_participant_joined", entity_type="GamingSessionParticipant",
+        entity_id=str(row.id), before=None,
+        after={"gaming_session_id": str(gs.id), "customer_id": str(customer.id), "play_elapsed_ms": meter, "participant_revision": int(gs.participant_revision)},
+        terminal_id=tenant.terminal_id,
+    ))
+    rows.append(row)
+    response = _participant_state(gs, rows)
+    row.join_response = response.model_dump(mode="json")
+    await session.flush()
+    await store_response(session, key=key, status_code=status.HTTP_200_OK, body=row.join_response)
+    return response
+
+
+@router.post("/sessions/{session_id}/participants/{participant_id}/leave", response_model=SessionParticipantStateRead)
+async def leave_session_participant(
+    session_id: UUID,
+    participant_id: UUID,
+    payload: SessionParticipantLeave,
+    session: SessionDep,
+    request: Request,
+    tenant: TenantContext = Depends(requires("gaming.write")),
+) -> SessionParticipantStateRead:
+    key, request_hash = _require_idempotency(request)
+    cached = await check_or_reserve(session, key=key, request_hash=request_hash, user_id=tenant.user_id, terminal_id=tenant.terminal_id)
+    if cached:
+        return SessionParticipantStateRead.model_validate(cached["body"])
+    durable = (
+        await session.execute(select(GamingSessionParticipant).where(GamingSessionParticipant.company_id == tenant.company_id, GamingSessionParticipant.leave_idempotency_key == key).with_for_update())
+    ).scalar_one_or_none()
+    if durable is not None:
+        if durable.gaming_session_id != session_id or durable.id != participant_id or durable.leave_request_hash != request_hash or durable.left_by != tenant.user_id or durable.left_terminal_id != tenant.terminal_id:
+            raise ConflictError("Idempotency key was already used for a different participant action.")
+        return SessionParticipantStateRead.model_validate(durable.leave_response)
+    gs, _station, _shift = await _lock_participant_context(session, session_id=session_id, tenant=tenant, operation="removing a gaming participant")
+    if gs.status not in ("active", "paused") or gs.order_id is not None:
+        raise BusinessRuleError("Friends can leave only while the session is running and unbilled.")
+    _require_participant_revision(gs, payload.expected_participant_revision)
+    rows = await _participant_rows(session, gs, lock=True)
+    row = next((candidate for candidate in rows if candidate.id == participant_id), None)
+    if row is None:
+        raise NotFoundError("participant not found")
+    if row.left_at is not None:
+        raise ConflictError("This friend already left. Refresh Gaming.")
+    occurred_at, meter, source = _participant_action_clock(request, payload, gs, label="participant leave")
+    _require_monotonic_participant_meter(rows, meter)
+    if meter < int(row.joined_play_elapsed_ms):
+        raise ConflictError("Leave cannot precede the saved join.")
+    gs.participant_revision = int(gs.participant_revision or 0) + 1
+    row.left_at = occurred_at
+    row.left_play_elapsed_ms = meter
+    row.leave_timing_source = source
+    row.left_by = tenant.user_id
+    row.left_terminal_id = tenant.terminal_id
+    row.leave_revision = gs.participant_revision
+    row.leave_idempotency_key = key
+    row.leave_request_hash = request_hash
+    response = _participant_state(gs, rows)
+    row.leave_response = response.model_dump(mode="json")
+    session.add(AuditLog(
+        actor_user_id=tenant.user_id, company_id=tenant.company_id,
+        action="gaming_participant_left", entity_type="GamingSessionParticipant",
+        entity_id=str(row.id),
+        before={"left_at": None},
+        after={"gaming_session_id": str(gs.id), "customer_id": str(row.customer_id), "play_elapsed_ms": meter, "participant_revision": int(gs.participant_revision)},
+        terminal_id=tenant.terminal_id,
+    ))
+    await session.flush()
+    await store_response(session, key=key, status_code=status.HTTP_200_OK, body=row.leave_response)
+    return response
+
+
+def _participant_totals(rows: list[GamingSessionParticipant]) -> dict[UUID, tuple[int, int]]:
+    totals: dict[UUID, tuple[int, int]] = {}
+    for row in rows:
+        if row.left_play_elapsed_ms is None:
+            raise GamingBillingRepairRequiredError("Participant presence is still open; billing cannot be verified.")
+        elapsed = int(row.left_play_elapsed_ms) - int(row.joined_play_elapsed_ms)
+        prior_ms, prior_count = totals.get(row.customer_id, (0, 0))
+        totals[row.customer_id] = (prior_ms + elapsed, prior_count + 1)
+    return totals
+
+
+async def _assert_participant_settlement_consistent(session, gs: GamingSession) -> None:
+    revision = int(getattr(gs, "participant_revision", 0) or 0)
+    if revision == 0:
+        return
+    rows = await _participant_rows(session, gs, lock=False)
+    settlement = (
+        await session.execute(select(GamingParticipantSettlement).where(
+            GamingParticipantSettlement.company_id == gs.company_id,
+            GamingParticipantSettlement.gaming_session_id == gs.id,
+        ))
+    ).scalar_one_or_none()
+    if settlement is None:
+        raise GamingBillingRepairRequiredError("Participant settlement receipt is missing. POS and repair are blocked.")
+    lines = list((await session.execute(select(GamingParticipantSettlementLine).where(
+        GamingParticipantSettlementLine.company_id == gs.company_id,
+        GamingParticipantSettlementLine.settlement_id == settlement.id,
+    ))).scalars().all())
+    totals = _participant_totals(rows)
+    extension_total = int((await session.execute(select(
+        func.coalesce(func.sum(GamingSessionExtension.total_minor), 0)
+    ).where(
+        GamingSessionExtension.company_id == gs.company_id,
+        GamingSessionExtension.gaming_session_id == gs.id,
+    ))).scalar_one())
+    expected_base = int(gs.package_price_minor_snapshot or 0) + extra_controller_surcharge_minor(
+        extra_controllers=int(gs.extra_controllers or 0),
+        duration_minutes=int(gs.package_duration_minutes_snapshot or 0),
+    ) + extension_total
+    final_meter = play_elapsed_ms(gs, gs.end_at) if gs.end_at is not None else -1
+    max_revision = max(
+        (int(row.leave_revision or row.join_revision) for row in rows),
+        default=0,
+    )
+    by_customer = {line.customer_id: line for line in lines}
+    if set(by_customer) != set(totals):
+        raise GamingBillingRepairRequiredError("Participant settlement lines do not match presence evidence.")
+    expected_charge = 0
+    for customer_id, (elapsed_ms, interval_count) in totals.items():
+        line = by_customer[customer_id]
+        hours = max(1, ceil(elapsed_ms / 3_600_000))
+        minutes = ceil(elapsed_ms / 60_000) if elapsed_ms else 0
+        if (
+            int(line.play_elapsed_ms) != elapsed_ms
+            or int(line.played_minutes) != minutes
+            or int(line.started_hours) != hours
+            or int(line.charge_minor) != hours * 3000
+            or int(line.interval_count) != interval_count
+        ):
+            raise GamingBillingRepairRequiredError("Participant settlement calculation is inconsistent.")
+        expected_charge += hours * 3000
+    if (
+        any(row.left_at is None for row in rows)
+        or any(int(row.left_play_elapsed_ms or 0) > int(settlement.final_play_elapsed_ms) for row in rows)
+        or int(settlement.final_play_elapsed_ms) != final_meter
+        or settlement.settled_at != gs.end_at
+        or max_revision != revision
+        or int(settlement.participant_revision) != revision
+        or int(settlement.base_amount_minor) != expected_base
+        or int(settlement.guest_charge_minor) != expected_charge
+        or int(settlement.amount_after_minor) != int(settlement.base_amount_minor) + expected_charge
+        or gs.amount_minor is None
+        or int(gs.amount_minor) != int(settlement.amount_after_minor)
+    ):
+        raise GamingBillingRepairRequiredError("Participant settlement total is inconsistent. POS and repair are blocked.")
+
+
+async def _settle_participants(
+    session,
+    *,
+    gs: GamingSession,
+    rows: list[GamingSessionParticipant],
+    stopped_at: datetime,
+    final_meter: int,
+    actor_id: UUID,
+    terminal_id: UUID,
+    stop_key: str,
+    stop_hash: str,
+) -> None:
+    revision_before = int(gs.participant_revision or 0)
+    for row in rows:
+        if row.left_at is None:
+            gs.participant_revision = int(gs.participant_revision or 0) + 1
+            row.left_at = stopped_at
+            row.left_play_elapsed_ms = final_meter
+            row.leave_timing_source = "server"
+            row.left_by = actor_id
+            row.left_terminal_id = terminal_id
+            row.leave_revision = gs.participant_revision
+            row.leave_idempotency_key = f"stop:{row.id}:{stop_hash}"
+            row.leave_request_hash = stop_hash
+            row.leave_response = {
+                "session_id": str(gs.id),
+                "participant_id": str(row.id),
+                "closed_by_stop": True,
+                "participant_revision": int(gs.participant_revision),
+            }
+    totals = _participant_totals(rows)
+    settlement_id = uuid4()
+    base_amount = int(gs.amount_minor or 0)
+    charge = 0
+    for customer_id, (elapsed_ms, interval_count) in totals.items():
+        hours = max(1, ceil(elapsed_ms / 3_600_000))
+        line_charge = hours * 3000
+        charge += line_charge
+        session.add(GamingParticipantSettlementLine(
+            id=uuid4(), company_id=gs.company_id, settlement_id=settlement_id,
+            gaming_session_id=gs.id, customer_id=customer_id,
+            play_elapsed_ms=elapsed_ms,
+            played_minutes=(ceil(elapsed_ms / 60_000) if elapsed_ms else 0),
+            started_hours=hours, charge_minor=line_charge, interval_count=interval_count,
+        ))
+    amount_after = base_amount + charge
+    session.add(GamingParticipantSettlement(
+        id=settlement_id, company_id=gs.company_id, gaming_session_id=gs.id,
+        base_amount_minor=base_amount, guest_charge_minor=charge,
+        amount_after_minor=amount_after, final_play_elapsed_ms=final_meter,
+        participant_revision_before=revision_before,
+        participant_revision=int(gs.participant_revision), settled_at=stopped_at,
+        settled_by=actor_id, terminal_id=terminal_id,
+        stop_idempotency_key=stop_key, stop_request_hash=stop_hash,
+    ))
+    gs.amount_minor = amount_after
+    session.add(AuditLog(
+        actor_user_id=actor_id, company_id=gs.company_id,
+        action="gaming_participants_settled", entity_type="GamingSession",
+        entity_id=str(gs.id),
+        before={"amount_minor": base_amount, "participant_revision": revision_before},
+        after={"amount_minor": amount_after, "guest_charge_minor": charge, "participant_revision": int(gs.participant_revision)},
+        terminal_id=terminal_id,
+    ))
+
+
 @router.post("/sessions/{session_id}/stop", response_model=SessionRead)
 async def stop_session(
     session_id: UUID,
@@ -3349,6 +3826,7 @@ async def stop_session(
     tenant: TenantContext = Depends(requires("gaming.write")),
 ) -> SessionRead:
     idempotency_key, request_hash = _gaming_idempotency_or_legacy_ios(request)
+    existing_response = None
     if idempotency_key is not None:
         assert request_hash is not None
         existing_response = await check_or_reserve(
@@ -3358,8 +3836,6 @@ async def stop_session(
             user_id=tenant.user_id,
             terminal_id=tenant.terminal_id,
         )
-        if existing_response:
-            return SessionRead.model_validate(existing_response["body"])
 
     gs = (
         await session.execute(
@@ -3395,6 +3871,45 @@ async def stop_session(
         if has_captured_end
         else server_now
     )
+    participant_rows = await _participant_rows(session, gs, lock=True)
+    participant_revision = int(getattr(gs, "participant_revision", 0) or 0)
+    if participant_revision > 0:
+        settlement = (
+            await session.execute(select(GamingParticipantSettlement).where(
+                GamingParticipantSettlement.company_id == tenant.company_id,
+                GamingParticipantSettlement.gaming_session_id == gs.id,
+            ))
+        ).scalar_one_or_none()
+        expected_revision = payload.expected_participant_revision if payload is not None else None
+        required_revision = (
+            int(settlement.participant_revision_before)
+            if gs.status == "ended" and settlement is not None
+            else participant_revision
+        )
+        if expected_revision is None:
+            raise ConflictError(
+                "Stop requires the current participant revision. Upload all Join/Leave actions in order, refresh, and retry."
+            )
+        if expected_revision != required_revision:
+            raise ConflictError(
+                "Participant list changed or an offline roster action is still pending. Stop was not settled."
+            )
+        if gs.status == "ended" and settlement is not None and (
+            idempotency_key != settlement.stop_idempotency_key
+            or request_hash != settlement.stop_request_hash
+            or tenant.user_id != settlement.settled_by
+            or tenant.terminal_id != settlement.terminal_id
+        ):
+            raise ConflictError("This session was already stopped by a different durable action. Refresh Gaming.")
+        if gs.status != "ended":
+            latest_event_at = max(
+                (row.left_at or row.joined_at for row in participant_rows),
+                default=gs.start_at,
+            )
+            if captured_end <= latest_event_at:
+                raise ConflictError(
+                    "Stop time must follow the latest participant action. Upload the session outbox in order."
+                )
     if gs.status == "ended":
         # Response-loss retry: validate the exact operational scope first,
         # then return the already-computed result.
@@ -3403,7 +3918,10 @@ async def stop_session(
             gs.end_at is None or abs((gs.end_at - captured_end).total_seconds()) > 1
         ):
             raise ConflictError("Session was already stopped at a different time. Refresh Gaming.")
+        await _assert_participant_settlement_consistent(session, gs)
         response = session_read(gs)
+        if existing_response is not None and SessionRead.model_validate(existing_response["body"]) != response:
+            raise GamingBillingRepairRequiredError("Stored Stop replay does not match the immutable participant settlement.")
         if idempotency_key is not None:
             await store_response(
                 session,
@@ -3457,6 +3975,10 @@ async def stop_session(
                 "next_action": "Refresh Gaming and review the current session before retrying Stop.",
             },
         )
+    # Read the clock before closing an active pause. Computing it again after
+    # folding that pause into paused_duration_ms can lose one millisecond at a
+    # flooring boundary even though the authoritative play duration is equal.
+    participant_final_meter = play_elapsed_ms(gs, captured_end)
     gs.end_at = captured_end
     finish_pause(gs, captured_end)
     gs.billable_minutes = billable_whole_minutes(gs, captured_end)
@@ -3466,6 +3988,22 @@ async def stop_session(
     # else: a package session's amount_minor was locked in at start (plus any
     # paid extensions) and never changes based on how long they actually
     # played — billable_minutes above is still recorded for the audit trail.
+    if participant_revision > 0:
+        if idempotency_key is None or request_hash is None:
+            raise ConflictError("Participant billing requires a durable idempotent Stop action.")
+        final_meter = participant_final_meter
+        _require_monotonic_participant_meter(participant_rows, final_meter)
+        await _settle_participants(
+            session,
+            gs=gs,
+            rows=participant_rows,
+            stopped_at=captured_end,
+            final_meter=final_meter,
+            actor_id=tenant.user_id,
+            terminal_id=tenant.terminal_id,
+            stop_key=idempotency_key,
+            stop_hash=request_hash,
+        )
     gs.status = "ended"
     gs.stopped_by = tenant.user_id
     response = session_read(gs)
@@ -4024,6 +4562,12 @@ async def cancel_session(
     if gs.status == "cancelled":
         # Safe response-loss replay, including after the original shift closes.
         return session_read(gs)
+    if int(getattr(gs, "participant_revision", 0) or 0) > 0:
+        if gs.status == "ended":
+            await _assert_participant_settlement_consistent(session, gs)
+        raise BusinessRuleError(
+            "A session with saved friend presence cannot be cancelled; settle it through Stop and POS."
+        )
     if gs.order_id is not None:
         raise BusinessRuleError("cannot cancel a session that was already sent to POS")
     if gs.status not in ("active", "paused", "ended"):
@@ -4463,6 +5007,11 @@ async def repair_session_billing(
         )
     if gs.status != "ended":
         raise BusinessRuleError("Only an ended session can have missing billing repaired.")
+    if int(getattr(gs, "participant_revision", 0) or 0) > 0:
+        await _assert_participant_settlement_consistent(session, gs)
+        raise BusinessRuleError(
+            "Participant-settled sessions cannot use the legacy missing-bill repair workflow."
+        )
     if gs.order_id is not None:
         raise BusinessRuleError(
             "This session already has a POS order. Repair the order through the "
@@ -5278,6 +5827,21 @@ async def _session_pos_description(session, gaming_session: GamingSession) -> st
     if extra_controllers:
         suffix = "controller" if extra_controllers == 1 else "controllers"
         parts.append(f"{extra_controllers} extra {suffix}")
+    settlement = (
+        await session.execute(
+            select(GamingParticipantSettlement).where(
+                GamingParticipantSettlement.company_id == gaming_session.company_id,
+                GamingParticipantSettlement.gaming_session_id == gaming_session.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if settlement is not None:
+        parts.append(
+            f"base + extensions {int(settlement.base_amount_minor) / 100:.2f}"
+        )
+        parts.append(
+            f"friend controller surcharge {int(settlement.guest_charge_minor) / 100:.2f}"
+        )
     return " · ".join(parts)
 
 

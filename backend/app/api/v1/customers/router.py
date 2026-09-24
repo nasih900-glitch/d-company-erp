@@ -187,6 +187,7 @@ class PlaytimeHistoryRead(BaseModel):
         "unproven_package_duration",
         "discounted_or_free",
         "not_qualifying",
+        "participant_non_qualifying",
     ]
 
 
