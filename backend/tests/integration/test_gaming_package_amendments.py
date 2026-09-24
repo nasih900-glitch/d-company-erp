@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
+import psycopg
 import pytest
 from sqlalchemy import func, select, text
+from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
 
 from app.models import (
@@ -411,6 +414,96 @@ async def test_single_offline_amendment_replay_friend_payment_receipt_and_playti
         headers=_headers(seed_owner, token),
     )
     assert deleted_friend_playtime.status_code == 404
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_expired_amendment_replay_locks_session_before_receipt(
+    client,
+    session,
+    seed_owner,
+) -> None:
+    token, shift_id, station, _primary, _friend, packages = await _setup(
+        client, session, seed_owner
+    )
+    started = await _start(
+        client,
+        seed_owner,
+        token,
+        shift_id,
+        station,
+        packages["standard-single-session-60m"],
+    )
+    session_id = UUID(started["id"])
+    path = f"/api/v1/gaming/sessions/{session_id}/amend-package"
+    key = f"amend:{uuid4()}"
+    payload = _amend_payload(
+        packages["standard-single-session-30m"], amount_minor=12_000
+    )
+    amended = await client.post(path, json=payload, headers=_headers(seed_owner, token, key))
+    assert amended.status_code == 200, amended.text
+    cached = await session.get(IdempotencyKey, key)
+    assert cached is not None
+    await session.delete(cached)
+    await session.commit()
+
+    # Hold the session in one connection. A replay must block on that row
+    # before it can lock the receipt. The old reverse ordering held the receipt
+    # while waiting here and could deadlock against Stop/Extend.
+    url = make_url(os.environ["DATABASE_URL"])
+    connection_args = dict(
+        host=url.host,
+        port=url.port,
+        dbname=url.database,
+        user=url.username,
+        password=url.password,
+    )
+    replay_task = None
+    receipt_was_available = False
+    blocked_on_session = False
+    with psycopg.connect(**connection_args) as blocker, psycopg.connect(
+        **connection_args
+    ) as inspector:
+        blocker.execute(
+            "SELECT id FROM gaming_sessions WHERE id = %s FOR UPDATE", (session_id,)
+        )
+        blocker_pid = blocker.execute("SELECT pg_backend_pid()").fetchone()[0]
+        try:
+            replay_task = asyncio.create_task(
+                client.post(path, json=payload, headers=_headers(seed_owner, token, key))
+            )
+            for _ in range(100):
+                blocked_on_session = bool(
+                    inspector.execute(
+                        "SELECT EXISTS ("
+                        "SELECT 1 FROM pg_stat_activity a "
+                        "WHERE datname = current_database() "
+                        "AND %s = ANY(pg_blocking_pids(a.pid))"
+                        ")",
+                        (blocker_pid,),
+                    ).fetchone()[0]
+                )
+                if blocked_on_session:
+                    break
+                await asyncio.sleep(0.02)
+            if blocked_on_session:
+                try:
+                    inspector.execute(
+                        "SELECT id FROM gaming_session_package_amendments "
+                        "WHERE gaming_session_id = %s FOR UPDATE NOWAIT",
+                        (session_id,),
+                    )
+                    receipt_was_available = True
+                except psycopg.errors.LockNotAvailable:
+                    pass
+        finally:
+            inspector.rollback()
+            blocker.rollback()
+    assert replay_task is not None
+    replay = await asyncio.wait_for(replay_task, timeout=10)
+    assert replay.status_code == 200, replay.text
+    assert blocked_on_session, "replay never reached the locked session row"
+    assert receipt_was_available, "replay locked the receipt before the session"
 
 
 @pytest.mark.integration
