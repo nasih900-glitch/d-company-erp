@@ -695,8 +695,9 @@ class GamingDialogUiTest {
     }
 
     @Test
-    fun pendingOfflinePackageStartTicksAndCanCaptureStopWithoutEnablingConfirmedOnlyActions() {
+    fun pendingOfflinePackageStartOffersPlayersAndStopWithoutEnablingConfirmedOnlyActions() {
         var stopRequested = false
+        var playersRequested = false
         val station = testStation()
         val session = GameSession(
             id = "local-session-1",
@@ -712,8 +713,10 @@ class GamingDialogUiTest {
             billingMode = "package",
             packagePriceMinorSnapshot = 15_000,
             packageDurationMinutesSnapshot = 60,
-            packageVariantSnapshot = "solo",
+            packageVariantSnapshot = "dual",
             packageStationTypeSnapshot = "ps5",
+            packagePricingTierSnapshot = "standard",
+            pauseVersion = 0,
             extraControllers = 1,
             localState = GamingSessionState.START_PENDING,
         )
@@ -748,6 +751,7 @@ class GamingDialogUiTest {
                         onRepairBilling = {},
                         onResolveLegacyStart = {},
                         onDiscardPackageExtension = {},
+                        onManageParticipants = { playersRequested = true },
                     )
                 }
             }
@@ -758,6 +762,8 @@ class GamingDialogUiTest {
         compose.onNodeWithText("Package total · ₹180.00").assertIsDisplayed()
         compose.onAllNodesWithText("+30 min").assertCountEquals(0)
         compose.onAllNodesWithText("Transfer").assertCountEquals(0)
+        compose.onNodeWithText("Players & booking").assertIsDisplayed().performClick()
+        compose.runOnIdle { assertEquals(true, playersRequested) }
         compose.onNodeWithText("Stop & save end").assertIsDisplayed().performClick()
         compose.runOnIdle { assertEquals(true, stopRequested) }
     }

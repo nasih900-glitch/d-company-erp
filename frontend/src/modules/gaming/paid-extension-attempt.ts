@@ -39,6 +39,8 @@ export interface PaidExtensionAttemptContext {
   readonly packageVariant: string;
   readonly expectedTimerMinutes: number;
   readonly expectedAmountMinor: number;
+  /** Captured with the financial snapshot. Older saved receipts omit it. */
+  readonly expectedBillingRevision?: number;
 }
 
 export type PaidExtensionAttemptScope = Pick<
@@ -163,7 +165,9 @@ function isTimerMinutes(value: unknown): value is number {
 
 function hasExactAttemptFields(value: Record<string, unknown>): boolean {
   const keys = Object.keys(value);
-  return keys.length === ATTEMPT_FIELDS.length
+  return (keys.length === ATTEMPT_FIELDS.length
+    || (keys.length === ATTEMPT_FIELDS.length + 1
+      && Object.prototype.hasOwnProperty.call(value, 'expectedBillingRevision')))
     && ATTEMPT_FIELDS.every((field) => Object.prototype.hasOwnProperty.call(value, field));
 }
 
@@ -184,6 +188,9 @@ export function parsePaidExtensionAttempt(value: unknown): PaidExtensionAttempt 
     || !isNonEmptyString(value.packageVariant, 20)
     || !isTimerMinutes(value.expectedTimerMinutes)
     || !isWholeMinor(value.expectedAmountMinor)
+    || (value.expectedBillingRevision !== undefined
+      && (!Number.isSafeInteger(value.expectedBillingRevision)
+        || (value.expectedBillingRevision as number) < 0))
   ) return null;
 
   return value as unknown as PaidExtensionAttempt;
@@ -203,6 +210,9 @@ function assertContext(context: PaidExtensionAttemptContext): void {
     || !isNonEmptyString(context.packageVariant, 20)
     || !isTimerMinutes(context.expectedTimerMinutes)
     || !isWholeMinor(context.expectedAmountMinor)
+    || (context.expectedBillingRevision !== undefined
+      && (!Number.isSafeInteger(context.expectedBillingRevision)
+        || context.expectedBillingRevision < 0))
   ) {
     throw new PaidExtensionPersistenceError(
       'current_scope_unverified',
@@ -479,7 +489,8 @@ export function inspectPaidExtensionAttemptForSession({
 }
 
 function attemptsEqual(left: PaidExtensionAttempt, right: PaidExtensionAttempt): boolean {
-  return ATTEMPT_FIELDS.every((field) => left[field] === right[field]);
+  return ATTEMPT_FIELDS.every((field) => left[field] === right[field])
+    && left.expectedBillingRevision === right.expectedBillingRevision;
 }
 
 export function preparePaidExtensionAttempt({

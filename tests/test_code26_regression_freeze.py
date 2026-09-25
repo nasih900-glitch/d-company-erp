@@ -9,7 +9,9 @@ from scripts.verify_code26_regression_freeze import (
     CODE30_1_BASE,
     CODE30_2_BASE,
     CODE30_2_FREEZE_CONTROL_PATHS,
+    CODE30_3_BASE,
     CODE30_3_FREEZE_CONTROL_PATHS,
+    CODE30_4_FREEZE_CONTROL_PATHS,
     RegressionFreezeError,
     REVIEWED_CODE29_2_PRODUCTION_PATHS,
     REVIEWED_CODE29_2_TEST_SHA256,
@@ -23,6 +25,8 @@ from scripts.verify_code26_regression_freeze import (
     REVIEWED_CODE30_2_SHA256,
     REVIEWED_CODE30_3_PRODUCTION_PATHS,
     REVIEWED_CODE30_3_SHA256,
+    REVIEWED_CODE30_4_PRODUCTION_PATHS,
+    REVIEWED_CODE30_4_SHA256,
     REVIEWED_POST_CODE30_3_MAINTENANCE_SHA256,
     REVIEWED_CODE30_PRODUCTION_PATHS,
     REVIEWED_CODE30_TEST_SHA256,
@@ -55,8 +59,11 @@ def _git_object_bytes(ref: str, path: str) -> bytes:
 
 
 def _current_reviewed_sha256(path: str, fallback: str) -> str:
-    return REVIEWED_CODE30_3_SHA256.get(
-        path, REVIEWED_CODE30_2_SHA256.get(path, fallback)
+    return REVIEWED_CODE30_4_SHA256.get(
+        path,
+        REVIEWED_CODE30_3_SHA256.get(
+            path, REVIEWED_CODE30_2_SHA256.get(path, fallback)
+        ),
     )
 
 
@@ -174,6 +181,14 @@ def test_code30_point2_build37_identity_normalises_to_inherited_code25_baseline(
 def test_code30_point3_build38_identity_normalises_to_inherited_code25_baseline() -> None:
     path = "android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt"
     current = 'assertEquals(38, BuildConfig.VERSION_CODE)\n"3.1.30"\ncode 30.3 artifact\n'
+    assert _normalise_release_identity(path, current) == (
+        'assertEquals(25, BuildConfig.VERSION_CODE)\n"3.1.14"\ncode 25 artifact\n'
+    )
+
+
+def test_code30_point4_build39_identity_normalises_to_inherited_code25_baseline() -> None:
+    path = "android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt"
+    current = 'assertEquals(39, BuildConfig.VERSION_CODE)\n"3.1.31"\ncode 30.4 artifact\n'
     assert _normalise_release_identity(path, current) == (
         'assertEquals(25, BuildConfig.VERSION_CODE)\n"3.1.14"\ncode 25 artifact\n'
     )
@@ -379,15 +394,40 @@ def test_code30_point3_reviewed_delta_requires_exact_bytes(
     path: str,
     expected_sha256: str,
 ) -> None:
-    current = (ROOT / path).read_bytes()
-    assert hashlib.sha256(current).hexdigest() == expected_sha256
-    assert hashlib.sha256(current + b"\n").hexdigest() != expected_sha256
+    historical = _git_object_bytes(CODE30_3_BASE, path)
+    assert hashlib.sha256(historical).hexdigest() == expected_sha256
+    assert hashlib.sha256(historical + b"\n").hexdigest() != expected_sha256
 
 
 def test_code30_point3_delta_inventory_is_exact() -> None:
     changed = set(
         subprocess.run(
-            ["git", "diff", "--name-only", CODE30_2_BASE],
+            ["git", "diff", "--name-only", CODE30_2_BASE, CODE30_3_BASE],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.splitlines()
+    )
+    assert {path for path in changed if path} == (
+        set(REVIEWED_CODE30_3_SHA256) | set(CODE30_3_FREEZE_CONTROL_PATHS)
+    )
+
+
+@pytest.mark.parametrize(("path", "expected_sha256"), REVIEWED_CODE30_4_SHA256.items())
+def test_code30_point4_reviewed_delta_requires_exact_bytes(
+    path: str,
+    expected_sha256: str,
+) -> None:
+    current = (ROOT / path).read_bytes()
+    assert hashlib.sha256(current).hexdigest() == expected_sha256
+    assert hashlib.sha256(current + b"\n").hexdigest() != expected_sha256
+
+
+def test_code30_point4_delta_inventory_is_exact() -> None:
+    changed = set(
+        subprocess.run(
+            ["git", "diff", "--name-only", CODE30_3_BASE],
             cwd=ROOT,
             check=True,
             capture_output=True,
@@ -404,8 +444,8 @@ def test_code30_point3_delta_inventory_is_exact() -> None:
         ).stdout.splitlines()
     )
     assert {path for path in changed if path} == (
-        set(REVIEWED_CODE30_3_SHA256)
-        | set(CODE30_3_FREEZE_CONTROL_PATHS)
+        set(REVIEWED_CODE30_4_SHA256)
+        | set(CODE30_4_FREEZE_CONTROL_PATHS)
         | set(REVIEWED_POST_CODE30_3_MAINTENANCE_SHA256)
     )
 
@@ -491,5 +531,9 @@ def test_code26_preserves_the_complete_code25_test_surface() -> None:
     } | {
         path
         for path in REVIEWED_CODE30_3_PRODUCTION_PATHS
+        if path.startswith("frontend/src/")
+    } | {
+        path
+        for path in REVIEWED_CODE30_4_PRODUCTION_PATHS
         if path.startswith("frontend/src/")
     }

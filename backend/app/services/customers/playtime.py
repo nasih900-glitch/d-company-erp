@@ -5,12 +5,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from uuid import UUID
 
-from sqlalchemy import and_, case, func, or_, select
+from sqlalchemy import and_, case, func, literal, or_, select
 
 from app.models import (
     Customer,
+    GamingParticipantSettlementLine,
     GamingSession,
     GamingSessionExtension,
+    GamingSessionPackageAmendment,
     MembershipBenefitReservation,
     Order,
     OrderLine,
@@ -104,7 +106,11 @@ def _facts(company_id: UUID):
     )
     played = func.greatest(func.coalesce(GamingSession.billable_minutes, 0), 0)
     package_cap = (
-        func.coalesce(GamingSession.package_duration_minutes_snapshot, 0)
+        func.coalesce(
+            GamingSessionPackageAmendment.target_package_duration_minutes,
+            GamingSession.package_duration_minutes_snapshot,
+            0,
+        )
         + func.coalesce(extensions.c.extension_minutes, 0)
     )
     qualifying_minutes = case(
@@ -159,6 +165,7 @@ def _facts(company_id: UUID):
             ).label("order_discount_minor"),
             func.coalesce(line_flags.c.has_discount_or_void, 0).label("line_flag"),
             benefits.c.order_id.label("benefit_order_id"),
+            literal("primary").label("playtime_source"),
         )
         .outerjoin(
             Order,
@@ -176,12 +183,54 @@ def _facts(company_id: UUID):
         )
         .outerjoin(payments, payments.c.order_id == Order.id)
         .outerjoin(refunds, refunds.c.order_id == Order.id)
+        .outerjoin(
+            GamingSessionPackageAmendment,
+            and_(
+                GamingSessionPackageAmendment.gaming_session_id
+                == GamingSession.id,
+                GamingSessionPackageAmendment.company_id == company_id,
+            ),
+        )
         .outerjoin(extensions, extensions.c.gaming_session_id == GamingSession.id)
         .outerjoin(line_flags, line_flags.c.order_id == Order.id)
         .outerjoin(benefits, benefits.c.order_id == Order.id)
         .where(GamingSession.company_id == company_id)
     )
     return stmt, effective_customer_id, qualifying_minutes
+
+
+def _participant_facts(company_id: UUID):
+    return (
+        select(
+            GamingSession.id.label("session_id"),
+            GamingParticipantSettlementLine.customer_id.label("customer_id"),
+            Station.name.label("station_name"),
+            GamingSession.end_at,
+            GamingParticipantSettlementLine.played_minutes.label("played_minutes"),
+            literal(0).label("qualifying_minutes"),
+            GamingSession.status.label("session_status"),
+            GamingSession.billing_mode.label("billing_mode"),
+            literal(0).label("package_cap_minutes"),
+            GamingSession.customer_id.label("session_customer_id"),
+            literal(None).label("order_customer_id"),
+            literal(None).label("order_status"),
+            GamingSession.amount_minor.label("gaming_amount_minor"),
+            literal(0).label("paid_minor"),
+            literal(0).label("refunded_minor"),
+            literal(0).label("order_discount_minor"),
+            literal(0).label("line_flag"),
+            literal(None).label("benefit_order_id"),
+            literal("participant").label("playtime_source"),
+        )
+        .join(GamingSession, GamingSession.id == GamingParticipantSettlementLine.gaming_session_id)
+        .join(Station, Station.id == GamingSession.station_id)
+        .where(
+            GamingParticipantSettlementLine.company_id == company_id,
+            GamingSession.company_id == company_id,
+            Station.company_id == company_id,
+            GamingSession.status == "ended",
+        )
+    )
 
 
 async def leaderboard(
@@ -194,7 +243,9 @@ async def leaderboard(
     limit: int,
 ) -> tuple[list[dict], int]:
     facts, _effective_customer_id, _qualifying_minutes = _facts(company_id)
-    fact_rows = facts.where(GamingSession.status == "ended").subquery()
+    fact_rows = facts.where(GamingSession.status == "ended").union_all(
+        _participant_facts(company_id)
+    ).subquery()
     totals = (
         select(
             fact_rows.c.customer_id,
@@ -256,6 +307,8 @@ async def leaderboard(
 
 
 def _qualification_status(row) -> str:
+    if getattr(row, "playtime_source", "primary") == "participant":
+        return "participant_non_qualifying"
     if (
         row.session_customer_id is not None
         and row.order_customer_id is not None
@@ -287,11 +340,14 @@ async def customer_playtime(
     offset: int,
 ) -> dict:
     facts, effective_customer_id, _qualifying = _facts(company_id)
-    scoped = facts.where(
+    primary = facts.where(
         GamingSession.status == "ended",
         effective_customer_id == customer_id,
     )
-    scoped_rows = scoped.subquery()
+    participant = _participant_facts(company_id).where(
+        GamingParticipantSettlementLine.customer_id == customer_id
+    )
+    scoped_rows = primary.union_all(participant).subquery()
     count_row = (
         await session.execute(
             select(

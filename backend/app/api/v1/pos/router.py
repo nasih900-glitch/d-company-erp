@@ -62,6 +62,7 @@ from app.models import (
     CustomerSpendReconciliation,
     Floor,
     GamingSession,
+    GamingSessionPackageAmendment,
     MembershipPayment,
     MembershipPaymentRequest,
     MembershipPaymentRequestResolution,
@@ -579,6 +580,17 @@ class ReceiptGamingSessionHistoryRead(BaseModel):
     package_price_minor_snapshot: int | None
     package_duration_minutes_snapshot: int | None
     package_variant_snapshot: str | None
+    billing_revision: int
+    package_amendment_id: UUID | None
+    package_amended_at: datetime | None
+    package_amended_by: UUID | None
+    package_amended_by_name: str | None
+    effective_package_id: UUID | None
+    effective_package_price_minor_snapshot: int | None
+    effective_package_duration_minutes_snapshot: int | None
+    effective_package_variant_snapshot: str | None
+    effective_package_station_type_snapshot: str | None
+    effective_package_pricing_tier_snapshot: str | None
     timer_minutes: int | None
     paused_minutes: int
     billable_minutes: int | None
@@ -746,6 +758,26 @@ async def _receipt_history_reads(
             .order_by(GamingSession.order_id, GamingSession.start_at, GamingSession.id)
         )
     ).all()
+    gaming_session_ids = [gaming_session.id for gaming_session, _station in gaming_rows]
+    amendment_rows = (
+        (
+            await session.execute(
+                select(GamingSessionPackageAmendment).where(
+                    GamingSessionPackageAmendment.company_id == company_id,
+                    GamingSessionPackageAmendment.gaming_session_id.in_(
+                        gaming_session_ids
+                    ),
+                )
+            )
+        )
+        .scalars()
+        .all()
+        if gaming_session_ids
+        else []
+    )
+    amendments_by_session = {
+        amendment.gaming_session_id: amendment for amendment in amendment_rows
+    }
     shift_ids = {order.shift_id for order in orders}
     shifts = (
         (
@@ -781,6 +813,7 @@ async def _receipt_history_reads(
             actor_ids.add(gaming_session.stopped_by)
         if gaming_session.sent_to_pos_by is not None:
             actor_ids.add(gaming_session.sent_to_pos_by)
+    actor_ids.update(amendment.amended_by for amendment in amendment_rows)
     actor_names = dict(
         (
             await session.execute(
@@ -805,6 +838,102 @@ async def _receipt_history_reads(
     for gaming_session, station in gaming_rows:
         assert gaming_session.order_id is not None
         gaming_by_order.setdefault(gaming_session.order_id, []).append((gaming_session, station))
+
+    def gaming_history_read(
+        gaming_session: GamingSession,
+        station: Station,
+    ) -> ReceiptGamingSessionHistoryRead:
+        amendment = amendments_by_session.get(gaming_session.id)
+        return ReceiptGamingSessionHistoryRead(
+            id=gaming_session.id,
+            station_id=gaming_session.station_id,
+            station_code=station.code,
+            station_name=station.name,
+            station_type=station.type,
+            source_shift_id=gaming_session.shift_id,
+            started_by=gaming_session.opened_by,
+            started_by_name=actor_names.get(gaming_session.opened_by),
+            stopped_by=gaming_session.stopped_by,
+            stopped_by_name=(
+                actor_names.get(gaming_session.stopped_by)
+                if gaming_session.stopped_by is not None
+                else None
+            ),
+            sent_to_pos_by=gaming_session.sent_to_pos_by,
+            sent_to_pos_by_name=(
+                actor_names.get(gaming_session.sent_to_pos_by)
+                if gaming_session.sent_to_pos_by is not None
+                else None
+            ),
+            started_at=gaming_session.start_at,
+            stopped_at=gaming_session.end_at,
+            sent_to_pos_at=gaming_session.sent_to_pos_at,
+            billing_mode=gaming_session.billing_mode,
+            rate_per_hour_minor=int(gaming_session.rate_per_hour_minor),
+            package_id=gaming_session.package_id,
+            package_price_minor_snapshot=(
+                int(gaming_session.package_price_minor_snapshot)
+                if gaming_session.package_price_minor_snapshot is not None
+                else None
+            ),
+            package_duration_minutes_snapshot=(
+                int(gaming_session.package_duration_minutes_snapshot)
+                if gaming_session.package_duration_minutes_snapshot is not None
+                else None
+            ),
+            package_variant_snapshot=gaming_session.package_variant_snapshot,
+            billing_revision=int(gaming_session.billing_revision or 0),
+            package_amendment_id=amendment.id if amendment is not None else None,
+            package_amended_at=(amendment.occurred_at if amendment is not None else None),
+            package_amended_by=(amendment.amended_by if amendment is not None else None),
+            package_amended_by_name=(
+                actor_names.get(amendment.amended_by) if amendment is not None else None
+            ),
+            effective_package_id=(
+                amendment.target_package_id
+                if amendment is not None
+                else gaming_session.package_id
+            ),
+            effective_package_price_minor_snapshot=(
+                int(amendment.target_package_price_minor)
+                if amendment is not None
+                else (
+                    int(gaming_session.package_price_minor_snapshot)
+                    if gaming_session.package_price_minor_snapshot is not None
+                    else None
+                )
+            ),
+            effective_package_duration_minutes_snapshot=(
+                int(amendment.target_package_duration_minutes)
+                if amendment is not None
+                else gaming_session.package_duration_minutes_snapshot
+            ),
+            effective_package_variant_snapshot=(
+                amendment.target_package_variant
+                if amendment is not None
+                else gaming_session.package_variant_snapshot
+            ),
+            effective_package_station_type_snapshot=(
+                amendment.target_package_station_type
+                if amendment is not None
+                else gaming_session.package_station_type_snapshot
+            ),
+            effective_package_pricing_tier_snapshot=(
+                amendment.target_package_pricing_tier
+                if amendment is not None
+                else gaming_session.package_pricing_tier_snapshot
+            ),
+            timer_minutes=gaming_session.timer_minutes,
+            paused_minutes=int(gaming_session.paused_minutes or 0),
+            billable_minutes=gaming_session.billable_minutes,
+            amount_minor=(
+                int(gaming_session.amount_minor)
+                if gaming_session.amount_minor is not None
+                else None
+            ),
+            created_at=gaming_session.created_at,
+            updated_at=gaming_session.updated_at,
+        )
 
     results: list[ReceiptHistoryRead] = []
     for order in orders:
@@ -979,55 +1108,7 @@ async def _receipt_history_reads(
                     for refund in order_refunds
                 ],
                 gaming_sessions=[
-                    ReceiptGamingSessionHistoryRead(
-                        id=gaming_session.id,
-                        station_id=gaming_session.station_id,
-                        station_code=station.code,
-                        station_name=station.name,
-                        station_type=station.type,
-                        source_shift_id=gaming_session.shift_id,
-                        started_by=gaming_session.opened_by,
-                        started_by_name=actor_names.get(gaming_session.opened_by),
-                        stopped_by=gaming_session.stopped_by,
-                        stopped_by_name=(
-                            actor_names.get(gaming_session.stopped_by)
-                            if gaming_session.stopped_by is not None
-                            else None
-                        ),
-                        sent_to_pos_by=gaming_session.sent_to_pos_by,
-                        sent_to_pos_by_name=(
-                            actor_names.get(gaming_session.sent_to_pos_by)
-                            if gaming_session.sent_to_pos_by is not None
-                            else None
-                        ),
-                        started_at=gaming_session.start_at,
-                        stopped_at=gaming_session.end_at,
-                        sent_to_pos_at=gaming_session.sent_to_pos_at,
-                        billing_mode=gaming_session.billing_mode,
-                        rate_per_hour_minor=int(gaming_session.rate_per_hour_minor),
-                        package_id=gaming_session.package_id,
-                        package_price_minor_snapshot=(
-                            int(gaming_session.package_price_minor_snapshot)
-                            if gaming_session.package_price_minor_snapshot is not None
-                            else None
-                        ),
-                        package_duration_minutes_snapshot=(
-                            int(gaming_session.package_duration_minutes_snapshot)
-                            if gaming_session.package_duration_minutes_snapshot is not None
-                            else None
-                        ),
-                        package_variant_snapshot=gaming_session.package_variant_snapshot,
-                        timer_minutes=gaming_session.timer_minutes,
-                        paused_minutes=int(gaming_session.paused_minutes or 0),
-                        billable_minutes=gaming_session.billable_minutes,
-                        amount_minor=(
-                            int(gaming_session.amount_minor)
-                            if gaming_session.amount_minor is not None
-                            else None
-                        ),
-                        created_at=gaming_session.created_at,
-                        updated_at=gaming_session.updated_at,
-                    )
+                    gaming_history_read(gaming_session, station)
                     for gaming_session, station in gaming_by_order.get(order.id, [])
                 ],
             )
@@ -1612,7 +1693,7 @@ async def _upsert_and_attach_customer(
     at: datetime,
     directory_fence: CustomerDirectoryFence,
     order_lines: list[OrderLine] | None = None,
-) -> Customer | None:
+) -> tuple[Customer, int, int] | None:
     """Find or create customer by phone, bump visit_count + total_spent,
     award loyalty points (1× food, 2× gaming/hookah/streaming/events, × membership tier).
     """
@@ -1705,15 +1786,7 @@ async def _upsert_and_attach_customer(
         if name and not existing.name and directory_fence.allows_identity_mutation:
             existing.name = name
         order.customer_id = existing.id
-        await record_order_loyalty_settlement(
-            session,
-            order=order,
-            customer=existing,
-            points_earned=int(points_earned),
-            rank_bonus_points_awarded=bonus,
-            at=now,
-        )
-        return existing
+        return existing, int(points_earned), bonus
     else:
         bonus = rank_up_bonus_points(old_lifetime=0, new_lifetime=int(points_earned))
         customer = Customer(
@@ -1730,15 +1803,7 @@ async def _upsert_and_attach_customer(
         )
         session.add(customer)
         order.customer_id = customer.id
-        await record_order_loyalty_settlement(
-            session,
-            order=order,
-            customer=customer,
-            points_earned=int(points_earned),
-            rank_bonus_points_awarded=bonus,
-            at=now,
-        )
-        return customer
+        return customer, int(points_earned), bonus
 
 
 class ShiftCloseRequest(BaseModel):
@@ -3095,6 +3160,7 @@ async def _finalize_order(
     at: datetime,
     payment_method: str = "unknown",
     payment_breakdown_minor: dict[str, int] | None = None,
+    final_payment_bundle: list[Payment] | None = None,
 ) -> None:
     """Issue the invoice and run every sale-finalization side effect once.
 
@@ -3188,9 +3254,10 @@ async def _finalize_order(
         branch_id=order.branch_id,
         created_by=actor_user_id,
     )
+    loyalty_facts: tuple[Customer, int, int] | None = None
     if order.customer_phone:
         assert directory_fence is not None
-        await _upsert_and_attach_customer(
+        loyalty_facts = await _upsert_and_attach_customer(
             session,
             company_id=company_id,
             phone=order.customer_phone,
@@ -3199,6 +3266,23 @@ async def _finalize_order(
             order_lines=list(order_lines),
             at=at,
             directory_fence=directory_fence,
+        )
+    if final_payment_bundle is not None:
+        # The payment insert guard needs the issued order row first, while the
+        # loyalty settlement guard needs every payment leg already visible.
+        # Keep both flushes inside the one checkout transaction.
+        await session.flush()
+        session.add_all(final_payment_bundle)
+        await session.flush()
+    if loyalty_facts is not None:
+        customer, points_earned, rank_bonus_points = loyalty_facts
+        await record_order_loyalty_settlement(
+            session,
+            order=order,
+            customer=customer,
+            points_earned=points_earned,
+            rank_bonus_points_awarded=rank_bonus_points,
+            at=at,
         )
     await _enqueue_paid_order_mirror(
         session,
@@ -6010,17 +6094,8 @@ async def record_payment_bundle(
         at=paid_at,
         payment_method="split",
         payment_breakdown_minor=payment_breakdown_minor,
+        final_payment_bundle=payments,
     )
-    # Persist the issued-paid order before inserting any bundle leg. The
-    # database insert guard reads the order row and requires paid status plus
-    # the exact invoice timestamp. Relying on SQLAlchemy to order unrelated
-    # Order UPDATE and Payment INSERT statements happens to work today, but is
-    # not a stable correctness contract across ORM upgrades. Both flushes stay
-    # inside this request transaction, so a later leg/claim/receipt failure
-    # still rolls the entire settlement back.
-    await session.flush()
-    session.add_all(payments)
-    await session.flush()
     response = PaymentBundleRead(
         order_id=order.id,
         shift_id=order.shift_id,

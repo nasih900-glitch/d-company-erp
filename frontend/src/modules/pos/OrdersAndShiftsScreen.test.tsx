@@ -9,6 +9,7 @@ import {
   OperationalOrderList,
   RecoverDirectOrderModal,
   RecoverAndroidShiftForm,
+  androidShiftRecoveryMissingRequirements,
   canRecoverAndroidShift,
   canUseShiftPermission,
   isAndroidOriginShift,
@@ -232,12 +233,28 @@ describe('Orders & Shifts staff-facing shift feedback', () => {
     expect(markup).toContain('maxLength="500"');
     expect(markup).toContain('originating tablet app is isolated');
     expect(markup).toContain('cannot be silently undone');
+    expect(markup).toContain('To enable Recover &amp; close shift:');
+    expect(markup).toContain('Enter the exact physical cash count');
+    expect(markup).toContain('Add a recovery reason of at least 12 characters.');
+    expect(markup).toContain('Confirm the originating tablet app is isolated.');
+    expect(markup).toContain('aria-describedby="android-shift-recovery-requirements"');
     const actionLabel = 'Recover &amp; close shift</button>';
     const labelIndex = markup.lastIndexOf(actionLabel);
     const buttonStart = markup.lastIndexOf('<button', labelIndex);
     expect(labelIndex).toBeGreaterThan(-1);
     expect(markup.slice(buttonStart, markup.indexOf('>', buttonStart)))
       .toContain('disabled=""');
+  });
+
+  it('enables recovery guidance only after exact cash, an audit reason and isolation are supplied', () => {
+    expect(androidShiftRecoveryMissingRequirements('', '', false)).toHaveLength(3);
+    expect(androidShiftRecoveryMissingRequirements('0.00', '', true)).toEqual([
+      'Add a recovery reason of at least 12 characters.',
+    ]);
+    expect(androidShiftRecoveryMissingRequirements('0.001', 'Tablet is isolated', true)).toEqual([
+      'Enter a valid cash count (₹0 or more, up to two decimal places).',
+    ]);
+    expect(androidShiftRecoveryMissingRequirements('0.00', 'Tablet is isolated', true)).toEqual([]);
   });
 
   it('disables the close action while its cash-count flow is already opening', () => {

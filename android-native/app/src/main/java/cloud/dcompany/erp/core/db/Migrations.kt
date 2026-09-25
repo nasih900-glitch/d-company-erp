@@ -2931,6 +2931,89 @@ val MIGRATION_51_52 = object : Migration(51, 52) {
     }
 }
 
+val MIGRATION_52_53 = object : Migration(52, 53) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "ALTER TABLE `local_gaming_package_extensions` ADD COLUMN `expectedBillingRevision` " +
+                "INTEGER NOT NULL DEFAULT 0",
+        )
+        db.execSQL("ALTER TABLE `gaming_session_cache` ADD COLUMN `participantRevision` INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE `gaming_session_cache` ADD COLUMN `billingRevision` INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE `gaming_session_cache` ADD COLUMN `effectivePackageId` TEXT")
+        db.execSQL("ALTER TABLE `gaming_session_cache` ADD COLUMN `effectivePackagePriceMinor` INTEGER")
+        db.execSQL("ALTER TABLE `gaming_session_cache` ADD COLUMN `effectivePackageDurationMinutes` INTEGER")
+        db.execSQL("ALTER TABLE `gaming_session_cache` ADD COLUMN `effectivePackageVariant` TEXT")
+        db.execSQL("ALTER TABLE `gaming_session_cache` ADD COLUMN `effectivePackageStationType` TEXT")
+        db.execSQL("ALTER TABLE `gaming_session_cache` ADD COLUMN `effectivePackagePricingTier` TEXT")
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `gaming_session_participant_cache` (" +
+                "`id` TEXT NOT NULL, `gamingSessionId` TEXT NOT NULL, `customerId` TEXT NOT NULL, " +
+                "`joinedAtMillis` INTEGER NOT NULL, `joinedPlayElapsedMs` INTEGER NOT NULL, " +
+                "`leftAtMillis` INTEGER, `leftPlayElapsedMs` INTEGER, `joinRevision` INTEGER NOT NULL, " +
+                "`leaveRevision` INTEGER, PRIMARY KEY(`id`))",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_gaming_session_participant_cache_gamingSessionId` " +
+                "ON `gaming_session_participant_cache` (`gamingSessionId`)",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_gaming_session_participant_cache_customerId` " +
+                "ON `gaming_session_participant_cache` (`customerId`)",
+        )
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `local_gaming_session_actions` (" +
+                "`actionId` TEXT NOT NULL, `sessionKey` TEXT NOT NULL, `sequence` INTEGER NOT NULL, " +
+                "`actionType` TEXT NOT NULL, `ownerCompanyId` TEXT NOT NULL DEFAULT '', " +
+                "`ownerUserId` TEXT NOT NULL DEFAULT '', `branchId` TEXT NOT NULL DEFAULT '', " +
+                "`terminalId` TEXT NOT NULL DEFAULT '', `serverSessionId` TEXT, `localSessionId` TEXT, " +
+                "`shiftId` TEXT NOT NULL, `occurredAtMillis` INTEGER NOT NULL, `playElapsedMs` INTEGER, " +
+                "`expectedPauseVersion` INTEGER, `expectedParticipantRevision` INTEGER, " +
+                "`expectedBillingRevision` INTEGER, `customerId` TEXT, `customerName` TEXT, " +
+                "`customerPhone` TEXT, `customerDirectoryRevision` INTEGER, " +
+                "`customerDirectoryCompanyId` TEXT, `participantReference` TEXT, " +
+                "`resultParticipantId` TEXT, `packageId` TEXT, `expectedPackagePriceMinor` INTEGER, " +
+                "`expectedPackageDurationMinutes` INTEGER, `expectedPackageVariant` TEXT, " +
+                "`expectedSessionTimerMinutes` INTEGER, `expectedSessionAmountMinor` INTEGER, " +
+                "`state` TEXT NOT NULL, `lastError` TEXT, `resolvedAtMillis` INTEGER, " +
+                "PRIMARY KEY(`actionId`))",
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_local_gaming_session_actions_state` ON `local_gaming_session_actions` (`state`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_local_gaming_session_actions_serverSessionId` ON `local_gaming_session_actions` (`serverSessionId`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_local_gaming_session_actions_localSessionId` ON `local_gaming_session_actions` (`localSessionId`)")
+        db.execSQL(
+            "CREATE UNIQUE INDEX IF NOT EXISTS `index_local_gaming_session_actions_sessionKey_sequence` " +
+                "ON `local_gaming_session_actions` (`sessionKey`, `sequence`)",
+        )
+        // Preserve unresolved financial chronology from the old split outboxes.
+        db.execSQL(
+            "WITH candidates AS (" +
+                "SELECT actionId, COALESCE(localSessionId, serverSessionId) sessionKey, 'extend' actionType, " +
+                "serverSessionId, localSessionId, COALESCE(shiftId, '') shiftId, createdAtMillis occurredAtMillis, " +
+                "packageId, expectedPackagePriceMinor, expectedPackageDurationMinutes, expectedPackageVariant, " +
+                // Room 52 extension requests never sent a billing revision. A lost
+                // response must replay byte-for-byte under its original key.
+                "expectedSessionTimerMinutes, expectedSessionAmountMinor, NULL expectedBillingRevision, state, lastError, resolvedAtMillis, 0 priority " +
+                "FROM local_gaming_package_extensions WHERE state IN ('pending','ambiguous','rejected') " +
+                "UNION ALL " +
+                "SELECT 'gaming-session-stop:' || localId, localId, 'stop', serverId, localId, " +
+                "COALESCE(shiftId, ''), COALESCE(endAtMillis, startedAtMillis), NULL, NULL, NULL, NULL, " +
+                // Room 52 Stop sent ended_at only; null preserves omitted CAS fields.
+                "timerMinutes, amountMinor, NULL, CASE WHEN state = 'stop_rejected' THEN 'rejected' ELSE 'pending' END, " +
+                "lastError, NULL, 1 FROM local_gaming_sessions WHERE state IN ('stop_pending','stop_rejected')" +
+                "), ranked AS (SELECT *, ROW_NUMBER() OVER (PARTITION BY sessionKey ORDER BY occurredAtMillis, priority, actionId) sequence FROM candidates) " +
+                "INSERT INTO local_gaming_session_actions (actionId, sessionKey, sequence, actionType, serverSessionId, " +
+                "localSessionId, shiftId, occurredAtMillis, packageId, expectedPackagePriceMinor, " +
+                "expectedPackageDurationMinutes, expectedPackageVariant, expectedSessionTimerMinutes, " +
+                "expectedSessionAmountMinor, expectedBillingRevision, state, lastError, resolvedAtMillis) " +
+                "SELECT actionId, sessionKey, sequence, actionType, serverSessionId, localSessionId, shiftId, " +
+                "occurredAtMillis, packageId, expectedPackagePriceMinor, expectedPackageDurationMinutes, " +
+                "expectedPackageVariant, expectedSessionTimerMinutes, expectedSessionAmountMinor, expectedBillingRevision, state, lastError, " +
+                "resolvedAtMillis FROM ranked",
+        )
+        installShiftClosingWriteGuards(db)
+    }
+}
+
 val ALL_MIGRATIONS = arrayOf(
     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8,
     MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14,
@@ -2941,5 +3024,5 @@ val ALL_MIGRATIONS = arrayOf(
     MIGRATION_34_35, MIGRATION_35_36, MIGRATION_36_37, MIGRATION_37_38, MIGRATION_38_39,
     MIGRATION_39_40, MIGRATION_40_41, MIGRATION_41_42, MIGRATION_42_43, MIGRATION_43_44,
     MIGRATION_44_45, MIGRATION_45_46, MIGRATION_46_47, MIGRATION_47_48, MIGRATION_48_49,
-    MIGRATION_49_50, MIGRATION_50_51, MIGRATION_51_52,
+    MIGRATION_49_50, MIGRATION_50_51, MIGRATION_51_52, MIGRATION_52_53,
 )

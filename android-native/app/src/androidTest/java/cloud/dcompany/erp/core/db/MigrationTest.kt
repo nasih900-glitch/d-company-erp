@@ -7,6 +7,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Rule
 import org.junit.Test
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.runner.RunWith
 
@@ -3039,6 +3040,88 @@ class MigrationTest {
             assertTrue(cursor.isNull(1))
             assertTrue(cursor.isNull(2))
             assertTrue(cursor.isNull(3))
+        }
+        migrated.close()
+    }
+
+    @Test
+    fun migrate52To53PreservesAndOrdersPendingExtensionBeforeStop() {
+        helper.createDatabase(dbName, 52).apply {
+            execSQL(
+                "INSERT INTO local_gaming_sessions " +
+                    "(localId, serverId, stationId, shiftId, timerMinutes, startedAtMillis, state, status, " +
+                    "endAtMillis, amountMinor, billingMode, extraControllers, cleanupEvidenceRevision) VALUES " +
+                    "('local-1', 'server-1', 'station-1', 'shift-1', 60, 1000, 'stop_pending', " +
+                    "'stopping', 3000, 15000, 'package', 0, 0)",
+            )
+            execSQL(
+                "INSERT INTO local_gaming_package_extensions " +
+                    "(actionId, serverSessionId, localSessionId, shiftId, packageId, " +
+                    "expectedPackagePriceMinor, expectedPackageDurationMinutes, expectedPackageVariant, " +
+                    "expectedSessionTimerMinutes, expectedSessionAmountMinor, createdAtMillis, state) VALUES " +
+                    "('extend-1', 'server-1', 'local-1', 'shift-1', 'package-30', 8000, 30, " +
+                    "'single', 60, 15000, 2000, 'pending')",
+            )
+            close()
+        }
+
+        val migrated = helper.runMigrationsAndValidate(dbName, 53, true, MIGRATION_52_53)
+        migrated.query(
+            "SELECT actionId, actionType, sequence, state, expectedBillingRevision " +
+                "FROM local_gaming_session_actions ORDER BY sequence",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("extend-1", cursor.getString(0))
+            assertEquals("extend", cursor.getString(1))
+            assertEquals(1L, cursor.getLong(2))
+            assertEquals("pending", cursor.getString(3))
+            assertTrue(cursor.isNull(4))
+            assertTrue(cursor.moveToNext())
+            assertEquals("gaming-session-stop:local-1", cursor.getString(0))
+            assertEquals("stop", cursor.getString(1))
+            assertEquals(2L, cursor.getLong(2))
+            assertTrue(cursor.isNull(4))
+            assertFalse(cursor.moveToNext())
+        }
+        migrated.query(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND " +
+                "name IN ('guard_local_gaming_session_actions_while_shift_closing', " +
+                "'guard_local_gaming_session_actions_update_while_shift_closing')",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(2, cursor.getInt(0))
+        }
+        migrated.close()
+    }
+
+    @Test
+    fun migrate52To53KeepsBodylessStopWithoutInventingCapturedEnd() {
+        helper.createDatabase(dbName, 52).apply {
+            execSQL(
+                "INSERT INTO local_gaming_sessions " +
+                    "(localId, serverId, stationId, shiftId, startedAtMillis, state, status, " +
+                    "billingMode, extraControllers, cleanupEvidenceRevision) VALUES " +
+                    "('bodyless-stop', 'server-1', 'station-1', 'shift-1', 1000, " +
+                    "'stop_pending', 'stopping', 'package', 0, 0)",
+            )
+            close()
+        }
+
+        val migrated = helper.runMigrationsAndValidate(dbName, 53, true, MIGRATION_52_53)
+        migrated.query(
+            "SELECT s.endAtMillis, a.actionId, a.occurredAtMillis, " +
+                "a.expectedParticipantRevision, a.expectedBillingRevision " +
+                "FROM local_gaming_sessions s JOIN local_gaming_session_actions a " +
+                "ON a.localSessionId = s.localId WHERE s.localId = 'bodyless-stop'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertTrue(cursor.isNull(0))
+            assertEquals("gaming-session-stop:bodyless-stop", cursor.getString(1))
+            // Fallback ordering timestamp is not a captured Stop timestamp.
+            assertEquals(1_000L, cursor.getLong(2))
+            assertTrue(cursor.isNull(3))
+            assertTrue(cursor.isNull(4))
+            assertFalse(cursor.moveToNext())
         }
         migrated.close()
     }
