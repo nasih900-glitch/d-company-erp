@@ -737,6 +737,16 @@ internal fun gamingStopReplayMode(endAtMillis: Long?): GamingStopReplayMode =
     if (endAtMillis == null) GamingStopReplayMode.LEGACY_BODYLESS
     else GamingStopReplayMode.CAPTURED_TIMESTAMP_BODY
 
+/** Room 52 ledger rows have no revision fields; their original local end is the wire evidence. */
+internal fun gamingActionStopReplayAt(
+    action: LocalGamingSessionActionEntity,
+    local: LocalGamingSessionEntity,
+): Long? = if (action.expectedParticipantRevision == null && action.expectedBillingRevision == null) {
+    local.endAtMillis
+} else {
+    action.occurredAtMillis
+}
+
 internal enum class GamingSessionPushPhase { STARTS, STOPS, SENDS }
 
 /**
@@ -3380,9 +3390,13 @@ class SyncEngine private constructor(
         for (action in dao.packageExtensionsForSync()) {
             val lease = cacheIsolation.currentLease() ?: return
             try {
+                val captured = dao.sessionAction(action.actionId)
+                check(captured?.actionType == GamingSessionActionType.EXTEND) {
+                    "The saved extension lost its immutable replay evidence."
+                }
                 val updated = gamingApi.extendWithPackage(
                     id = action.serverSessionId,
-                    body = action.toPackageExtendBody(),
+                    body = action.toPackageExtendBody(captured.expectedBillingRevision),
                     key = packageExtensionIdempotencyKey(action),
                     provenance = outboxProvenanceHeaders(action.createdAtMillis, action.actionId),
                 )
@@ -3433,6 +3447,13 @@ class SyncEngine private constructor(
                 continue
             }
             val localSession = saved.localSessionId?.let { dao.localSessionById(it) }
+            if (localSession?.state == GamingSessionState.START_REJECTED) {
+                // A protected receipt may prove an authoritative server Start
+                // whose start clock is later than these captured commands.
+                // Keep their evidence queued for audited billing review.
+                blockedSessions += saved.sessionKey
+                continue
+            }
             val serverSessionId = saved.serverSessionId ?: localSession?.serverId
             if (serverSessionId == null) {
                 blockedSessions += saved.sessionKey
@@ -3581,16 +3602,40 @@ class SyncEngine private constructor(
                             blockedSessions += action.sessionKey
                             continue
                         }
-                        val stopped = gamingApi.stop(
-                            serverSessionId,
-                            SessionStopBody(
-                                endedAt = Instant.ofEpochMilli(action.occurredAtMillis).toString(),
-                                expectedParticipantRevision = action.expectedParticipantRevision,
-                                expectedBillingRevision = action.expectedBillingRevision,
-                            ),
-                            action.actionId,
-                            outboxProvenanceHeaders(action.occurredAtMillis, action.actionId),
-                        )
+                        // Room 52 had no revision fields. Its Stop used the
+                        // local captured end, or no body at all when that end
+                        // was absent. Keep both the body and provenance exactly
+                        // as before migration under the same idempotency key.
+                        val stopAt = gamingActionStopReplayAt(action, local)
+                        val provenance = outboxProvenanceHeaders(stopAt, action.actionId)
+                        val stopped = when (gamingStopReplayMode(stopAt)) {
+                            GamingStopReplayMode.LEGACY_BODYLESS -> gamingApi.stopLegacy(
+                                id = serverSessionId,
+                                key = action.actionId,
+                                provenance = provenance,
+                            )
+                            GamingStopReplayMode.CAPTURED_TIMESTAMP_BODY -> {
+                                val stopBody = SessionStopBody(
+                                    endedAt = Instant.ofEpochMilli(requireNotNull(stopAt)).toString(),
+                                    expectedParticipantRevision = action.expectedParticipantRevision,
+                                    expectedBillingRevision = action.expectedBillingRevision,
+                                )
+                                val stopHash = gamingStopRequestHash(local.localId, serverSessionId, stopBody)
+                                check(local.stopRequestHash == null || local.stopRequestHash == stopHash) {
+                                    "Saved Gaming Stop request evidence changed."
+                                }
+                                val capturedStopHash = dao.captureStopRequestHash(local.localId, stopHash)
+                                check(capturedStopHash == 1 ||
+                                    dao.localSessionById(local.localId)?.stopRequestHash == stopHash
+                                ) { "Saved Gaming Stop request evidence changed concurrently." }
+                                gamingApi.stop(
+                                    id = serverSessionId,
+                                    body = stopBody,
+                                    key = action.actionId,
+                                    provenance = provenance,
+                                )
+                            }
+                        }
                         require(stopped.id == serverSessionId)
                         if (!commitToCurrentScope(lease) {
                                 db.withTransaction {

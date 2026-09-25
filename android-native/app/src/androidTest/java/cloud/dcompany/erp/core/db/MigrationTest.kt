@@ -3075,11 +3075,12 @@ class MigrationTest {
             assertEquals("extend", cursor.getString(1))
             assertEquals(1L, cursor.getLong(2))
             assertEquals("pending", cursor.getString(3))
-            assertEquals(0, cursor.getInt(4))
+            assertTrue(cursor.isNull(4))
             assertTrue(cursor.moveToNext())
             assertEquals("gaming-session-stop:local-1", cursor.getString(0))
             assertEquals("stop", cursor.getString(1))
             assertEquals(2L, cursor.getLong(2))
+            assertTrue(cursor.isNull(4))
             assertFalse(cursor.moveToNext())
         }
         migrated.query(
@@ -3089,6 +3090,38 @@ class MigrationTest {
         ).use { cursor ->
             assertTrue(cursor.moveToFirst())
             assertEquals(2, cursor.getInt(0))
+        }
+        migrated.close()
+    }
+
+    @Test
+    fun migrate52To53KeepsBodylessStopWithoutInventingCapturedEnd() {
+        helper.createDatabase(dbName, 52).apply {
+            execSQL(
+                "INSERT INTO local_gaming_sessions " +
+                    "(localId, serverId, stationId, shiftId, startedAtMillis, state, status, " +
+                    "billingMode, extraControllers, cleanupEvidenceRevision) VALUES " +
+                    "('bodyless-stop', 'server-1', 'station-1', 'shift-1', 1000, " +
+                    "'stop_pending', 'stopping', 'package', 0, 0)",
+            )
+            close()
+        }
+
+        val migrated = helper.runMigrationsAndValidate(dbName, 53, true, MIGRATION_52_53)
+        migrated.query(
+            "SELECT s.endAtMillis, a.actionId, a.occurredAtMillis, " +
+                "a.expectedParticipantRevision, a.expectedBillingRevision " +
+                "FROM local_gaming_sessions s JOIN local_gaming_session_actions a " +
+                "ON a.localSessionId = s.localId WHERE s.localId = 'bodyless-stop'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertTrue(cursor.isNull(0))
+            assertEquals("gaming-session-stop:bodyless-stop", cursor.getString(1))
+            // Fallback ordering timestamp is not a captured Stop timestamp.
+            assertEquals(1_000L, cursor.getLong(2))
+            assertTrue(cursor.isNull(3))
+            assertTrue(cursor.isNull(4))
+            assertFalse(cursor.moveToNext())
         }
         migrated.close()
     }

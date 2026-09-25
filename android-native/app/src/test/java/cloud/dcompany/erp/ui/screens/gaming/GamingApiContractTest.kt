@@ -246,6 +246,39 @@ class GamingApiContractTest {
     }
 
     @Test
+    fun `migrated Room 52 extension and stop retain their original revision-free JSON`() {
+        // Room 52 sent these bodies under stable idempotency keys before the
+        // revision fields existed. A replay after upgrade must not change the
+        // server-side request hash for an already accepted ambiguous write.
+        val extension = ApiClient.json.parseToJsonElement(
+            ApiClient.json.encodeToString(
+                SessionPackageExtendBody(
+                    packageId = "package-30",
+                    expectedPackagePriceMinor = 8_000,
+                    expectedPackageDurationMinutes = 30,
+                    expectedPackageVariant = "single",
+                    expectedTimerMinutes = 60,
+                    expectedAmountMinor = 15_000,
+                    expectedBillingRevision = null,
+                ),
+            ),
+        ).jsonObject
+        val stop = ApiClient.json.parseToJsonElement(
+            ApiClient.json.encodeToString(
+                SessionStopBody(
+                    endedAt = "2026-09-24T12:20:00Z",
+                    expectedParticipantRevision = null,
+                    expectedBillingRevision = null,
+                ),
+            ),
+        ).jsonObject
+
+        assertEquals(6, extension.size)
+        assertFalse(extension.containsKey("expected_billing_revision"))
+        assertEquals(mapOf("ended_at" to JsonPrimitive("2026-09-24T12:20:00Z")), stop)
+    }
+
+    @Test
     fun `legacy package resolution keeps the retained action identity and evidence`() {
         val localActionId = "11111111-1111-4111-8111-111111111111"
         val encoded = ApiClient.json.encodeToString(

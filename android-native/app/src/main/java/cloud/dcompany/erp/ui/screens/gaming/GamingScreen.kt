@@ -484,6 +484,7 @@ fun GamingScreen(
                         }
                     },
                     onManageParticipants = {
+                        android.util.Log.d("Code304Trial", "manage-click-workspace")
                         vm.refreshCustomersForStart()
                         managingParticipants = it
                     },
@@ -714,10 +715,11 @@ fun GamingScreen(
                                 it.actionId == actionId
                             }
                         },
-                        onManageParticipants = {
-                            vm.refreshCustomersForStart()
-                            managingParticipants = it
-                        },
+                    onManageParticipants = {
+                        android.util.Log.d("Code304Trial", "manage-click-grid")
+                        vm.refreshCustomersForStart()
+                        managingParticipants = it
+                    },
                     )
                 }
             }
@@ -741,6 +743,7 @@ fun GamingScreen(
     }
 
     managingParticipants?.let { selected ->
+        android.util.Log.d("Code304Trial", "manage-dialog-compose")
         val current = state.sessions.firstOrNull { it.id == selected.id } ?: selected
         val target30 = state.packages.firstOrNull { candidate ->
             candidate.kind == "base" && candidate.stationType == current.packageStationTypeSnapshot &&
@@ -2790,6 +2793,18 @@ internal fun GamingStationCard(
             }
 
             StationVisualState.Starting -> Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                if (stationFilterId(station.type) == "ps5" &&
+                    session?.isLocallyPendingPs5PackageStart() == true
+                ) {
+                    ErpButton(
+                        text = "Players & booking",
+                        onClick = { onManageParticipants(session) },
+                        enabled = actionsEnabled && ownsSession && session.orderId == null,
+                        intent = ActionIntent.Secondary,
+                        leadingIcon = Icons.Filled.People,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
                 ErpButton(
                     text = "Add drinks & snacks",
                     onClick = { session?.let(onAddItems) },
@@ -5018,6 +5033,15 @@ private fun GamingParticipantsDialog(
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
+                if (session.isLocallyPendingStart()) {
+                    item {
+                        Text(
+                            "Start and player changes are saved on this tablet. They will sync in order; the final charge is confirmed when the session stops.",
+                            color = Brand.Warning,
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
+                }
                 rejectedAction?.let { rejected ->
                     item {
                         SectionCard(
@@ -5191,7 +5215,10 @@ internal fun canAmendGamingPackageTo30(
     target: GamingPackage?,
     nowMillis: Long,
 ): Boolean =
-    target != null && session.status in setOf("active", "paused") && session.orderId == null &&
+    target != null &&
+        (session.status in setOf("active", "paused") ||
+            session.isLocallyPendingPs5PackageStart()) &&
+        session.orderId == null && session.pauseVersion != null && session.amountMinor != null &&
         session.billingRevision == 0 && session.participantRevision == 0 &&
         session.timerMinutes == 60 && session.packageDurationMinutesSnapshot == 60 &&
         session.packageVariantSnapshot in setOf("single", "dual") &&

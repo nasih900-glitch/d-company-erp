@@ -31,9 +31,29 @@ earlier one passed. Stop at the first failure and record it exactly.
 2. Install the signed build `39` **over it** without uninstalling or clearing
    data. Confirm Room migrates 52 → 53, the local data and queued action are
    intact, and the queue replays exactly once after reconnecting.
-3. Offline trial on build `39` against a disposable local backend: 60 → 30
-   amendment, friend Join and Leave, reconnect, Stop, Send to POS, split cash +
-   UPI payment and receipt; then check reports and that the station is free.
+3. Offline trial on build `39` against a disposable local backend: capture a
+   new PS5 60-minute Start while offline, amend it to 30 minutes before 30:00,
+   save a friend's Join and Leave, then Stop before reconnecting. Confirm the
+   original timestamps, versions, saved customer and Start → amendment → Join →
+   Leave → Stop replay order after reconnect. Check the server-confirmed base
+   plus friend total, Send to POS, split cash + UPI payment and receipt, reports,
+   and that the station is free. Between confirmed Join and pending Leave,
+   verify the friend appears once as leaving and a second Leave is blocked.
+   A rejected Start must retain its dependent actions for review without
+   posting a charge. An audited no-play receipt retires those actions as
+   retained evidence and clears the shift gate. A manual-bill receipt with
+   saved amendment or attendance must keep those actions and the shift blocked
+   until their amounts are independently reconciled; a base bill alone is not
+   proof of the extras. If recovery finds a later server Start time than the
+   saved actions, verify they remain retained for audited review and do not
+   automatically replay. A second staff account must be told to let the
+   original staff sign in and finish Sync before changing this tablet's scope.
+4. Seed a Room 52 tablet with an ambiguous legacy extension, a captured Stop,
+   and a separate bodyless Stop without an end time, then upgrade in place.
+   Verify migration records null revisions and replays each under its original
+   idempotency key and request shape. The bodyless Stop must remain bodyless,
+   with no invented occurrence header. A previously accepted charge or Stop
+   must be confirmed, never duplicated.
 
 A debug APK installed over a release-signed build is not valid evidence for
 this gate.

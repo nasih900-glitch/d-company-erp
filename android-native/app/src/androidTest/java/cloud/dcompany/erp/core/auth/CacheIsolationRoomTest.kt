@@ -5,11 +5,14 @@ import androidx.room.Room
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import cloud.dcompany.erp.core.db.ErpDatabase
+import cloud.dcompany.erp.core.db.GamingSessionActionType
+import cloud.dcompany.erp.core.db.LocalGamingSessionActionEntity
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertThrows
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -164,6 +167,59 @@ class CacheIsolationRoomTest {
         } finally {
             first.clear()
         }
+    }
+
+    @Test
+    fun offlineJoinBlocksOtherStaffWithSyncGuidanceUntilOriginalStaffDrainsIt() = runBlocking {
+        val staffA = CacheScope("staff-a", "company-1", "branch-1", "terminal-1")
+        val staffB = staffA.copy(userId = "staff-b")
+        val marker = object : CacheScopeMarker {
+            var stored: CacheScope? = null
+            override fun current(): CacheScope? = stored
+            override fun remember(scope: CacheScope): Boolean {
+                stored = scope
+                return true
+            }
+            override fun clear(): Boolean {
+                stored = null
+                return true
+            }
+        }
+        val coordinator = CacheIsolationCoordinator(RoomScopeDataPurger(db), marker)
+        assertEquals(CacheScopeActivation.PURGED, coordinator.activateValidated(staffA))
+        db.gamingDao().captureSessionAction(LocalGamingSessionActionEntity(
+            actionId = "join-a",
+            sessionKey = "server-session-1",
+            actionType = GamingSessionActionType.PARTICIPANT_JOIN,
+            ownerCompanyId = staffA.companyId,
+            ownerUserId = staffA.userId,
+            branchId = requireNotNull(staffA.branchId),
+            terminalId = requireNotNull(staffA.terminalId),
+            serverSessionId = "server-session-1",
+            shiftId = "shift-1",
+            occurredAtMillis = 1_000,
+            playElapsedMs = 0,
+            expectedPauseVersion = 0,
+            expectedParticipantRevision = 0,
+            expectedBillingRevision = 0,
+            customerName = "Amina",
+        ))
+        coordinator.deactivate()
+
+        val blocked = assertThrows(CacheScopeException::class.java) {
+            runBlocking { coordinator.activateValidated(staffB) }
+        }
+        assertTrue(blocked.message.orEmpty().contains("original staff member"))
+        assertTrue(blocked.message.orEmpty().contains("finish Sync"))
+        assertEquals(staffA, marker.current())
+        assertEquals("pending", db.gamingDao().sessionAction("join-a")?.state)
+
+        assertEquals(CacheScopeActivation.RETAINED, coordinator.activateValidated(staffA))
+        assertEquals(1, db.gamingDao().markSessionActionConfirmed("join-a", 2_000, "participant-1"))
+        coordinator.deactivate()
+        assertEquals(CacheScopeActivation.PURGED, coordinator.activateValidated(staffB))
+        assertEquals(staffB, marker.current())
+        assertEquals(null, db.gamingDao().sessionAction("join-a"))
     }
 
     /** Supplying one deterministic typed value for every column lets this test

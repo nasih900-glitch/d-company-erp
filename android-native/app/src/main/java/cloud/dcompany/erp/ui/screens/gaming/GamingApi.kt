@@ -468,14 +468,18 @@ internal fun sessionAddonReceiptError(
 }
 
 /** One canonical mapping prevents UI recovery and background replay from diverging. */
-internal fun LocalGamingPackageExtensionEntity.toPackageExtendBody() = SessionPackageExtendBody(
+internal fun LocalGamingPackageExtensionEntity.toPackageExtendBody(
+    capturedBillingRevision: Int?,
+) = SessionPackageExtendBody(
     packageId = packageId,
     expectedPackagePriceMinor = expectedPackagePriceMinor,
     expectedPackageDurationMinutes = expectedPackageDurationMinutes,
     expectedPackageVariant = expectedPackageVariant,
     expectedTimerMinutes = expectedSessionTimerMinutes,
     expectedAmountMinor = expectedSessionAmountMinor,
-    expectedBillingRevision = expectedBillingRevision,
+    // The ledger holds the exact wire evidence. Room 52 requests had no
+    // revision field, even though the upgraded extension table defaults to 0.
+    expectedBillingRevision = capturedBillingRevision,
 )
 
 @Serializable

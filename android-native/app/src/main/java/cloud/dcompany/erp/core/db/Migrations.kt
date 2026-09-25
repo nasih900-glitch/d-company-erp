@@ -2990,12 +2990,15 @@ val MIGRATION_52_53 = object : Migration(52, 53) {
                 "SELECT actionId, COALESCE(localSessionId, serverSessionId) sessionKey, 'extend' actionType, " +
                 "serverSessionId, localSessionId, COALESCE(shiftId, '') shiftId, createdAtMillis occurredAtMillis, " +
                 "packageId, expectedPackagePriceMinor, expectedPackageDurationMinutes, expectedPackageVariant, " +
-                "expectedSessionTimerMinutes, expectedSessionAmountMinor, expectedBillingRevision, state, lastError, resolvedAtMillis, 0 priority " +
+                // Room 52 extension requests never sent a billing revision. A lost
+                // response must replay byte-for-byte under its original key.
+                "expectedSessionTimerMinutes, expectedSessionAmountMinor, NULL expectedBillingRevision, state, lastError, resolvedAtMillis, 0 priority " +
                 "FROM local_gaming_package_extensions WHERE state IN ('pending','ambiguous','rejected') " +
                 "UNION ALL " +
                 "SELECT 'gaming-session-stop:' || localId, localId, 'stop', serverId, localId, " +
                 "COALESCE(shiftId, ''), COALESCE(endAtMillis, startedAtMillis), NULL, NULL, NULL, NULL, " +
-                "timerMinutes, amountMinor, 0, CASE WHEN state = 'stop_rejected' THEN 'rejected' ELSE 'pending' END, " +
+                // Room 52 Stop sent ended_at only; null preserves omitted CAS fields.
+                "timerMinutes, amountMinor, NULL, CASE WHEN state = 'stop_rejected' THEN 'rejected' ELSE 'pending' END, " +
                 "lastError, NULL, 1 FROM local_gaming_sessions WHERE state IN ('stop_pending','stop_rejected')" +
                 "), ranked AS (SELECT *, ROW_NUMBER() OVER (PARTITION BY sessionKey ORDER BY occurredAtMillis, priority, actionId) sequence FROM candidates) " +
                 "INSERT INTO local_gaming_session_actions (actionId, sessionKey, sequence, actionType, serverSessionId, " +

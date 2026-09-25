@@ -37,6 +37,35 @@ Start 60 min → change to 30 min → friend Join/Leave → Stop (₹80 + ₹30 
 server-confirmed) → Send to POS → customer-linked split cash + UPI with change →
 receipt → shift close with zero variance.
 
+Follow-up source review found that an offline-created PS5 Start displayed only
+items and Stop while its Start was pending, so staff could not save the promised
+60-to-30 amendment or friend attendance until a server ID existed. The current
+candidate adds the pending-Start control, a verified version-zero baseline,
+atomic local action capture and projected FIFO revisions. Focused JVM policy
+tests and a disposable-emulator Room test verify Start → amendment → Join →
+Leave → Stop persistence across restart and later server-ID resolution; a
+rendered emulator test confirms the pending-Start control is usable. These
+checks do not replace the full local-backend replay and billing trial or CI on
+the eventual exact release commit.
+
+A second review caught offline replay edges: a confirmed Join could appear
+active while its queued Leave still referenced the Join action ID; rejected
+Starts could leave dependent commands; and Room 52 extension/Stop retries could
+change their request body under an old idempotency key. The candidate resolves
+Join IDs to server participant IDs until Leave confirms, keeps migrated legacy
+revisions null and a bodyless legacy Stop bodyless so original requests replay, and retires dependent commands
+only after an audited **no-play** receipt commits. A manual base bill with saved
+attendance or amendment keeps the actions and shift blocked for audited billing
+review. A recovered server Start with incompatible captured action timestamps
+also retains its commands and shift blocker instead of silently replaying or
+discarding them. Offline actions remain bound to the original staff account;
+the account-switch error tells another user to let that staff member finish
+Sync on the tablet before closing its shift. The original command timestamps
+and receipt reference remain in Room. The current source passed the full Android
+debug JVM suite and a focused 68-test Room/migration emulator run; the earlier
+73-test run also covered account-switch safety. Exact-head CI and the real-backend
+replay trial remain separate release gates.
+
 Outstanding gates: exact-head CI for the candidate commit; the protected signed
 build-39 APK and its verification; an in-place same-signing-certificate
 build-38-to-39 upgrade that retains Room data and queued actions; an offline

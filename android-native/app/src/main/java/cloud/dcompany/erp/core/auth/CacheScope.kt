@@ -431,7 +431,8 @@ class CacheIsolationCoordinator internal constructor(
                     "Reconnect with the previous setup or ask support; no workspace was opened."
             } else {
                 "Saved work still belongs to the previous account, branch, or terminal. " +
-                    "Reopen that exact workspace and resolve Sync before switching."
+                    "Sign in as the original staff member on this tablet and finish Sync " +
+                    "before another user stops the session or closes the shift."
             }
             throw CacheScopeException(message)
         }

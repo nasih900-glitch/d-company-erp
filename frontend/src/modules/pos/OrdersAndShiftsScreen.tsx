@@ -2245,6 +2245,26 @@ function CloseShiftForm({
   );
 }
 
+export function androidShiftRecoveryMissingRequirements(
+  counted: string,
+  normalizedReason: string,
+  quarantined: boolean,
+): string[] {
+  const missing: string[] = [];
+  if (counted.trim() === '') {
+    missing.push('Enter the exact physical cash count (₹0 is valid if the drawer is empty).');
+  } else if (parseRupeesToMinor(counted) === null) {
+    missing.push('Enter a valid cash count (₹0 or more, up to two decimal places).');
+  }
+  if (normalizedReason.length < 12) {
+    missing.push('Add a recovery reason of at least 12 characters.');
+  }
+  if (!quarantined) {
+    missing.push('Confirm the originating tablet app is isolated.');
+  }
+  return missing;
+}
+
 export function RecoverAndroidShiftForm({
   shift,
   currentUserId,
@@ -2281,9 +2301,10 @@ export function RecoverAndroidShiftForm({
   const opener = shiftOpenerLabel(shift);
   const normalizedReason = reason.trim().replace(/\s+/g, ' ');
   const parsedCountedMinor = parseRupeesToMinor(counted);
+  const missingRequirements = androidShiftRecoveryMissingRequirements(counted, normalizedReason, quarantined);
   const canSubmit = !busy && (
     ambiguousPayload !== null
-      || (quarantined && normalizedReason.length >= 12 && parsedCountedMinor !== null)
+      || missingRequirements.length === 0
   );
 
   const close = () => {
@@ -2454,6 +2475,19 @@ export function RecoverAndroidShiftForm({
         </label>
 
         {err && <ErrorRow text={err}/>}
+        {!ambiguousPayload && missingRequirements.length > 0 && (
+          <div
+            id="android-shift-recovery-requirements"
+            className="rounded-xl border border-accent-gold/40 bg-accent-gold/10 p-3 text-sm"
+            role="status"
+            aria-live="polite"
+          >
+            <p className="font-semibold text-accent-gold">To enable Recover &amp; close shift:</p>
+            <ul className="mt-1 list-disc pl-5 text-fg-muted">
+              {missingRequirements.map((requirement) => <li key={requirement}>{requirement}</li>)}
+            </ul>
+          </div>
+        )}
         {ambiguousPayload && (
           <div className="rounded-xl border border-accent-gold/40 bg-accent-gold/10 p-3 text-sm" role="status" aria-live="polite">
             <p className="font-semibold text-accent-gold">Unconfirmed recovery · details locked</p>
@@ -2468,7 +2502,14 @@ export function RecoverAndroidShiftForm({
           <button type="button" className="btn btn-ghost" onClick={close} disabled={busy || ambiguousPayload !== null}>
             Cancel
           </button>
-          <button type="submit" className="btn btn-danger" disabled={!canSubmit}>
+          <button
+            type="submit"
+            className="btn btn-danger"
+            disabled={!canSubmit}
+            aria-describedby={missingRequirements.length > 0 && !ambiguousPayload
+              ? 'android-shift-recovery-requirements'
+              : undefined}
+          >
             {busy ? <Loader2 className="animate-spin" size={14}/> : <ShieldCheck size={14}/>}
             {busy ? 'Checking every blocker…' : ambiguousPayload ? 'Retry exact recovery' : 'Recover & close shift'}
           </button>

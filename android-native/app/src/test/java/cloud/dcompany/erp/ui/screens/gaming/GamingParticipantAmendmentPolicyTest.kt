@@ -3,7 +3,9 @@ package cloud.dcompany.erp.ui.screens.gaming
 import cloud.dcompany.erp.core.db.GamingSessionActionState
 import cloud.dcompany.erp.core.db.GamingSessionActionType
 import cloud.dcompany.erp.core.db.GamingSessionParticipantCacheEntity
+import cloud.dcompany.erp.core.db.GamingSessionState
 import cloud.dcompany.erp.core.db.LocalGamingSessionActionEntity
+import cloud.dcompany.erp.core.db.LocalGamingSessionEntity
 import java.time.Instant
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -22,6 +24,72 @@ class GamingParticipantAmendmentPolicyTest {
         assertFalse(canAmendGamingPackageTo30(session, target, startedAt + 1_800_000))
         assertFalse(canAmendGamingPackageTo30(session.copy(participantRevision = 1), target, startedAt + 1_000))
         assertFalse(canAmendGamingPackageTo30(session.copy(billingRevision = 1), target, startedAt + 1_000))
+    }
+
+    @Test
+    fun `offline start has version zero and permits amendment before thirty played minutes`() {
+        val local = pendingStart().toGameSession()
+        val target = package30("ps5", "single", 8_000)
+
+        assertTrue(local.isLocallyPendingStart())
+        assertTrue(local.isLocallyPendingPs5PackageStart())
+        assertEquals(0, local.pauseVersion)
+        assertEquals(0, local.participantRevision)
+        assertEquals(0, local.billingRevision)
+        assertTrue(canAmendGamingPackageTo30(local, target, startedAt + 1_799_999))
+        assertFalse(canAmendGamingPackageTo30(local, target, startedAt + 1_800_000))
+        assertFalse(canAmendGamingPackageTo30(
+            pendingStart().copy(state = GamingSessionState.START_REJECTED, status = "start_failed")
+                .toGameSession(),
+            target,
+            startedAt + 1_000,
+        ))
+    }
+
+    @Test
+    fun `offline start amendment and friend attendance project in FIFO without a speculative friend charge`() {
+        val local = pendingStart().toGameSession()
+        val amend = action(
+            id = "amend-1", sequence = 1, type = GamingSessionActionType.AMEND,
+            expectedParticipantRevision = 0, expectedBillingRevision = 0,
+            packageId = "single-30", expectedPackagePriceMinor = 8_000,
+            expectedPackageDurationMinutes = 30, expectedPackageVariant = "single",
+            expectedSessionTimerMinutes = 60, expectedSessionAmountMinor = 12_000,
+        ).copy(sessionKey = local.id, localSessionId = local.id, serverSessionId = null)
+        val join = action(
+            id = "join-1", sequence = 2, type = GamingSessionActionType.PARTICIPANT_JOIN,
+            expectedParticipantRevision = 0,
+        ).copy(
+            sessionKey = local.id, localSessionId = local.id, serverSessionId = null,
+            customerId = null, customerName = "Amina", customerPhone = "9876543210",
+        )
+        val leave = action(
+            id = "leave-1", sequence = 3, type = GamingSessionActionType.PARTICIPANT_LEAVE,
+            expectedParticipantRevision = 1, participantReference = "join-1",
+        ).copy(sessionKey = local.id, localSessionId = local.id, serverSessionId = null)
+
+        val afterAmend = projectPendingGamingSessionActions(local, listOf(amend))
+        val afterJoin = projectPendingGamingSessionActions(local, listOf(amend, join))
+        val afterLeave = projectPendingGamingSessionActions(local, listOf(leave, join, amend))
+        val friend = mergeGamingParticipants(local, emptyList(), listOf(join, leave), emptyList()).single()
+
+        assertEquals(30, afterAmend.timerMinutes)
+        assertEquals(Instant.ofEpochMilli(startedAt + 1_800_000).toString(), afterAmend.timerEndsAt)
+        assertEquals(8_000L, afterAmend.amountMinor)
+        assertEquals(1, afterAmend.billingRevision)
+        assertEquals(1, afterJoin.participantRevision)
+        assertEquals(2, afterLeave.participantRevision)
+        assertEquals(8_000L, afterLeave.amountMinor)
+        assertEquals("Amina", friend.name)
+        assertFalse(friend.active)
+        assertTrue(friend.pending)
+
+        val failedStart = pendingStart().copy(
+            state = GamingSessionState.START_REJECTED,
+            status = "start_failed",
+        ).toGameSession()
+        assertEquals(failedStart, projectPendingGamingSessionActions(failedStart, listOf(amend, join)))
+        assertFalse(mergeGamingParticipants(failedStart, emptyList(), listOf(join), emptyList()).single().active)
     }
 
     @Test
@@ -81,6 +149,57 @@ class GamingParticipantAmendmentPolicyTest {
         assertFalse(roster.single().active)
         assertTrue(roster.single().pending)
         assertEquals(2, projected.participantRevision)
+    }
+
+    @Test
+    fun `confirmed join with saved leave still hides friend and blocks duplicate leave`() {
+        val join = action(
+            id = "join-1",
+            sequence = 1,
+            type = GamingSessionActionType.PARTICIPANT_JOIN,
+            customerId = "friend-1",
+        ).copy(
+            state = GamingSessionActionState.CONFIRMED,
+            resultParticipantId = "participant-1",
+        )
+        val leave = action(
+            id = "leave-1",
+            sequence = 2,
+            type = GamingSessionActionType.PARTICIPANT_LEAVE,
+            expectedParticipantRevision = 1,
+            participantReference = join.actionId,
+        )
+        val cached = GamingSessionParticipantCacheEntity(
+            id = "participant-1",
+            gamingSessionId = session().id,
+            customerId = "friend-1",
+            joinedAtMillis = startedAt + 1_000,
+            joinedPlayElapsedMs = 1_000,
+            joinRevision = 1,
+        )
+        val actions = listOf(join, leave)
+
+        val roster = mergeGamingParticipants(session(), listOf(cached), actions, emptyList())
+
+        assertEquals(1, roster.size)
+        assertEquals(cached.id, roster.single().reference)
+        assertFalse(roster.single().active)
+        assertTrue(roster.single().pending)
+        assertTrue(hasSavedGamingParticipantLeave(join.actionId, actions))
+        assertTrue(hasSavedGamingParticipantLeave(cached.id, actions))
+        assertFalse(hasSavedGamingParticipantLeave("participant-2", actions))
+        val board = GamingUiState(
+            sessions = listOf(session()),
+            participantCache = listOf(cached),
+            sessionActions = actions,
+        )
+        assertFalse(board.participantsFor(session()).single().active)
+        assertEquals(listOf(leave.actionId), board.unresolvedSequencedActionsFor(session()).map { it.actionId })
+
+        val rejected = leave.copy(state = GamingSessionActionState.REJECTED, lastError = "Roster changed")
+        val rejectedRoster = mergeGamingParticipants(session(), listOf(cached), listOf(join, rejected), emptyList())
+        assertTrue(rejectedRoster.single().active)
+        assertEquals("Roster changed", rejectedRoster.single().lastError)
     }
 
     @Test
@@ -200,6 +319,25 @@ class GamingParticipantAmendmentPolicyTest {
         effectivePackageVariant = "single",
         effectivePackageStationType = "ps5",
         effectivePackagePricingTier = "standard",
+    )
+
+    private fun pendingStart() = LocalGamingSessionEntity(
+        localId = "local-session-1",
+        stationId = "station-1",
+        shiftId = "shift-1",
+        startedAtMillis = startedAt,
+        state = GamingSessionState.START_PENDING,
+        status = "starting",
+        timerMinutes = 60,
+        timerEndsAtMillis = startedAt + 3_600_000,
+        amountMinor = 12_000,
+        packageId = "single-60",
+        packagePriceMinor = 12_000,
+        packageDurationMinutes = 60,
+        packageVariant = "single",
+        packageStationTypeSnapshot = "ps5",
+        packagePricingTierSnapshot = "standard",
+        billingMode = "package",
     )
 
     private fun package30(stationType: String, variant: String, priceMinor: Long) = GamingPackage(

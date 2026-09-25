@@ -188,7 +188,9 @@ data class GamingUiState(
     fun unresolvedSequencedActionsFor(session: GameSession): List<LocalGamingSessionActionEntity> {
         val localId = sessions.firstOrNull { it.id == session.id }?.id
         return sessionActions.filter {
-            it.serverSessionId == session.id || it.localSessionId == localId || it.sessionKey == session.id
+            it.state !in setOf(GamingSessionActionState.CONFIRMED, GamingSessionActionState.DISCARDED) &&
+                (it.serverSessionId == session.id || it.localSessionId == localId ||
+                    it.sessionKey == session.id)
         }
     }
 }
@@ -216,11 +218,15 @@ internal fun mergeGamingParticipants(
     val pendingLeaveRefs = relevantActions.filter {
         it.actionType == GamingSessionActionType.PARTICIPANT_LEAVE &&
             it.state in setOf(GamingSessionActionState.PENDING, GamingSessionActionState.AMBIGUOUS)
-    }.mapNotNull { it.participantReference }.toSet()
+    }.mapNotNull { it.participantReference?.let { reference ->
+        resolvedGamingParticipantReference(reference, relevantActions)
+    } }.toSet()
     val rejectedLeaveByRef = relevantActions.filter {
         it.actionType == GamingSessionActionType.PARTICIPANT_LEAVE &&
             it.state == GamingSessionActionState.REJECTED
-    }.associateBy { it.participantReference }
+    }.associateBy { it.participantReference?.let { reference ->
+        resolvedGamingParticipantReference(reference, relevantActions)
+    } }
     val serverRows = cache.filter { it.gamingSessionId == session.id }.map { row ->
         val customer = customerById[row.customerId]
         val rejectedLeave = rejectedLeaveByRef[row.id]
@@ -245,12 +251,37 @@ internal fun mergeGamingParticipants(
             name = customer?.name ?: action.customerName,
             phone = customer?.phone ?: action.customerPhone,
             active = action.state != GamingSessionActionState.REJECTED &&
-                action.actionId !in pendingLeaveRefs,
+                session.status != "start_failed" &&
+                resolvedGamingParticipantReference(action.actionId, relevantActions) !in pendingLeaveRefs,
             pending = true,
-            lastError = action.lastError,
+            lastError = action.lastError ?: if (session.status == "start_failed") {
+                "Start needs review before friend attendance can sync."
+            } else null,
         )
     }
     return serverRows + pendingJoins
+}
+
+/** A queued Leave keeps its immutable Join action ID after that Join receives a server ID. */
+internal fun resolvedGamingParticipantReference(
+    reference: String,
+    actions: List<LocalGamingSessionActionEntity>,
+): String = actions.firstOrNull {
+    it.actionType == GamingSessionActionType.PARTICIPANT_JOIN && it.actionId == reference
+}?.resultParticipantId ?: reference
+
+internal fun hasSavedGamingParticipantLeave(
+    reference: String,
+    actions: List<LocalGamingSessionActionEntity>,
+): Boolean {
+    val resolved = resolvedGamingParticipantReference(reference, actions)
+    return actions.any {
+        it.actionType == GamingSessionActionType.PARTICIPANT_LEAVE &&
+            it.state != GamingSessionActionState.DISCARDED &&
+            it.participantReference?.let { saved ->
+                resolvedGamingParticipantReference(saved, actions) == resolved
+            } == true
+    }
 }
 
 data class GamingCleanupAcknowledgementUi(
@@ -1135,7 +1166,7 @@ class GamingViewModel : ViewModel() {
                 db.gamingDao().observeSessionAddonCache(),
                 db.gamingDao().observeUnresolvedSessionAddonActions(),
                 db.gamingDao().observeParticipantCache(),
-                db.gamingDao().observeUnresolvedSessionActions(),
+                db.gamingDao().observeSessionActionsForBoard(),
             ) { packageExtensions, addonCache, addonActions, participants, sessionActions ->
                 AddonState(packageExtensions, addonCache, addonActions, participants, sessionActions)
             },
@@ -1713,6 +1744,18 @@ class GamingViewModel : ViewModel() {
                             // Already an outbox row for this session (this device started
                             // it, possibly still unsynced) — just flag the stop.
                             db.withTransaction {
+                                val projectedLocal = projectPendingGamingSessionActions(
+                                    if (session.id == existing.localId) session
+                                    else session.copy(id = existing.localId),
+                                    dao.sessionActionsForKey(existing.localId),
+                                )
+                                val projected = existing.serverId?.takeIf { it != existing.localId }
+                                    ?.let { serverId ->
+                                        projectPendingGamingSessionActions(
+                                            projectedLocal.copy(id = serverId),
+                                            dao.sessionActionsForKey(serverId),
+                                        )
+                                    } ?: projectedLocal
                                 changed = dao.requestSessionStop(
                                     existing.localId,
                                     stoppedAtMillis,
@@ -1739,8 +1782,8 @@ class GamingViewModel : ViewModel() {
                                             localSessionId = existing.localId,
                                             shiftId = resolvedStopShiftId,
                                             occurredAtMillis = stoppedAtMillis,
-                                            expectedParticipantRevision = session.participantRevision,
-                                            expectedBillingRevision = session.billingRevision,
+                                            expectedParticipantRevision = projected.participantRevision,
+                                            expectedBillingRevision = projected.billingRevision,
                                         ),
                                     )
                                 } else if (changed && prior?.state == GamingSessionActionState.REJECTED) {
@@ -1748,8 +1791,8 @@ class GamingViewModel : ViewModel() {
                                         dao.recaptureRejectedStopAction(
                                             stopActionId,
                                             stoppedAtMillis,
-                                            session.participantRevision,
-                                            session.billingRevision,
+                                            projected.participantRevision,
+                                            projected.billingRevision,
                                         )
                                     } else {
                                         dao.retryRejectedSessionAction(stopActionId)
@@ -1762,6 +1805,11 @@ class GamingViewModel : ViewModel() {
                             // pushGamingSessionOne skips straight to the stop leg.
                             val localId = UUID.randomUUID().toString()
                             db.withTransaction {
+                                val latest = dao.sessionCacheById(session.id)?.toGameSession() ?: session
+                                val projected = projectPendingGamingSessionActions(
+                                    latest,
+                                    dao.sessionActionsForKey(session.id),
+                                )
                                 dao.insertLocalSession(
                                     LocalGamingSessionEntity(
                                     localId = localId,
@@ -1800,7 +1848,9 @@ class GamingViewModel : ViewModel() {
                                 dao.captureSessionAction(
                                     LocalGamingSessionActionEntity(
                                         actionId = "gaming-session-stop:$localId",
-                                        sessionKey = localId,
+                                        // Share the server session's FIFO with earlier
+                                        // Join/Leave actions captured before this Stop.
+                                        sessionKey = session.id,
                                         actionType = GamingSessionActionType.STOP,
                                         ownerCompanyId = scopeLease.scope.companyId,
                                         ownerUserId = scopeLease.scope.userId,
@@ -1810,8 +1860,8 @@ class GamingViewModel : ViewModel() {
                                         localSessionId = localId,
                                         shiftId = resolvedStopShiftId,
                                         occurredAtMillis = stoppedAtMillis,
-                                        expectedParticipantRevision = session.participantRevision,
-                                        expectedBillingRevision = session.billingRevision,
+                                        expectedParticipantRevision = projected.participantRevision,
+                                        expectedBillingRevision = projected.billingRevision,
                                     ),
                                 )
                             }
@@ -2370,7 +2420,7 @@ class GamingViewModel : ViewModel() {
                 }
                 val restoreCapturedStop = recoveredDisposition ==
                     RecoveredLegacyServerDisposition.RESTORE_CAPTURED_STOP
-                val retainedBillingReview = recoveredDisposition ==
+                val requestedBillingReview = recoveredDisposition ==
                     RecoveredLegacyServerDisposition.RETAIN_BILLING_REVIEW
                 val scopeStillCurrent = appCtx.cacheIsolation.commitIfCurrentOrNotifyStale(
                     lease = scopeLease,
@@ -2388,10 +2438,10 @@ class GamingViewModel : ViewModel() {
                             authoritative = authoritative,
                             disposition = requireNotNull(recoveredDisposition),
                             billingReviewError = LEGACY_RECOVERED_BILLING_REVIEW_ERROR
-                                .takeIf { retainedBillingReview },
+                                .takeIf { requestedBillingReview },
                         )
                     } else {
-                        db.gamingDao().confirmLegacyPackageResolution(
+                        db.gamingDao().confirmNoServerLegacyResolutionAndReconcileDependents(
                             localId = actionId,
                             resolution = body.resolution,
                             reason = body.reason,
@@ -2406,9 +2456,24 @@ class GamingViewModel : ViewModel() {
                 if (!committed) {
                     throw IllegalStateException("Legacy resolution receipt could not be committed")
                 }
+                val retainedBillingReview = recovered != null &&
+                    db.gamingDao().localSessionById(actionId)?.let {
+                        it.state == GamingSessionState.START_REJECTED &&
+                            it.legacyResolutionReceiptId == receipt.receiptId
+                    } == true
+                val retainedManualBillReview = recovered == null &&
+                    body.resolution == GamingLegacyResolution.MANUAL_BILL_RECORDED &&
+                    db.gamingDao().localSessionById(actionId)?.let {
+                        it.state == GamingSessionState.START_REJECTED &&
+                            it.legacyResolutionReceiptId == receipt.receiptId
+                    } == true
                 if (restoreCapturedStop) appCtx.sync.requestSync()
                 GamingAlarmReconciler.reconcile(appCtx)
                 notice.value = when {
+                    recovered != null && retainedBillingReview && !requestedBillingReview ->
+                        "The server Start was recovered, but its saved offline changes need audited billing review. Audit receipt ${receipt.receiptId} and the original actions are retained; ordinary Stop and POS handoff remain locked."
+                    retainedManualBillReview ->
+                        "The manual bill was recorded, but saved offline session changes still need audited billing review. Audit receipt ${receipt.receiptId} and the original actions are retained; this shift remains blocked."
                     recovered != null && retainedBillingReview ->
                         "The server Start was recovered, but its original offline Stop cannot be converted into a safe bill. Audit receipt ${receipt.receiptId} is retained; ordinary Stop and POS handoff remain locked for owner/support review."
                     recovered != null && restoreCapturedStop &&
@@ -2950,9 +3015,12 @@ class GamingViewModel : ViewModel() {
     fun amendPackage(session: GameSession, target: GamingPackage) {
         if (!requireWrite() || !requireIdle()) return
         val station = state.value.stations.firstOrNull { it.id == session.stationId }
-        val elapsed = sessionPlayElapsedMillis(session, System.currentTimeMillis())
+        val capturedAt = System.currentTimeMillis()
+        val elapsed = sessionPlayElapsedMillis(session, capturedAt)
         val valid = station != null && stationFilterId(station.type) == "ps5" &&
-            session.status in setOf("active", "paused") && session.orderId == null &&
+            (session.status in setOf("active", "paused") ||
+                session.isLocallyPendingPs5PackageStart()) &&
+            session.orderId == null && session.pauseVersion != null && session.amountMinor != null &&
             session.billingRevision == 0 && session.participantRevision == 0 &&
             session.timerMinutes == 60 && session.packageDurationMinutesSnapshot == 60 &&
             session.packageVariantSnapshot in setOf("single", "dual") &&
@@ -2975,8 +3043,7 @@ class GamingViewModel : ViewModel() {
                 preservedState = "The original 60-minute booking remains unchanged.",
             ),
         ) ?: return
-        val capturedAt = System.currentTimeMillis()
-        val capturedElapsed = requireNotNull(sessionPlayElapsedMillis(session, capturedAt))
+        val capturedElapsed = requireNotNull(elapsed)
         val actionId = UUID.randomUUID().toString()
         busyStationId.value = session.stationId
         error.value = null
@@ -2986,14 +3053,27 @@ class GamingViewModel : ViewModel() {
                 if (!appCtx.cacheIsolation.commitIfCurrentOrNotifyStale(scopeLease, onStale = {
                         error.value = "The workspace changed before the booking change was saved."
                     }) {
-                        val dao = db.gamingDao()
-                        val local = dao.localSessionByEitherId(session.id)
-                        val serverId = local?.serverId ?: session.id.takeIf { local == null }
-                        if (serverId != null) {
-                            dao.captureSessionAction(
+                        db.withTransaction {
+                            val dao = db.gamingDao()
+                            val local = dao.localSessionByEitherId(session.id)
+                            val serverId = local?.serverId ?: session.id.takeIf {
+                                local == null && session.localState == null
+                            }
+                            val pendingStart = local?.state == GamingSessionState.START_PENDING &&
+                                local.serverId == null && local.status == "starting"
+                            val sessionKey = local?.localId ?: serverId
+                            val existing = sessionKey?.let { dao.sessionActionsForKey(it) }.orEmpty()
+                            if ((pendingStart || serverId != null &&
+                                    (local == null || local.state == GamingSessionState.START_SYNCED)) &&
+                                existing.none { it.state !in setOf(
+                                    GamingSessionActionState.CONFIRMED,
+                                    GamingSessionActionState.DISCARDED,
+                                ) }
+                            ) {
+                                dao.captureSessionAction(
                                 LocalGamingSessionActionEntity(
                                     actionId = actionId,
-                                    sessionKey = local?.localId ?: serverId,
+                                    sessionKey = requireNotNull(sessionKey),
                                     actionType = GamingSessionActionType.AMEND,
                                     ownerCompanyId = scopeLease.scope.companyId,
                                     ownerUserId = scopeLease.scope.userId,
@@ -3004,7 +3084,7 @@ class GamingViewModel : ViewModel() {
                                     shiftId = requireNotNull(session.shiftId),
                                     occurredAtMillis = capturedAt,
                                     playElapsedMs = capturedElapsed,
-                                    expectedPauseVersion = session.pauseVersion ?: 0,
+                                    expectedPauseVersion = requireNotNull(session.pauseVersion),
                                     expectedParticipantRevision = session.participantRevision,
                                     expectedBillingRevision = session.billingRevision,
                                     packageId = target.id,
@@ -3014,13 +3094,14 @@ class GamingViewModel : ViewModel() {
                                     expectedSessionTimerMinutes = requireNotNull(session.timerMinutes),
                                     expectedSessionAmountMinor = requireNotNull(session.amountMinor),
                                 ),
-                            )
-                            saved = true
+                                )
+                                saved = true
+                            }
                         }
                     }
                 ) return@launch
                 if (!saved) {
-                    error.value = "Wait for this session's Start to reach the server before changing its booking."
+                    error.value = "The session changed or has another saved action. Refresh Gaming before changing its booking."
                     return@launch
                 }
                 notice.value = "30-minute ${gamingModeLabel(target.variant)} price saved for sync."
@@ -3041,7 +3122,9 @@ class GamingViewModel : ViewModel() {
     ) {
         if (!requireWrite() || !requireIdle()) return
         val station = state.value.stations.firstOrNull { it.id == session.stationId }
-        if (station == null || stationFilterId(station.type) != "ps5" || session.status != "active") {
+        if (station == null || stationFilterId(station.type) != "ps5" ||
+            (session.status != "active" && !session.isLocallyPendingPs5PackageStart())
+        ) {
             error.value = if (session.status == "paused") {
                 "Resume the session before adding a friend."
             } else {
@@ -3076,7 +3159,7 @@ class GamingViewModel : ViewModel() {
 
     fun leaveParticipant(session: GameSession, participantReference: String) {
         if (!requireWrite() || !requireIdle()) return
-        if (session.status !in setOf("active", "paused")) {
+        if (session.status !in setOf("active", "paused") && !session.isLocallyPendingPs5PackageStart()) {
             error.value = "Friends can leave only while the session is running."
             return
         }
@@ -3121,18 +3204,55 @@ class GamingViewModel : ViewModel() {
         viewModelScope.launch {
             try {
                 var saved = false
+                var captureError: String? = null
                 if (!appCtx.cacheIsolation.commitIfCurrentOrNotifyStale(scopeLease, onStale = {
                         error.value = "The workspace changed before friend attendance was saved."
                     }) {
-                        val dao = db.gamingDao()
-                        val local = dao.localSessionByEitherId(session.id)
-                        val serverId = local?.serverId ?: session.id.takeIf { local == null }
-                        val directory = db.customerDao().directoryState(scopeLease.scope.companyId)
-                        if (serverId != null) {
+                        db.withTransaction {
+                            val dao = db.gamingDao()
+                            val local = dao.localSessionByEitherId(session.id)
+                            val serverId = local?.serverId ?: session.id.takeIf {
+                                local == null && session.localState == null
+                            }
+                            val pendingStart = local?.state == GamingSessionState.START_PENDING &&
+                                local.serverId == null && local.status == "starting"
+                            if (!pendingStart && (serverId == null ||
+                                    local != null && local.state != GamingSessionState.START_SYNCED)
+                            ) {
+                                captureError = "This session's Start or Stop changed. Refresh Gaming before changing friends."
+                                return@withTransaction
+                            }
+                            val sessionKey = local?.localId ?: requireNotNull(serverId)
+                            val savedActions = dao.sessionActionsForKey(sessionKey)
+                            if (savedActions.any { it.state == GamingSessionActionState.REJECTED ||
+                                    it.actionType == GamingSessionActionType.STOP &&
+                                        it.state != GamingSessionActionState.DISCARDED
+                            }) {
+                                captureError = "Resolve the earlier saved session action before changing friends."
+                                return@withTransaction
+                            }
+                            if (actionType == GamingSessionActionType.PARTICIPANT_LEAVE &&
+                                hasSavedGamingParticipantLeave(requireNotNull(participantReference), savedActions)
+                            ) {
+                                captureError = "This friend already has a saved Leave action."
+                                return@withTransaction
+                            }
+                            if (customerId != null &&
+                                db.customerDao().getCache(customerId) == null &&
+                                db.customerDao().pendingLocalForServerId(customerId) == null
+                            ) {
+                                captureError = "That saved customer is no longer available. Search again."
+                                return@withTransaction
+                            }
+                            val projected = projectPendingGamingSessionActions(
+                                if (session.id == sessionKey) session else session.copy(id = sessionKey),
+                                savedActions,
+                            )
+                            val directory = db.customerDao().directoryState(scopeLease.scope.companyId)
                             dao.captureSessionAction(
                                 LocalGamingSessionActionEntity(
                                     actionId = UUID.randomUUID().toString(),
-                                    sessionKey = local?.localId ?: serverId,
+                                    sessionKey = sessionKey,
                                     actionType = actionType,
                                     ownerCompanyId = scopeLease.scope.companyId,
                                     ownerUserId = scopeLease.scope.userId,
@@ -3144,8 +3264,8 @@ class GamingViewModel : ViewModel() {
                                     occurredAtMillis = capturedAt,
                                     playElapsedMs = playElapsed,
                                     expectedPauseVersion = requireNotNull(session.pauseVersion),
-                                    expectedParticipantRevision = session.participantRevision,
-                                    expectedBillingRevision = session.billingRevision,
+                                    expectedParticipantRevision = projected.participantRevision,
+                                    expectedBillingRevision = projected.billingRevision,
                                     customerId = customerId,
                                     customerName = customerName,
                                     customerPhone = customerPhone,
@@ -3159,7 +3279,7 @@ class GamingViewModel : ViewModel() {
                     }
                 ) return@launch
                 if (!saved) {
-                    error.value = "Wait for this session's Start to reach the server before changing friends."
+                    error.value = captureError ?: "The friend change was not saved. Refresh Gaming and try again."
                     return@launch
                 }
                 notice.value = if (actionType == GamingSessionActionType.PARTICIPANT_JOIN) {
@@ -3272,19 +3392,24 @@ class GamingViewModel : ViewModel() {
         viewModelScope.launch {
             try {
                 var retainedSnapshot: LocalGamingPackageExtensionEntity? = null
+                var retainedLedger: LocalGamingSessionActionEntity? = null
                 val retainedSnapshotCommitted = appCtx.cacheIsolation.commitIfCurrentOrNotifyStale(
                     lease = scopeLease,
                     onStale = { error.value = workspaceMessage },
                 ) {
                     retainedSnapshot = db.gamingDao().packageExtensionAction(actionId)
+                    retainedLedger = db.gamingDao().sessionAction(actionId)
                 }
                 if (!retainedSnapshotCommitted) {
                     return@launch
                 }
                 val retained = retainedSnapshot
+                val capturedAction = retainedLedger
                 if (
                     retained == null || retained.state != GamingPackageExtensionState.REJECTED ||
-                    retained.serverSessionId != action.serverSessionId || retained.shiftId != action.shiftId
+                    retained.serverSessionId != action.serverSessionId || retained.shiftId != action.shiftId ||
+                    capturedAction?.actionType != GamingSessionActionType.EXTEND ||
+                    capturedAction.actionId != retained.actionId
                 ) {
                     error.value = "The saved extension changed state and was kept. Refresh Gaming before continuing."
                     return@launch
@@ -3293,7 +3418,7 @@ class GamingViewModel : ViewModel() {
                 try {
                     val replayed = gamingApi.extendWithPackage(
                         id = retained.serverSessionId,
-                        body = retained.toPackageExtendBody(),
+                        body = retained.toPackageExtendBody(capturedAction.expectedBillingRevision),
                         key = retained.actionId,
                         provenance = outboxProvenanceHeaders(
                             retained.createdAtMillis,
@@ -3849,6 +3974,9 @@ internal fun projectPendingGamingSessionActions(
     session: GameSession,
     actions: List<LocalGamingSessionActionEntity>,
 ): GameSession {
+    if (session.status == "start_failed" && session.localState == GamingSessionState.START_REJECTED) {
+        return session
+    }
     var projected = session
     actions.asSequence()
         .filter {
@@ -3861,14 +3989,24 @@ internal fun projectPendingGamingSessionActions(
                 GamingSessionActionType.AMEND -> {
                     val originalBase = projected.packagePriceMinorSnapshot ?: return@forEach
                     val targetPrice = action.expectedPackagePriceMinor ?: return@forEach
+                    val targetMinutes = action.expectedPackageDurationMinutes ?: return@forEach
+                    val timerEndsAt = if (projected.pausedAt != null) null else runCatching {
+                        Instant.parse(projected.startAt)
+                            .plusMillis(Math.addExact(
+                                Math.multiplyExact(targetMinutes.toLong(), 60_000L),
+                                projected.completedPauseMillis(),
+                            ))
+                            .toString()
+                    }.getOrNull()
                     projected = projected.copy(
-                        timerMinutes = action.expectedPackageDurationMinutes,
+                        timerMinutes = targetMinutes,
+                        timerEndsAt = timerEndsAt,
                         amountMinor = (action.expectedSessionAmountMinor ?: projected.amountMinor ?: 0L) -
                             originalBase + targetPrice,
                         billingRevision = (action.expectedBillingRevision ?: projected.billingRevision) + 1,
                         effectivePackageId = action.packageId,
                         effectivePackagePriceMinor = targetPrice,
-                        effectivePackageDurationMinutes = action.expectedPackageDurationMinutes,
+                        effectivePackageDurationMinutes = targetMinutes,
                         effectivePackageVariant = action.expectedPackageVariant,
                         effectivePackageStationType = projected.packageStationTypeSnapshot,
                         effectivePackagePricingTier = projected.packagePricingTierSnapshot,
@@ -3896,6 +4034,14 @@ internal fun projectPendingGamingSessionActions(
         }
     return projected
 }
+
+internal fun GameSession.isLocallyPendingStart(): Boolean =
+    status == "starting" && localState == GamingSessionState.START_PENDING
+
+internal fun GameSession.isLocallyPendingPs5PackageStart(): Boolean =
+    isLocallyPendingStart() && billingMode == "package" && pauseVersion == 0 &&
+        packageStationTypeSnapshot == "ps5" && packagePricingTierSnapshot == "standard" &&
+        packageVariantSnapshot in setOf("single", "dual") && hasLockedPackageExtensionSnapshot()
 
 internal fun sequencedGamingActionBlockMessage(count: Int, action: String): String =
     "$count saved session action(s) must sync in order before $action. " +
@@ -4037,7 +4183,7 @@ internal fun GameSession.toCacheEntity() = GamingSessionCacheEntity(
     orderId = orderId,
 )
 
-private fun LocalGamingSessionEntity.toGameSession() = GameSession(
+internal fun LocalGamingSessionEntity.toGameSession() = GameSession(
     id = serverId ?: localId,
     stationId = stationId,
     shiftId = shiftId,
@@ -4046,6 +4192,9 @@ private fun LocalGamingSessionEntity.toGameSession() = GameSession(
     endAt = endAtMillis?.let { Instant.ofEpochMilli(it).toString() },
     timerMinutes = timerMinutes,
     timerEndsAt = timerEndsAtMillis?.let { Instant.ofEpochMilli(it).toString() },
+    // A newly captured Start has not paused or changed either revision yet.
+    // Only this verified local state may supply the server's version-zero baseline.
+    pauseVersion = if (serverId == null && state == GamingSessionState.START_PENDING) 0 else null,
     billableMinutes = billableMinutes,
     amountMinor = amountMinor,
     ratePerHourMinor = ratePerHourMinor,
