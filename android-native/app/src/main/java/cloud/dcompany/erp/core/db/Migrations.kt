@@ -2995,12 +2995,20 @@ val MIGRATION_52_53 = object : Migration(52, 53) {
                 "expectedSessionTimerMinutes, expectedSessionAmountMinor, NULL expectedBillingRevision, state, lastError, resolvedAtMillis, 0 priority " +
                 "FROM local_gaming_package_extensions WHERE state IN ('pending','ambiguous','rejected') " +
                 "UNION ALL " +
-                "SELECT 'gaming-session-stop:' || localId, localId, 'stop', serverId, localId, " +
+                // A remote session's extension has no localSessionId. Its later
+                // locally captured Stop must share the extension's server key.
+                "SELECT 'gaming-session-stop:' || s.localId, " +
+                "CASE WHEN s.serverId IS NOT NULL AND EXISTS (" +
+                "SELECT 1 FROM local_gaming_package_extensions e WHERE e.serverSessionId = s.serverId " +
+                "AND e.localSessionId IS NULL AND e.state IN ('pending','ambiguous','rejected')" +
+                ") THEN s.serverId ELSE s.localId END, 'stop', s.serverId, s.localId, " +
                 "COALESCE(shiftId, ''), COALESCE(endAtMillis, startedAtMillis), NULL, NULL, NULL, NULL, " +
                 // Room 52 Stop sent ended_at only; null preserves omitted CAS fields.
                 "timerMinutes, amountMinor, NULL, CASE WHEN state = 'stop_rejected' THEN 'rejected' ELSE 'pending' END, " +
-                "lastError, NULL, 1 FROM local_gaming_sessions WHERE state IN ('stop_pending','stop_rejected')" +
-                "), ranked AS (SELECT *, ROW_NUMBER() OVER (PARTITION BY sessionKey ORDER BY occurredAtMillis, priority, actionId) sequence FROM candidates) " +
+                "lastError, NULL, 1 FROM local_gaming_sessions s WHERE state IN ('stop_pending','stop_rejected')" +
+                // A bodyless legacy Stop only has a start-time fallback; it
+                // still follows every extension captured before that Stop.
+                "), ranked AS (SELECT *, ROW_NUMBER() OVER (PARTITION BY sessionKey ORDER BY priority, occurredAtMillis, actionId) sequence FROM candidates) " +
                 "INSERT INTO local_gaming_session_actions (actionId, sessionKey, sequence, actionType, serverSessionId, " +
                 "localSessionId, shiftId, occurredAtMillis, packageId, expectedPackagePriceMinor, " +
                 "expectedPackageDurationMinutes, expectedPackageVariant, expectedSessionTimerMinutes, " +

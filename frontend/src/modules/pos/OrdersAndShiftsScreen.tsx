@@ -2504,7 +2504,7 @@ export function RecoverAndroidShiftForm({
           </button>
           <button
             type="submit"
-            className="btn btn-danger"
+            className="btn btn-danger disabled:cursor-not-allowed disabled:opacity-40"
             disabled={!canSubmit}
             aria-describedby={missingRequirements.length > 0 && !ambiguousPayload
               ? 'android-shift-recovery-requirements'

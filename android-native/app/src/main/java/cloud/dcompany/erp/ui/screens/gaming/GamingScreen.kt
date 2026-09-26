@@ -2485,6 +2485,7 @@ internal fun GamingStationCard(
                         onAddItems = onAddItems,
                         onVoidAddon = onVoidAddon,
                         onReviewRejectedAddon = onReviewRejectedAddon,
+                        onManageParticipants = onManageParticipants,
                         onPauseResume = onPauseResume,
                     )
                 }
@@ -4995,7 +4996,7 @@ private fun gamingPackageChipColors() = FilterChipDefaults.filterChipColors(
 )
 
 @Composable
-private fun GamingParticipantsDialog(
+internal fun GamingParticipantsDialog(
     session: GameSession,
     participants: List<GamingParticipantUi>,
     rejectedAction: LocalGamingSessionActionEntity?,

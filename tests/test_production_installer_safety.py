@@ -89,6 +89,101 @@ def test_every_git_archive_extraction_honours_the_private_installer_umask() -> N
         assert private_umask < source.index(extraction)
 
 
+def test_candidate_archive_restores_only_the_reviewed_vex_template_mode(
+    tmp_path: Path,
+) -> None:
+    source = INSTALLER.read_text(encoding="utf-8")
+    extraction = (
+        '  tar --no-same-permissions -xf "$CANDIDATE_SOURCE_ARCHIVE" \\\n'
+        '    -C "$CANDIDATE_BUILD_ROOT"\n'
+    )
+    start = source.index(extraction)
+    end = source.index('  rm -f "$CANDIDATE_SOURCE_ARCHIVE"', start)
+    extraction_and_mode_check = source[start:end]
+    assert 'chmod 0644 "$candidate_vex_template"' in extraction_and_mode_check
+    assert '[ -L "$candidate_vex_template" ]' in extraction_and_mode_check
+    assert 'realpath "$candidate_vex_template"' in extraction_and_mode_check
+
+    template_name = "infra/security/vex/zlib-cve-2026-85091.openvex.json"
+    peer = tmp_path / "peer.txt"
+    peer.write_text("another reviewed input\n", encoding="utf-8")
+    archive = tmp_path / "source.tar"
+    with tarfile.open(archive, "w") as package:
+        package.add(ROOT / template_name, arcname=template_name)
+        package.add(peer, arcname="infra/security/vex/peer.txt")
+
+    snapshot = tmp_path / "snapshot"
+    snapshot.mkdir(mode=0o700)
+    completed = subprocess.run(
+        ["bash", "-c", "set -euo pipefail\numask 077\n" + extraction_and_mode_check],
+        env={
+            **os.environ,
+            "CANDIDATE_SOURCE_ARCHIVE": str(archive),
+            "CANDIDATE_BUILD_ROOT": str(snapshot),
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    template = snapshot / template_name
+    assert stat.S_IMODE(template.stat().st_mode) == 0o644
+    assert template.read_bytes() == (ROOT / template_name).read_bytes()
+    assert stat.S_IMODE((snapshot / "infra/security/vex/peer.txt").stat().st_mode) == 0o600
+
+    linked = tmp_path / "linked-source.tar"
+    with tarfile.open(linked, "w") as package:
+        package.add(peer, arcname="infra/security/vex/peer.txt")
+        link = tarfile.TarInfo(template_name)
+        link.type = tarfile.SYMTYPE
+        link.linkname = "peer.txt"
+        package.addfile(link)
+    linked_snapshot = tmp_path / "linked-snapshot"
+    linked_snapshot.mkdir(mode=0o700)
+    rejected = subprocess.run(
+        ["bash", "-c", "set -euo pipefail\numask 077\n" + extraction_and_mode_check],
+        env={
+            **os.environ,
+            "CANDIDATE_SOURCE_ARCHIVE": str(linked),
+            "CANDIDATE_BUILD_ROOT": str(linked_snapshot),
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert rejected.returncode != 0
+    assert "Frozen zlib VEX template is missing or linked." in rejected.stderr
+    assert stat.S_IMODE((linked_snapshot / "infra/security/vex/peer.txt").stat().st_mode) == 0o600
+
+    external = tmp_path / "external"
+    external.mkdir()
+    external_template = external / "zlib-cve-2026-85091.openvex.json"
+    external_template.write_bytes((ROOT / template_name).read_bytes())
+    external_template.chmod(0o600)
+    linked_parent = tmp_path / "linked-parent.tar"
+    with tarfile.open(linked_parent, "w") as package:
+        link = tarfile.TarInfo("infra/security/vex")
+        link.type = tarfile.SYMTYPE
+        link.linkname = str(external)
+        package.addfile(link)
+    parent_snapshot = tmp_path / "parent-snapshot"
+    parent_snapshot.mkdir(mode=0o700)
+    rejected_parent = subprocess.run(
+        ["bash", "-c", "set -euo pipefail\numask 077\n" + extraction_and_mode_check],
+        env={
+            **os.environ,
+            "CANDIDATE_SOURCE_ARCHIVE": str(linked_parent),
+            "CANDIDATE_BUILD_ROOT": str(parent_snapshot),
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert rejected_parent.returncode != 0
+    assert "Frozen zlib VEX template is missing or linked." in rejected_parent.stderr
+    assert stat.S_IMODE(external_template.stat().st_mode) == 0o600
+
+
 def test_business_quiescence_verifier_requires_exact_zero_evidence() -> None:
     verifier = _load_business_quiescence_verifier()
     verifier.verify_state(_quiescent_document(verifier))

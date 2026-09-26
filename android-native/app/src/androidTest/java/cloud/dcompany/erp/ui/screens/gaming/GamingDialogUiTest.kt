@@ -769,6 +769,86 @@ class GamingDialogUiTest {
     }
 
     @Test
+    fun pendingOfflineStartOpensPlayersDialogInCommandViewport() {
+        val station = testStation()
+        val session = GameSession(
+            id = "local-command-start",
+            stationId = station.id,
+            shiftId = "shift-1",
+            status = "starting",
+            startAt = "2026-08-26T17:00:00Z",
+            timerMinutes = 60,
+            amountMinor = 18_000,
+            packageId = "package-60",
+            billingMode = "package",
+            packagePriceMinorSnapshot = 15_000,
+            packageDurationMinutesSnapshot = 60,
+            packageVariantSnapshot = "dual",
+            packageStationTypeSnapshot = "ps5",
+            packagePricingTierSnapshot = "standard",
+            pauseVersion = 0,
+            localState = GamingSessionState.START_PENDING,
+        )
+        val pendingStartMessage =
+            "Start and player changes are saved on this tablet. They will sync in order; the final charge is confirmed when the session stops."
+
+        compose.setContent {
+            DCompanyTheme {
+                val selected = remember { mutableStateOf<GameSession?>(null) }
+                Box(Modifier.width(417.dp).height(267.dp)) {
+                    GamingStationCard(
+                        station = station,
+                        session = session,
+                        packageExtensionAction = null,
+                        wallClock = rememberedWallClock(
+                            Instant.parse("2026-08-26T17:15:00Z").toEpochMilli(),
+                        ),
+                        actionInProgress = false,
+                        busyHere = false,
+                        focused = false,
+                        canWrite = true,
+                        canReconcileLegacy = false,
+                        activeShiftId = "shift-1",
+                        activeShiftServerConfirmed = true,
+                        online = false,
+                        packages = emptyList(),
+                        hasTransferTarget = false,
+                        onStart = {}, onStop = {}, onSend = {}, onCancelUnbilled = {},
+                        onExtendTimer = {}, onExtendPackage = { _, _ -> }, onTransfer = {},
+                        onReconcile = {}, onRepairBilling = {}, onResolveLegacyStart = {},
+                        onDiscardPackageExtension = {},
+                        onManageParticipants = { selected.value = it },
+                        pinActiveSessionActions = true,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+                selected.value?.let { current ->
+                    GamingParticipantsDialog(
+                        session = current,
+                        participants = emptyList(),
+                        rejectedAction = null,
+                        customers = emptyList(),
+                        online = false,
+                        amendTarget = null,
+                        onSearchCustomer = {},
+                        onJoin = { _, _, _ -> },
+                        onLeave = {},
+                        onAmend = {},
+                        onDiscardRejected = {},
+                        onDismiss = { selected.value = null },
+                    )
+                }
+            }
+        }
+
+        compose.onAllNodesWithText(pendingStartMessage).assertCountEquals(0)
+        compose.onNodeWithText("Players & booking").performScrollTo().assertIsDisplayed().performClick()
+        compose.onNodeWithText(pendingStartMessage).assertIsDisplayed()
+        compose.onNodeWithText("Done").performClick()
+        compose.onAllNodesWithText(pendingStartMessage).assertCountEquals(0)
+    }
+
+    @Test
     fun recoveredStopShowsAuthoritativeClockAndDisclosesRetainedChronologyAdjustment() {
         val station = testStation()
         val session = GameSession(

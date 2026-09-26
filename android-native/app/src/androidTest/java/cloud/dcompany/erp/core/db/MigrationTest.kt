@@ -3095,6 +3095,47 @@ class MigrationTest {
     }
 
     @Test
+    fun migrate52To53KeepsCrossTerminalStopBehindRejectedExtension() {
+        helper.createDatabase(dbName, 52).apply {
+            execSQL(
+                "INSERT INTO local_gaming_sessions " +
+                    "(localId, serverId, stationId, shiftId, startedAtMillis, state, status, " +
+                    "endAtMillis, billingMode, extraControllers, cleanupEvidenceRevision) VALUES " +
+                    "('aaa-stop', 'zzz-server-session', 'station-1', 'shift-1', 1000, " +
+                    "'stop_pending', 'stopping', 3000, 'package', 0, 0)",
+            )
+            execSQL(
+                "INSERT INTO local_gaming_package_extensions " +
+                    "(actionId, serverSessionId, localSessionId, shiftId, packageId, " +
+                    "expectedPackagePriceMinor, expectedPackageDurationMinutes, expectedPackageVariant, " +
+                    "expectedSessionTimerMinutes, expectedSessionAmountMinor, createdAtMillis, state) VALUES " +
+                    "('extend-remote', 'zzz-server-session', NULL, 'shift-1', 'package-30', " +
+                    "8000, 30, 'single', 60, 15000, 2000, 'rejected')",
+            )
+            close()
+        }
+
+        val migrated = helper.runMigrationsAndValidate(dbName, 53, true, MIGRATION_52_53)
+        migrated.query(
+            "SELECT actionId, sessionKey, sequence, state FROM local_gaming_session_actions " +
+                "ORDER BY sessionKey, sequence, actionId",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("extend-remote", cursor.getString(0))
+            assertEquals("zzz-server-session", cursor.getString(1))
+            assertEquals(1L, cursor.getLong(2))
+            assertEquals("rejected", cursor.getString(3))
+            assertTrue(cursor.moveToNext())
+            assertEquals("gaming-session-stop:aaa-stop", cursor.getString(0))
+            assertEquals("zzz-server-session", cursor.getString(1))
+            assertEquals(2L, cursor.getLong(2))
+            assertEquals("pending", cursor.getString(3))
+            assertFalse(cursor.moveToNext())
+        }
+        migrated.close()
+    }
+
+    @Test
     fun migrate52To53KeepsBodylessStopWithoutInventingCapturedEnd() {
         helper.createDatabase(dbName, 52).apply {
             execSQL(
@@ -3121,6 +3162,48 @@ class MigrationTest {
             assertEquals(1_000L, cursor.getLong(2))
             assertTrue(cursor.isNull(3))
             assertTrue(cursor.isNull(4))
+            assertFalse(cursor.moveToNext())
+        }
+        migrated.close()
+    }
+
+    @Test
+    fun migrate52To53RanksBodylessCrossTerminalStopAfterItsExtension() {
+        helper.createDatabase(dbName, 52).apply {
+            execSQL(
+                "INSERT INTO local_gaming_sessions " +
+                    "(localId, serverId, stationId, shiftId, startedAtMillis, state, status, " +
+                    "billingMode, extraControllers, cleanupEvidenceRevision) VALUES " +
+                    "('bodyless-remote-stop', 'remote-session', 'station-1', 'shift-1', 1000, " +
+                    "'stop_pending', 'stopping', 'package', 0, 0)",
+            )
+            execSQL(
+                "INSERT INTO local_gaming_package_extensions " +
+                    "(actionId, serverSessionId, localSessionId, shiftId, packageId, " +
+                    "expectedPackagePriceMinor, expectedPackageDurationMinutes, expectedPackageVariant, " +
+                    "expectedSessionTimerMinutes, expectedSessionAmountMinor, createdAtMillis, state) VALUES " +
+                    "('extend-before-bodyless-stop', 'remote-session', NULL, 'shift-1', 'package-30', " +
+                    "8000, 30, 'single', 60, 15000, 2000, 'pending')",
+            )
+            close()
+        }
+
+        val migrated = helper.runMigrationsAndValidate(dbName, 53, true, MIGRATION_52_53)
+        migrated.query(
+            "SELECT actionId, sessionKey, sequence, occurredAtMillis FROM local_gaming_session_actions " +
+                "ORDER BY sessionKey, sequence, actionId",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("extend-before-bodyless-stop", cursor.getString(0))
+            assertEquals("remote-session", cursor.getString(1))
+            assertEquals(1L, cursor.getLong(2))
+            assertEquals(2_000L, cursor.getLong(3))
+            assertTrue(cursor.moveToNext())
+            assertEquals("gaming-session-stop:bodyless-remote-stop", cursor.getString(0))
+            assertEquals("remote-session", cursor.getString(1))
+            assertEquals(2L, cursor.getLong(2))
+            // This is a ranking fallback, not a captured Stop timestamp.
+            assertEquals(1_000L, cursor.getLong(3))
             assertFalse(cursor.moveToNext())
         }
         migrated.close()

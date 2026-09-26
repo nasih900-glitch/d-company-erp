@@ -244,6 +244,8 @@ describe('Orders & Shifts staff-facing shift feedback', () => {
     expect(labelIndex).toBeGreaterThan(-1);
     expect(markup.slice(buttonStart, markup.indexOf('>', buttonStart)))
       .toContain('disabled=""');
+    expect(markup.slice(buttonStart, markup.indexOf('>', buttonStart)))
+      .toContain('disabled:opacity-40');
   });
 
   it('enables recovery guidance only after exact cash, an audit reason and isolation are supplied', () => {
