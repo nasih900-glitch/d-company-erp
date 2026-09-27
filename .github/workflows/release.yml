@@ -364,6 +364,9 @@ jobs:
           # then verifies the exact 1280x800dp logical viewport.
           profile: pixel_c
           disable-animations: true
+          # Match the hosted CI renderer workaround after emulator 37.1.11
+          # exited during Gaming UI tests with the deprecated default.
+          emulator-options: -no-window -gpu software -feature -Vulkan -no-snapshot -noaudio -no-boot-anim
           pre-emulator-launch-script: python3 scripts/configure_ci_android_avd.py test
           script: D_COMPANY_REQUIRE_NATIVE_AVD_SIZE=1 bash scripts/run_android_instrumentation_ci.sh
       - name: Upload Android instrumentation reports

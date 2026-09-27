@@ -689,7 +689,7 @@ REVIEWED_CODE30_4_HOTFIX_SHA256 = {
 REVIEWED_CODE30_4_BUILD41_SHA256 = {
     '.env.production.example': 'f27985296627c02601b59cdb8af541fa43f5a3f12a75ed781ad095b534200ffd',
     '.github/workflows/ci.yml': '1ffc0a3b8e7bd1bfe34ed805773a3d76241a695b0895122d73a1ff09569d5ef8',
-    '.github/workflows/release.yml': '1c63bd71c55cc227228f02310b50e08fa03366d65e5d4f2653777f3cf583d62b',
+    '.github/workflows/release.yml': 'fb7b6d672033564af7c894b5422ba9e2e427f925215439395e4d1dbbb311503b',
     'android-native/app/build.gradle.kts': '6ae336925ebfbe7321f717dbe2eff8ebeef6c5b476ad5d3af48efa6d5388baad',
     'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/GamingCentreNavigationUiTest.kt': 'f399e7d8e24c52cded9b9401e5e50331559b9d7111538da6eaee3b4f4ea6c2d4',
     'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/ControlDeckFullShellScreenshotsUiTest.kt': 'd1acd617346b9c7323963e61e7b442089a4abc8318453883dedadc9fe9ad87e1',
@@ -745,7 +745,7 @@ REVIEWED_CODE30_4_BUILD41_SHA256 = {
     'scripts/verify_android_instrumentation_shards.py': 'c5c6371bf3897aa2a7548dda716a7930894e17e6ef917e2d787d1b41fad826c0',
     'tests/test_android_instrumentation_shards.py': '1b323085241fc5a1c623f0dd52fbe78aa77983dc8c2931e056acd1df344210dc',
     'scripts/run_code26_physical_business_audit.sh': 'cf833c24cfbc69b5717a77823395635d72eea3e4297521a49481d8e9fed0e9f5',
-    'tests/test_android_release_pipeline.py': '2570429e1fe0b26423ec01fdeb70554b165b3cd446ff5c9b5dc4128772c9b57d',
+    'tests/test_android_release_pipeline.py': '4cfc03e7028b9d890dd764867ac50d3a93a913b8c164ce581fbbba79e4a9bf9d',
     'tests/test_code26_physical_audit_lane.py': 'b3ef51afcbb482bf7402e5340f9e6094687b5e2970c8a6210686cb6fb359f0ff',
     'tests/test_code29_installer_correction.py': 'f77d22ad26f2f400f51768d0d8c30c4b169e3d9a308af7fdda2deca051686a0c',
 }
