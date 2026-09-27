@@ -16,6 +16,7 @@ discovered_tests_file="${shard_evidence_root}/discovered-tests.txt"
 shard_verifier="${repo_root}/scripts/verify_android_instrumentation_shards.py"
 functional_shard_count=4
 stress_class='cloud.dcompany.erp.ui.PhysicalComponentFrameStressUiTest'
+gaming_board_class='cloud.dcompany.erp.ui.screens.gaming.GamingBoardUiTest'
 expected_notification_skip='cloud.dcompany.erp.core.alarm.AlarmLifecycleDeviceTest#grantedNotificationCanBePostedWithPrivateVisibilityAndCancelled'
 expected_exact_alarm_skip='cloud.dcompany.erp.core.alarm.AlarmLifecycleDeviceTest#exactAlarmReachesFailClosedReceiverDuringEmulatedDeepIdle'
 device_serial=''
@@ -29,8 +30,23 @@ tablet_viewport_configured=0
 mkdir -p "${diagnostics_dir}"
 cd "${android_root}"
 
+device_is_connected() {
+  [[ -n "${device_serial}" ]] || return 1
+  local state=''
+  if command -v timeout >/dev/null 2>&1; then
+    state="$(timeout 3s adb -s "${device_serial}" get-state 2>/dev/null)" || return 1
+  else
+    state="$(adb -s "${device_serial}" get-state 2>/dev/null)" || return 1
+  fi
+  [[ "${state}" == 'device' ]]
+}
+
 cleanup_alarm_environment() {
   [[ -n "${device_serial}" ]] || return 0
+  if ! device_is_connected; then
+    echo "Android emulator ${device_serial} disconnected before cleanup." >&2
+    return 1
+  fi
   local cleanup_status=0
   local restored_state=''
   # A failed/aborted deep-idle test must not poison subsequent CI steps.
@@ -169,6 +185,11 @@ read_deep_idle_enabled() {
 
 capture_diagnostics() {
   [[ -n "${device_serial}" ]] || return 0
+  if ! device_is_connected; then
+    printf 'Android emulator %s disconnected before on-device diagnostics.\n' \
+      "${device_serial}" > "${diagnostics_dir}/device-disconnected.txt"
+    return 0
+  fi
   adb -s "${device_serial}" logcat -d -v threadtime > "${diagnostics_dir}/logcat.txt" || true
   adb -s "${device_serial}" shell dumpsys activity processes > "${diagnostics_dir}/activity-processes.txt" || true
   adb -s "${device_serial}" shell dumpsys alarm > "${diagnostics_dir}/alarm-service.txt" || true
@@ -293,6 +314,29 @@ preserve_instrumentation_lane() {
   return "${preserved}"
 }
 
+sample_host_health() {
+  local lane_dir=$1
+  local phase=$2
+  {
+    printf 'phase=%s utc=%s\n' "${phase}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    if [[ -r /proc/meminfo ]]; then
+      awk '/^(MemAvailable|SwapFree):/ { print }' /proc/meminfo
+    fi
+    for counter in /sys/fs/cgroup/memory.current /sys/fs/cgroup/memory.max; do
+      if [[ -r "${counter}" ]]; then
+        printf '%s=' "${counter##*/}"
+        cat "${counter}"
+      fi
+    done
+    if [[ -r /sys/fs/cgroup/memory.events ]]; then
+      awk '/^(oom|oom_kill|oom_group_kill) / { print "cgroup_" $0 }' \
+        /sys/fs/cgroup/memory.events
+    fi
+    ps -eo pid=,ppid=,rss=,comm= 2>/dev/null \
+      | awk '$4 ~ /(qemu|emulator)/ { print "process " $0; if (++count == 8) exit }'
+  } >> "${lane_dir}/host-health.txt" 2>&1 || true
+}
+
 run_connected_instrumentation_lane() {
   local lane_name=$1
   shift
@@ -300,6 +344,7 @@ run_connected_instrumentation_lane() {
   local lane_status=0
 
   mkdir -p "${lane_dir}"
+  sample_host_health "${lane_dir}" before
   clear_connected_outputs
   if ! reset_emulator_for_instrumentation_lane 2>&1 | tee "${lane_dir}/reset.log"; then
     lane_status=1
@@ -307,6 +352,7 @@ run_connected_instrumentation_lane() {
     "$@" :app:connectedDebugAndroidTest 2>&1 | tee "${lane_dir}/gradle.log"; then
     lane_status=1
   fi
+  sample_host_health "${lane_dir}" after
   if ! preserve_instrumentation_lane "${lane_dir}"; then
     lane_status=1
   fi
@@ -370,7 +416,7 @@ mkdir -p "${shard_evidence_root}"
 
 # Discover the exact runner inventory once, without executing test bodies. The
 # later verifier rejects a missing, duplicated or unexpected test across all
-# functional shards and the isolated physical-frame stress lane.
+# functional shards and both isolated Gaming and physical-frame lanes.
 if ! ./gradlew --no-daemon --max-workers=2 --stacktrace \
   :app:assembleDebug :app:assembleDebugAndroidTest \
   2>&1 | tee "${shard_evidence_root}/assemble.log"; then
@@ -380,16 +426,27 @@ elif ! discover_instrumentation_tests; then
 fi
 
 if [[ "${status}" -eq 0 ]]; then
+  if ! run_connected_instrumentation_lane \
+    'gaming-board' \
+    "-Pandroid.testInstrumentationRunnerArguments.class=${gaming_board_class}"; then
+    status=1
+  fi
+fi
+
+if [[ "${status}" -eq 0 ]]; then
   for ((shard_index = 0; shard_index < functional_shard_count; shard_index++)); do
     if ! run_connected_instrumentation_lane \
       "functional-shard-${shard_index}" \
       "-Pandroid.testInstrumentationRunnerArguments.numShards=${functional_shard_count}" \
       "-Pandroid.testInstrumentationRunnerArguments.shardIndex=${shard_index}" \
-      "-Pandroid.testInstrumentationRunnerArguments.notClass=${stress_class}"; then
+      "-Pandroid.testInstrumentationRunnerArguments.notClass=${stress_class},${gaming_board_class}"; then
       status=1
+      break
     fi
   done
+fi
 
+if [[ "${status}" -eq 0 ]]; then
   # These long render-cadence tests intentionally create sustained physical
   # frame load. Run them last in their own fresh instrumentation process so
   # they cannot poison functional Compose/IME/window tests that follow.
@@ -398,12 +455,15 @@ if [[ "${status}" -eq 0 ]]; then
     "-Pandroid.testInstrumentationRunnerArguments.class=${stress_class}"; then
     status=1
   fi
+fi
 
+if [[ "${status}" -eq 0 ]]; then
   if ! python3 "${shard_verifier}" verify \
     --expected-tests "${discovered_tests_file}" \
     --evidence-root "${shard_evidence_root}" \
     --functional-shards "${functional_shard_count}" \
     --stress-class "${stress_class}" \
+    --gaming-board-class "${gaming_board_class}" \
     --expected-skip "${expected_notification_skip}" \
     --expected-skip "${expected_exact_alarm_skip}" \
     --summary "${shard_evidence_root}/summary.txt"; then

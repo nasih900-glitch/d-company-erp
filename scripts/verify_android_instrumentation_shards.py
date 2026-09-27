@@ -101,7 +101,14 @@ def verify(args: argparse.Namespace) -> str:
     expected_stress = {test for test in expected if test.startswith(stress_prefix)}
     if not expected_stress:
         raise ValueError(f"Discovery did not include dedicated stress class {args.stress_class}")
+    gaming_prefix = f"{args.gaming_board_class}#"
+    expected_gaming = {test for test in expected if test.startswith(gaming_prefix)}
+    if not expected_gaming:
+        raise ValueError(
+            f"Discovery did not include dedicated gaming class {args.gaming_board_class}"
+        )
 
+    gaming_lane = args.evidence_root / "gaming-board"
     functional_lanes = [
         args.evidence_root / f"functional-shard-{index}"
         for index in range(args.functional_shards)
@@ -112,6 +119,11 @@ def verify(args: argparse.Namespace) -> str:
     stress_observed: list[str] = []
     skipped: set[str] = set()
     failures: list[str] = []
+
+    gaming_observed, gaming_skipped, gaming_failures = _read_lane(gaming_lane)
+    all_observed.extend(gaming_observed)
+    skipped.update(gaming_skipped)
+    failures.extend(gaming_failures)
 
     for lane in functional_lanes:
         lane_observed, lane_skipped, lane_failures = _read_lane(lane)
@@ -133,6 +145,10 @@ def verify(args: argparse.Namespace) -> str:
     stress_in_functional = sorted(
         test for test in functional_observed if test.startswith(stress_prefix)
     )
+    gaming_in_functional = sorted(
+        test for test in functional_observed if test.startswith(gaming_prefix)
+    )
+    gaming_only = set(gaming_observed)
     stress_only = set(stress_observed)
 
     if failures:
@@ -147,6 +163,16 @@ def verify(args: argparse.Namespace) -> str:
         problems.append(
             "Physical frame stress leaked into functional shards:\n  "
             + "\n  ".join(stress_in_functional)
+        )
+    if gaming_in_functional:
+        problems.append(
+            "Dedicated gaming board tests leaked into functional shards:\n  "
+            + "\n  ".join(gaming_in_functional)
+        )
+    if gaming_only != expected_gaming:
+        problems.append(
+            "Dedicated gaming board coverage differed from discovery: "
+            f"expected={sorted(expected_gaming)!r}, observed={sorted(gaming_only)!r}"
         )
     if stress_only != expected_stress:
         problems.append(
@@ -166,6 +192,7 @@ def verify(args: argparse.Namespace) -> str:
         [
             f"discovered={len(expected)}",
             f"executed={len(all_observed)}",
+            f"gaming_board={len(gaming_observed)}",
             f"functional={len(functional_observed)}",
             f"physical_frame_stress={len(stress_observed)}",
             f"skipped={len(skipped)}",
@@ -191,6 +218,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     verify_parser.add_argument("--evidence-root", type=Path, required=True)
     verify_parser.add_argument("--functional-shards", type=int, required=True)
     verify_parser.add_argument("--stress-class", required=True)
+    verify_parser.add_argument("--gaming-board-class", required=True)
     verify_parser.add_argument("--expected-skip", action="append", default=[])
     verify_parser.add_argument("--summary", type=Path, required=True)
     args = parser.parse_args(argv)

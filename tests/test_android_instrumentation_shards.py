@@ -35,20 +35,26 @@ def junit_xml(testcases: list[tuple[str, str, bool]]) -> str:
 
 
 class AndroidInstrumentationShardsTest(unittest.TestCase):
-    def test_runner_isolated_stress_and_resets_each_functional_shard(self) -> None:
+    def test_runner_isolates_gaming_board_and_stress_and_resets_each_lane(self) -> None:
         source = RUNNER.read_text(encoding="utf-8")
 
         self.assertIn("functional_shard_count=4", source)
         self.assertIn("android.testInstrumentationRunnerArguments.numShards", source)
         self.assertIn("android.testInstrumentationRunnerArguments.shardIndex", source)
-        self.assertIn("android.testInstrumentationRunnerArguments.notClass=${stress_class}", source)
+        self.assertIn("android.testInstrumentationRunnerArguments.notClass=${stress_class},${gaming_board_class}", source)
+        self.assertIn("'gaming-board'", source)
+        self.assertIn("android.testInstrumentationRunnerArguments.class=${gaming_board_class}", source)
         self.assertIn("'physical-frame-stress'", source)
         self.assertIn("android.testInstrumentationRunnerArguments.class=${stress_class}", source)
+        self.assertLess(source.index("'gaming-board'"), source.index("functional-shard-${shard_index}"))
         self.assertLess(source.index("functional-shard-${shard_index}"), source.index("'physical-frame-stress'"))
         self.assertIn("KEYCODE_WAKEUP", source)
         self.assertIn("KEYCODE_HOME", source)
         self.assertIn("wait-for-broadcast-idle", source)
         self.assertIn("preserve_instrumentation_lane", source)
+        self.assertIn('sample_host_health "${lane_dir}" before', source)
+        self.assertIn('sample_host_health "${lane_dir}" after', source)
+        self.assertIn('memory.events', source)
         self.assertIn('python3 "${shard_verifier}" discover', source)
         self.assertIn('python3 "${shard_verifier}" verify', source)
 
@@ -92,9 +98,19 @@ class AndroidInstrumentationShardsTest(unittest.TestCase):
             root = Path(directory)
             evidence = root / "evidence"
             stress_class = "example.PhysicalComponentFrameStressUiTest"
-            expected = [*(f"example.FunctionalTest#case{index}" for index in range(4)), f"{stress_class}#frame"]
+            gaming_class = "example.GamingBoardUiTest"
+            expected = [
+                *(f"example.FunctionalTest#case{index}" for index in range(4)),
+                f"{gaming_class}#board",
+                f"{stress_class}#frame",
+            ]
             inventory = root / "tests.txt"
             inventory.write_text("\n".join(expected) + "\n", encoding="utf-8")
+            gaming_results = evidence / "gaming-board" / "results"
+            gaming_results.mkdir(parents=True)
+            (gaming_results / "TEST.xml").write_text(
+                junit_xml([(gaming_class, "board", False)]), encoding="utf-8"
+            )
             for index in range(4):
                 results = evidence / f"functional-shard-{index}" / "results"
                 results.mkdir(parents=True)
@@ -114,13 +130,15 @@ class AndroidInstrumentationShardsTest(unittest.TestCase):
                 "--evidence-root", str(evidence),
                 "--functional-shards", "4",
                 "--stress-class", stress_class,
+                "--gaming-board-class", gaming_class,
                 "--expected-skip", "example.FunctionalTest#case3",
                 "--summary", str(summary),
             ]
 
             result = subprocess.run(command, text=True, capture_output=True, check=False)
             self.assertEqual(0, result.returncode, result.stderr)
-            self.assertIn("executed=5", summary.read_text(encoding="utf-8"))
+            self.assertIn("executed=6", summary.read_text(encoding="utf-8"))
+            self.assertIn("gaming_board=1", summary.read_text(encoding="utf-8"))
             duplicate_xml = evidence / "functional-shard-0" / "results" / "TEST.xml"
             duplicate_xml.write_text(
                 junit_xml([("example.FunctionalTest", "case0", False), ("example.FunctionalTest", "case1", False)]),
@@ -129,6 +147,26 @@ class AndroidInstrumentationShardsTest(unittest.TestCase):
             result = subprocess.run(command, text=True, capture_output=True, check=False)
             self.assertNotEqual(0, result.returncode)
             self.assertIn("more than once", result.stderr)
+
+            duplicate_xml.write_text(
+                junit_xml([("example.FunctionalTest", "case0", False),
+                           (gaming_class, "board", False)]),
+                encoding="utf-8",
+            )
+            result = subprocess.run(command, text=True, capture_output=True, check=False)
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("Dedicated gaming board tests leaked", result.stderr)
+
+            duplicate_xml.write_text(
+                junit_xml([("example.FunctionalTest", "case0", False)]),
+                encoding="utf-8",
+            )
+            (gaming_results / "TEST.xml").write_text(
+                junit_xml([("example.FunctionalTest", "case1", False)]), encoding="utf-8"
+            )
+            result = subprocess.run(command, text=True, capture_output=True, check=False)
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("Dedicated gaming board coverage differed", result.stderr)
 
 
 if __name__ == "__main__":
