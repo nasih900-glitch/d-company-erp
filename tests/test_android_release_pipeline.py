@@ -174,8 +174,8 @@ class AndroidReleasePipelineTest(unittest.TestCase):
 
         self.assertIn("profile: pixel_c", ci_workflow)
         self.assertIn("profile: pixel_c", release_workflow)
-        self.assertIn("shell wm size 2560x1600", instrumentation)
-        self.assertIn("shell wm density 320", instrumentation)
+        self.assertIn("shell wm size 1280x800", instrumentation)
+        self.assertIn("shell wm density 160", instrumentation)
         self.assertIn("logical_viewport=1280x800dp", instrumentation)
         self.assertIn("shell wm size reset", instrumentation)
         self.assertIn("shell wm density reset", instrumentation)

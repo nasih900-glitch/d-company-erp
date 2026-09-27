@@ -85,8 +85,12 @@ configure_tablet_viewport() {
   user_rotation_initial="$(adb -s "${device_serial}" shell settings get system user_rotation | tr -d '\r')"
   tablet_viewport_configured=1
 
-  adb -s "${device_serial}" shell wm size 2560x1600 >/dev/null
-  adb -s "${device_serial}" shell wm density 320 >/dev/null
+  # Keep the 1280x800dp tablet layout while using a smaller host framebuffer.
+  # The hosted emulator lost its graphics device twice while capturing the
+  # full Gaming workspace at 2560x1600; physical-device rendering is a
+  # separate release gate.
+  adb -s "${device_serial}" shell wm size 1280x800 >/dev/null
+  adb -s "${device_serial}" shell wm density 160 >/dev/null
   adb -s "${device_serial}" shell settings put system accelerometer_rotation 0 >/dev/null
   adb -s "${device_serial}" shell settings put system user_rotation 0 >/dev/null
 
@@ -100,8 +104,8 @@ configure_tablet_viewport() {
     echo "rotation=$(adb -s "${device_serial}" shell settings get system user_rotation | tr -d '\r')"
   } | tee "${report}"
 
-  [[ "${effective_size}" == '2560x1600' ]]
-  [[ "${effective_density}" == '320' ]]
+  [[ "${effective_size}" == '1280x800' ]]
+  [[ "${effective_density}" == '160' ]]
   [[ "$(adb -s "${device_serial}" shell settings get system user_rotation | tr -d '\r')" == '0' ]]
 }
 
@@ -109,14 +113,14 @@ reassert_tablet_viewport() {
   local effective_size=''
   local effective_density=''
 
-  adb -s "${device_serial}" shell wm size 2560x1600 >/dev/null
-  adb -s "${device_serial}" shell wm density 320 >/dev/null
+  adb -s "${device_serial}" shell wm size 1280x800 >/dev/null
+  adb -s "${device_serial}" shell wm density 160 >/dev/null
   adb -s "${device_serial}" shell settings put system accelerometer_rotation 0 >/dev/null
   adb -s "${device_serial}" shell settings put system user_rotation 0 >/dev/null
   effective_size="$(adb -s "${device_serial}" shell wm size | tr -d '\r' | awk -F': ' '/Physical size:/{value=$2} /Override size:/{value=$2} END{print value}')"
   effective_density="$(adb -s "${device_serial}" shell wm density | tr -d '\r' | awk -F': ' '/Physical density:/{value=$2} /Override density:/{value=$2} END{print value}')"
-  [[ "${effective_size}" == '2560x1600' ]]
-  [[ "${effective_density}" == '320' ]]
+  [[ "${effective_size}" == '1280x800' ]]
+  [[ "${effective_density}" == '160' ]]
   [[ "$(adb -s "${device_serial}" shell settings get system user_rotation | tr -d '\r')" == '0' ]]
 }
 
