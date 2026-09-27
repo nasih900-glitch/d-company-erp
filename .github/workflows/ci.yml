@@ -195,6 +195,9 @@ jobs:
           # class viewport, matching the 1280x800dp production target closely.
           profile: pixel_c
           disable-animations: true
+          # Work around hosted emulator 37.1.11 exits during Gaming UI tests:
+          # replace its deprecated swiftshader_indirect default with supported software rendering.
+          emulator-options: -no-window -gpu software -feature -Vulkan -no-snapshot -noaudio -no-boot-anim
           # Pixel C boots with a 2560x1800 host graphics buffer. A post-boot
           # `wm size` override does not shrink that buffer, and the hosted
           # emulator can disappear during the Compose suite. Keep tablet dp
