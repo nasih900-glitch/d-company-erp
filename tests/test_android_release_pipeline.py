@@ -876,13 +876,19 @@ class AndroidReleasePipelineTest(unittest.TestCase):
                 "hw.lcd.width=1280\nhw.lcd.height=800\nhw.lcd.density=160\n",
             )
 
-    def test_ci_and_release_android_emulators_use_same_supported_renderer(self) -> None:
+    def test_ci_and_release_android_emulators_use_same_pinned_build_and_renderer(self) -> None:
         expected = (
             "-no-window -gpu software -feature -Vulkan "
             "-no-snapshot -noaudio -no-boot-anim"
         )
         for workflow_path in (CI_WORKFLOW, WORKFLOW):
             with self.subTest(workflow=workflow_path.name):
+                emulator_builds = re.findall(
+                    r"^\s*emulator-build:\s*(\d+)\s*$",
+                    workflow_path.read_text(encoding="utf-8"),
+                    flags=re.MULTILINE,
+                )
+                self.assertEqual(emulator_builds, ["15081367"])
                 options = re.findall(
                     r"^\s*emulator-options:\s*(.+)$",
                     workflow_path.read_text(encoding="utf-8"),
