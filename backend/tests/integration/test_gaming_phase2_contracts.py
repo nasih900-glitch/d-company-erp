@@ -36,7 +36,13 @@ from app.models import (
     User,
     UserRole,
 )
-from app.services.audit.recorder import install_audit_listeners
+from app.services.audit.recorder import (
+    clear_actor,
+    clear_request_context,
+    install_audit_listeners,
+    set_actor,
+    set_request_context,
+)
 
 
 @pytest_asyncio.fixture(autouse=True)
@@ -108,6 +114,24 @@ def _shift(
     )
 
 
+def _single_ps5_package(seed_owner) -> GamingPackage:
+    return GamingPackage(
+        id=uuid4(),
+        code=f"test-{uuid4().hex}",
+        company_id=seed_owner["company"].id,
+        branch_id=seed_owner["branch"].id,
+        station_type="ps5",
+        variant="single",
+        pricing_tier="standard",
+        kind="base",
+        name="Single 60 min",
+        duration_minutes=60,
+        price_minor=10_000,
+        sort_order=0,
+        is_active=True,
+    )
+
+
 def _running_session(
     seed_owner,
     *,
@@ -174,6 +198,8 @@ def _offline_action_headers(
     token: str,
     key: str,
     captured_at: datetime,
+    *,
+    version_code: int = 8,
 ) -> dict[str, str]:
     return _headers(
         seed_owner,
@@ -181,7 +207,7 @@ def _offline_action_headers(
         key,
         **{
             "X-Client-Platform": "android",
-            "X-Client-Version-Code": "8",
+            "X-Client-Version-Code": str(version_code),
             "X-Offline-Captured": "true",
             "X-Client-Occurred-At": captured_at.isoformat(),
             "X-Client-Action-Id": key,
@@ -1767,6 +1793,7 @@ async def _accepted_legacy_hourly_start(
             token,
             start_key,
             captured_start,
+            version_code=39,
         ),
     )
     assert started.status_code == 201, started.text
@@ -1998,6 +2025,726 @@ async def test_server_recovery_probe_with_plausible_unproven_history_stays_ambig
             "resolution": "server_session_recovered",
             "reference_order_id": None,
             "reason": "Owner is probing ambiguous server session history",
+        },
+        headers=_headers(seed_owner, token, key),
+    )
+
+    assert response.status_code == 409, response.text
+    assert "no exact original action receipt" in response.text
+    assert await session.get(IdempotencyKey, key) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    (
+        "prior_on_same_station",
+        "shift_closed_after_capture",
+        "version_code",
+        "prior_was_offline",
+        "package_start_includes_hourly_rate",
+    ),
+    [
+        (False, False, 18, True, False),
+        (True, True, 40, False, False),
+        (False, False, 39, True, True),
+    ],
+)
+async def test_exact_rejected_package_start_allows_no_play_despite_prior_same_package_history(
+    prior_on_same_station,
+    shift_closed_after_capture,
+    version_code,
+    prior_was_offline,
+    package_start_includes_hourly_rate,
+    client,
+    session,
+    seed_owner,
+) -> None:
+    install_audit_listeners()
+    captured_start = datetime.now(UTC) - timedelta(minutes=10)
+    target_station = _station(seed_owner, station_type="ps5")
+    target_station.is_active = False
+    prior_station = (
+        target_station
+        if prior_on_same_station
+        else _station(seed_owner, station_type="ps5")
+    )
+    shift = _shift(seed_owner, opened_at=captured_start - timedelta(hours=2))
+    if shift_closed_after_capture:
+        shift.status = "closed"
+        shift.closed_at = captured_start + timedelta(minutes=5)
+        shift.closed_by = seed_owner["owner"].id
+        shift.counted_minor = 0
+        shift.variance_minor = 0
+    package = _single_ps5_package(seed_owner)
+    prior_session = _running_session(
+        seed_owner,
+        station=prior_station,
+        shift=shift,
+        start_at=captured_start - timedelta(hours=1),
+        timer_minutes=package.duration_minutes,
+        package_id=package.id,
+        package_price_minor_snapshot=package.price_minor,
+        package_duration_minutes_snapshot=package.duration_minutes,
+        package_variant_snapshot=package.variant,
+        package_station_type_snapshot=package.station_type,
+        amount_minor=package.price_minor,
+        status="cancelled",
+    )
+    session.add_all(
+        [target_station, shift, package]
+        + ([] if prior_on_same_station else [prior_station])
+    )
+    await session.flush()
+    prior_action_key = f"gaming-session-start:{uuid4()}"
+    set_actor(
+        user_id=seed_owner["owner"].id,
+        company_id=seed_owner["company"].id,
+        terminal_id=seed_owner["terminal"].id,
+    )
+    set_request_context(
+        request_id=str(uuid4()),
+        client_platform="android" if prior_was_offline else "web",
+        client_version_code=version_code if prior_was_offline else None,
+        client_action_id=prior_action_key,
+        client_reported_at=prior_session.start_at if prior_was_offline else None,
+        client_was_offline=prior_was_offline,
+    )
+    try:
+        session.add(prior_session)
+        await session.commit()
+    finally:
+        clear_request_context()
+        clear_actor()
+    session.add(
+        IdempotencyKey(
+            key=prior_action_key,
+            user_id=seed_owner["owner"].id,
+            terminal_id=seed_owner["terminal"].id,
+            request_hash="b" * 64,
+            response_status=201,
+            response_body={
+                "id": str(prior_session.id),
+                "station_id": str(prior_station.id),
+                "shift_id": str(shift.id),
+                "start_at": prior_session.start_at.isoformat(),
+            },
+            created_at=prior_session.start_at,
+        )
+    )
+    await session.commit()
+    token = await _login(client, seed_owner)
+    local_action_id = uuid4()
+    start_key = f"gaming-session-start:{local_action_id}"
+    start_payload = {
+        "station_id": str(target_station.id),
+        "shift_id": str(shift.id),
+        "started_at": captured_start.isoformat(),
+        "package_id": str(package.id),
+        "expected_package_price_minor": package.price_minor,
+        "expected_package_duration_minutes": package.duration_minutes,
+        "expected_package_variant": package.variant,
+    }
+    if package_start_includes_hourly_rate:
+        # Signed build 39 sends the displayed station rate in Start even for
+        # fixed-price packages; its owner recovery body correctly omits it.
+        start_payload["expected_rate_per_hour_minor"] = target_station.rate_per_hour_minor
+
+    rejected = await client.post(
+        "/api/v1/gaming/sessions/start",
+        json=start_payload,
+        headers=_offline_action_headers(
+            seed_owner,
+            token,
+            start_key,
+            captured_start,
+            version_code=version_code,
+        ),
+    )
+    replay = await client.post(
+        "/api/v1/gaming/sessions/start",
+        json=start_payload,
+        headers=_offline_action_headers(
+            seed_owner,
+            token,
+            start_key,
+            captured_start,
+            version_code=version_code,
+        ),
+    )
+
+    assert rejected.status_code == 422, rejected.text
+    assert replay.status_code == 422, replay.text
+    assert rejected.json() == replay.json()
+    start_receipts = (
+        (
+            await session.execute(
+                select(AuditLog).where(
+                    AuditLog.company_id == seed_owner["company"].id,
+                    AuditLog.action == "gaming_session_start_rejected",
+                    AuditLog.entity_id == str(local_action_id),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(start_receipts) == 1
+    assert start_receipts[0].client_platform == "android"
+    assert start_receipts[0].client_version_code == version_code
+    assert start_receipts[0].client_action_id == start_key
+    assert start_receipts[0].client_was_offline is True
+    assert start_receipts[0].after["expected_rate_per_hour_minor"] == (
+        target_station.rate_per_hour_minor
+        if package_start_includes_hourly_rate
+        else None
+    )
+    assert "request_body" not in start_receipts[0].after
+    assert "customer_name" not in start_receipts[0].after
+    assert "customer_phone" not in start_receipts[0].after
+    idempotency = await session.get(IdempotencyKey, start_key)
+    assert idempotency is not None
+    assert idempotency.response_status == 422
+    await session.delete(idempotency)
+    await session.commit()
+
+    durable_replay = await client.post(
+        "/api/v1/gaming/sessions/start",
+        json=start_payload,
+        headers=_offline_action_headers(
+            seed_owner,
+            token,
+            start_key,
+            captured_start,
+            version_code=version_code,
+        ),
+    )
+    mismatched_replay = await client.post(
+        "/api/v1/gaming/sessions/start",
+        json={
+            **start_payload,
+            "expected_package_price_minor": package.price_minor + 100,
+        },
+        headers=_offline_action_headers(
+            seed_owner,
+            token,
+            start_key,
+            captured_start,
+        ),
+    )
+
+    assert durable_replay.status_code == 422, durable_replay.text
+    assert durable_replay.json() == rejected.json()
+    assert mismatched_replay.status_code == 409, mismatched_replay.text
+    assert mismatched_replay.json()["error"]["code"] == "idempotency_conflict"
+    assert await session.get(IdempotencyKey, start_key) is None
+
+    await _grant_protected_owner(session, seed_owner)
+    token = await _login(client, seed_owner)
+    resolution_key = f"gaming-legacy-outbox-resolution:{local_action_id}"
+    resolved = await client.post(
+        "/api/v1/gaming/legacy-outbox-resolutions",
+        json={
+            "local_action_id": str(local_action_id),
+            "station_id": str(target_station.id),
+            "shift_id": str(shift.id),
+            "captured_started_at": captured_start.isoformat(),
+            "captured_stopped_at": None,
+            "package_id": str(package.id),
+            "expected_rate_per_hour_minor": None,
+            "resolution": "confirmed_no_play",
+            "reference_order_id": None,
+            "reason": "Owner confirmed that this rejected Start had no play",
+        },
+        headers=_headers(seed_owner, token, resolution_key),
+    )
+
+    assert resolved.status_code == 201, resolved.text
+    assert resolved.json()["resolution"] == "confirmed_no_play"
+    assert resolved.json()["server_session"] is None
+    resolution_receipt = await session.get(
+        AuditLog,
+        resolved.json()["receipt_id"],
+    )
+    assert resolution_receipt is not None
+    assert resolution_receipt.after["recovery_proof"] == "rejected_start_receipt"
+
+
+@pytest.mark.asyncio
+async def test_exact_rejected_hourly_start_still_requires_matching_rate(
+    client,
+    session,
+    seed_owner,
+) -> None:
+    install_audit_listeners()
+    captured_start = datetime.now(UTC) - timedelta(minutes=10)
+    station = _station(seed_owner)
+    station.is_active = False
+    shift = _shift(seed_owner, opened_at=captured_start - timedelta(hours=1))
+    session.add_all([station, shift])
+    await session.commit()
+    token = await _login(client, seed_owner)
+    local_action_id = uuid4()
+    start_key = f"gaming-session-start:{local_action_id}"
+
+    rejected = await client.post(
+        "/api/v1/gaming/sessions/start",
+        json={
+            "station_id": str(station.id),
+            "shift_id": str(shift.id),
+            "started_at": captured_start.isoformat(),
+            "expected_rate_per_hour_minor": station.rate_per_hour_minor,
+        },
+        headers=_offline_action_headers(
+            seed_owner, token, start_key, captured_start, version_code=39,
+        ),
+    )
+    assert rejected.status_code == 422, rejected.text
+
+    await _grant_protected_owner(session, seed_owner)
+    token = await _login(client, seed_owner)
+    resolution_key = f"gaming-legacy-outbox-resolution:{local_action_id}"
+    recovery = {
+        "local_action_id": str(local_action_id),
+        "station_id": str(station.id),
+        "shift_id": str(shift.id),
+        "captured_started_at": captured_start.isoformat(),
+        "captured_stopped_at": None,
+        "package_id": None,
+        "expected_rate_per_hour_minor": station.rate_per_hour_minor - 100,
+        "resolution": "confirmed_no_play",
+        "reference_order_id": None,
+        "reason": "Owner verified this rejected hourly Start had no play",
+    }
+    wrong_rate = await client.post(
+        "/api/v1/gaming/legacy-outbox-resolutions",
+        json=recovery,
+        headers=_headers(seed_owner, token, resolution_key),
+    )
+    assert wrong_rate.status_code == 409, wrong_rate.text
+    assert "does not exactly match" in wrong_rate.text
+    assert await session.get(IdempotencyKey, resolution_key) is None
+
+    exact_rate = await client.post(
+        "/api/v1/gaming/legacy-outbox-resolutions",
+        json={
+            **recovery,
+            "expected_rate_per_hour_minor": station.rate_per_hour_minor,
+        },
+        headers=_headers(seed_owner, token, resolution_key),
+    )
+    assert exact_rate.status_code == 201, exact_rate.text
+    assert exact_rate.json()["resolution"] == "confirmed_no_play"
+    assert exact_rate.json()["server_session"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("use_other_terminal", "version_code"),
+    [(True, 39), (False, 17)],
+)
+async def test_inactive_station_rejection_requires_modern_exact_shift_provenance(
+    use_other_terminal,
+    version_code,
+    client,
+    session,
+    seed_owner,
+) -> None:
+    install_audit_listeners()
+    captured_start = datetime.now(UTC) - timedelta(minutes=10)
+    station = _station(seed_owner, station_type="ps5")
+    station.is_active = False
+    other_terminal = (
+        Terminal(
+            id=uuid4(),
+            branch_id=seed_owner["branch"].id,
+            name=f"Other-{uuid4().hex[:8]}",
+            device_id=f"other-{uuid4()}",
+            purpose="hybrid",
+            is_active=False,
+        )
+        if use_other_terminal
+        else None
+    )
+    shift = _shift(
+        seed_owner,
+        opened_at=captured_start - timedelta(hours=1),
+        terminal_id=other_terminal.id if other_terminal is not None else None,
+    )
+    package = _single_ps5_package(seed_owner)
+    if other_terminal is not None:
+        session.add(other_terminal)
+        await session.flush()
+    session.add_all([station, shift, package])
+    await session.commit()
+    token = await _login(client, seed_owner)
+    local_action_id = uuid4()
+    key = f"gaming-session-start:{local_action_id}"
+
+    rejected = await client.post(
+        "/api/v1/gaming/sessions/start",
+        json={
+            "station_id": str(station.id),
+            "shift_id": str(shift.id),
+            "started_at": captured_start.isoformat(),
+            "package_id": str(package.id),
+            "expected_package_price_minor": package.price_minor,
+            "expected_package_duration_minutes": package.duration_minutes,
+            "expected_package_variant": package.variant,
+        },
+        headers=_offline_action_headers(
+            seed_owner,
+            token,
+            key,
+            captured_start,
+            version_code=version_code,
+        ),
+    )
+
+    assert rejected.status_code == 422, rejected.text
+    assert rejected.json()["error"]["message"] == "station is not active"
+    assert await session.get(IdempotencyKey, key) is None
+    receipt_count = (
+        await session.execute(
+            select(AuditLog.id).where(
+                AuditLog.company_id == seed_owner["company"].id,
+                AuditLog.action == "gaming_session_start_rejected",
+                AuditLog.entity_id == str(local_action_id),
+            )
+        )
+    ).scalars().all()
+    assert receipt_count == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("history_mode", "transferred_to_other_station", "server_start_offset_minutes"),
+    [
+        ("missing", False, -30),
+        ("corrupt", True, 5),
+        ("same_key", False, -25),
+        ("orphan", False, -20),
+    ],
+)
+async def test_inactive_replay_with_unproven_accepted_history_stays_fail_closed(
+    history_mode,
+    transferred_to_other_station,
+    server_start_offset_minutes,
+    client,
+    session,
+    seed_owner,
+) -> None:
+    install_audit_listeners()
+    captured_start = datetime.now(UTC) - timedelta(minutes=10)
+    local_action_id = uuid4()
+    start_key = f"gaming-session-start:{local_action_id}"
+    requested_station = _station(seed_owner, station_type="ps5")
+    requested_station.is_active = False
+    current_station = (
+        _station(seed_owner, station_type="ps5")
+        if transferred_to_other_station
+        else requested_station
+    )
+    shift = _shift(seed_owner, opened_at=captured_start - timedelta(hours=1))
+    package = _single_ps5_package(seed_owner)
+    accepted_session = _running_session(
+        seed_owner,
+        station=current_station,
+        shift=shift,
+        # Exercise caller timestamps both before and after the authoritative
+        # server time; neither may replace durable action identity.
+        start_at=captured_start + timedelta(minutes=server_start_offset_minutes),
+        timer_minutes=package.duration_minutes,
+        package_id=package.id,
+        package_price_minor_snapshot=package.price_minor,
+        package_duration_minutes_snapshot=package.duration_minutes,
+        package_variant_snapshot=package.variant,
+        package_station_type_snapshot=package.station_type,
+        amount_minor=package.price_minor,
+    )
+    session.add_all(
+        [requested_station, shift, package]
+        + ([] if current_station is requested_station else [current_station])
+    )
+    await session.flush()
+    if history_mode in {"corrupt", "same_key", "orphan"}:
+        set_actor(
+            user_id=seed_owner["owner"].id,
+            company_id=seed_owner["company"].id,
+            terminal_id=seed_owner["terminal"].id,
+        )
+        set_request_context(
+            request_id=str(uuid4()),
+            client_platform="android",
+            client_version_code=39,
+            client_action_id=(
+                "gaming-session-start:corrupt"
+                if history_mode == "corrupt"
+                else (
+                    start_key
+                    if history_mode == "same_key"
+                    else f"gaming-session-start:{uuid4()}"
+                )
+            ),
+            client_reported_at=accepted_session.start_at,
+            client_was_offline=True,
+        )
+    try:
+        session.add(accepted_session)
+        await session.commit()
+    finally:
+        clear_request_context()
+        clear_actor()
+    if history_mode == "orphan":
+        await session.delete(accepted_session)
+        await session.commit()
+    token = await _login(client, seed_owner)
+    start_payload = {
+        "station_id": str(requested_station.id),
+        "shift_id": str(shift.id),
+        "started_at": captured_start.isoformat(),
+        "package_id": str(package.id),
+        "expected_package_price_minor": package.price_minor,
+        "expected_package_duration_minutes": package.duration_minutes,
+        "expected_package_variant": package.variant,
+    }
+    pruned_key = IdempotencyKey(
+        key=start_key,
+        user_id=seed_owner["owner"].id,
+        terminal_id=seed_owner["terminal"].id,
+        request_hash="a" * 64,
+        response_status=201,
+        response_body={"id": str(accepted_session.id)},
+        created_at=captured_start,
+    )
+    session.add(pruned_key)
+    await session.commit()
+    await session.delete(pruned_key)
+    await session.commit()
+
+    replay = await client.post(
+        "/api/v1/gaming/sessions/start",
+        json=start_payload,
+        headers=_offline_action_headers(
+            seed_owner,
+            token,
+            start_key,
+            captured_start,
+            version_code=39,
+        ),
+    )
+
+    assert replay.status_code == 422, replay.text
+    assert replay.json()["error"]["message"] == "station is not active"
+    assert await session.get(IdempotencyKey, start_key) is None
+    rejection_receipts = (
+        await session.execute(
+            select(AuditLog.id).where(
+                AuditLog.company_id == seed_owner["company"].id,
+                AuditLog.action == "gaming_session_start_rejected",
+                AuditLog.entity_id == str(local_action_id),
+            )
+        )
+    ).scalars().all()
+    assert rejection_receipts == []
+
+    await _grant_protected_owner(session, seed_owner)
+    token = await _login(client, seed_owner)
+    recovery = await client.post(
+        "/api/v1/gaming/legacy-outbox-resolutions",
+        json={
+            "local_action_id": str(local_action_id),
+            "station_id": str(requested_station.id),
+            "shift_id": str(shift.id),
+            "captured_started_at": captured_start.isoformat(),
+            "captured_stopped_at": None,
+            "package_id": str(package.id),
+            "resolution": "confirmed_no_play",
+            "reference_order_id": None,
+            "reason": "Owner is checking an accepted Start with missing exact proof",
+        },
+        headers=_headers(
+            seed_owner,
+            token,
+            f"gaming-legacy-outbox-resolution:{local_action_id}",
+        ),
+    )
+
+    assert recovery.status_code == 409, recovery.text
+    assert await session.get(
+        IdempotencyKey,
+        f"gaming-legacy-outbox-resolution:{local_action_id}",
+    ) is None
+
+
+@pytest.mark.asyncio
+async def test_online_action_header_mismatch_cannot_authorize_pruned_start_recovery(
+    client,
+    session,
+    seed_owner,
+) -> None:
+    install_audit_listeners()
+    captured_start = datetime.now(UTC) - timedelta(minutes=10)
+    station = _station(seed_owner, station_type="ps5")
+    shift = _shift(seed_owner, opened_at=captured_start - timedelta(hours=1))
+    package = _single_ps5_package(seed_owner)
+    session.add_all([station, shift, package])
+    await session.commit()
+    token = await _login(client, seed_owner)
+    local_action_id = uuid4()
+    accepted_key = f"gaming-session-start:{local_action_id}"
+    spoofed_audit_key = f"gaming-session-start:{uuid4()}"
+    online_payload = {
+        "station_id": str(station.id),
+        "shift_id": str(shift.id),
+        "package_id": str(package.id),
+        "expected_package_price_minor": package.price_minor,
+        "expected_package_duration_minutes": package.duration_minutes,
+        "expected_package_variant": package.variant,
+    }
+
+    accepted = await client.post(
+        "/api/v1/gaming/sessions/start",
+        json=online_payload,
+        headers=_headers(
+            seed_owner,
+            token,
+            accepted_key,
+            **{
+                "X-Client-Platform": "android",
+                "X-Client-Version-Code": "39",
+                "X-Client-Action-Id": spoofed_audit_key,
+            },
+        ),
+    )
+
+    assert accepted.status_code == 201, accepted.text
+    accepted_session_id = UUID(accepted.json()["id"])
+    create_audits = (
+        (
+            await session.execute(
+                select(AuditLog).where(
+                    AuditLog.company_id == seed_owner["company"].id,
+                    AuditLog.action == "create",
+                    AuditLog.entity_type == "GamingSession",
+                    AuditLog.entity_id == str(accepted_session_id),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(create_audits) == 1
+    assert create_audits[0].client_action_id == spoofed_audit_key
+    assert await session.get(IdempotencyKey, spoofed_audit_key) is None
+    original_receipt = await session.get(IdempotencyKey, accepted_key)
+    assert original_receipt is not None
+    await session.delete(original_receipt)
+    station.is_active = False
+    await session.commit()
+
+    rejected = await client.post(
+        "/api/v1/gaming/sessions/start",
+        json={**online_payload, "started_at": captured_start.isoformat()},
+        headers=_offline_action_headers(
+            seed_owner,
+            token,
+            accepted_key,
+            captured_start,
+            version_code=39,
+        ),
+    )
+
+    assert rejected.status_code == 422, rejected.text
+    assert rejected.json()["error"]["message"] == "station is not active"
+    assert await session.get(IdempotencyKey, accepted_key) is None
+    rejection_receipts = (
+        await session.execute(
+            select(AuditLog.id).where(
+                AuditLog.company_id == seed_owner["company"].id,
+                AuditLog.action == "gaming_session_start_rejected",
+                AuditLog.entity_id == str(local_action_id),
+            )
+        )
+    ).scalars().all()
+    assert rejection_receipts == []
+
+    await _grant_protected_owner(session, seed_owner)
+    token = await _login(client, seed_owner)
+    resolution_key = f"gaming-legacy-outbox-resolution:{local_action_id}"
+    recovery = await client.post(
+        "/api/v1/gaming/legacy-outbox-resolutions",
+        json={
+            "local_action_id": str(local_action_id),
+            "station_id": str(station.id),
+            "shift_id": str(shift.id),
+            "captured_started_at": captured_start.isoformat(),
+            "captured_stopped_at": None,
+            "package_id": str(package.id),
+            "resolution": "confirmed_no_play",
+            "reference_order_id": None,
+            "reason": "Owner is checking an accepted online Start after key cleanup",
+        },
+        headers=_headers(seed_owner, token, resolution_key),
+    )
+
+    assert recovery.status_code == 409, recovery.text
+    assert await session.get(IdempotencyKey, resolution_key) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("transferred_to_other_station", [False, True])
+async def test_same_package_history_without_exact_receipt_remains_ambiguous(
+    transferred_to_other_station,
+    client,
+    session,
+    seed_owner,
+) -> None:
+    captured_start = datetime.now(UTC) - timedelta(minutes=10)
+    requested_station = _station(seed_owner, station_type="ps5")
+    current_station = (
+        _station(seed_owner, station_type="ps5")
+        if transferred_to_other_station
+        else requested_station
+    )
+    shift = _shift(seed_owner, opened_at=captured_start - timedelta(hours=2))
+    package = _single_ps5_package(seed_owner)
+    unproven_session = _running_session(
+        seed_owner,
+        station=current_station,
+        shift=shift,
+        start_at=captured_start - timedelta(minutes=5),
+        timer_minutes=package.duration_minutes,
+        package_id=package.id,
+        package_price_minor_snapshot=package.price_minor,
+        package_duration_minutes_snapshot=package.duration_minutes,
+        package_variant_snapshot=package.variant,
+        package_station_type_snapshot=package.station_type,
+        amount_minor=package.price_minor,
+    )
+    session.add_all(
+        [requested_station, shift, package]
+        + ([] if current_station is requested_station else [current_station])
+    )
+    await session.flush()
+    session.add(unproven_session)
+    await session.commit()
+    await _grant_protected_owner(session, seed_owner)
+    token = await _login(client, seed_owner)
+    local_action_id = uuid4()
+    key = f"gaming-legacy-outbox-resolution:{local_action_id}"
+
+    response = await client.post(
+        "/api/v1/gaming/legacy-outbox-resolutions",
+        json={
+            "local_action_id": str(local_action_id),
+            "station_id": str(requested_station.id),
+            "shift_id": str(shift.id),
+            "captured_started_at": captured_start.isoformat(),
+            "captured_stopped_at": None,
+            "package_id": str(package.id),
+            "resolution": "confirmed_no_play",
+            "reference_order_id": None,
+            "reason": "Owner is checking an unproven same-package Start",
         },
         headers=_headers(seed_owner, token, key),
     )
