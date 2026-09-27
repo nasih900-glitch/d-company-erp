@@ -263,6 +263,7 @@ async def leaderboard(
             Customer.id.label("customer_id"),
             Customer.name,
             Customer.phone,
+            Customer.visit_count,
             played_total.label("total_played_minutes"),
             qualifying_total.label("qualifying_paid_minutes"),
             func.row_number()
@@ -296,6 +297,7 @@ async def leaderboard(
             "customer_id": row["customer_id"],
             "name": row["name"],
             "masked_phone": mask_phone(row["phone"]),
+            "recorded_visits": int(row["visit_count"]),
             "total_played_minutes": int(row["total_played_minutes"]),
             "qualifying_paid_minutes": int(row["qualifying_paid_minutes"]),
             "draft_estimated_reward_minutes": program.estimate(

@@ -45,10 +45,10 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AddShoppingCart
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.LocalCafe
 import androidx.compose.material.icons.filled.RestaurantMenu
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.SearchOff
@@ -56,6 +56,9 @@ import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -77,13 +80,17 @@ import androidx.compose.runtime.key
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -119,10 +126,8 @@ import cloud.dcompany.erp.ui.components.ErpButton
 import cloud.dcompany.erp.ui.components.NumericValue
 import cloud.dcompany.erp.ui.components.OperationalBanner
 import cloud.dcompany.erp.ui.components.OperationalStatusBadge
-import cloud.dcompany.erp.ui.components.PremiumTabBar
 import cloud.dcompany.erp.ui.components.PrimaryButton
 import cloud.dcompany.erp.ui.components.SearchInput
-import cloud.dcompany.erp.ui.components.TabOption
 import cloud.dcompany.erp.ui.components.TouchMoneyEntry
 import cloud.dcompany.erp.ui.components.UiTone
 import cloud.dcompany.erp.ui.components.ViewOnlyNotice
@@ -138,6 +143,9 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+
+private val PosTeal = Color(0xFF43D9D0)
+private val PosTealMuted = Color(0xFF12343B)
 
 @Composable
 fun PosScreen(
@@ -329,7 +337,9 @@ fun PosScreen(
             val workspace = remember(maxWidth) {
                 posWorkspaceMetrics(maxWidth = maxWidth, horizontalGap = Spacing.md)
             }
+            val compactWorkspace = maxHeight < 480.dp
             val cataloguePane: @Composable (Modifier) -> Unit = { modifier ->
+                val paneModifier = modifier.testTag("pos-catalog")
                 if (state.menuEmpty) {
                     // An empty product catalogue must never replace the money
                     // pane. Gaming and table bills are valid POS work even in
@@ -337,12 +347,11 @@ fun PosScreen(
                     EmptyMenuPanel(
                         everSynced = state.everSynced,
                         onRefresh = onRefresh,
-                        modifier = modifier,
+                        modifier = paneModifier,
                     )
                 } else {
                     ProductCatalogPanel(
                         categories = state.operationalCategories,
-                        items = state.operationalItems,
                         selectedCategoryId = state.selectedCategoryId,
                         visibleItems = searchedItems,
                         query = menuQuery,
@@ -351,7 +360,7 @@ fun PosScreen(
                         onClearSearch = { menuQuery = "" },
                         onSelectCategory = onSelectCategory,
                         onAdd = addOrConfigure,
-                        modifier = modifier,
+                        modifier = paneModifier,
                     )
                 }
             }
@@ -363,13 +372,15 @@ fun PosScreen(
                     cataloguePane(Modifier.weight(1f).fillMaxHeight())
                     CartPanel(
                         state = state,
+                        compact = compactWorkspace,
                         canWrite = access.canCreateAndCollect,
                         canDiscount = access.canApplyDiscount,
                         onIncrementLine = onIncrementLine,
                         onDecrementLine = onDecrementLine,
                         onClear = onClearCart,
                         onEditDetails = { showOrderDetails = true },
-                        modifier = Modifier.width(requireNotNull(workspace.cartWidth)).fillMaxHeight(),
+                        modifier = Modifier.width(requireNotNull(workspace.cartWidth))
+                            .fillMaxHeight().testTag("pos-cart"),
                     ) { requestDirectPayment() }
                 }
             } else {
@@ -380,13 +391,14 @@ fun PosScreen(
                     cataloguePane(Modifier.weight(1.05f).fillMaxWidth())
                     CartPanel(
                         state = state,
+                        compact = compactWorkspace,
                         canWrite = access.canCreateAndCollect,
                         canDiscount = access.canApplyDiscount,
                         onIncrementLine = onIncrementLine,
                         onDecrementLine = onDecrementLine,
                         onClear = onClearCart,
                         onEditDetails = { showOrderDetails = true },
-                        modifier = Modifier.weight(0.95f).fillMaxWidth(),
+                        modifier = Modifier.weight(0.95f).fillMaxWidth().testTag("pos-cart"),
                     ) { requestDirectPayment() }
                 }
             }
@@ -1096,28 +1108,33 @@ private fun PosContextBar(
         state.heldOrders.isNotEmpty() -> Icons.Default.Sync
         else -> Icons.Default.ShoppingCart
     }
+    val showContext = hasPosOperationalAlerts(state) || state.pendingCount > 0 ||
+        state.heldOrders.isNotEmpty() || !state.online
 
     BoxWithConstraints(
         Modifier.fillMaxWidth().padding(horizontal = Spacing.md, vertical = Spacing.xs)
-            .clip(Radius.shapeLg).background(Brand.Surface)
-            .border(1.dp, Brand.BorderSubtle, Radius.shapeLg)
-            .padding(horizontal = Spacing.lg, vertical = Spacing.sm)
+            .padding(horizontal = Spacing.sm, vertical = Spacing.xs)
             .semantics { liveRegion = LiveRegionMode.Polite },
     ) {
-        if (maxWidth >= 620.dp) {
+        if (maxWidth >= 740.dp) {
             Row(
                 Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                PosContextSummary(
-                    title = title,
-                    details = details,
-                    tone = tone,
-                    icon = icon,
-                    modifier = Modifier.weight(1f),
-                )
-                ErpButton("Status & alarms", onOpenStatus, intent = ActionIntent.Secondary)
+                PosTitle(Modifier.width(200.dp))
+                if (showContext) {
+                    PosContextSummary(
+                        title = title,
+                        details = details,
+                        tone = tone,
+                        icon = icon,
+                        modifier = Modifier.weight(1f),
+                    )
+                } else {
+                    Spacer(Modifier.weight(1f))
+                }
+                ErpButton("Status", onOpenStatus, intent = ActionIntent.Secondary)
                 ErpButton(
                     if (receiptCount > 0) "Receipts ($receiptCount)" else "Receipts",
                     onOpenReceipts,
@@ -1125,7 +1142,7 @@ private fun PosContextBar(
                 )
                 if (state.heldOrders.isNotEmpty()) {
                     ErpButton(
-                        text = if (focused) "Review highlighted" else "Held (${state.heldOrders.size})",
+                        text = "Held (${state.heldOrders.size})",
                         onClick = onOpenHeldOrders,
                         intent = ActionIntent.Primary,
                     )
@@ -1134,15 +1151,23 @@ private fun PosContextBar(
         } else {
             Column(
                 Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+                verticalArrangement = Arrangement.spacedBy(Spacing.xs),
             ) {
-                PosContextSummary(title, details, tone, icon)
                 Row(
                     Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    PosTitle(Modifier.weight(1f))
+                    if (showContext) {
+                        PosContextSummary(title, details, tone, icon, Modifier.weight(1f))
+                    }
+                }
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
                 ) {
                     ErpButton(
-                        "Status & alarms",
+                        "Status",
                         onOpenStatus,
                         modifier = Modifier.weight(1f),
                         intent = ActionIntent.Secondary,
@@ -1163,6 +1188,36 @@ private fun PosContextBar(
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun PosTitle(modifier: Modifier = Modifier) {
+    Row(
+        modifier,
+        horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            Icons.Filled.LocalCafe,
+            contentDescription = null,
+            tint = Brand.GoldBright,
+            modifier = Modifier.size(32.dp),
+        )
+        Column {
+            Text(
+                "POS",
+                color = Brand.Foreground,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                "Snacks, drinks & more",
+                color = Brand.ForegroundMuted,
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1,
+            )
         }
     }
 }
@@ -2127,7 +2182,6 @@ private fun OrderDetailsDialog(
 @Composable
 private fun ProductCatalogPanel(
     categories: List<MenuCategoryEntity>,
-    items: List<MenuItemEntity>,
     selectedCategoryId: String?,
     visibleItems: List<MenuItemEntity>,
     query: String,
@@ -2142,55 +2196,19 @@ private fun ProductCatalogPanel(
         categories.associate { category -> category.id to category.name }
     }
     Column(
-        modifier = modifier.clip(Radius.shapeLg).background(Brand.Surface)
-            .border(1.dp, Brand.BorderSubtle, Radius.shapeLg),
+        modifier = modifier.clip(Radius.shapeLg).background(Brand.Background),
     ) {
-        BoxWithConstraints(
-            Modifier.fillMaxWidth().padding(Spacing.lg),
-        ) {
-            if (maxWidth >= 560.dp) {
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(Spacing.lg),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    CatalogPanelSummary(
-                        availableCount = items.size,
-                        shownCount = visibleItems.size,
-                        modifier = Modifier.weight(1f),
-                    )
-                    SearchInput(
-                        value = query,
-                        onValueChange = onQueryChange,
-                        placeholder = "Search menu or SKU",
-                        modifier = Modifier.width(264.dp),
-                    )
-                }
-            } else {
-                Column(
-                    Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(Spacing.md),
-                ) {
-                    CatalogPanelSummary(
-                        availableCount = items.size,
-                        shownCount = visibleItems.size,
-                    )
-                    SearchInput(
-                        value = query,
-                        onValueChange = onQueryChange,
-                        placeholder = "Search menu or SKU",
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-            }
-        }
+        SearchInput(
+            value = query,
+            onValueChange = onQueryChange,
+            placeholder = "Search items…",
+            modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.sm, vertical = Spacing.xs),
+        )
         CategoryStrip(
             categories = categories,
-            items = items,
             selectedCategoryId = selectedCategoryId,
             onSelect = onSelectCategory,
         )
-        HorizontalDivider(color = Brand.BorderSubtle)
 
         if (visibleItems.isEmpty()) {
             DesignedEmptyState(
@@ -2213,14 +2231,15 @@ private fun ProductCatalogPanel(
                 val columnCount = remember(maxWidth) {
                     posProductColumnCount(
                         panelWidth = maxWidth,
-                        horizontalContentPadding = Spacing.md,
+                        horizontalContentPadding = Spacing.sm,
                         horizontalGap = Spacing.sm,
                     )
                 }
+                val compactTiles = maxHeight < 300.dp
                 LazyVerticalGrid(
                     modifier = Modifier.fillMaxSize(),
                     columns = GridCells.Fixed(columnCount),
-                    contentPadding = PaddingValues(Spacing.md),
+                    contentPadding = PaddingValues(Spacing.sm),
                     horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
                     verticalArrangement = Arrangement.spacedBy(Spacing.sm),
                 ) {
@@ -2229,6 +2248,7 @@ private fun ProductCatalogPanel(
                             item = item,
                             categoryName = categoryNames[item.categoryId],
                             enabled = canWrite,
+                            compact = compactTiles,
                             modifier = Modifier.animateItem(),
                         ) { onAdd(item) }
                     }
@@ -2239,73 +2259,50 @@ private fun ProductCatalogPanel(
 }
 
 @Composable
-private fun CatalogPanelSummary(
-    availableCount: Int,
-    shownCount: Int,
-    modifier: Modifier = Modifier,
-) {
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                "Menu items",
-                color = Brand.Foreground,
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.SemiBold,
-            )
-            OperationalStatusBadge(
-                label = "$availableCount in menu",
-                tone = UiTone.Success,
-            )
-        }
-        Text(
-            "$shownCount shown in this view · Tap a product to add it to this order",
-            color = Brand.ForegroundMuted,
-            style = MaterialTheme.typography.bodySmall,
-        )
-    }
-}
-
-@Composable
 private fun CategoryStrip(
     categories: List<MenuCategoryEntity>,
-    items: List<MenuItemEntity>,
     selectedCategoryId: String?,
     onSelect: (String?) -> Unit,
 ) {
-    val allId = "__all_pos_categories__"
-    val options = remember(categories, items) {
-        buildList {
-            add(TabOption(id = allId, label = "All", count = items.size))
-            categories.forEach { category ->
-                add(
-                    TabOption(
-                        id = category.id,
-                        label = category.name,
-                        count = items.count { it.categoryId == category.id },
-                    ),
-                )
-            }
+    val colors = FilterChipDefaults.filterChipColors(
+        containerColor = Brand.Surface,
+        labelColor = Brand.ForegroundMuted,
+        selectedContainerColor = Brand.Gold,
+        selectedLabelColor = Brand.Background,
+    )
+    LazyRow(
+        contentPadding = PaddingValues(horizontal = Spacing.sm),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        item(key = "all") {
+            FilterChip(
+                selected = selectedCategoryId == null,
+                onClick = { onSelect(null) },
+                label = { Text("All") },
+                shape = Radius.shapeMd,
+                colors = colors,
+            )
+        }
+        items(categories, key = { it.id }) { category ->
+            FilterChip(
+                selected = selectedCategoryId == category.id,
+                onClick = { onSelect(category.id) },
+                label = { Text(category.name, maxLines = 1) },
+                shape = Radius.shapeMd,
+                colors = colors,
+            )
         }
     }
-    PremiumTabBar(
-        options = options,
-        selectedId = selectedCategoryId ?: allId,
-        onSelect = { selected -> onSelect(selected.takeUnless { it == allId }) },
-        modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.sm),
-    )
 }
 
-/** Scales down slightly on press — the one micro-interaction a cashier taps
- * hundreds of times a shift, so it's worth it being responsive-feeling even
- * though the tile itself is a plain, high-density grid item. */
+/** Live product data only; the server catalogue has no product-photo field. */
 @Composable
 private fun MenuTile(
     item: MenuItemEntity,
     categoryName: String?,
     enabled: Boolean,
+    compact: Boolean,
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
@@ -2314,19 +2311,25 @@ private fun MenuTile(
     val scale by animateFloatAsState(if (pressed) 0.94f else 1f, tween(Motion.fast, easing = Motion.emphasized), label = "tileScale")
     Column(
         modifier = modifier
-            .height(132.dp)
+            .height(if (compact) 104.dp else 116.dp)
+            .testTag("pos-product-${item.id}")
             .graphicsLayer {
                 scaleX = scale
                 scaleY = scale
                 alpha = if (enabled) 1f else 0.55f
             }
             .clip(Radius.shapeLg)
-            .background(Brand.SurfaceRaised)
-            .border(1.dp, if (pressed && enabled) Brand.Gold else Brand.BorderSubtle, Radius.shapeLg)
+            .background(Brush.verticalGradient(listOf(Brand.SurfaceRaised, Brand.Surface)))
+            .border(
+                1.dp,
+                if (pressed && enabled) Brand.GoldBright else Brand.Gold.copy(alpha = 0.25f),
+                Radius.shapeLg,
+            )
             .semantics {
                 role = Role.Button
                 contentDescription = if (enabled) {
-                    "Add ${item.name} to the current order"
+                    "Add ${item.name}, ${item.basePriceMinor.asRupees()}" +
+                        (categoryName?.let { ", $it" } ?: "") + " to the current order"
                 } else {
                     "${item.name}, view only"
                 }
@@ -2337,77 +2340,97 @@ private fun MenuTile(
                 indication = null,
                 onClick = onClick,
             )
-            .padding(Spacing.md),
-        verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+            .padding(Spacing.sm),
+        verticalArrangement = Arrangement.spacedBy(Spacing.xs),
     ) {
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
-            verticalAlignment = Alignment.Top,
+        Box(
+            Modifier.fillMaxWidth().weight(1f).clip(Radius.shapeSm)
+                .background(
+                    Brush.radialGradient(
+                        listOf(Brand.Gold.copy(alpha = 0.16f), Brand.SurfaceHover),
+                    ),
+                ),
+            contentAlignment = Alignment.Center,
         ) {
-            Box(
-                Modifier.size(38.dp).clip(Radius.shapeMd).background(Brand.SurfaceHover),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    Icons.Filled.RestaurantMenu,
-                    contentDescription = null,
-                    tint = if (enabled) Brand.GoldBright else Brand.Disabled,
-                    modifier = Modifier.size(20.dp),
-                )
-            }
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-                Text(
-                    item.name,
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    color = Brand.Foreground,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    categoryName ?: item.type.replaceFirstChar { it.titlecase(Locale.getDefault()) },
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Brand.ForegroundFaint,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-        }
-        Spacer(Modifier.weight(1f))
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            NumericValue(
-                value = item.basePriceMinor.asRupees(),
-                color = Brand.GoldBright,
-                style = MaterialTheme.typography.titleMedium,
+            Icon(
+                Icons.Filled.RestaurantMenu,
+                contentDescription = null,
+                tint = if (enabled) Brand.GoldBright else Brand.Disabled,
+                modifier = Modifier.size(30.dp),
             )
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(
-                    Icons.Filled.AddShoppingCart,
-                    contentDescription = null,
-                    tint = if (enabled) Brand.ForegroundMuted else Brand.Disabled,
-                    modifier = Modifier.size(17.dp),
-                )
-                Text(
-                    if (enabled) "Add" else "View only",
-                    color = if (enabled) Brand.ForegroundMuted else Brand.Disabled,
-                    style = MaterialTheme.typography.labelMedium,
-                )
-            }
         }
+        Text(
+            item.name,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = Brand.Foreground,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        NumericValue(
+            value = item.basePriceMinor.asRupees(),
+            color = Brand.GoldBright,
+            style = MaterialTheme.typography.labelMedium,
+        )
+    }
+}
+
+/** The counter's one primary action. Its static finish matches the gold control deck without
+ * animating or obscuring the enabled/busy state of a payment submission. */
+@Composable
+private fun PosCheckoutButton(
+    text: String,
+    onClick: () -> Unit,
+    enabled: Boolean,
+    busy: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val active = enabled && !busy
+    val finish = if (active) {
+        Brush.horizontalGradient(
+            listOf(Color(0xFFFFDB78), Color(0xFFE8AF45), Color(0xFFFFD46D)),
+        )
+    } else {
+        Brush.horizontalGradient(listOf(Brand.SurfaceRaised, Brand.SurfaceHover))
+    }
+    Button(
+        onClick = onClick,
+        enabled = active,
+        shape = Radius.shapeMd,
+        colors = ButtonDefaults.buttonColors(
+            containerColor = Color.Transparent,
+            contentColor = Brand.Background,
+            disabledContainerColor = Color.Transparent,
+            disabledContentColor = if (busy) Brand.Foreground else Brand.Disabled,
+        ),
+        modifier = modifier.heightIn(min = 48.dp)
+            .clip(Radius.shapeMd)
+            .background(finish)
+            .border(
+                1.dp,
+                if (active) Color(0xFFFFE5A3) else Brand.BorderSubtle,
+                Radius.shapeMd,
+            )
+            .semantics { if (busy) stateDescription = "$text in progress" },
+    ) {
+        if (busy) {
+            CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Brand.Foreground)
+            Spacer(Modifier.width(Spacing.sm))
+        }
+        Text(
+            if (busy) "$text…" else text,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 
 @Composable
 private fun CartPanel(
     state: PosUiState,
+    compact: Boolean,
     canWrite: Boolean,
     canDiscount: Boolean,
     onIncrementLine: (String) -> Unit,
@@ -2422,24 +2445,18 @@ private fun CartPanel(
             .border(1.dp, Brand.BorderSubtle, Radius.shapeLg),
     ) {
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = Spacing.lg, vertical = Spacing.md),
-            horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+            Modifier.fillMaxWidth().padding(horizontal = Spacing.md, vertical = Spacing.sm),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(
-                    "Current order",
-                    style = MaterialTheme.typography.titleLarge,
-                    color = Brand.Foreground,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Text(
-                    if (state.cart.isEmpty()) "Ready for the next customer"
-                    else "${state.cartCount} item${if (state.cartCount == 1) "" else "s"} in this sale",
-                    color = Brand.ForegroundMuted,
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
+            Text(
+                "Current order",
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.titleMedium,
+                color = Brand.Foreground,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+            )
             AnimatedVisibility(state.cart.isNotEmpty(), enter = fadeIn(), exit = fadeOut()) {
                 Row(horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
                     ErpButton(
@@ -2449,13 +2466,15 @@ private fun CartPanel(
                         ) "Details ✓" else "Details",
                         onClick = onEditDetails,
                         enabled = canWrite && state.draftEditable,
-                        intent = ActionIntent.Secondary,
+                        intent = ActionIntent.Quiet,
+                        contentPadding = PaddingValues(horizontal = Spacing.sm),
                     )
                     ErpButton(
                         text = "Clear",
                         onClick = onClear,
                         enabled = canWrite && state.draftEditable,
-                        intent = ActionIntent.Quiet,
+                        intent = ActionIntent.Secondary,
+                        contentPadding = PaddingValues(horizontal = Spacing.sm),
                     )
                 }
             }
@@ -2475,78 +2494,82 @@ private fun CartPanel(
             )
         } else {
             LazyColumn(
-                modifier = Modifier.weight(1f).padding(Spacing.md),
-                verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+                modifier = Modifier.weight(1f).padding(horizontal = Spacing.md),
             ) {
                 items(state.cart, key = { it.lineId }) { line ->
-                    Row(
-                        Modifier.fillMaxWidth().animateItem().clip(Radius.shapeMd)
-                            .background(Brand.SurfaceRaised)
-                            .border(1.dp, Brand.BorderSubtle, Radius.shapeMd)
-                            .padding(Spacing.sm),
-                        verticalAlignment = Alignment.CenterVertically,
+                    Column(
+                        Modifier.fillMaxWidth().animateItem(),
                     ) {
-                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                            Text(
-                                line.item.name,
-                                color = Brand.Foreground,
-                                style = MaterialTheme.typography.labelLarge,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                            val optionLabel = buildList {
-                                line.variant?.name?.let(::add)
-                                addAll(line.modifiers.map { modifier ->
-                                    if (modifier.qty == 1) modifier.modifier.name
-                                    else "${modifier.modifier.name} ×${modifier.qty}"
-                                })
-                                line.note?.let { add("Note: $it") }
-                            }.joinToString(" · ")
-                            if (optionLabel.isNotBlank()) {
+                        Row(
+                            Modifier.fillMaxWidth().padding(vertical = Spacing.xs),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(
+                                Modifier.weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(1.dp),
+                            ) {
                                 Text(
-                                    optionLabel,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = Brand.ForegroundMuted,
-                                    maxLines = 2,
+                                    line.item.name,
+                                    color = Brand.Foreground,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                 )
+                                val optionLabel = buildList {
+                                    line.variant?.name?.let(::add)
+                                    addAll(line.modifiers.map { modifier ->
+                                        if (modifier.qty == 1) modifier.modifier.name
+                                        else "${modifier.modifier.name} ×${modifier.qty}"
+                                    })
+                                    line.note?.let { add("Note: $it") }
+                                }.joinToString(" · ")
+                                if (optionLabel.isNotBlank()) {
+                                    Text(
+                                        optionLabel,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = Brand.ForegroundMuted,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                                Text(
+                                    line.lineTotalMinor.asRupees(),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Brand.ForegroundMuted,
+                                )
                             }
-                            Text(
-                                line.lineTotalMinor.asRupees(),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = Brand.ForegroundFaint,
-                            )
+                            QtyButton(
+                                label = "−",
+                                accessibilityLabel = if (line.qty == 1) {
+                                    "Remove ${line.item.name} from the current order"
+                                } else {
+                                    "Decrease ${line.item.name} quantity from ${line.qty}"
+                                },
+                                enabled = canWrite && state.draftEditable,
+                            ) {
+                                onDecrementLine(line.lineId)
+                            }
+                            AnimatedContent(
+                                targetState = line.qty,
+                                transitionSpec = { fadeIn(tween(Motion.fast)).togetherWith(fadeOut(tween(Motion.fast))) },
+                                label = "qty",
+                            ) { qty ->
+                                Text(
+                                    "$qty",
+                                    modifier = Modifier.padding(horizontal = Spacing.xs),
+                                    color = Brand.Foreground,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                            }
+                            QtyButton(
+                                label = "+",
+                                accessibilityLabel = "Increase ${line.item.name} quantity from ${line.qty}",
+                                enabled = canWrite && state.draftEditable,
+                            ) {
+                                onIncrementLine(line.lineId)
+                            }
                         }
-                        QtyButton(
-                            label = "−",
-                            accessibilityLabel = if (line.qty == 1) {
-                                "Remove ${line.item.name} from the current order"
-                            } else {
-                                "Decrease ${line.item.name} quantity from ${line.qty}"
-                            },
-                            enabled = canWrite && state.draftEditable,
-                        ) {
-                            onDecrementLine(line.lineId)
-                        }
-                        AnimatedContent(
-                            targetState = line.qty,
-                            transitionSpec = { fadeIn(tween(Motion.fast)).togetherWith(fadeOut(tween(Motion.fast))) },
-                            label = "qty",
-                        ) { qty ->
-                            Text(
-                                "$qty",
-                                modifier = Modifier.padding(horizontal = Spacing.sm),
-                                color = Brand.Foreground,
-                                fontWeight = FontWeight.Bold,
-                            )
-                        }
-                        QtyButton(
-                            label = "+",
-                            accessibilityLabel = "Increase ${line.item.name} quantity from ${line.qty}",
-                            enabled = canWrite && state.draftEditable,
-                        ) {
-                            onIncrementLine(line.lineId)
-                        }
+                        HorizontalDivider(color = Brand.BorderSubtle)
                     }
                 }
             }
@@ -2554,40 +2577,10 @@ private fun CartPanel(
 
         HorizontalDivider(color = Brand.BorderSubtle)
         Column(
-            Modifier.fillMaxWidth().padding(Spacing.lg),
-            verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+            Modifier.fillMaxWidth().padding(Spacing.md),
+            verticalArrangement = Arrangement.spacedBy(Spacing.xs),
         ) {
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
-                    Text(
-                        "Subtotal estimate",
-                        color = Brand.ForegroundMuted,
-                        style = MaterialTheme.typography.labelLarge,
-                    )
-                    Text(
-                        if (state.online) "Server verifies the exact total before payment"
-                        else "Provisional offline total; server reconciles on reconnect",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Brand.ForegroundFaint,
-                    )
-                }
-                AnimatedContent(
-                    targetState = state.estimateMinor,
-                    transitionSpec = {
-                        fadeIn(tween(Motion.fast)).togetherWith(fadeOut(tween(Motion.fast)))
-                    },
-                    label = "estimate",
-                ) { minor ->
-                    NumericValue(
-                        value = minor.asRupees(),
-                        style = MaterialTheme.typography.headlineSmall,
-                    )
-                }
-            }
+            PaymentAmountRow("Subtotal estimate", state.estimateMinor)
             if (state.manualDiscountMinor > 0L) {
                 PaymentAmountRow("Manual discount", -state.manualDiscountMinor, Brand.Good)
             } else if (!canDiscount && state.cart.isNotEmpty()) {
@@ -2597,7 +2590,90 @@ private fun CartPanel(
                     style = MaterialTheme.typography.labelSmall,
                 )
             }
-            ErpButton(
+            Box(
+                Modifier.fillMaxWidth().clip(Radius.shapeMd)
+                    .background(
+                        Brush.horizontalGradient(
+                            listOf(Brand.Gold.copy(alpha = 0.16f), Brand.SurfaceRaised),
+                        ),
+                    )
+                    .border(1.dp, Brand.Gold.copy(alpha = 0.42f), Radius.shapeMd)
+                    .padding(horizontal = Spacing.sm, vertical = Spacing.xs),
+            ) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "Total estimate",
+                        color = Brand.Foreground,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    NumericValue(
+                        value = state.estimatedDueMinor.asRupees(),
+                        color = Brand.GoldBright,
+                        style = MaterialTheme.typography.headlineSmall,
+                    )
+                }
+            }
+            if (!compact || !state.online) {
+                Text(
+                    if (state.online) "Exact total is verified before collecting payment."
+                    else "Offline estimate is provisional until server reconciliation.",
+                    color = if (state.online) Brand.ForegroundFaint else Brand.Warning,
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 2,
+                )
+            }
+            if (state.cart.isNotEmpty()) {
+                Box(
+                    Modifier.fillMaxWidth().clip(Radius.shapeMd)
+                        .background(PosTealMuted.copy(alpha = 0.55f))
+                        .border(1.dp, PosTeal.copy(alpha = 0.34f), Radius.shapeMd)
+                        .padding(horizontal = Spacing.sm, vertical = Spacing.xs),
+                ) {
+                    if (compact) {
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                "Split payment",
+                                modifier = Modifier.weight(1f),
+                                color = Brand.Foreground,
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Text(
+                                if (state.online) "CASH  +  UPI" else "Reconnect first",
+                                color = if (state.online) PosTeal else Brand.ForegroundMuted,
+                                style = MaterialTheme.typography.labelSmall,
+                                maxLines = 1,
+                            )
+                        }
+                    } else {
+                        Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                            Text(
+                                "Split payment",
+                                color = Brand.Foreground,
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Text(
+                                if (state.online) "Cash + UPI, or other methods, after bill verification."
+                                else "Reconnect to verify the bill before splitting payment.",
+                                color = if (state.online) PosTeal else Brand.ForegroundMuted,
+                                style = MaterialTheme.typography.labelSmall,
+                                maxLines = 2,
+                            )
+                        }
+                    }
+                }
+            }
+            PosCheckoutButton(
                 text = when {
                     state.checkoutBusy && state.preparingHeldOrderId != null -> "Verifying held bill"
                     state.checkoutBusy -> "Recording payment once"
@@ -2612,7 +2688,7 @@ private fun CartPanel(
                     ) -> "RECONNECT TO FINISH BILL"
                     state.draftState == SyncState.PREPARING -> "RESUME SERVER CHECK"
                     state.draftState == SyncState.AWAITING_PAYMENT -> "REVIEW VERIFIED BILL"
-                    else -> "PAY · ${state.estimatedDueMinor.asRupees()}"
+                    else -> "TAKE PAYMENT"
                 },
                 onClick = onPay,
                 enabled = canWrite && state.cart.isNotEmpty() && state.canCollectPayment &&
@@ -2621,8 +2697,7 @@ private fun CartPanel(
                     !state.heldSelectionBlocked &&
                     (state.online || state.draftState == SyncState.DRAFT),
                 busy = state.checkoutBusy,
-                intent = ActionIntent.Primary,
-                modifier = Modifier.fillMaxWidth().height(52.dp),
+                modifier = Modifier.fillMaxWidth().height(52.dp).testTag("pos-take-payment"),
             )
             if (state.checkoutBusy) {
                 Text(
@@ -3662,7 +3737,7 @@ private fun SplitTenderEditor(
                 confirmedAllocation.forEach { (method, amountMinor) ->
                     val color = when (method) {
                         "cash" -> Brand.Good
-                        "upi" -> Brand.Information
+                        "upi" -> PosTeal
                         "card" -> Brand.GoldBright
                         else -> Brand.Warning
                     }
@@ -3672,15 +3747,53 @@ private fun SplitTenderEditor(
                     )
                 }
             }
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+                items(confirmedAllocation, key = { it.first }) { (method, amountMinor) ->
+                    val accent = when (method) {
+                        "cash" -> Brand.Good
+                        "upi" -> PosTeal
+                        "card" -> Brand.GoldBright
+                        else -> Brand.Warning
+                    }
+                    Column(
+                        Modifier.widthIn(min = 104.dp).clip(Radius.shapeSm)
+                            .background(Brand.SurfaceHover)
+                            .border(1.dp, accent.copy(alpha = 0.35f), Radius.shapeSm)
+                            .padding(horizontal = Spacing.sm, vertical = Spacing.xs),
+                    ) {
+                        Text(
+                            SplitPaymentPolicy.methodLabel(method),
+                            color = accent,
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                        Text(
+                            amountMinor.asRupees(),
+                            color = Brand.Foreground,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                }
+            }
         }
         LazyRow(horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
             items(orderedMethods, key = { it }) { splitMethod ->
+                val accent = when (splitMethod) {
+                    "cash" -> Brand.Good
+                    "upi" -> PosTeal
+                    "card" -> Brand.GoldBright
+                    else -> Brand.Information
+                }
                 FilterChip(
                     selected = splitMethod in selectedMethods,
                     enabled = enabled,
                     onClick = { onToggleMethod(splitMethod) },
                     label = { Text(SplitPaymentPolicy.methodLabel(splitMethod)) },
                     shape = Radius.shapePill,
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = accent.copy(alpha = 0.2f),
+                        selectedLabelColor = accent,
+                    ),
                 )
             }
         }
@@ -4019,8 +4132,6 @@ private fun QtyButton(
         modifier = Modifier
             .graphicsLayer { scaleX = scale; scaleY = scale }
             .size(48.dp)
-            .clip(Radius.shapeMd)
-            .background(Brand.SurfaceRaised)
             .semantics {
                 role = Role.Button
                 contentDescription = accessibilityLabel
@@ -4033,7 +4144,13 @@ private fun QtyButton(
             ),
         contentAlignment = Alignment.Center,
     ) {
-        Text(label, color = Brand.Foreground, fontWeight = FontWeight.Bold)
+        Box(
+            Modifier.size(32.dp).clip(Radius.shapeSm).background(Brand.SurfaceRaised)
+                .border(1.dp, Brand.BorderSubtle, Radius.shapeSm),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(label, color = Brand.Foreground, fontWeight = FontWeight.Bold)
+        }
     }
 }
 

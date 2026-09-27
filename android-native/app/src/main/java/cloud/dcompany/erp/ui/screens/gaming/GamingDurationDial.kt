@@ -3,17 +3,20 @@ package cloud.dcompany.erp.ui.screens.gaming
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.layout.width
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -23,17 +26,24 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.setProgress
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Motion
@@ -58,12 +68,15 @@ internal fun GamingDurationDial(
     selectedPackageId: String?,
     onSelect: (String) -> Unit,
     modifier: Modifier = Modifier,
+    dialSize: Dp = 280.dp,
+    showChoiceChips: Boolean = true,
 ) {
     if (choices.isEmpty()) return
     val options = choices.sortedWith(compareBy(GamingDurationChoice::minutes, GamingDurationChoice::packageId))
     val selectedIndex = options.indexOfFirst { it.packageId == selectedPackageId }
         .takeIf { it >= 0 } ?: 0
     val selected = options[selectedIndex]
+    val compactMarkers = dialSize < 270.dp
     val targetAngle = durationDialStopAngles(options.size)[selectedIndex]
     val animatedAngle by animateFloatAsState(
         targetValue = targetAngle,
@@ -80,7 +93,7 @@ internal fun GamingDurationDial(
     ) {
         Box(
             modifier = Modifier
-                .size(208.dp)
+                .size(dialSize)
                 .semantics {
                     contentDescription = "Session duration dial"
                     stateDescription = "${selected.minutes} minutes, ${selected.totalMinor.asRupees()} total"
@@ -133,31 +146,71 @@ internal fun GamingDurationDial(
                 },
             contentAlignment = Alignment.Center,
         ) {
-            Canvas(modifier = Modifier.size(208.dp)) {
-                val stroke = 10.dp.toPx()
-                val radius = size.minDimension * 0.38f
+            Canvas(modifier = Modifier.size(dialSize)) {
+                val vividGold = Color(0xFFFFD76D)
+                val paleGold = Color(0xFFFFF0AE)
+                val stroke = 14.dp.toPx()
+                val radius = size.minDimension * 0.40f
                 val center = Offset(size.width / 2f, size.height / 2f)
                 val topLeft = Offset(center.x - radius, center.y - radius)
                 val diameter = radius * 2f
+                val tickOuter = radius - 12.dp.toPx()
+
+                // Fine static instrument marks and concentric outlines give the
+                // control depth without animating the full canvas every frame.
                 drawCircle(
-                    Brand.Border.copy(alpha = 0.24f),
+                    vividGold.copy(alpha = 0.14f),
+                    radius = radius + 14.dp.toPx(), center = center,
+                    style = Stroke(1.dp.toPx()),
+                )
+                drawCircle(
+                    vividGold.copy(alpha = 0.09f),
+                    radius = radius - 23.dp.toPx(), center = center,
+                    style = Stroke(1.dp.toPx()),
+                )
+                repeat(96) { index ->
+                    val angle = Math.toRadians((index * 360f / 96f).toDouble())
+                    val direction = Offset(cos(angle).toFloat(), sin(angle).toFloat())
+                    val inner = tickOuter - (if (index % 8 == 0) 9.dp.toPx() else 4.dp.toPx())
+                    drawLine(
+                        color = vividGold.copy(alpha = if (index % 8 == 0) 0.30f else 0.12f),
+                        start = center + direction * inner,
+                        end = center + direction * tickOuter,
+                        strokeWidth = if (index % 8 == 0) 1.1.dp.toPx() else 0.7.dp.toPx(),
+                    )
+                }
+                drawCircle(
+                    Color(0xFF1A272C),
                     radius = radius,
                     center = center,
-                    style = Stroke(stroke),
+                    style = Stroke(9.dp.toPx()),
                 )
                 drawArc(
-                    color = Brand.Border,
-                    startAngle = 210f,
-                    sweepAngle = 120f,
+                    color = vividGold.copy(alpha = 0.13f),
+                    startAngle = 170f,
+                    sweepAngle = (animatedAngle - 170f).coerceAtLeast(0f),
                     useCenter = false,
                     topLeft = topLeft,
                     size = Size(diameter, diameter),
-                    style = Stroke(width = stroke, cap = StrokeCap.Round),
+                    style = Stroke(width = 30.dp.toPx(), cap = StrokeCap.Round),
                 )
                 drawArc(
-                    color = Brand.GoldBright,
-                    startAngle = 210f,
-                    sweepAngle = animatedAngle - 210f,
+                    color = vividGold.copy(alpha = 0.29f),
+                    startAngle = 170f,
+                    sweepAngle = (animatedAngle - 170f).coerceAtLeast(0f),
+                    useCenter = false,
+                    topLeft = topLeft,
+                    size = Size(diameter, diameter),
+                    style = Stroke(width = 21.dp.toPx(), cap = StrokeCap.Round),
+                )
+                drawArc(
+                    brush = Brush.linearGradient(
+                        colors = listOf(vividGold, paleGold, vividGold),
+                        start = Offset(center.x - radius, center.y + radius),
+                        end = Offset(center.x + radius, center.y - radius),
+                    ),
+                    startAngle = 170f,
+                    sweepAngle = (animatedAngle - 170f).coerceAtLeast(0f),
                     useCenter = false,
                     topLeft = topLeft,
                     size = Size(diameter, diameter),
@@ -168,14 +221,60 @@ internal fun GamingDurationDial(
                     center.x + radius * cos(radians).toFloat(),
                     center.y + radius * sin(radians).toFloat(),
                 )
-                drawCircle(Brand.Gold.copy(alpha = 0.20f), radius = 19.dp.toPx(), center = knob)
-                drawCircle(Brand.GoldBright, radius = 11.dp.toPx(), center = knob)
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colors = listOf(vividGold.copy(alpha = 0.55f), Color.Transparent),
+                        center = knob, radius = 34.dp.toPx(),
+                    ),
+                    radius = 34.dp.toPx(), center = knob,
+                )
+                drawCircle(vividGold.copy(alpha = 0.50f), radius = 17.dp.toPx(), center = knob)
+                drawCircle(paleGold, radius = 13.dp.toPx(), center = knob)
+                drawCircle(
+                    Color.White.copy(alpha = 0.9f), radius = 13.dp.toPx(), center = knob,
+                    style = Stroke(1.2.dp.toPx()),
+                )
             }
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            if (options.size == 2) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().align(Alignment.TopCenter)
+                        .padding(top = if (compactMarkers) 0.dp else 24.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    options.forEachIndexed { index, option ->
+                        Text(
+                            if (compactMarkers) "${option.minutes} min"
+                            else "${option.minutes} min\n${option.totalMinor.asRupees()}",
+                            modifier = Modifier.weight(1f).sizeIn(minHeight = 48.dp)
+                                .clickable(role = Role.Button) { onSelect(option.packageId) }
+                                .semantics {
+                                    contentDescription = "Choose ${option.minutes} minutes, ${option.totalMinor.asRupees()}"
+                                    this.selected = option.packageId == selected.packageId
+                                },
+                            color = if (option.packageId == selected.packageId) {
+                                Color(0xFFFFD76D)
+                            } else Brand.ForegroundMuted,
+                            style = if (compactMarkers) MaterialTheme.typography.labelMedium
+                                else MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            textAlign = if (index == 0) TextAlign.Start else TextAlign.End,
+                        )
+                    }
+                }
+            }
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(Spacing.xs),
+            ) {
                 Text(
                     "${selected.minutes} min",
-                    color = Brand.GoldBright,
-                    style = MaterialTheme.typography.headlineMedium,
+                    color = Color(0xFFFFD76D),
+                    style = MaterialTheme.typography.displayLarge,
+                    fontWeight = FontWeight.Bold,
+                )
+                HorizontalDivider(
+                    modifier = Modifier.width(dialSize * 0.42f),
+                    color = Brand.Gold.copy(alpha = 0.35f),
                 )
                 Text(
                     "Session price",
@@ -185,19 +284,32 @@ internal fun GamingDurationDial(
                 Text(
                     selected.totalMinor.asRupees(),
                     color = Brand.Foreground,
-                    style = MaterialTheme.typography.titleLarge,
+                    style = MaterialTheme.typography.headlineLarge,
                 )
             }
         }
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-            items(options, key = GamingDurationChoice::packageId) { option ->
-                FilterChip(
-                    selected = option.packageId == selectedPackageId,
-                    onClick = { onSelect(option.packageId) },
-                    label = { Text("${option.minutes} min · ${option.totalMinor.asRupees()} total") },
-                    colors = gamingPackageChipColors(),
-                    modifier = Modifier.sizeIn(minHeight = 48.dp),
-                )
+        if (showChoiceChips) {
+            Column(
+                Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(Spacing.xs),
+            ) {
+                options.chunked(2).forEach { rowOptions ->
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                    ) {
+                        rowOptions.forEach { option ->
+                            FilterChip(
+                                selected = option.packageId == selectedPackageId,
+                                onClick = { onSelect(option.packageId) },
+                                label = { Text("${option.minutes} min · ${option.totalMinor.asRupees()}") },
+                                colors = gamingPackageChipColors(),
+                                modifier = Modifier.weight(1f).sizeIn(minHeight = 48.dp),
+                            )
+                        }
+                        repeat(2 - rowOptions.size) { androidx.compose.foundation.layout.Spacer(Modifier.weight(1f)) }
+                    }
+                }
             }
         }
     }
@@ -206,7 +318,7 @@ internal fun GamingDurationDial(
 internal fun durationDialStopAngles(count: Int): List<Float> {
     require(count > 0)
     if (count == 1) return listOf(270f)
-    return List(count) { index -> 210f + 120f * index / (count - 1) }
+    return List(count) { index -> 240f + 90f * index / (count - 1) }
 }
 
 internal fun closestDurationDialStop(position: Offset, size: IntSize, count: Int): Int? {
@@ -215,12 +327,12 @@ internal fun closestDurationDialStop(position: Offset, size: IntSize, count: Int
     val centerY = size.height / 2f
     val dx = position.x - centerX
     val dy = position.y - centerY
-    val radius = size.width.coerceAtMost(size.height) * 0.38f
+    val radius = size.width.coerceAtMost(size.height) * 0.40f
     if (abs(hypot(dx, dy) - radius) > size.width.coerceAtMost(size.height) * 0.12f) {
         return null
     }
     val angle = (Math.toDegrees(atan2(dy, dx).toDouble()).toFloat() + 360f) % 360f
-    if (angle !in 190f..350f) return null
+    if (angle !in 160f..350f) return null
     val stops = durationDialStopAngles(count)
     return stops.indices.minBy { index ->
         val difference = abs(angle - stops[index])

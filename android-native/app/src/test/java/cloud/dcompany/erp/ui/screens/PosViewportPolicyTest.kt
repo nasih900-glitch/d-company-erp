@@ -11,12 +11,12 @@ class PosViewportPolicyTest {
 
     @Test
     fun `target tablet keeps a sixty four thirty six workspace and three product columns`() {
-        // 960dp screen - 88dp compact rail - 24dp POS outer padding.
-        val workspace = posWorkspaceMetrics(maxWidth = 848.dp)
+        // 960dp control deck has bottom navigation, no rail; subtract 24dp POS padding.
+        val workspace = posWorkspaceMetrics(maxWidth = 936.dp)
 
         assertTrue(workspace.sideBySide)
-        assertEquals(305.28f, requireNotNull(workspace.cartWidth).value, 0.01f)
-        assertEquals(530.72f, workspace.productWidth.value, 0.01f)
+        assertEquals(336.96f, requireNotNull(workspace.cartWidth).value, 0.01f)
+        assertEquals(587.04f, workspace.productWidth.value, 0.01f)
         assertEquals(
             0.36f,
             requireNotNull(workspace.cartWidth).value /
@@ -27,12 +27,12 @@ class PosViewportPolicyTest {
     }
 
     @Test
-    fun `larger tablet expands to four columns without growing checkout beyond its cap`() {
-        // 1280dp screen - 184dp expanded rail - 24dp POS outer padding.
-        val workspace = posWorkspaceMetrics(maxWidth = 1_072.dp)
+    fun `larger tablet uses four columns without an oversized checkout`() {
+        // 1280dp control deck has bottom navigation, no rail; subtract 24dp POS padding.
+        val workspace = posWorkspaceMetrics(maxWidth = 1_256.dp)
 
         assertTrue(workspace.sideBySide)
-        assertEquals(385.92f, requireNotNull(workspace.cartWidth).value, 0.01f)
+        assertEquals(400f, requireNotNull(workspace.cartWidth).value, 0.01f)
         assertEquals(4, posProductColumnCount(workspace.productWidth))
 
         val desktop = posWorkspaceMetrics(maxWidth = 1_600.dp)

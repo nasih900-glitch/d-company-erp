@@ -28,6 +28,49 @@ class GamingCentreNavigationUiTest {
     val compose = createComposeRule()
 
     @Test
+    fun controlDeckTabsNavigateAndMoreKeepsPermittedModulesReachable() {
+        val current = mutableStateOf(Destination.Gaming)
+        val allowed = listOf(
+            Destination.Gaming,
+            Destination.Pos,
+            Destination.Shift,
+            Destination.Customers,
+            Destination.Inventory,
+        )
+        compose.setContent {
+            DCompanyTheme {
+                WorkspaceScaffold(
+                    destinations = allowed,
+                    currentDestination = current.value,
+                    employeeName = "Rafi",
+                    locationLabel = "Gaming Centre",
+                    connectivityProblem = SyncAvailabilityProblem.NONE,
+                    outboxWorkStatus = OutboxWorkStatus(),
+                    syncing = false,
+                    canChangeTill = false,
+                    onOpenSupport = {},
+                    onChangeTill = {},
+                    onSignOut = {},
+                    onDestinationChanged = { current.value = it },
+                ) { destination, _ ->
+                    Text("Current: ${destination.label}")
+                }
+            }
+        }
+
+        listOf(Destination.Pos, Destination.Shift, Destination.Customers).forEach { target ->
+            compose.onNodeWithContentDescription(
+                "${target.label}. ${target.description}",
+                useUnmergedTree = true,
+            ).performClick()
+            compose.onNodeWithText("Current: ${target.label}").assertIsDisplayed()
+        }
+        compose.onNodeWithContentDescription("More modules").performClick()
+        compose.onNodeWithText("Stock").performClick()
+        compose.onNodeWithText("Current: Stock").assertIsDisplayed()
+    }
+
+    @Test
     fun hiddenRestoredMembershipRouteNeverEntersWorkspaceContent() {
         val focused = listOf(
             Destination.Gaming,
@@ -61,10 +104,12 @@ class GamingCentreNavigationUiTest {
             "Gaming. Manage stations and sessions",
             useUnmergedTree = true,
         ).assertExists()
+        compose.onNodeWithContentDescription("More modules").performClick()
         compose.onNodeWithContentDescription(
             "Help. Report a problem or ask what to do next",
             useUnmergedTree = true,
-        ).assertExists()
+        ).assertDoesNotExist()
+        compose.onNodeWithText("Help").assertExists()
         compose.onNodeWithContentDescription(
             "Memberships. Manage plans and member credit",
             useUnmergedTree = true,

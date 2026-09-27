@@ -1,30 +1,54 @@
 # Code30.4 control-deck visual patch
 
-This patch applies the approved black, navy and brass design direction to the
-existing Android ERP. It does not replace the operational screens with the
-illustrative mockup: every amount, status and action still comes from the real
-POS, Gaming, Shift and Customers state.
+This patch applies the approved black, navy and brass references to the
+existing Android ERP. The original references are
+`docs/design/code30-4-gaming-eight-stations.png`,
+`docs/design/code30-4-session-payment.png`, and
+`docs/design/code30-4-pos-shift-customers.png`. The approved Gaming
+layout adapts the original gold duration dial so the station board and dial are
+visible together at the target tablet width. Every amount, status, customer
+and action comes from the ERP; illustrative mockup data and product imagery are
+not inserted into live screens.
 
-- The existing 68 dp workspace header now carries a gold destination icon and
-  title on Gaming, POS, Shift and Customers. Keeping the same header height
-  protects the station board, checkout and shift-close viewport on smaller
-  landscape tablets.
-- Gaming's station and command panels use restrained gold focus and active
-  borders. The start-session touch dial selects only published duration/package
-  choices and their stored prices; it cannot invent a price.
-- POS product cards highlight on press. Once a valid split tender is entered,
-  a read-only allocation bar shows the selected methods and amounts. Existing
-  fields, validation and atomic payment submission remain authoritative.
-- Shift collection figures and the close panel have stronger visual grouping.
-  Close eligibility, drawer entry and server reconciliation are unchanged.
-- Customers shows a clearer saved-customer list and a top-three playtime
-  leaderboard. Reward estimates and WhatsApp messages remain disabled.
+- Gaming, POS, Shift and Customers use a full-width content area with a
+  five-position bottom bar: four daily modules and a permission-filtered More
+  menu. Other ERP modules keep the existing sidebar. Connection, saved-work,
+  Help and account controls remain in the top bar.
+- Gaming keeps the eight real stations and the station control pane on the
+  same screen. At tablet width the compact station board sits beside the large
+  luminous gold duration dial; selecting a station updates the pane without
+  opening a new page. Available stations show their published duration and
+  price, mode, customer and player controls and Start action. Active and
+  payment-due stations show their applicable stop, extend, participant,
+  transfer, billing and recovery actions in that pane. At narrower widths the
+  two regions stack in one scrollable screen. The dial selects only published
+  package durations and stored prices; it never derives a tariff from dial
+  position. Simultaneous permission, cleanup and action warnings have their own
+  bounded scroll area so they cannot push the board and dial off a compact
+  tablet.
+- POS uses a product catalogue and current-order pane. Product names and
+  prices come from the synced menu; Android does not currently receive product
+  photos, so it uses an icon fallback. Split-tender entry remains in the
+  verified payment flow. Existing validation and atomic payment submission
+  remain authoritative.
+- Shift shows actual cash, UPI, net collection, drawer expectation and close
+  readiness in a single summary. The guarded close and recovery steps remain
+  authoritative; the example figures in the mockup are not seeded into ERP.
+- Customers keeps the searchable saved directory available offline and shows a
+  separate online leaderboard ordered and paginated by the server's completed
+  playtime ranks. Its `Recorded visits` column comes from settled purchase
+  visits, not a guessed count of gaming sessions; older servers leave it blank.
+  Unknown or unavailable ranks are labeled rather than inferred from the local
+  directory. Rewards and WhatsApp messaging remain disabled.
 
-The visual design uses static color and borders, without ongoing glow effects
-or background animation. It does not add API calls, database migrations,
-permissions or new financial calculations. Production acceptance still requires
-the signed update's normal release gates and a real-tablet check; emulator frame
-measurements alone do not prove performance on the Redmi Pad.
+The visual design uses static color and gold light trails, restrained focus
+borders and local press feedback rather than continuous background animation.
+The leaderboard makes paginated calls to the existing read-only endpoint, whose
+response gains an additive recorded-visits field. No new backend route,
+database migration, permission or financial calculation is introduced.
+Production acceptance still requires the signed update's normal release gates
+and a real-tablet check; emulator frame measurements alone do not prove
+performance on the Redmi Pad.
 
 ## Build 41 acceptance
 

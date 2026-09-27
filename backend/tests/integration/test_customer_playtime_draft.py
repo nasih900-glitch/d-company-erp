@@ -138,11 +138,13 @@ async def test_playtime_leaderboard_is_tenant_scoped_and_conservative(
     now = datetime.now(UTC)
     first = Customer(
         id=uuid4(), company_id=seed_owner["company"].id,
-        phone="9000000001", name="First", created_at=now - timedelta(days=2),
+        phone="9000000001", name="First", visit_count=3,
+        created_at=now - timedelta(days=2),
     )
     second = Customer(
         id=uuid4(), company_id=seed_owner["company"].id,
-        phone="9000000002", name="Second", created_at=now - timedelta(days=1),
+        phone="9000000002", name="Second", visit_count=1,
+        created_at=now - timedelta(days=1),
     )
     zero = Customer(
         id=uuid4(), company_id=seed_owner["company"].id,
@@ -255,6 +257,7 @@ async def test_playtime_leaderboard_is_tenant_scoped_and_conservative(
     assert payload["items"][0]["qualifying_paid_minutes"] == 600
     assert payload["items"][0]["draft_estimated_reward_minutes"] == 60
     assert payload["items"][0]["masked_phone"].endswith("0001")
+    assert [row["recorded_visits"] for row in payload["items"]] == [3, 1]
 
     detail = await client.get(
         f"/api/v1/customers/{first.id}/playtime", headers=_headers(token)
@@ -269,6 +272,7 @@ async def test_playtime_leaderboard_is_tenant_scoped_and_conservative(
     )
     assert second_page.status_code == 200
     assert [row["name"] for row in second_page.json()["items"]] == ["Zero"]
+    assert second_page.json()["items"][0]["recorded_visits"] == 0
 
 
 @pytest.mark.asyncio

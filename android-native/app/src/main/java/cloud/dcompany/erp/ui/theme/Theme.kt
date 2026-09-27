@@ -25,8 +25,9 @@ import androidx.core.view.WindowCompat
  *
  * The interface is a neutral business tool: navy establishes hierarchy, brass
  * is reserved for brand identity and primary actions, and semantic colours are
- * reserved for operational state. Gaming remains a workflow, not a visual
- * theme, so there are no decorative gradients, glows or neon treatments.
+ * reserved for operational state. Daily control-deck pages add restrained,
+ * static gold artwork behind content while semantic state and controls keep
+ * using these shared tokens.
  */
 object Brand {
     // Five deliberate surface steps keep dense tablet screens structured

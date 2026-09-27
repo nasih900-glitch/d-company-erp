@@ -164,7 +164,7 @@ class GamingDialogUiTest {
         compose.onNodeWithText("Fixed packages from ₹80.00").assertIsDisplayed()
         compose.onAllNodesWithText("₹200.00/hour").assertCountEquals(0)
         compose.onNodeWithContentDescription(
-            "PS5 Station Fixed. Available. Ready. Fixed packages from ₹80.00",
+            "PS5 Station Fixed. Available. Ready. Fixed packages from ₹80.00. Select station",
         ).assertIsDisplayed()
     }
 
@@ -1867,9 +1867,13 @@ class GamingDialogUiTest {
             }
         }
 
-        compose.onNodeWithText("3 players")
-            .bringIntoViewIfNeeded()
-            .performClick()
+        // Player count now grows through one Add player action rather than a
+        // preselected count chip. A third player has one extra controller.
+        repeat(2) {
+            compose.onNodeWithText("Add player")
+                .bringIntoViewIfNeeded()
+                .performClick()
+        }
         compose.onNodeWithText("60 min · ₹180.00 total")
             .bringIntoViewIfNeeded()
             .assertIsDisplayed()

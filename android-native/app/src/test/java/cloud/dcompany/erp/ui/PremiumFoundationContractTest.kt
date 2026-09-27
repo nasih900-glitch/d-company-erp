@@ -65,7 +65,7 @@ class PremiumFoundationContractTest {
         val navigation = read("src/main/java/cloud/dcompany/erp/ui/Nav.kt")
 
         assertTrue("maxWidth <= 1_280.dp" in navigation)
-        assertTrue("Modifier.fillMaxWidth().height(68.dp)" in navigation)
+        assertTrue(".height(if (controlDeckDestination) 56.dp else 68.dp)" in navigation)
         assertTrue("private fun HeaderIconAction(" in navigation)
         assertTrue("modifier = Modifier.size(48.dp)" in navigation)
     }

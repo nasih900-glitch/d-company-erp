@@ -305,10 +305,9 @@ class ShiftCompactUiTest {
 }
 
 /**
- * Recreates the exact 1280 x 800dp target window: 88dp compact rail, 68dp
- * header, Shift page padding, 82dp summary cards and the 350dp history panel.
- * This catches regressions that a wide-only breakpoint test misses when the
- * available height is still tablet-sized.
+ * Exercises a conservative Shift viewport inside a 1280 x 800dp window with
+ * a 56dp control-deck header and a reserved 88dp rail. The live Shift page
+ * uses the full width, so this remains the tighter layout for regression QA.
  */
 @Composable
 private fun TargetTabletWideShiftFrame(
@@ -318,7 +317,7 @@ private fun TargetTabletWideShiftFrame(
     Row(Modifier.width(1_280.dp).height(800.dp)) {
         Spacer(Modifier.width(88.dp))
         Column(Modifier.weight(1f).fillMaxHeight()) {
-            Spacer(Modifier.height(68.dp))
+            Spacer(Modifier.height(56.dp))
             Column(
                 Modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
