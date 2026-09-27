@@ -688,7 +688,7 @@ REVIEWED_CODE30_4_HOTFIX_SHA256 = {
 # Pixel C buffer. This changes no application runtime code or earlier release.
 REVIEWED_CODE30_4_BUILD41_SHA256 = {
     '.env.production.example': 'f27985296627c02601b59cdb8af541fa43f5a3f12a75ed781ad095b534200ffd',
-    '.github/workflows/ci.yml': 'b00b2810731caf479ef3728af68af60ff9630b7cf2fda1cbcbeef1236b71f1de',
+    '.github/workflows/ci.yml': '21e70d5865657732fd867c8ae7e42b58f0bb27a2655439c58f43770d5d3197d3',
     '.github/workflows/release.yml': '3238e5840e5dd4c783af254abf271d7709484a1e4254bdfeac7577781ebf3115',
     'android-native/app/build.gradle.kts': '6ae336925ebfbe7321f717dbe2eff8ebeef6c5b476ad5d3af48efa6d5388baad',
     'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/GamingCentreNavigationUiTest.kt': 'f399e7d8e24c52cded9b9401e5e50331559b9d7111538da6eaee3b4f4ea6c2d4',
