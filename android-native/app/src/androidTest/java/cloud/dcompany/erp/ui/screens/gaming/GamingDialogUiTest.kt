@@ -45,6 +45,7 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipe
 import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.SemanticsMatcher
@@ -1872,7 +1873,7 @@ class GamingDialogUiTest {
             .bringIntoViewIfNeeded()
             .assertIsDisplayed()
             .performClick()
-        compose.onNodeWithText("Start · ₹180.00")
+        compose.onNodeWithText("Start 60 min · ₹180.00")
             .bringIntoViewIfNeeded()
             .assertIsDisplayed()
             .assertIsEnabled()
@@ -1883,6 +1884,50 @@ class GamingDialogUiTest {
             assertEquals("standard-dual-60", submittedPackage)
             assertEquals(1, submittedControllers)
         }
+    }
+
+    @Test
+    fun startSession_draggingDurationDialSelectsPublishedPackageAndPrice() {
+        var submittedPackage: String? = null
+        compose.setContent {
+            DCompanyTheme {
+                StartSessionDialog(
+                    station = testStation(),
+                    packages = listOf(
+                        GamingPackage("single-30", "standard-single-session-30m", "ps5", "standard", "single", 1, 1, "base", "Single Mode 30 min", 30, 8_000),
+                        GamingPackage("single-60", "standard-single-session-60m", "ps5", "standard", "single", 1, 1, "base", "Single Mode 1 hour", 60, 12_000),
+                    ),
+                    onDismiss = {},
+                    onConfirm = { _, _, _, _, packageId, _ -> submittedPackage = packageId },
+                )
+            }
+        }
+
+        compose.onNodeWithText("Start 30 min · ₹80.00").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Session duration dial")
+            .bringIntoViewIfNeeded()
+            .performTouchInput {
+                swipe(
+                    start = Offset(width * 0.83f, height * 0.31f),
+                    end = Offset(width * 0.83f, height * 0.80f),
+                    durationMillis = 300,
+                )
+            }
+        compose.onNodeWithText("Start 30 min · ₹80.00").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Session duration dial")
+            .bringIntoViewIfNeeded()
+            .performTouchInput {
+                swipe(
+                    start = Offset(width * 0.17f, height * 0.31f),
+                    end = Offset(width * 0.83f, height * 0.31f),
+                    durationMillis = 300,
+                )
+            }
+        compose.onNodeWithText("Start 60 min · ₹120.00")
+            .bringIntoViewIfNeeded()
+            .assertIsDisplayed()
+            .performClick()
+        compose.runOnIdle { assertEquals("single-60", submittedPackage) }
     }
 
     @Test
@@ -1906,7 +1951,7 @@ class GamingDialogUiTest {
         compose.onNodeWithText("Premium stale").assertDoesNotExist()
         compose.onNodeWithText("VR Racing Sim").performClick()
         compose.onNodeWithText("15 min · ₹100.00 total").performClick()
-        compose.onNodeWithText("Start · ₹100.00").performClick()
+        compose.onNodeWithText("Start 15 min · ₹100.00").performClick()
         compose.runOnIdle { assertEquals("vr-racing-15", submittedPackage) }
     }
 

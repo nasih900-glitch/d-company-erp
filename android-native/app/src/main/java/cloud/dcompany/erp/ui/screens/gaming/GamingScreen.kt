@@ -4650,6 +4650,19 @@ internal fun StartSessionDialog(
     val selectedPackageTotalMinor = selectedPackage?.let {
         it.priceMinor + selectedControllerSurchargeMinor
     }
+    val durationChoices = eligiblePackages.map { option ->
+        val optionExtraControllers = if (option.variant == "dual") {
+            (playerCount - option.includedPlayers).coerceAtLeast(0)
+        } else 0
+        GamingDurationChoice(
+            packageId = option.id,
+            minutes = option.durationMinutes,
+            totalMinor = option.priceMinor + extraControllerSurchargeMinor(
+                optionExtraControllers,
+                option.durationMinutes,
+            ),
+        )
+    }
     val hasFixedTariff = basePackages.isNotEmpty()
     val fixedTariffRequired = requiresCanonicalGamingTariff(station.type)
     val fixedTariffUnavailable = fixedTariffRequired && !hasFixedTariff
@@ -4677,7 +4690,12 @@ internal fun StartSessionDialog(
             .navigationBarsPadding()
             .imePadding(),
         properties = gamingImeAwareDialogProperties,
-        title = { Text("Start · ${station.name}") },
+        title = {
+            Column {
+                Text("START SESSION")
+                Text(station.name, color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelLarge)
+            }
+        },
         text = {
             Column(
                 modifier = Modifier
@@ -4759,22 +4777,25 @@ internal fun StartSessionDialog(
                         }
                     }
                     Text("Duration", color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelMedium)
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                        items(eligiblePackages, key = GamingPackage::id) { option ->
-                            val optionExtraControllers = if (option.variant == "dual") {
-                                (playerCount - option.includedPlayers).coerceAtLeast(0)
-                            } else 0
-                            val optionTotalMinor = option.priceMinor + extraControllerSurchargeMinor(
-                                optionExtraControllers,
-                                option.durationMinutes,
-                            )
-                            FilterChip(
-                                selected = selectedPackageId == option.id,
-                                onClick = { selectedPackageId = option.id },
-                                label = { Text("${option.durationMinutes} min · ${optionTotalMinor.asRupees()} total") },
-                                colors = gamingPackageChipColors(),
-                                modifier = Modifier.heightIn(min = 48.dp),
-                            )
+                    if (durationChoices.size in 2..4 &&
+                        durationChoices.map(GamingDurationChoice::minutes).distinct().size == durationChoices.size
+                    ) {
+                        GamingDurationDial(
+                            choices = durationChoices,
+                            selectedPackageId = selectedPackageId,
+                            onSelect = { selectedPackageId = it },
+                        )
+                    } else {
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                            items(durationChoices, key = GamingDurationChoice::packageId) { option ->
+                                FilterChip(
+                                    selected = selectedPackageId == option.packageId,
+                                    onClick = { selectedPackageId = option.packageId },
+                                    label = { Text("${option.minutes} min · ${option.totalMinor.asRupees()} total") },
+                                    colors = gamingPackageChipColors(),
+                                    modifier = Modifier.heightIn(min = 48.dp),
+                                )
+                            }
                         }
                     }
                 } else {
@@ -4955,7 +4976,9 @@ internal fun StartSessionDialog(
         },
         confirmButton = {
             ErpButton(
-                text = selectedPackageTotalMinor?.let { "Start · ${it.asRupees()}" } ?: "Start session",
+                text = selectedPackageTotalMinor?.let {
+                    "Start ${selectedPackage?.durationMinutes} min · ${it.asRupees()}"
+                } ?: "Start session",
                 onClick = {
                     val selected = selectedCustomer
                     val snapshotName = when {
@@ -4988,7 +5011,7 @@ internal fun StartSessionDialog(
 }
 
 @Composable
-private fun gamingPackageChipColors() = FilterChipDefaults.filterChipColors(
+internal fun gamingPackageChipColors() = FilterChipDefaults.filterChipColors(
     containerColor = Brand.Surface,
     labelColor = Brand.ForegroundMuted,
     selectedContainerColor = Brand.Gold,
