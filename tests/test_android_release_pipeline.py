@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os
 import re
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 INSTRUMENTATION_SCRIPT = ROOT / "scripts" / "run_android_instrumentation_ci.sh"
+AVD_CONFIGURATOR = ROOT / "scripts" / "configure_ci_android_avd.py"
 MAIN_MANIFEST = ROOT / "android-native" / "app" / "src" / "main" / "AndroidManifest.xml"
 DIRECT_MANIFEST = (
     ROOT / "android-native" / "app" / "src" / "directRelease" / "AndroidManifest.xml"
@@ -833,6 +836,45 @@ class AndroidReleasePipelineTest(unittest.TestCase):
 
         self.assertIn("?Content-Security-Policy", caddy)
         self.assertNotIn("\n        Content-Security-Policy  ", caddy)
+
+    def test_ci_avd_configurator_changes_only_the_physical_display(self) -> None:
+        ci_workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+        release_workflow = WORKFLOW.read_text(encoding="utf-8")
+        instrumentation = INSTRUMENTATION_SCRIPT.read_text(encoding="utf-8")
+        for workflow in (ci_workflow, release_workflow):
+            self.assertIn(
+                "pre-emulator-launch-script: python3 scripts/configure_ci_android_avd.py test",
+                workflow,
+            )
+            self.assertIn(
+                "script: D_COMPANY_REQUIRE_NATIVE_AVD_SIZE=1 bash scripts/run_android_instrumentation_ci.sh",
+                workflow,
+            )
+        self.assertIn("Physical size:", instrumentation)
+        self.assertIn("Physical density:", instrumentation)
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            config = Path(temporary_directory) / "test.avd" / "config.ini"
+            config.parent.mkdir()
+            config.write_text(
+                "hw.cpu.ncore=2\nhw.lcd.width=2560\nhw.lcd.height=1800\n"
+                "hw.lcd.density=320\nhw.lcd.width=2560\nhw.ramSize=2048M\n",
+                encoding="utf-8",
+            )
+            environment = {**os.environ, "ANDROID_AVD_HOME": temporary_directory}
+            for _ in range(2):
+                subprocess.run(
+                    [sys.executable, str(AVD_CONFIGURATOR), "test"],
+                    env=environment,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+            self.assertEqual(
+                config.read_text(encoding="utf-8"),
+                "hw.cpu.ncore=2\nhw.ramSize=2048M\n"
+                "hw.lcd.width=1280\nhw.lcd.height=800\nhw.lcd.density=160\n",
+            )
 
 
 if __name__ == "__main__":

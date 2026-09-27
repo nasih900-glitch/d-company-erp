@@ -682,12 +682,14 @@ REVIEWED_CODE30_4_HOTFIX_SHA256 = {
     'tests/test_code26_physical_audit_lane.py': '03fc2280153696bad5898916d1ee6b6d63a045b413b300fd80389392c8a0ad33',
 }
 # The v3.1.33 / build-41 control-deck UI and coordinated identity are a
-# separate exact-byte overlay. The CI viewport correction keeps the same
-# 1280x800dp layout with a smaller hosted-emulator framebuffer after two
-# graphics-device losses; it changes no application runtime code. Neither
-# preceding signed release map changes.
+# separate exact-byte overlay. The CI AVD correction sets the physical
+# 1280x800 framebuffer before boot after three hosted-emulator losses;
+# changing Android's logical display after boot did not shrink the underlying
+# Pixel C buffer. This changes no application runtime code or earlier release.
 REVIEWED_CODE30_4_BUILD41_SHA256 = {
     '.env.production.example': 'f27985296627c02601b59cdb8af541fa43f5a3f12a75ed781ad095b534200ffd',
+    '.github/workflows/ci.yml': 'ce6c131d0418274e9722dac3ee50603b425db1ad84775be2553b05ddae4ccc81',
+    '.github/workflows/release.yml': '1c63bd71c55cc227228f02310b50e08fa03366d65e5d4f2653777f3cf583d62b',
     'android-native/app/build.gradle.kts': '6ae336925ebfbe7321f717dbe2eff8ebeef6c5b476ad5d3af48efa6d5388baad',
     'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/GamingCentreNavigationUiTest.kt': 'f399e7d8e24c52cded9b9401e5e50331559b9d7111538da6eaee3b4f4ea6c2d4',
     'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/ControlDeckFullShellScreenshotsUiTest.kt': 'd1acd617346b9c7323963e61e7b442089a4abc8318453883dedadc9fe9ad87e1',
@@ -738,9 +740,10 @@ REVIEWED_CODE30_4_BUILD41_SHA256 = {
     'frontend/package-lock.json': '033e9c8b6d8a67786c6bab571976284a875618e1b1943e5acb8b840b95562f09',
     'frontend/package.json': '228100da3f0223e9ccd082bf668c88876eba3b12dc10ca408b4a7f4fecbb4b52',
     'scripts/analyze_code26_physical_evidence.py': '7dca0ce2bb16ba6f1bb0b58a004501131309b4cef6b8753747394aa0947de336',
-    'scripts/run_android_instrumentation_ci.sh': '0778c934d485673cab2420ffccadb7649ad07ea648dd9667f155dfa2ed1a82af',
+    'scripts/configure_ci_android_avd.py': '89e4b4316cc5d0b959fbf9e6c72d4b3ba8db34fff0eb9add97db97631fbdeb8a',
+    'scripts/run_android_instrumentation_ci.sh': '49b9aaa0582b20a9e00ece327a4420434f9d85c6111328615c479a3cb4cab7dc',
     'scripts/run_code26_physical_business_audit.sh': 'cf833c24cfbc69b5717a77823395635d72eea3e4297521a49481d8e9fed0e9f5',
-    'tests/test_android_release_pipeline.py': 'ef238f88c3cc66096410ee896ba2cdc13b6a1094b3bea261bfbc1b08c650e836',
+    'tests/test_android_release_pipeline.py': '2570429e1fe0b26423ec01fdeb70554b165b3cd446ff5c9b5dc4128772c9b57d',
     'tests/test_code26_physical_audit_lane.py': 'b3ef51afcbb482bf7402e5340f9e6094687b5e2970c8a6210686cb6fb359f0ff',
 }
 REVIEWED_CODE30_4_PRODUCTION_PATHS = frozenset(

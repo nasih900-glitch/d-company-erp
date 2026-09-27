@@ -195,7 +195,12 @@ jobs:
           # class viewport, matching the 1280x800dp production target closely.
           profile: pixel_c
           disable-animations: true
-          script: bash scripts/run_android_instrumentation_ci.sh
+          # Pixel C boots with a 2560x1800 host graphics buffer. A post-boot
+          # `wm size` override does not shrink that buffer, and the hosted
+          # emulator can disappear during the Compose suite. Keep tablet dp
+          # coverage while setting its physical buffer before first boot.
+          pre-emulator-launch-script: python3 scripts/configure_ci_android_avd.py test
+          script: D_COMPANY_REQUIRE_NATIVE_AVD_SIZE=1 bash scripts/run_android_instrumentation_ci.sh
       - name: Upload Android test and lint reports
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

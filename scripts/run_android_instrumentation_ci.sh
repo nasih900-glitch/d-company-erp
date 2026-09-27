@@ -77,7 +77,17 @@ restore_system_setting() {
 configure_tablet_viewport() {
   local effective_size=''
   local effective_density=''
+  local physical_size=''
+  local physical_density=''
   local report="${diagnostics_dir}/tablet-viewport.txt"
+
+  physical_size="$(adb -s "${device_serial}" shell wm size | tr -d '\r' | sed -n 's/^Physical size: //p')"
+  physical_density="$(adb -s "${device_serial}" shell wm density | tr -d '\r' | sed -n 's/^Physical density: //p')"
+  if [[ "${D_COMPANY_REQUIRE_NATIVE_AVD_SIZE:-0}" == '1' ]] && \
+     { [[ "${physical_size}" != '1280x800' ]] || [[ "${physical_density}" != '160' ]]; }; then
+    echo "Hosted emulator has unexpected physical display ${physical_size:-unknown} at ${physical_density:-unknown} dpi." >&2
+    return 1
+  fi
 
   display_size_override_initial="$({ adb -s "${device_serial}" shell wm size || true; } | tr -d '\r' | sed -n 's/^Override size: //p')"
   display_density_override_initial="$({ adb -s "${device_serial}" shell wm density || true; } | tr -d '\r' | sed -n 's/^Override density: //p')"
@@ -85,10 +95,9 @@ configure_tablet_viewport() {
   user_rotation_initial="$(adb -s "${device_serial}" shell settings get system user_rotation | tr -d '\r')"
   tablet_viewport_configured=1
 
-  # Keep the 1280x800dp tablet layout while using a smaller host framebuffer.
-  # The hosted emulator lost its graphics device twice while capturing the
-  # full Gaming workspace at 2560x1600; physical-device rendering is a
-  # separate release gate.
+  # Keep the 1280x800dp tablet layout. CI also verifies the AVD's physical
+  # framebuffer, because a post-boot wm override alone does not shrink it.
+  # Physical-device rendering remains a separate release gate.
   adb -s "${device_serial}" shell wm size 1280x800 >/dev/null
   adb -s "${device_serial}" shell wm density 160 >/dev/null
   adb -s "${device_serial}" shell settings put system accelerometer_rotation 0 >/dev/null
@@ -98,6 +107,8 @@ configure_tablet_viewport() {
   effective_density="$(adb -s "${device_serial}" shell wm density | tr -d '\r' | awk -F': ' '/Physical density:/{value=$2} /Override density:/{value=$2} END{print value}')"
   {
     echo "serial=${device_serial}"
+    echo "physical_size=${physical_size}"
+    echo "physical_density=${physical_density}"
     echo "effective_size=${effective_size}"
     echo "effective_density=${effective_density}"
     echo "logical_viewport=1280x800dp"

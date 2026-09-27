@@ -364,7 +364,8 @@ jobs:
           # then verifies the exact 1280x800dp logical viewport.
           profile: pixel_c
           disable-animations: true
-          script: bash scripts/run_android_instrumentation_ci.sh
+          pre-emulator-launch-script: python3 scripts/configure_ci_android_avd.py test
+          script: D_COMPANY_REQUIRE_NATIVE_AVD_SIZE=1 bash scripts/run_android_instrumentation_ci.sh
       - name: Upload Android instrumentation reports
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
