@@ -67,6 +67,26 @@ class GamingSession(Base, TimestampMixin, TenantMixin):
             "(customer_identity_provenance = 'start_unlinked' AND customer_id IS NULL)",
             name="ck_gaming_sessions_customer_identity_provenance",
         ),
+        CheckConstraint(
+            "participant_revision >= 0",
+            name="ck_gaming_sessions_participant_revision",
+        ),
+        CheckConstraint(
+            "(billing_revision = 0 "
+            "AND effective_package_id IS NULL "
+            "AND effective_package_price_minor_snapshot IS NULL "
+            "AND effective_package_duration_minutes_snapshot IS NULL "
+            "AND effective_package_variant_snapshot IS NULL "
+            "AND effective_package_station_type_snapshot IS NULL "
+            "AND effective_package_pricing_tier_snapshot IS NULL) "
+            "OR (billing_revision = 1 "
+            "AND effective_package_price_minor_snapshot >= 0 "
+            "AND effective_package_duration_minutes_snapshot = 30 "
+            "AND effective_package_variant_snapshot IN ('single','dual') "
+            "AND effective_package_station_type_snapshot = 'ps5' "
+            "AND effective_package_pricing_tier_snapshot = 'standard')",
+            name="ck_gaming_sessions_billing_amendment_projection",
+        ),
     )
 
     id: Mapped[UUID] = _uuid_pk()
@@ -175,6 +195,24 @@ class GamingSession(Base, TimestampMixin, TenantMixin):
     # (e.g. a 3rd/4th player joining a Dual-mode PS5 slot). Surcharge is
     # computed at package-price time, never re-derived from elapsed time.
     extra_controllers: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # Monotonic compare-and-swap token for post-Start participant roster events.
+    # The active count is deliberately derived from open interval rows.
+    participant_revision: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    # One-way projection of the immutable package-amendment receipt. Original
+    # Start snapshots above remain unchanged for historical truth.
+    billing_revision: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    effective_package_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("gaming_packages.id", ondelete="SET NULL")
+    )
+    effective_package_price_minor_snapshot: Mapped[int | None] = mapped_column(BigInteger)
+    effective_package_duration_minutes_snapshot: Mapped[int | None] = mapped_column(Integer)
+    effective_package_variant_snapshot: Mapped[str | None] = mapped_column(String(20))
+    effective_package_station_type_snapshot: Mapped[str | None] = mapped_column(String(20))
+    effective_package_pricing_tier_snapshot: Mapped[str | None] = mapped_column(String(20))
 
 
 @event.listens_for(GamingSession, "before_update")
@@ -257,6 +295,10 @@ class GamingSessionExtension(Base, TenantMixin):
             "length(trim(idempotency_key)) > 0",
             name="ck_gaming_session_extension_idempotency_present",
         ),
+        CheckConstraint(
+            "billing_revision IN (0,1)",
+            name="ck_gaming_session_extension_billing_revision",
+        ),
         UniqueConstraint(
             "company_id",
             "idempotency_key",
@@ -288,6 +330,9 @@ class GamingSessionExtension(Base, TenantMixin):
     amount_before_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
     amount_after_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
     idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    billing_revision: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
     created_by: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="RESTRICT"),
@@ -307,6 +352,308 @@ def _guard_gaming_session_extension_update(_mapper, _connection, _row) -> None:
 @event.listens_for(GamingSessionExtension, "before_delete")
 def _guard_gaming_session_extension_delete(_mapper, _connection, _row) -> None:
     raise ValueError("gaming session extension ledger rows cannot be deleted")
+
+
+class GamingSessionPackageAmendment(Base, TenantMixin):
+    """Immutable evidence for the sole supported 60-to-30-minute PS5 reprice."""
+
+    __tablename__ = "gaming_session_package_amendments"
+    __table_args__ = (
+        CheckConstraint(
+            "original_package_duration_minutes = 60 "
+            "AND original_package_station_type = 'ps5' "
+            "AND original_package_pricing_tier = 'standard' "
+            "AND ((original_package_variant = 'single' "
+            "AND original_package_price_minor = 12000) "
+            "OR (original_package_variant = 'dual' "
+            "AND original_package_price_minor = 15000))",
+            name="ck_gaming_package_amendment_original",
+        ),
+        CheckConstraint(
+            "target_package_duration_minutes = 30 "
+            "AND target_package_station_type = 'ps5' "
+            "AND target_package_pricing_tier = 'standard' "
+            "AND target_package_variant = original_package_variant "
+            "AND ((target_package_variant = 'single' "
+            "AND target_package_code = 'standard-single-session-30m' "
+            "AND target_package_price_minor = 8000) "
+            "OR (target_package_variant = 'dual' "
+            "AND target_package_code = 'standard-dual-session-30m' "
+            "AND target_package_price_minor = 10000))",
+            name="ck_gaming_package_amendment_target",
+        ),
+        CheckConstraint(
+            "extra_controllers >= 0 "
+            "AND (original_package_variant <> 'single' OR extra_controllers = 0) "
+            "AND controller_surcharge_minor = extra_controllers * 3000 "
+            "AND timer_before_minutes = 60 AND timer_after_minutes = 30 "
+            "AND amount_before_minor = original_package_price_minor + controller_surcharge_minor "
+            "AND amount_after_minor = target_package_price_minor + controller_surcharge_minor",
+            name="ck_gaming_package_amendment_amounts",
+        ),
+        CheckConstraint(
+            "play_elapsed_ms >= 0 AND play_elapsed_ms < 1800000 "
+            "AND timing_source IN ('server','offline_capture') "
+            "AND pause_version >= 0 AND participant_revision = 0 "
+            "AND billing_revision_before = 0 AND billing_revision = 1",
+            name="ck_gaming_package_amendment_state",
+        ),
+        CheckConstraint(
+            "length(trim(idempotency_key)) > 0 AND length(request_hash) = 64",
+            name="ck_gaming_package_amendment_receipt",
+        ),
+        UniqueConstraint("gaming_session_id", name="uq_gaming_package_amendment_session"),
+        UniqueConstraint("company_id", "idempotency_key", name="uq_gaming_package_amendment_key"),
+        Index("ix_gaming_package_amendments_company_session", "company_id", "gaming_session_id"),
+    )
+
+    id: Mapped[UUID] = _uuid_pk()
+    gaming_session_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("gaming_sessions.id", ondelete="RESTRICT"), nullable=False
+    )
+    original_package_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("gaming_packages.id", ondelete="SET NULL")
+    )
+    original_package_price_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    original_package_duration_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+    original_package_variant: Mapped[str] = mapped_column(String(20), nullable=False)
+    original_package_station_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    original_package_pricing_tier: Mapped[str] = mapped_column(String(20), nullable=False)
+    target_package_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("gaming_packages.id", ondelete="SET NULL")
+    )
+    target_package_code: Mapped[str] = mapped_column(String(80), nullable=False)
+    target_package_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    target_package_price_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    target_package_duration_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+    target_package_variant: Mapped[str] = mapped_column(String(20), nullable=False)
+    target_package_station_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    target_package_pricing_tier: Mapped[str] = mapped_column(String(20), nullable=False)
+    extra_controllers: Mapped[int] = mapped_column(Integer, nullable=False)
+    controller_surcharge_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    timer_before_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+    timer_after_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+    amount_before_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    amount_after_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    play_elapsed_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    timing_source: Mapped[str] = mapped_column(String(20), nullable=False)
+    pause_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    participant_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    billing_revision_before: Mapped[int] = mapped_column(Integer, nullable=False)
+    billing_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    amended_by: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    terminal_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("terminals.id", ondelete="RESTRICT"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+@event.listens_for(GamingSessionPackageAmendment, "before_update")
+def _guard_gaming_package_amendment_update(_mapper, _connection, row) -> None:
+    state = inspect(row)
+    for field in (
+        "company_id", "gaming_session_id", "original_package_price_minor",
+        "original_package_duration_minutes", "original_package_variant",
+        "original_package_station_type", "original_package_pricing_tier",
+        "target_package_code", "target_package_name", "target_package_price_minor",
+        "target_package_duration_minutes", "target_package_variant",
+        "target_package_station_type", "target_package_pricing_tier",
+        "extra_controllers", "controller_surcharge_minor", "timer_before_minutes",
+        "timer_after_minutes", "amount_before_minor", "amount_after_minor",
+        "occurred_at", "play_elapsed_ms", "timing_source", "pause_version",
+        "participant_revision", "billing_revision_before", "billing_revision",
+        "idempotency_key", "request_hash", "amended_by", "terminal_id", "created_at",
+    ):
+        if state.attrs[field].history.has_changes():
+            raise ValueError("gaming package amendment evidence is immutable")
+    for field in ("original_package_id", "target_package_id"):
+        history = state.attrs[field].history
+        if history.has_changes() and (not history.deleted or history.deleted[0] is None):
+            raise ValueError("gaming package amendment catalog identity cannot be changed")
+
+
+@event.listens_for(GamingSessionPackageAmendment, "before_delete")
+def _guard_gaming_package_amendment_delete(_mapper, _connection, _row) -> None:
+    raise ValueError("gaming package amendment evidence cannot be deleted")
+
+
+class GamingSessionParticipant(Base, TenantMixin):
+    """One immutable-presence interval for a saved customer joining after Start."""
+
+    __tablename__ = "gaming_session_participants"
+    __table_args__ = (
+        CheckConstraint(
+            "joined_play_elapsed_ms >= 0 AND "
+            "(left_play_elapsed_ms IS NULL OR (left_play_elapsed_ms >= joined_play_elapsed_ms AND left_at >= joined_at))",
+            name="ck_gaming_session_participant_meter",
+        ),
+        CheckConstraint(
+            "join_revision > 0 AND (leave_revision IS NULL OR leave_revision > join_revision)",
+            name="ck_gaming_session_participant_revision",
+        ),
+        CheckConstraint(
+            "join_timing_source IN ('server','offline_capture') AND "
+            "(leave_timing_source IS NULL OR leave_timing_source IN ('server','offline_capture'))",
+            name="ck_gaming_session_participant_timing_source",
+        ),
+        CheckConstraint(
+            "length(trim(join_idempotency_key)) > 0 AND length(join_request_hash) = 64",
+            name="ck_gaming_session_participant_join_receipt",
+        ),
+        CheckConstraint(
+            "(left_at IS NULL AND left_play_elapsed_ms IS NULL AND leave_revision IS NULL "
+            "AND left_by IS NULL AND left_terminal_id IS NULL AND leave_timing_source IS NULL "
+            "AND leave_idempotency_key IS NULL AND leave_request_hash IS NULL AND leave_response IS NULL) OR "
+            "(left_at IS NOT NULL AND left_play_elapsed_ms IS NOT NULL AND leave_revision IS NOT NULL "
+            "AND left_by IS NOT NULL AND left_terminal_id IS NOT NULL AND leave_timing_source IS NOT NULL "
+            "AND length(trim(leave_idempotency_key)) > 0 AND length(leave_request_hash) = 64 "
+            "AND leave_response IS NOT NULL)",
+            name="ck_gaming_session_participant_leave_receipt",
+        ),
+        UniqueConstraint("company_id", "join_idempotency_key", name="uq_gaming_participant_join_key"),
+        Index(
+            "uq_gaming_participant_leave_key",
+            "company_id",
+            "leave_idempotency_key",
+            unique=True,
+            postgresql_where=text("leave_idempotency_key IS NOT NULL"),
+        ),
+        Index(
+            "uq_gaming_participant_open_customer",
+            "gaming_session_id",
+            "customer_id",
+            unique=True,
+            postgresql_where=text("left_at IS NULL"),
+        ),
+        Index("ix_gaming_participant_session", "company_id", "gaming_session_id"),
+    )
+
+    id: Mapped[UUID] = _uuid_pk()
+    gaming_session_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("gaming_sessions.id", ondelete="RESTRICT"), nullable=False)
+    customer_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("customers.id", ondelete="RESTRICT"), nullable=False, index=True)
+    joined_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    joined_play_elapsed_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    join_timing_source: Mapped[str] = mapped_column(String(20), nullable=False)
+    joined_by: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    joined_terminal_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("terminals.id", ondelete="RESTRICT"), nullable=False)
+    join_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    join_idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    join_request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    join_response: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    left_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    left_play_elapsed_ms: Mapped[int | None] = mapped_column(BigInteger)
+    leave_timing_source: Mapped[str | None] = mapped_column(String(20))
+    left_by: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"))
+    left_terminal_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("terminals.id", ondelete="RESTRICT"))
+    leave_revision: Mapped[int | None] = mapped_column(Integer)
+    leave_idempotency_key: Mapped[str | None] = mapped_column(String(160))
+    leave_request_hash: Mapped[str | None] = mapped_column(String(64))
+    leave_response: Mapped[dict | None] = mapped_column(JSONB)
+
+
+@event.listens_for(GamingSessionParticipant, "before_update")
+def _guard_gaming_session_participant_update(_mapper, _connection, row) -> None:
+    state = inspect(row)
+    immutable = (
+        "company_id", "gaming_session_id", "customer_id", "joined_at",
+        "joined_play_elapsed_ms", "join_timing_source", "joined_by",
+        "joined_terminal_id", "join_revision", "join_idempotency_key",
+        "join_request_hash", "join_response",
+    )
+    if any(state.attrs[field].history.has_changes() for field in immutable):
+        raise ValueError("gaming participant join evidence is immutable")
+    leave_fields = (
+        "left_at", "left_play_elapsed_ms", "leave_timing_source", "left_by",
+        "left_terminal_id", "leave_revision", "leave_idempotency_key",
+        "leave_request_hash", "leave_response",
+    )
+    for field in leave_fields:
+        history = state.attrs[field].history
+        if history.has_changes() and history.deleted and history.deleted[0] is not None:
+            raise ValueError("gaming participant leave evidence cannot be changed")
+
+
+@event.listens_for(GamingSessionParticipant, "before_delete")
+def _guard_gaming_session_participant_delete(_mapper, _connection, _row) -> None:
+    raise ValueError("gaming participant evidence cannot be deleted")
+
+
+class GamingParticipantSettlement(Base, TenantMixin):
+    """Immutable Stop receipt for the post-Start participant surcharge."""
+
+    __tablename__ = "gaming_participant_settlements"
+    __table_args__ = (
+        UniqueConstraint("gaming_session_id", name="uq_gaming_participant_settlement_session"),
+        UniqueConstraint("company_id", "stop_idempotency_key", name="uq_gaming_participant_settlement_stop_key"),
+        CheckConstraint(
+            "base_amount_minor >= 0 AND guest_charge_minor >= 0 AND "
+            "amount_after_minor = base_amount_minor + guest_charge_minor AND "
+            "final_play_elapsed_ms >= 0 AND participant_revision_before > 0 AND "
+            "participant_revision >= participant_revision_before",
+            name="ck_gaming_participant_settlement_amounts",
+        ),
+        CheckConstraint(
+            "length(trim(stop_idempotency_key)) > 0 AND length(stop_request_hash) = 64",
+            name="ck_gaming_participant_settlement_stop_receipt",
+        ),
+    )
+    id: Mapped[UUID] = _uuid_pk()
+    gaming_session_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("gaming_sessions.id", ondelete="RESTRICT"), nullable=False, index=True)
+    base_amount_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    guest_charge_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    amount_after_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    final_play_elapsed_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    participant_revision_before: Mapped[int] = mapped_column(Integer, nullable=False)
+    participant_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    settled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    settled_by: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    terminal_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("terminals.id", ondelete="RESTRICT"), nullable=False)
+    stop_idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    stop_request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
+class GamingParticipantSettlementLine(Base, TenantMixin):
+    __tablename__ = "gaming_participant_settlement_lines"
+    __table_args__ = (
+        UniqueConstraint("settlement_id", "customer_id", name="uq_gaming_participant_settlement_customer"),
+        CheckConstraint(
+            "play_elapsed_ms >= 0 AND interval_count >= 1 "
+            "AND played_minutes = CASE WHEN play_elapsed_ms = 0 THEN 0 "
+            "ELSE (play_elapsed_ms + 59999) / 60000 END "
+            "AND started_hours = greatest(1, (play_elapsed_ms + 3599999) / 3600000) "
+            "AND charge_minor = started_hours * 3000",
+            name="ck_gaming_participant_settlement_line_charge",
+        ),
+    )
+    id: Mapped[UUID] = _uuid_pk()
+    settlement_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("gaming_participant_settlements.id", ondelete="RESTRICT"), nullable=False, index=True)
+    gaming_session_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("gaming_sessions.id", ondelete="RESTRICT"), nullable=False, index=True)
+    customer_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("customers.id", ondelete="RESTRICT"), nullable=False, index=True)
+    play_elapsed_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    played_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+    started_hours: Mapped[int] = mapped_column(Integer, nullable=False)
+    charge_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    interval_count: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+def _guard_gaming_participant_settlement_update(_mapper, _connection, _row) -> None:
+    raise ValueError("gaming participant settlement evidence is immutable")
+
+
+def _guard_gaming_participant_settlement_delete(_mapper, _connection, _row) -> None:
+    raise ValueError("gaming participant settlement evidence cannot be deleted")
+
+
+for _immutable_model in (GamingParticipantSettlement, GamingParticipantSettlementLine):
+    event.listen(_immutable_model, "before_update", _guard_gaming_participant_settlement_update)
+    event.listen(_immutable_model, "before_delete", _guard_gaming_participant_settlement_delete)
 
 
 class GamingSessionAddon(Base, TenantMixin):

@@ -20,7 +20,7 @@ describe('gaming paid-extension API contract', () => {
     expect(api.get).toHaveBeenCalledExactlyOnceWith('/gaming/sessions', { params: { unbilled_only: true, limit: 500 } });
   });
 
-  it('sends the caller-retained idempotency key', async () => {
+  it('sends the caller-retained idempotency key for a legacy extension', async () => {
     const response = {
       id: 'session-1',
       station_id: 'station-1',
@@ -50,6 +50,31 @@ describe('gaming paid-extension API contract', () => {
         expected_amount_minor: 12_000,
       },
       { headers: { 'Idempotency-Key': 'gaming-extension:attempt-1' } },
+    );
+  });
+
+  it('sends the effective billing revision with a paid extension after amendment', async () => {
+    vi.mocked(api.post).mockResolvedValue({ data: { id: 'session-1', amount_minor: 18_000 } });
+
+    await gaming.extendSessionWithPackage(
+      'session-1',
+      { id: 'extension-1', price_minor: 10_000, duration_minutes: 30, variant: 'single' },
+      { timer_minutes: 30, amount_minor: 8_000, billing_revision: 1 },
+      'gaming-extension:amended-1',
+    );
+
+    expect(api.post).toHaveBeenCalledExactlyOnceWith(
+      '/gaming/sessions/session-1/extend',
+      {
+        package_id: 'extension-1',
+        expected_package_price_minor: 10_000,
+        expected_package_duration_minutes: 30,
+        expected_package_variant: 'single',
+        expected_timer_minutes: 30,
+        expected_amount_minor: 8_000,
+        expected_billing_revision: 1,
+      },
+      { headers: { 'Idempotency-Key': 'gaming-extension:amended-1' } },
     );
   });
 
@@ -94,6 +119,89 @@ describe('gaming paid-extension API contract', () => {
       '/gaming/sessions/session-1/stop',
       undefined,
       { headers: { 'Idempotency-Key': 'gaming-stop:attempt-1' } },
+    );
+  });
+
+  it('sends acknowledged participant and billing revisions when stopping a changed session', async () => {
+    vi.mocked(api.post).mockResolvedValue({ data: { id: 'session-1', status: 'ended' } });
+
+    await gaming.stopSession('session-1', 'gaming-stop:revisioned-1', {
+      participant_revision: 2,
+      billing_revision: 1,
+    });
+
+    expect(api.post).toHaveBeenCalledExactlyOnceWith(
+      '/gaming/sessions/session-1/stop',
+      { expected_participant_revision: 2, expected_billing_revision: 1 },
+      { headers: { 'Idempotency-Key': 'gaming-stop:revisioned-1' } },
+    );
+  });
+
+  it('sends all current and target snapshots for a 60-to-30-minute package amendment', async () => {
+    const body = {
+      target_package_id: 'ps5-single-30',
+      expected_timer_minutes: 60,
+      expected_amount_minor: 12_000,
+      expected_pause_version: 0,
+      expected_participant_revision: 0,
+      expected_billing_revision: 0,
+      expected_target_price_minor: 8_000,
+      expected_target_duration_minutes: 30,
+      expected_target_variant: 'single',
+    };
+    const amended = { id: 'session-1', billing_revision: 1, amount_minor: 8_000 };
+    vi.mocked(api.post).mockResolvedValue({ data: amended });
+
+    await expect(gaming.amendSessionPackage('session-1', body, 'gaming-session-action:amend-1'))
+      .resolves.toEqual(amended);
+    expect(api.post).toHaveBeenCalledExactlyOnceWith(
+      '/gaming/sessions/session-1/amend-package',
+      body,
+      { headers: { 'Idempotency-Key': 'gaming-session-action:amend-1' } },
+    );
+  });
+
+  it('loads the revisioned participant roster for the exact session', async () => {
+    const roster = {
+      session_id: 'session-1', participant_revision: 1,
+      active_friend_count: 1, current_player_count: 2, max_player_count: 4,
+      participants: [{ id: 'participant-1', customer_id: 'customer-1' }],
+    };
+    vi.mocked(api.get).mockResolvedValue({ data: roster });
+
+    await expect(gaming.listSessionParticipants('session-1')).resolves.toEqual(roster);
+    expect(api.get).toHaveBeenCalledExactlyOnceWith('/gaming/sessions/session-1/participants');
+  });
+
+  it('sends a saved customer and directory fence when a friend joins', async () => {
+    const body = {
+      customer_id: 'customer-1',
+      expected_participant_revision: 1,
+      customer_directory_revision: 7,
+      customer_directory_company_id: 'company-1',
+    };
+    vi.mocked(api.post).mockResolvedValue({ data: { session_id: 'session-1', participant_revision: 2 } });
+
+    await gaming.joinSessionParticipant('session-1', body, 'gaming-session-action:join-1');
+
+    expect(api.post).toHaveBeenCalledExactlyOnceWith(
+      '/gaming/sessions/session-1/participants/join',
+      body,
+      { headers: { 'Idempotency-Key': 'gaming-session-action:join-1' } },
+    );
+  });
+
+  it('sends the selected interval and current roster revision when a friend leaves', async () => {
+    vi.mocked(api.post).mockResolvedValue({ data: { session_id: 'session-1', participant_revision: 3 } });
+
+    await gaming.leaveSessionParticipant(
+      'session-1', 'participant-1', 2, 'gaming-session-action:leave-1',
+    );
+
+    expect(api.post).toHaveBeenCalledExactlyOnceWith(
+      '/gaming/sessions/session-1/participants/participant-1/leave',
+      { expected_participant_revision: 2 },
+      { headers: { 'Idempotency-Key': 'gaming-session-action:leave-1' } },
     );
   });
 

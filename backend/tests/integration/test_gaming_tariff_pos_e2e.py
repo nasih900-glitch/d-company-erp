@@ -17,6 +17,7 @@ from uuid import UUID, uuid4
 import pytest
 import pytest_asyncio
 from sqlalchemy import select, text, update
+from sqlalchemy.exc import DBAPIError
 
 from app.core.db import AsyncSessionLocal
 from app.core.security import hash_password
@@ -94,7 +95,7 @@ async def _install_tariff(session, seed_owner) -> dict[str, GamingPackage]:
         company_id=seed_owner["company"].id,
         branch_id=seed_owner["branch"].id,
     )
-    assert len(result.created_codes) == 17
+    assert len(result.created_codes) == 26
     assert result.updated_codes == ()
     await session.commit()
     rows = (
@@ -111,7 +112,7 @@ async def _install_tariff(session, seed_owner) -> dict[str, GamingPackage]:
         .scalars()
         .all()
     )
-    assert len(rows) == 17
+    assert len(rows) == 26
     audit_rows = (
         (
             await session.execute(
@@ -124,10 +125,18 @@ async def _install_tariff(session, seed_owner) -> dict[str, GamingPackage]:
         .scalars()
         .all()
     )
-    assert len(audit_rows) == 17
+    assert len(audit_rows) == 26
     assert all(row.action == "create" for row in audit_rows)
     assert all(row.actor_user_id is None for row in audit_rows)
-    assert all(row.user_agent == "script/ensure_gaming_tariff-v2" for row in audit_rows)
+    assert all(row.user_agent == "script/ensure_gaming_tariff-v3" for row in audit_rows)
+    assert all(
+        row.reason
+        == (
+            "Applied the owner-approved D Company tariff catalog: 2026-09-13 card plus "
+            "2026-09-24 Racing Sim, VR Games, and VR Racing Sim extensions."
+        )
+        for row in audit_rows
+    )
     assert all(
         row.after and row.after["branch_id"] == str(seed_owner["branch"].id) for row in audit_rows
     )
@@ -163,7 +172,7 @@ async def test_tariff_repair_is_audited_once_and_noop_restart_writes_nothing(
                     AuditLog.entity_type == "GamingPackage",
                     AuditLog.entity_id == str(package.id),
                     AuditLog.action == "update",
-                    AuditLog.user_agent == "script/ensure_gaming_tariff-v2",
+                    AuditLog.user_agent == "script/ensure_gaming_tariff-v3",
                 )
             )
         )
@@ -189,7 +198,7 @@ async def test_tariff_repair_is_audited_once_and_noop_restart_writes_nothing(
                     AuditLog.entity_type == "GamingPackage",
                     AuditLog.entity_id == str(package.id),
                     AuditLog.action == "update",
-                    AuditLog.user_agent == "script/ensure_gaming_tariff-v2",
+                    AuditLog.user_agent == "script/ensure_gaming_tariff-v3",
                 )
             )
         )
@@ -457,8 +466,8 @@ async def test_parallel_tariff_applies_serialize_and_write_one_truthful_audit(
         apply_in_own_transaction(),
         apply_in_own_transaction(),
     )
-    assert sorted((len(first.created_codes), len(second.created_codes))) == [0, 17]
-    assert sorted((len(first.unchanged_codes), len(second.unchanged_codes))) == [0, 17]
+    assert sorted((len(first.created_codes), len(second.created_codes))) == [0, 26]
+    assert sorted((len(first.unchanged_codes), len(second.unchanged_codes))) == [0, 26]
 
     packages = (
         (
@@ -480,15 +489,15 @@ async def test_parallel_tariff_applies_serialize_and_write_one_truthful_audit(
                     AuditLog.company_id == company_id,
                     AuditLog.entity_type == "GamingPackage",
                     AuditLog.action == "create",
-                    AuditLog.user_agent == "script/ensure_gaming_tariff-v2",
+                    AuditLog.user_agent == "script/ensure_gaming_tariff-v3",
                 )
             )
         )
         .scalars()
         .all()
     )
-    assert len(packages) == 17
-    assert len(audits) == 17
+    assert len(packages) == 26
+    assert len(audits) == 26
     assert {row.entity_id for row in audits} == {str(row.id) for row in packages}
 
 
@@ -589,7 +598,7 @@ async def test_printed_tariff_is_exact_through_package_start_and_stop(
     assert listed.status_code == 200, listed.text
     listed_by_code = {row["code"]: row for row in listed.json()}
     assert set(listed_by_code) == set(packages)
-    assert len(listed_by_code) == 17
+    assert len(listed_by_code) == 26
 
     # Hard-coded paise values are the photographed price card, not values
     # derived from the implementation under test.
@@ -1030,6 +1039,210 @@ async def _claim_and_pay(
     assert replay.status_code == 201, replay.text
     assert replay.json() == paid.json()
     return claim_body, paid.json()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    (
+        "base_code",
+        "extension_code",
+        "extension_price_minor",
+        "final_amount_minor",
+    ),
+    [
+        (
+            "standard-simdrive-session-15m",
+            "standard-simdrive-extension-15m",
+            7_000,
+            14_000,
+        ),
+        (
+            "standard-simdrive-session-30m",
+            "standard-simdrive-extension-30m",
+            10_000,
+            20_000,
+        ),
+        (
+            "standard-simdrive-session-60m",
+            "standard-simdrive-extension-60m",
+            18_000,
+            36_000,
+        ),
+        ("vr-games-session-15m", "vr-games-extension-15m", 8_000, 16_000),
+        ("vr-games-session-30m", "vr-games-extension-30m", 12_000, 24_000),
+        ("vr-games-session-60m", "vr-games-extension-60m", 20_000, 40_000),
+        ("vr-racing-session-15m", "vr-racing-extension-15m", 10_000, 20_000),
+        ("vr-racing-session-30m", "vr-racing-extension-30m", 14_000, 28_000),
+        ("vr-racing-session-60m", "vr-racing-extension-60m", 25_000, 50_000),
+    ],
+)
+async def test_non_ps5_extensions_bill_exact_catalog_price_through_pos(
+    client,
+    session,
+    seed_owner,
+    base_code: str,
+    extension_code: str,
+    extension_price_minor: int,
+    final_amount_minor: int,
+) -> None:
+    """Every approved SKU keeps one replay-safe receipt and exact POS total."""
+
+    seed_owner["company"].gstin = "32AAAAA0000A1Z5"
+    seed_owner["branch"].state_code = "32"
+    await session.commit()
+    packages = await _install_tariff(session, seed_owner)
+    base = packages[base_code]
+    extension = packages[extension_code]
+    assert extension.kind == "extension"
+    assert int(extension.price_minor) == extension_price_minor
+    assert int(base.price_minor) == extension_price_minor
+    assert extension.station_type == base.station_type
+    assert extension.variant == base.variant
+    assert int(extension.duration_minutes) == int(base.duration_minutes)
+
+    station = _station(seed_owner, base.station_type, 1)
+    session.add(station)
+    await session.commit()
+    token = await _login(
+        client,
+        email=seed_owner["owner"].email,
+        password=seed_owner["password"],
+    )
+    shift_id = await _open_shift(client, seed_owner, token)
+    started = await client.post(
+        "/api/v1/gaming/sessions/start",
+        json=_start_payload(
+            station_id=station.id,
+            shift_id=shift_id,
+            package=base,
+            player_count=1,
+        ),
+        headers=_headers(seed_owner, token, key=f"non-ps5-extension-start:{uuid4()}"),
+    )
+    assert started.status_code == 201, started.text
+    assert started.json()["amount_minor"] == extension_price_minor
+    assert started.json()["timer_minutes"] == int(base.duration_minutes)
+
+    extension_key = f"non-ps5-extension-apply:{uuid4()}"
+    extension_payload = {
+        "package_id": str(extension.id),
+        "expected_timer_minutes": int(base.duration_minutes),
+        "expected_amount_minor": extension_price_minor,
+        "expected_package_price_minor": extension_price_minor,
+        "expected_package_duration_minutes": int(extension.duration_minutes),
+        "expected_package_variant": extension.variant,
+    }
+    path = f"/api/v1/gaming/sessions/{started.json()['id']}/extend"
+    extended = await client.post(
+        path,
+        json=extension_payload,
+        headers=_headers(seed_owner, token, key=extension_key),
+    )
+    replay = await client.post(
+        path,
+        json=extension_payload,
+        headers=_headers(seed_owner, token, key=extension_key),
+    )
+    assert extended.status_code == 200, extended.text
+    assert replay.status_code == 200, replay.text
+    assert replay.json() == extended.json()
+    assert extended.json()["amount_minor"] == final_amount_minor
+    assert extended.json()["timer_minutes"] == (
+        int(base.duration_minutes) + int(extension.duration_minutes)
+    )
+
+    receipt = (
+        await session.execute(
+            select(GamingSessionExtension)
+            .where(
+                GamingSessionExtension.gaming_session_id
+                == UUID(started.json()["id"])
+            )
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one()
+    receipt_id = receipt.id
+    receipt_snapshot = (
+        receipt_id,
+        receipt.package_id,
+        receipt.package_name,
+        receipt.package_variant,
+        receipt.station_type,
+        int(receipt.duration_minutes),
+        int(receipt.package_price_minor),
+        int(receipt.total_minor),
+        int(receipt.amount_before_minor),
+        int(receipt.amount_after_minor),
+        receipt.idempotency_key,
+    )
+    assert receipt_snapshot == (
+        receipt_id,
+        extension.id,
+        extension.name,
+        extension.variant,
+        extension.station_type,
+        int(extension.duration_minutes),
+        extension_price_minor,
+        extension_price_minor,
+        extension_price_minor,
+        final_amount_minor,
+        extension_key,
+    )
+
+    stopped = await client.post(
+        f"/api/v1/gaming/sessions/{started.json()['id']}/stop",
+        json={},
+        headers=_headers(seed_owner, token, key=f"non-ps5-extension-stop:{uuid4()}"),
+    )
+    assert stopped.status_code == 200, stopped.text
+    assert stopped.json()["amount_minor"] == final_amount_minor
+    sent = await client.post(
+        f"/api/v1/gaming/sessions/{started.json()['id']}/send-to-pos",
+        headers=_headers(seed_owner, token, key=f"non-ps5-extension-pos:{uuid4()}"),
+    )
+    assert sent.status_code == 201, sent.text
+    order = await client.get(
+        f"/api/v1/pos/orders/{sent.json()['order_id']}",
+        headers=_headers(seed_owner, token),
+    )
+    assert order.status_code == 200, order.text
+    assert order.json()["total_minor"] == final_amount_minor
+    _claim, payment = await _claim_and_pay(
+        client,
+        seed_owner,
+        token=token,
+        order_id=sent.json()["order_id"],
+        method="upi",
+        amount_minor=final_amount_minor,
+    )
+    assert payment["bill_amount_minor"] == final_amount_minor
+    assert payment["amount_minor"] == final_amount_minor
+
+    with pytest.raises(DBAPIError, match="append-only"):
+        await session.execute(
+            text(
+                "UPDATE gaming_session_extensions "
+                "SET package_name = 'tampered' WHERE id = :receipt_id"
+            ),
+            {"receipt_id": receipt_id},
+        )
+    await session.rollback()
+    persisted_receipt = await session.get(GamingSessionExtension, receipt_id)
+    assert persisted_receipt is not None
+    assert (
+        persisted_receipt.id,
+        persisted_receipt.package_id,
+        persisted_receipt.package_name,
+        persisted_receipt.package_variant,
+        persisted_receipt.station_type,
+        int(persisted_receipt.duration_minutes),
+        int(persisted_receipt.package_price_minor),
+        int(persisted_receipt.total_minor),
+        int(persisted_receipt.amount_before_minor),
+        int(persisted_receipt.amount_after_minor),
+        persisted_receipt.idempotency_key,
+    ) == receipt_snapshot
 
 
 @pytest.mark.integration
@@ -1741,7 +1954,7 @@ async def test_start_does_not_disclose_another_branch_station_or_tariff(
         company_id=seed_owner["company"].id,
         branch_id=other_branch.id,
     )
-    assert len(installed.created_codes) == 17
+    assert len(installed.created_codes) == 26
     await session.commit()
 
     token = await _login(

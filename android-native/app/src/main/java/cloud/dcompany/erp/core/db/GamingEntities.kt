@@ -70,10 +70,35 @@ data class GamingSessionCacheEntity(
     val packageStationTypeSnapshot: String? = null,
     val packagePricingTierSnapshot: String? = null,
     val extraControllers: Int = 0,
+    @ColumnInfo(defaultValue = "0") val participantRevision: Int = 0,
+    @ColumnInfo(defaultValue = "0") val billingRevision: Int = 0,
+    val effectivePackageId: String? = null,
+    val effectivePackagePriceMinor: Long? = null,
+    val effectivePackageDurationMinutes: Int? = null,
+    val effectivePackageVariant: String? = null,
+    val effectivePackageStationType: String? = null,
+    val effectivePackagePricingTier: String? = null,
     val customerId: String? = null,
     val customerName: String? = null,
     val customerPhone: String? = null,
     val orderId: String? = null,
+)
+
+/** Server-authoritative late-friend presence. Names and phones stay in the customer directory. */
+@Entity(
+    tableName = "gaming_session_participant_cache",
+    indices = [Index("gamingSessionId"), Index("customerId")],
+)
+data class GamingSessionParticipantCacheEntity(
+    @PrimaryKey val id: String,
+    val gamingSessionId: String,
+    val customerId: String,
+    val joinedAtMillis: Long,
+    val joinedPlayElapsedMs: Long,
+    val leftAtMillis: Long? = null,
+    val leftPlayElapsedMs: Long? = null,
+    val joinRevision: Int,
+    val leaveRevision: Int? = null,
 )
 
 /**
@@ -458,9 +483,80 @@ data class LocalGamingPackageExtensionEntity(
     /** Server CAS snapshot captured at the same instant as the package choice. */
     val expectedSessionTimerMinutes: Int,
     val expectedSessionAmountMinor: Long,
+    @ColumnInfo(defaultValue = "0") val expectedBillingRevision: Int = 0,
     val createdAtMillis: Long,
     val state: String = GamingPackageExtensionState.PENDING,
     val lastError: String? = null,
     val resolvedAtMillis: Long? = null,
     val resolutionReason: String? = null,
+)
+
+object GamingSessionActionType {
+    const val EXTEND = "extend"
+    const val AMEND = "amend"
+    const val PARTICIPANT_JOIN = "participant_join"
+    const val PARTICIPANT_LEAVE = "participant_leave"
+    const val STOP = "stop"
+}
+
+object GamingSessionActionState {
+    const val PENDING = "pending"
+    const val AMBIGUOUS = "ambiguous"
+    const val CONFIRMED = "confirmed"
+    const val REJECTED = "rejected"
+    const val DISCARDED = "discarded"
+}
+
+/**
+ * Immutable per-session command ledger introduced in Room 53.
+ *
+ * [sessionKey] is the local lifecycle id when this tablet started the session,
+ * otherwise the server id. [sequence] is allocated transactionally and makes
+ * Stop wait for every earlier billing/participant command. Nullable columns
+ * are action-specific immutable request evidence; sync never rebuilds them
+ * from a mutable catalogue or refreshed session.
+ */
+@Entity(
+    tableName = "local_gaming_session_actions",
+    indices = [
+        Index("state"),
+        Index("serverSessionId"),
+        Index("localSessionId"),
+        Index(value = ["sessionKey", "sequence"], unique = true),
+    ],
+)
+data class LocalGamingSessionActionEntity(
+    @PrimaryKey val actionId: String,
+    val sessionKey: String,
+    val sequence: Long = 0,
+    val actionType: String,
+    @ColumnInfo(defaultValue = "''") val ownerCompanyId: String = "",
+    @ColumnInfo(defaultValue = "''") val ownerUserId: String = "",
+    @ColumnInfo(defaultValue = "''") val branchId: String = "",
+    @ColumnInfo(defaultValue = "''") val terminalId: String = "",
+    val serverSessionId: String? = null,
+    val localSessionId: String? = null,
+    val shiftId: String,
+    val occurredAtMillis: Long,
+    val playElapsedMs: Long? = null,
+    val expectedPauseVersion: Int? = null,
+    val expectedParticipantRevision: Int? = null,
+    val expectedBillingRevision: Int? = null,
+    val customerId: String? = null,
+    val customerName: String? = null,
+    val customerPhone: String? = null,
+    val customerDirectoryRevision: Long? = null,
+    val customerDirectoryCompanyId: String? = null,
+    /** A leave can point at an earlier offline join until its server id arrives. */
+    val participantReference: String? = null,
+    val resultParticipantId: String? = null,
+    val packageId: String? = null,
+    val expectedPackagePriceMinor: Long? = null,
+    val expectedPackageDurationMinutes: Int? = null,
+    val expectedPackageVariant: String? = null,
+    val expectedSessionTimerMinutes: Int? = null,
+    val expectedSessionAmountMinor: Long? = null,
+    val state: String = GamingSessionActionState.PENDING,
+    val lastError: String? = null,
+    val resolvedAtMillis: Long? = null,
 )

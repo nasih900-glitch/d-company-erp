@@ -8,6 +8,56 @@ import androidx.room.Transaction
 import kotlinx.coroutines.flow.Flow
 import java.util.UUID
 
+private const val RECOVERED_START_DEPENDENT_ACTION_REVIEW_ERROR =
+    "The server Start was recovered, but saved offline session actions still need audited " +
+        "billing review. The original actions are retained and will not replay automatically; contact support."
+private const val MANUAL_BILL_DEPENDENT_ACTION_REVIEW_ERROR =
+    "The manual bill receipt verifies the base session only. Saved offline session actions " +
+        "still need audited billing review; do not close this shift until they are reconciled."
+
+private fun recoveredStartDependentChronologyIsSafe(
+    retained: LocalGamingSessionEntity,
+    authoritative: GamingSessionCacheEntity,
+    actions: List<LocalGamingSessionActionEntity>,
+): Boolean {
+    if (authoritative.status != "active" ||
+        authoritative.startAtMillis != retained.startedAtMillis ||
+        authoritative.pauseVersion != 0 ||
+        authoritative.participantRevision != 0 || authoritative.billingRevision != 0
+    ) return false
+    var lastOccurredAt = authoritative.startAtMillis
+    var participantRevision = 0
+    var billingRevision = 0
+    var stopSeen = false
+    for (action in actions.sortedBy(LocalGamingSessionActionEntity::sequence)) {
+        if (action.state == GamingSessionActionState.REJECTED) return false
+        if (action.actionType == GamingSessionActionType.STOP) {
+            if (stopSeen || action.occurredAtMillis < lastOccurredAt ||
+                action.expectedParticipantRevision != participantRevision ||
+                action.expectedBillingRevision != billingRevision
+            ) return false
+            stopSeen = true
+            continue
+        }
+        if (stopSeen || action.expectedParticipantRevision != participantRevision ||
+            action.expectedBillingRevision != billingRevision
+        ) return false
+        val elapsed = action.playElapsedMs ?: return false
+        if (action.occurredAtMillis < lastOccurredAt ||
+            elapsed != action.occurredAtMillis - authoritative.startAtMillis ||
+            action.expectedPauseVersion != 0
+        ) return false
+        when (action.actionType) {
+            GamingSessionActionType.AMEND -> billingRevision++
+            GamingSessionActionType.PARTICIPANT_JOIN,
+            GamingSessionActionType.PARTICIPANT_LEAVE -> participantRevision++
+            else -> return false
+        }
+        lastOccurredAt = action.occurredAtMillis
+    }
+    return true
+}
+
 @Dao
 interface GamingDao {
 
@@ -53,6 +103,9 @@ interface GamingDao {
     @Query("SELECT * FROM gaming_session_cache WHERE status IN ('active', 'paused')")
     suspend fun activeSessionCacheForAlarms(): List<GamingSessionCacheEntity>
 
+    @Query("SELECT * FROM gaming_session_cache WHERE id = :serverSessionId LIMIT 1")
+    suspend fun sessionCacheById(serverSessionId: String): GamingSessionCacheEntity?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertSessionCache(rows: List<GamingSessionCacheEntity>)
 
@@ -70,6 +123,31 @@ interface GamingDao {
         reconcileLocalSessions(rows)
         deleteSessionCacheNotIn(rows.map { it.id }.ifEmpty { listOf("") })
     }
+
+    @Query("SELECT * FROM gaming_session_participant_cache ORDER BY joinedAtMillis, id")
+    fun observeParticipantCache(): Flow<List<GamingSessionParticipantCacheEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertParticipantCache(rows: List<GamingSessionParticipantCacheEntity>)
+
+    @Query("DELETE FROM gaming_session_participant_cache WHERE gamingSessionId = :serverSessionId")
+    suspend fun deleteParticipantCacheForSession(serverSessionId: String)
+
+    @Transaction
+    suspend fun replaceParticipantCacheForSession(
+        serverSessionId: String,
+        rows: List<GamingSessionParticipantCacheEntity>,
+    ) {
+        require(rows.all { it.gamingSessionId == serverSessionId })
+        deleteParticipantCacheForSession(serverSessionId)
+        upsertParticipantCache(rows)
+    }
+
+    @Query(
+        "UPDATE gaming_session_cache SET participantRevision = :participantRevision " +
+            "WHERE id = :serverSessionId",
+    )
+    suspend fun updateCachedParticipantRevision(serverSessionId: String, participantRevision: Int): Int
 
     /** Applies one authoritative mutation response without replacing the full cache. */
     @Transaction
@@ -945,6 +1023,53 @@ interface GamingDao {
         resolvedAtMillis: Long,
     ): Int
 
+    @Query(
+        "UPDATE local_gaming_sessions SET state = 'start_rejected', status = 'start_failed', " +
+            "lastError = :reviewError, legacyResolutionError = :reviewError " +
+            "WHERE localId = :localId AND state = 'legacy_resolved' " +
+            "AND legacyResolution = 'manual_bill_recorded' AND legacyResolutionReceiptId = :receiptId",
+    )
+    suspend fun retainManualBillDependentReview(localId: String, receiptId: Long, reviewError: String): Int
+
+    /**
+     * No-play can retire captured commands after the audited receipt proves
+     * there was no server session. A manual bill proves only the base charge;
+     * any saved attendance or billing command remains a visible shift blocker
+     * until independently reconciled. Keep all original rows as audit evidence.
+     */
+    @Transaction
+    suspend fun confirmNoServerLegacyResolutionAndReconcileDependents(
+        localId: String,
+        resolution: String,
+        reason: String,
+        referenceOrderId: String?,
+        actorUserId: String,
+        receiptId: Long,
+        resolvedAtMillis: Long,
+    ): Int {
+        require(resolution in setOf(
+            GamingLegacyResolution.CONFIRMED_NO_PLAY,
+            GamingLegacyResolution.MANUAL_BILL_RECORDED,
+        ))
+        val changed = confirmLegacyPackageResolution(
+            localId, resolution, reason, referenceOrderId, actorUserId, receiptId, resolvedAtMillis,
+        )
+        if (changed == 1) {
+            when (resolution) {
+                GamingLegacyResolution.CONFIRMED_NO_PLAY ->
+                    discardActionsForAuditedRejectedStart(localId, receiptId, resolvedAtMillis)
+                GamingLegacyResolution.MANUAL_BILL_RECORDED -> if (sessionActionsForKey(localId).any {
+                        it.state !in setOf(GamingSessionActionState.CONFIRMED, GamingSessionActionState.DISCARDED)
+                    }) {
+                    check(retainManualBillDependentReview(
+                        localId, receiptId, MANUAL_BILL_DEPENDENT_ACTION_REVIEW_ERROR,
+                    ) == 1)
+                }
+            }
+        }
+        return changed
+    }
+
     /**
      * A response-lost Start can be proven by the server after migration has
      * quarantined the local row. If that row also captured Stop while the
@@ -1104,30 +1229,49 @@ interface GamingDao {
         if (!authoritative.hasSafeRecoveredLegacyBillingEvidence()) return false
         if (authoritative.status !in setOf("active", "paused", "ended", "cancelled")) return false
         val retained = localSessionById(localId) ?: return false
+        // A recovered server Start can still owe the original offline
+        // amendment/attendance/Stop. Its captured timestamps may predate the
+        // server's recovered start time, so do not replay or discard them
+        // automatically. Keep the audited session and shift visibly blocked.
+        val unresolvedActions = sessionActionsForKey(localId).filter {
+            it.state !in setOf(GamingSessionActionState.CONFIRMED, GamingSessionActionState.DISCARDED)
+        }
+        val dependentActionsNeedReview = when (disposition) {
+            RecoveredLegacyServerDisposition.RESOLVE_LOCAL -> unresolvedActions.isNotEmpty()
+            RecoveredLegacyServerDisposition.RESTORE_CAPTURED_STOP ->
+                unresolvedActions.any { it.actionType != GamingSessionActionType.STOP } &&
+                    !recoveredStartDependentChronologyIsSafe(retained, authoritative, unresolvedActions)
+            RecoveredLegacyServerDisposition.RETAIN_BILLING_REVIEW -> false
+        }
+        val effectiveDisposition = if (dependentActionsNeedReview) {
+            RecoveredLegacyServerDisposition.RETAIN_BILLING_REVIEW
+        } else {
+            disposition
+        }
         if (
             authoritative.billingMode == "hourly" &&
             retained.ratePerHourMinor != authoritative.ratePerHourMinor &&
-            disposition != RecoveredLegacyServerDisposition.RETAIN_BILLING_REVIEW
+            effectiveDisposition != RecoveredLegacyServerDisposition.RETAIN_BILLING_REVIEW
         ) return false
         if (
-            disposition == RecoveredLegacyServerDisposition.RESTORE_CAPTURED_STOP &&
+            effectiveDisposition == RecoveredLegacyServerDisposition.RESTORE_CAPTURED_STOP &&
             authoritative.status !in setOf("active", "paused")
         ) return false
         if (
-            disposition == RecoveredLegacyServerDisposition.RESTORE_CAPTURED_STOP &&
+            effectiveDisposition == RecoveredLegacyServerDisposition.RESTORE_CAPTURED_STOP &&
             retained.endAtMillis == null
         ) return false
         if (
-            disposition == RecoveredLegacyServerDisposition.RESTORE_CAPTURED_STOP &&
+            effectiveDisposition == RecoveredLegacyServerDisposition.RESTORE_CAPTURED_STOP &&
             authoritative.billingMode == "hourly" &&
             requireNotNull(retained.endAtMillis) < authoritative.startAtMillis &&
             (referenceOrderId == null || authoritative.orderId != referenceOrderId)
         ) return false
         if (
-            disposition == RecoveredLegacyServerDisposition.RESOLVE_LOCAL &&
+            effectiveDisposition == RecoveredLegacyServerDisposition.RESOLVE_LOCAL &&
             authoritative.status in setOf("active", "paused") && retained.endAtMillis != null
         ) return false
-        val changed = when (disposition) {
+        val changed = when (effectiveDisposition) {
             RecoveredLegacyServerDisposition.RESTORE_CAPTURED_STOP ->
                 adoptRecoveredLegacyStartForPendingStop(
                 localId = localId,
@@ -1166,8 +1310,11 @@ interface GamingDao {
                     actorUserId = actorUserId,
                     receiptId = receiptId,
                     resolvedAtMillis = resolvedAtMillis,
-                    reviewError = billingReviewError?.trim()?.takeIf(String::isNotEmpty)
-                        ?: return false,
+                    reviewError = if (dependentActionsNeedReview) {
+                        RECOVERED_START_DEPENDENT_ACTION_REVIEW_ERROR
+                    } else {
+                        billingReviewError?.trim()?.takeIf(String::isNotEmpty) ?: return false
+                    },
                     serverId = authoritative.id,
                     stationId = authoritative.stationId,
                     shiftId = authoritative.shiftId,
@@ -1201,6 +1348,9 @@ interface GamingDao {
             }
         }
         if (changed != 1) return false
+        if (effectiveDisposition == RecoveredLegacyServerDisposition.RESTORE_CAPTURED_STOP) {
+            resolveSessionActionServerId(localId, authoritative.id)
+        }
         upsertSessionCache(listOf(authoritative))
         return true
     }
@@ -1241,6 +1391,160 @@ interface GamingDao {
         insertPackageExtensionAction(action)
         return true
     }
+
+    @Insert(onConflict = OnConflictStrategy.ABORT)
+    suspend fun insertSessionAction(action: LocalGamingSessionActionEntity)
+
+    @Query("SELECT COALESCE(MAX(sequence), 0) FROM local_gaming_session_actions WHERE sessionKey = :sessionKey")
+    suspend fun maxSessionActionSequence(sessionKey: String): Long
+
+    @Query(
+        "SELECT * FROM local_gaming_session_actions WHERE sessionKey = :sessionKey " +
+            "ORDER BY sequence, actionId",
+    )
+    suspend fun sessionActionsForKey(sessionKey: String): List<LocalGamingSessionActionEntity>
+
+    @Transaction
+    suspend fun captureSessionAction(action: LocalGamingSessionActionEntity): LocalGamingSessionActionEntity {
+        require(action.sequence == 0L)
+        require(action.actionType in setOf(
+            GamingSessionActionType.EXTEND,
+            GamingSessionActionType.AMEND,
+            GamingSessionActionType.PARTICIPANT_JOIN,
+            GamingSessionActionType.PARTICIPANT_LEAVE,
+            GamingSessionActionType.STOP,
+        ))
+        require(action.sessionKey.isNotBlank() && action.shiftId.isNotBlank())
+        require(action.ownerCompanyId.isNotBlank() && action.ownerUserId.isNotBlank())
+        require(action.branchId.isNotBlank() && action.terminalId.isNotBlank())
+        require(action.occurredAtMillis > 0L)
+        require(action.state == GamingSessionActionState.PENDING && action.lastError == null)
+        val sequenced = action.copy(sequence = maxSessionActionSequence(action.sessionKey) + 1L)
+        insertSessionAction(sequenced)
+        return sequenced
+    }
+
+    @Transaction
+    suspend fun captureSequencedPackageExtension(
+        extension: LocalGamingPackageExtensionEntity,
+        queueAction: LocalGamingSessionActionEntity,
+    ): Boolean {
+        if (!capturePackageExtension(extension)) return false
+        captureSessionAction(queueAction)
+        return true
+    }
+
+    @Query(
+        "SELECT * FROM local_gaming_session_actions WHERE state NOT IN ('confirmed','discarded') " +
+            "ORDER BY sessionKey, sequence, actionId",
+    )
+    suspend fun sessionActionsForSync(): List<LocalGamingSessionActionEntity>
+
+    @Query(
+        "SELECT COUNT(*) FROM local_gaming_session_actions " +
+            "WHERE state NOT IN ('confirmed','discarded') AND (" +
+            "serverSessionId = :sessionId OR localSessionId = :sessionId OR sessionKey = :sessionId)",
+    )
+    suspend fun unresolvedSessionActionCount(sessionId: String): Int
+
+    @Query(
+        "SELECT * FROM local_gaming_session_actions WHERE state NOT IN ('confirmed','discarded') " +
+            "ORDER BY sessionKey, sequence, actionId",
+    )
+    fun observeUnresolvedSessionActions(): Flow<List<LocalGamingSessionActionEntity>>
+
+    /** Keep a confirmed Join's ID mapping visible only until its dependent Leave resolves. */
+    @Query(
+        "SELECT a.* FROM local_gaming_session_actions a WHERE " +
+            "a.state NOT IN ('confirmed','discarded') OR " +
+            "(a.actionType = 'participant_join' AND a.state = 'confirmed' AND EXISTS (" +
+            "SELECT 1 FROM local_gaming_session_actions leave_action WHERE " +
+            "leave_action.actionType = 'participant_leave' AND " +
+            "leave_action.participantReference = a.actionId AND " +
+            "leave_action.state NOT IN ('confirmed','discarded'))) " +
+            "ORDER BY a.sessionKey, a.sequence, a.actionId",
+    )
+    fun observeSessionActionsForBoard(): Flow<List<LocalGamingSessionActionEntity>>
+
+    @Query("SELECT * FROM local_gaming_session_actions WHERE actionId = :actionId LIMIT 1")
+    suspend fun sessionAction(actionId: String): LocalGamingSessionActionEntity?
+
+    @Query(
+        "UPDATE local_gaming_session_actions SET serverSessionId = :serverSessionId " +
+            "WHERE localSessionId = :localSessionId AND serverSessionId IS NULL " +
+            "AND state NOT IN ('confirmed','discarded')",
+    )
+    suspend fun resolveSessionActionServerId(localSessionId: String, serverSessionId: String): Int
+
+    @Query(
+        "UPDATE local_gaming_session_actions SET resultParticipantId = :participantId " +
+            "WHERE actionId = :actionId AND actionType = 'participant_join' " +
+            "AND state IN ('pending','ambiguous')",
+    )
+    suspend fun setJoinedParticipantId(actionId: String, participantId: String): Int
+
+    @Query(
+        "UPDATE local_gaming_session_actions SET state = 'confirmed', lastError = NULL, " +
+            "resolvedAtMillis = :resolvedAtMillis, resultParticipantId = COALESCE(:participantId, resultParticipantId) " +
+            "WHERE actionId = :actionId AND state IN ('pending','ambiguous')",
+    )
+    suspend fun markSessionActionConfirmed(
+        actionId: String,
+        resolvedAtMillis: Long,
+        participantId: String? = null,
+    ): Int
+
+    @Query(
+        "UPDATE local_gaming_session_actions SET state = 'ambiguous', lastError = :error " +
+            "WHERE actionId = :actionId AND state IN ('pending','ambiguous')",
+    )
+    suspend fun markSessionActionAmbiguous(actionId: String, error: String): Int
+
+    @Query(
+        "UPDATE local_gaming_session_actions SET state = 'rejected', lastError = :error " +
+            "WHERE actionId = :actionId AND state IN ('pending','ambiguous')",
+    )
+    suspend fun markSessionActionRejected(actionId: String, error: String): Int
+
+    @Query(
+        "UPDATE local_gaming_session_actions SET state = 'pending', lastError = NULL " +
+            "WHERE actionId = :actionId AND state = 'rejected'",
+    )
+    suspend fun retryRejectedSessionAction(actionId: String): Int
+
+    @Query(
+        "UPDATE local_gaming_session_actions SET state = 'pending', lastError = NULL, " +
+            "occurredAtMillis = :occurredAtMillis, expectedParticipantRevision = :participantRevision, " +
+            "expectedBillingRevision = :billingRevision " +
+            "WHERE actionId = :actionId AND actionType = 'stop' AND state = 'rejected'",
+    )
+    suspend fun recaptureRejectedStopAction(
+        actionId: String,
+        occurredAtMillis: Long,
+        participantRevision: Int,
+        billingRevision: Int,
+    ): Int
+
+    @Query(
+        "UPDATE local_gaming_session_actions SET state = 'discarded', resolvedAtMillis = :resolvedAtMillis " +
+            "WHERE actionId = :actionId AND state = 'rejected'",
+    )
+    suspend fun discardRejectedSessionAction(actionId: String, resolvedAtMillis: Long): Int
+
+    @Query(
+        "UPDATE local_gaming_session_actions SET state = 'discarded', " +
+            "resolvedAtMillis = :resolvedAtMillis, " +
+            "lastError = CASE WHEN lastError IS NULL OR trim(lastError) = '' " +
+            "THEN 'Retired by rejected-Start audit receipt #' || :receiptId " +
+            "ELSE lastError || ' | Retired by rejected-Start audit receipt #' || :receiptId END " +
+            "WHERE serverSessionId IS NULL AND (localSessionId = :localId OR sessionKey = :localId) " +
+            "AND state NOT IN ('confirmed', 'discarded') AND :receiptId > 0 AND :resolvedAtMillis > 0",
+    )
+    suspend fun discardActionsForAuditedRejectedStart(
+        localId: String,
+        receiptId: Long,
+        resolvedAtMillis: Long,
+    ): Int
 
     @Query("SELECT * FROM local_gaming_package_extensions WHERE actionId = :actionId LIMIT 1")
     suspend fun packageExtensionAction(actionId: String): LocalGamingPackageExtensionEntity?
@@ -1302,11 +1606,13 @@ interface GamingDao {
         val normalizedReason = reason.trim()
         require(normalizedReason.length in 3..500)
         require(resolvedAtMillis > 0L)
-        return markRejectedPackageExtensionDiscarded(
+        val changed = markRejectedPackageExtensionDiscarded(
             actionId = actionId,
             reason = normalizedReason,
             resolvedAtMillis = resolvedAtMillis,
         )
+        if (changed == 1) discardRejectedSessionAction(actionId, resolvedAtMillis)
+        return changed
     }
 }
 

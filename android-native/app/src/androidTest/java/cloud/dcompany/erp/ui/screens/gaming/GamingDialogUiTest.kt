@@ -695,8 +695,9 @@ class GamingDialogUiTest {
     }
 
     @Test
-    fun pendingOfflinePackageStartTicksAndCanCaptureStopWithoutEnablingConfirmedOnlyActions() {
+    fun pendingOfflinePackageStartOffersPlayersAndStopWithoutEnablingConfirmedOnlyActions() {
         var stopRequested = false
+        var playersRequested = false
         val station = testStation()
         val session = GameSession(
             id = "local-session-1",
@@ -712,8 +713,10 @@ class GamingDialogUiTest {
             billingMode = "package",
             packagePriceMinorSnapshot = 15_000,
             packageDurationMinutesSnapshot = 60,
-            packageVariantSnapshot = "solo",
+            packageVariantSnapshot = "dual",
             packageStationTypeSnapshot = "ps5",
+            packagePricingTierSnapshot = "standard",
+            pauseVersion = 0,
             extraControllers = 1,
             localState = GamingSessionState.START_PENDING,
         )
@@ -748,6 +751,7 @@ class GamingDialogUiTest {
                         onRepairBilling = {},
                         onResolveLegacyStart = {},
                         onDiscardPackageExtension = {},
+                        onManageParticipants = { playersRequested = true },
                     )
                 }
             }
@@ -758,8 +762,90 @@ class GamingDialogUiTest {
         compose.onNodeWithText("Package total · ₹180.00").assertIsDisplayed()
         compose.onAllNodesWithText("+30 min").assertCountEquals(0)
         compose.onAllNodesWithText("Transfer").assertCountEquals(0)
+        compose.onNodeWithText("Players & booking").assertIsDisplayed().performClick()
+        compose.runOnIdle { assertEquals(true, playersRequested) }
         compose.onNodeWithText("Stop & save end").assertIsDisplayed().performClick()
         compose.runOnIdle { assertEquals(true, stopRequested) }
+    }
+
+    @Test
+    fun pendingOfflineStartOpensPlayersDialogInCommandViewport() {
+        val station = testStation()
+        val session = GameSession(
+            id = "local-command-start",
+            stationId = station.id,
+            shiftId = "shift-1",
+            status = "starting",
+            startAt = "2026-08-26T17:00:00Z",
+            timerMinutes = 60,
+            amountMinor = 18_000,
+            packageId = "package-60",
+            billingMode = "package",
+            packagePriceMinorSnapshot = 15_000,
+            packageDurationMinutesSnapshot = 60,
+            packageVariantSnapshot = "dual",
+            packageStationTypeSnapshot = "ps5",
+            packagePricingTierSnapshot = "standard",
+            pauseVersion = 0,
+            localState = GamingSessionState.START_PENDING,
+        )
+        val pendingStartMessage =
+            "Start and player changes are saved on this tablet. They will sync in order; the final charge is confirmed when the session stops."
+
+        compose.setContent {
+            DCompanyTheme {
+                val selected = remember { mutableStateOf<GameSession?>(null) }
+                Box(Modifier.width(417.dp).height(267.dp)) {
+                    GamingStationCard(
+                        station = station,
+                        session = session,
+                        packageExtensionAction = null,
+                        wallClock = rememberedWallClock(
+                            Instant.parse("2026-08-26T17:15:00Z").toEpochMilli(),
+                        ),
+                        actionInProgress = false,
+                        busyHere = false,
+                        focused = false,
+                        canWrite = true,
+                        canReconcileLegacy = false,
+                        activeShiftId = "shift-1",
+                        activeShiftServerConfirmed = true,
+                        online = false,
+                        packages = emptyList(),
+                        hasTransferTarget = false,
+                        onStart = {}, onStop = {}, onSend = {}, onCancelUnbilled = {},
+                        onExtendTimer = {}, onExtendPackage = { _, _ -> }, onTransfer = {},
+                        onReconcile = {}, onRepairBilling = {}, onResolveLegacyStart = {},
+                        onDiscardPackageExtension = {},
+                        onManageParticipants = { selected.value = it },
+                        pinActiveSessionActions = true,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+                selected.value?.let { current ->
+                    GamingParticipantsDialog(
+                        session = current,
+                        participants = emptyList(),
+                        rejectedAction = null,
+                        customers = emptyList(),
+                        online = false,
+                        amendTarget = null,
+                        onSearchCustomer = {},
+                        onJoin = { _, _, _ -> },
+                        onLeave = {},
+                        onAmend = {},
+                        onDiscardRejected = {},
+                        onDismiss = { selected.value = null },
+                    )
+                }
+            }
+        }
+
+        compose.onAllNodesWithText(pendingStartMessage).assertCountEquals(0)
+        compose.onNodeWithText("Players & booking").performScrollTo().assertIsDisplayed().performClick()
+        compose.onNodeWithText(pendingStartMessage).assertIsDisplayed()
+        compose.onNodeWithText("Done").performClick()
+        compose.onAllNodesWithText(pendingStartMessage).assertCountEquals(0)
     }
 
     @Test

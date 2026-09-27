@@ -525,11 +525,11 @@ class CacheScopeTest {
 
     @Test
     fun `cache inventory is exhaustive unique and all tables are scope bound`() {
-        assertEquals(43, SERVER_DERIVED_CACHE_TABLES.size)
-        assertEquals(40, LOCAL_DURABLE_TABLES.size)
+        assertEquals(44, SERVER_DERIVED_CACHE_TABLES.size)
+        assertEquals(41, LOCAL_DURABLE_TABLES.size)
         assertEquals(SERVER_DERIVED_CACHE_TABLES.size, SERVER_DERIVED_CACHE_TABLES.toSet().size)
         assertEquals(LOCAL_DURABLE_TABLES.size, LOCAL_DURABLE_TABLES.toSet().size)
-        assertEquals(83, ALL_SCOPE_TABLES.size)
+        assertEquals(85, ALL_SCOPE_TABLES.size)
         assertTrue(SERVER_DERIVED_CACHE_TABLES.toSet().intersect(LOCAL_DURABLE_TABLES).isEmpty())
         assertTrue("menu_variants" in SERVER_DERIVED_CACHE_TABLES)
         assertTrue("menu_modifier_groups" in SERVER_DERIVED_CACHE_TABLES)
@@ -543,6 +543,7 @@ class CacheScopeTest {
         assertTrue("membership_refund_attempt_cache" in SERVER_DERIVED_CACHE_TABLES)
         assertTrue("cafe_bill_cache" in SERVER_DERIVED_CACHE_TABLES)
         assertTrue("gaming_package_cache" in SERVER_DERIVED_CACHE_TABLES)
+        assertTrue("gaming_session_participant_cache" in SERVER_DERIVED_CACHE_TABLES)
         assertTrue("gaming_session_addon_cache" in SERVER_DERIVED_CACHE_TABLES)
         assertTrue("customer_order_history_cache" in SERVER_DERIVED_CACHE_TABLES)
         assertTrue("customer_directory_state" in SERVER_DERIVED_CACHE_TABLES)
@@ -567,6 +568,7 @@ class CacheScopeTest {
         assertTrue("local_cafe_actions" in LOCAL_DURABLE_TABLES)
         assertTrue("local_kitchen_cancellation_acks" in LOCAL_DURABLE_TABLES)
         assertTrue("local_gaming_package_extensions" in LOCAL_DURABLE_TABLES)
+        assertTrue("local_gaming_session_actions" in LOCAL_DURABLE_TABLES)
         assertTrue("local_gaming_session_addon_actions" in LOCAL_DURABLE_TABLES)
         assertTrue("local_bug_reports" in LOCAL_DURABLE_TABLES)
         assertTrue("local_bug_report_attachments" in LOCAL_DURABLE_TABLES)

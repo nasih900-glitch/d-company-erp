@@ -108,6 +108,7 @@ import cloud.dcompany.erp.core.remote.RemoteUiCommandHost
 import cloud.dcompany.erp.core.remote.remoteSemanticUiAdmission
 import cloud.dcompany.erp.core.sync.summarizeOutboxWork
 import cloud.dcompany.erp.core.sync.OutboxWorkStatus
+import cloud.dcompany.erp.core.diagnostics.AppHealthRecorder
 import cloud.dcompany.erp.ui.components.syncAvailabilityProblem
 import cloud.dcompany.erp.ui.remote.LocalRemoteCapturePrivacyController
 import cloud.dcompany.erp.ui.remote.RemoteAssistanceConsentDialog
@@ -148,6 +149,7 @@ class MainActivity : ComponentActivity() {
                             AppRoot(
                                 onOpenUpdateLink = ::openSecureUpdate,
                                 onInstallVerifiedUpdate = ::requestVerifiedUpdateInstall,
+                                onStartHealthRecording = { AppHealthRecorder.start(window) },
                             )
                         }
                     }
@@ -168,6 +170,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onStop() {
+        AppHealthRecorder.stop("background")
         DCompanyApp.instance.remoteAssistance.detachWindow(window)
         super.onStop()
     }
@@ -258,6 +261,7 @@ class MainActivity : ComponentActivity() {
 private fun AppRoot(
     onOpenUpdateLink: (String) -> Unit,
     onInstallVerifiedUpdate: (File) -> InstallerLaunchResult,
+    onStartHealthRecording: () -> Boolean,
     session: SessionViewModel = viewModel(),
     appUpdate: AppUpdateViewModel = viewModel(),
 ) {
@@ -497,6 +501,16 @@ private fun AppRoot(
             // a module, dispose every feature ViewModel from the old profile
             // so its polling/queued actions cannot continue behind a removed tab.
             SessionViewModelScope(s.me) {
+                DisposableEffect(s.me.companyId, s.me.userId) {
+                    AppHealthRecorder.activateScope(
+                        DCompanyApp.instance,
+                        s.me.companyId,
+                        s.me.userId,
+                    )
+                    onDispose {
+                        AppHealthRecorder.deactivateScope(s.me.companyId, s.me.userId)
+                    }
+                }
                 val permissions = remember(s.me) { EffectivePermissions.from(s.me) }
                 val destinations = remember(s.me) { allowedDestinations(s.me) }
                 val bugReportVm: BugReportViewModel = viewModel(
@@ -565,6 +579,9 @@ private fun AppRoot(
                     }
                 }
                 val visibleDestination = resolveWorkspaceDestination(currentDestination, destinations)
+                LaunchedEffect(visibleDestination) {
+                    AppHealthRecorder.setScreen(visibleDestination.name)
+                }
                 val remoteCommandHost = remember(s.me.userId, destinations, bugReportVm) {
                     RemoteUiCommandHost(
                         currentRouteKey = {
@@ -817,6 +834,7 @@ private fun AppRoot(
                                 canManageSystem = canManageSystemSettings(s.me),
                                 onPasswordChanged = session::expireAfterPasswordChange,
                                 onReportProblem = ::openSupport,
+                                onStartHealthRecording = onStartHealthRecording,
                                 remoteAssistanceContent = {
                                     RemoteAssistanceSettingsCard(
                                         state = remoteAssistanceState,

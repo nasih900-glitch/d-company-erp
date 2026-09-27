@@ -36,8 +36,9 @@ class GamingTariffSpec:
     sort_order: int
 
 
-# Exact transcription of the D Company printed card supplied on 2026-09-13.
-# All money is integer paise (₹80 == 8_000), never floating-point rupees.
+# Exact transcription of the D Company printed card supplied on 2026-09-13,
+# plus the non-PS5 extensions approved by the owner on 2026-09-24. All money
+# is integer paise (₹80 == 8_000), never floating-point rupees.
 D_COMPANY_GAMING_TARIFF: Final[tuple[GamingTariffSpec, ...]] = (
     GamingTariffSpec(
         "standard-single-session-30m",
@@ -183,6 +184,45 @@ D_COMPANY_GAMING_TARIFF: Final[tuple[GamingTariffSpec, ...]] = (
         30,
     ),
     GamingTariffSpec(
+        "standard-simdrive-extension-15m",
+        "simulator",
+        "simdrive",
+        "standard",
+        "extension",
+        "Racing Sim · 15 min extension",
+        15,
+        7_000,
+        1,
+        1,
+        40,
+    ),
+    GamingTariffSpec(
+        "standard-simdrive-extension-30m",
+        "simulator",
+        "simdrive",
+        "standard",
+        "extension",
+        "Racing Sim · 30 min extension",
+        30,
+        10_000,
+        1,
+        1,
+        50,
+    ),
+    GamingTariffSpec(
+        "standard-simdrive-extension-60m",
+        "simulator",
+        "simdrive",
+        "standard",
+        "extension",
+        "Racing Sim · 1 hour extension",
+        60,
+        18_000,
+        1,
+        1,
+        60,
+    ),
+    GamingTariffSpec(
         "vr-games-session-15m",
         "vr",
         "vr_games",
@@ -220,6 +260,45 @@ D_COMPANY_GAMING_TARIFF: Final[tuple[GamingTariffSpec, ...]] = (
         1,
         1,
         30,
+    ),
+    GamingTariffSpec(
+        "vr-games-extension-15m",
+        "vr",
+        "vr_games",
+        "standard",
+        "extension",
+        "VR Games · 15 min extension",
+        15,
+        8_000,
+        1,
+        1,
+        40,
+    ),
+    GamingTariffSpec(
+        "vr-games-extension-30m",
+        "vr",
+        "vr_games",
+        "standard",
+        "extension",
+        "VR Games · 30 min extension",
+        30,
+        12_000,
+        1,
+        1,
+        50,
+    ),
+    GamingTariffSpec(
+        "vr-games-extension-60m",
+        "vr",
+        "vr_games",
+        "standard",
+        "extension",
+        "VR Games · 1 hour extension",
+        60,
+        20_000,
+        1,
+        1,
+        60,
     ),
     GamingTariffSpec(
         "vr-racing-session-15m",
@@ -260,6 +339,45 @@ D_COMPANY_GAMING_TARIFF: Final[tuple[GamingTariffSpec, ...]] = (
         1,
         130,
     ),
+    GamingTariffSpec(
+        "vr-racing-extension-15m",
+        "simulator",
+        "vr_racing",
+        "standard",
+        "extension",
+        "VR Racing Sim · 15 min extension",
+        15,
+        10_000,
+        1,
+        1,
+        140,
+    ),
+    GamingTariffSpec(
+        "vr-racing-extension-30m",
+        "simulator",
+        "vr_racing",
+        "standard",
+        "extension",
+        "VR Racing Sim · 30 min extension",
+        30,
+        14_000,
+        1,
+        1,
+        150,
+    ),
+    GamingTariffSpec(
+        "vr-racing-extension-60m",
+        "simulator",
+        "vr_racing",
+        "standard",
+        "extension",
+        "VR Racing Sim · 1 hour extension",
+        60,
+        25_000,
+        1,
+        1,
+        160,
+    ),
 )
 
 RETIRED_PREMIUM_CODES: Final[frozenset[str]] = frozenset(
@@ -289,8 +407,11 @@ _UPSERT_FIELDS: Final[tuple[str, ...]] = (
     "sort_order",
     "is_active",
 )
-_AUDIT_SOURCE: Final[str] = "script/ensure_gaming_tariff-v2"
-_AUDIT_REASON: Final[str] = "Applied the owner-approved D Company tariff card dated 2026-09-13."
+_AUDIT_SOURCE: Final[str] = "script/ensure_gaming_tariff-v3"
+_AUDIT_REASON: Final[str] = (
+    "Applied the owner-approved D Company tariff catalog: 2026-09-13 card plus "
+    "2026-09-24 Racing Sim, VR Games, and VR Racing Sim extensions."
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -370,8 +491,8 @@ def _audit_values(
 
 
 def _validate_catalog_definition() -> None:
-    if len(D_COMPANY_GAMING_TARIFF) != 17 or len(_CANONICAL_CODES) != 17:
-        raise RuntimeError("D Company gaming tariff must contain 17 unique package codes")
+    if len(D_COMPANY_GAMING_TARIFF) != 26 or len(_CANONICAL_CODES) != 26:
+        raise RuntimeError("D Company gaming tariff must contain 26 unique package codes")
     for spec in D_COMPANY_GAMING_TARIFF:
         if spec.pricing_tier not in {"standard", "premium"}:
             raise RuntimeError(f"invalid pricing tier in gaming tariff: {spec.code}")
@@ -396,7 +517,7 @@ async def upsert_d_company_gaming_tariff(
     branch_id: UUID,
     dry_run: bool = False,
 ) -> GamingTariffUpsertResult:
-    """Plan and, unless dry-run, upsert the canonical 17-row tariff.
+    """Plan and, unless dry-run, upsert the canonical 26-row tariff.
 
     Active unknown rows in the covered PS5/simulator/VR scope are reported
     as conflicts. They are never silently deleted, retired, renamed, or folded

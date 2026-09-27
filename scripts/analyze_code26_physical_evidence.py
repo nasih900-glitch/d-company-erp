@@ -831,8 +831,8 @@ def _source_errors(payload: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     if payload.get("clean") is not True:
         errors.append("source was not recorded clean")
-    if payload.get("version_code") != 38 or payload.get("version_name") != "3.1.30":
-        errors.append("source is not Code30.3 / 3.1.30")
+    if payload.get("version_code") != 39 or payload.get("version_name") != "3.1.31":
+        errors.append("source is not Code30.4 / 3.1.31")
     for key in ("commit", "tree"):
         if not re.fullmatch(r"[0-9a-f]{40}", str(payload.get(key, ""))):
             errors.append(f"source {key} is not an immutable git object id")

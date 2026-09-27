@@ -68,12 +68,17 @@ import cloud.dcompany.erp.ui.presentationPolicy
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.theme.Spacing
+import cloud.dcompany.erp.core.diagnostics.AppHealthRecorder
+import cloud.dcompany.erp.core.diagnostics.healthCaptureInsight
+import java.text.DateFormat
+import java.util.Date
 
 @Composable
 fun SettingsScreen(
     canManageSystem: Boolean,
     onPasswordChanged: () -> Unit = {},
     onReportProblem: () -> Unit = {},
+    onStartHealthRecording: () -> Boolean = { false },
     remoteAssistanceContent: (@Composable () -> Unit)? = null,
     vm: SettingsViewModel = viewModel(),
     presentation: WorkspacePresentationPolicy = WorkspaceFeatureProfiles.Active.presentationPolicy(),
@@ -124,6 +129,7 @@ fun SettingsScreen(
                     state,
                     vm,
                     onReportProblem,
+                    onStartHealthRecording,
                     remoteAssistanceContent,
                 )
                 SettingsTab.Company -> CompanyTab(state, vm, presentation)
@@ -188,11 +194,14 @@ private fun AccountTab(
     state: SettingsUiState,
     vm: SettingsViewModel,
     onReportProblem: () -> Unit,
+    onStartHealthRecording: () -> Boolean,
     remoteAssistanceContent: (@Composable () -> Unit)?,
 ) {
     var code by remember { mutableStateOf("") }
     var pwd by remember { mutableStateOf("") }
     var confirm by remember { mutableStateOf("") }
+    val appHealth by AppHealthRecorder.state.collectAsStateWithLifecycle()
+    var appHealthError by remember { mutableStateOf<String?>(null) }
 
     Column(
         Modifier.widthIn(max = 980.dp).fillMaxWidth()
@@ -288,6 +297,73 @@ private fun AccountTab(
             }
         }
         remoteAssistanceContent?.invoke()
+        SectionCard(
+            title = "App health",
+            subtitle = "Record slow screens and sync waits for five minutes on this tablet.",
+            icon = Icons.Default.Schedule,
+            tone = UiTone.Information,
+        ) {
+            Text(
+                "Crash, freeze and sync-failure reporting already runs automatically. " +
+                    "This extra performance recording starts only when you tap below, stays on this tablet, " +
+                    "and stops when you leave the app.",
+                color = Brand.ForegroundMuted,
+            )
+            if (appHealth.recording) {
+                Text("Recording now. Use the screens that feel slow, then return here.")
+                ErpButton(
+                    text = "Stop and view result",
+                    intent = ActionIntent.Secondary,
+                    onClick = { AppHealthRecorder.stop() },
+                )
+            } else {
+                ErpButton(
+                    text = "Record a problem for 5 minutes",
+                    intent = ActionIntent.Secondary,
+                    onClick = {
+                        appHealthError = if (onStartHealthRecording()) null
+                        else "Could not start recording. Return to Settings and try again."
+                    },
+                )
+            }
+            appHealthError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            appHealth.records.firstOrNull()?.let { capture ->
+                PanelDivider()
+                val recordedAt = remember(capture.endedAtMillis) {
+                    DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT)
+                        .format(Date(capture.endedAtMillis))
+                }
+                Text("Last recording: $recordedAt · ${capture.stopReason.replace('_', ' ')}")
+                Text(healthCaptureInsight(capture), color = Brand.ForegroundMuted)
+                val screen = capture.frames.maxByOrNull { it.slowFrames }
+                if (screen != null && screen.frames > 0) {
+                    Text(
+                        "${screen.screen.replaceFirstChar(Char::uppercase)}: " +
+                            "${screen.slowFrames}/${screen.frames} slow frames; " +
+                            "longest ${screen.longestFrameMs} ms.",
+                        color = Brand.ForegroundMuted,
+                    )
+                }
+                val refresh = capture.refreshes.maxByOrNull { it.longestRefreshMs }
+                if (refresh != null) {
+                    Text(
+                        "${refresh.resource.replaceFirstChar(Char::uppercase)} refresh: " +
+                            "longest ${refresh.longestRefreshMs} ms; ${refresh.failure} failures.",
+                        color = Brand.ForegroundMuted,
+                    )
+                }
+                Text(
+                    "Only the last three summaries are kept for up to 24 hours. " +
+                        "No names, phone numbers, bills or request contents are recorded.",
+                    color = Brand.ForegroundMuted,
+                )
+                ErpButton(
+                    text = "Delete local health results",
+                    intent = ActionIntent.Secondary,
+                    onClick = AppHealthRecorder::deleteRecords,
+                )
+            }
+        }
         SectionCard(
             title = "Help & feedback",
             subtitle = "Send a problem directly to the ERP web inbox for review.",

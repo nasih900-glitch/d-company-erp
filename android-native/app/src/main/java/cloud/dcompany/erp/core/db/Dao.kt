@@ -509,10 +509,12 @@ interface SyncMetaDao {
         GamingStationEntity::class,
         GamingPackageCacheEntity::class,
         GamingSessionCacheEntity::class,
+        GamingSessionParticipantCacheEntity::class,
         GamingSessionAddonCacheEntity::class,
         LocalGamingSessionEntity::class,
         LocalGamingPackageExtensionEntity::class,
         LocalGamingSessionAddonActionEntity::class,
+        LocalGamingSessionActionEntity::class,
         KitchenOrderCacheEntity::class,
         LocalKitchenAdvanceEntity::class,
         FloorEntity::class,
@@ -581,7 +583,7 @@ interface SyncMetaDao {
         LocalBugReportEntity::class,
         LocalBugReportAttachmentEntity::class,
     ],
-    version = 52,
+    version = 53,
     exportSchema = true,
 )
 @TypeConverters(

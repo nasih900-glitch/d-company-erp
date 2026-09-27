@@ -547,7 +547,7 @@ async def seed() -> None:
                 "void_control_batch_id": str(crisps_batch.id),
                 "station_ids": {key: str(value) for key, value in station_ids.items()},
                 "tariff_created": list(tariff_result.created_codes),
-                "tariff_count": 17,
+                "tariff_count": 26,
                 "menu_items": ["Audit Cola", "Audit Crisps"],
                 "credential_secret_in_manifest": False,
             }

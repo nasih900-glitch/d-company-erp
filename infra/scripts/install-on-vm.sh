@@ -158,6 +158,15 @@ if [ -z "$CANDIDATE_BUILD_ROOT" ]; then
   tar -tf "$CANDIDATE_SOURCE_ARCHIVE" >/dev/null
   tar --no-same-permissions -xf "$CANDIDATE_SOURCE_ARCHIVE" \
     -C "$CANDIDATE_BUILD_ROOT"
+  # The scanner requires this non-secret, reviewed template to retain its Git
+  # mode even though the rest of the frozen snapshot stays private under umask 077.
+  candidate_vex_template="$CANDIDATE_BUILD_ROOT/infra/security/vex/zlib-cve-2026-85091.openvex.json"
+  if [ ! -f "$candidate_vex_template" ] || [ -L "$candidate_vex_template" ] || \
+     [ "$(realpath "$candidate_vex_template")" != "$candidate_vex_template" ]; then
+    echo "Frozen zlib VEX template is missing or linked." >&2
+    exit 1
+  fi
+  chmod 0644 "$candidate_vex_template"
   rm -f "$CANDIDATE_SOURCE_ARCHIVE"
   test ! -e "$CANDIDATE_BUILD_ROOT/.git"
   test -f "$CANDIDATE_BUILD_ROOT/infra/scripts/install-on-vm.sh"

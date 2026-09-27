@@ -1,7 +1,11 @@
 package cloud.dcompany.erp.core.sync
 
 import cloud.dcompany.erp.core.db.GamingPackageExtensionState
+import cloud.dcompany.erp.core.db.GamingSessionActionType
+import cloud.dcompany.erp.core.db.GamingSessionState
 import cloud.dcompany.erp.core.db.LocalGamingPackageExtensionEntity
+import cloud.dcompany.erp.core.db.LocalGamingSessionActionEntity
+import cloud.dcompany.erp.core.db.LocalGamingSessionEntity
 import cloud.dcompany.erp.core.net.ApiException
 import cloud.dcompany.erp.ui.screens.gaming.toPackageExtendBody
 import org.junit.Assert.assertEquals
@@ -25,10 +29,10 @@ class GamingPackageExtensionReplayPolicyTest {
         assertEquals(original.actionId, packageExtensionIdempotencyKey(original))
         assertEquals(original.actionId, packageExtensionIdempotencyKey(afterLostResponse))
         assertEquals(original.actionId, packageExtensionIdempotencyKey(afterDefinitiveRejection))
-        assertEquals(original.toPackageExtendBody(), afterLostResponse.toPackageExtendBody())
-        assertEquals(original.toPackageExtendBody(), afterDefinitiveRejection.toPackageExtendBody())
-        assertEquals(60, original.toPackageExtendBody().expectedTimerMinutes)
-        assertEquals(23_000L, original.toPackageExtendBody().expectedAmountMinor)
+        assertEquals(original.toPackageExtendBody(0), afterLostResponse.toPackageExtendBody(0))
+        assertEquals(original.toPackageExtendBody(0), afterDefinitiveRejection.toPackageExtendBody(0))
+        assertEquals(60, original.toPackageExtendBody(0).expectedTimerMinutes)
+        assertEquals(23_000L, original.toPackageExtendBody(0).expectedAmountMinor)
     }
 
     @Test
@@ -57,6 +61,36 @@ class GamingPackageExtensionReplayPolicyTest {
             GamingStopReplayMode.CAPTURED_TIMESTAMP_BODY,
             gamingStopReplayMode(1_787_795_200_000L),
         )
+        val local = LocalGamingSessionEntity(
+            localId = "local-session-1", serverId = "server-session-1",
+            stationId = "station-1", shiftId = "shift-1",
+            startedAtMillis = 1_000, endAtMillis = null,
+            state = GamingSessionState.STOP_PENDING, status = "stopping",
+        )
+        val migrated = LocalGamingSessionActionEntity(
+            actionId = "gaming-session-stop:local-session-1",
+            sessionKey = local.localId,
+            actionType = GamingSessionActionType.STOP,
+            localSessionId = local.localId,
+            serverSessionId = local.serverId,
+            shiftId = "shift-1",
+            occurredAtMillis = 1_000, // Migration's ordering fallback, not captured Stop.
+            expectedParticipantRevision = null,
+            expectedBillingRevision = null,
+        )
+        assertEquals(null, gamingActionStopReplayAt(migrated, local))
+        assertEquals(
+            GamingStopReplayMode.LEGACY_BODYLESS,
+            gamingStopReplayMode(gamingActionStopReplayAt(migrated, local)),
+        )
+        assertEquals(2_000L, gamingActionStopReplayAt(migrated.copy(
+            occurredAtMillis = 1_000,
+        ), local.copy(endAtMillis = 2_000)))
+        assertEquals(3_000L, gamingActionStopReplayAt(migrated.copy(
+            occurredAtMillis = 3_000,
+            expectedParticipantRevision = 0,
+            expectedBillingRevision = 0,
+        ), local))
     }
 
     private fun action(state: String) = LocalGamingPackageExtensionEntity(

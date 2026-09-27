@@ -87,6 +87,16 @@ const expectedAttempt: PaidExtensionAttempt = {
   ...context,
 };
 
+const amendedContext: PaidExtensionAttemptContext = {
+  ...context,
+  expectedBillingRevision: 1,
+};
+
+const amendedAttempt: PaidExtensionAttempt = {
+  ...expectedAttempt,
+  expectedBillingRevision: 1,
+};
+
 function expectPersistenceCode(error: unknown, code: PaidExtensionPersistenceError['code']) {
   expect(error).toBeInstanceOf(PaidExtensionPersistenceError);
   expect((error as PaidExtensionPersistenceError).code).toBe(code);
@@ -176,6 +186,31 @@ describe('paid gaming extension persistence', () => {
     expect(JSON.parse(storage.getItem(paidExtensionStorageKey(context)) ?? '')).toEqual(expectedAttempt);
   });
 
+  it('persists and replays an amended session with its original billing revision and key', async () => {
+    const storage = new MemoryStorage();
+    const createIdempotencyKey = vi.fn(() => amendedAttempt.idempotencyKey);
+    const send = vi.fn(async (attempt: PaidExtensionAttempt) => attempt);
+
+    const first = await sendDurablyPersistedPaidExtension({
+      storageProvider: () => storage,
+      context: amendedContext,
+      createIdempotencyKey,
+      send,
+    });
+    expect(first.attempt).toEqual(amendedAttempt);
+    expect(JSON.parse(storage.getItem(paidExtensionStorageKey(context)) ?? '')).toEqual(amendedAttempt);
+
+    const replay = await replayDurablyPersistedPaidExtension({
+      storageProvider: () => storage,
+      expectedAttempt: amendedAttempt,
+      send,
+    });
+    expect(replay.attempt).toEqual(amendedAttempt);
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(send).toHaveBeenNthCalledWith(2, amendedAttempt);
+    expect(createIdempotencyKey).toHaveBeenCalledOnce();
+  });
+
   it('never calls the API when device storage rejects the write', async () => {
     const storage: PaidExtensionStorage = {
       length: 0,
@@ -233,6 +268,7 @@ describe('paid gaming extension persistence', () => {
       packageVariant: 'duo',
       expectedTimerMinutes: 90,
       expectedAmountMinor: 19_500,
+      expectedBillingRevision: 1,
     };
     const result = await sendDurablyPersistedPaidExtension({
       storageProvider: () => storage,
@@ -244,6 +280,12 @@ describe('paid gaming extension persistence', () => {
     expect(result.attempt).toEqual(expectedAttempt);
     expect(send).toHaveBeenCalledWith(expectedAttempt);
     expect(createIdempotencyKey).not.toHaveBeenCalled();
+  });
+
+  it('retains the pre-amendment v3 receipt format without inventing a billing revision', () => {
+    expect(parsePaidExtensionAttempt(expectedAttempt)).toEqual(expectedAttempt);
+    expect(parsePaidExtensionAttempt(expectedAttempt)).not.toHaveProperty('expectedBillingRevision');
+    expect(parsePaidExtensionAttempt(amendedAttempt)).toEqual(amendedAttempt);
   });
 
   it('replay mode refuses a missing receipt without writing or sending', async () => {
@@ -279,6 +321,24 @@ describe('paid gaming extension persistence', () => {
       return true;
     });
     expect(setItem).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+    expect(JSON.parse(storage.getItem(paidExtensionStorageKey(context)) ?? '')).toEqual(changed);
+  });
+
+  it('refuses replay when only the saved billing revision changed', async () => {
+    const storage = new MemoryStorage();
+    const changed = { ...amendedAttempt, expectedBillingRevision: 2 };
+    storage.setItem(paidExtensionStorageKey(context), JSON.stringify(changed));
+    const send = vi.fn(async () => 'sent');
+
+    await expect(replayDurablyPersistedPaidExtension({
+      storageProvider: () => storage,
+      expectedAttempt: amendedAttempt,
+      send,
+    })).rejects.toSatisfy((error: unknown) => {
+      expectPersistenceCode(error, 'replay_receipt_changed');
+      return true;
+    });
     expect(send).not.toHaveBeenCalled();
     expect(JSON.parse(storage.getItem(paidExtensionStorageKey(context)) ?? '')).toEqual(changed);
   });
@@ -491,6 +551,27 @@ describe('paid gaming extension persistence', () => {
     expect(send).not.toHaveBeenCalled();
   });
 
+  it('never sends an amended extension if storage changes only the billing revision', async () => {
+    const storage = new MemoryStorage();
+    const originalSet = storage.setItem.bind(storage);
+    storage.setItem = (key, value) => {
+      const saved = JSON.parse(value) as PaidExtensionAttempt;
+      originalSet(key, JSON.stringify({ ...saved, expectedBillingRevision: 2 }));
+    };
+    const send = vi.fn(async () => 'sent');
+
+    await expect(sendDurablyPersistedPaidExtension({
+      storageProvider: () => storage,
+      context: amendedContext,
+      createIdempotencyKey: () => amendedAttempt.idempotencyKey,
+      send,
+    })).rejects.toSatisfy((error: unknown) => {
+      expectPersistenceCode(error, 'write_verification_failed');
+      return true;
+    });
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it('requires every versioned field and rejects extra fields', () => {
     for (const field of Object.keys(expectedAttempt)) {
       const incomplete: Record<string, unknown> = { ...expectedAttempt };
@@ -522,6 +603,18 @@ describe('paid gaming extension persistence', () => {
       expectedAttempt,
     })).toThrowError(PaidExtensionPersistenceError);
     expect(storage.getItem(paidExtensionStorageKey(context))).toBe(JSON.stringify(changed));
+  });
+
+  it('does not clear a confirmed receipt when only its billing revision changed', () => {
+    const storage = new MemoryStorage();
+    const changed = { ...amendedAttempt, expectedBillingRevision: 2 };
+    storage.setItem(paidExtensionStorageKey(context), JSON.stringify(changed));
+
+    expect(() => clearPaidExtensionAttempt({
+      storageProvider: () => storage,
+      expectedAttempt: amendedAttempt,
+    })).toThrowError(PaidExtensionPersistenceError);
+    expect(JSON.parse(storage.getItem(paidExtensionStorageKey(context)) ?? '')).toEqual(changed);
   });
 
   it('rejects an unverified current shift before reading or writing storage', () => {

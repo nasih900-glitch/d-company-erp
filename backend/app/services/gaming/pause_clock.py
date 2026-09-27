@@ -15,11 +15,14 @@ def completed_pause_ms(session) -> int:
 
 
 def play_elapsed_ms(session, at: datetime) -> int:
-    elapsed = duration_ms(at - session.start_at)
     paused = completed_pause_ms(session)
     paused_at = getattr(session, "paused_at", None)
     if paused_at is not None:
-        paused += duration_ms(at - paused_at)
+        # Play time is frozen at the pause boundary. Subtracting two separately
+        # floored, advancing durations can otherwise make the meter oscillate
+        # by one millisecond while the session remains paused.
+        at = paused_at
+    elapsed = duration_ms(at - session.start_at)
     return max(0, elapsed - paused)
 
 
@@ -40,7 +43,8 @@ def finish_pause(session, at: datetime) -> None:
     """Called under the session row lock; a second call cannot add time twice."""
     if getattr(session, "paused_at", None) is None:
         return
-    session.paused_duration_ms = completed_pause_ms(session) + duration_ms(at - session.paused_at)
+    frozen_play_ms = play_elapsed_ms(session, at)
+    session.paused_duration_ms = duration_ms(at - session.start_at) - frozen_play_ms
     # This is a compatibility projection of the total, not a per-pause round.
     session.paused_minutes = session.paused_duration_ms // 60_000
     session.paused_at = None

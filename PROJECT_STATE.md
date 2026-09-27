@@ -1,5 +1,81 @@
 # D Company ERP — current project state
 
+## Code30.4 patch candidate (updated 2026-09-24)
+
+Code30.4 is an additive patch on released Code30.3 (tag `v3.1.30`, commit
+`ad5adfb93c3488f1f931ca27da53824aa57d3dc5`). It is not Code31. Its coordinated
+identity is `v3.1.31`, Android build `39`, Room `53` and Alembic head `0085`.
+The compatibility defaults stay at minimum `8`, latest `8`, policy revision `1`,
+so nothing is offered to tablets until the owner activates a verified release.
+
+Scope: PS5 60-to-30-minute package amendment before 30:00 of play (Alembic
+`0085`); friends who join and leave a PS5 session by saved customer identity,
+billed ₹30 per started hour of each friend's total pause-excluded presence,
+minimum ₹30 (Alembic `0083`, `0084`); paid extensions for Racing Sim, VR Games
+and VR Racing Sim at their base-session tariffs; the Room 53 per-session FIFO
+action ledger for offline amendment, Join, Leave, extension and Stop; opt-in
+local App health capture and a bounded Gaming refresh; and the customer-linked
+split-checkout ordering fix (invoice, then every payment leg, then the loyalty
+settlement, in one transaction). Details are in
+[`docs/CODE30_4_GAMING_PARTICIPANTS_PATCH.md`](docs/CODE30_4_GAMING_PARTICIPANTS_PATCH.md),
+[`docs/CODE30_4_GAMING_EXTENSION_PATCH.md`](docs/CODE30_4_GAMING_EXTENSION_PATCH.md),
+[`docs/CODE30_4_APP_HEALTH.md`](docs/CODE30_4_APP_HEALTH.md) and
+[`docs/CODE30_4_RELEASE_RUNBOOK.md`](docs/CODE30_4_RELEASE_RUNBOOK.md).
+
+The regression freeze adds a Code30.4 layer: the historical Code30.2 and
+Code30.3 maps are verified against their release commits, and a separate
+`REVIEWED_CODE30_4_SHA256` map covers the current delta.
+
+Local source evidence on the candidate tree (not CI, signing, device or
+production evidence): full backend suite 1,745 passed with none skipped on a
+fresh CI-like `erp_test` database migrated from empty through `0085`; backend
+unit 1,209; repository suite green with the freeze verifier preserving all 491
+baseline test files; Web lint, typecheck, 604 tests and production build;
+Android release lint, release APK and bundle at a 4 GB heap, 1,150 JVM tests
+and the audit driver. A rendered Web trial on a disposable local tenant covered
+Start 60 min → change to 30 min → friend Join/Leave → Stop (₹80 + ₹30 = ₹110,
+server-confirmed) → Send to POS → customer-linked split cash + UPI with change →
+receipt → shift close with zero variance.
+
+Follow-up source review found that an offline-created PS5 Start displayed only
+items and Stop while its Start was pending, so staff could not save the promised
+60-to-30 amendment or friend attendance until a server ID existed. The current
+candidate adds the pending-Start control, a verified version-zero baseline,
+atomic local action capture and projected FIFO revisions. Focused JVM policy
+tests and a disposable-emulator Room test verify Start → amendment → Join →
+Leave → Stop persistence across restart and later server-ID resolution; a
+rendered emulator test confirms the pending-Start control is usable. These
+checks do not replace the full local-backend replay and billing trial or CI on
+the eventual exact release commit.
+
+A second review caught offline replay edges: a confirmed Join could appear
+active while its queued Leave still referenced the Join action ID; rejected
+Starts could leave dependent commands; and Room 52 extension/Stop retries could
+change their request body under an old idempotency key. The candidate resolves
+Join IDs to server participant IDs until Leave confirms, keeps migrated legacy
+revisions null and a bodyless legacy Stop bodyless so original requests replay, and retires dependent commands
+only after an audited **no-play** receipt commits. A manual base bill with saved
+attendance or amendment keeps the actions and shift blocked for audited billing
+review. A recovered server Start with incompatible captured action timestamps
+also retains its commands and shift blocker instead of silently replaying or
+discarding them. Offline actions remain bound to the original staff account;
+the account-switch error tells another user to let that staff member finish
+Sync on the tablet before closing its shift. The original command timestamps
+and receipt reference remain in Room. The current source passed the full Android
+debug JVM suite and a focused 68-test Room/migration emulator run; the earlier
+73-test run also covered account-switch safety. Exact-head CI and the real-backend
+replay trial remain separate release gates.
+
+Outstanding gates: exact-head CI for the candidate commit; the protected signed
+build-39 APK and its verification; an in-place same-signing-certificate
+build-38-to-39 upgrade that retains Room data and queued actions; an offline
+Android trial of amendment, friend Join/Leave, reconnect, Stop and POS payment;
+production quiescence, backup and restore proof, guarded deployment to `0085`
+and inactive staging; the owner's **Offer update**; and physical Redmi tablet,
+printer and SMTP acceptance.
+
+## Code30.3 handover (predecessor)
+
 Updated 2026-09-22. This is the handover for the additive Code30.3 operational
 patch. Read
 [`docs/CODE30_3_PATCH_CANDIDATE.md`](docs/CODE30_3_PATCH_CANDIDATE.md) before

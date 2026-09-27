@@ -50,6 +50,7 @@ type Props = {
   onSelect: (customer: CustomerDTO | undefined) => void;
   onNameChange: (name: string) => void;
   onPhoneChange: (phone: string) => void;
+  saveContext?: 'start' | 'join';
 };
 
 export function GamingCustomerPicker({
@@ -61,6 +62,7 @@ export function GamingCustomerPicker({
   onSelect,
   onNameChange,
   onPhoneChange,
+  saveContext = 'start',
 }: Props) {
   const [mode, setMode] = useState<'search' | 'add'>('search');
   const [query, setQuery] = useState('');
@@ -140,7 +142,7 @@ export function GamingCustomerPicker({
           {searching && <div className="text-[11px] text-fg-muted">Searching…</div>}
           {searchError && <div className="text-[11px] text-accent-bad">{searchError}</div>}
           {!searching && !searchError && query.trim().length >= 2 && results.length === 0 && (
-            <div className="text-[11px] text-fg-muted">No saved customer found. Choose Add new to save one when the session starts.</div>
+            <div className="text-[11px] text-fg-muted">No saved customer found. Choose Add new to save one {saveContext === 'join' ? 'when the friend joins.' : 'when the session starts.'}</div>
           )}
           {results.length > 0 && (
             <div className="max-h-36 overflow-y-auto rounded-lg border border-bg-border" role="listbox" aria-label="Saved customer results">
@@ -163,7 +165,9 @@ export function GamingCustomerPicker({
             <input type="tel" placeholder="Customer phone (optional)" className="input !py-1.5 text-xs w-full"
               disabled={disabled} value={phone} maxLength={20} onChange={(event) => onPhoneChange(event.target.value)}/>
           </div>
-          <p className="text-[11px] text-fg-muted">A valid new phone is saved through session start for next time. A name alone stays an untracked receipt note.</p>
+          <p className="text-[11px] text-fg-muted">{saveContext === 'join'
+            ? 'Name and phone are saved as a customer before this friend joins.'
+            : 'A valid new phone is saved through session start for next time. A name alone stays an untracked receipt note.'}</p>
         </>
       )}
     </div>

@@ -2,6 +2,7 @@ package cloud.dcompany.erp.ui.screens.gaming
 
 import cloud.dcompany.erp.core.db.GamingSessionAddonActionType
 import cloud.dcompany.erp.core.db.GamingSessionAddonCacheEntity
+import cloud.dcompany.erp.core.db.GamingSessionParticipantCacheEntity
 import cloud.dcompany.erp.core.db.GamingCleanupLocalSnapshot
 import cloud.dcompany.erp.core.db.LocalGamingPackageExtensionEntity
 import cloud.dcompany.erp.core.db.LocalGamingSessionAddonActionEntity
@@ -86,6 +87,14 @@ data class GameSession(
     @SerialName("package_station_type_snapshot") val packageStationTypeSnapshot: String? = null,
     @SerialName("package_pricing_tier_snapshot") val packagePricingTierSnapshot: String? = null,
     @SerialName("extra_controllers") val extraControllers: Int = 0,
+    @SerialName("participant_revision") val participantRevision: Int = 0,
+    @SerialName("billing_revision") val billingRevision: Int = 0,
+    @SerialName("effective_package_id") val effectivePackageId: String? = null,
+    @SerialName("effective_package_price_minor") val effectivePackagePriceMinor: Long? = null,
+    @SerialName("effective_package_duration_minutes") val effectivePackageDurationMinutes: Int? = null,
+    @SerialName("effective_package_variant") val effectivePackageVariant: String? = null,
+    @SerialName("effective_package_station_type") val effectivePackageStationType: String? = null,
+    @SerialName("effective_package_pricing_tier") val effectivePackagePricingTier: String? = null,
     @SerialName("customer_id") val customerId: String? = null,
     @SerialName("customer_name") val customerName: String? = null,
     @SerialName("customer_phone") val customerPhone: String? = null,
@@ -127,7 +136,11 @@ data class SessionStartBody(
 )
 
 @Serializable
-data class SessionStopBody(@SerialName("ended_at") val endedAt: String)
+data class SessionStopBody(
+    @SerialName("ended_at") val endedAt: String,
+    @SerialName("expected_participant_revision") val expectedParticipantRevision: Int? = null,
+    @SerialName("expected_billing_revision") val expectedBillingRevision: Int? = null,
+)
 
 @Serializable
 data class SessionPauseBody(
@@ -163,7 +176,79 @@ data class SessionPackageExtendBody(
     @SerialName("expected_package_variant") val expectedPackageVariant: String,
     @SerialName("expected_timer_minutes") val expectedTimerMinutes: Int,
     @SerialName("expected_amount_minor") val expectedAmountMinor: Long,
+    @SerialName("expected_billing_revision") val expectedBillingRevision: Int? = null,
 )
+
+@Serializable
+data class SessionPackageAmendBody(
+    @SerialName("target_package_id") val targetPackageId: String,
+    @SerialName("expected_timer_minutes") val expectedTimerMinutes: Int,
+    @SerialName("expected_amount_minor") val expectedAmountMinor: Long,
+    @SerialName("expected_pause_version") val expectedPauseVersion: Int,
+    @SerialName("expected_participant_revision") val expectedParticipantRevision: Int,
+    @SerialName("expected_billing_revision") val expectedBillingRevision: Int,
+    @SerialName("expected_target_price_minor") val expectedTargetPriceMinor: Long,
+    @SerialName("expected_target_duration_minutes") val expectedTargetDurationMinutes: Int,
+    @SerialName("expected_target_variant") val expectedTargetVariant: String,
+    @SerialName("occurred_at") val occurredAt: String? = null,
+    @SerialName("play_elapsed_ms") val playElapsedMs: Long? = null,
+)
+
+@Serializable
+data class SessionParticipantJoinBody(
+    @SerialName("expected_participant_revision") val expectedParticipantRevision: Int,
+    @SerialName("customer_id") val customerId: String? = null,
+    @SerialName("customer_name") val customerName: String? = null,
+    @SerialName("customer_phone") val customerPhone: String? = null,
+    @SerialName("customer_directory_revision") val customerDirectoryRevision: Long? = null,
+    @SerialName("customer_directory_company_id") val customerDirectoryCompanyId: String? = null,
+    @SerialName("occurred_at") val occurredAt: String? = null,
+    @SerialName("play_elapsed_ms") val playElapsedMs: Long? = null,
+    @SerialName("expected_pause_version") val expectedPauseVersion: Int? = null,
+)
+
+@Serializable
+data class SessionParticipantLeaveBody(
+    @SerialName("expected_participant_revision") val expectedParticipantRevision: Int,
+    @SerialName("occurred_at") val occurredAt: String? = null,
+    @SerialName("play_elapsed_ms") val playElapsedMs: Long? = null,
+    @SerialName("expected_pause_version") val expectedPauseVersion: Int? = null,
+)
+
+@Serializable
+data class SessionParticipant(
+    val id: String,
+    @SerialName("customer_id") val customerId: String,
+    @SerialName("joined_at") val joinedAt: String,
+    @SerialName("joined_play_elapsed_ms") val joinedPlayElapsedMs: Long,
+    @SerialName("left_at") val leftAt: String? = null,
+    @SerialName("left_play_elapsed_ms") val leftPlayElapsedMs: Long? = null,
+    @SerialName("join_revision") val joinRevision: Int,
+    @SerialName("leave_revision") val leaveRevision: Int? = null,
+)
+
+@Serializable
+data class SessionParticipantState(
+    @SerialName("session_id") val sessionId: String,
+    @SerialName("participant_revision") val participantRevision: Int,
+    @SerialName("active_friend_count") val activeFriendCount: Int,
+    @SerialName("current_player_count") val currentPlayerCount: Int,
+    @SerialName("max_player_count") val maxPlayerCount: Int,
+    val participants: List<SessionParticipant>,
+)
+
+internal fun SessionParticipant.toCacheEntity(sessionId: String) =
+    GamingSessionParticipantCacheEntity(
+        id = id,
+        gamingSessionId = sessionId,
+        customerId = customerId,
+        joinedAtMillis = Instant.parse(joinedAt).toEpochMilli(),
+        joinedPlayElapsedMs = joinedPlayElapsedMs,
+        leftAtMillis = leftAt?.let { Instant.parse(it).toEpochMilli() },
+        leftPlayElapsedMs = leftPlayElapsedMs,
+        joinRevision = joinRevision,
+        leaveRevision = leaveRevision,
+    )
 
 @Serializable
 data class SessionAddonModifierBody(
@@ -383,13 +468,18 @@ internal fun sessionAddonReceiptError(
 }
 
 /** One canonical mapping prevents UI recovery and background replay from diverging. */
-internal fun LocalGamingPackageExtensionEntity.toPackageExtendBody() = SessionPackageExtendBody(
+internal fun LocalGamingPackageExtensionEntity.toPackageExtendBody(
+    capturedBillingRevision: Int?,
+) = SessionPackageExtendBody(
     packageId = packageId,
     expectedPackagePriceMinor = expectedPackagePriceMinor,
     expectedPackageDurationMinutes = expectedPackageDurationMinutes,
     expectedPackageVariant = expectedPackageVariant,
     expectedTimerMinutes = expectedSessionTimerMinutes,
     expectedAmountMinor = expectedSessionAmountMinor,
+    // The ledger holds the exact wire evidence. Room 52 requests had no
+    // revision field, even though the upgraded extension table defaults to 0.
+    expectedBillingRevision = capturedBillingRevision,
 )
 
 @Serializable
@@ -628,6 +718,34 @@ internal interface GamingApi {
         @Header("Idempotency-Key") key: String,
         @HeaderMap provenance: Map<String, String> = emptyMap(),
     ): GameSession
+
+    @POST("gaming/sessions/{id}/amend-package")
+    suspend fun amendPackage(
+        @Path("id") id: String,
+        @Body body: SessionPackageAmendBody,
+        @Header("Idempotency-Key") key: String,
+        @HeaderMap provenance: Map<String, String> = emptyMap(),
+    ): GameSession
+
+    @GET("gaming/sessions/{id}/participants")
+    suspend fun participants(@Path("id") id: String): SessionParticipantState
+
+    @POST("gaming/sessions/{id}/participants/join")
+    suspend fun joinParticipant(
+        @Path("id") id: String,
+        @Body body: SessionParticipantJoinBody,
+        @Header("Idempotency-Key") key: String,
+        @HeaderMap provenance: Map<String, String> = emptyMap(),
+    ): SessionParticipantState
+
+    @POST("gaming/sessions/{id}/participants/{participantId}/leave")
+    suspend fun leaveParticipant(
+        @Path("id") id: String,
+        @Path("participantId") participantId: String,
+        @Body body: SessionParticipantLeaveBody,
+        @Header("Idempotency-Key") key: String,
+        @HeaderMap provenance: Map<String, String> = emptyMap(),
+    ): SessionParticipantState
 
     @GET("gaming/sessions/{id}/addons")
     suspend fun sessionAddons(@Path("id") id: String): List<SessionAddon>
