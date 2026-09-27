@@ -1,9 +1,13 @@
 # Code30.4 release runbook
 
-Code30.4 is `v3.1.31`, Android build `39`, Room `53` and Alembic `0085`, layered
-on released Code30.3 (`v3.1.30`). Each gate below is a separate claim. A green
-lower gate is not proof of a higher one, and no step may be skipped because an
-earlier one passed. Stop at the first failure and record it exactly.
+The corrective Code30.4 release is `v3.1.32`, Android build `40`, Room `53`
+and Alembic `0085`, layered on released Code30.3 (`v3.1.30`). The earlier
+`v3.1.31` / build `39` was signed, but its offline rejected-Start recovery failed
+an isolated multi-station trial; it was not offered or deployed. Keep its tag
+and signed artifacts as immutable evidence, and do not stage or offer build 39.
+Each gate below is a separate claim. A green lower gate is not proof of a
+higher one, and no step may be skipped because an earlier one passed. Stop at
+the first failure and record it exactly.
 
 ## 1. Source and CI
 
@@ -11,27 +15,27 @@ earlier one passed. Stop at the first failure and record it exactly.
 2. Protected CI must pass every job on that exact commit: backend (including
    the repository contract suite and the Code30.4 freeze layer), frontend,
    Android native with emulator instrumentation, and both Docker lanes.
-3. Run `scripts/verify_android_release_version.py --tag v3.1.31` on the commit
+3. Run `scripts/verify_android_release_version.py --tag v3.1.32` on the commit
    to be tagged.
 
 ## 2. Signed Android artifact
 
-1. Tag the reviewed commit `v3.1.31`. The tagged release workflow runs the tests,
+1. Tag the reviewed commit `v3.1.32`. The tagged release workflow runs the tests,
    scans, instrumentation and reproducible builds, then signs through the
    protected `android-release-signing` environment, which requires a reviewer.
    Never weaken that environment or substitute a debug APK.
 2. Verify the draft release manifest and APK: source commit, package
-   `cloud.dcompany.erp`, versionCode `39`, versionName `3.1.31`, size, SHA-256,
+   `cloud.dcompany.erp`, versionCode `40`, versionName `3.1.32`, size, SHA-256,
    and a signing certificate identical to build `38`.
 
 ## 3. Same-signer upgrade trial (isolated emulator)
 
 1. Install the released signed build `38` on a fresh AVD. Create local data:
    an open shift, a running PS5 session, and at least one queued offline action.
-2. Install the signed build `39` **over it** without uninstalling or clearing
+2. Install the signed build `40` **over it** without uninstalling or clearing
    data. Confirm Room migrates 52 → 53, the local data and queued action are
    intact, and the queue replays exactly once after reconnecting.
-3. Offline trial on build `39` against a disposable local backend: capture a
+3. Offline trial on build `40` against a disposable local backend: capture a
    new PS5 60-minute Start while offline, amend it to 30 minutes before 30:00,
    save a friend's Join and Leave, then Stop before reconnecting. Confirm the
    original timestamps, versions, saved customer and Start → amendment → Join →
@@ -40,8 +44,16 @@ earlier one passed. Stop at the first failure and record it exactly.
    and that the station is free. Between confirmed Join and pending Leave,
    verify the friend appears once as leaving and a second Leave is blocked.
    A rejected Start must retain its dependent actions for review without
-   posting a charge. An audited no-play receipt retires those actions as
-   retained evidence and clears the shift gate. A manual-bill receipt with
+   posting a charge. Verify an inactive-station rejection is durably bound to
+   that Start's exact action key, actor, terminal, captured shift and
+   timestamp. In a shift with an unrelated earlier session using the same
+   package, an audited owner no-play receipt may retire only this proven
+   rejected Start and its retained dependents; it must never clear another
+   station's history. If the original Start was accepted, including after a
+   station transfer or expiry of its idempotency cache entry, it must never be
+   inferred as no play. Exact authoritative session recovery may still return
+   `server_session_recovered`; ambiguous accepted history remains blocked.
+   A manual-bill receipt with
    saved amendment or attendance must keep those actions and the shift blocked
    until their amounts are independently reconciled; a base bill alone is not
    proof of the extras. If recovery finds a later server Start time than the
@@ -74,10 +86,11 @@ this gate.
 5. Stage the signed APK **inactive** with `ops/stage_android_release.py`, as
    described in `docs/SERVER_DRIVEN_ANDROID_UPDATES.md`. Registration alone does
    not offer the update.
-6. The owner reviews the staged release in Settings → Devices & updates and
-   presses **Offer update**. Tablet users still approve the installation.
+6. The release controller reviews the staged release in Settings → Devices &
+   updates and presses **Offer update** only after all gates pass. Tablet users
+   still approve the installation.
 
-Do not offer build `39` while the shop is active or before the same-signer
+Do not offer build `40` while the shop is active or before the same-signer
 upgrade trial has passed. After participant rows, settlements or amendment
 receipts exist, do not roll back below migration `0085` or run the Code30.3
 application; restore the pre-deployment backup only as an owner decision.

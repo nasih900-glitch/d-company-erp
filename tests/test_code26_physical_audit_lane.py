@@ -1345,8 +1345,8 @@ def _synthetic_evidence(root: Path) -> tuple[list[dict], dict[str, Path]]:
                 "commit": commit,
                 "tree": tree,
                 "clean": True,
-                "version_code": 39,
-                "version_name": "3.1.31",
+                "version_code": 40,
+                "version_name": "3.1.32",
             }
         ),
         encoding="utf-8",

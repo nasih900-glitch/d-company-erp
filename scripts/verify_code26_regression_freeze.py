@@ -177,6 +177,9 @@ CODE30_1_BASE = "3b534fdc76a5463475d58f44686f91608e1e2601"
 CODE30_2_BASE = "3ea84be4718a794d5a2e8efc7ac9bcacbc0cee01"
 # Tag v3.1.30: the PR 16 merge commit released as Code30.3.
 CODE30_3_BASE = "ad5adfb93c3488f1f931ca27da53824aa57d3dc5"
+# Signed v3.1.31 / build 39: preserved as the reviewed, unoffered Code30.4
+# source. The corrective v3.1.32 release is checked by a separate overlay.
+CODE30_4_BASE = "5bfa54c8d960a91e99144d2b04978ea73a6196a5"
 CODE30_2_FREEZE_CONTROL_PATHS = frozenset({
     "scripts/verify_code26_regression_freeze.py",
     "tests/test_code26_regression_freeze.py",
@@ -656,11 +659,37 @@ REVIEWED_CODE30_4_SHA256 = {
     'tests/test_code26_physical_audit_lane.py': 'fa41a4c3b56595ea95fa8df33c3a9f22653cf1586f5c25e6642bc860cf844baa',
     'tests/test_production_installer_safety.py': 'e381fdc8d5f4c6f8995391823862902f7631689c3046047f1f492c7ff100e7af',
 }
+# Only the exact corrective v3.1.32 / build-40 changes belong here. The
+# signed v3.1.31 bytes above remain immutable and are checked at CODE30_4_BASE.
+REVIEWED_CODE30_4_HOTFIX_SHA256 = {
+    '.env.production.example': 'f05447a5b3efc87ef9272741e1eeb5c8c3ad2eb9cd42e6ef5f1322e35a67456c',
+    'android-native/app/build.gradle.kts': 'ea96303198d7156fa6f24dc14654f02b2a453379d73d509eb39d818785aa2d42',
+    'android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt': 'c84e000fae07d02b638a4b8e5dae59d71e1a9e66a2c684ad6d3514db23e2031a',
+    'backend/app/__init__.py': 'a51866a1dec711af47ba97015b9a7e7087544adc045b2a3a2148cc8501ba8a17',
+    'backend/app/api/v1/gaming/router.py': 'c252e3bdb83b71c993245b55043822a5dafdb8ab4b34c86ba76ef988b1a28481',
+    'backend/pyproject.toml': 'ad3150a51c64c0a0a2760fd4bc0cb65a51be35875284d5093f92cd99cbcb6d12',
+    'backend/tests/integration/test_gaming_phase2_contracts.py': 'f35833a8a504930e53e790f20fbc6bf5a3a48315b99be7994eb2c01b6ddcc767',
+    'backend/tests/unit/test_release_contracts.py': 'bf13cd9dac8d8c0baac70b2bd0f144ed6dd3cc85d0dfb65cfbbec765086d42cf',
+    'backend/tests/unit/test_remote_assistance_contract.py': 'ed89e8f9526bca6c551b7e57927b9b088d471cace334a44664905cd1002d7e81',
+    'docker-compose.prod.yml': 'e4005e66fc60864e7a41ac5f2d80e562013b3c24d833d4df88357fb86f9f23ab',
+    'docs/CODE30_4_RELEASE_RUNBOOK.md': '91fccea37f9428cbc12e62ae4a7b97b2525637c25b504f7dbf11c8a4b514b5ae',
+    'frontend/.env.example': '898d3e84f10e26bb35693b6b7dd10c48c5e137a7001d187705c2e3ceb15a92b1',
+    'frontend/package-lock.json': '4c1e8798fd3e3214e61ae49451f310c9b49bb4baf00176018788544954863212',
+    'frontend/package.json': '7aeb3d78f46dfa42dde0b0c2f8dcf2428cc0eb68d933d97860c15dc2824ca9c0',
+    'scripts/analyze_code26_physical_evidence.py': '90a4dbafa924c905b77c9e816040fb70d0ceacd10c22e5a0952d49883e4a0c0e',
+    'tests/test_code26_physical_audit_lane.py': '03fc2280153696bad5898916d1ee6b6d63a045b413b300fd80389392c8a0ad33',
+}
 REVIEWED_CODE30_4_PRODUCTION_PATHS = frozenset(
     path
-    for path in REVIEWED_CODE30_4_SHA256
+    for path in REVIEWED_CODE30_4_SHA256 | REVIEWED_CODE30_4_HOTFIX_SHA256
     if path.startswith(("backend/app/", "frontend/src/", "android-native/app/src/main/"))
 )
+
+
+def _current_code30_4_sha256(path: str, fallback: str | None = None) -> str | None:
+    return REVIEWED_CODE30_4_HOTFIX_SHA256.get(
+        path, REVIEWED_CODE30_4_SHA256.get(path, fallback)
+    )
 
 # Separate from the signed Code30.3 release inventory: these are reviewed
 # post-release maintenance tools only. Their exact bytes must be pinned before
@@ -867,6 +896,7 @@ def _normalise_release_identity(path: str, text: str) -> str:
         return text
     normalised = text
     for current, baseline in (
+        ("3.1.32", "3.1.14"),
         ("3.1.31", "3.1.14"),
         ("3.1.30", "3.1.14"),
         ("3.1.29", "3.1.14"),
@@ -942,10 +972,10 @@ def _normalise_release_identity(path: str, text: str) -> str:
     ):
         normalised = normalised.replace(current, baseline)
     normalised = re.sub(
-        r"version_code\s*=\s*(?:26|27|28|29|30|31|32|33|34|35|36|37|38|39)\b", "version_code=25", normalised
+        r"version_code\s*=\s*(?:26|27|28|29|30|31|32|33|34|35|36|37|38|39|40)\b", "version_code=25", normalised
     )
     normalised = re.sub(
-        r"assertEquals\((?:26|27|28|29|30|31|32|33|34|35|36|37|38|39),\s*BuildConfig\.VERSION_CODE\)",
+        r"assertEquals\((?:26|27|28|29|30|31|32|33|34|35|36|37|38|39|40),\s*BuildConfig\.VERSION_CODE\)",
         "assertEquals(25, BuildConfig.VERSION_CODE)",
         normalised,
     )
@@ -1254,18 +1284,31 @@ def _verify_code30_3_exact_delta(root: Path, errors: list[str]) -> None:
 
 
 def _verify_code30_4_exact_delta(root: Path, errors: list[str]) -> None:
-    # The post-release Code30.3 maintenance tools arrived after v3.1.30 and
-    # are pinned by their own map, so they sit beside the Code30.4 delta.
+    # The unoffered signed candidate remains auditable at its immutable Git
+    # object. Only the narrow corrective overlay may differ in this checkout.
+    for path, expected_sha256 in REVIEWED_CODE30_4_SHA256.items():
+        try:
+            original_bytes = _git_bytes(root, "show", f"{CODE30_4_BASE}:{path}")
+        except subprocess.CalledProcessError:
+            errors.append(f"signed Code30.4 file absent from immutable base: {path}")
+            continue
+        if hashlib.sha256(original_bytes).hexdigest() != expected_sha256:
+            errors.append(f"signed Code30.4 file differs from reviewed bytes: {path}")
+
+    # Post-release Code30.3 maintenance tools are pinned by their own map.
     expected_paths = set(REVIEWED_CODE30_4_SHA256) | set(
         CODE30_4_FREEZE_CONTROL_PATHS
-    ) | set(REVIEWED_POST_CODE30_3_MAINTENANCE_SHA256)
+    ) | set(REVIEWED_POST_CODE30_3_MAINTENANCE_SHA256) | set(
+        REVIEWED_CODE30_4_HOTFIX_SHA256
+    )
     current_paths = _code30_4_delta_paths(root)
     for path in sorted(expected_paths - current_paths):
         errors.append(f"reviewed Code30.4 delta path disappeared: {path}")
     for path in sorted(current_paths - expected_paths):
         errors.append(f"unreviewed path entered the Code30.4 delta: {path}")
 
-    for path, expected_sha256 in REVIEWED_CODE30_4_SHA256.items():
+    current_hashes = REVIEWED_CODE30_4_SHA256 | REVIEWED_CODE30_4_HOTFIX_SHA256
+    for path, expected_sha256 in current_hashes.items():
         candidate_path = root / path
         if not _is_canonical_regular_file(candidate_path):
             errors.append(
@@ -1311,6 +1354,7 @@ def verify_repository(root: Path, baseline: str = CODE25_BASE) -> RegressionFree
     _git(root, "cat-file", "-e", f"{CODE30_1_BASE}^{{commit}}")
     _git(root, "cat-file", "-e", f"{CODE30_2_BASE}^{{commit}}")
     _git(root, "cat-file", "-e", f"{CODE30_3_BASE}^{{commit}}")
+    _git(root, "cat-file", "-e", f"{CODE30_4_BASE}^{{commit}}")
     _verify_code30_2_exact_delta(root, errors)
     _verify_code30_3_exact_delta(root, errors)
     _verify_code30_4_exact_delta(root, errors)
@@ -1335,7 +1379,8 @@ def verify_repository(root: Path, baseline: str = CODE25_BASE) -> RegressionFree
             path, candidate_normalised
         )
         reviewed_test_sha256 = (
-            REVIEWED_CODE30_4_SHA256.get(path)
+            REVIEWED_CODE30_4_HOTFIX_SHA256.get(path)
+            or REVIEWED_CODE30_4_SHA256.get(path)
             or REVIEWED_CODE30_3_SHA256.get(path)
             or REVIEWED_CODE30_2_SHA256.get(path)
             or REVIEWED_CODE30_1_DELETION_REPLAY_SHA256.get(path)
@@ -1371,7 +1416,7 @@ def verify_repository(root: Path, baseline: str = CODE25_BASE) -> RegressionFree
                 REVIEWED_CODE30_1_DELETION_REPLAY_SHA256.get(path, expected_sha256),
             ),
         )
-        current_expected_sha256 = REVIEWED_CODE30_4_SHA256.get(path, current_expected_sha256)
+        current_expected_sha256 = _current_code30_4_sha256(path, current_expected_sha256)
         if not candidate_path.is_file():
             errors.append(f"reviewed Code30.1 file was removed: {path}")
         elif hashlib.sha256(candidate_path.read_bytes()).hexdigest() != current_expected_sha256:
@@ -1382,7 +1427,7 @@ def verify_repository(root: Path, baseline: str = CODE25_BASE) -> RegressionFree
         current_expected_sha256 = REVIEWED_CODE30_3_SHA256.get(
             path, REVIEWED_CODE30_2_SHA256.get(path, expected_sha256)
         )
-        current_expected_sha256 = REVIEWED_CODE30_4_SHA256.get(path, current_expected_sha256)
+        current_expected_sha256 = _current_code30_4_sha256(path, current_expected_sha256)
         if not candidate_path.is_file():
             errors.append(f"reviewed Code30.1 deletion-replay file was removed: {path}")
         elif hashlib.sha256(candidate_path.read_bytes()).hexdigest() != current_expected_sha256:
@@ -1395,7 +1440,7 @@ def verify_repository(root: Path, baseline: str = CODE25_BASE) -> RegressionFree
         current_expected_sha256 = REVIEWED_CODE30_3_SHA256.get(
             path, REVIEWED_CODE30_2_SHA256.get(path, expected_sha256)
         )
-        current_expected_sha256 = REVIEWED_CODE30_4_SHA256.get(path, current_expected_sha256)
+        current_expected_sha256 = _current_code30_4_sha256(path, current_expected_sha256)
         if not candidate_path.is_file():
             errors.append(f"reviewed Code30.1 build-36 release test was removed: {path}")
         elif hashlib.sha256(candidate_path.read_bytes()).hexdigest() != current_expected_sha256:
@@ -1412,7 +1457,7 @@ def verify_repository(root: Path, baseline: str = CODE25_BASE) -> RegressionFree
                 REVIEWED_CODE30_1_BUILD36_RELEASE_TEST_SHA256.get(path, expected_sha256),
             ),
         )
-        current_expected_sha256 = REVIEWED_CODE30_4_SHA256.get(path, current_expected_sha256)
+        current_expected_sha256 = _current_code30_4_sha256(path, current_expected_sha256)
         if not candidate_path.is_file():
             errors.append(f"reviewed Code30.1 release test was removed: {path}")
         elif hashlib.sha256(candidate_path.read_bytes()).hexdigest() != current_expected_sha256:

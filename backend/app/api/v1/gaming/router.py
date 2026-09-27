@@ -9,6 +9,7 @@ from typing import Literal, Self
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Header, Query, Request, status
+from fastapi.responses import JSONResponse
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -31,6 +32,7 @@ from app.core.errors import (
     GamingLegacyServerSessionNotFoundError,
     GamingLegacyStopOwnerReviewRequiredError,
     GamingSourceShiftClosedError,
+    IdempotencyConflict,
     NotFoundError,
 )
 from app.core.idempotency import check_or_reserve, store_response
@@ -121,6 +123,10 @@ _SESSION_ITEM_LABEL = {
     "streaming": "Streaming Session",
 }
 _GAMING_SOURCE_TERMINAL_PURPOSES = frozenset({"gaming", "hybrid"})
+# v3.1.7 (Android code 18) and every sampled release through v3.1.30 send
+# `started_at` and the server persists that exact validated instant. Older
+# actions remain on the generic conservative recovery path.
+_REJECTED_START_RECEIPT_MIN_ANDROID_VERSION_CODE = 18
 _POS_DESTINATION_TERMINAL_PURPOSES = frozenset({"cafe_pos", "hybrid"})
 _PS5_30M_AMENDMENT_TARGETS = {
     spec.variant: spec
@@ -1449,6 +1455,321 @@ def _same_utc_instant(left: datetime, right: datetime) -> bool:
     return left.astimezone(timezone.utc) == right.astimezone(timezone.utc)
 
 
+def _gaming_start_action_id(idempotency_key: str) -> UUID | None:
+    prefix = "gaming-session-start:"
+    if not idempotency_key.startswith(prefix):
+        return None
+    try:
+        action_id = UUID(idempotency_key.removeprefix(prefix))
+    except ValueError:
+        return None
+    return action_id if idempotency_key == f"{prefix}{action_id}" else None
+
+
+async def _durable_rejected_gaming_start_response(
+    session: SessionDep,
+    *,
+    idempotency_key: str,
+    request_hash: str,
+    tenant: TenantContext,
+) -> JSONResponse | None:
+    """Replay one exact rejected offline Start after ordinary key cleanup."""
+    local_action_id = _gaming_start_action_id(idempotency_key)
+    if local_action_id is None:
+        return None
+    rows = (
+        (
+            await session.execute(
+                select(AuditLog)
+                .where(
+                    AuditLog.company_id == tenant.company_id,
+                    AuditLog.action == "gaming_session_start_rejected",
+                    AuditLog.entity_type == "GamingSessionStart",
+                    AuditLog.entity_id == str(local_action_id),
+                )
+                .order_by(AuditLog.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not rows:
+        return None
+    if len(rows) != 1:
+        raise ConflictError(
+            "More than one rejected Start receipt exists for this saved action. "
+            "Nothing was changed; contact support for audit review."
+        )
+    receipt = rows[0]
+    after = receipt.after if isinstance(receipt.after, dict) else {}
+    if (
+        receipt.actor_user_id != tenant.user_id
+        or receipt.terminal_id != tenant.terminal_id
+        or after.get("idempotency_key") != idempotency_key
+        or after.get("request_hash") != request_hash
+    ):
+        raise IdempotencyConflict(
+            "Idempotency-Key reused by a different request, user, or terminal",
+            details={"key": idempotency_key},
+        )
+    response_status = after.get("response_status")
+    response_body = after.get("response_body")
+    if response_status != BusinessRuleError.status_code or not isinstance(
+        response_body, dict
+    ):
+        raise ConflictError(
+            "The rejected Start receipt is incomplete. Nothing was changed; "
+            "contact support for audit review."
+        )
+    return JSONResponse(status_code=response_status, content=response_body)
+
+
+async def _shift_history_has_only_distinct_start_actions(
+    session: SessionDep,
+    *,
+    shift: Shift,
+    idempotency_key: str,
+    tenant: TenantContext,
+) -> bool:
+    """Prove every surviving Start in the shift belongs to another action."""
+    sessions = (
+        (
+            await session.execute(
+                select(GamingSession).where(
+                    GamingSession.company_id == tenant.company_id,
+                    GamingSession.shift_id == shift.id,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    audits = (
+        (
+            await session.execute(
+                select(AuditLog)
+                .where(
+                    AuditLog.company_id == tenant.company_id,
+                    AuditLog.action == "create",
+                    AuditLog.entity_type == "GamingSession",
+                    or_(
+                        AuditLog.client_action_id == idempotency_key,
+                        AuditLog.after.contains({"shift_id": str(shift.id)}),
+                    ),
+                )
+                .order_by(AuditLog.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if any(audit.client_action_id == idempotency_key for audit in audits):
+        return False
+
+    audits_by_session: dict[str, list[AuditLog]] = {}
+    for audit in audits:
+        audits_by_session.setdefault(audit.entity_id, []).append(audit)
+    sessions_by_id = {str(gaming_session.id): gaming_session for gaming_session in sessions}
+
+    # An orphan create audit may be the only surviving evidence of the
+    # accepted action after cleanup. Never classify it as unrelated.
+    if set(audits_by_session) != set(sessions_by_id):
+        return False
+
+    distinct_action_keys: set[str] = set()
+    for session_id, gaming_session in sessions_by_id.items():
+        matching_audits = audits_by_session.get(session_id, [])
+        if len(matching_audits) != 1:
+            return False
+        audit = matching_audits[0]
+        action_key = audit.client_action_id or ""
+        after = audit.after if isinstance(audit.after, dict) else {}
+        try:
+            audited_started_at = datetime.fromisoformat(
+                str(after["start_at"]).replace("Z", "+00:00")
+            )
+        except (KeyError, TypeError, ValueError):
+            return False
+        if (
+            _gaming_start_action_id(action_key) is None
+            or action_key == idempotency_key
+            or action_key in distinct_action_keys
+            or audit.actor_user_id is None
+            or audit.terminal_id != shift.terminal_id
+            or not audit.request_id
+            or audit.client_platform not in {"android", "web"}
+            or (
+                audit.client_platform == "android"
+                and (
+                    audit.client_version_code is None
+                    or audit.client_version_code
+                    < _REJECTED_START_RECEIPT_MIN_ANDROID_VERSION_CODE
+                )
+            )
+            or str(after.get("id")) != session_id
+            or str(after.get("company_id")) != str(tenant.company_id)
+            or str(after.get("shift_id")) != str(shift.id)
+            or audited_started_at.tzinfo is None
+            or not _same_utc_instant(audited_started_at, gaming_session.start_at)
+        ):
+            return False
+        accepted_key = await session.get(IdempotencyKey, action_key)
+        accepted_body = (
+            accepted_key.response_body
+            if accepted_key is not None
+            and isinstance(accepted_key.response_body, dict)
+            else {}
+        )
+        try:
+            accepted_started_at = datetime.fromisoformat(
+                str(accepted_body["start_at"]).replace("Z", "+00:00")
+            )
+        except (KeyError, TypeError, ValueError):
+            return False
+        if (
+            accepted_key is None
+            or accepted_key.response_status != status.HTTP_201_CREATED
+            or accepted_key.user_id != audit.actor_user_id
+            or accepted_key.terminal_id != shift.terminal_id
+            or len(accepted_key.request_hash) != 64
+            or any(
+                char not in "0123456789abcdef"
+                for char in accepted_key.request_hash.lower()
+            )
+            or str(accepted_body.get("id")) != session_id
+            or str(accepted_body.get("shift_id")) != str(shift.id)
+            or str(accepted_body.get("station_id"))
+            != str(after.get("station_id"))
+            or accepted_started_at.tzinfo is None
+            or not _same_utc_instant(
+                accepted_started_at, gaming_session.start_at
+            )
+        ):
+            return False
+        distinct_action_keys.add(action_key)
+    return True
+
+
+async def _record_inactive_station_start_rejection(
+    session: SessionDep,
+    *,
+    payload: SessionStart,
+    started_at: datetime,
+    station: Station,
+    request: Request,
+    idempotency_key: str,
+    request_hash: str,
+    tenant: TenantContext,
+) -> JSONResponse | None:
+    """Persist proof that one exact Android offline Start created no session."""
+    local_action_id = _gaming_start_action_id(idempotency_key)
+    client_version_code = parse_client_version_code(
+        request.headers.get("X-Client-Version-Code")
+    )
+    if (
+        local_action_id is None
+        or tenant.terminal_id is None
+        or request.headers.get("X-Client-Platform", "").strip().lower() != "android"
+        or client_version_code is None
+        or client_version_code < _REJECTED_START_RECEIPT_MIN_ANDROID_VERSION_CODE
+        or request.headers.get("X-Offline-Captured", "").strip().lower()
+        not in {"1", "true", "yes"}
+        or request.headers.get("X-Client-Action-Id", "").strip()
+        != idempotency_key
+        or payload.started_at is None
+    ):
+        return None
+    terminal = await session.get(Terminal, tenant.terminal_id)
+    captured_shift = (
+        await session.execute(
+            select(Shift)
+            .where(
+                Shift.id == payload.shift_id,
+                Shift.company_id == tenant.company_id,
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if (
+        terminal is None
+        or terminal.branch_id != tenant.branch_id
+        or not terminal.is_active
+        or terminal.purpose not in _GAMING_SOURCE_TERMINAL_PURPOSES
+        or captured_shift is None
+        or captured_shift.company_id != tenant.company_id
+        or captured_shift.branch_id != tenant.branch_id
+        or captured_shift.branch_id != station.branch_id
+        or captured_shift.terminal_id != tenant.terminal_id
+        or started_at
+        < captured_shift.opened_at.astimezone(timezone.utc) - timedelta(seconds=1)
+        or (
+            captured_shift.closed_at is not None
+            and started_at > captured_shift.closed_at.astimezone(timezone.utc)
+        )
+    ):
+        # Preserve the ordinary inactive-station response, but do not turn an
+        # unverified shift scope into durable recovery authority.
+        return None
+    # Caller-controlled timestamps and provenance headers cannot prove an
+    # earlier same-shift session is unrelated. Require every surviving session
+    # to have one create audit plus its still-live successful idempotency
+    # receipt, both bound to a different canonical Start action. Missing,
+    # duplicate, malformed, same-action, and orphan evidence all fail closed.
+    if not await _shift_history_has_only_distinct_start_actions(
+        session,
+        shift=captured_shift,
+        idempotency_key=idempotency_key,
+        tenant=tenant,
+    ):
+        return None
+    error_body = {
+        "error": {
+            "code": "business_rule",
+            "message": "station is not active",
+            "details": {},
+        }
+    }
+    session.add(
+        AuditLog(
+            actor_user_id=tenant.user_id,
+            company_id=tenant.company_id,
+            action="gaming_session_start_rejected",
+            entity_type="GamingSessionStart",
+            entity_id=str(local_action_id),
+            before=None,
+            after={
+                "idempotency_key": idempotency_key,
+                "request_hash": request_hash,
+                "station_id": str(station.id),
+                "shift_id": str(payload.shift_id),
+                "branch_id": str(tenant.branch_id),
+                "terminal_id": str(tenant.terminal_id),
+                "captured_started_at": started_at.isoformat(),
+                "package_id": (
+                    str(payload.package_id) if payload.package_id is not None else None
+                ),
+                "expected_rate_per_hour_minor": payload.expected_rate_per_hour_minor,
+                "rejection_code": "station_inactive",
+                "response_status": BusinessRuleError.status_code,
+                "response_body": error_body,
+            },
+            terminal_id=tenant.terminal_id,
+            reason="station_inactive",
+        )
+    )
+    await session.flush()
+    await store_response(
+        session,
+        key=idempotency_key,
+        status_code=BusinessRuleError.status_code,
+        body=error_body,
+    )
+    return JSONResponse(
+        status_code=BusinessRuleError.status_code,
+        content=error_body,
+    )
+
+
 async def _legacy_resolution_shift(
     session,
     *,
@@ -1609,6 +1930,97 @@ async def _legacy_stop_recovery_outcome(
     )
 
 
+async def _exact_rejected_legacy_start_receipt(
+    session: SessionDep,
+    *,
+    payload: LegacyOutboxResolution,
+    station: Station,
+    shift: Shift | None,
+    captured_started_at: datetime,
+    tenant: TenantContext,
+) -> AuditLog | None:
+    """Prove that this action was rejected before any server session existed."""
+    rows: list[AuditLog] = (
+        (
+            await session.execute(
+                select(AuditLog)
+                .where(
+                    AuditLog.company_id == tenant.company_id,
+                    AuditLog.action == "gaming_session_start_rejected",
+                    AuditLog.entity_type == "GamingSessionStart",
+                    AuditLog.entity_id == str(payload.local_action_id),
+                )
+                .order_by(AuditLog.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not rows:
+        return None
+    if len(rows) != 1:
+        raise ConflictError(
+            "More than one rejected Start receipt exists for this saved action. "
+            "Nothing was changed; contact support for audit review."
+        )
+    receipt = rows[0]
+    after = receipt.after if isinstance(receipt.after, dict) else {}
+    try:
+        recorded_started_at = datetime.fromisoformat(
+            str(after["captured_started_at"]).replace("Z", "+00:00")
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ConflictError(
+            "The rejected Start receipt is incomplete. The saved action was kept "
+            "unchanged for support review."
+        ) from exc
+    exact = all(
+        (
+            shift is not None,
+            receipt.client_platform == "android",
+            receipt.client_version_code is not None,
+            int(receipt.client_version_code or 0)
+            >= _REJECTED_START_RECEIPT_MIN_ANDROID_VERSION_CODE,
+            receipt.client_was_offline is True,
+            receipt.client_action_id
+            == f"gaming-session-start:{payload.local_action_id}",
+            receipt.terminal_id == tenant.terminal_id,
+            after.get("idempotency_key")
+            == f"gaming-session-start:{payload.local_action_id}",
+            isinstance(after.get("request_hash"), str),
+            len(str(after.get("request_hash"))) == 64,
+            after.get("rejection_code") == "station_inactive",
+            after.get("response_status") == BusinessRuleError.status_code,
+            str(after.get("station_id")) == str(station.id),
+            str(after.get("shift_id")) == str(shift.id) if shift is not None else False,
+            str(after.get("branch_id")) == str(tenant.branch_id),
+            str(after.get("terminal_id")) == str(tenant.terminal_id),
+            recorded_started_at.tzinfo is not None,
+            _same_utc_instant(recorded_started_at, captured_started_at),
+            (
+                after.get("package_id") is None
+                if payload.package_id is None
+                else str(after.get("package_id")) == str(payload.package_id)
+            ),
+            # Android Start retains the station's hourly display rate even
+            # when a fixed-price package was selected. Package recovery
+            # intentionally omits that irrelevant rate; the package ID and
+            # exact rejected action receipt remain the authority here.
+            (
+                payload.package_id is not None
+                or after.get("expected_rate_per_hour_minor")
+                == payload.expected_rate_per_hour_minor
+            ),
+        )
+    )
+    if not exact:
+        raise ConflictError(
+            "The rejected Start receipt does not exactly match this saved action. "
+            "Nothing was changed; contact support for audit review."
+        )
+    return receipt
+
+
 async def _authoritative_legacy_server_session(
     session,
     *,
@@ -1641,6 +2053,8 @@ async def _authoritative_legacy_server_session(
                 select(AuditLog)
                 .where(
                     AuditLog.company_id == tenant.company_id,
+                    AuditLog.action == "create",
+                    AuditLog.entity_type == "GamingSession",
                     AuditLog.client_action_id == original_start_key,
                 )
                 .order_by(AuditLog.id)
@@ -1649,6 +2063,38 @@ async def _authoritative_legacy_server_session(
         .scalars()
         .all()
     )
+
+    rejected_start = await _exact_rejected_legacy_start_receipt(
+        session,
+        payload=payload,
+        station=station,
+        shift=shift,
+        captured_started_at=captured_started_at,
+        tenant=tenant,
+    )
+    rejected_after = (
+        rejected_start.after
+        if rejected_start is not None and isinstance(rejected_start.after, dict)
+        else {}
+    )
+    rejected_idempotency_row = bool(
+        rejected_start is not None
+        and accepted_start is not None
+        and accepted_start.terminal_id == rejected_start.terminal_id
+        and accepted_start.user_id == rejected_start.actor_user_id
+        and accepted_start.request_hash == rejected_after.get("request_hash")
+        and accepted_start.response_status == rejected_after.get("response_status")
+        and accepted_start.response_body == rejected_after.get("response_body")
+    )
+    if rejected_start is not None and (
+        (accepted_start is not None and not rejected_idempotency_row) or action_audits
+    ):
+        raise ConflictError(
+            "The same gaming Start has both accepted and rejected server evidence. "
+            "Nothing was changed; contact support for audit review."
+        )
+    if rejected_start is not None:
+        return None, "rejected_start_receipt", original_start_key, None, None
 
     if (accepted_start is not None or action_audits) and shift is None:
         raise ConflictError(
@@ -2544,11 +2990,19 @@ async def start_session(
     session: SessionDep,
     request: Request,
     tenant: TenantContext = Depends(requires("gaming.write")),
-) -> SessionRead:
+) -> SessionRead | JSONResponse:
     idempotency_key, request_hash = _gaming_idempotency_or_legacy_ios(request)
     existing_response = None
     if idempotency_key is not None:
         assert request_hash is not None
+        rejected_response = await _durable_rejected_gaming_start_response(
+            session,
+            idempotency_key=idempotency_key,
+            request_hash=request_hash,
+            tenant=tenant,
+        )
+        if rejected_response is not None:
+            return rejected_response
         existing_response = await check_or_reserve(
             session,
             key=idempotency_key,
@@ -2557,6 +3011,12 @@ async def start_session(
             terminal_id=tenant.terminal_id,
         )
         if existing_response:
+            if existing_response["status_code"] != status.HTTP_201_CREATED:
+                raise ConflictError(
+                    "The original Start has a non-success idempotency response but no "
+                    "matching durable rejection receipt. Nothing was changed; contact "
+                    "support for audit review."
+                )
             return SessionRead.model_validate(existing_response["body"])
 
     server_now = datetime.now(timezone.utc)
@@ -2590,6 +3050,19 @@ async def start_session(
     if not station:
         raise NotFoundError("station not found")
     if not station.is_active:
+        if idempotency_key is not None and request_hash is not None:
+            rejected_response = await _record_inactive_station_start_rejection(
+                session,
+                payload=payload,
+                started_at=started_at,
+                station=station,
+                request=request,
+                idempotency_key=idempotency_key,
+                request_hash=request_hash,
+                tenant=tenant,
+            )
+            if rejected_response is not None:
+                return rejected_response
         raise BusinessRuleError("station is not active")
     await _require_terminal_purpose(
         session,
@@ -6345,6 +6818,8 @@ async def resolve_legacy_gaming_outbox(
             "package_id": str(payload.package_id) if payload.package_id else None,
             "expected_rate_per_hour_minor": payload.expected_rate_per_hour_minor,
             "package_catalog_verified": package_catalog_verified,
+            "original_start_idempotency_key": original_start_key,
+            "recovery_proof": recovery_proof,
             "resolution": payload.resolution,
             "reference_order_id": (
                 str(reference_order.id) if reference_order is not None else None
