@@ -1044,7 +1044,7 @@ def test_installer_verifier_and_live_workflows_are_exact() -> None:
         _assert_sha256(
             path,
             current.encode("utf-8"),
-            REVIEWED_CODE30_2_SHA256[path],
+            _current_reviewed_sha256(path, REVIEWED_CODE30_2_SHA256[path]),
         )
         assert current.count(_workflow_step()) == 1
         assert current.count(CADDY_SHA256) == 1

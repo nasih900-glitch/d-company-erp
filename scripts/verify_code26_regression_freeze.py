@@ -745,6 +745,7 @@ REVIEWED_CODE30_4_BUILD41_SHA256 = {
     'scripts/run_code26_physical_business_audit.sh': 'cf833c24cfbc69b5717a77823395635d72eea3e4297521a49481d8e9fed0e9f5',
     'tests/test_android_release_pipeline.py': '2570429e1fe0b26423ec01fdeb70554b165b3cd446ff5c9b5dc4128772c9b57d',
     'tests/test_code26_physical_audit_lane.py': 'b3ef51afcbb482bf7402e5340f9e6094687b5e2970c8a6210686cb6fb359f0ff',
+    'tests/test_code29_installer_correction.py': 'f77d22ad26f2f400f51768d0d8c30c4b169e3d9a308af7fdda2deca051686a0c',
 }
 REVIEWED_CODE30_4_PRODUCTION_PATHS = frozenset(
     path
