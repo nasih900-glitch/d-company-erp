@@ -327,7 +327,9 @@ jobs:
   # the unsigned build or the isolated job that receives the release keystore.
   android-instrumentation:
     needs: release-authority
-    runs-on: ubuntu-latest
+    # Keep the tagged-release emulator on the same host as CI after Linux
+    # QEMU exited during the first Gaming UI case on two emulator builds.
+    runs-on: macos-15-intel
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -350,6 +352,7 @@ jobs:
         with:
           packages: platform-tools
       - name: Enable KVM for Android emulator
+        if: runner.os == 'Linux'
         run: |
           test -c /dev/kvm
           sudo chmod 0666 /dev/kvm
@@ -364,11 +367,9 @@ jobs:
           # then verifies the exact 1280x800dp logical viewport.
           profile: pixel_c
           disable-animations: true
-          # Use the same older emulator 36.5.10 as CI for the bounded
-          # Gaming UI emulator-version comparison.
+          # Keep the same emulator build and host platform as CI.
           emulator-build: 15081367
-          # Match CI's software renderer so the emulator version remains the
-          # only variable in this comparison.
+          # Match CI's software renderer for the host-platform comparison.
           emulator-options: -no-window -gpu software -feature -Vulkan -no-snapshot -noaudio -no-boot-anim
           pre-emulator-launch-script: python3 scripts/configure_ci_android_avd.py test
           script: D_COMPANY_REQUIRE_NATIVE_AVD_SIZE=1 bash scripts/run_android_instrumentation_ci.sh

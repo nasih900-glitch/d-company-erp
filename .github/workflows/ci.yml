@@ -123,7 +123,9 @@ jobs:
       - run: cd frontend && npm run build
 
   android-native:
-    runs-on: ubuntu-latest
+    # Linux QEMU exited during the first Gaming UI case on emulator 37.1.11
+    # and 36.5.10. Compare the same API/AVD/test inventory on macOS Intel.
+    runs-on: macos-15-intel
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -173,6 +175,7 @@ jobs:
       # several minutes to boot and the instrumentation process may be killed
       # before it discovers any tests.
       - name: Enable KVM for Android emulator
+        if: runner.os == 'Linux'
         run: |
           test -c /dev/kvm
           # The hosted runner already created /dev/kvm. Change that device
@@ -195,11 +198,9 @@ jobs:
           # class viewport, matching the 1280x800dp production target closely.
           profile: pixel_c
           disable-animations: true
-          # Compare older emulator 36.5.10 after three hosted
-          # Gaming UI runs lost emulator 37.1.11, including with software rendering.
+          # Keep emulator 36.5.10 fixed while comparing the host platform.
           emulator-build: 15081367
-          # Hold the supported software renderer constant so this comparison
-          # changes only the emulator version.
+          # Hold the supported software renderer constant for this comparison.
           emulator-options: -no-window -gpu software -feature -Vulkan -no-snapshot -noaudio -no-boot-anim
           # Pixel C boots with a 2560x1800 host graphics buffer. A post-boot
           # `wm size` override does not shrink that buffer, and the hosted

@@ -876,22 +876,32 @@ class AndroidReleasePipelineTest(unittest.TestCase):
                 "hw.lcd.width=1280\nhw.lcd.height=800\nhw.lcd.density=160\n",
             )
 
-    def test_ci_and_release_android_emulators_use_same_pinned_build_and_renderer(self) -> None:
+    def test_ci_and_release_android_emulators_use_same_host_build_and_renderer(self) -> None:
         expected = (
             "-no-window -gpu software -feature -Vulkan "
             "-no-snapshot -noaudio -no-boot-anim"
         )
         for workflow_path in (CI_WORKFLOW, WORKFLOW):
             with self.subTest(workflow=workflow_path.name):
+                workflow = workflow_path.read_text(encoding="utf-8")
+                self.assertRegex(
+                    workflow,
+                    r"(?m)^    runs-on: macos-15-intel$",
+                )
+                self.assertRegex(
+                    workflow,
+                    r"(?m)^      - name: Enable KVM for Android emulator\n"
+                    r"        if: runner\.os == 'Linux'$",
+                )
                 emulator_builds = re.findall(
                     r"^\s*emulator-build:\s*(\d+)\s*$",
-                    workflow_path.read_text(encoding="utf-8"),
+                    workflow,
                     flags=re.MULTILINE,
                 )
                 self.assertEqual(emulator_builds, ["15081367"])
                 options = re.findall(
                     r"^\s*emulator-options:\s*(.+)$",
-                    workflow_path.read_text(encoding="utf-8"),
+                    workflow,
                     flags=re.MULTILINE,
                 )
                 self.assertEqual(options, [expected])
