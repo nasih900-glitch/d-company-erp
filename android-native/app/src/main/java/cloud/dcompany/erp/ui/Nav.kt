@@ -500,20 +500,50 @@ private fun WorkspaceHeader(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Spacing.md),
     ) {
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(
-                destination.label,
-                color = Brand.Foreground,
-                style = MaterialTheme.typography.titleLarge,
-                maxLines = 1,
-            )
-            Text(
-                destination.description,
-                color = Brand.ForegroundMuted,
-                style = MaterialTheme.typography.bodySmall,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+        val controlDeckDestination = destination in setOf(
+            Destination.Gaming,
+            Destination.Pos,
+            Destination.Shift,
+            Destination.Customers,
+        )
+        Row(
+            Modifier.weight(1f),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (controlDeckDestination) {
+                Box(
+                    Modifier.size(40.dp).clip(CircleShape)
+                        .background(Brand.Gold.copy(alpha = 0.12f))
+                        .border(1.dp, Brand.Gold.copy(alpha = 0.65f), CircleShape),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        destination.icon,
+                        contentDescription = null,
+                        tint = Brand.GoldBright,
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
+            }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    if (controlDeckDestination) destination.label.uppercase() else destination.label,
+                    color = if (controlDeckDestination) Brand.GoldBright else Brand.Foreground,
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = if (controlDeckDestination) FontWeight.Bold else FontWeight.Normal,
+                    letterSpacing = if (controlDeckDestination) 1.sp else 0.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    destination.description,
+                    color = Brand.ForegroundMuted,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
 
         if (!compact) {

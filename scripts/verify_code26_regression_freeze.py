@@ -180,6 +180,8 @@ CODE30_3_BASE = "ad5adfb93c3488f1f931ca27da53824aa57d3dc5"
 # Signed v3.1.31 / build 39: preserved as the reviewed, unoffered Code30.4
 # source. The corrective v3.1.32 release is checked by a separate overlay.
 CODE30_4_BASE = "5bfa54c8d960a91e99144d2b04978ea73a6196a5"
+# Signed v3.1.32 / build 40: immutable base for the additive build-41 UI patch.
+CODE30_4_BUILD40_BASE = "b503290a48ad3693b3913c5a77b1f7bbce219c46"
 CODE30_2_FREEZE_CONTROL_PATHS = frozenset({
     "scripts/verify_code26_regression_freeze.py",
     "tests/test_code26_regression_freeze.py",
@@ -679,16 +681,49 @@ REVIEWED_CODE30_4_HOTFIX_SHA256 = {
     'scripts/analyze_code26_physical_evidence.py': '90a4dbafa924c905b77c9e816040fb70d0ceacd10c22e5a0952d49883e4a0c0e',
     'tests/test_code26_physical_audit_lane.py': '03fc2280153696bad5898916d1ee6b6d63a045b413b300fd80389392c8a0ad33',
 }
+# The v3.1.33 / build-41 control-deck UI and coordinated identity are a
+# separate exact-byte overlay. Neither preceding signed release map changes.
+REVIEWED_CODE30_4_BUILD41_SHA256 = {
+    '.env.production.example': 'f27985296627c02601b59cdb8af541fa43f5a3f12a75ed781ad095b534200ffd',
+    'android-native/app/build.gradle.kts': '6ae336925ebfbe7321f717dbe2eff8ebeef6c5b476ad5d3af48efa6d5388baad',
+    'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingDialogUiTest.kt': '6ca23b3386753fc366193bc230444497b60701e38c0026d9dda7cc4fdf0df683',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/Nav.kt': 'f52bfb3fc6e90424e807bd4f20b32fbe26431d4dafb6e2b1a9afc67d3663ac6a',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/PosScreen.kt': 'dc0e2f361488204d85e54b1a7a0d6671d49c00eceb1fc750839b4ffc1b2377e0',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/customers/CustomersScreen.kt': '5364a19f1454d74c030dda49016b604f1cfa69d8c2939de9e9f83fe359ac5c42',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingDurationDial.kt': 'ead0ffbf31ed5db03e30a68b8fcc07bc526ef73f6d774bc2b98864a65b192e8a',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingScreen.kt': '4e29b1e3fc38bc439c5e704e36da295d0a17bff1925b52aed3dc8f0054e14ca5',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/shift/ShiftScreen.kt': 'c6a2fa4e5c7f1287052b5011598b3bf7405ff61b87b737b07a0d2ce30f36c9ed',
+    'android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt': '5282eab883d1cc8f28d6a01cafe89fcd07c3bce70675f7d9cd6c5ed6f999c68e',
+    'backend/app/__init__.py': 'b8289bd6045515e0efa056d7d33d9b5e54b3b97d44735bc895985c6a9f6afd0b',
+    'backend/pyproject.toml': '8fbf7cec9126400ae4750ba7f0275e542490c919e726676ac2863eeaab8af177',
+    'backend/tests/unit/test_release_contracts.py': '906704e7e7d886e6dee2413ed2136a2af361c1d18017e5f69dbc4d97bff6796d',
+    'backend/tests/unit/test_remote_assistance_contract.py': 'b2c6a7e705640deca8b62a8ff76de76be74554abd8cd38095a11f7855d5fe340',
+    'docker-compose.prod.yml': '907d7e29a7765117dc8c4c547b52a28e437ad06dd351e71561754e19f2bed299',
+    'docs/CODE30_4_CONTROL_DECK_UI.md': '913ec62e4345beeae812d11cbed1102b9e18818a9e2a057683c162a99c1375a2',
+    'frontend/.env.example': 'e9990a4d5b45f85c777ffe1ecd2687195159b296bb98af3042141784cf0c7772',
+    'frontend/package-lock.json': '033e9c8b6d8a67786c6bab571976284a875618e1b1943e5acb8b840b95562f09',
+    'frontend/package.json': '228100da3f0223e9ccd082bf668c88876eba3b12dc10ca408b4a7f4fecbb4b52',
+    'scripts/analyze_code26_physical_evidence.py': '7dca0ce2bb16ba6f1bb0b58a004501131309b4cef6b8753747394aa0947de336',
+    'scripts/run_code26_physical_business_audit.sh': 'cf833c24cfbc69b5717a77823395635d72eea3e4297521a49481d8e9fed0e9f5',
+    'tests/test_code26_physical_audit_lane.py': 'b3ef51afcbb482bf7402e5340f9e6094687b5e2970c8a6210686cb6fb359f0ff',
+}
 REVIEWED_CODE30_4_PRODUCTION_PATHS = frozenset(
     path
-    for path in REVIEWED_CODE30_4_SHA256 | REVIEWED_CODE30_4_HOTFIX_SHA256
+    for path in (
+        REVIEWED_CODE30_4_SHA256
+        | REVIEWED_CODE30_4_HOTFIX_SHA256
+        | REVIEWED_CODE30_4_BUILD41_SHA256
+    )
     if path.startswith(("backend/app/", "frontend/src/", "android-native/app/src/main/"))
 )
 
 
 def _current_code30_4_sha256(path: str, fallback: str | None = None) -> str | None:
-    return REVIEWED_CODE30_4_HOTFIX_SHA256.get(
-        path, REVIEWED_CODE30_4_SHA256.get(path, fallback)
+    return REVIEWED_CODE30_4_BUILD41_SHA256.get(
+        path,
+        REVIEWED_CODE30_4_HOTFIX_SHA256.get(
+            path, REVIEWED_CODE30_4_SHA256.get(path, fallback)
+        ),
     )
 
 # Separate from the signed Code30.3 release inventory: these are reviewed
@@ -896,6 +931,7 @@ def _normalise_release_identity(path: str, text: str) -> str:
         return text
     normalised = text
     for current, baseline in (
+        ("3.1.33", "3.1.14"),
         ("3.1.32", "3.1.14"),
         ("3.1.31", "3.1.14"),
         ("3.1.30", "3.1.14"),
@@ -972,10 +1008,10 @@ def _normalise_release_identity(path: str, text: str) -> str:
     ):
         normalised = normalised.replace(current, baseline)
     normalised = re.sub(
-        r"version_code\s*=\s*(?:26|27|28|29|30|31|32|33|34|35|36|37|38|39|40)\b", "version_code=25", normalised
+        r"version_code\s*=\s*(?:26|27|28|29|30|31|32|33|34|35|36|37|38|39|40|41)\b", "version_code=25", normalised
     )
     normalised = re.sub(
-        r"assertEquals\((?:26|27|28|29|30|31|32|33|34|35|36|37|38|39|40),\s*BuildConfig\.VERSION_CODE\)",
+        r"assertEquals\((?:26|27|28|29|30|31|32|33|34|35|36|37|38|39|40|41),\s*BuildConfig\.VERSION_CODE\)",
         "assertEquals(25, BuildConfig.VERSION_CODE)",
         normalised,
     )
@@ -1295,11 +1331,22 @@ def _verify_code30_4_exact_delta(root: Path, errors: list[str]) -> None:
         if hashlib.sha256(original_bytes).hexdigest() != expected_sha256:
             errors.append(f"signed Code30.4 file differs from reviewed bytes: {path}")
 
+    for path, expected_sha256 in REVIEWED_CODE30_4_HOTFIX_SHA256.items():
+        try:
+            signed_bytes = _git_bytes(root, "show", f"{CODE30_4_BUILD40_BASE}:{path}")
+        except subprocess.CalledProcessError:
+            errors.append(f"signed Code30.4 build-40 file absent from immutable base: {path}")
+            continue
+        if hashlib.sha256(signed_bytes).hexdigest() != expected_sha256:
+            errors.append(f"signed Code30.4 build-40 file differs from reviewed bytes: {path}")
+
     # Post-release Code30.3 maintenance tools are pinned by their own map.
     expected_paths = set(REVIEWED_CODE30_4_SHA256) | set(
         CODE30_4_FREEZE_CONTROL_PATHS
     ) | set(REVIEWED_POST_CODE30_3_MAINTENANCE_SHA256) | set(
         REVIEWED_CODE30_4_HOTFIX_SHA256
+    ) | set(
+        REVIEWED_CODE30_4_BUILD41_SHA256
     )
     current_paths = _code30_4_delta_paths(root)
     for path in sorted(expected_paths - current_paths):
@@ -1307,7 +1354,11 @@ def _verify_code30_4_exact_delta(root: Path, errors: list[str]) -> None:
     for path in sorted(current_paths - expected_paths):
         errors.append(f"unreviewed path entered the Code30.4 delta: {path}")
 
-    current_hashes = REVIEWED_CODE30_4_SHA256 | REVIEWED_CODE30_4_HOTFIX_SHA256
+    current_hashes = (
+        REVIEWED_CODE30_4_SHA256
+        | REVIEWED_CODE30_4_HOTFIX_SHA256
+        | REVIEWED_CODE30_4_BUILD41_SHA256
+    )
     for path, expected_sha256 in current_hashes.items():
         candidate_path = root / path
         if not _is_canonical_regular_file(candidate_path):
@@ -1355,6 +1406,7 @@ def verify_repository(root: Path, baseline: str = CODE25_BASE) -> RegressionFree
     _git(root, "cat-file", "-e", f"{CODE30_2_BASE}^{{commit}}")
     _git(root, "cat-file", "-e", f"{CODE30_3_BASE}^{{commit}}")
     _git(root, "cat-file", "-e", f"{CODE30_4_BASE}^{{commit}}")
+    _git(root, "cat-file", "-e", f"{CODE30_4_BUILD40_BASE}^{{commit}}")
     _verify_code30_2_exact_delta(root, errors)
     _verify_code30_3_exact_delta(root, errors)
     _verify_code30_4_exact_delta(root, errors)
@@ -1379,7 +1431,8 @@ def verify_repository(root: Path, baseline: str = CODE25_BASE) -> RegressionFree
             path, candidate_normalised
         )
         reviewed_test_sha256 = (
-            REVIEWED_CODE30_4_HOTFIX_SHA256.get(path)
+            REVIEWED_CODE30_4_BUILD41_SHA256.get(path)
+            or REVIEWED_CODE30_4_HOTFIX_SHA256.get(path)
             or REVIEWED_CODE30_4_SHA256.get(path)
             or REVIEWED_CODE30_3_SHA256.get(path)
             or REVIEWED_CODE30_2_SHA256.get(path)

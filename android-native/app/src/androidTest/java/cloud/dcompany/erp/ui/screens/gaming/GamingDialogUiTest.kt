@@ -29,6 +29,7 @@ import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertWidthIsAtLeast
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.click
 import androidx.compose.ui.test.isDisplayed
 import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -1928,6 +1929,43 @@ class GamingDialogUiTest {
             .assertIsDisplayed()
             .performClick()
         compose.runOnIdle { assertEquals("single-60", submittedPackage) }
+    }
+
+    @Test
+    fun startSession_tappingAndAccessibilityDialSelectOnlyPublishedPrices() {
+        var submittedPackage: String? = null
+        compose.setContent {
+            DCompanyTheme {
+                StartSessionDialog(
+                    station = testStation(),
+                    packages = listOf(
+                        GamingPackage("single-30", "standard-single-session-30m", "ps5", "standard", "single", 1, 1, "base", "Single Mode 30 min", 30, 8_000),
+                        GamingPackage("single-60", "standard-single-session-60m", "ps5", "standard", "single", 1, 1, "base", "Single Mode 1 hour", 60, 12_000),
+                    ),
+                    onDismiss = {},
+                    onConfirm = { _, _, _, _, packageId, _ -> submittedPackage = packageId },
+                )
+            }
+        }
+
+        val dial = compose.onNodeWithContentDescription("Session duration dial")
+            .bringIntoViewIfNeeded()
+        dial.performTouchInput {
+            click(Offset(width * 0.83f, height * 0.31f))
+        }
+        compose.onNodeWithText("Start 60 min · ₹120.00")
+            .bringIntoViewIfNeeded()
+            .assertIsDisplayed()
+
+        dial.performSemanticsAction(SemanticsActions.SetProgress) { setProgress ->
+            assertTrue(setProgress(0f))
+        }
+        compose.onNodeWithText("Start 30 min · ₹80.00")
+            .bringIntoViewIfNeeded()
+            .assertIsDisplayed()
+            .assertIsEnabled()
+            .performClick()
+        compose.runOnIdle { assertEquals("single-30", submittedPackage) }
     }
 
     @Test

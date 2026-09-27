@@ -1710,7 +1710,7 @@ private fun GamingCommandPanel(
     Column(
         modifier = modifier.clip(Radius.shapeLg)
             .background(Brand.Surface)
-            .border(1.dp, Brand.Border, Radius.shapeLg),
+            .border(1.dp, Brand.Gold.copy(alpha = 0.38f), Radius.shapeLg),
     ) {
         Row(
             Modifier.fillMaxWidth()
@@ -1727,8 +1727,8 @@ private fun GamingCommandPanel(
             }
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(
-                    title,
-                    color = Brand.Foreground,
+                    title.uppercase(),
+                    color = Brand.GoldBright,
                     style = MaterialTheme.typography.titleMedium,
                 )
                 Text(
@@ -1740,7 +1740,7 @@ private fun GamingCommandPanel(
                 )
             }
         }
-        HorizontalDivider(color = Brand.BorderSubtle)
+        HorizontalDivider(color = Brand.Gold.copy(alpha = 0.38f))
         Box(
             Modifier.fillMaxWidth().weight(1f).padding(contentPadding),
         ) {
@@ -1967,6 +1967,8 @@ internal fun GamingStationTile(
     val borderColor = when {
         focused -> Brand.GoldBright
         selected -> Brand.Gold
+        presentation.state in setOf(StationVisualState.Active, StationVisualState.Overtime) ->
+            Brand.Gold.copy(alpha = 0.48f)
         else -> Brand.BorderSubtle
     }
     val primaryValue = when (presentation.state) {
@@ -2515,7 +2517,16 @@ internal fun GamingStationCard(
             // the complete card neutral prevents payment/warning states from
             // turning the board into a field of competing colour blocks.
             .clip(Radius.shapeLg).background(Brand.Surface)
-            .border(if (focused) 2.dp else 1.dp, if (focused) Brand.Gold else Brand.BorderSubtle, Radius.shapeLg)
+            .border(
+                if (focused) 2.dp else 1.dp,
+                when {
+                    focused -> Brand.Gold
+                    presentation.state in setOf(StationVisualState.Active, StationVisualState.Overtime) ->
+                        Brand.Gold.copy(alpha = 0.48f)
+                    else -> Brand.BorderSubtle
+                },
+                Radius.shapeLg,
+            )
             .semantics {
                 contentDescription = "${station.name}. ${presentation.statusLabel}. " +
                     "$pricingDescription."

@@ -631,7 +631,9 @@ private fun CloseShiftCard(
     val cardModifier = if (compactLayout) Modifier.fillMaxWidth() else Modifier.fillMaxSize()
     Column(
         cardModifier.clip(Radius.shapeLg)
-            .background(Brand.Surface).border(1.dp, Brand.BorderSubtle, Radius.shapeLg).padding(Spacing.lg),
+            .background(Brand.Surface)
+            .border(1.dp, Brand.Gold.copy(alpha = 0.52f), Radius.shapeLg)
+            .padding(Spacing.lg),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         // A later, unrelated server shift must not hide an older rejected
@@ -1323,7 +1325,12 @@ private fun CollectionMetric(
     modifier: Modifier = Modifier,
     valueColor: androidx.compose.ui.graphics.Color = Brand.Foreground,
 ) {
-    Column(modifier) {
+    Column(
+        modifier.clip(Radius.shapeMd).background(Brand.SurfaceRaised)
+            .border(1.dp, Brand.BorderSubtle, Radius.shapeMd)
+            .padding(Spacing.md),
+        verticalArrangement = Arrangement.spacedBy(Spacing.xs),
+    ) {
         Text(label, color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelMedium)
         Text(value, color = valueColor, fontWeight = FontWeight.Bold)
     }

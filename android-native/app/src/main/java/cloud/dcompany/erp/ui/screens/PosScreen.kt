@@ -2322,7 +2322,7 @@ private fun MenuTile(
             }
             .clip(Radius.shapeLg)
             .background(Brand.SurfaceRaised)
-            .border(1.dp, Brand.BorderSubtle, Radius.shapeLg)
+            .border(1.dp, if (pressed && enabled) Brand.Gold else Brand.BorderSubtle, Radius.shapeLg)
             .semantics {
                 role = Role.Button
                 contentDescription = if (enabled) {
@@ -2352,7 +2352,7 @@ private fun MenuTile(
                 Icon(
                     Icons.Filled.RestaurantMenu,
                     contentDescription = null,
-                    tint = Brand.ForegroundMuted,
+                    tint = if (enabled) Brand.GoldBright else Brand.Disabled,
                     modifier = Modifier.size(20.dp),
                 )
             }
@@ -2382,6 +2382,7 @@ private fun MenuTile(
         ) {
             NumericValue(
                 value = item.basePriceMinor.asRupees(),
+                color = Brand.GoldBright,
                 style = MaterialTheme.typography.titleMedium,
             )
             Row(
@@ -3619,6 +3620,15 @@ private fun SplitTenderEditor(
     } else {
         null
     }
+    val confirmedAllocation = if (validationMessage == null && dueMinor > 0L) {
+        orderedMethods.mapNotNull { splitMethod ->
+            if (splitMethod !in selectedMethods) return@mapNotNull null
+            val amountMinor = parseRupeesToMinor(amounts[splitMethod].orEmpty()) ?: 0L
+            if (amountMinor > 0L) splitMethod to amountMinor else null
+        }
+    } else {
+        emptyList()
+    }
 
     Column(
         Modifier.fillMaxWidth().clip(Radius.shapeMd)
@@ -3638,6 +3648,31 @@ private fun SplitTenderEditor(
             color = Brand.ForegroundMuted,
             style = MaterialTheme.typography.labelSmall,
         )
+        if (confirmedAllocation.size >= 2) {
+            Text("Payment allocation", color = Brand.Foreground, style = MaterialTheme.typography.labelMedium)
+            Row(
+                Modifier.fillMaxWidth().height(10.dp).clip(Radius.shapePill)
+                    .background(Brand.BorderSubtle)
+                    .semantics {
+                        contentDescription = confirmedAllocation.joinToString { (method, amountMinor) ->
+                            "${SplitPaymentPolicy.methodLabel(method)} ${amountMinor.asRupees()}"
+                        }
+                    },
+            ) {
+                confirmedAllocation.forEach { (method, amountMinor) ->
+                    val color = when (method) {
+                        "cash" -> Brand.Good
+                        "upi" -> Brand.Information
+                        "card" -> Brand.GoldBright
+                        else -> Brand.Warning
+                    }
+                    Box(
+                        Modifier.weight((amountMinor.toDouble() / dueMinor.toDouble()).toFloat())
+                            .fillMaxHeight().background(color),
+                    )
+                }
+            }
+        }
         LazyRow(horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
             items(orderedMethods, key = { it }) { splitMethod ->
                 FilterChip(

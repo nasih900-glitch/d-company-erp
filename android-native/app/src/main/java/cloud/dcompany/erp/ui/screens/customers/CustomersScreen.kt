@@ -267,8 +267,8 @@ private fun CustomerPlaytimeSummary() {
     val state by vm.state.collectAsStateWithLifecycle()
     val board = state.leaderboard
     SectionCard(
-        title = "Play hours · draft proposal",
-        subtitle = "Recorded completed sessions; no free time has been issued",
+        title = "Player leaderboard",
+        subtitle = "Completed play hours · rewards and messages are off",
         icon = Icons.Default.EventRepeat,
         tone = UiTone.Information,
         action = {
@@ -303,7 +303,10 @@ private fun CustomerPlaytimeSummary() {
                 )
                 board.items.take(3).forEach { row ->
                     Row(
-                        Modifier.fillMaxWidth().padding(top = Spacing.sm),
+                        Modifier.fillMaxWidth().clip(Radius.shapeMd)
+                            .background(Brand.SurfaceRaised)
+                            .border(1.dp, Brand.BorderSubtle, Radius.shapeMd)
+                            .padding(horizontal = Spacing.md, vertical = Spacing.sm),
                         horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
@@ -327,6 +330,7 @@ private fun CustomerPlaytimeSummary() {
                         }
                         Text(
                             formatPlayMinutes(row.totalPlayedMinutes),
+                            color = Brand.GoldBright,
                             fontWeight = FontWeight.SemiBold,
                         )
                         Text(
@@ -580,7 +584,7 @@ private fun CustomerResultsPanel(
 ) {
     Column(
         modifier.clip(Radius.shapeLg).background(Brand.Surface)
-            .border(1.dp, Brand.BorderSubtle, Radius.shapeLg),
+            .border(1.dp, Brand.Gold.copy(alpha = 0.38f), Radius.shapeLg),
     ) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = Spacing.lg, vertical = Spacing.md),
@@ -588,7 +592,7 @@ private fun CustomerResultsPanel(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text("Customer results", color = Brand.Foreground, style = MaterialTheme.typography.titleMedium)
+                Text("Saved customers", color = Brand.GoldBright, style = MaterialTheme.typography.titleMedium)
                 Text(
                     if (state.searching) {
                         "${state.rows.size} match${if (state.rows.size == 1) "" else "es"} for “${state.query.trim()}”"

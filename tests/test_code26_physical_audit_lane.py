@@ -7,6 +7,7 @@ import copy
 import hashlib
 import importlib.util
 import json
+import re
 import struct
 import subprocess
 import sys
@@ -33,6 +34,24 @@ assert _SPEC and _SPEC.loader
 _ANALYZER = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _ANALYZER
 _SPEC.loader.exec_module(_ANALYZER)
+
+
+def test_physical_audit_runner_and_analyzer_accept_current_android_identity() -> None:
+    gradle = (ROOT / "android-native/app/build.gradle.kts").read_text(encoding="utf-8")
+    version_code = re.search(r"^\s*versionCode\s*=\s*(\d+)", gradle, re.MULTILINE)
+    version_name = re.search(r'^\s*versionName\s*=\s*"([^"]+)"', gradle, re.MULTILINE)
+    assert version_code is not None and version_name is not None
+    code, name = version_code.group(1), version_name.group(1)
+    runner = RUNNER_PATH.read_text(encoding="utf-8")
+    assert f'[[ "$VERSION_CODE" != "{code}" || "$VERSION_NAME" != "{name}" ]]' in runner
+    assert (
+        f"record_apk_identity \"$ERP_APK\" cloud.dcompany.erp.physicalaudit "
+        f"{code} {name}-physical-audit"
+    ) in runner
+    assert _ANALYZER._source_errors(
+        {"clean": True, "version_code": int(code), "version_name": name,
+         "commit": "a" * 40, "tree": "b" * 40}
+    ) == []
 
 
 def _steps() -> list[dict]:
@@ -1345,8 +1364,8 @@ def _synthetic_evidence(root: Path) -> tuple[list[dict], dict[str, Path]]:
                 "commit": commit,
                 "tree": tree,
                 "clean": True,
-                "version_code": 40,
-                "version_name": "3.1.32",
+                "version_code": 41,
+                "version_name": "3.1.33",
             }
         ),
         encoding="utf-8",
@@ -1369,8 +1388,8 @@ def _synthetic_evidence(root: Path) -> tuple[list[dict], dict[str, Path]]:
         (
             "app-physicalAudit.apk",
             "cloud.dcompany.erp.physicalaudit",
-            "38",
-            "3.1.30-physical-audit",
+            "41",
+            "3.1.33-physical-audit",
         ),
         ("audit-driver-debug.apk", "cloud.dcompany.erp.auditdriver", "1", "1-test-only"),
         (
