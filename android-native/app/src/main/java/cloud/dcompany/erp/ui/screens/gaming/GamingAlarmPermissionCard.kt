@@ -60,12 +60,12 @@ private enum class AlarmSettingsTarget {
 @Composable
 @SuppressLint("InlinedApi") // Every POST_NOTIFICATIONS operation is routed away below API 33.
 internal fun GamingAlarmPermissionCard() {
-    OperationalAlarmPermissionCard(contextLabel = "Gaming timer")
+    OperationalAlarmPermissionCard(contextLabel = "Gaming timer", compact = true)
 }
 
 @Composable
 @SuppressLint("InlinedApi")
-internal fun OperationalAlarmPermissionCard(contextLabel: String) {
+internal fun OperationalAlarmPermissionCard(contextLabel: String, compact: Boolean = false) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
@@ -200,6 +200,7 @@ internal fun OperationalAlarmPermissionCard(contextLabel: String) {
             ),
         tone = UiTone.Warning,
         icon = Icons.Filled.NotificationsOff,
+        compact = compact && feedback == null,
     ) {
             when (notificationRoute) {
                 NotificationPermissionRoute.REQUEST_SYSTEM_DIALOG -> {

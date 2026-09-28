@@ -158,6 +158,7 @@ fun OperationalBanner(
     tone: UiTone,
     icon: ImageVector,
     modifier: Modifier = Modifier,
+    compact: Boolean = false,
     action: (@Composable RowScope.() -> Unit)? = null,
 ) {
     val colors = toneColors(tone)
@@ -165,11 +166,12 @@ fun OperationalBanner(
         modifier.fillMaxWidth().clip(Radius.shapeMd).background(Brand.SurfaceRaised)
             .border(1.dp, colors.border, Radius.shapeMd)
             .semantics { liveRegion = LiveRegionMode.Polite }
-            .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
+            .padding(horizontal = Spacing.lg, vertical = if (compact) 0.dp else Spacing.sm),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Spacing.md),
     ) {
-        Icon(icon, contentDescription = null, tint = colors.foreground, modifier = Modifier.size(22.dp))
+        Icon(icon, contentDescription = null, tint = colors.foreground,
+            modifier = Modifier.size(if (compact) 18.dp else 22.dp))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(title, color = Brand.Foreground, style = MaterialTheme.typography.labelLarge)
             Text(

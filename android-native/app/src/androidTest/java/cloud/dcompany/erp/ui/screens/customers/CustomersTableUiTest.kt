@@ -2,10 +2,14 @@ package cloud.dcompany.erp.ui.screens.customers
 
 import android.graphics.Bitmap
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.testTag
@@ -30,6 +34,55 @@ import org.junit.Test
 
 class CustomersTableUiTest {
     @get:Rule val compose = createComposeRule()
+
+    @Test
+    fun leaderboardLandingKeepsSavedDirectoryOneTapAway() {
+        compose.setContent { CustomerModesFixture() }
+
+        compose.onNodeWithContentDescription("Rank 1 by completed playtime").assertIsDisplayed()
+        screenshot("customers-leaderboard-landing.png")
+        compose.onNodeWithContentDescription("Open saved customer directory")
+            .assertIsDisplayed().performClick()
+        compose.onNodeWithText("Saved customers").assertIsDisplayed()
+        compose.onNodeWithText("Test Customer One").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Open playtime leaderboard")
+            .assertIsDisplayed().performClick()
+        compose.onNodeWithContentDescription("Rank 1 by completed playtime").assertIsDisplayed()
+    }
+
+    @Test
+    fun offlineLandingUsesCachedDirectoryAndKeepsLeaderboardErrorAvailable() {
+        compose.setContent {
+            CustomerModesFixture(CustomerPlaytimeUiState(error = "Reconnect to load recorded play hours."))
+        }
+
+        compose.onNodeWithText("Test Customer One").assertIsDisplayed()
+        compose.onAllNodesWithText("2h 30m").assertCountEquals(0)
+        compose.onNodeWithContentDescription("Open playtime leaderboard").performClick()
+        compose.onNodeWithText("Playtime ranking unavailable").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Open saved customer directory").performClick()
+        compose.onNodeWithText("Test Customer One").assertIsDisplayed()
+    }
+
+    @Test
+    fun initialScopePlaceholderWaitsForRealLeaderboardFailureBeforeFallback() {
+        var attempted by mutableStateOf(false)
+        var playtimeState by mutableStateOf(
+            CustomerPlaytimeUiState(error = "Refresh to load this account's playtime ranks.")
+        )
+        compose.setContent { CustomerModesFixture(playtimeState, refreshAttempted = attempted) }
+
+        compose.onNodeWithContentDescription("Open saved customer directory").assertIsDisplayed()
+        compose.runOnIdle {
+            attempted = true
+            playtimeState = CustomerPlaytimeUiState(loading = true)
+        }
+        compose.onNodeWithContentDescription("Open saved customer directory").assertIsDisplayed()
+        compose.runOnIdle {
+            playtimeState = CustomerPlaytimeUiState(error = "Reconnect to load recorded play hours.")
+        }
+        compose.onNodeWithText("Test Customer One").assertIsDisplayed()
+    }
 
     @Test
     fun leaderboardAt1280UsesServerRankOrderAndMaskedPhones() {
@@ -138,6 +191,50 @@ class CustomersTableUiTest {
             output.outputStream().use { check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)) }
         } finally {
             bitmap.recycle()
+        }
+    }
+}
+
+@Composable
+private fun CustomerModesFixture(
+    playtimeState: CustomerPlaytimeUiState = CustomerPlaytimeUiState(
+        items = listOf(PlaytimeLeaderboardItem(
+            rank = 1, customerId = "customer-1", name = "Test Customer One",
+            maskedPhone = "••••••3210", totalPlayedMinutes = 150,
+            qualifyingPaidMinutes = 120, draftEstimatedRewardMinutes = 0,
+            recordedVisits = 3,
+        )),
+        total = 1,
+    ),
+    refreshAttempted: Boolean = true,
+) {
+    val customers = CustomersUiState(
+        everSynced = true,
+        rows = listOf(Customer(
+            id = "customer-1", name = "Test Customer One", phone = "+91 9876543210",
+            visitCount = 3, totalSpentMinor = 24_000, loyaltyPoints = 12,
+        )),
+    )
+    val viewSelection = rememberCustomerViewMode(
+        playtimeState, customers.rows.isNotEmpty(), refreshAttempted,
+    )
+    val mode = viewSelection.mode
+    DCompanyTheme {
+        Column(Modifier.width(872.dp).height(500.dp).testTag("customers-table-fixture")) {
+            CustomerViewModeSelector(mode, viewSelection.select)
+            Box(Modifier.weight(1f)) {
+                if (mode == CustomerViewMode.PlayHours) {
+                    CustomerLeaderboardPanel(
+                        state = playtimeState,
+                        onRefresh = {}, onLoadMore = {}, modifier = Modifier.fillMaxSize(),
+                    )
+                } else {
+                    CustomerResultsPanel(
+                        state = customers, onSelect = {}, filter = CustomerListFilter.All,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+            }
         }
     }
 }

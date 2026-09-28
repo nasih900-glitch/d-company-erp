@@ -4,8 +4,13 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,9 +26,11 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
@@ -156,8 +163,33 @@ internal fun GamingDurationDial(
                 val diameter = radius * 2f
                 val tickOuter = radius - 12.dp.toPx()
 
-                // Fine static instrument marks and concentric outlines give the
-                // control depth without animating the full canvas every frame.
+                // Static depth stays behind the controls; only the selected arc
+                // animates, so an idle board does not continuously redraw.
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colorStops = arrayOf(
+                            0f to Color.Transparent,
+                            0.72f to Color.Transparent,
+                            0.88f to vividGold.copy(alpha = 0.10f),
+                            1f to Color.Transparent,
+                        ),
+                        center = center,
+                        radius = radius + 32.dp.toPx(),
+                    ),
+                    radius = radius + 32.dp.toPx(),
+                    center = center,
+                )
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colors = listOf(Color(0xFF0D1A20), Color(0xFF050E14)),
+                        center = Offset(center.x - radius * 0.22f, center.y - radius * 0.28f),
+                        radius = radius * 1.45f,
+                    ),
+                    radius = radius - 6.dp.toPx(),
+                    center = center,
+                )
+                // Fine instrument marks and concentric outlines keep the dial
+                // legible against the dark centre at every published duration.
                 drawCircle(
                     vividGold.copy(alpha = 0.14f),
                     radius = radius + 14.dp.toPx(), center = center,
@@ -183,7 +215,7 @@ internal fun GamingDurationDial(
                     Color(0xFF1A272C),
                     radius = radius,
                     center = center,
-                    style = Stroke(9.dp.toPx()),
+                    style = Stroke(5.dp.toPx()),
                 )
                 drawArc(
                     color = vividGold.copy(alpha = 0.13f),
@@ -242,23 +274,53 @@ internal fun GamingDurationDial(
                     horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
                     options.forEachIndexed { index, option ->
-                        Text(
-                            if (compactMarkers) "${option.minutes} min"
-                            else "${option.minutes} min\n${option.totalMinor.asRupees()}",
-                            modifier = Modifier.weight(1f).sizeIn(minHeight = 48.dp)
-                                .clickable(role = Role.Button) { onSelect(option.packageId) }
-                                .semantics {
-                                    contentDescription = "Choose ${option.minutes} minutes, ${option.totalMinor.asRupees()}"
-                                    this.selected = option.packageId == selected.packageId
-                                },
-                            color = if (option.packageId == selected.packageId) {
-                                Color(0xFFFFD76D)
-                            } else Brand.ForegroundMuted,
-                            style = if (compactMarkers) MaterialTheme.typography.labelMedium
-                                else MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            textAlign = if (index == 0) TextAlign.Start else TextAlign.End,
-                        )
+                        val interaction = remember(option.packageId) { MutableInteractionSource() }
+                        val hovered by interaction.collectIsHoveredAsState()
+                        val focused by interaction.collectIsFocusedAsState()
+                        val pressed by interaction.collectIsPressedAsState()
+                        Box(
+                            Modifier.weight(1f),
+                            contentAlignment = if (index == 0) Alignment.CenterStart else Alignment.CenterEnd,
+                        ) {
+                            Text(
+                                if (compactMarkers) "${option.minutes} min"
+                                else "${option.minutes} min\n${option.totalMinor.asRupees()}",
+                                modifier = Modifier.sizeIn(minWidth = 76.dp, minHeight = 48.dp)
+                                    .hoverable(interactionSource = interaction)
+                                    .drawBehind {
+                                        if (hovered || focused || pressed) {
+                                            drawLine(
+                                                color = Brand.GoldBright,
+                                                start = Offset(0f, size.height - 2.dp.toPx()),
+                                                end = Offset(size.width, size.height - 2.dp.toPx()),
+                                                strokeWidth = 2.dp.toPx(),
+                                            )
+                                        }
+                                        if (focused) {
+                                            drawRoundRect(
+                                                color = Brand.FocusRing,
+                                                style = Stroke(width = 1.dp.toPx()),
+                                            )
+                                        }
+                                    }
+                                    .clickable(
+                                        interactionSource = interaction,
+                                        indication = null,
+                                        role = Role.Button,
+                                    ) { onSelect(option.packageId) }
+                                    .semantics {
+                                        contentDescription = "Choose ${option.minutes} minutes, ${option.totalMinor.asRupees()}"
+                                        this.selected = option.packageId == selected.packageId
+                                    },
+                                color = if (option.packageId == selected.packageId) {
+                                    Color(0xFFFFD76D)
+                                } else Brand.ForegroundMuted,
+                                style = if (compactMarkers) MaterialTheme.typography.labelMedium
+                                    else MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                textAlign = if (index == 0) TextAlign.Start else TextAlign.End,
+                            )
+                        }
                     }
                 }
             }

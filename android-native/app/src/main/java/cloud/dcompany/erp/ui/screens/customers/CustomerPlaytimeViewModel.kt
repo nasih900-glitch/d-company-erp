@@ -85,6 +85,10 @@ class CustomerPlaytimeViewModel : ViewModel() {
         if (loadedLease == appCtx.cacheIsolation.currentLease()) snapshot
         else CustomerPlaytimeUiState(error = "Refresh to load this account's playtime ranks.")
 
+    /** The scope placeholder above is not a failed request; wait for a real refresh. */
+    fun hasAttemptedRefreshForCurrentScope(): Boolean =
+        loadedLease != null && loadedLease == appCtx.cacheIsolation.currentLease()
+
     /** The ViewModel outlives this destination; do not retain another account's ranks. */
     fun clear() {
         generation++

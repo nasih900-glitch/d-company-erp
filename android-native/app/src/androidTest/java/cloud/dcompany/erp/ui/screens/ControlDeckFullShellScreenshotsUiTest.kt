@@ -92,7 +92,7 @@ class ControlDeckFullShellScreenshotsUiTest {
         capture("control-deck-shift-full-1280x800.png")
 
         compose.runOnIdle { current.value = Destination.Customers }
-        compose.onNodeWithText("Playtime leaderboard").assertIsDisplayed()
+        compose.onNodeWithText("PLAYTIME LEADERBOARD").assertIsDisplayed()
         compose.onNodeWithText("D COMPANY").assertIsDisplayed()
         compose.onNodeWithContentDescription("Rank 1 by completed playtime").assertIsDisplayed()
         compose.onNodeWithText("••••••3210").assertIsDisplayed()

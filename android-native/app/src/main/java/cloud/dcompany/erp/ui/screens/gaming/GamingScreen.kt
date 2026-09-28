@@ -74,6 +74,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -178,6 +179,7 @@ import cloud.dcompany.erp.ui.components.resolvedVoidReason
 import cloud.dcompany.erp.ui.screens.ProductConfigurationDialog
 import cloud.dcompany.erp.ui.screens.businessClockTime
 import cloud.dcompany.erp.ui.theme.Brand
+import cloud.dcompany.erp.ui.theme.controlDeckBackdrop
 import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.theme.Spacing
 import cloud.dcompany.erp.ui.remote.RemoteSensitiveContent
@@ -1666,6 +1668,7 @@ internal fun GamingCommandWorkspace(
         // The 960dp tablet must keep its station board and duration dial in
         // the same viewport; narrower screens retain the scroll fallback.
         val sideBySide = maxWidth >= 900.dp
+        val denseGrid = maxWidth < 1_100.dp
         val noticeRailMaxHeight = minOf(144.dp, maxHeight * 0.19f)
         val columns = when {
             sideBySide -> 4
@@ -1725,12 +1728,13 @@ internal fun GamingCommandWorkspace(
                         selectedStationId = selectedStation?.id,
                         focusStationId = focusStationId,
                         wallClock = wallClock, columns = columns,
+                        dense = denseGrid,
                         onSelectStation = onSelectStation,
-                        modifier = Modifier.weight(0.45f).fillMaxHeight()
+                        modifier = Modifier.weight(0.40f).fillMaxHeight()
                             .verticalScroll(rememberScrollState()),
                     )
                     controlPane(
-                        Modifier.weight(0.55f).fillMaxHeight()
+                        Modifier.weight(0.60f).fillMaxHeight()
                             .clip(Radius.shapeLg)
                             .border(1.dp, Brand.Gold.copy(alpha = 0.42f), Radius.shapeLg)
                             .testTag("gaming-control-pane"),
@@ -1753,6 +1757,7 @@ internal fun GamingCommandWorkspace(
                             selectedStationId = selectedStation?.id,
                             focusStationId = focusStationId,
                             wallClock = wallClock, columns = columns,
+                            dense = denseGrid,
                             onSelectStation = { stationId ->
                                 onSelectStation(stationId)
                                 compactScrollScope.launch {
@@ -1779,29 +1784,7 @@ internal fun GamingCommandWorkspace(
 /** Static ambient light keeps the board legible and does not schedule idle redraws. */
 @Composable
 private fun GamingAmbientBackdrop() {
-    Canvas(Modifier.fillMaxSize()) {
-        val gold = Color(0xFFF4C65A)
-        val horizon = size.height * 0.59f
-        repeat(3) { index ->
-            val offset = index * 14.dp.toPx()
-            val path = Path().apply {
-                moveTo(-size.width * 0.07f, horizon + offset)
-                cubicTo(
-                    size.width * 0.16f, horizon - 52.dp.toPx() + offset,
-                    size.width * 0.24f, horizon + 33.dp.toPx() + offset,
-                    size.width * 0.43f, horizon - 21.dp.toPx() + offset,
-                )
-            }
-            drawPath(
-                path = path,
-                brush = Brush.horizontalGradient(
-                    listOf(Color.Transparent, gold.copy(alpha = 0.13f), Color.Transparent),
-                ),
-                style = Stroke(width = if (index == 0) 2.dp.toPx() else 1.dp.toPx(),
-                    cap = StrokeCap.Round),
-            )
-        }
-    }
+    Box(Modifier.fillMaxSize().controlDeckBackdrop())
 }
 
 @Composable
@@ -1812,6 +1795,7 @@ private fun GamingStationSelectionGrid(
     focusStationId: String?,
     wallClock: State<Long>,
     columns: Int,
+    dense: Boolean,
     onSelectStation: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -1834,7 +1818,7 @@ private fun GamingStationSelectionGrid(
                         focused = station.id == focusStationId,
                         combinedBillSnapshotMinor = session?.let(state::pendingBillSnapshotMinor),
                         onSelect = { onSelectStation(station.id) },
-                        compact = true,
+                        compact = true, dense = dense,
                         modifier = Modifier.weight(1f),
                     )
                 }
@@ -2355,6 +2339,14 @@ private fun GamingStationArtwork(type: String, modifier: Modifier = Modifier) {
     }
 }
 
+private fun compactStationTitle(name: String): String = when {
+    name.startsWith("PS5 Station ") -> "PS5 " + name.removePrefix("PS5 Station ")
+    name.startsWith("Racing Simulator ") -> "Racing " + name.removePrefix("Racing Simulator ")
+    name.startsWith("Streaming Booth ") -> "Stream " + name.removePrefix("Streaming Booth ")
+    name.startsWith("Shisha Table ") -> "Shisha " + name.removePrefix("Shisha Table ")
+    else -> name
+}
+
 @Composable
 internal fun GamingStationTile(
     station: Station,
@@ -2368,6 +2360,7 @@ internal fun GamingStationTile(
     combinedBillSnapshotMinor: Long?,
     onSelect: () -> Unit,
     compact: Boolean = false,
+    dense: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val shouldTick = session?.status == "active" ||
@@ -2430,11 +2423,20 @@ internal fun GamingStationTile(
         StationVisualState.StartFailed -> "Evidence retained"
         StationVisualState.Unavailable -> "Refresh required"
     }
+    val missingTariff = session == null && supportingValue == "Fixed-price tariff not synced"
+    val tileStatusLabel = if (missingTariff) {
+        if (dense) "Sync" else if (compact) "Sync rates" else "Rates unavailable"
+    } else presentation.statusLabel
+    val tileStatusColor = if (missingTariff) Brand.Warning else accent
 
 
     val highlighted = selected || focused
     Column(
-        modifier.fillMaxWidth().heightIn(min = if (compact) 128.dp else 178.dp)
+        modifier.fillMaxWidth().heightIn(min = when {
+            dense -> 140.dp
+            compact -> 154.dp
+            else -> 178.dp
+        })
             .clip(Radius.shapeLg)
             .background(
                 Brush.verticalGradient(
@@ -2451,7 +2453,7 @@ internal fun GamingStationTile(
                 contentDescription = if (startsSessionOnTap) {
                     station.name + ". Available. Start session. " + supportingValue
                 } else if (session == null) {
-                    "${station.name}. ${presentation.statusLabel}. $primaryValue. $supportingValue. Select station"
+                    "${station.name}. $tileStatusLabel. $primaryValue. $supportingValue. Select station"
                 } else {
                     station.name + ". " + presentation.statusLabel + ". Select station controls"
                 }
@@ -2460,7 +2462,7 @@ internal fun GamingStationTile(
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         Box(
-            Modifier.fillMaxWidth().height(if (compact) 50.dp else 86.dp)
+            Modifier.fillMaxWidth().height(if (dense) 52.dp else if (compact) 62.dp else 86.dp)
                 .clip(Radius.shapeMd)
                 .background(
                     Brush.radialGradient(
@@ -2471,10 +2473,10 @@ internal fun GamingStationTile(
                 ),
             contentAlignment = Alignment.Center,
         ) {
-            GamingStationArtwork(station.type, Modifier.size(if (compact) 56.dp else 84.dp))
+            GamingStationArtwork(station.type, Modifier.size(if (dense) 60.dp else if (compact) 72.dp else 84.dp))
         }
         Text(
-            station.name,
+            if (dense) compactStationTitle(station.name) else station.name,
             color = Brand.Foreground,
             style = MaterialTheme.typography.titleSmall,
             fontWeight = FontWeight.SemiBold,
@@ -2487,14 +2489,21 @@ internal fun GamingStationTile(
             horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
         ) {
             if (compact) {
-                Canvas(Modifier.size(8.dp)) { drawCircle(accent) }
+                Canvas(Modifier.size(8.dp)) { drawCircle(tileStatusColor) }
                 Text(
-                    presentation.statusLabel,
-                    color = accent,
+                    tileStatusLabel,
+                    color = tileStatusColor,
                     style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
+                )
+                Spacer(Modifier.weight(1f))
+                if (!missingTariff) Icon(
+                    Icons.Filled.ChevronRight,
+                    contentDescription = null,
+                    tint = if (selected || focused) Brand.GoldBright else Brand.ForegroundMuted,
+                    modifier = Modifier.size(18.dp),
                 )
             } else {
                 OperationalStatusBadge(
@@ -2522,7 +2531,7 @@ internal fun GamingStationTile(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-        } else if (!compact || supportingValue.contains("not synced")) {
+        } else if (!compact) {
             Text(
                 supportingValue,
                 color = Brand.ForegroundMuted,
@@ -5300,26 +5309,40 @@ internal fun StartSessionEditor(
         if (supportsPlayerModes) {
             if (!embedded) Text("Mode", color = Brand.ForegroundMuted,
                 style = MaterialTheme.typography.labelMedium)
+            val compactEmbeddedPlayers = embedded &&
+                LocalConfiguration.current.screenHeightDp < 700
             Row(
                 Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                horizontalArrangement = Arrangement.spacedBy(
+                    if (compactEmbeddedPlayers) Spacing.xs else Spacing.sm,
+                ),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 FilterChip(
                     selected = playerCount == 1,
                     onClick = { playerCount = 1 },
-                    label = { Text("Single · 1 player") },
+                    label = { Text(if (compactEmbeddedPlayers) "Single" else "Single · 1 player") },
                     colors = gamingPackageChipColors(),
                     modifier = Modifier.weight(1f).heightIn(min = 48.dp),
                 )
                 if (maximumPlayers >= 2) FilterChip(
                     selected = playerCount >= 2,
                     onClick = { playerCount = 2 },
-                    label = { Text("Dual · 2+ players") },
+                    label = { Text(if (compactEmbeddedPlayers) {
+                        if (playerCount > 2) "Dual $playerCount" else "Dual"
+                    } else "Dual · 2+ players") },
                     colors = gamingPackageChipColors(),
                     modifier = Modifier.weight(1f).heightIn(min = 48.dp),
                 )
+                if (compactEmbeddedPlayers) IconButton(
+                    onClick = { playerCount = (playerCount + 1).coerceAtMost(maximumPlayers) },
+                    enabled = playerCount < maximumPlayers,
+                    modifier = Modifier.size(48.dp),
+                ) {
+                    Icon(Icons.Filled.Add, contentDescription = "Add player")
+                }
             }
-            Row(
+            if (!compactEmbeddedPlayers) Row(
                 Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(Spacing.md),
@@ -5342,6 +5365,10 @@ internal fun StartSessionEditor(
                     modifier = Modifier.heightIn(min = 48.dp),
                 ) { Text("Remove last") }
             }
+            if (compactEmbeddedPlayers && playerCount > 2) TextButton(
+                onClick = { playerCount-- },
+                modifier = Modifier.heightIn(min = 48.dp),
+            ) { Text("Remove last player") }
             if (extraControllers > 0) {
                 Text(
                     "${extraControllers.asControllerCount()} · " +
@@ -5531,29 +5558,6 @@ internal fun StartSessionEditor(
                             endY = 800f,
                         ),
                     ) else Modifier)
-                    .then(if (embedded) Modifier.drawBehind {
-                        val gold = Color(0xFFF8CB67)
-                        val light = Brush.horizontalGradient(
-                            listOf(Color.Transparent, gold.copy(alpha = 0.23f),
-                                gold.copy(alpha = 0.11f), Color.Transparent),
-                        )
-                        repeat(3) { index ->
-                            val y = size.height * 0.57f + index * 19.dp.toPx()
-                            val path = Path().apply {
-                                moveTo(-size.width * 0.07f, y)
-                                cubicTo(size.width * 0.15f, y - 55.dp.toPx(),
-                                    size.width * 0.26f, y + 38.dp.toPx(),
-                                    size.width * 0.48f, y - 16.dp.toPx())
-                                cubicTo(size.width * 0.70f, y - 49.dp.toPx(),
-                                    size.width * 0.86f, y + 28.dp.toPx(),
-                                    size.width * 1.06f, y - 10.dp.toPx())
-                            }
-                            drawPath(path, light, style = Stroke(
-                                width = if (index == 0) 2.dp.toPx() else 1.dp.toPx(),
-                                cap = StrokeCap.Round,
-                            ))
-                        }
-                    } else Modifier)
                     .padding(
                     horizontal = if (embedded) Spacing.md else Spacing.lgPlus,
                     vertical = if (compactIme || embedded) Spacing.sm else Spacing.md,
@@ -5569,19 +5573,27 @@ internal fun StartSessionEditor(
                         Icon(Icons.Filled.ChevronLeft, contentDescription = null)
                         Text("Back")
                     }
+                    val compactEmbeddedHeader = embedded && LocalConfiguration.current.screenHeightDp < 700
                     Column(Modifier.weight(1f), horizontalAlignment = if (embedded) Alignment.Start else Alignment.CenterHorizontally) {
+                        if (embedded && !compactEmbeddedHeader) Text(
+                            "START SESSION",
+                            color = Brand.GoldBright,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold,
+                        )
                         Text(
                             if (embedded) station.name else "START SESSION",
                             color = Brand.Foreground,
-                            style = if (embedded) MaterialTheme.typography.titleLarge
+                            style = if (compactEmbeddedHeader) MaterialTheme.typography.titleMedium
+                                else if (embedded) MaterialTheme.typography.titleLarge
                                 else MaterialTheme.typography.headlineSmall,
                             fontWeight = FontWeight.Bold,
                         )
                         if (!compactIme && !embedded) Text(station.name, color = Brand.ForegroundMuted)
-                        if (embedded) Text("Available · select a published duration",
+                        if (embedded && !compactEmbeddedHeader) Text("Available · select a published duration",
                             color = statusColor(UiTone.Success), style = MaterialTheme.typography.labelMedium)
                     }
-                    if (supportsPlayerModes) {
+                    if (supportsPlayerModes && !embedded) {
                         Text(
                             if (playerCount == 1) "Single mode" else "$playerCount players",
                             color = Brand.GoldBright,
@@ -5600,8 +5612,15 @@ internal fun StartSessionEditor(
                         .padding(vertical = if (embedded) Spacing.xs else Spacing.md),
                     verticalArrangement = Arrangement.spacedBy(if (embedded) Spacing.xs else Spacing.md),
                 ) {
-                val wideEmbeddedDial = embedded && prominentPs5Dial && availableFormWidth >= 600.dp
+                // Keep the dial and customer/player controls alongside each
+                // other on the 960dp tablet as well as the wider layout.
+                val wideEmbeddedDial = embedded && prominentPs5Dial && availableFormWidth >= 420.dp
                 if (wideEmbeddedDial) {
+                    val dialColumnWidth = (availableFormWidth - Spacing.md) * 0.55f
+                    val dialSize = minOf(
+                        if (LocalConfiguration.current.screenHeightDp < 700) 170.dp else 344.dp,
+                        dialColumnWidth,
+                    )
                     Row(
                         Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(Spacing.md),
@@ -5612,7 +5631,7 @@ internal fun StartSessionEditor(
                             selectedPackageId = selectedPackageId,
                             onSelect = { selectedPackageId = it },
                             modifier = Modifier.weight(0.55f),
-                            dialSize = 344.dp,
+                            dialSize = dialSize,
                             showChoiceChips = durationChoices.size > 2,
                         )
                         Column(
@@ -5628,7 +5647,11 @@ internal fun StartSessionEditor(
                             choices = durationChoices,
                             selectedPackageId = selectedPackageId,
                             onSelect = { selectedPackageId = it },
-                            dialSize = if (embedded || LocalConfiguration.current.screenHeightDp < 700) 220.dp else 280.dp,
+                            dialSize = when {
+                                embedded && LocalConfiguration.current.screenHeightDp < 700 -> 170.dp
+                                embedded || LocalConfiguration.current.screenHeightDp < 700 -> 220.dp
+                                else -> 280.dp
+                            },
                             showChoiceChips = durationChoices.size > 2,
                         )
                     }

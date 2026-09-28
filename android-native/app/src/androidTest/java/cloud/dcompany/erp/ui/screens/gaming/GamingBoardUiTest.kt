@@ -15,15 +15,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.click
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performMouseInput
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performTouchInput
@@ -38,6 +41,8 @@ import cloud.dcompany.erp.ui.components.SyncAvailabilityProblem
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.DCompanyTheme
 import java.io.File
+import kotlin.math.abs
+import kotlin.math.roundToInt
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -45,6 +50,58 @@ import org.junit.Test
 
 class GamingBoardUiTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
+
+    @OptIn(ExperimentalTestApi::class)
+    @Test
+    fun hoveringDurationPriceKeepsBookingUnchangedAndMarkerStillSelects() {
+        val selected = mutableStateOf("single-30")
+        compose.setContent {
+            DCompanyTheme {
+                Box(Modifier.width(420.dp).height(420.dp).testTag("dial-hover-fixture")) {
+                    GamingDurationDial(
+                        choices = listOf(
+                            GamingDurationChoice("single-30", 30, 8_000),
+                            GamingDurationChoice("single-60", 60, 12_000),
+                        ),
+                        selectedPackageId = selected.value,
+                        onSelect = { selected.value = it },
+                        dialSize = 344.dp,
+                        showChoiceChips = false,
+                    )
+                }
+            }
+        }
+
+        val sixtyMinutePrice = compose.onNodeWithContentDescription("Choose 60 minutes, ₹120.00")
+        sixtyMinutePrice.performMouseInput { enter() }
+        compose.runOnIdle { assertEquals("single-30", selected.value) }
+        val marker = sixtyMinutePrice.fetchSemanticsNode().boundsInRoot
+        val fixture = compose.onNodeWithTag("dial-hover-fixture").fetchSemanticsNode().boundsInRoot
+        val hovered = compose.onNodeWithTag("dial-hover-fixture").captureToImage().asAndroidBitmap()
+        try {
+            val left = (marker.left - fixture.left).roundToInt().coerceIn(0, hovered.width)
+            val top = (marker.top - fixture.top).roundToInt().coerceIn(0, hovered.height)
+            val right = (marker.right - fixture.left).roundToInt().coerceIn(left, hovered.width)
+            val bottom = (marker.bottom - fixture.top).roundToInt().coerceIn(top, hovered.height)
+            var nearWhite = 0
+            var sampled = 0
+            for (y in top until bottom step 2) for (x in left until right step 2) {
+                val pixel = hovered.getPixel(x, y)
+                if (android.graphics.Color.red(pixel) > 225 &&
+                    android.graphics.Color.green(pixel) > 225 &&
+                    android.graphics.Color.blue(pixel) > 225
+                ) nearWhite++
+                sampled++
+            }
+            assertTrue("Duration-price hover must not paint a white rectangular highlight",
+                sampled > 0 && nearWhite * 20 < sampled)
+        } finally {
+            hovered.recycle()
+        }
+        capture("gaming-duration-price-hover.png", "dial-hover-fixture")
+        sixtyMinutePrice.performClick()
+        compose.runOnIdle { assertEquals("single-60", selected.value) }
+    }
 
     @Test
     fun publishedDurationRingChangesDisplayedPriceAndSubmittedPackageBothWays() {
@@ -497,10 +554,20 @@ class GamingBoardUiTest {
         compose.onNodeWithTag("gaming-filter-ps5").assertIsDisplayed()
         compose.onNodeWithTag("gaming-filter-racing").assertIsDisplayed()
         compose.onNodeWithTag("gaming-filter-vr").assertIsDisplayed()
+        val firstTile = compose.onNodeWithTag("gaming-station-ps5-1")
+            .getUnclippedBoundsInRoot()
+        val racingTile = compose.onNodeWithTag("gaming-station-racing-1")
+            .getUnclippedBoundsInRoot()
+        assertTrue(
+            "Long station names and missing-rate warnings must not stretch the board: " +
+                "first=${firstTile.bottom - firstTile.top}, racing=${racingTile.bottom - racingTile.top}",
+            abs((firstTile.bottom - firstTile.top).value -
+                (racingTile.bottom - racingTile.top).value) <= 1f,
+        )
         if (compose.activity.resources.configuration.screenWidthDp >= 1_100) {
-            val pane = compose.onNodeWithTag("gaming-control-pane").fetchSemanticsNode().boundsInRoot
+            val pane = compose.onNodeWithTag("gaming-control-pane").getUnclippedBoundsInRoot()
             val lastStation = compose.onNodeWithTag("gaming-station-streaming-1")
-                .fetchSemanticsNode().boundsInRoot
+                .getUnclippedBoundsInRoot()
             assertTrue("Station board fits in the full workspace", lastStation.bottom <= pane.bottom)
             compose.onNodeWithContentDescription("Session duration dial").assertIsDisplayed()
             compose.onNodeWithContentDescription("Search saved customers by name or phone")
@@ -517,24 +584,32 @@ class GamingBoardUiTest {
                 state.value = state.value.copy(stations = tenStations)
             }
             val tenth = compose.onNodeWithTag("gaming-station-ps5-6")
-                .fetchSemanticsNode().boundsInRoot
+                .getUnclippedBoundsInRoot()
             val expandedPane = compose.onNodeWithTag("gaming-control-pane")
-                .fetchSemanticsNode().boundsInRoot
+                .getUnclippedBoundsInRoot()
             assertTrue("Ten stations fit in the full workspace", tenth.bottom <= expandedPane.bottom)
             capture("gaming-full-workspace-10-stations-1280x800.png", "gaming-full-workspace")
         } else {
             val board = compose.onNodeWithTag("gaming-station-board")
-                .fetchSemanticsNode().boundsInRoot
+                .getUnclippedBoundsInRoot()
             val pane = compose.onNodeWithTag("gaming-control-pane")
-                .fetchSemanticsNode().boundsInRoot
+                .getUnclippedBoundsInRoot()
             val eighth = compose.onNodeWithTag("gaming-station-streaming-1")
-                .fetchSemanticsNode().boundsInRoot
+                .getUnclippedBoundsInRoot()
             assertTrue("960dp board and dial share the viewport", board.right < pane.left)
             assertTrue("All eight cards remain above the bottom navigation", eighth.bottom <= pane.bottom)
             compose.onNodeWithTag("gaming-station-streaming-1").assertIsDisplayed()
             val dial = compose.onNodeWithContentDescription("Session duration dial")
                 .assertIsDisplayed()
+            compose.onNodeWithText("₹80.00").assertIsDisplayed()
             compose.onNodeWithText("Start 30 min · ₹80.00").assertIsDisplayed()
+            val dialBounds = dial.getUnclippedBoundsInRoot()
+            val search = compose.onNodeWithContentDescription("Search saved customers by name or phone")
+                .getUnclippedBoundsInRoot()
+            val start = compose.onNodeWithText("Start 30 min · ₹80.00")
+                .getUnclippedBoundsInRoot()
+            assertTrue("Duration dial must not overlap customer controls", dialBounds.right <= search.left)
+            assertTrue("Customer lookup stays above the Start action", search.bottom <= start.top)
             capture("gaming-full-workspace-960x600-board-and-dial.png", "gaming-full-workspace")
             dial.performTouchInput {
                 swipe(Offset(width * 0.17f, height * 0.31f),
@@ -611,7 +686,9 @@ class GamingBoardUiTest {
             }
         }
         compose.onNodeWithTag("gaming-station-racing-1").assertIsDisplayed()
-        compose.onNodeWithText("Fixed-price tariff not synced").assertIsDisplayed()
+        compose.onNodeWithText("Sync", substring = true).assertIsDisplayed()
+        compose.onNodeWithText("The fixed-price tariff has not synced", substring = true)
+            .performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("Start session").assertExists()
         compose.onNodeWithText("Start session").assertIsNotEnabled()
     }
