@@ -884,6 +884,12 @@ class AndroidReleasePipelineTest(unittest.TestCase):
         for workflow_path in (CI_WORKFLOW, WORKFLOW):
             with self.subTest(workflow=workflow_path.name):
                 workflow = workflow_path.read_text(encoding="utf-8")
+                emulator_job = re.search(
+                    r"(?ms)^  android-instrumentation:\n(.*?)(?=^  [a-z][a-z-]*:|\Z)",
+                    workflow,
+                )
+                self.assertIsNotNone(emulator_job)
+                self.assertIn("timeout-minutes: 70", emulator_job.group(0))
                 self.assertRegex(
                     workflow,
                     r"(?m)^    runs-on: macos-15-intel$",
