@@ -71,6 +71,6 @@ interface CustomersApi {
     @GET("customers/playtime/leaderboard")
     suspend fun playtimeLeaderboard(
         @Query("page") page: Int = 1,
-        @Query("limit") limit: Int = 5,
+        @Query("limit") limit: Int = 25,
     ): PlaytimeLeaderboard
 }

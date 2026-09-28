@@ -29,6 +29,7 @@ import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertWidthIsAtLeast
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.click
 import androidx.compose.ui.test.isDisplayed
 import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -45,6 +46,7 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipe
 import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.SemanticsMatcher
@@ -162,7 +164,7 @@ class GamingDialogUiTest {
         compose.onNodeWithText("Fixed packages from ₹80.00").assertIsDisplayed()
         compose.onAllNodesWithText("₹200.00/hour").assertCountEquals(0)
         compose.onNodeWithContentDescription(
-            "PS5 Station Fixed. Available. Ready. Fixed packages from ₹80.00",
+            "PS5 Station Fixed. Available. Ready. Fixed packages from ₹80.00. Select station",
         ).assertIsDisplayed()
     }
 
@@ -1865,14 +1867,18 @@ class GamingDialogUiTest {
             }
         }
 
-        compose.onNodeWithText("3 players")
-            .bringIntoViewIfNeeded()
-            .performClick()
+        // Player count now grows through one Add player action rather than a
+        // preselected count chip. A third player has one extra controller.
+        repeat(2) {
+            compose.onNodeWithText("Add player")
+                .bringIntoViewIfNeeded()
+                .performClick()
+        }
         compose.onNodeWithText("60 min · ₹180.00 total")
             .bringIntoViewIfNeeded()
             .assertIsDisplayed()
             .performClick()
-        compose.onNodeWithText("Start · ₹180.00")
+        compose.onNodeWithText("Start 60 min · ₹180.00")
             .bringIntoViewIfNeeded()
             .assertIsDisplayed()
             .assertIsEnabled()
@@ -1883,6 +1889,87 @@ class GamingDialogUiTest {
             assertEquals("standard-dual-60", submittedPackage)
             assertEquals(1, submittedControllers)
         }
+    }
+
+    @Test
+    fun startSession_draggingDurationDialSelectsPublishedPackageAndPrice() {
+        var submittedPackage: String? = null
+        compose.setContent {
+            DCompanyTheme {
+                StartSessionDialog(
+                    station = testStation(),
+                    packages = listOf(
+                        GamingPackage("single-30", "standard-single-session-30m", "ps5", "standard", "single", 1, 1, "base", "Single Mode 30 min", 30, 8_000),
+                        GamingPackage("single-60", "standard-single-session-60m", "ps5", "standard", "single", 1, 1, "base", "Single Mode 1 hour", 60, 12_000),
+                    ),
+                    onDismiss = {},
+                    onConfirm = { _, _, _, _, packageId, _ -> submittedPackage = packageId },
+                )
+            }
+        }
+
+        compose.onNodeWithText("Start 30 min · ₹80.00").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Session duration dial")
+            .bringIntoViewIfNeeded()
+            .performTouchInput {
+                swipe(
+                    start = Offset(width * 0.83f, height * 0.31f),
+                    end = Offset(width * 0.83f, height * 0.80f),
+                    durationMillis = 300,
+                )
+            }
+        compose.onNodeWithText("Start 30 min · ₹80.00").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Session duration dial")
+            .bringIntoViewIfNeeded()
+            .performTouchInput {
+                swipe(
+                    start = Offset(width * 0.17f, height * 0.31f),
+                    end = Offset(width * 0.83f, height * 0.31f),
+                    durationMillis = 300,
+                )
+            }
+        compose.onNodeWithText("Start 60 min · ₹120.00")
+            .bringIntoViewIfNeeded()
+            .assertIsDisplayed()
+            .performClick()
+        compose.runOnIdle { assertEquals("single-60", submittedPackage) }
+    }
+
+    @Test
+    fun startSession_tappingAndAccessibilityDialSelectOnlyPublishedPrices() {
+        var submittedPackage: String? = null
+        compose.setContent {
+            DCompanyTheme {
+                StartSessionDialog(
+                    station = testStation(),
+                    packages = listOf(
+                        GamingPackage("single-30", "standard-single-session-30m", "ps5", "standard", "single", 1, 1, "base", "Single Mode 30 min", 30, 8_000),
+                        GamingPackage("single-60", "standard-single-session-60m", "ps5", "standard", "single", 1, 1, "base", "Single Mode 1 hour", 60, 12_000),
+                    ),
+                    onDismiss = {},
+                    onConfirm = { _, _, _, _, packageId, _ -> submittedPackage = packageId },
+                )
+            }
+        }
+
+        val dial = compose.onNodeWithContentDescription("Session duration dial")
+            .bringIntoViewIfNeeded()
+        dial.performTouchInput {
+            click(Offset(width * 0.83f, height * 0.31f))
+        }
+        compose.onNodeWithText("Start 60 min · ₹120.00")
+            .bringIntoViewIfNeeded()
+            .assertIsDisplayed()
+
+        dial.performSemanticsAction(SemanticsActions.SetProgress) { setProgress ->
+            assertTrue(setProgress(0f))
+        }
+        compose.onNodeWithText("Start 30 min · ₹80.00")
+            .bringIntoViewIfNeeded()
+            .assertIsDisplayed()
+            .assertIsEnabled()
+            .performClick()
+        compose.runOnIdle { assertEquals("single-30", submittedPackage) }
     }
 
     @Test
@@ -1906,7 +1993,7 @@ class GamingDialogUiTest {
         compose.onNodeWithText("Premium stale").assertDoesNotExist()
         compose.onNodeWithText("VR Racing Sim").performClick()
         compose.onNodeWithText("15 min · ₹100.00 total").performClick()
-        compose.onNodeWithText("Start · ₹100.00").performClick()
+        compose.onNodeWithText("Start 15 min · ₹100.00").performClick()
         compose.runOnIdle { assertEquals("vr-racing-15", submittedPackage) }
     }
 

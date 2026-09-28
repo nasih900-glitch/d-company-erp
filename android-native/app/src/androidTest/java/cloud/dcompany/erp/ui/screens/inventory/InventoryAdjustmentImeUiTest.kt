@@ -310,7 +310,7 @@ class InventoryAdjustmentImeUiTest {
         }
 
         val idleDialog = compose.onNode(dialogPane(BACK_DIALOG_TITLE)).assertIsDisplayed()
-        idleDialog.awaitDialogWindowFocus()
+        idleDialog.awaitBackReadyDialogWindow()
         injectAndroidBack()
         compose.waitForIdle()
         compose.runOnIdle {
@@ -322,7 +322,7 @@ class InventoryAdjustmentImeUiTest {
         compose.waitForIdle()
 
         val busyDialog = compose.onNode(dialogPane(BACK_DIALOG_TITLE)).assertIsDisplayed()
-        busyDialog.awaitDialogWindowFocus()
+        busyDialog.awaitBackReadyDialogWindow()
         injectAndroidBack()
         compose.waitForIdle()
         compose.runOnIdle {
@@ -1255,10 +1255,36 @@ class InventoryAdjustmentImeUiTest {
         InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(keyCode)
     }
 
-    private fun SemanticsNodeInteraction.awaitDialogWindowFocus() {
+    private fun SemanticsNodeInteraction.awaitBackReadyDialogWindow() {
         val root = fetchSemanticsNode().root as ViewRootForTest
+        var readySinceMillis: Long? = null
         compose.waitUntil(timeoutMillis = 5_000) {
-            root.view.hasWindowFocus()
+            val ready = compose.runOnIdle {
+                val view = root.view
+                val insets = ViewCompat.getRootWindowInsets(view)
+                view.isAttachedToWindow && view.hasWindowFocus() &&
+                    insets != null && !insets.isVisible(WindowInsetsCompat.Type.ime())
+            }
+            val now = SystemClock.uptimeMillis()
+            if (!ready) {
+                readySinceMillis = null
+                false
+            } else {
+                val firstReadyAt = readySinceMillis ?: now.also { readySinceMillis = it }
+                now - firstReadyAt >= 150L
+            }
+        }
+        compose.runOnIdle {
+            val view = root.view
+            val insets = ViewCompat.getRootWindowInsets(view)
+            assertTrue(
+                "The dialog window must still be attached and foreground before Android Back",
+                view.isAttachedToWindow && view.hasWindowFocus(),
+            )
+            assertTrue(
+                "The software keyboard must be hidden before Android Back tests dialog dismissal",
+                insets != null && !insets.isVisible(WindowInsetsCompat.Type.ime()),
+            )
         }
     }
 

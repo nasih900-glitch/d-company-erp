@@ -127,6 +127,13 @@ jobs:
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.14'
+      - name: Install hash-pinned Android contract dependency
+        run: |
+          printf '%s\n' 'pyyaml==6.0.3 --hash=sha256:c458b6d084f9b935061bc36216e8a69a7e293a2f1e68bf956dcd9e6cbcd143f5' > "$RUNNER_TEMP/android-contract-requirements.txt"
+          python3 -m pip install --only-binary=:all: --require-hashes -r "$RUNNER_TEMP/android-contract-requirements.txt"
       - name: Test Android release and server-delivery contracts
         run: python3 -m unittest discover -s tests -p 'test_android_*.py'
       - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
@@ -168,11 +175,48 @@ jobs:
           -Pkotlin.compiler.execution.strategy=in-process
           :audit-driver:testDebugUnitTest
           :audit-driver:assembleDebug :audit-driver:assembleDebugAndroidTest
+      - name: Upload Android build, lint and JVM reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: android-native-ci-reports
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            android-native/app/build/reports/lint-results-*.html
+            android-native/app/build/reports/tests/
+            android-native/app/build/test-results/
+            android-native/audit-driver/build/reports/tests/
+            android-native/audit-driver/build/test-results/
+
+  # Keep all Android emulator tests blocking, but run them separately from
+  # the release build. Linux QEMU disappeared during the first Gaming case on
+  # two emulator builds; macOS Intel exercises the unchanged full inventory.
+  android-instrumentation:
+    runs-on: macos-15-intel
+    timeout-minutes: 70
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+          cache-dependency-path: |
+            android-native/*.gradle.kts
+            android-native/gradle.properties
+            android-native/gradle/wrapper/gradle-wrapper.properties
+            android-native/app/*.gradle.kts
+            android-native/audit-driver/*.gradle.kts
+      - uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
+        with:
+          packages: platform-tools
       # GitHub's Linux runner exposes /dev/kvm, but the runner user is not
       # consistently granted access. Without KVM the API-35 emulator can take
       # several minutes to boot and the instrumentation process may be killed
       # before it discovers any tests.
       - name: Enable KVM for Android emulator
+        if: runner.os == 'Linux'
         run: |
           test -c /dev/kvm
           # The hosted runner already created /dev/kvm. Change that device
@@ -195,23 +239,27 @@ jobs:
           # class viewport, matching the 1280x800dp production target closely.
           profile: pixel_c
           disable-animations: true
-          script: bash scripts/run_android_instrumentation_ci.sh
-      - name: Upload Android test and lint reports
+          # Keep emulator 36.5.10 fixed while comparing the host platform.
+          emulator-build: 15081367
+          # Hold the supported software renderer constant for this comparison.
+          emulator-options: -no-window -gpu software -feature -Vulkan -no-snapshot -noaudio -no-boot-anim
+          # Pixel C boots with a 2560x1800 host graphics buffer. A post-boot
+          # `wm size` override does not shrink that buffer, and the hosted
+          # emulator can disappear during the Compose suite. Keep tablet dp
+          # coverage while setting its physical buffer before first boot.
+          pre-emulator-launch-script: python3 scripts/configure_ci_android_avd.py test
+          script: D_COMPANY_REQUIRE_NATIVE_AVD_SIZE=1 bash scripts/run_android_instrumentation_ci.sh
+      - name: Upload Android instrumentation reports
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: android-native-ci-reports
+          name: android-native-instrumentation-reports
           if-no-files-found: warn
           retention-days: 14
           path: |
-            android-native/app/build/reports/lint-results-*.html
-            android-native/app/build/reports/tests/
             android-native/app/build/reports/androidTests/
-            android-native/app/build/test-results/
             android-native/app/build/outputs/androidTest-results/
             android-native/app/build/outputs/ci-diagnostics/
-            android-native/audit-driver/build/reports/tests/
-            android-native/audit-driver/build/test-results/
 
   docker:
     runs-on: ubuntu-24.04

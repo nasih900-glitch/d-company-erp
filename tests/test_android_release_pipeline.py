@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os
 import re
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 INSTRUMENTATION_SCRIPT = ROOT / "scripts" / "run_android_instrumentation_ci.sh"
+AVD_CONFIGURATOR = ROOT / "scripts" / "configure_ci_android_avd.py"
 MAIN_MANIFEST = ROOT / "android-native" / "app" / "src" / "main" / "AndroidManifest.xml"
 DIRECT_MANIFEST = (
     ROOT / "android-native" / "app" / "src" / "directRelease" / "AndroidManifest.xml"
@@ -174,8 +177,8 @@ class AndroidReleasePipelineTest(unittest.TestCase):
 
         self.assertIn("profile: pixel_c", ci_workflow)
         self.assertIn("profile: pixel_c", release_workflow)
-        self.assertIn("shell wm size 2560x1600", instrumentation)
-        self.assertIn("shell wm density 320", instrumentation)
+        self.assertIn("shell wm size 1280x800", instrumentation)
+        self.assertIn("shell wm density 160", instrumentation)
         self.assertIn("logical_viewport=1280x800dp", instrumentation)
         self.assertIn("shell wm size reset", instrumentation)
         self.assertIn("shell wm density reset", instrumentation)
@@ -833,6 +836,112 @@ class AndroidReleasePipelineTest(unittest.TestCase):
 
         self.assertIn("?Content-Security-Policy", caddy)
         self.assertNotIn("\n        Content-Security-Policy  ", caddy)
+
+    def test_ci_avd_configurator_changes_only_the_physical_display(self) -> None:
+        ci_workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+        release_workflow = WORKFLOW.read_text(encoding="utf-8")
+        instrumentation = INSTRUMENTATION_SCRIPT.read_text(encoding="utf-8")
+        for workflow in (ci_workflow, release_workflow):
+            self.assertIn(
+                "pre-emulator-launch-script: python3 scripts/configure_ci_android_avd.py test",
+                workflow,
+            )
+            self.assertIn(
+                "script: D_COMPANY_REQUIRE_NATIVE_AVD_SIZE=1 bash scripts/run_android_instrumentation_ci.sh",
+                workflow,
+            )
+        self.assertIn("Physical size:", instrumentation)
+        self.assertIn("Physical density:", instrumentation)
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            config = Path(temporary_directory) / "test.avd" / "config.ini"
+            config.parent.mkdir()
+            config.write_text(
+                "hw.cpu.ncore=2\nhw.lcd.width=2560\nhw.lcd.height=1800\n"
+                "hw.lcd.density=320\nhw.lcd.width=2560\nhw.ramSize=2048M\n",
+                encoding="utf-8",
+            )
+            environment = {**os.environ, "ANDROID_AVD_HOME": temporary_directory}
+            for _ in range(2):
+                subprocess.run(
+                    [sys.executable, str(AVD_CONFIGURATOR), "test"],
+                    env=environment,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+            self.assertEqual(
+                config.read_text(encoding="utf-8"),
+                "hw.cpu.ncore=2\nhw.ramSize=2048M\n"
+                "hw.lcd.width=1280\nhw.lcd.height=800\nhw.lcd.density=160\n",
+            )
+
+    def test_ci_and_release_android_emulators_use_same_host_build_and_renderer(self) -> None:
+        expected = (
+            "-no-window -gpu software -feature -Vulkan "
+            "-no-snapshot -noaudio -no-boot-anim"
+        )
+        for workflow_path in (CI_WORKFLOW, WORKFLOW):
+            with self.subTest(workflow=workflow_path.name):
+                workflow = workflow_path.read_text(encoding="utf-8")
+                emulator_job = re.search(
+                    r"(?ms)^  android-instrumentation:\n(.*?)(?=^  [a-z][a-z-]*:|\Z)",
+                    workflow,
+                )
+                self.assertIsNotNone(emulator_job)
+                self.assertIn("timeout-minutes: 70", emulator_job.group(0))
+                self.assertRegex(
+                    workflow,
+                    r"(?m)^    runs-on: macos-15-intel$",
+                )
+                self.assertRegex(
+                    workflow,
+                    r"(?m)^      - name: Enable KVM for Android emulator\n"
+                    r"        if: runner\.os == 'Linux'$",
+                )
+                emulator_builds = re.findall(
+                    r"^\s*emulator-build:\s*(\d+)\s*$",
+                    workflow,
+                    flags=re.MULTILINE,
+                )
+                self.assertEqual(emulator_builds, ["15081367"])
+                options = re.findall(
+                    r"^\s*emulator-options:\s*(.+)$",
+                    workflow,
+                    flags=re.MULTILINE,
+                )
+                self.assertEqual(options, [expected])
+
+    def test_ci_keeps_release_build_and_full_emulator_inventory_as_separate_gates(self) -> None:
+        workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+
+        def job_body(name: str) -> str:
+            match = re.search(
+                rf"(?ms)^  {re.escape(name)}:\n(.*?)(?=^  [a-z][a-z-]*:|\Z)",
+                workflow,
+            )
+            self.assertIsNotNone(match, f"missing CI job: {name}")
+            return match.group(1) if match else ""
+
+        build = job_body("android-native")
+        instrumentation = job_body("android-instrumentation")
+        self.assertIn("runs-on: ubuntu-latest", build)
+        self.assertIn("Build and lint Android release", build)
+        self.assertIn("Run Android JVM tests", build)
+        self.assertNotIn("android-emulator-runner@", build)
+        self.assertIn("runs-on: macos-15-intel", instrumentation)
+        self.assertIn("android-emulator-runner@", instrumentation)
+        self.assertIn(
+            "script: D_COMPANY_REQUIRE_NATIVE_AVD_SIZE=1 bash scripts/run_android_instrumentation_ci.sh",
+            instrumentation,
+        )
+
+    def test_hosted_emulator_compiler_has_the_release_build_memory_envelope(self) -> None:
+        script = INSTRUMENTATION_SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("--max-workers=1", script)
+        self.assertIn("-Xmx4096m", script)
+        self.assertIn("-Pkotlin.compiler.execution.strategy=in-process", script)
+        self.assertNotIn("--max-workers=2", script)
 
 
 if __name__ == "__main__":

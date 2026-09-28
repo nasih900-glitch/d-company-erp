@@ -158,6 +158,7 @@ class PlaytimeLeaderboardItemRead(BaseModel):
     customer_id: UUID
     name: str | None
     masked_phone: str
+    recorded_visits: int
     total_played_minutes: int
     qualifying_paid_minutes: int
     draft_estimated_reward_minutes: int

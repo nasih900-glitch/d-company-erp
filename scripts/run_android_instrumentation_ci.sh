@@ -16,6 +16,7 @@ discovered_tests_file="${shard_evidence_root}/discovered-tests.txt"
 shard_verifier="${repo_root}/scripts/verify_android_instrumentation_shards.py"
 functional_shard_count=4
 stress_class='cloud.dcompany.erp.ui.PhysicalComponentFrameStressUiTest'
+gaming_board_class='cloud.dcompany.erp.ui.screens.gaming.GamingBoardUiTest'
 expected_notification_skip='cloud.dcompany.erp.core.alarm.AlarmLifecycleDeviceTest#grantedNotificationCanBePostedWithPrivateVisibilityAndCancelled'
 expected_exact_alarm_skip='cloud.dcompany.erp.core.alarm.AlarmLifecycleDeviceTest#exactAlarmReachesFailClosedReceiverDuringEmulatedDeepIdle'
 device_serial=''
@@ -29,8 +30,32 @@ tablet_viewport_configured=0
 mkdir -p "${diagnostics_dir}"
 cd "${android_root}"
 
+# Hosted macOS ran out of Kotlin compiler heap while assembling the debug test
+# APK with the project default 2 GiB heap and two Gradle workers. Use the same
+# bounded, in-process compiler envelope as the passing Android release build.
+run_gradle_ci() {
+  ./gradlew --no-daemon --max-workers=1 --stacktrace \
+    '-Dorg.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8' \
+    -Pkotlin.compiler.execution.strategy=in-process "$@"
+}
+
+device_is_connected() {
+  [[ -n "${device_serial}" ]] || return 1
+  local state=''
+  if command -v timeout >/dev/null 2>&1; then
+    state="$(timeout 3s adb -s "${device_serial}" get-state 2>/dev/null)" || return 1
+  else
+    state="$(adb -s "${device_serial}" get-state 2>/dev/null)" || return 1
+  fi
+  [[ "${state}" == 'device' ]]
+}
+
 cleanup_alarm_environment() {
   [[ -n "${device_serial}" ]] || return 0
+  if ! device_is_connected; then
+    echo "Android emulator ${device_serial} disconnected before cleanup." >&2
+    return 1
+  fi
   local cleanup_status=0
   local restored_state=''
   # A failed/aborted deep-idle test must not poison subsequent CI steps.
@@ -77,7 +102,17 @@ restore_system_setting() {
 configure_tablet_viewport() {
   local effective_size=''
   local effective_density=''
+  local physical_size=''
+  local physical_density=''
   local report="${diagnostics_dir}/tablet-viewport.txt"
+
+  physical_size="$(adb -s "${device_serial}" shell wm size | tr -d '\r' | sed -n 's/^Physical size: //p')"
+  physical_density="$(adb -s "${device_serial}" shell wm density | tr -d '\r' | sed -n 's/^Physical density: //p')"
+  if [[ "${D_COMPANY_REQUIRE_NATIVE_AVD_SIZE:-0}" == '1' ]] && \
+     { [[ "${physical_size}" != '1280x800' ]] || [[ "${physical_density}" != '160' ]]; }; then
+    echo "Hosted emulator has unexpected physical display ${physical_size:-unknown} at ${physical_density:-unknown} dpi." >&2
+    return 1
+  fi
 
   display_size_override_initial="$({ adb -s "${device_serial}" shell wm size || true; } | tr -d '\r' | sed -n 's/^Override size: //p')"
   display_density_override_initial="$({ adb -s "${device_serial}" shell wm density || true; } | tr -d '\r' | sed -n 's/^Override density: //p')"
@@ -85,8 +120,11 @@ configure_tablet_viewport() {
   user_rotation_initial="$(adb -s "${device_serial}" shell settings get system user_rotation | tr -d '\r')"
   tablet_viewport_configured=1
 
-  adb -s "${device_serial}" shell wm size 2560x1600 >/dev/null
-  adb -s "${device_serial}" shell wm density 320 >/dev/null
+  # Keep the 1280x800dp tablet layout. CI also verifies the AVD's physical
+  # framebuffer, because a post-boot wm override alone does not shrink it.
+  # Physical-device rendering remains a separate release gate.
+  adb -s "${device_serial}" shell wm size 1280x800 >/dev/null
+  adb -s "${device_serial}" shell wm density 160 >/dev/null
   adb -s "${device_serial}" shell settings put system accelerometer_rotation 0 >/dev/null
   adb -s "${device_serial}" shell settings put system user_rotation 0 >/dev/null
 
@@ -94,14 +132,16 @@ configure_tablet_viewport() {
   effective_density="$(adb -s "${device_serial}" shell wm density | tr -d '\r' | awk -F': ' '/Physical density:/{value=$2} /Override density:/{value=$2} END{print value}')"
   {
     echo "serial=${device_serial}"
+    echo "physical_size=${physical_size}"
+    echo "physical_density=${physical_density}"
     echo "effective_size=${effective_size}"
     echo "effective_density=${effective_density}"
     echo "logical_viewport=1280x800dp"
     echo "rotation=$(adb -s "${device_serial}" shell settings get system user_rotation | tr -d '\r')"
   } | tee "${report}"
 
-  [[ "${effective_size}" == '2560x1600' ]]
-  [[ "${effective_density}" == '320' ]]
+  [[ "${effective_size}" == '1280x800' ]]
+  [[ "${effective_density}" == '160' ]]
   [[ "$(adb -s "${device_serial}" shell settings get system user_rotation | tr -d '\r')" == '0' ]]
 }
 
@@ -109,14 +149,14 @@ reassert_tablet_viewport() {
   local effective_size=''
   local effective_density=''
 
-  adb -s "${device_serial}" shell wm size 2560x1600 >/dev/null
-  adb -s "${device_serial}" shell wm density 320 >/dev/null
+  adb -s "${device_serial}" shell wm size 1280x800 >/dev/null
+  adb -s "${device_serial}" shell wm density 160 >/dev/null
   adb -s "${device_serial}" shell settings put system accelerometer_rotation 0 >/dev/null
   adb -s "${device_serial}" shell settings put system user_rotation 0 >/dev/null
   effective_size="$(adb -s "${device_serial}" shell wm size | tr -d '\r' | awk -F': ' '/Physical size:/{value=$2} /Override size:/{value=$2} END{print value}')"
   effective_density="$(adb -s "${device_serial}" shell wm density | tr -d '\r' | awk -F': ' '/Physical density:/{value=$2} /Override density:/{value=$2} END{print value}')"
-  [[ "${effective_size}" == '2560x1600' ]]
-  [[ "${effective_density}" == '320' ]]
+  [[ "${effective_size}" == '1280x800' ]]
+  [[ "${effective_density}" == '160' ]]
   [[ "$(adb -s "${device_serial}" shell settings get system user_rotation | tr -d '\r')" == '0' ]]
 }
 
@@ -154,6 +194,11 @@ read_deep_idle_enabled() {
 
 capture_diagnostics() {
   [[ -n "${device_serial}" ]] || return 0
+  if ! device_is_connected; then
+    printf 'Android emulator %s disconnected before on-device diagnostics.\n' \
+      "${device_serial}" > "${diagnostics_dir}/device-disconnected.txt"
+    return 0
+  fi
   adb -s "${device_serial}" logcat -d -v threadtime > "${diagnostics_dir}/logcat.txt" || true
   adb -s "${device_serial}" shell dumpsys activity processes > "${diagnostics_dir}/activity-processes.txt" || true
   adb -s "${device_serial}" shell dumpsys alarm > "${diagnostics_dir}/alarm-service.txt" || true
@@ -278,6 +323,29 @@ preserve_instrumentation_lane() {
   return "${preserved}"
 }
 
+sample_host_health() {
+  local lane_dir=$1
+  local phase=$2
+  {
+    printf 'phase=%s utc=%s\n' "${phase}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    if [[ -r /proc/meminfo ]]; then
+      awk '/^(MemAvailable|SwapFree):/ { print }' /proc/meminfo
+    fi
+    for counter in /sys/fs/cgroup/memory.current /sys/fs/cgroup/memory.max; do
+      if [[ -r "${counter}" ]]; then
+        printf '%s=' "${counter##*/}"
+        cat "${counter}"
+      fi
+    done
+    if [[ -r /sys/fs/cgroup/memory.events ]]; then
+      awk '/^(oom|oom_kill|oom_group_kill) / { print "cgroup_" $0 }' \
+        /sys/fs/cgroup/memory.events
+    fi
+    ps -eo pid=,ppid=,rss=,comm= 2>/dev/null \
+      | awk '$4 ~ /(qemu|emulator)/ { print "process " $0; if (++count == 8) exit }'
+  } >> "${lane_dir}/host-health.txt" 2>&1 || true
+}
+
 run_connected_instrumentation_lane() {
   local lane_name=$1
   shift
@@ -285,13 +353,15 @@ run_connected_instrumentation_lane() {
   local lane_status=0
 
   mkdir -p "${lane_dir}"
+  sample_host_health "${lane_dir}" before
   clear_connected_outputs
   if ! reset_emulator_for_instrumentation_lane 2>&1 | tee "${lane_dir}/reset.log"; then
     lane_status=1
-  elif ! ./gradlew --no-daemon --max-workers=2 --stacktrace \
-    "$@" :app:connectedDebugAndroidTest 2>&1 | tee "${lane_dir}/gradle.log"; then
+  elif ! run_gradle_ci "$@" :app:connectedDebugAndroidTest \
+    2>&1 | tee "${lane_dir}/gradle.log"; then
     lane_status=1
   fi
+  sample_host_health "${lane_dir}" after
   if ! preserve_instrumentation_lane "${lane_dir}"; then
     lane_status=1
   fi
@@ -355,13 +425,20 @@ mkdir -p "${shard_evidence_root}"
 
 # Discover the exact runner inventory once, without executing test bodies. The
 # later verifier rejects a missing, duplicated or unexpected test across all
-# functional shards and the isolated physical-frame stress lane.
-if ! ./gradlew --no-daemon --max-workers=2 --stacktrace \
-  :app:assembleDebug :app:assembleDebugAndroidTest \
+# functional shards and both isolated Gaming and physical-frame lanes.
+if ! run_gradle_ci :app:assembleDebug :app:assembleDebugAndroidTest \
   2>&1 | tee "${shard_evidence_root}/assemble.log"; then
   status=1
 elif ! discover_instrumentation_tests; then
   status=1
+fi
+
+if [[ "${status}" -eq 0 ]]; then
+  if ! run_connected_instrumentation_lane \
+    'gaming-board' \
+    "-Pandroid.testInstrumentationRunnerArguments.class=${gaming_board_class}"; then
+    status=1
+  fi
 fi
 
 if [[ "${status}" -eq 0 ]]; then
@@ -370,11 +447,14 @@ if [[ "${status}" -eq 0 ]]; then
       "functional-shard-${shard_index}" \
       "-Pandroid.testInstrumentationRunnerArguments.numShards=${functional_shard_count}" \
       "-Pandroid.testInstrumentationRunnerArguments.shardIndex=${shard_index}" \
-      "-Pandroid.testInstrumentationRunnerArguments.notClass=${stress_class}"; then
+      "-Pandroid.testInstrumentationRunnerArguments.notClass=${stress_class},${gaming_board_class}"; then
       status=1
+      break
     fi
   done
+fi
 
+if [[ "${status}" -eq 0 ]]; then
   # These long render-cadence tests intentionally create sustained physical
   # frame load. Run them last in their own fresh instrumentation process so
   # they cannot poison functional Compose/IME/window tests that follow.
@@ -383,12 +463,15 @@ if [[ "${status}" -eq 0 ]]; then
     "-Pandroid.testInstrumentationRunnerArguments.class=${stress_class}"; then
     status=1
   fi
+fi
 
+if [[ "${status}" -eq 0 ]]; then
   if ! python3 "${shard_verifier}" verify \
     --expected-tests "${discovered_tests_file}" \
     --evidence-root "${shard_evidence_root}" \
     --functional-shards "${functional_shard_count}" \
     --stress-class "${stress_class}" \
+    --gaming-board-class "${gaming_board_class}" \
     --expected-skip "${expected_notification_skip}" \
     --expected-skip "${expected_exact_alarm_skip}" \
     --summary "${shard_evidence_root}/summary.txt"; then

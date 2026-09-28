@@ -148,6 +148,7 @@ data class PlaytimeLeaderboardItem(
     @SerialName("total_played_minutes") val totalPlayedMinutes: Int,
     @SerialName("qualifying_paid_minutes") val qualifyingPaidMinutes: Int,
     @SerialName("draft_estimated_reward_minutes") val draftEstimatedRewardMinutes: Int,
+    @SerialName("recorded_visits") val recordedVisits: Int? = null,
 )
 
 @Serializable

@@ -2,13 +2,12 @@ package cloud.dcompany.erp.ui.screens.customers
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.RowScope
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -16,12 +15,14 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ReceiptLong
@@ -33,6 +34,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.EventRepeat
+import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.PersonAdd
@@ -43,7 +45,10 @@ import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -51,18 +56,24 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.remember
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -109,30 +120,62 @@ import java.util.Locale
 fun CustomersScreen(access: CustomersAccess = CustomersAccess()) {
     val vm: CustomersViewModel = viewModel()
     val state by vm.state.collectAsStateWithLifecycle()
+    val playtimeVm: CustomerPlaytimeViewModel = viewModel()
+    val playtime by playtimeVm.state.collectAsStateWithLifecycle()
+    val focusManager = LocalFocusManager.current
+    var listFilter by rememberSaveable { mutableStateOf(CustomerListFilter.All) }
+    var viewMode by rememberSaveable { mutableStateOf(CustomerViewMode.Directory) }
+    LaunchedEffect(viewMode) {
+        if (viewMode == CustomerViewMode.PlayHours) playtimeVm.refresh()
+    }
     SideEffect { vm.updateAccess(access) }
+    SideEffect { playtimeVm.clearIfScopeChanged() }
+    DisposableEffect(playtimeVm) {
+        onDispose { playtimeVm.clear() }
+    }
 
     Column(
         Modifier.fillMaxSize().padding(Spacing.lg),
         verticalArrangement = Arrangement.spacedBy(Spacing.md),
     ) {
-        CustomerActionRow(
-            state = state,
-            canWrite = access.canManageCustomers,
-            onQueryChange = vm::search,
-            onClearSearch = vm::clearSearch,
-            onRefresh = vm::retry,
-            onAdd = vm::startCreate,
-        )
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Default.People, contentDescription = null,
+                tint = Brand.GoldBright, modifier = Modifier.size(32.dp))
+            Column {
+                Text("CUSTOMERS", color = Brand.Foreground,
+                    style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                Text("Players make D Company", color = Brand.ForegroundMuted,
+                    style = MaterialTheme.typography.labelMedium)
+            }
+        }
+        CustomerViewModeSelector(viewMode) { next ->
+            focusManager.clearFocus()
+            if (next == CustomerViewMode.PlayHours) vm.clearSelection()
+            viewMode = next
+        }
+        if (viewMode == CustomerViewMode.Directory) {
+            CustomerActionRow(
+                state = state,
+                canWrite = access.canManageCustomers,
+                onQueryChange = vm::search,
+                onClearSearch = vm::clearSearch,
+                onRefresh = vm::retry,
+                onAdd = vm::startCreate,
+                filter = listFilter,
+                onFilterChange = { listFilter = it },
+            )
+        }
         if (!access.canManageCustomers) ViewOnlyNotice()
-        Totals(state)
-        CustomerPlaytimeSummary()
 
         state.notice?.let {
             NoticeBanner(it, vm::dismissNotice)
         }
 
-        BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
-            val twoPane = maxWidth >= 760.dp
+        Box(Modifier.weight(1f).fillMaxWidth()) {
             val selected = state.selected
 
             // The Customers destination is retained by the app shell. Refresh
@@ -151,6 +194,13 @@ fun CustomersScreen(access: CustomersAccess = CustomersAccess()) {
             }
 
             when {
+                viewMode == CustomerViewMode.PlayHours -> CustomerLeaderboardPanel(
+                    state = playtimeVm.stateForCurrentScope(playtime),
+                    onRefresh = playtimeVm::refresh,
+                    onLoadMore = playtimeVm::loadMore,
+                    modifier = Modifier.fillMaxSize(),
+                )
+
                 state.loading -> SectionCard(Modifier.fillMaxSize()) {
                     LoadingSkeleton(lines = 7)
                 }
@@ -197,35 +247,6 @@ fun CustomersScreen(access: CustomersAccess = CustomersAccess()) {
                     )
                 }
 
-                twoPane -> Row(
-                    Modifier.fillMaxSize(),
-                    horizontalArrangement = Arrangement.spacedBy(Spacing.md),
-                ) {
-                    CustomerResultsPanel(state, vm, Modifier.weight(1f).fillMaxHeight())
-                    Box(Modifier.widthIn(min = 340.dp, max = 400.dp).fillMaxHeight()) {
-                        if (selected == null) {
-                            DetailPlaceholder()
-                        } else {
-                            DetailPane(
-                                selected,
-                                canWrite = access.canManageCustomers,
-                                onEdit = { vm.startEdit(selected) },
-                                onBack = null,
-                                onRetrySync = { vm.retrySync(selected) },
-                                history = state.history.takeIf {
-                                    state.historyCustomerId == selected.id
-                                }.orEmpty(),
-                                historyLoading = state.historyLoading &&
-                                    state.historyCustomerId == selected.id,
-                                historyError = state.historyError.takeIf {
-                                    state.historyCustomerId == selected.id
-                                },
-                                onRetryHistory = vm::retryHistory,
-                            )
-                        }
-                    }
-                }
-
                 selected != null -> DetailPane(
                     customer = selected,
                     canWrite = access.canManageCustomers,
@@ -243,7 +264,12 @@ fun CustomersScreen(access: CustomersAccess = CustomersAccess()) {
                 )
 
                 else -> Column(Modifier.fillMaxSize()) {
-                    CustomerResultsPanel(state, vm, Modifier.fillMaxSize())
+                    CustomerResultsPanel(
+                        state = state,
+                        onSelect = vm::select,
+                        filter = listFilter,
+                        modifier = Modifier.fillMaxSize(),
+                    )
                 }
             }
         }
@@ -261,94 +287,6 @@ fun CustomersScreen(access: CustomersAccess = CustomersAccess()) {
     }
 }
 
-@Composable
-private fun CustomerPlaytimeSummary() {
-    val vm: CustomerPlaytimeViewModel = viewModel()
-    val state by vm.state.collectAsStateWithLifecycle()
-    val board = state.leaderboard
-    SectionCard(
-        title = "Play hours · draft proposal",
-        subtitle = "Recorded completed sessions; no free time has been issued",
-        icon = Icons.Default.EventRepeat,
-        tone = UiTone.Information,
-        action = {
-            TextButton(onClick = vm::refresh, enabled = !state.loading) {
-                Text("Refresh")
-            }
-        },
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(
-            horizontal = Spacing.lg,
-            vertical = Spacing.sm,
-        ),
-    ) {
-        when {
-            state.loading && board == null -> LoadingSkeleton(lines = 2)
-            state.error != null && board == null -> Text(
-                state.error.orEmpty(),
-                color = Brand.ForegroundMuted,
-                style = MaterialTheme.typography.bodySmall,
-            )
-            board == null || board.items.isEmpty() -> Text(
-                "No completed customer sessions are recorded yet.",
-                color = Brand.ForegroundMuted,
-                style = MaterialTheme.typography.bodySmall,
-            )
-            else -> {
-                Text(
-                    "Draft estimate: every ${formatPlayMinutes(board.program.thresholdPaidMinutes)} " +
-                        "of qualifying paid play would equal ${formatPlayMinutes(board.program.rewardMinutes)}. " +
-                        "Rewards and WhatsApp messages are off.",
-                    color = Brand.ForegroundMuted,
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                board.items.take(3).forEach { row ->
-                    Row(
-                        Modifier.fillMaxWidth().padding(top = Spacing.sm),
-                        horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            "#${row.rank}",
-                            fontWeight = FontWeight.Bold,
-                            color = Brand.Gold,
-                            modifier = Modifier.widthIn(min = 28.dp),
-                        )
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                row.name?.takeIf(String::isNotBlank) ?: "Unnamed customer",
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                            Text(
-                                row.maskedPhone,
-                                color = Brand.ForegroundMuted,
-                                style = MaterialTheme.typography.labelSmall,
-                            )
-                        }
-                        Text(
-                            formatPlayMinutes(row.totalPlayedMinutes),
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                        Text(
-                            "Draft estimate ${formatPlayMinutes(row.draftEstimatedRewardMinutes)}",
-                            color = Brand.ForegroundMuted,
-                            style = MaterialTheme.typography.labelSmall,
-                        )
-                    }
-                }
-                if (board.total > board.items.take(3).size) {
-                    Text(
-                        "Showing the leading 3 of ${board.total} customers. Use Web ERP for the full searchable leaderboard and draft settings.",
-                        modifier = Modifier.padding(top = Spacing.sm),
-                        color = Brand.ForegroundMuted,
-                        style = MaterialTheme.typography.labelSmall,
-                    )
-                }
-            }
-        }
-    }
-}
-
 private fun formatPlayMinutes(minutes: Int): String {
     val safe = minutes.coerceAtLeast(0)
     val hours = safe / 60
@@ -360,7 +298,33 @@ private fun formatPlayMinutes(minutes: Int): String {
     }
 }
 
+internal enum class CustomerViewMode { Directory, PlayHours }
+
+@Composable
+private fun CustomerViewModeSelector(selected: CustomerViewMode, onSelect: (CustomerViewMode) -> Unit) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+        ErpButton(
+            text = "Customer directory",
+            onClick = { onSelect(CustomerViewMode.Directory) },
+            modifier = Modifier.weight(1f),
+            intent = if (selected == CustomerViewMode.Directory) ActionIntent.Primary else ActionIntent.Secondary,
+        )
+        ErpButton(
+            text = "Playtime leaderboard",
+            onClick = { onSelect(CustomerViewMode.PlayHours) },
+            modifier = Modifier.weight(1f),
+            intent = if (selected == CustomerViewMode.PlayHours) ActionIntent.Primary else ActionIntent.Secondary,
+        )
+    }
+}
+
 // ------------------------------------------------------------------ header
+
+internal enum class CustomerListFilter(val label: String) {
+    All("All customers"),
+    NeedsSync("Waiting to sync"),
+    SyncFailed("Sync failed"),
+}
 
 @Composable
 private fun CustomerActionRow(
@@ -370,6 +334,8 @@ private fun CustomerActionRow(
     onClearSearch: () -> Unit,
     onRefresh: () -> Unit,
     onAdd: () -> Unit,
+    filter: CustomerListFilter,
+    onFilterChange: (CustomerListFilter) -> Unit,
 ) {
     BoxWithConstraints(Modifier.fillMaxWidth()) {
         val compact = maxWidth < 760.dp
@@ -379,6 +345,7 @@ private fun CustomerActionRow(
                 CustomerSearchBar(state, onQueryChange, onClearSearch)
                 ActionBar(
                     leading = {
+                        CustomerFilterAction(filter, onFilterChange)
                         CustomerRefreshAction(state, onRefresh, Modifier.weight(1f))
                         CustomerAddAction(canWrite, onAdd, Modifier.weight(1f))
                     },
@@ -396,10 +363,36 @@ private fun CustomerActionRow(
                     if (state.query.isNotBlank()) {
                         ErpButton("Clear", onClearSearch, intent = ActionIntent.Quiet)
                     }
+                    CustomerFilterAction(filter, onFilterChange)
                     CustomerRefreshAction(state, onRefresh)
                     CustomerAddAction(canWrite, onAdd)
                 },
             )
+        }
+    }
+}
+
+@Composable
+private fun CustomerFilterAction(
+    filter: CustomerListFilter,
+    onFilterChange: (CustomerListFilter) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        OutlinedButton(onClick = { expanded = true }) {
+            Icon(Icons.Default.FilterList, contentDescription = null, modifier = Modifier.size(18.dp))
+            Text(if (filter == CustomerListFilter.All) "Filter" else filter.label)
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            CustomerListFilter.entries.forEach { option ->
+                DropdownMenuItem(
+                    text = { Text(option.label) },
+                    onClick = {
+                        expanded = false
+                        onFilterChange(option)
+                    },
+                )
+            }
         }
     }
 }
@@ -458,88 +451,6 @@ private fun CustomerAddAction(
 }
 
 @Composable
-private fun Totals(state: CustomersUiState) {
-    BoxWithConstraints(Modifier.fillMaxWidth()) {
-        val cards: @Composable RowScope.() -> Unit = {
-            CompactStatCard(
-                label = if (state.searching) "Matches" else "Customers",
-                value = state.rows.size.grouped(),
-                detail = if (state.searching) "Current search" else "Saved profiles",
-                icon = Icons.Default.People,
-                tone = UiTone.Information,
-                modifier = Modifier.weight(1f),
-            )
-            CompactStatCard(
-                label = "Total visits",
-                value = state.totalVisits.grouped(),
-                detail = "Current result set",
-                icon = Icons.Default.EventRepeat,
-                tone = UiTone.Success,
-                modifier = Modifier.weight(1f),
-            )
-            CompactStatCard(
-                label = "Total spend",
-                value = state.totalSpentMinor.asRupees(),
-                detail = "Current result set",
-                icon = Icons.Default.Payments,
-                tone = UiTone.Brand,
-                modifier = Modifier.weight(1f),
-            )
-            CompactStatCard(
-                label = "Points held",
-                value = state.totalPoints.grouped(),
-                detail = "Worth ${(state.totalPoints * MINOR_PER_POINT).asRupees()}",
-                icon = Icons.Default.Star,
-                tone = UiTone.Warning,
-                modifier = Modifier.weight(1f),
-            )
-        }
-        if (maxWidth >= 760.dp) {
-            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm), content = cards)
-        } else {
-            Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                    CompactStatCard(
-                        label = if (state.searching) "Matches" else "Customers",
-                        value = state.rows.size.grouped(),
-                        detail = if (state.searching) "Current search" else "Saved profiles",
-                        icon = Icons.Default.People,
-                        tone = UiTone.Information,
-                        modifier = Modifier.weight(1f),
-                    )
-                    CompactStatCard(
-                        label = "Total visits",
-                        value = state.totalVisits.grouped(),
-                        detail = "Current result set",
-                        icon = Icons.Default.EventRepeat,
-                        tone = UiTone.Success,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                    CompactStatCard(
-                        label = "Total spend",
-                        value = state.totalSpentMinor.asRupees(),
-                        detail = "Current result set",
-                        icon = Icons.Default.Payments,
-                        tone = UiTone.Brand,
-                        modifier = Modifier.weight(1f),
-                    )
-                    CompactStatCard(
-                        label = "Points held",
-                        value = state.totalPoints.grouped(),
-                        detail = "Worth ${(state.totalPoints * MINOR_PER_POINT).asRupees()}",
-                        icon = Icons.Default.Star,
-                        tone = UiTone.Warning,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
 private fun NoticeBanner(message: String, onDismiss: () -> Unit) {
     OperationalBanner(
         title = "Customer update",
@@ -573,45 +484,330 @@ private fun SyncFailedNotice(error: String?, canRetry: Boolean, onRetry: () -> U
 // -------------------------------------------------------------------- list
 
 @Composable
-private fun CustomerResultsPanel(
+internal fun CustomerResultsPanel(
     state: CustomersUiState,
-    vm: CustomersViewModel,
+    onSelect: (Customer) -> Unit,
+    filter: CustomerListFilter,
+    modifier: Modifier = Modifier,
+) {
+    val rows = when (filter) {
+        CustomerListFilter.All -> state.rows
+        CustomerListFilter.NeedsSync -> state.rows.filter(Customer::isPendingSync)
+        CustomerListFilter.SyncFailed -> state.rows.filter(Customer::isRejected)
+    }
+    Column(
+        modifier.clip(Radius.shapeLg).background(Brand.Surface)
+            .border(1.dp, Brand.Gold.copy(alpha = 0.38f), Radius.shapeLg),
+    ) {
+        Row(
+            Modifier.fillMaxWidth()
+                .background(
+                    Brush.horizontalGradient(
+                        listOf(Brand.Gold.copy(alpha = 0.12f), Brand.Surface, Brand.Surface),
+                    ),
+                )
+                .padding(horizontal = Spacing.lg, vertical = Spacing.md),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text("Saved customers", color = Brand.GoldBright, style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "${rows.size} shown · ${state.rows.size} in current ${if (state.searching) "search" else "directory"}",
+                    color = Brand.ForegroundMuted,
+                    style = MaterialTheme.typography.labelSmall,
+                )
+                Text(
+                    "${state.totalVisits.grouped()} visits · ${state.totalSpentMinor.asRupees()} spent · " +
+                        "${state.totalPoints.grouped()} points",
+                    color = Brand.ForegroundMuted,
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            }
+            Column(
+                Modifier.clip(Radius.shapeMd)
+                    .background(Brand.Gold.copy(alpha = 0.1f))
+                    .border(1.dp, Brand.Gold.copy(alpha = 0.35f), Radius.shapeMd)
+                    .padding(horizontal = Spacing.md, vertical = Spacing.sm),
+                horizontalAlignment = Alignment.End,
+            ) {
+                Text(
+                    "${state.rows.size.grouped()} customers",
+                    color = Brand.GoldBright,
+                    fontWeight = FontWeight.Bold,
+                )
+                if (state.syncing) Text("Refreshing", color = Brand.Information,
+                    style = MaterialTheme.typography.labelSmall)
+            }
+        }
+        PanelDivider()
+        if (rows.isEmpty()) {
+            Text(
+                "No customers match ${filter.label.lowercase(Locale.getDefault())}.",
+                modifier = Modifier.weight(1f).padding(Spacing.lg),
+                color = Brand.ForegroundMuted,
+            )
+        } else {
+            LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
+                items(rows, key = Customer::id) { customer ->
+                    CustomerRow(
+                        customer = customer,
+                        selected = customer.id == state.selectedId,
+                        onClick = { onSelect(customer) },
+                    )
+                    PanelDivider()
+                }
+            }
+        }
+        Text(
+            "Saved directory works offline · playtime ranks require an online refresh",
+            modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.sm),
+            color = Brand.ForegroundMuted,
+            style = MaterialTheme.typography.labelSmall,
+        )
+    }
+}
+
+@Composable
+internal fun CustomerLeaderboardPanel(
+    state: CustomerPlaytimeUiState,
+    onRefresh: () -> Unit,
+    onLoadMore: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
         modifier.clip(Radius.shapeLg).background(Brand.Surface)
-            .border(1.dp, Brand.BorderSubtle, Radius.shapeLg),
+            .border(1.dp, Brand.Gold.copy(alpha = 0.38f), Radius.shapeLg),
     ) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = Spacing.lg, vertical = Spacing.md),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text("Customer results", color = Brand.Foreground, style = MaterialTheme.typography.titleMedium)
+            Column {
+                Text("Playtime leaderboard", color = Brand.GoldBright,
+                    style = MaterialTheme.typography.titleMedium)
                 Text(
-                    if (state.searching) {
-                        "${state.rows.size} match${if (state.rows.size == 1) "" else "es"} for “${state.query.trim()}”"
-                    } else {
-                        "${state.rows.size} saved profile${if (state.rows.size == 1) "" else "s"}"
-                    },
+                    state.total?.let { "${state.items.size} of $it ranked customers" }
+                        ?: "Online playtime ranking",
                     color = Brand.ForegroundMuted,
                     style = MaterialTheme.typography.labelSmall,
                 )
             }
-            if (state.syncing) {
-                OperationalStatusBadge("Refreshing", UiTone.Information)
-            }
+            ErpButton(
+                text = "Refresh",
+                onClick = onRefresh,
+                enabled = !state.loading,
+                intent = ActionIntent.Secondary,
+                leadingIcon = Icons.Default.Refresh,
+            )
         }
         PanelDivider()
-        LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
-            items(state.rows, key = { it.id }) { customer ->
-                CustomerRow(
-                    customer = customer,
-                    selected = customer.id == state.selectedId,
-                    onClick = { vm.select(customer) },
-                )
-                if (customer.id != state.rows.lastOrNull()?.id) PanelDivider()
+        when {
+            state.loading && state.items.isEmpty() -> {
+                Box(Modifier.weight(1f).fillMaxWidth().padding(Spacing.lg)) {
+                    LoadingSkeleton(lines = 7)
+                }
+            }
+            state.items.isEmpty() -> {
+                Column(
+                    Modifier.weight(1f).fillMaxWidth().padding(Spacing.lg),
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text(
+                        when {
+                            state.error != null -> "Playtime ranking unavailable"
+                            state.total == 0 -> "No customers to rank yet"
+                            else -> "Connect to load playtime ranks"
+                        },
+                        color = Brand.Foreground,
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                    Text(
+                        state.error ?: "Completed sessions will appear after the first online refresh.",
+                        color = if (state.error == null) Brand.ForegroundMuted else Brand.Warning,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    if (state.error != null) ErpButton("Retry", onRefresh)
+                }
+            }
+            else -> {
+                BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+                    val wide = maxWidth >= 700.dp
+                    LazyColumn(Modifier.fillMaxSize()) {
+                        if (wide) item(key = "header") { CustomerTableHeader() }
+                        items(state.items, key = PlaytimeLeaderboardItem::customerId) { item ->
+                            CustomerLeaderboardRow(item, state.program?.rewardsEnabled == true, wide)
+                            PanelDivider()
+                        }
+                        if (state.error != null) item(key = "error") {
+                            Column(Modifier.fillMaxWidth().padding(Spacing.md)) {
+                                Text("Remaining ranks unavailable: ${state.error}", color = Brand.Warning)
+                                ErpButton("Refresh leaderboard", onRefresh, intent = ActionIntent.Secondary)
+                            }
+                        } else if (state.canLoadMore) item(key = "load-more") {
+                            ErpButton(
+                                text = if (state.loading) "Loading more…" else "Load more ranks",
+                                onClick = onLoadMore,
+                                busy = state.loading,
+                                modifier = Modifier.fillMaxWidth().padding(Spacing.md),
+                                intent = ActionIntent.Secondary,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        val rewardNote = if (state.program?.rewardsEnabled == true ||
+            state.program?.messagingEnabled == true
+        ) "Check Web ERP for play rewards and messages"
+        else "Play rewards and messages are off"
+        Text(
+            "Server-ranked completed playtime · Recorded visits are settled purchases · $rewardNote",
+            modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.sm),
+            color = Brand.ForegroundMuted,
+            style = MaterialTheme.typography.labelSmall,
+        )
+    }
+}
+
+@Composable
+private fun CustomerTableHeader() {
+    Row(
+        Modifier.fillMaxWidth().background(Brand.BackgroundSecondary)
+            .padding(horizontal = Spacing.md, vertical = Spacing.sm),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("#", Modifier.width(48.dp), color = Brand.ForegroundMuted,
+            style = MaterialTheme.typography.labelSmall)
+        Text("Customer", Modifier.weight(1f), color = Brand.ForegroundMuted,
+            style = MaterialTheme.typography.labelSmall)
+        Text("Hours played", Modifier.width(112.dp), color = Brand.ForegroundMuted,
+            style = MaterialTheme.typography.labelSmall)
+        Text("Paid hours", Modifier.width(96.dp), color = Brand.ForegroundMuted,
+            style = MaterialTheme.typography.labelSmall)
+        Text("Recorded visits", Modifier.width(116.dp), color = Brand.ForegroundMuted,
+            style = MaterialTheme.typography.labelSmall)
+        Text("Play rewards", Modifier.width(132.dp), color = Brand.ForegroundMuted,
+            style = MaterialTheme.typography.labelSmall)
+    }
+}
+
+@Composable
+private fun CustomerLeaderboardRow(
+    playtime: PlaytimeLeaderboardItem,
+    rewardsEnabled: Boolean,
+    wide: Boolean,
+) {
+    val rank = playtime.rank
+    val rankColor = leaderboardRankColor(rank)
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 64.dp)
+            .background(
+                when {
+                    rankColor != null -> Brush.horizontalGradient(
+                        listOf(rankColor.copy(alpha = 0.14f), Brand.Surface, Brand.Surface),
+                    )
+                    else -> Brush.horizontalGradient(listOf(Brand.Surface, Brand.Surface))
+                },
+            )
+            .padding(horizontal = Spacing.md, vertical = Spacing.sm),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier.width(48.dp).semantics {
+                contentDescription = "Rank $rank by completed playtime"
+            },
+            contentAlignment = Alignment.CenterStart,
+        ) {
+            if (rankColor != null) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    Icon(Icons.Default.Star, contentDescription = null,
+                        tint = rankColor, modifier = Modifier.size(15.dp))
+                    Text(rank.toString(), color = rankColor, fontWeight = FontWeight.Bold)
+                }
+            } else {
+                Text(rank.toString(),
+                    color = Brand.ForegroundMuted, fontWeight = FontWeight.Bold)
+            }
+        }
+        Row(
+            Modifier.weight(1f),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+        ) {
+            Box(
+                Modifier.size(38.dp).clip(CircleShape)
+                    .background((rankColor ?: Brand.Gold).copy(alpha = 0.16f))
+                    .border(
+                        1.dp,
+                        (rankColor ?: Brand.Gold).copy(alpha = if (rankColor == null) 0.22f else 0.68f),
+                        CircleShape,
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(playtime.name?.trim()?.firstOrNull()?.uppercase() ?: "?",
+                    color = rankColor ?: Brand.GoldBright, fontWeight = FontWeight.Bold)
+            }
+            Column {
+                Text(playtime.name?.takeIf(String::isNotBlank) ?: "— no name —", color = Brand.Foreground,
+                    style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                // The leaderboard API has already masked this value and kept
+                // the last four digits for staff identification. Masking it
+                // again would erase that suffix.
+                Text(playtime.maskedPhone,
+                    color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1)
+            }
+        }
+        Text(
+            formatPlayMinutes(playtime.totalPlayedMinutes),
+            modifier = Modifier.width(if (wide) 112.dp else 90.dp), color = rankColor ?: Brand.Foreground,
+            fontWeight = FontWeight.SemiBold,
+        )
+        if (wide) {
+            Text(formatPlayMinutes(playtime.qualifyingPaidMinutes), Modifier.width(96.dp),
+                color = Brand.Foreground)
+            Text(playtime.recordedVisits?.toString() ?: "—", Modifier.width(116.dp),
+                color = Brand.Foreground)
+            Text(
+                if (rewardsEnabled) "See Web" else "Coming soon",
+                modifier = Modifier.width(132.dp).clip(Radius.shapePill)
+                    .background(Brand.SurfaceRaised)
+                    .padding(horizontal = Spacing.sm, vertical = Spacing.xs),
+                color = Brand.ForegroundMuted,
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1,
+            )
+        }
+    }
+}
+
+/** Only the server's actual top-three playtime ranks receive podium colours. */
+private fun leaderboardRankColor(rank: Int?): Color? = when (rank) {
+    1 -> Brand.GoldBright
+    2 -> Color(0xFFB9C7D2)
+    3 -> Color(0xFFD7A176)
+    else -> null
+}
+
+private fun maskCustomerListPhone(phone: String): String {
+    val digitCount = phone.count(Char::isDigit)
+    if (digitCount <= 4) return phone.map { if (it.isDigit()) '*' else it }.joinToString("")
+    val visiblePrefix = if (digitCount > 10) 5 else 2
+    var digitIndex = 0
+    return buildString(phone.length) {
+        phone.forEach { character ->
+            if (character.isDigit()) {
+                append(if (digitIndex in visiblePrefix until digitCount - 2) '*' else character)
+                digitIndex++
+            } else {
+                append(character)
             }
         }
     }
@@ -652,8 +848,8 @@ private fun CustomerRow(customer: Customer, selected: Boolean, onClick: () -> Un
                 )
                 RankBadge(customer.gamingRank)
             }
-            Text(
-                customer.phone,
+                Text(
+                    maskCustomerListPhone(customer.phone),
                 fontFamily = FontFamily.Monospace,
                 style = MaterialTheme.typography.labelMedium,
                 color = Brand.ForegroundMuted,
@@ -713,17 +909,6 @@ private fun rankColour(rank: String) = when (rank) {
 }
 
 // ------------------------------------------------------------------ detail
-
-@Composable
-private fun DetailPlaceholder() {
-    SectionCard(Modifier.fillMaxSize()) {
-        DesignedEmptyState(
-            title = "Select a customer",
-            body = "Tap a result to review visits, spend, loyalty balance and contact details.",
-            icon = Icons.Default.AccountCircle,
-        )
-    }
-}
 
 @Composable
 private fun DetailPane(

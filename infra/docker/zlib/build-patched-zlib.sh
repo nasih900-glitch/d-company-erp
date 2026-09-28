@@ -19,16 +19,38 @@ FOLLOWUP_PATCH_SHA256='96040ee84d0d187905283912dbd3f7b66ac2033976a2ceefe9b8cca63
 FOLLOWUP_PATCH_FILE='/tmp/dcompany-zlib/cve-2026-85091-followup.patch'
 BUILD_ROOT='/tmp/dcompany-zlib/source'
 OUTPUT_ROOT='/out'
+SOURCE_ARCHIVE='/tmp/zlib-1.3.2.tar.gz'
 EXPECTED_GZWRITE_SHA256='cc6687863cc2560ca866e9fd480802d0a90fe09b65bea37f1b1a59e5a02f9e2b'
+
+fetch_zlib_source() {
+    attempt=1
+    while [ "$attempt" -le 3 ]; do
+        if wget -T 30 -O "$SOURCE_ARCHIVE" "$SOURCE_URL"; then
+            actual_sha256=$(sha256sum "$SOURCE_ARCHIVE" | awk '{print $1}')
+            if [ "$actual_sha256" != "$SOURCE_SHA256" ]; then
+                printf 'zlib source SHA256 mismatch: expected %s, got %s\n' \
+                    "$SOURCE_SHA256" "$actual_sha256" >&2
+                return 1
+            fi
+            return 0
+        fi
+        if [ "$attempt" -eq 3 ]; then
+            printf 'zlib source download failed after 3 attempts: %s\n' "$SOURCE_URL" >&2
+            return 1
+        fi
+        printf 'zlib source download failed (attempt %s/3); retrying\n' "$attempt" >&2
+        sleep "$attempt"
+        attempt=$((attempt + 1))
+    done
+}
 
 test "$(sha256sum "$NULL_GUARD_PATCH_FILE" | awk '{print $1}')" = "$NULL_GUARD_SHA256"
 test "$(sha256sum "$PRINTF_RETURN_PATCH_FILE" | awk '{print $1}')" = "$PRINTF_RETURN_SHA256"
 test "$(sha256sum "$PRIMARY_PATCH_FILE" | awk '{print $1}')" = "$PRIMARY_PATCH_SHA256"
 test "$(sha256sum "$FOLLOWUP_PATCH_FILE" | awk '{print $1}')" = "$FOLLOWUP_PATCH_SHA256"
-wget -q -O /tmp/zlib-1.3.2.tar.gz "$SOURCE_URL"
-test "$(sha256sum /tmp/zlib-1.3.2.tar.gz | awk '{print $1}')" = "$SOURCE_SHA256"
+fetch_zlib_source
 mkdir -p "$BUILD_ROOT" "$OUTPUT_ROOT/usr/lib" "$OUTPUT_ROOT/etc/dcompany"
-tar -xzf /tmp/zlib-1.3.2.tar.gz -C "$BUILD_ROOT" --strip-components=1
+tar -xzf "$SOURCE_ARCHIVE" -C "$BUILD_ROOT" --strip-components=1
 cd "$BUILD_ROOT"
 patch -p1 --forward --batch < "$NULL_GUARD_PATCH_FILE"
 patch -p1 --forward --batch < "$PRINTF_RETURN_PATCH_FILE"

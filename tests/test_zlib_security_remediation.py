@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 
@@ -60,6 +61,71 @@ def test_official_zlib_source_and_complete_upstream_patch_chain_are_hash_bound()
     assert "adjacent++" in build
     assert "-eq 2" in build
     assert "cc6687863cc2560ca866e9fd480802d0a90fe09b65bea37f1b1a59e5a02f9e2b" in build
+
+
+def test_zlib_source_fetch_retries_failures_and_rejects_wrong_bytes(tmp_path: Path) -> None:
+    source = (ROOT / "infra/docker/zlib/build-patched-zlib.sh").read_text()
+    function = re.search(r"(?ms)^fetch_zlib_source\(\) \{\n.*?^\}\n", source)
+    assert function is not None
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    wget = bin_dir / "wget"
+    wget.write_text(
+        "#!/bin/sh\n"
+        "set -eu\n"
+        "count=$(cat \"$FAKE_WGET_COUNT\" 2>/dev/null || printf 0)\n"
+        "count=$((count + 1))\n"
+        "printf '%s\\n' \"$count\" > \"$FAKE_WGET_COUNT\"\n"
+        "if [ \"$count\" -lt \"$FAKE_WGET_SUCCEED_ON\" ]; then\n"
+        "    printf 'simulated download failure\\n' >&2\n"
+        "    exit 1\n"
+        "fi\n"
+        "while [ \"$#\" -gt 0 ]; do\n"
+        "    if [ \"$1\" = -O ]; then output=$2; break; fi\n"
+        "    shift\n"
+        "done\n"
+        "cp \"$FAKE_WGET_PAYLOAD\" \"$output\"\n"
+    )
+    wget.chmod(0o755)
+    sleep = bin_dir / "sleep"
+    sleep.write_text("#!/bin/sh\nexit 0\n")
+    sleep.chmod(0o755)
+
+    payload = tmp_path / "payload"
+    payload.write_bytes(b"verified source archive fixture")
+    archive = tmp_path / "archive.tar.gz"
+    count_file = tmp_path / "attempts"
+    env = os.environ | {
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "SOURCE_URL": "https://example.test/zlib-1.3.2.tar.gz",
+        "SOURCE_ARCHIVE": str(archive),
+        "SOURCE_SHA256": hashlib.sha256(payload.read_bytes()).hexdigest(),
+        "FAKE_WGET_COUNT": str(count_file),
+        "FAKE_WGET_PAYLOAD": str(payload),
+    }
+    harness = "set -eu\n" + function.group() + "\nfetch_zlib_source\n"
+
+    env["FAKE_WGET_SUCCEED_ON"] = "3"
+    recovered = subprocess.run(["sh", "-c", harness], env=env, capture_output=True, text=True)
+    assert recovered.returncode == 0, recovered.stderr
+    assert count_file.read_text().strip() == "3"
+    assert archive.read_bytes() == payload.read_bytes()
+
+    count_file.unlink()
+    env["SOURCE_SHA256"] = "0" * 64
+    env["FAKE_WGET_SUCCEED_ON"] = "1"
+    mismatch = subprocess.run(["sh", "-c", harness], env=env, capture_output=True, text=True)
+    assert mismatch.returncode != 0
+    assert "zlib source SHA256 mismatch" in mismatch.stderr
+    assert count_file.read_text().strip() == "1"
+
+    count_file.unlink()
+    env["FAKE_WGET_SUCCEED_ON"] = "4"
+    failed = subprocess.run(["sh", "-c", harness], env=env, capture_output=True, text=True)
+    assert failed.returncode != 0
+    assert "zlib source download failed after 3 attempts" in failed.stderr
+    assert count_file.read_text().strip() == "3"
 
 
 def test_every_alpine_runtime_installs_and_proves_the_patched_library() -> None:

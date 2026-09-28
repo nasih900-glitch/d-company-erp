@@ -204,30 +204,25 @@ class AndroidPerformanceOwnershipContractTest {
     }
 
     @Test
-    fun `Gaming command status stays in place and overtime tint is locally derived`() {
+    fun `Gaming board keeps status visible without observing the one-second clock`() {
         val gaming = read("src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingScreen.kt")
         val workspace = gaming.between(
-            "private fun GamingCommandWorkspace(",
-            "@Composable\nprivate fun GamingCommandPanel(",
+            "internal fun GamingCommandWorkspace(",
+            "@Composable\nprivate fun GamingAmbientBackdrop(",
         )
 
         assertTrue(
-            "The command workspace must retain one in-place status rail even when attention clears",
-            "GamingCommandAttentionBar(" in workspace,
+            "Active, available, payment-due, and shift status must remain on the station board",
+            "GamingBoardHeadline(state, onRefresh)" in workspace,
         )
         assertFalse(
-            "Attention changes must not insert or remove the command status rail",
-            "if (attentionCount > 0)" in workspace,
+            "The whole station board must not observe the one-second clock",
+            "wallClock.value" in workspace,
         )
+        val hero = gaming.between("private fun GamingStationHero(", "@Composable\nprivate fun GamingStationArtwork(")
         assertTrue(
-            "Only the selected command panel may observe the overtime clock",
-            "toneProvider = {" in workspace &&
-                "derivedStateOf(structuralEqualityPolicy())" in workspace &&
-                "if (observesOvertime) wallClock.value else stableNow" in workspace,
-        )
-        assertFalse(
-            "The command header must not freeze its tone at an unobserved wall-clock snapshot",
-            "nowMillis = System.currentTimeMillis()" in workspace,
+            "Only an active station's detail should read the ticking clock",
+            "if (ticking) wallClock.value else frozenNow" in hero,
         )
     }
 

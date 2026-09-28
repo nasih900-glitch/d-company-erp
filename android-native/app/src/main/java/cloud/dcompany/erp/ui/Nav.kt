@@ -97,6 +97,7 @@ import cloud.dcompany.erp.core.sync.OutboxWorkStatus
 import cloud.dcompany.erp.core.sync.outboxWorkVisibleLabel
 import cloud.dcompany.erp.ui.components.SyncAvailabilityProblem
 import cloud.dcompany.erp.ui.components.DCompanyBrandMark
+import cloud.dcompany.erp.ui.components.GoldAtmosphere
 import cloud.dcompany.erp.ui.components.fieldColors
 import cloud.dcompany.erp.ui.components.syncAvailabilityCopy
 import cloud.dcompany.erp.ui.components.syncAvailabilityDialogTitle
@@ -138,9 +139,9 @@ enum class Destination(
 }
 
 /**
- * Responsive, touch-first workspace shell. The permanent rail remains fast on
- * a tablet stand, but collapses below laptop width so portrait tablets keep
- * enough room for the active workflow.
+ * Responsive workspace shell. Daily Gaming, POS, Shift and Customers screens
+ * get a full-width control deck and permission-filtered bottom navigation;
+ * the other modules retain their compact or expanded sidebar.
  */
 @Composable
 fun WorkspaceScaffold(
@@ -175,30 +176,25 @@ fun WorkspaceScaffold(
     val destinationStateHolder = rememberSaveableStateHolder()
 
     BoxWithConstraints(Modifier.fillMaxSize().background(Brand.Background)) {
-        // The Redmi-class target is 1280 x 800 logical pixels. Use the compact
-        // rail and header at that exact width so persistent chrome does not
-        // crowd the operational board.
+        // The Redmi-class target is 1280 x 800 logical pixels. Secondary
+        // modules use a compact rail at this width; daily control-deck pages
+        // receive the full-width board and bottom navigation instead.
         val compact = maxWidth <= 1_280.dp
         val narrow = maxWidth < 760.dp
+        val controlDeck = current in setOf(
+            Destination.Gaming,
+            Destination.Pos,
+            Destination.Shift,
+            Destination.Customers,
+        )
         val railWidth = when {
             narrow -> 76.dp
             compact -> 88.dp
             else -> 176.dp
         }
 
-        Row(Modifier.fillMaxSize()) {
-            WorkspaceSidebar(
-                destinations = destinations,
-                current = current,
-                expanded = !compact,
-                narrow = narrow,
-                employeeName = employeeName,
-                locationLabel = locationLabel,
-                modifier = Modifier.width(railWidth).fillMaxHeight(),
-                onSelect = onDestinationChanged,
-            )
-
-            Column(Modifier.weight(1f).fillMaxHeight()) {
+        val contentPane: @Composable (Modifier) -> Unit = { modifier ->
+            Column(modifier) {
                 WorkspaceHeader(
                     destination = current,
                     employeeName = employeeName,
@@ -226,6 +222,9 @@ fun WorkspaceScaffold(
                     onStop = onStopRemoteSupport,
                 )
                 Box(Modifier.fillMaxSize()) {
+                    if (controlDeck && current != Destination.Gaming) {
+                        GoldAtmosphere()
+                    }
                     // A full-screen crossfade renders both destination trees into
                     // overlapping layers. On the target 2560 x 1600 tablet that
                     // turns every sidebar tap into several expensive 4 MP frames,
@@ -241,6 +240,31 @@ fun WorkspaceScaffold(
                 }
             }
         }
+        if (controlDeck) {
+            Column(Modifier.fillMaxSize()) {
+                contentPane(Modifier.weight(1f).fillMaxWidth())
+                ControlDeckBottomNavigation(
+                    destinations = destinations,
+                    current = current,
+                    onSelect = onDestinationChanged,
+                    onOpenMore = { commandOpen = true },
+                )
+            }
+        } else {
+            Row(Modifier.fillMaxSize()) {
+                WorkspaceSidebar(
+                    destinations = destinations,
+                    current = current,
+                    expanded = !compact,
+                    narrow = narrow,
+                    employeeName = employeeName,
+                    locationLabel = locationLabel,
+                    modifier = Modifier.width(railWidth).fillMaxHeight(),
+                    onSelect = onDestinationChanged,
+                )
+                contentPane(Modifier.weight(1f).fillMaxHeight())
+            }
+        }
     }
 
     if (commandOpen) {
@@ -252,6 +276,66 @@ fun WorkspaceScaffold(
                 onDestinationChanged(it)
             },
         )
+    }
+}
+
+/** The four daily workflows stay one tap away; all permitted modules remain in More. */
+@Composable
+private fun ControlDeckBottomNavigation(
+    destinations: List<Destination>,
+    current: Destination,
+    onSelect: (Destination) -> Unit,
+    onOpenMore: () -> Unit,
+) {
+    val primary = listOf(
+        Destination.Gaming,
+        Destination.Pos,
+        Destination.Shift,
+        Destination.Customers,
+    ).filter(destinations::contains)
+    Row(
+        Modifier.fillMaxWidth().height(68.dp).background(Brand.BackgroundSecondary)
+            .border(1.dp, Brand.Gold.copy(alpha = 0.28f)),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        primary.forEach { destination ->
+            val selected = destination == current
+            Column(
+                Modifier.weight(1f).fillMaxHeight()
+                    .selectable(selected = selected, role = Role.Tab) { onSelect(destination) }
+                    .semantics {
+                        contentDescription = "${destination.label}. ${destination.description}"
+                        this.selected = selected
+                    }
+                    .padding(vertical = Spacing.sm),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+            ) {
+                Icon(
+                    destination.icon,
+                    contentDescription = null,
+                    tint = if (selected) Brand.GoldBright else Brand.ForegroundMuted,
+                    modifier = Modifier.size(24.dp),
+                )
+                Text(
+                    destination.label,
+                    color = if (selected) Brand.GoldBright else Brand.ForegroundMuted,
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1,
+                )
+            }
+        }
+        Column(
+            Modifier.weight(1f).fillMaxHeight()
+                .clickable(role = Role.Button, onClick = onOpenMore)
+                .semantics { contentDescription = "More modules" }
+                .padding(vertical = Spacing.sm),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            Icon(Icons.Filled.MoreVert, contentDescription = null, tint = Brand.ForegroundMuted, modifier = Modifier.size(24.dp))
+            Text("More", color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelSmall)
+        }
     }
 }
 
@@ -492,28 +576,48 @@ private fun WorkspaceHeader(
     onSignOut: () -> Unit,
 ) {
     var accountMenuOpen by remember { mutableStateOf(false) }
+    val controlDeckDestination = destination in setOf(
+        Destination.Gaming,
+        Destination.Pos,
+        Destination.Shift,
+        Destination.Customers,
+    )
 
     Row(
-        Modifier.fillMaxWidth().height(68.dp).background(Brand.BackgroundSecondary)
+        Modifier.fillMaxWidth()
+            .height(if (controlDeckDestination) 56.dp else 68.dp)
+            .background(Brand.BackgroundSecondary)
             .border(width = 1.dp, color = Brand.BorderSubtle)
             .padding(horizontal = if (compact) Spacing.md else Spacing.lg),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Spacing.md),
     ) {
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(
-                destination.label,
-                color = Brand.Foreground,
-                style = MaterialTheme.typography.titleLarge,
-                maxLines = 1,
-            )
-            Text(
-                destination.description,
-                color = Brand.ForegroundMuted,
-                style = MaterialTheme.typography.bodySmall,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+        Row(
+            Modifier.weight(1f),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (controlDeckDestination) {
+                DCompanyBrandMark(size = 32.dp, contentDescription = "D Company")
+            }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    if (controlDeckDestination) "D COMPANY" else destination.label,
+                    color = if (controlDeckDestination) Brand.GoldBright else Brand.Foreground,
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = if (controlDeckDestination) FontWeight.Bold else FontWeight.Normal,
+                    letterSpacing = if (controlDeckDestination) 1.sp else 0.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    if (controlDeckDestination) "GAMING LOUNGE" else destination.description,
+                    color = Brand.ForegroundMuted,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
 
         if (!compact) {
@@ -902,8 +1006,6 @@ private fun DestinationCommandDialog(
         }
     }
 
-    LaunchedEffect(Unit) { focusRequester.requestFocus() }
-
     AlertDialog(
         onDismissRequest = onDismiss,
         modifier = Modifier.widthIn(max = 560.dp).fillMaxWidth(0.92f).imePadding(),
@@ -922,6 +1024,7 @@ private fun DestinationCommandDialog(
                     colors = fieldColors(),
                     modifier = Modifier.fillMaxWidth().focusRequester(focusRequester),
                 )
+                LaunchedEffect(focusRequester) { focusRequester.requestFocus() }
                 if (matches.isEmpty()) {
                     Text(
                         "No accessible module matches \"$normalized\".",
