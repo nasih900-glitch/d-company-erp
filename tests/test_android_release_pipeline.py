@@ -936,6 +936,13 @@ class AndroidReleasePipelineTest(unittest.TestCase):
             instrumentation,
         )
 
+    def test_hosted_emulator_compiler_has_the_release_build_memory_envelope(self) -> None:
+        script = INSTRUMENTATION_SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("--max-workers=1", script)
+        self.assertIn("-Xmx4096m", script)
+        self.assertIn("-Pkotlin.compiler.execution.strategy=in-process", script)
+        self.assertNotIn("--max-workers=2", script)
+
 
 if __name__ == "__main__":
     unittest.main()

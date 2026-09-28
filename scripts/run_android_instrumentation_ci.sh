@@ -30,6 +30,15 @@ tablet_viewport_configured=0
 mkdir -p "${diagnostics_dir}"
 cd "${android_root}"
 
+# Hosted macOS ran out of Kotlin compiler heap while assembling the debug test
+# APK with the project default 2 GiB heap and two Gradle workers. Use the same
+# bounded, in-process compiler envelope as the passing Android release build.
+run_gradle_ci() {
+  ./gradlew --no-daemon --max-workers=1 --stacktrace \
+    '-Dorg.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8' \
+    -Pkotlin.compiler.execution.strategy=in-process "$@"
+}
+
 device_is_connected() {
   [[ -n "${device_serial}" ]] || return 1
   local state=''
@@ -348,8 +357,8 @@ run_connected_instrumentation_lane() {
   clear_connected_outputs
   if ! reset_emulator_for_instrumentation_lane 2>&1 | tee "${lane_dir}/reset.log"; then
     lane_status=1
-  elif ! ./gradlew --no-daemon --max-workers=2 --stacktrace \
-    "$@" :app:connectedDebugAndroidTest 2>&1 | tee "${lane_dir}/gradle.log"; then
+  elif ! run_gradle_ci "$@" :app:connectedDebugAndroidTest \
+    2>&1 | tee "${lane_dir}/gradle.log"; then
     lane_status=1
   fi
   sample_host_health "${lane_dir}" after
@@ -417,8 +426,7 @@ mkdir -p "${shard_evidence_root}"
 # Discover the exact runner inventory once, without executing test bodies. The
 # later verifier rejects a missing, duplicated or unexpected test across all
 # functional shards and both isolated Gaming and physical-frame lanes.
-if ! ./gradlew --no-daemon --max-workers=2 --stacktrace \
-  :app:assembleDebug :app:assembleDebugAndroidTest \
+if ! run_gradle_ci :app:assembleDebug :app:assembleDebugAndroidTest \
   2>&1 | tee "${shard_evidence_root}/assemble.log"; then
   status=1
 elif ! discover_instrumentation_tests; then
