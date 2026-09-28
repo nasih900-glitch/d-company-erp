@@ -906,6 +906,30 @@ class AndroidReleasePipelineTest(unittest.TestCase):
                 )
                 self.assertEqual(options, [expected])
 
+    def test_ci_keeps_release_build_and_full_emulator_inventory_as_separate_gates(self) -> None:
+        workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+
+        def job_body(name: str) -> str:
+            match = re.search(
+                rf"(?ms)^  {re.escape(name)}:\n(.*?)(?=^  [a-z][a-z-]*:|\Z)",
+                workflow,
+            )
+            self.assertIsNotNone(match, f"missing CI job: {name}")
+            return match.group(1) if match else ""
+
+        build = job_body("android-native")
+        instrumentation = job_body("android-instrumentation")
+        self.assertIn("runs-on: ubuntu-latest", build)
+        self.assertIn("Build and lint Android release", build)
+        self.assertIn("Run Android JVM tests", build)
+        self.assertNotIn("android-emulator-runner@", build)
+        self.assertIn("runs-on: macos-15-intel", instrumentation)
+        self.assertIn("android-emulator-runner@", instrumentation)
+        self.assertIn(
+            "script: D_COMPANY_REQUIRE_NATIVE_AVD_SIZE=1 bash scripts/run_android_instrumentation_ci.sh",
+            instrumentation,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
