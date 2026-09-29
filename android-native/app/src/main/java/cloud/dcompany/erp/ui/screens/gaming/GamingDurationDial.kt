@@ -25,9 +25,12 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
@@ -38,6 +41,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -46,11 +50,13 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.setProgress
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.stateDescription
-import androidx.compose.ui.unit.IntSize
-import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.dp
+import androidx.core.view.HapticFeedbackConstantsCompat
+import androidx.core.view.ViewCompat
 import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Motion
@@ -77,6 +83,7 @@ internal fun GamingDurationDial(
     modifier: Modifier = Modifier,
     dialSize: Dp = 280.dp,
     showChoiceChips: Boolean = true,
+    segmentTick: (() -> Unit)? = null,
 ) {
     if (choices.isEmpty()) return
     val options = choices.sortedWith(compareBy(GamingDurationChoice::minutes, GamingDurationChoice::packageId))
@@ -91,8 +98,31 @@ internal fun GamingDurationDial(
         animationSpec = tween(durationMillis = Motion.medium, easing = Motion.emphasized),
         label = "Gaming duration selection",
     )
-    val currentSelection by rememberUpdatedState(selectedPackageId)
+    val currentRequestedSelection by rememberUpdatedState(selectedPackageId)
+    val currentDisplayedSelection by rememberUpdatedState(selected.packageId)
     val currentOnSelect by rememberUpdatedState(onSelect)
+    val view = LocalView.current
+    val platformSegmentTick: () -> Unit = remember(view) {
+        { ViewCompat.performHapticFeedback(view, HapticFeedbackConstantsCompat.SEGMENT_TICK) }
+    }
+    val currentSegmentTick by rememberUpdatedState(segmentTick ?: platformSegmentTick)
+    val optionIds = options.map(GamingDurationChoice::packageId)
+    var observedSelection by remember(optionIds) { mutableStateOf(selected.packageId) }
+    var lastPublishedSelection by remember(optionIds) { mutableStateOf(selected.packageId) }
+    SideEffect {
+        if (observedSelection != selected.packageId) {
+            observedSelection = selected.packageId
+            lastPublishedSelection = selected.packageId
+        }
+    }
+    fun publishUserSelection(packageId: String, repeatSameSelection: Boolean) {
+        val changed = packageId != lastPublishedSelection
+        if (changed) {
+            lastPublishedSelection = packageId
+            currentSegmentTick()
+        }
+        if (changed || repeatSameSelection) currentOnSelect(packageId)
+    }
 
     Column(
         modifier = modifier.fillMaxWidth(),
@@ -112,7 +142,7 @@ internal fun GamingDurationDial(
                     )
                     setProgress { requested ->
                         val index = requested.roundToInt().coerceIn(options.indices)
-                        currentOnSelect(options[index].packageId)
+                        publishUserSelection(options[index].packageId, repeatSameSelection = true)
                         true
                     }
                 }
@@ -120,7 +150,10 @@ internal fun GamingDurationDial(
                     fun selectAt(position: Offset) {
                         val index = closestDurationDialStop(position, size, options.size) ?: return
                         val id = options[index].packageId
-                        if (id != currentSelection) currentOnSelect(id)
+                        val needsSelectionNormalization =
+                            currentRequestedSelection != currentDisplayedSelection &&
+                                id == currentDisplayedSelection
+                        publishUserSelection(id, repeatSameSelection = needsSelectionNormalization)
                     }
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = false)
@@ -317,7 +350,12 @@ internal fun GamingDurationDial(
                                         interactionSource = interaction,
                                         indication = null,
                                         role = Role.Button,
-                                    ) { onSelect(option.packageId) }
+                                    ) {
+                                        publishUserSelection(
+                                            option.packageId,
+                                            repeatSameSelection = true,
+                                        )
+                                    }
                                     .semantics {
                                         contentDescription = "Choose ${option.minutes} minutes, ${option.totalMinor.asRupees()}"
                                         this.selected = option.packageId == selected.packageId
@@ -375,7 +413,12 @@ internal fun GamingDurationDial(
                         rowOptions.forEach { option ->
                             FilterChip(
                                 selected = option.packageId == selectedPackageId,
-                                onClick = { onSelect(option.packageId) },
+                                onClick = {
+                                    publishUserSelection(
+                                        option.packageId,
+                                        repeatSameSelection = true,
+                                    )
+                                },
                                 label = { Text("${option.minutes} min · ${option.totalMinor.asRupees()}") },
                                 colors = gamingPackageChipColors(),
                                 modifier = Modifier.weight(1f).sizeIn(minHeight = 48.dp),

@@ -15,6 +15,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -29,6 +30,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performMouseInput
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToIndex
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.swipe
@@ -101,6 +103,136 @@ class GamingBoardUiTest {
         capture("gaming-duration-price-hover.png", "dial-hover-fixture")
         sixtyMinutePrice.performClick()
         compose.runOnIdle { assertEquals("single-60", selected.value) }
+    }
+
+    @OptIn(ExperimentalTestApi::class)
+    @Test
+    fun durationHapticTicksOnlyForDifferentUserPublishedSelections() {
+        val selected = mutableStateOf("single-30")
+        val selections = mutableListOf<String>()
+        var tickCount = 0
+        compose.setContent {
+            DCompanyTheme {
+                GamingDurationDial(
+                    choices = listOf(
+                        GamingDurationChoice("single-30", 30, 8_000),
+                        GamingDurationChoice("single-60", 60, 12_000),
+                        GamingDurationChoice("single-90", 90, 16_000),
+                    ),
+                    selectedPackageId = selected.value,
+                    onSelect = {
+                        selections += it
+                        selected.value = it
+                    },
+                    segmentTick = { tickCount++ },
+                )
+            }
+        }
+
+        compose.runOnIdle { assertEquals(0, tickCount) }
+        compose.runOnIdle { selected.value = "single-60" }
+        compose.waitForIdle()
+        compose.onNodeWithText("90 min · ₹160.00").performMouseInput { enter() }
+        compose.onNodeWithText("60 min · ₹120.00").performClick()
+        compose.runOnIdle {
+            assertEquals(0, tickCount)
+            assertEquals(listOf("single-60"), selections)
+        }
+
+        val dial = compose.onNodeWithContentDescription("Session duration dial")
+        dial.performTouchInput { click(Offset(width * 0.83f, height * 0.31f)) }
+        compose.onNodeWithText("30 min · ₹80.00").performClick()
+        dial.performSemanticsAction(SemanticsActions.SetProgress) { setProgress ->
+            assertTrue(setProgress(1f))
+        }
+        dial.performSemanticsAction(SemanticsActions.SetProgress) { setProgress ->
+            assertTrue(setProgress(1f))
+        }
+
+        compose.runOnIdle {
+            assertEquals(3, tickCount)
+            assertEquals(
+                listOf("single-60", "single-90", "single-30", "single-60", "single-60"),
+                selections,
+            )
+        }
+    }
+
+    @Test
+    fun durationHapticDoesNotTickWhenFirstStopNormalizesMissingSelection() {
+        val selected = mutableStateOf<String?>("single-60")
+        val selections = mutableListOf<String>()
+        var tickCount = 0
+        compose.setContent {
+            DCompanyTheme {
+                GamingDurationDial(
+                    choices = listOf(
+                        GamingDurationChoice("single-30", 30, 8_000),
+                        GamingDurationChoice("single-60", 60, 12_000),
+                    ),
+                    selectedPackageId = selected.value,
+                    onSelect = {
+                        selections += it
+                        selected.value = it
+                    },
+                    segmentTick = { tickCount++ },
+                )
+            }
+        }
+
+        compose.runOnIdle { selected.value = null }
+        compose.waitForIdle()
+        val dial = compose.onNodeWithContentDescription("Session duration dial")
+        dial.performTouchInput { click(Offset(width * 0.17f, height * 0.31f)) }
+        dial.performTouchInput { click(Offset(width * 0.17f, height * 0.31f)) }
+
+        compose.runOnIdle {
+            assertEquals(0, tickCount)
+            assertEquals(listOf("single-30"), selections)
+        }
+    }
+
+    @Test
+    fun durationHapticDragTicksOncePerChangedStopBeforeParentRecomposition() {
+        val selections = mutableListOf<String>()
+        var tickCount = 0
+        compose.setContent {
+            DCompanyTheme {
+                GamingDurationDial(
+                    choices = listOf(
+                        GamingDurationChoice("single-30", 30, 8_000),
+                        GamingDurationChoice("single-60", 60, 12_000),
+                        GamingDurationChoice("single-90", 90, 16_000),
+                    ),
+                    selectedPackageId = "single-30",
+                    onSelect = { selections += it },
+                    segmentTick = { tickCount++ },
+                )
+            }
+        }
+
+        compose.onNodeWithContentDescription("Session duration dial").performTouchInput {
+            val thirty = Offset(width * 0.30f, height * 0.15f)
+            val sixty = Offset(width * 0.60f, height * 0.11f)
+            val ninety = Offset(width * 0.85f, height * 0.30f)
+            down(thirty)
+            moveTo(sixty)
+            moveTo(sixty)
+            moveTo(ninety)
+            moveTo(ninety)
+            moveTo(sixty)
+            moveTo(thirty)
+            moveTo(thirty)
+            up()
+        }
+
+        compose.runOnIdle {
+            assertEquals(4, tickCount)
+            assertEquals(
+                listOf("single-60", "single-90", "single-60", "single-30"),
+                selections,
+            )
+        }
     }
 
     @Test
