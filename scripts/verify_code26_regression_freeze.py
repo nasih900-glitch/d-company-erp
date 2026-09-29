@@ -758,6 +758,8 @@ REVIEWED_CODE30_4_BUILD41_SHA256 = {
 # Build 42 changes only these exact reviewed bytes relative to signed build 41.
 # Freeze-control files are enumerated separately to avoid self-referential hashes.
 REVIEWED_CODE30_4_BUILD42_SHA256 = {
+    '.github/workflows/ci.yml': '8b69ebd08e837747fccfeca98937e0581934263536d2a6d9cb54d5b4e6a15fe5',
+    '.github/workflows/release.yml': '4a109c790435d1b4be25c8f9e4a90d11b65059af9b18031b9cd56886c03e5e81',
     '.env.production.example': 'e28e66ad6f21f31866de67a9e8ddcc4d5bd15db6c5e7ea1ef80191050792735c',
     'android-native/app/build.gradle.kts': 'bd67f512b4550707066fde8a3c3ae377d5509c0296c64aef2940acecf330e80b',
     'android-native/app/src/androidTest/java/cloud/dcompany/erp/core/db/ShiftCloseSafetyDaoTest.kt': '45f729632aa9ecaa85861c0c87c1041c4b2ec2ce9849e06fdf7588a6e30c4e29',
@@ -800,6 +802,7 @@ REVIEWED_CODE30_4_BUILD42_SHA256 = {
     'frontend/package.json': 'b37d5393ba4686ae3fb251fc2debff48b8b1f80ef0f0b93dd6b3a2b3ab2b5309',
     'scripts/analyze_code26_physical_evidence.py': 'fa764129bc898a9f7ecbd1f4e5240d5985d57cb84f0510b2031b52b1194471fa',
     'scripts/run_code26_physical_business_audit.sh': 'f95f0e3c02d54ac7d025be934c81d8ac6a5a0058036a049f678c14e0e6d76280',
+    'tests/test_android_release_pipeline.py': '9952dab31fb34a71553259bb90ec46b4b8538e06843d1d44b54bd974ed9b9492',
     'tests/test_code26_physical_audit_lane.py': '0952d83ff073b196307544aa3b51ffedeb095a48f1057f5a3f519976d0e930b6',
 }
 REVIEWED_CODE30_4_PRODUCTION_PATHS = frozenset(

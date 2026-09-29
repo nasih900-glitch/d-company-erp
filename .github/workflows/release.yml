@@ -330,7 +330,8 @@ jobs:
     # Keep the tagged-release emulator on the same host as CI after Linux
     # QEMU exited during the first Gaming UI case on two emulator builds.
     runs-on: macos-15-intel
-    timeout-minutes: 70
+    # Leave 20 minutes for artifact cleanup after the blocking suite.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Reject non-tag release dispatches before emulator startup

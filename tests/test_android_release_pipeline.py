@@ -889,7 +889,7 @@ class AndroidReleasePipelineTest(unittest.TestCase):
                     workflow,
                 )
                 self.assertIsNotNone(emulator_job)
-                self.assertIn("timeout-minutes: 70", emulator_job.group(0))
+                self.assertIn("timeout-minutes: 90", emulator_job.group(0))
                 self.assertRegex(
                     workflow,
                     r"(?m)^    runs-on: macos-15-intel$",
