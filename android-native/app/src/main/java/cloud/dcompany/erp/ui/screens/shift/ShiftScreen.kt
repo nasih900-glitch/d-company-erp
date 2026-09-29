@@ -221,12 +221,22 @@ fun ShiftScreen(
                         Box(Modifier.widthIn(max = 700.dp).fillMaxWidth()) {
                             CloseShiftCard(
                                 state,
-                                vm,
                                 access.canClose,
                                 access.canOpen,
                                 compactLayout = true,
                                 presentation = presentation,
                                 reviewAnchor = closeReview,
+                                callbacks = ShiftCloseCallbacks(
+                                    onRetryRejectedOpen = vm::retryRejectedOpen,
+                                    onVerifyAndClearRejectedOpen = vm::verifyAndClearRejectedOpen,
+                                    onContinueShift = vm::continueShift,
+                                    onRetryClose = vm::retryClose,
+                                    onRefresh = vm::load,
+                                    currentShiftIdentity = {
+                                        vm.state.value.open?.let(::shiftCloseUiIdentity)
+                                    },
+                                    onCloseShift = vm::closeShift,
+                                ),
                             )
                         }
                     }
@@ -879,7 +889,7 @@ private fun RejectedShiftCard(
     workspaceLabel: String?,
     onRetry: () -> Unit,
     onVerifyAndClear: () -> Unit,
-    titleModifier: Modifier = Modifier,
+    actionModifier: Modifier = Modifier,
 ) {
     val actions = rejectedOpenRecoveryActions(
         hasCurrentShift = currentShift != null,
@@ -896,7 +906,6 @@ private fun RejectedShiftCard(
     ) {
         Text(
             if (currentShift == null) "Couldn't open a shift" else "A shift is already open",
-            modifier = titleModifier,
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.Bold,
             color = Brand.Danger,
@@ -926,7 +935,7 @@ private fun RejectedShiftCard(
                 style = MaterialTheme.typography.labelSmall,
             )
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(actionModifier, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Button(
                 onClick = onRetry,
                 enabled = actions.retryEnabled,
@@ -939,16 +948,26 @@ private fun RejectedShiftCard(
     }
 }
 
+internal class ShiftCloseCallbacks(
+    val onRetryRejectedOpen: () -> Unit,
+    val onVerifyAndClearRejectedOpen: () -> Unit,
+    val onContinueShift: () -> Unit,
+    val onRetryClose: () -> Unit,
+    val onRefresh: () -> Unit,
+    val currentShiftIdentity: () -> String?,
+    val onCloseShift: (Long) -> Unit,
+)
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun CloseShiftCard(
+internal fun CloseShiftCard(
     state: ShiftUiState,
-    vm: ShiftViewModel,
     canClosePermission: Boolean,
     canOpenPermission: Boolean,
     compactLayout: Boolean,
     presentation: WorkspacePresentationPolicy,
     reviewAnchor: BringIntoViewRequester,
+    callbacks: ShiftCloseCallbacks,
 ) {
     val shift = state.open!!
     val closing = shift.local?.state == ShiftState.CLOSE_PENDING
@@ -995,17 +1014,13 @@ private fun CloseShiftCard(
                 canRecover = canOpenPermission,
                 currentShift = shift,
                 workspaceLabel = state.workspaceLabel,
-                onRetry = vm::retryRejectedOpen,
-                onVerifyAndClear = vm::verifyAndClearRejectedOpen,
-                titleModifier = Modifier.bringIntoViewRequester(reviewAnchor),
+                onRetry = callbacks.onRetryRejectedOpen,
+                onVerifyAndClear = callbacks.onVerifyAndClearRejectedOpen,
+                actionModifier = Modifier.bringIntoViewRequester(reviewAnchor),
             )
         }
         Row(
-            if (state.rejectedShift == null) {
-                Modifier.fillMaxWidth().bringIntoViewRequester(reviewAnchor)
-            } else {
-                Modifier.fillMaxWidth()
-            },
+            Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -1032,7 +1047,16 @@ private fun CloseShiftCard(
             workspaceLabel = state.workspaceLabel,
             canClose = canClosePermission && state.canClose,
         )
-        state.closeOriginMessage?.let { ShiftCloseOriginFeedback(it) }
+        state.closeOriginMessage?.let { message ->
+            ShiftCloseOriginFeedback(
+                message = message,
+                modifier = if (state.rejectedShift == null && !closeBlocked) {
+                    Modifier.bringIntoViewRequester(reviewAnchor)
+                } else {
+                    Modifier
+                },
+            )
+        }
         PanelDivider()
         InfoRow(label = "Opening float", value = shift.openingFloatMinor.asRupees())
         InfoRow(
@@ -1155,7 +1179,11 @@ private fun CloseShiftCard(
 
         if (closing) {
             Column(
-                Modifier.fillMaxWidth().clip(Radius.shapeSm)
+                (if (state.rejectedShift == null) {
+                    Modifier.fillMaxWidth().bringIntoViewRequester(reviewAnchor)
+                } else {
+                    Modifier.fillMaxWidth()
+                }).clip(Radius.shapeSm)
                     .background(Brand.SurfaceRaised).padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
@@ -1186,7 +1214,11 @@ private fun CloseShiftCard(
 
         if (closeRejected) {
             Column(
-                Modifier.fillMaxWidth().clip(Radius.shapeSm)
+                (if (state.rejectedShift == null) {
+                    Modifier.fillMaxWidth().bringIntoViewRequester(reviewAnchor)
+                } else {
+                    Modifier.fillMaxWidth()
+                }).clip(Radius.shapeSm)
                     .background(Brand.SurfaceRaised)
                     .border(1.dp, Brand.Danger, Radius.shapeSm)
                     .padding(12.dp),
@@ -1216,14 +1248,14 @@ private fun CloseShiftCard(
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(
-                        onClick = vm::continueShift,
+                        onClick = callbacks.onContinueShift,
                         enabled = canClosePermission && !state.busy &&
                             closePresentation.canContinueShift,
                     ) {
                         Text("Continue shift")
                     }
                     Button(
-                        onClick = vm::retryClose,
+                        onClick = callbacks.onRetryClose,
                         enabled = canClosePermission && !state.busy && state.canClose &&
                             closePresentation.canRetrySavedClose,
                     ) {
@@ -1233,7 +1265,6 @@ private fun CloseShiftCard(
             }
         }
 
-        PanelDivider()
         if (closePresentation.usesSavedCount) {
             Text("Saved drawer count", color = Brand.Foreground, fontWeight = FontWeight.SemiBold)
             Text(
@@ -1248,74 +1279,85 @@ private fun CloseShiftCard(
                 style = MaterialTheme.typography.labelSmall,
             )
             if (!compactLayout) Spacer(Modifier.weight(1f))
-        } else {
-            Text("Count the drawer", color = Brand.Foreground, fontWeight = FontWeight.SemiBold)
-            Text(
-                "Count each note and coin in a focused view. Your total and difference stay visible here.",
-                color = Brand.ForegroundMuted,
-                style = MaterialTheme.typography.labelSmall,
-            )
-            ErpButton(
-                text = if (counts.isEmpty()) "Count cash" else "Edit cash count",
-                onClick = { drawerCountOpen = true },
-                enabled = closePresentation.canEditCount,
-                leadingIcon = Icons.Filled.AccountBalanceWallet,
-                modifier = Modifier.fillMaxWidth(),
-            )
         }
-
-        val displayedCountedMinor = closePresentation.displayedCountedMinor
-        val variance = displayedCountedMinor?.let { counted ->
-            state.expectedMinor?.let { expected -> counted - expected }
-        }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("Counted", color = Brand.ForegroundMuted)
-            Text(
-                displayedCountedMinor?.asRupees() ?: "unavailable",
-                color = if (displayedCountedMinor == null) Brand.Danger else Brand.Foreground,
-                fontWeight = FontWeight.Bold,
-            )
-        }
-        if (variance != null) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("Difference", color = Brand.ForegroundMuted)
+        Column(
+            if (state.rejectedShift == null && !closeBlocked && state.closeOriginMessage == null) {
+                Modifier.fillMaxWidth().bringIntoViewRequester(reviewAnchor)
+            } else {
+                Modifier.fillMaxWidth()
+            },
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            PanelDivider()
+            if (!closePresentation.usesSavedCount) {
+                Text("Count the drawer", color = Brand.Foreground, fontWeight = FontWeight.SemiBold)
                 Text(
-                    when {
-                        variance == 0L -> "balanced"
-                        variance > 0 -> "over ${variance.asRupees()}"
-                        else -> "short ${(-variance).asRupees()}"
-                    },
-                    color = if (variance == 0L) Brand.Good else Brand.Danger,
+                    "Count each note and coin in a focused view. Your total and difference stay visible here.",
+                    color = Brand.ForegroundMuted,
+                    style = MaterialTheme.typography.labelSmall,
+                )
+                ErpButton(
+                    text = if (counts.isEmpty()) "Count cash" else "Edit cash count",
+                    onClick = { drawerCountOpen = true },
+                    enabled = closePresentation.canEditCount,
+                    leadingIcon = Icons.Filled.AccountBalanceWallet,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+
+            val displayedCountedMinor = closePresentation.displayedCountedMinor
+            val variance = displayedCountedMinor?.let { counted ->
+                state.expectedMinor?.let { expected -> counted - expected }
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("Counted", color = Brand.ForegroundMuted)
+                Text(
+                    displayedCountedMinor?.asRupees() ?: "unavailable",
+                    color = if (displayedCountedMinor == null) Brand.Danger else Brand.Foreground,
                     fontWeight = FontWeight.Bold,
                 )
             }
-        }
+            if (variance != null) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Difference", color = Brand.ForegroundMuted)
+                    Text(
+                        when {
+                            variance == 0L -> "balanced"
+                            variance > 0 -> "over ${variance.asRupees()}"
+                            else -> "short ${(-variance).asRupees()}"
+                        },
+                        color = if (variance == 0L) Brand.Good else Brand.Danger,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+            }
 
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            ErpButton(
-                text = "Refresh",
-                onClick = vm::load,
-                enabled = !closing,
-                busy = state.busy && !closing,
-                intent = ActionIntent.Secondary,
-                leadingIcon = Icons.Filled.Refresh,
-            )
-            Spacer(Modifier.weight(1f))
-            ErpButton(
-                text = if (closing) "Waiting for server" else "Close shift",
-                onClick = {
-                    closePresentation.displayedCountedMinor?.let { counted ->
-                        confirmation = ShiftCloseConfirmation(shiftIdentity, counted)
-                    }
-                },
-                enabled = canClosePermission && !closeBlocked && !state.busy && state.canClose,
-                busy = closing,
-                intent = ActionIntent.Destructive,
-            )
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                ErpButton(
+                    text = "Refresh",
+                    onClick = callbacks.onRefresh,
+                    enabled = !closing,
+                    busy = state.busy && !closing,
+                    intent = ActionIntent.Secondary,
+                    leadingIcon = Icons.Filled.Refresh,
+                )
+                Spacer(Modifier.weight(1f))
+                ErpButton(
+                    text = if (closing) "Waiting for server" else "Close shift",
+                    onClick = {
+                        closePresentation.displayedCountedMinor?.let { counted ->
+                            confirmation = ShiftCloseConfirmation(shiftIdentity, counted)
+                        }
+                    },
+                    enabled = canClosePermission && !closeBlocked && !state.busy && state.canClose,
+                    busy = closing,
+                    intent = ActionIntent.Destructive,
+                )
+            }
         }
     }
 
@@ -1356,9 +1398,9 @@ private fun CloseShiftCard(
                     intent = ActionIntent.Destructive,
                     onClick = {
                         confirmation = null
-                        val currentIdentity = vm.state.value.open?.let(::shiftCloseUiIdentity)
+                        val currentIdentity = callbacks.currentShiftIdentity()
                         if (activeConfirmation.isFor(currentIdentity)) {
-                            vm.closeShift(activeConfirmation.countedMinor)
+                            callbacks.onCloseShift(activeConfirmation.countedMinor)
                         } else {
                             // The dialog belonged to a shift that has since changed.
                             // Explain the safe rejection rather than ever applying
@@ -1877,9 +1919,9 @@ private fun HistoryRow(s: ShiftHistoryRow) {
 }
 
 @Composable
-internal fun ShiftCloseOriginFeedback(message: String) {
+internal fun ShiftCloseOriginFeedback(message: String, modifier: Modifier = Modifier) {
     Column(
-        Modifier.fillMaxWidth().clip(Radius.shapeMd)
+        modifier.fillMaxWidth().clip(Radius.shapeMd)
             .background(Brand.Warning.copy(alpha = 0.10f))
             .border(1.dp, Brand.Warning.copy(alpha = 0.6f), Radius.shapeMd)
             .padding(Spacing.md),

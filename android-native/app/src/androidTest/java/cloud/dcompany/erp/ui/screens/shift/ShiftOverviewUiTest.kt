@@ -1,17 +1,25 @@
 package cloud.dcompany.erp.ui.screens.shift
 
 import android.graphics.Bitmap
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -26,8 +34,11 @@ import cloud.dcompany.erp.core.db.LocalShiftEntity
 import cloud.dcompany.erp.core.db.ResolvedOpenShift
 import cloud.dcompany.erp.core.db.ShiftSource
 import cloud.dcompany.erp.core.db.ShiftState
+import cloud.dcompany.erp.ui.WorkspaceFeatureProfiles
+import cloud.dcompany.erp.ui.presentationPolicy
 import cloud.dcompany.erp.ui.theme.DCompanyTheme
 import java.io.File
+import kotlinx.coroutines.launch
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -97,6 +108,48 @@ class ShiftOverviewUiTest {
         compose.onAllNodesWithText("Review & close shift").assertCountEquals(0)
     }
 
+    @OptIn(ExperimentalFoundationApi::class)
+    @Test
+    fun reviewAndCloseScrollsPastVisibleHeadingToDrawerAndCloseControls() {
+        compose.setContent {
+            val reviewTarget = remember { BringIntoViewRequester() }
+            val scope = rememberCoroutineScope()
+            ShiftFixture(
+                width = 900,
+                height = 620,
+                onReview = { scope.launch { reviewTarget.bringIntoView() } },
+                afterOverview = { state ->
+                    Box(Modifier.fillMaxWidth().testTag("production-close-card")) {
+                        CloseShiftCard(
+                            state = state,
+                            canClosePermission = true,
+                            canOpenPermission = true,
+                            compactLayout = true,
+                            presentation = WorkspaceFeatureProfiles.Active.presentationPolicy(),
+                            reviewAnchor = reviewTarget,
+                            callbacks = ShiftCloseCallbacks(
+                                onRetryRejectedOpen = {},
+                                onVerifyAndClearRejectedOpen = {},
+                                onContinueShift = {},
+                                onRetryClose = {},
+                                onRefresh = {},
+                                currentShiftIdentity = { state.open?.let(::shiftCloseUiIdentity) },
+                                onCloseShift = {},
+                            ),
+                        )
+                    }
+                },
+            )
+        }
+
+        compose.onNodeWithText("Count cash").assertIsNotDisplayed()
+        compose.onNodeWithText("Close shift").assertIsNotDisplayed()
+        compose.onNodeWithText("Review & close shift").performScrollTo().performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Count cash").assertIsDisplayed().assertIsEnabled()
+        compose.onNodeWithText("Close shift").assertIsDisplayed().assertIsEnabled()
+    }
+
     private fun screenshot(filename: String) {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val output = File(requireNotNull(context.getExternalFilesDir(null)), filename)
@@ -117,6 +170,7 @@ private fun ShiftFixture(
     rejectedOpen: Boolean = false,
     canClose: Boolean = true,
     onReview: () -> Unit,
+    afterOverview: @Composable (ShiftUiState) -> Unit = {},
 ) {
     val local = LocalShiftEntity(
         localId = "test-shift",
@@ -147,25 +201,28 @@ private fun ShiftFixture(
         openedByName = "Admin",
         openedByEmail = null,
     )
+    val state = ShiftUiState(
+        open = shift,
+        online = true,
+        expectedMinor = if (accountingAvailable) 10_000 else null,
+        canClose = canClose,
+        rejectedShift = local.copy(
+            localId = "rejected-open-attempt",
+            serverShiftId = null,
+            state = ShiftState.OPEN_REJECTED,
+            lastError = "Duplicate open attempt needs review",
+        ).takeIf { rejectedOpen },
+    )
     DCompanyTheme {
         Box(Modifier.width(width.dp).height(height.dp).testTag("shift-overview-fixture")) {
-            Box(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
                 ShiftDashboardOverview(
-                    state = ShiftUiState(
-                        open = shift,
-                        online = true,
-                        expectedMinor = if (accountingAvailable) 10_000 else null,
-                        rejectedShift = local.copy(
-                            localId = "rejected-open-attempt",
-                            serverShiftId = null,
-                            state = ShiftState.OPEN_REJECTED,
-                            lastError = "Duplicate open attempt needs review",
-                        ).takeIf { rejectedOpen },
-                    ),
+                    state = state,
                     canClose = canClose,
                     onRefresh = {},
                     onReview = onReview,
                 )
+                afterOverview(state)
             }
         }
     }
