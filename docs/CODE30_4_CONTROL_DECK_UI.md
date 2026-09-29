@@ -75,6 +75,13 @@ Room reconciliation after Web closes the shift. The customer-dialog test
 separately bounds OS keyboard appearance and layout stability while retaining
 real touch and unclipped-target assertions.
 
+The dependency scan also identified CVE-2026-102274 in PyJWT 2.13.0. Production
+and CI locks use the patched 2.14.0 with hashes verified against its PyPI release,
+and both source dependency declarations require at least that version. Other
+dependency pins are unchanged. This is the JWK-set availability issue described
+in [the upstream advisory](https://github.com/advisories/GHSA-w6j9-cwv2-h6wq);
+the ERP's configured-key token flow still requires its authentication tests.
+
 This patch targets `v3.1.34` / Android build `42`. The signed build 41 is
 immutable predecessor history, not an instruction to reuse its release tag or
 offer it in place of build 42.
