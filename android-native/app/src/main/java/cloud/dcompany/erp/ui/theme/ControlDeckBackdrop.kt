@@ -23,8 +23,15 @@ fun Modifier.controlDeckBackdrop(): Modifier = drawWithCache {
         center = lightCenter,
         radius = lightRadius,
     )
+    val controlLightCenter = Offset(size.width * 0.76f, size.height * 0.54f)
+    val controlLightRadius = size.width * 0.42f
+    val controlLight = Brush.radialGradient(
+        colors = listOf(gold.copy(alpha = 0.065f), Color.Transparent),
+        center = controlLightCenter,
+        radius = controlLightRadius,
+    )
     val streak = Brush.horizontalGradient(
-        listOf(Color.Transparent, gold.copy(alpha = 0.16f), Color.Transparent),
+        listOf(Color.Transparent, gold.copy(alpha = 0.14f), Color.Transparent),
     )
     val paths = List(3) { index ->
         val y = size.height * (0.54f + index * 0.035f)
@@ -51,6 +58,11 @@ fun Modifier.controlDeckBackdrop(): Modifier = drawWithCache {
     onDrawBehind {
         drawRect(base)
         drawCircle(brush = light, radius = lightRadius, center = lightCenter)
+        drawCircle(
+            brush = controlLight,
+            radius = controlLightRadius,
+            center = controlLightCenter,
+        )
         paths.forEachIndexed { index, path ->
             drawPath(path, brush = streak, style = strokes[index])
         }

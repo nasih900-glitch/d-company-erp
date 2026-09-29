@@ -1617,6 +1617,25 @@ def _shift_read_installation_id(
     return installation_id
 
 
+def _android_shift_origin_close_message(request: Request | None) -> str:
+    platform = (
+        request.headers.get("X-Client-Platform", "").strip().lower()
+        if request is not None
+        else ""
+    )
+    if platform == "android":
+        return (
+            "This Android app installation is not verified as the one that opened this shift. "
+            "The shift remains open; a reinstalled app or another installation cannot close "
+            "it while saved work may still be waiting."
+        )
+    return (
+        "This shift was opened by the Android tablet and cannot be closed "
+        "from this browser or a different app installation while saved "
+        "work may still be waiting."
+    )
+
+
 def _require_idempotency(request: Request) -> tuple[str, str]:
     key = getattr(request.state, "idempotency_key", None)
     request_hash = getattr(request.state, "idempotency_request_hash", None)
@@ -9100,11 +9119,7 @@ async def _close_shift_impl(
             session,
             shift,
             issue="android_shift_close_requires_origin_tablet",
-            message=(
-                "This shift was opened by the Android tablet and cannot be closed "
-                "from this browser or a different app installation while saved "
-                "work may still be waiting."
-            ),
+            message=_android_shift_origin_close_message(request),
             next_action=(
                 "On the tablet that opened it, sign in as any staff member with "
                 "Shift close access, reconnect, let all saved work finish syncing, "

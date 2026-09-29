@@ -282,7 +282,12 @@ interface ShiftDao {
         "UPDATE local_shifts SET state = CASE WHEN serverShiftId IS NULL " +
             "THEN 'open_pending' ELSE 'open_synced' END, " +
             "countedMinor = NULL, closedAtMillis = NULL, " +
-            "lastError = NULL, closeResultPending = 0 " +
+            // A definitive origin refusal must survive discarding the count;
+            // otherwise a cached shift becomes a false local-origin proof.
+            "lastError = CASE WHEN " +
+            "instr(lastError, 'This Android app installation is not verified as the one that opened this shift') > 0 OR " +
+            "instr(lastError, 'cannot be closed from this browser or a different app installation') > 0 " +
+            "THEN lastError ELSE NULL END, closeResultPending = 0 " +
             "WHERE localId = :localId AND state = 'close_rejected'",
     )
     suspend fun cancelRejectedClose(localId: String): Int

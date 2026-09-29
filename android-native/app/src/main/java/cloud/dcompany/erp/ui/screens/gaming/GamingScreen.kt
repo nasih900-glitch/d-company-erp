@@ -59,6 +59,7 @@ import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.RestaurantMenu
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.SportsEsports
@@ -1730,13 +1731,13 @@ internal fun GamingCommandWorkspace(
                         wallClock = wallClock, columns = columns,
                         dense = denseGrid,
                         onSelectStation = onSelectStation,
-                        modifier = Modifier.weight(0.40f).fillMaxHeight()
+                        modifier = Modifier.weight(0.35f).fillMaxHeight()
                             .verticalScroll(rememberScrollState()),
                     )
                     controlPane(
-                        Modifier.weight(0.60f).fillMaxHeight()
+                        Modifier.weight(0.65f).fillMaxHeight()
                             .clip(Radius.shapeLg)
-                            .border(1.dp, Brand.Gold.copy(alpha = 0.42f), Radius.shapeLg)
+                            .border(1.dp, Brand.Gold.copy(alpha = 0.28f), Radius.shapeLg)
                             .testTag("gaming-control-pane"),
                     )
                 }
@@ -1771,7 +1772,7 @@ internal fun GamingCommandWorkspace(
                         controlPane(
                             Modifier.fillMaxWidth().height(560.dp)
                                 .clip(Radius.shapeLg)
-                                .border(1.dp, Brand.Gold.copy(alpha = 0.42f), Radius.shapeLg)
+                                .border(1.dp, Brand.Gold.copy(alpha = 0.28f), Radius.shapeLg)
                                 .testTag("gaming-control-pane"),
                         )
                     }
@@ -2424,9 +2425,21 @@ internal fun GamingStationTile(
         StationVisualState.Unavailable -> "Refresh required"
     }
     val missingTariff = session == null && supportingValue == "Fixed-price tariff not synced"
-    val tileStatusLabel = if (missingTariff) {
-        if (dense) "Sync" else if (compact) "Sync rates" else "Rates unavailable"
-    } else presentation.statusLabel
+    val tileStatusLabel = when {
+        missingTariff -> if (dense) "Sync" else if (compact) "Sync rates" else "Rates unavailable"
+        dense -> when (presentation.state) {
+            StationVisualState.Available -> "Ready"
+            StationVisualState.PaymentDue -> "Due"
+            StationVisualState.Overtime -> "Overtime"
+            StationVisualState.StartFailed, StationVisualState.StopFailed,
+            StationVisualState.SendRejected, StationVisualState.BillingMissing -> "Review"
+            StationVisualState.CancellationRequired -> "Resolve"
+            StationVisualState.SendPending -> "Sending"
+            StationVisualState.Unavailable -> "Check"
+            else -> presentation.statusLabel
+        }
+        else -> presentation.statusLabel
+    }
     val tileStatusColor = if (missingTariff) Brand.Warning else accent
 
 
@@ -2441,8 +2454,8 @@ internal fun GamingStationTile(
             .background(
                 Brush.verticalGradient(
                     if (highlighted) listOf(
-                        Color(0xFF393324), Color(0xFF1C292B), Color(0xFF101B21),
-                    ) else listOf(Color(0xFF14242A), Color(0xFF0B171D)),
+                        Color(0xFF29261B), Color(0xFF172124), Color(0xFF091419),
+                    ) else listOf(Color(0xFF101D22), Color(0xFF071218)),
                 ),
             )
             .border(if (highlighted) 2.dp else 1.dp, borderColor, Radius.shapeLg)
@@ -2453,7 +2466,8 @@ internal fun GamingStationTile(
                 contentDescription = if (startsSessionOnTap) {
                     station.name + ". Available. Start session. " + supportingValue
                 } else if (session == null) {
-                    "${station.name}. $tileStatusLabel. $primaryValue. $supportingValue. Select station"
+                    "${station.name}. ${if (missingTariff) "Rates unavailable" else presentation.statusLabel}. " +
+                        "$primaryValue. $supportingValue. Select station"
                 } else {
                     station.name + ". " + presentation.statusLabel + ". Select station controls"
                 }
@@ -2462,18 +2476,17 @@ internal fun GamingStationTile(
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         Box(
-            Modifier.fillMaxWidth().height(if (dense) 52.dp else if (compact) 62.dp else 86.dp)
-                .clip(Radius.shapeMd)
+            Modifier.fillMaxWidth().height(if (dense) 68.dp else if (compact) 76.dp else 96.dp)
                 .background(
                     Brush.radialGradient(
                         if (highlighted) listOf(
-                            Brand.Gold.copy(alpha = 0.20f), Brand.Background,
-                        ) else listOf(Color(0xFF14242A), Brand.Background),
+                            Brand.Gold.copy(alpha = 0.20f), Color.Transparent,
+                        ) else listOf(Brand.Gold.copy(alpha = 0.06f), Color.Transparent),
                     ),
                 ),
             contentAlignment = Alignment.Center,
         ) {
-            GamingStationArtwork(station.type, Modifier.size(if (dense) 60.dp else if (compact) 72.dp else 84.dp))
+            GamingStationArtwork(station.type, Modifier.fillMaxSize())
         }
         Text(
             if (dense) compactStationTitle(station.name) else station.name,
@@ -2499,7 +2512,7 @@ internal fun GamingStationTile(
                     overflow = TextOverflow.Ellipsis,
                 )
                 Spacer(Modifier.weight(1f))
-                if (!missingTariff) Icon(
+                if (!missingTariff && !dense) Icon(
                     Icons.Filled.ChevronRight,
                     contentDescription = null,
                     tint = if (selected || focused) Brand.GoldBright else Brand.ForegroundMuted,
@@ -5455,7 +5468,10 @@ internal fun StartSessionEditor(
                         customerQuery = it.take(200)
                         onSearchCustomer(customerQuery)
                     },
-                    label = { Text("Search by name or phone") },
+                    placeholder = { Text(if (embedded) "Search customer" else "Search by name or phone") },
+                    leadingIcon = if (embedded) {
+                        { Icon(Icons.Filled.Search, contentDescription = null, tint = Brand.Gold) }
+                    } else null,
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth().semantics {
                         contentDescription = "Search saved customers by name or phone"
@@ -5545,15 +5561,19 @@ internal fun StartSessionEditor(
     }
 
     val formContent: @Composable (Boolean, Modifier) -> Unit = { compactIme, formModifier ->
-        Surface(color = Brand.Background, modifier = formModifier) {
+        Surface(
+            color = if (embedded) Color.Transparent else Brand.Background,
+            contentColor = Brand.Foreground,
+            modifier = formModifier,
+        ) {
             Column(
                 Modifier.fillMaxSize()
                     .then(if (embedded) Modifier.background(
                         Brush.verticalGradient(
                             colors = listOf(
-                                Brand.Gold.copy(alpha = 0.12f),
+                                Brand.Gold.copy(alpha = 0.055f),
                                 Color.Transparent,
-                                Brand.Gold.copy(alpha = 0.025f),
+                                Brand.Gold.copy(alpha = 0.012f),
                             ),
                             endY = 800f,
                         ),
@@ -5602,13 +5622,14 @@ internal fun StartSessionEditor(
                     }
                 }
                 BoxWithConstraints(
-                    Modifier.fillMaxWidth().weight(1f)
-                        .verticalScroll(rememberScrollState()),
+                    Modifier.fillMaxWidth().weight(1f),
                     contentAlignment = Alignment.TopCenter,
                 ) {
                 val availableFormWidth = maxWidth
+                val availableFormHeight = maxHeight
                 Column(
                     Modifier.widthIn(max = 760.dp).fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
                         .padding(vertical = if (embedded) Spacing.xs else Spacing.md),
                     verticalArrangement = Arrangement.spacedBy(if (embedded) Spacing.xs else Spacing.md),
                 ) {
@@ -5616,10 +5637,11 @@ internal fun StartSessionEditor(
                 // other on the 960dp tablet as well as the wider layout.
                 val wideEmbeddedDial = embedded && prominentPs5Dial && availableFormWidth >= 420.dp
                 if (wideEmbeddedDial) {
-                    val dialColumnWidth = (availableFormWidth - Spacing.md) * 0.55f
+                    val dialColumnWidth = (availableFormWidth - Spacing.md) * 0.62f
                     val dialSize = minOf(
-                        if (LocalConfiguration.current.screenHeightDp < 700) 170.dp else 344.dp,
+                        if (LocalConfiguration.current.screenHeightDp < 700) 232.dp else 344.dp,
                         dialColumnWidth,
+                        (availableFormHeight - Spacing.sm * 2).coerceAtLeast(160.dp),
                     )
                     Row(
                         Modifier.fillMaxWidth(),
@@ -5630,12 +5652,12 @@ internal fun StartSessionEditor(
                             choices = durationChoices,
                             selectedPackageId = selectedPackageId,
                             onSelect = { selectedPackageId = it },
-                            modifier = Modifier.weight(0.55f),
+                            modifier = Modifier.weight(0.62f),
                             dialSize = dialSize,
                             showChoiceChips = durationChoices.size > 2,
                         )
                         Column(
-                            Modifier.weight(0.45f),
+                            Modifier.weight(0.38f),
                             verticalArrangement = Arrangement.spacedBy(Spacing.xs),
                         ) {
                             optionsContent()

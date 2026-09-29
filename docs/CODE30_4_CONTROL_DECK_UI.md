@@ -50,10 +50,34 @@ Production acceptance still requires the signed update's normal release gates
 and a real-tablet check; emulator frame measurements alone do not prove
 performance on the Redmi Pad.
 
-## Build 41 acceptance
+## Build 42 acceptance
 
-This patch targets `v3.1.33` / Android build `41`. The build-40 runbook is
-historical evidence, not an instruction to offer build 40 in its place.
+Build 42 also addresses the repeated Android shift-close refusal. On 29
+September the production shift's opening installation UUID differed from the
+tablet's later telemetry UUID. This is verified; the reason that UUID changed
+is not established. A normal in-place upgrade must preserve it.
+
+The patch serializes first installation-ID creation across independent store
+instances. Before adopting a server-cached Android shift, the app requires the
+origin ID echoed to that installation, keeps close permission separate from
+opener attribution, and explains an origin refusal without calling the native
+app a browser. An already rejected origin close cannot be turned into another
+unusable drawer count through Continue or Retry. Original local offline and
+Code21 causal-key closes remain supported. Web recovery, financial blockers,
+saved counts, exact terminal scope and backend authorization remain unchanged.
+The photographed rejected local close is reconciled by a successful exact
+terminal refresh after Web closure, with its saved count retained as evidence.
+
+Regression coverage includes concurrent ID creation, version-marker
+persistence, another authorized employee on the same installation, rejection
+on another installation, legacy local lifecycle, saved-count preservation and
+Room reconciliation after Web closes the shift. The customer-dialog test
+separately bounds OS keyboard appearance and layout stability while retaining
+real touch and unclipped-target assertions.
+
+This patch targets `v3.1.34` / Android build `42`. The signed build 41 is
+immutable predecessor history, not an instruction to reuse its release tag or
+offer it in place of build 42.
 
 1. Require green CI for the exact reviewed commit, including full Android
    instrumentation, backend/Web contracts, source freeze and release version.
@@ -62,7 +86,7 @@ historical evidence, not an instruction to offer build 40 in its place.
    against the release manifest. A local debug or physical-audit APK is not an
    in-place business update.
 3. On an isolated emulator, install the signed build actually used by the
-   tablet fleet, save offline test data, then install build 41 over it without
+   tablet fleet, save offline test data, then install build 42 over it without
    uninstalling. Confirm Room and pending work survive, sync once, and verify
    Gaming, POS, Shift and Customers controls at 1280×800 and 960×600.
 4. Before offering it to the partner, check the current live server and tablet

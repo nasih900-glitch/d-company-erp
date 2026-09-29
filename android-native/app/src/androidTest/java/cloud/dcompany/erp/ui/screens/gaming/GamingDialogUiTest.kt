@@ -2211,6 +2211,17 @@ class GamingDialogUiTest {
         var previous: DialogTouchSnapshot? = null
         var stableSamples = 0
         try {
+            // A cold hosted emulator may take several seconds to show the OS
+            // keyboard. Give that system work its own bound; retain the strict
+            // five-second layout/touch-target check after the IME appears.
+            compose.waitUntil(timeoutMillis = 10_000) {
+                awaitAndroidFrame()
+                val snapshot = dialogTouchSnapshot()
+                if (snapshot != previous) Log.i("GamingDialogTouch", "Waiting for IME: $snapshot")
+                previous = snapshot
+                snapshot.imeVisible && snapshot.imeBottom > 0
+            }
+            previous = null
             compose.waitUntil(timeoutMillis = 5_000) {
                 awaitAndroidFrame()
                 val snapshot = dialogTouchSnapshot()

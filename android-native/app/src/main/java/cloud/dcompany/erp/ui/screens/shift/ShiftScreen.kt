@@ -1032,6 +1032,7 @@ private fun CloseShiftCard(
             workspaceLabel = state.workspaceLabel,
             canClose = canClosePermission && state.canClose,
         )
+        state.closeOriginMessage?.let { ShiftCloseOriginFeedback(it) }
         PanelDivider()
         InfoRow(label = "Opening float", value = shift.openingFloatMinor.asRupees())
         InfoRow(
@@ -1201,7 +1202,9 @@ private fun CloseShiftCard(
                     color = Brand.Foreground,
                 )
                 Text(
-                    closePresentation.savedCountMessage(
+                    if (state.closeOriginMessage != null) {
+                        "The saved count is retained. Retry is unavailable until the opening app is verified. Continue shift removes only this rejected close request so this tablet can resume work; it does not close the server shift or change recorded cash."
+                    } else closePresentation.savedCountMessage(
                         valid = "Saved drawer count: %s. Resolve any unpaid orders or active sessions, " +
                             "then Retry saved close to reuse this exact amount. Choose Continue shift " +
                             "to discard this close request, resume billing, and count again later.",
@@ -1214,7 +1217,7 @@ private fun CloseShiftCard(
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(
                         onClick = vm::continueShift,
-                        enabled = canClosePermission && !state.busy && state.canClose &&
+                        enabled = canClosePermission && !state.busy &&
                             closePresentation.canContinueShift,
                     ) {
                         Text("Continue shift")
@@ -1870,6 +1873,20 @@ private fun HistoryRow(s: ShiftHistoryRow) {
                 )
             }
         }
+    }
+}
+
+@Composable
+internal fun ShiftCloseOriginFeedback(message: String) {
+    Column(
+        Modifier.fillMaxWidth().clip(Radius.shapeMd)
+            .background(Brand.Warning.copy(alpha = 0.10f))
+            .border(1.dp, Brand.Warning.copy(alpha = 0.6f), Radius.shapeMd)
+            .padding(Spacing.md),
+        verticalArrangement = Arrangement.spacedBy(Spacing.xs),
+    ) {
+        Text("Verify the opening app before closing", color = Brand.Warning, fontWeight = FontWeight.SemiBold)
+        Text(message, color = Brand.Foreground, style = MaterialTheme.typography.bodySmall)
     }
 }
 

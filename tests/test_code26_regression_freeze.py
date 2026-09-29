@@ -13,6 +13,7 @@ from scripts.verify_code26_regression_freeze import (
     CODE30_3_FREEZE_CONTROL_PATHS,
     CODE30_4_BASE,
     CODE30_4_BUILD40_BASE,
+    CODE30_4_BUILD41_BASE,
     CODE30_4_FREEZE_CONTROL_PATHS,
     RegressionFreezeError,
     REVIEWED_CODE29_2_PRODUCTION_PATHS,
@@ -30,6 +31,7 @@ from scripts.verify_code26_regression_freeze import (
     REVIEWED_CODE30_4_PRODUCTION_PATHS,
     REVIEWED_CODE30_4_HOTFIX_SHA256,
     REVIEWED_CODE30_4_BUILD41_SHA256,
+    REVIEWED_CODE30_4_BUILD42_SHA256,
     REVIEWED_CODE30_4_SHA256,
     REVIEWED_POST_CODE30_3_MAINTENANCE_SHA256,
     REVIEWED_CODE30_PRODUCTION_PATHS,
@@ -63,14 +65,17 @@ def _git_object_bytes(ref: str, path: str) -> bytes:
 
 
 def _current_reviewed_sha256(path: str, fallback: str) -> str:
-    return REVIEWED_CODE30_4_BUILD41_SHA256.get(
+    return REVIEWED_CODE30_4_BUILD42_SHA256.get(
         path,
-        REVIEWED_CODE30_4_HOTFIX_SHA256.get(
+        REVIEWED_CODE30_4_BUILD41_SHA256.get(
             path,
-            REVIEWED_CODE30_4_SHA256.get(
+            REVIEWED_CODE30_4_HOTFIX_SHA256.get(
                 path,
-                REVIEWED_CODE30_3_SHA256.get(
-                    path, REVIEWED_CODE30_2_SHA256.get(path, fallback)
+                REVIEWED_CODE30_4_SHA256.get(
+                    path,
+                    REVIEWED_CODE30_3_SHA256.get(
+                        path, REVIEWED_CODE30_2_SHA256.get(path, fallback)
+                    ),
                 ),
             ),
         ),
@@ -215,6 +220,14 @@ def test_code30_point4_corrective_build40_identity_normalises_to_inherited_code2
 def test_code30_point4_control_deck_build41_identity_normalises_to_inherited_code25_baseline() -> None:
     path = "android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt"
     current = 'assertEquals(41, BuildConfig.VERSION_CODE)\n"3.1.33"\ncode 30.4 artifact\n'
+    assert _normalise_release_identity(path, current) == (
+        'assertEquals(25, BuildConfig.VERSION_CODE)\n"3.1.14"\ncode 25 artifact\n'
+    )
+
+
+def test_code30_point4_polish_build42_identity_normalises_to_inherited_code25_baseline() -> None:
+    path = "android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt"
+    current = 'assertEquals(42, BuildConfig.VERSION_CODE)\n"3.1.34"\ncode 30.4 artifact\n'
     assert _normalise_release_identity(path, current) == (
         'assertEquals(25, BuildConfig.VERSION_CODE)\n"3.1.14"\ncode 25 artifact\n'
     )
@@ -469,6 +482,18 @@ def test_code30_point4_build41_overlay_requires_exact_bytes(
     path: str,
     expected_sha256: str,
 ) -> None:
+    current = _git_object_bytes(CODE30_4_BUILD41_BASE, path)
+    assert hashlib.sha256(current).hexdigest() == expected_sha256
+    assert hashlib.sha256(current + b"\n").hexdigest() != expected_sha256
+
+
+@pytest.mark.parametrize(
+    ("path", "expected_sha256"), REVIEWED_CODE30_4_BUILD42_SHA256.items()
+)
+def test_code30_point4_build42_overlay_requires_exact_bytes(
+    path: str,
+    expected_sha256: str,
+) -> None:
     current = (ROOT / path).read_bytes()
     assert hashlib.sha256(current).hexdigest() == expected_sha256
     assert hashlib.sha256(current + b"\n").hexdigest() != expected_sha256
@@ -499,6 +524,31 @@ def test_code30_point4_delta_inventory_is_exact() -> None:
         | set(REVIEWED_POST_CODE30_3_MAINTENANCE_SHA256)
         | set(REVIEWED_CODE30_4_HOTFIX_SHA256)
         | set(REVIEWED_CODE30_4_BUILD41_SHA256)
+        | set(REVIEWED_CODE30_4_BUILD42_SHA256)
+    )
+
+
+def test_code30_point4_build42_delta_inventory_is_exact() -> None:
+    changed = set(
+        subprocess.run(
+            ["git", "diff", "--name-only", CODE30_4_BUILD41_BASE],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.splitlines()
+    )
+    changed.update(
+        subprocess.run(
+            ["git", "ls-files", "--others", "--exclude-standard"],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.splitlines()
+    )
+    assert {path for path in changed if path} == (
+        set(REVIEWED_CODE30_4_BUILD42_SHA256) | set(CODE30_4_FREEZE_CONTROL_PATHS)
     )
 
 

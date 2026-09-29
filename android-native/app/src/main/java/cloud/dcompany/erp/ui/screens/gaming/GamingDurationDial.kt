@@ -84,6 +84,7 @@ internal fun GamingDurationDial(
         .takeIf { it >= 0 } ?: 0
     val selected = options[selectedIndex]
     val compactMarkers = dialSize < 270.dp
+    val compactCentre = dialSize < 200.dp
     val targetAngle = durationDialStopAngles(options.size)[selectedIndex]
     val animatedAngle by animateFloatAsState(
         targetValue = targetAngle,
@@ -285,7 +286,16 @@ internal fun GamingDurationDial(
                             Text(
                                 if (compactMarkers) "${option.minutes} min"
                                 else "${option.minutes} min\n${option.totalMinor.asRupees()}",
-                                modifier = Modifier.sizeIn(minWidth = 76.dp, minHeight = 48.dp)
+                                // The first stop's knob sits near the top-left
+                                // of the arc. A 76dp label hit area overlaps it
+                                // on compact tablets and hides the price under
+                                // a mouse cursor; keep the text and touch target
+                                // clear of the draggable ring.
+                                modifier = Modifier.sizeIn(
+                                    minWidth = if (compactMarkers) 48.dp else 64.dp,
+                                    maxWidth = if (compactMarkers) 48.dp else 64.dp,
+                                    minHeight = 48.dp,
+                                )
                                     .hoverable(interactionSource = interaction)
                                     .drawBehind {
                                         if (hovered || focused || pressed) {
@@ -331,7 +341,8 @@ internal fun GamingDurationDial(
                 Text(
                     "${selected.minutes} min",
                     color = Color(0xFFFFD76D),
-                    style = MaterialTheme.typography.displayLarge,
+                    style = if (compactCentre) MaterialTheme.typography.headlineLarge
+                        else MaterialTheme.typography.displayLarge,
                     fontWeight = FontWeight.Bold,
                 )
                 HorizontalDivider(
@@ -346,7 +357,8 @@ internal fun GamingDurationDial(
                 Text(
                     selected.totalMinor.asRupees(),
                     color = Brand.Foreground,
-                    style = MaterialTheme.typography.headlineLarge,
+                    style = if (compactCentre) MaterialTheme.typography.headlineMedium
+                        else MaterialTheme.typography.headlineLarge,
                 )
             }
         }
