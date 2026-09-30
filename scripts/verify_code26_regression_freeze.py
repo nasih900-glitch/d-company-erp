@@ -800,7 +800,7 @@ REVIEWED_CODE30_4_BUILD42_SHA256 = {
     'docker-compose.prod.yml': 'c9b473a4ca5ee91b2a7ffea3c459dc55940dfdf818b226418367b17ed9296908',
     'docs/CODE30_4_CONTROL_DECK_UI.md': 'dc81511e154e0c027cbc516c1d0fc06861fd653e174d5350ce4ace0da37f63d9',
     'frontend/.env.example': '51d391e35b13bfc009b70bff0ddd134d50bd038f603184f25de025e5a59ee349',
-    'frontend/package-lock.json': '8fc8025d7d9295fcddfd0178e50cd6e821e27f9b123402511fd3d6ad6630ec63',
+    'frontend/package-lock.json': '33d258c0d93e5d5b18fe96f8fdddc95f98f28b834f47016dac38fd7c31a99fa1',
     'frontend/package.json': 'b37d5393ba4686ae3fb251fc2debff48b8b1f80ef0f0b93dd6b3a2b3ab2b5309',
     'scripts/analyze_code26_physical_evidence.py': 'fa764129bc898a9f7ecbd1f4e5240d5985d57cb84f0510b2031b52b1194471fa',
     'scripts/capture_android_startup_diagnostics.py': 'baccdb179d1c15424bfda9a4179836b4e307c4f49232fa975a910836a2ece7e6',
