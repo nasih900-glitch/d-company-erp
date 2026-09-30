@@ -764,7 +764,7 @@ REVIEWED_CODE30_4_BUILD42_SHA256 = {
     'android-native/app/build.gradle.kts': 'bd67f512b4550707066fde8a3c3ae377d5509c0296c64aef2940acecf330e80b',
     'android-native/app/src/androidTest/java/cloud/dcompany/erp/core/db/ShiftCloseSafetyDaoTest.kt': '45f729632aa9ecaa85861c0c87c1041c4b2ec2ce9849e06fdf7588a6e30c4e29',
     'android-native/app/src/androidTest/java/cloud/dcompany/erp/core/update/UpdatePersistenceTest.kt': '39205128e17d65aef0da04861aa158b421608acd50b112f15bc9733525441d2e',
-    'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/ControlDeckFullShellScreenshotsUiTest.kt': '7a8772288ba5bba812f309ab2de1baeb3d45138c88487b7d7c339b22dad4bf22',
+    'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/ControlDeckFullShellScreenshotsUiTest.kt': '26cf5f27218a77864c8529604410896509a50a15a4c39a688e1a73f9da335e99',
     'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/customers/CustomersTableUiTest.kt': '4e28d00f69441fa07a7799c21d89e7d5a63ded4a25c9302026c0ba554e80f35a',
     'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingBoardUiTest.kt': 'fd0eccaa2ad8a77903f8a38a87f3cf2efa513524767aabead88d8bf2b1e53cf2',
     'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingDialogUiTest.kt': '13814dc8f7ac58e70631d1161f9875bef2d67fb3f234ae85d815c418b33e4b4b',
