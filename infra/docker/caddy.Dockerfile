@@ -83,14 +83,14 @@ RUN set -eux; \
       'c-ares=1.34.8-r0' \
       'curl=8.22.0-r0' \
       'libcurl=8.22.0-r0' \
-      'libcrypto3=3.5.8-r0' \
-      'libssl3=3.5.8-r0'; \
+      'libcrypto3=3.5.9-r0' \
+      'libssl3=3.5.9-r0'; \
     installed_packages="$(apk info -v)"; \
     printf '%s\n' "$installed_packages" | grep -Fx 'c-ares-1.34.8-r0'; \
     printf '%s\n' "$installed_packages" | grep -Fx 'curl-8.22.0-r0'; \
     printf '%s\n' "$installed_packages" | grep -Fx 'libcurl-8.22.0-r0'; \
-    printf '%s\n' "$installed_packages" | grep -Fx 'libcrypto3-3.5.8-r0'; \
-    printf '%s\n' "$installed_packages" | grep -Fx 'libssl3-3.5.8-r0'; \
+    printf '%s\n' "$installed_packages" | grep -Fx 'libcrypto3-3.5.9-r0'; \
+    printf '%s\n' "$installed_packages" | grep -Fx 'libssl3-3.5.9-r0'; \
     printf '%s\n' "$installed_packages" | grep -Fx 'zlib-1.3.2-r0'; \
     sh /tmp/verify-patched-zlib.sh; \
     rm -f /tmp/zlib-runtime-probe /tmp/verify-patched-zlib.sh

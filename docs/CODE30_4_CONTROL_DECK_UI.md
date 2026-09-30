@@ -82,9 +82,12 @@ dependency pins are unchanged. This is the JWK-set availability issue described
 in [the upstream advisory](https://github.com/advisories/GHSA-w6j9-cwv2-h6wq);
 the ERP's configured-key token flow still requires its authentication tests.
 
-This patch targets `v3.1.34` / Android build `42`. The signed build 41 is
+This patch targets `v3.1.35` / Android build `43`. Tagged `v3.1.34` / build 42
+is immutable unsigned history: its production image gate failed when Alpine
+published OpenSSL 3.5.9. Build 43 changes only those security package pins and
+coordinated release/compatibility metadata. The signed build 41 is
 immutable predecessor history, not an instruction to reuse its release tag or
-offer it in place of build 42.
+offer it in place of build 43.
 
 1. Require green CI for the exact reviewed commit, including full Android
    instrumentation, backend/Web contracts, source freeze and release version.
@@ -93,12 +96,15 @@ offer it in place of build 42.
    against the release manifest. A local debug or physical-audit APK is not an
    in-place business update.
 3. On an isolated emulator, install the signed build actually used by the
-   tablet fleet, save offline test data, then install build 42 over it without
+   tablet fleet, save offline test data, then install build 43 over it without
    uninstalling. Confirm Room and pending work survive, sync once, and verify
    Gaming, POS, Shift and Customers controls at 1280×800 and 960×600.
-4. Before offering it to the partner, check the current live server and tablet
-   versions, clear real operational blockers through normal workflows, confirm
-   the tablet has no pending work, and perform the same in-place upgrade and
-   screen/shift/session smoke test on the Redmi Pad. Only then activate the
-   optional update in Web Settings. Signing, staging and offering are separate
-   actions.
+4. Before offering it, check current server/tablet versions and real operational
+   blockers through normal workflows. The owner has authorized isolated signed
+   emulator acceptance while the Redmi Pad is unavailable. An exact signed-41
+   server compatibility certificate may carry reported tablet queues unresolved;
+   it never clears them or claims they drained. Preserve installation identity,
+   environment, replay fences, quiescence, fresh backup/restore and rollback
+   controls. Physical tablet acceptance remains unverified. Activate the optional
+   update only after signed upgrade/replay and coordinated deployment checks;
+   signing, staging, offering and actual tablet installation are separate actions.

@@ -70,12 +70,12 @@ COPY infra/docker/zlib/verify-patched-zlib.sh /tmp/verify-patched-zlib.sh
 
 RUN set -eux; \
     apk add --no-cache --upgrade \
-      'libcrypto3=3.5.8-r0' \
-      'libssl3=3.5.8-r0' \
+      'libcrypto3=3.5.9-r0' \
+      'libssl3=3.5.9-r0' \
       'libuuid=2.42.3-r1'; \
     installed_packages="$(apk info -v)"; \
-    printf '%s\n' "$installed_packages" | grep -Fx 'libcrypto3-3.5.8-r0'; \
-    printf '%s\n' "$installed_packages" | grep -Fx 'libssl3-3.5.8-r0'; \
+    printf '%s\n' "$installed_packages" | grep -Fx 'libcrypto3-3.5.9-r0'; \
+    printf '%s\n' "$installed_packages" | grep -Fx 'libssl3-3.5.9-r0'; \
     printf '%s\n' "$installed_packages" | grep -Fx 'libuuid-2.42.3-r1'; \
     printf '%s\n' "$installed_packages" | grep -Fx 'zlib-1.3.2-r0'; \
     sh /tmp/verify-patched-zlib.sh; \

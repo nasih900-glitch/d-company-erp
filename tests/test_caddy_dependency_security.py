@@ -9,11 +9,13 @@ ROOT = Path(__file__).resolve().parents[1]
 CODE28_SCANNER_BASE = "aac3a2167a298b0eae5330a831fb01875c37bf25"
 CODE28_SIGNED_BASE = "ab10a3138f41c5acf709e6275dfac55c6652d0d8"
 CODE29_SIGNED_BASE = "0949620b4632ebd6accdfa62a203be8d85b31a24"
+BUILD42_RELEASE_BASE = "1c1c7582eb8d6d6c509ddddc159014af10ce5f89"
 OLD_BINARY_SHA256 = "73c0169f0b72b465e2ae20bdb67a3e017044b2ab3d267816398b9d6ece243fb0"
 PATCHED_BINARY_SHA256 = "951a0136950bb9edf60ff5cec6ca2df0a041b27ded9e610f0aab49b168739dac"
 GO_MOD = ROOT / "infra" / "docker" / "caddy-build" / "go.mod"
 GO_SUM = ROOT / "infra" / "docker" / "caddy-build" / "go.sum"
 CADDY_DOCKERFILE = ROOT / "infra" / "docker" / "caddy.Dockerfile"
+POSTGRES_DOCKERFILE = ROOT / "infra" / "docker" / "postgres.Dockerfile"
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
 CURRENT_WORKFLOW_SHA256 = {
@@ -140,7 +142,31 @@ def test_caddy_build_contract_adds_only_reviewed_module_and_zlib_changes() -> No
         "    sh /tmp/verify-patched-zlib.sh; \\\n"
         "    rm -f /tmp/zlib-runtime-probe /tmp/verify-patched-zlib.sh\n",
     )
+    expected = _replace_once(
+        expected, "'libcrypto3=3.5.8-r0'", "'libcrypto3=3.5.9-r0'"
+    )
+    expected = _replace_once(
+        expected, "'libssl3=3.5.8-r0'", "'libssl3=3.5.9-r0'"
+    )
+    expected = _replace_once(
+        expected, "'libcrypto3-3.5.8-r0'", "'libcrypto3-3.5.9-r0'"
+    )
+    expected = _replace_once(
+        expected, "'libssl3-3.5.8-r0'", "'libssl3-3.5.9-r0'"
+    )
     assert CADDY_DOCKERFILE.read_text(encoding="utf-8") == expected
+
+
+def test_postgres_runtime_changes_only_reviewed_openssl_patch_release() -> None:
+    expected = _file_at(BUILD42_RELEASE_BASE, POSTGRES_DOCKERFILE)
+    for old, new in (
+        ("'libcrypto3=3.5.8-r0'", "'libcrypto3=3.5.9-r0'"),
+        ("'libssl3=3.5.8-r0'", "'libssl3=3.5.9-r0'"),
+        ("'libcrypto3-3.5.8-r0'", "'libcrypto3-3.5.9-r0'"),
+        ("'libssl3-3.5.8-r0'", "'libssl3-3.5.9-r0'"),
+    ):
+        expected = _replace_once(expected, old, new)
+    assert POSTGRES_DOCKERFILE.read_text(encoding="utf-8") == expected
 
 
 def test_caddy_binary_hash_is_coordinated_across_ci_and_release() -> None:
