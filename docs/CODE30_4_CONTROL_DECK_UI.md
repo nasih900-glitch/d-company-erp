@@ -82,12 +82,15 @@ dependency pins are unchanged. This is the JWK-set availability issue described
 in [the upstream advisory](https://github.com/advisories/GHSA-w6j9-cwv2-h6wq);
 the ERP's configured-key token flow still requires its authentication tests.
 
-This patch targets `v3.1.35` / Android build `43`. Tagged `v3.1.34` / build 42
+This patch targets `v3.1.36` / Android build `44`. Tagged `v3.1.34` / build 42
 is immutable unsigned history: its production image gate failed when Alpine
-published OpenSSL 3.5.9. Build 43 changes only those security package pins and
-coordinated release/compatibility metadata. The signed build 41 is
-immutable predecessor history, not an instruction to reuse its release tag or
-offer it in place of build 43.
+published OpenSSL 3.5.9. Tagged `v3.1.35` / build 43 was cancelled before signing
+when the SBOM inventory identified the same older TLS packages in backend and
+Web runtime images. Build 44 completes the exact security pins and loaded-library
+checks across backend, Web, Caddy and Postgres, plus coordinated metadata. The
+application patch and database schema are unchanged. Signed build 41 is immutable
+predecessor history, not an instruction to reuse its release tag or offer it in
+place of build 44.
 
 1. Require green CI for the exact reviewed commit, including full Android
    instrumentation, backend/Web contracts, source freeze and release version.
@@ -96,7 +99,7 @@ offer it in place of build 43.
    against the release manifest. A local debug or physical-audit APK is not an
    in-place business update.
 3. On an isolated emulator, install the signed build actually used by the
-   tablet fleet, save offline test data, then install build 43 over it without
+   tablet fleet, save offline test data, then install build 44 over it without
    uninstalling. Confirm Room and pending work survive, sync once, and verify
    Gaming, POS, Shift and Customers controls at 1280×800 and 960×600.
 4. Before offering it, check current server/tablet versions and real operational

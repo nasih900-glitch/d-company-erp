@@ -15,6 +15,7 @@ from scripts.verify_code26_regression_freeze import (
     CODE30_4_BUILD40_BASE,
     CODE30_4_BUILD41_BASE,
     CODE30_4_BUILD42_BASE,
+    CODE30_4_BUILD43_BASE,
     CODE30_4_FREEZE_CONTROL_PATHS,
     RegressionFreezeError,
     REVIEWED_CODE29_2_PRODUCTION_PATHS,
@@ -34,6 +35,7 @@ from scripts.verify_code26_regression_freeze import (
     REVIEWED_CODE30_4_BUILD41_SHA256,
     REVIEWED_CODE30_4_BUILD42_SHA256,
     REVIEWED_CODE30_4_BUILD43_SHA256,
+    REVIEWED_CODE30_4_BUILD44_SHA256,
     REVIEWED_CODE30_4_SHA256,
     REVIEWED_POST_CODE30_3_MAINTENANCE_SHA256,
     REVIEWED_CODE30_PRODUCTION_PATHS,
@@ -67,7 +69,7 @@ def _git_object_bytes(ref: str, path: str) -> bytes:
 
 
 def _current_reviewed_sha256(path: str, fallback: str) -> str:
-    return REVIEWED_CODE30_4_BUILD43_SHA256.get(path) or REVIEWED_CODE30_4_BUILD42_SHA256.get(
+    return REVIEWED_CODE30_4_BUILD44_SHA256.get(path) or REVIEWED_CODE30_4_BUILD43_SHA256.get(path) or REVIEWED_CODE30_4_BUILD42_SHA256.get(
         path,
         REVIEWED_CODE30_4_BUILD41_SHA256.get(
             path,
@@ -238,6 +240,15 @@ def test_code30_point4_polish_build42_identity_normalises_to_inherited_code25_ba
 def test_code30_point4_security_build43_identity_normalises_to_inherited_code25_baseline() -> None:
     path = "android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt"
     current = 'assertEquals(43, BuildConfig.VERSION_CODE)\n"3.1.35"\ncode 30.4 artifact\n'
+    assert _normalise_release_identity(path, current) == (
+        'assertEquals(25, BuildConfig.VERSION_CODE)\n"3.1.14"\ncode 25 artifact\n'
+    )
+    assert _normalise_release_identity("backend/tests/unit/test_money.py", current) == current
+
+
+def test_code30_point4_security_build44_identity_normalises_to_inherited_code25_baseline() -> None:
+    path = "android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt"
+    current = 'assertEquals(44, BuildConfig.VERSION_CODE)\n"3.1.36"\ncode 30.4 artifact\n'
     assert _normalise_release_identity(path, current) == (
         'assertEquals(25, BuildConfig.VERSION_CODE)\n"3.1.14"\ncode 25 artifact\n'
     )
@@ -514,6 +525,15 @@ def test_code30_point4_build42_overlay_requires_exact_bytes(
     ("path", "expected_sha256"), REVIEWED_CODE30_4_BUILD43_SHA256.items()
 )
 def test_code30_point4_build43_overlay_requires_exact_bytes(path: str, expected_sha256: str) -> None:
+    current = _git_object_bytes(CODE30_4_BUILD43_BASE, path)
+    assert hashlib.sha256(current).hexdigest() == expected_sha256
+    assert hashlib.sha256(current + b"\n").hexdigest() != expected_sha256
+
+
+@pytest.mark.parametrize(
+    ("path", "expected_sha256"), REVIEWED_CODE30_4_BUILD44_SHA256.items()
+)
+def test_code30_point4_build44_overlay_requires_exact_bytes(path: str, expected_sha256: str) -> None:
     current = (ROOT / path).read_bytes()
     assert hashlib.sha256(current).hexdigest() == expected_sha256
     assert hashlib.sha256(current + b"\n").hexdigest() != expected_sha256
@@ -546,6 +566,7 @@ def test_code30_point4_delta_inventory_is_exact() -> None:
         | set(REVIEWED_CODE30_4_BUILD41_SHA256)
         | set(REVIEWED_CODE30_4_BUILD42_SHA256)
         | set(REVIEWED_CODE30_4_BUILD43_SHA256)
+        | set(REVIEWED_CODE30_4_BUILD44_SHA256)
     )
 
 
@@ -567,7 +588,22 @@ def test_code30_point4_build42_delta_inventory_is_exact() -> None:
 def test_code30_point4_build43_delta_inventory_is_exact() -> None:
     changed = set(
         subprocess.run(
-            ["git", "diff", "--name-only", CODE30_4_BUILD42_BASE],
+            ["git", "diff", "--name-only", CODE30_4_BUILD42_BASE, CODE30_4_BUILD43_BASE],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.splitlines()
+    )
+    assert {path for path in changed if path} == (
+        set(REVIEWED_CODE30_4_BUILD43_SHA256) | set(CODE30_4_FREEZE_CONTROL_PATHS)
+    )
+
+
+def test_code30_point4_build44_delta_inventory_is_exact() -> None:
+    changed = set(
+        subprocess.run(
+            ["git", "diff", "--name-only", CODE30_4_BUILD43_BASE],
             cwd=ROOT,
             check=True,
             capture_output=True,
@@ -584,7 +620,7 @@ def test_code30_point4_build43_delta_inventory_is_exact() -> None:
         ).stdout.splitlines()
     )
     assert {path for path in changed if path} == (
-        set(REVIEWED_CODE30_4_BUILD43_SHA256) | set(CODE30_4_FREEZE_CONTROL_PATHS)
+        set(REVIEWED_CODE30_4_BUILD44_SHA256) | set(CODE30_4_FREEZE_CONTROL_PATHS)
     )
 
 

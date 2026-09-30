@@ -10,7 +10,15 @@ RUN sh /tmp/dcompany-zlib/build-patched-zlib.sh
 # --- Python dependency builder ---
 FROM python:3.14.7-alpine3.24@sha256:016508ba505da24f7139765bc4bb669df4e88eb2f12eeadd571bf2f88d7533df AS builder
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
-RUN apk add --no-cache --upgrade 'libuuid=2.42.3-r1'
+RUN apk add --no-cache --upgrade \
+      'libcrypto3=3.5.9-r0' \
+      'libssl3=3.5.9-r0' \
+      'libuuid=2.42.3-r1' \
+    && installed_packages="$(apk info -v)" \
+    && printf '%s\n' "$installed_packages" | grep -Fx 'libcrypto3-3.5.9-r0' \
+    && printf '%s\n' "$installed_packages" | grep -Fx 'libssl3-3.5.9-r0' \
+    && printf '%s\n' "$installed_packages" | grep -Fx 'libuuid-2.42.3-r1' \
+    && python -c 'import ssl; assert ssl.OPENSSL_VERSION_INFO[:3] == (3, 5, 9), ssl.OPENSSL_VERSION'
 WORKDIR /app
 COPY backend/requirements.lock .
 RUN pip install --prefix=/install --only-binary=:all: --require-hashes -r requirements.lock
@@ -38,7 +46,15 @@ COPY --from=zlib-builder /out/usr/lib/libz.so.1.3.2 /usr/lib/libz.so.1.3.2
 COPY --from=zlib-builder /out/etc/dcompany/zlib-patch-evidence.env /etc/dcompany/zlib-patch-evidence.env
 COPY --from=zlib-builder /out/zlib-runtime-probe /tmp/zlib-runtime-probe
 COPY infra/docker/zlib/verify-patched-zlib.sh /tmp/verify-patched-zlib.sh
-RUN apk add --no-cache --upgrade 'libuuid=2.42.3-r1' \
+RUN apk add --no-cache --upgrade \
+      'libcrypto3=3.5.9-r0' \
+      'libssl3=3.5.9-r0' \
+      'libuuid=2.42.3-r1' \
+    && installed_packages="$(apk info -v)" \
+    && printf '%s\n' "$installed_packages" | grep -Fx 'libcrypto3-3.5.9-r0' \
+    && printf '%s\n' "$installed_packages" | grep -Fx 'libssl3-3.5.9-r0' \
+    && printf '%s\n' "$installed_packages" | grep -Fx 'libuuid-2.42.3-r1' \
+    && python -c 'import ssl; assert ssl.OPENSSL_VERSION_INFO[:3] == (3, 5, 9), ssl.OPENSSL_VERSION' \
     && test "$(python --version)" = 'Python 3.14.7' \
     && sh /tmp/verify-patched-zlib.sh \
     && rm -f /tmp/zlib-runtime-probe /tmp/verify-patched-zlib.sh \

@@ -1205,14 +1205,14 @@ if [ -n "$EXISTING_POSTGRES_CONTAINER" ]; then
        | python3 "$POST_CLEANUP_STATE_VERIFIER" --quiet; then
       CODE30_2_POST_CLEANUP_STALE_OUTBOX_ACCEPTED=true
       echo "==> Verified completed Code30.2 cleanup and retained historical outbox evidence."
-    elif [ "$CANDIDATE_APP_VERSION" = 3.1.35 ] && \
+    elif [ "$CANDIDATE_APP_VERSION" = 3.1.36 ] && \
          [ "$PRIOR_REVISION" = 099daa28ea5b9cb3c4b167a66c82302896ad4acc ]; then
       # This is a source-verified server compatibility proof, never permission
       # to clear tablet queues or classify other installation counters as stale.
-      PENDING_COMPATIBILITY_REPORT="$UPGRADE_SNAPSHOT/build43-pending-compatibility.json"
+      PENDING_COMPATIBILITY_REPORT="$UPGRADE_SNAPSHOT/build44-pending-compatibility.json"
       PRIOR_RUNTIME_ENV="$UPGRADE_SNAPSHOT/build41-backend-environment.json"
-      CANDIDATE_IMAGE_ENV="$UPGRADE_SNAPSHOT/build43-backend-image-environment.json"
-      CANDIDATE_COMPOSE_CONFIG="$UPGRADE_SNAPSHOT/build43-compose-config.json"
+      CANDIDATE_IMAGE_ENV="$UPGRADE_SNAPSHOT/build44-backend-image-environment.json"
+      CANDIDATE_COMPOSE_CONFIG="$UPGRADE_SNAPSHOT/build44-compose-config.json"
       CANDIDATE_BACKEND_IMAGE_ID=$(python3 -c \
         'import json,sys; print(json.loads(sys.argv[1])["services"]["backend"]["image_id"])' \
         "$CANDIDATE_IMAGE_ATTESTATION")
@@ -1253,7 +1253,7 @@ if [ -n "$EXISTING_POSTGRES_CONTAINER" ]; then
       fi
       chmod 600 "$PENDING_COMPATIBILITY_REPORT"
       BUILD42_PENDING_CARRIED_UNRESOLVED=true
-      echo "==> Exact build41-to-build43 server compatibility verified; reported tablet pending count $pending_outbox_count is carried UNRESOLVED."
+      echo "==> Exact build41-to-build44 server compatibility verified; reported tablet pending count $pending_outbox_count is carried UNRESOLVED."
     else
       # Before the cleanup exists, permit the exact reviewed row only for the
       # Code30.2 migration from 0073. The row remains untouched and protected
@@ -1293,7 +1293,7 @@ if [ -n "$EXISTING_POSTGRES_CONTAINER" ]; then
       CODE30_2_STALE_OUTBOX_BRIDGE_USED=true
     fi
   fi
-  # Preserve the original legacy-path guard unless the exact build43 proof passed.
+  # Preserve the original legacy-path guard unless the exact build44 proof passed.
   if [ "$pending_outbox_count" -ne 0 ] && \
      [ "$BUILD42_PENDING_CARRIED_UNRESOLVED" = false ] && \
      [ "$CODE30_2_POST_CLEANUP_STALE_OUTBOX_ACCEPTED" = \

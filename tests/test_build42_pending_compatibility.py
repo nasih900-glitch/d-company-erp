@@ -139,7 +139,7 @@ def test_original_archived_predecessor_and_candidate_match_production_policy(hel
 
 def _identity(helper):
     return dict(prior_revision=helper.PRIOR_REVISION, prior_version="3.1.33", prior_db_head="0085",
-                candidate_revision="a" * 40, candidate_version="3.1.35",
+                candidate_revision="a" * 40, candidate_version="3.1.36",
                 prior_image_id="sha256:" + "b" * 64,
                 prior_backend_manifest_sha256=helper.PRIOR_BACKEND_MANIFEST_SHA256)
 
@@ -151,7 +151,7 @@ def test_exact_identity_accepted(helper):
 @pytest.mark.parametrize("field,value", [
     ("prior_revision", "099daa28"), ("prior_revision", "b" * 40),
     ("prior_version", "3.1.32"), ("prior_db_head", "0084"), ("prior_db_head", "0086"),
-    ("candidate_version", "3.1.34"), ("candidate_version", "3.1.36"), ("candidate_revision", "a" * 7),
+    ("candidate_version", "3.1.34"), ("candidate_version", "3.1.35"), ("candidate_version", "3.1.37"), ("candidate_revision", "a" * 7),
     ("prior_image_id", "backend:latest"), ("prior_backend_manifest_sha256", "c" * 64),
 ])
 def test_other_releases_schemas_or_unattested_images_refused(helper, field, value):
@@ -217,7 +217,7 @@ def test_raw_duplicate_nonfinite_and_oversized_json_refused(helper, history, raw
 def _environments(helper):
     common = b"DOMAIN=example.test\nJWT_SECRET=synthetic-private-value\nMIN_CLIENT_VERSION=41\nFEATURE_FLAG=false\n"
     prior = common + f"APP_VERSION=3.1.33\nAPP_REVISION={helper.PRIOR_REVISION}\n".encode()
-    candidate = common + f"APP_VERSION=3.1.35\nAPP_REVISION={'a' * 40}\n".encode()
+    candidate = common + f"APP_VERSION=3.1.36\nAPP_REVISION={'a' * 40}\n".encode()
     return prior, candidate
 
 
@@ -241,9 +241,9 @@ def test_environment_policy_changes_refused_without_secret_output(helper, change
     elif change == "extra":
         candidate += b"NEW_POLICY=true\n"
     elif change == "duplicate":
-        candidate += b"export APP_VERSION=3.1.35\n"
+        candidate += b"export APP_VERSION=3.1.36\n"
     elif change == "identity":
-        candidate = candidate.replace(b"APP_VERSION=3.1.35", b"APP_VERSION=3.1.36")
+        candidate = candidate.replace(b"APP_VERSION=3.1.36", b"APP_VERSION=3.1.37")
     else:
         live += b"CHANGED_AFTER_SNAPSHOT=true\n"
     with pytest.raises(helper.CompatibilityError) as error:
@@ -259,7 +259,7 @@ def _effective_environments(helper):
               "JWT_ALGORITHM": "HS256", "ANDROID_MIN_SUPPORTED_VERSION_CODE": "8", "EMPTY": ""}
     before = {**common, "APP_VERSION": "3.1.33", "APP_REVISION": helper.PRIOR_REVISION}
     compose_env = {key: value for key, value in common.items() if key != "PATH"}
-    compose_env.update(APP_VERSION="3.1.35", APP_REVISION=revision)
+    compose_env.update(APP_VERSION="3.1.36", APP_REVISION=revision)
     prior = {"image_id": prior_id, "environment": [f"{key}={value}" for key, value in before.items()]}
     image = {"image_id": candidate_id, "environment": ["PATH=/usr/local/bin:/usr/bin"]}
     compose = {"services": {"backend": {"image": f"d-company-erp-backend:{revision}", "environment": compose_env}}}

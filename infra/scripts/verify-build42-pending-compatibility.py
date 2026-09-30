@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One reviewed build-41 -> build-43 server update; never a queue-drain proof.
+"""One reviewed build-41 -> build-44 server update; never a queue-drain proof.
 
 Run only from the installer's immutable candidate archive, after prior-image
 source attestation and writer stop. The original historical verifier is reused
@@ -25,15 +25,15 @@ class CompatibilityError(ValueError):
 
 PRIOR_REVISION = "099daa28ea5b9cb3c4b167a66c82302896ad4acc"
 PRIOR_VERSION = "3.1.33"
-CANDIDATE_VERSION = "3.1.35"
+CANDIDATE_VERSION = "3.1.36"
 DATABASE_HEAD = "0085"
 PRIOR_SOURCE_SHA256 = '3930b746ef2f2ae1375fe989bbeccf3342efd1ba53d243e319318426e67c0736'
-CANDIDATE_SOURCE_SHA256 = 'dc6c5e58053f7be50d7faaea1c45feab1a376ba96dcb8968fd4ef3e382a1ea64'
+CANDIDATE_SOURCE_SHA256 = '054f069fba96e8658015dfd426ccbf7f02122e14670cff2635c9ec4233c8cdf3'
 PRIOR_BACKEND_MANIFEST_SHA256 = "bc5f10ff1bc2d7359333b6eb97d42e777c1438e89e318c7b0c18ea5420a3993d"
 HISTORICAL_VERIFIER = "infra/scripts/verify-code30-2-post-cleanup-state.py"
 MAX_STATE_BYTES = 1024 * 1024
 # The entire backend (including shipped tests), build/startup inputs and proxy
-# configuration are covered. The Android version file binds this to build 43.
+# configuration are covered. The Android version file binds this to build 44.
 PROTECTED_SCOPES = ('backend',
  'infra/docker',
  'infra/caddy',
@@ -52,18 +52,18 @@ PROTECTED_SCOPES = ('backend',
 # Exact reviewed byte pairs, not a filename or semantic-change allowlist.
 # Four backend test changes are included because Docker ships the full tree.
 # Runtime deltas are the reviewed origin-message helper, version metadata and
-# pinned PyJWT 2.13 -> 2.14 plus exact Caddy/Postgres OpenSSL security pins.
+# pinned PyJWT 2.13 -> 2.14 plus exact backend/frontend/Caddy/Postgres TLS pins.
 # The token dependency and TLS images require separate compatibility evidence.
 REVIEWED_PAIRS = {'.env.production.example': ('f27985296627c02601b59cdb8af541fa43f5a3f12a75ed781ad095b534200ffd',
-                             'aefbf2484379764568b5179b274e8cb988f283e76d6706c09aeede6a5bb37adb'),
+                             '0ae533abb6d8e815894ce1faad9d7931333f0c53f857495e0690ae12765918b2'),
  'android-native/app/build.gradle.kts': ('6ae336925ebfbe7321f717dbe2eff8ebeef6c5b476ad5d3af48efa6d5388baad',
-                                         '363d86c3ee75fe4f4fc411fa7041f060447b61303db4daa6faabdfbe688e8413'),
+                                         'b40cf6a658ec06a2cbd5a6c38e201edb2f8d2814486747e018ef8620ceec6612'),
  'backend/app/__init__.py': ('b8289bd6045515e0efa056d7d33d9b5e54b3b97d44735bc895985c6a9f6afd0b',
-                             '462c804e97e4567886bcef7f440af5dc5d5e9d8753b9b395436595dcd49e2b93'),
+                             '2f617d2094a97d4a631689803a90c604d904fdafbb2710401793bb4495af1b8e'),
  'backend/app/api/v1/pos/router.py': ('3c66a676615aba73af8fb298969c7501520726ba1478c016dfd69a1eaeb8e8a8',
                                       '834ffb264be9c95167be9f0a034f45f305de69d6596a6da3bf5151c1b15b20ab'),
  'backend/pyproject.toml': ('8fbf7cec9126400ae4750ba7f0275e542490c919e726676ac2863eeaab8af177',
-                            '21747a63c4870b6030c41e6b8b64d22a5b713e7c398012f41331e600d348bc35'),
+                            '812c0509f3a5c6814b2292244d11791999dfbd283386cc96bfe1fc74d94fdccd'),
  'backend/requirements-ci.lock': ('f77e16af56632cecac34a6e2011f8570b0fb05bce8caec089272a5a4e57a8fe9',
                                   '4cb457d7f8910a8f4c594c6185c97bc7db59355d44b33d56fddbd510b35fe89d'),
  'backend/requirements.lock': ('cd319d2a4dc1c29497d7470f4cc8136a126e44d516b731873dade51c6b2d9b81',
@@ -73,15 +73,19 @@ REVIEWED_PAIRS = {'.env.production.example': ('f27985296627c02601b59cdb8af541fa4
  'backend/tests/integration/test_captured_shift_opening.py': ('b7929678aa8de871f3640759900ed0cfda62bc0c9ca23b5fabe91a73840fffd3',
                                                               'c7f84593127066b0c88aa230b3a9db56d50161ead83a2e5e5a5d3971c37cb06b'),
  'backend/tests/unit/test_release_contracts.py': ('906704e7e7d886e6dee2413ed2136a2af361c1d18017e5f69dbc4d97bff6796d',
-                                                  '497c08e080ba515b7b1b83035ecfe7ba8d3050f8c677401f9e8af5678a0593a5'),
+                                                  '9f79452c5892e32310b0d3390c32557cec71d372048fc24bf61546498681da10'),
  'backend/tests/unit/test_remote_assistance_contract.py': ('b2c6a7e705640deca8b62a8ff76de76be74554abd8cd38095a11f7855d5fe340',
-                                                           'ecf7daa09a498782e1ec756035f886cc7e1199865a6247fec95f4729f412d0a7'),
+                                                           'ffd60daaf5e9cdd0bacf666cbd93c671a7380fefcf83c092dd686ae416d8d3ba'),
  'backend/tests/unit/test_shift_recovery_scope.py': ('e3246be8d42b0145369f5c271c4544ed40808969ae36134eaf25517ef4ee2782',
                                                      '0d21960e1996b24055788086b51e37352fc2195df971d06f34ef83c59b537f59'),
  'docker-compose.prod.yml': ('907d7e29a7765117dc8c4c547b52a28e437ad06dd351e71561754e19f2bed299',
-                             '448cb60434417cccc51d5529b31a86d032f30de2c84b23e66a63d3c2e6608681'),
+                             '70dfd8854ec352dd5730a290794a4dcb1d3af69eb27dc865b7e1a59e3743d601'),
+ 'infra/docker/backend.Dockerfile': ('6ea2f833c7a5eff6f2427a433f99b447ebabd901fdc6bc077a54ae1a39548016',
+                                     '366786c2cc5fd369b9c5b24a23c5903369e51d1981da033d433e523206699ee6'),
  'infra/docker/caddy.Dockerfile': ('e5f0486572636a283a81b5ed2415936cd06836537d394644b801b0b9de054bee',
                                    '5fe8c0adce4b2f69404fcf9462c58383e7f9015528be08fe5cd465da3ed4cde8'),
+ 'infra/docker/frontend.Dockerfile': ('e49dd25cb75dbbf962a118cd328a0d174fc0f60b29263662d225297fe843475c',
+                                      '03a58d90e273e684d26793c23adce116ef9cd256f9b948cd6b023a5de199f0e6'),
  'infra/docker/postgres.Dockerfile': ('1e627f5ba7378f3d478a44eafbec6ef9c983523ce19934256de8cd44748a9ee6',
                                       'd7f13eb61d042f9227af43f7e446b5f5f7b9f5160a59ff21e13f62725d5d971e')}
 

@@ -160,7 +160,7 @@ if [[ -n "$SOURCE_DIRTY" ]]; then
 fi
 VERSION_CODE="$(sed -nE 's/^[[:space:]]*versionCode[[:space:]]*=[[:space:]]*([0-9]+).*/\1/p' "$ANDROID_DIR/app/build.gradle.kts" | head -1)"
 VERSION_NAME="$(sed -nE 's/^[[:space:]]*versionName[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' "$ANDROID_DIR/app/build.gradle.kts" | head -1)"
-if [[ "$VERSION_CODE" != "43" || "$VERSION_NAME" != "3.1.35" ]]; then
+if [[ "$VERSION_CODE" != "44" || "$VERSION_NAME" != "3.1.36" ]]; then
   printf 'Refusing non-Code30.4 source identity: versionCode=%s versionName=%s\n' \
     "$VERSION_CODE" "$VERSION_NAME" >&2
   exit 65
@@ -601,7 +601,7 @@ record_apk_identity() {
       source_commit:$source_commit,signature_verified:true,copied_hash_verified:true}' \
     >> "$APK_IDENTITIES_NDJSON"
 }
-record_apk_identity "$ERP_APK" cloud.dcompany.erp.physicalaudit 43 3.1.35-physical-audit
+record_apk_identity "$ERP_APK" cloud.dcompany.erp.physicalaudit 44 3.1.36-physical-audit
 record_apk_identity "$DRIVER_APK"
 record_apk_identity "$DRIVER_TEST_APK"
 jq -s --arg commit "$SOURCE_COMMIT" --arg tree "$SOURCE_TREE" \
