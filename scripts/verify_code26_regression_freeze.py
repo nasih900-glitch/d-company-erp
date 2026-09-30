@@ -758,6 +758,9 @@ REVIEWED_CODE30_4_BUILD41_SHA256 = {
 # Build 42 changes only these exact reviewed bytes relative to signed build 41.
 # Freeze-control files are enumerated separately to avoid self-referential hashes.
 REVIEWED_CODE30_4_BUILD42_SHA256 = {
+    'infra/scripts/install-on-vm.sh': '043da9a875429c5613fad0b4416427220b582655f07ecb063061f308cb6188c7',
+    'infra/scripts/verify-build42-pending-compatibility.py': '2cf7387757d2ddf550c36edebf22121112f1f5b005674c6fd8686674bcaf3af6',
+    'tests/test_build42_pending_compatibility.py': 'e2b49d76cb5a10d3354b5eed9f366755753662bb3a0b5c0cc0a4e40dd453fea0',
     '.github/workflows/ci.yml': '8b69ebd08e837747fccfeca98937e0581934263536d2a6d9cb54d5b4e6a15fe5',
     '.github/workflows/release.yml': '4a109c790435d1b4be25c8f9e4a90d11b65059af9b18031b9cd56886c03e5e81',
     '.env.production.example': 'e28e66ad6f21f31866de67a9e8ddcc4d5bd15db6c5e7ea1ef80191050792735c',
@@ -806,7 +809,7 @@ REVIEWED_CODE30_4_BUILD42_SHA256 = {
     'scripts/capture_android_startup_diagnostics.py': 'baccdb179d1c15424bfda9a4179836b4e307c4f49232fa975a910836a2ece7e6',
     'scripts/run_android_instrumentation_ci.sh': '53ac300a9767602a2196f3a56de58a3ad521eac5b920eff87f399032a9c975b4',
     'scripts/run_code26_physical_business_audit.sh': 'f95f0e3c02d54ac7d025be934c81d8ac6a5a0058036a049f678c14e0e6d76280',
-    'tests/test_android_startup_diagnostics.py': '1d6410cf283b17f67f976c0a2ddc395948aa82b38de78edafee3beaea945b780',
+    'tests/test_android_startup_diagnostics.py': '0bd0b9fbbf22bbc9eed14bbe91aa9f36645f25a5446f022a7f3e97d4f3214a37',
     'tests/test_android_release_pipeline.py': '9952dab31fb34a71553259bb90ec46b4b8538e06843d1d44b54bd974ed9b9492',
     'tests/test_code26_physical_audit_lane.py': '0952d83ff073b196307544aa3b51ffedeb095a48f1057f5a3f519976d0e930b6',
 }

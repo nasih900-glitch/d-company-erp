@@ -163,16 +163,20 @@ def test_discovery_failure_budget_captures_dropbox_before_stalled_reads(tmp_path
         adb=str(fake_adb),
         system_name="Linux",
     )
+    started = time.monotonic()
     manifest_path = capture(
         phase="discovery-failure",
         output_root=tmp_path / "diagnostics",
         serial="emulator-fake",
-        overall_timeout_seconds=0.15,
+        # Leave room for shell startup on a loaded host. Later fake reads sleep
+        # five seconds, so this still exercises the overall deadline and skips.
+        overall_timeout_seconds=1.0,
         commands=commands,
     )
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
     first = manifest["commands"][0]
+    assert time.monotonic() - started < 2.5
     assert first["name"] == "guest-data-app-anr-dropbox"
     assert first["returncode"] == 0
     assert "retained-anr-trace" in (
