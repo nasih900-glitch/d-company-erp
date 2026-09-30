@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import subprocess
+import sys
+import types
 from pathlib import Path
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -183,7 +188,7 @@ def test_backend_image_changes_only_reviewed_openssl_runtime_controls() -> None:
         "    && printf '%s\\n' \"$installed_packages\" | grep -Fx 'libcrypto3-3.5.9-r0' \\\n"
         "    && printf '%s\\n' \"$installed_packages\" | grep -Fx 'libssl3-3.5.9-r0' \\\n"
         "    && printf '%s\\n' \"$installed_packages\" | grep -Fx 'libuuid-2.42.3-r1' \\\n"
-        "    && python -c 'import ssl; assert ssl.OPENSSL_VERSION_INFO[:3] == (3, 5, 9), ssl.OPENSSL_VERSION'"
+        "    && python -c 'import ssl; assert ssl.OPENSSL_VERSION_INFO == (3, 5, 0, 9, 0), (ssl.OPENSSL_VERSION_INFO, ssl.OPENSSL_VERSION)'"
     )
     expected = _replace_once(
         expected,
@@ -199,6 +204,43 @@ def test_backend_image_changes_only_reviewed_openssl_runtime_controls() -> None:
         + "    && test \"$(python --version)\" = 'Python 3.14.7' \\\n",
     )
     assert BACKEND_DOCKERFILE.read_text(encoding="utf-8") == expected
+
+
+@pytest.mark.parametrize(
+    ("version_info", "accepted"),
+    (
+        ((3, 5, 0, 9, 0), True),
+        ((3, 5, 0, 8, 0), False),
+        ((3, 5, 0, 10, 0), False),
+        ((3, 6, 0, 9, 0), False),
+        ((3, 5, 9), False),
+    ),
+)
+def test_backend_openssl_assertions_require_exact_legacy_version_tuple(
+    monkeypatch: pytest.MonkeyPatch,
+    version_info: tuple[int, ...],
+    accepted: bool,
+) -> None:
+    commands = re.findall(
+        r"python -c '([^'\n]*OPENSSL_VERSION_INFO[^'\n]*)'",
+        BACKEND_DOCKERFILE.read_text(encoding="utf-8"),
+    )
+    assert len(commands) == 2
+
+    synthetic_ssl = types.ModuleType("ssl")
+    synthetic_ssl.OPENSSL_VERSION_INFO = version_info
+    synthetic_ssl.OPENSSL_VERSION = f"OpenSSL synthetic {version_info!r}"
+    monkeypatch.setitem(sys.modules, "ssl", synthetic_ssl)
+
+    for command in commands:
+        if accepted:
+            exec(command, {})
+        else:
+            with pytest.raises(AssertionError) as error:
+                exec(command, {})
+            assert error.value.args == (
+                (version_info, synthetic_ssl.OPENSSL_VERSION),
+            )
 
 
 def test_frontend_image_changes_only_reviewed_openssl_runtime_controls() -> None:

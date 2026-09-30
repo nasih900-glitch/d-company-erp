@@ -852,14 +852,14 @@ REVIEWED_CODE30_4_BUILD44_SHA256 = {'.env.production.example': '0ae533abb6d8e815
  'frontend/.env.example': 'b8392686cf34e9220ecb2c14a138bede3958d6312f1f330438cf7be917bdacfa',
  'frontend/package-lock.json': 'f1f280bb40d37725939e5cf5dd044b195588186351cfed9f8b7274c54a2ef85b',
  'frontend/package.json': 'f9bec3e3acbe0965d8de4f0c370ec6043d166a56358cd4039ac046393f11291e',
- 'infra/docker/backend.Dockerfile': '366786c2cc5fd369b9c5b24a23c5903369e51d1981da033d433e523206699ee6',
+ 'infra/docker/backend.Dockerfile': 'a293cc747ea6b600465fd4d9207e6a6ecf901456b308e0297f051ec8dccca490',
  'infra/docker/frontend.Dockerfile': '03a58d90e273e684d26793c23adce116ef9cd256f9b948cd6b023a5de199f0e6',
  'infra/scripts/install-on-vm.sh': '35928a4a081be5220e813cb1b293c1ebfe174844774f91367ee07b17e6de821b',
- 'infra/scripts/verify-build42-pending-compatibility.py': '82765d2cd5008546b18bcb78a92a81714463f3fa27f674af8bf90d3d91282186',
+ 'infra/scripts/verify-build42-pending-compatibility.py': 'bdeeb01d20a27d21230554ccedee5c6cd1fa6617f761a4f44e0e9033c15cc7b4',
  'scripts/analyze_code26_physical_evidence.py': '023ede3e43ab697053ff775b30787fc6d941e68cfb2a1585adedd8aae56be91d',
  'scripts/run_code26_physical_business_audit.sh': 'd387a801e45137768fffa99d4cb34cad59f6f71937300cad064e6e1f6097b5e5',
  'tests/test_build42_pending_compatibility.py': '7a433d007aeb9c77dfae48f25522610caf9eb6f235406766d4d0f927d0dc775c',
- 'tests/test_caddy_dependency_security.py': '73355f9472c64e733469bb10ec8f20097bbfe080d0832f404214d27cf37ca06d',
+ 'tests/test_caddy_dependency_security.py': 'a9e103ab73957337d91af06b20abf1c95c465ef8a544a021c4540fbfdbe1658c',
  'tests/test_code26_physical_audit_lane.py': 'ca5a3244b9d1ae376b93bcb59ea6388eeac3a8d00d1b80d74e97942aa9659609'}
 REVIEWED_CODE30_4_PRODUCTION_PATHS = frozenset(
     path

@@ -18,7 +18,7 @@ RUN apk add --no-cache --upgrade \
     && printf '%s\n' "$installed_packages" | grep -Fx 'libcrypto3-3.5.9-r0' \
     && printf '%s\n' "$installed_packages" | grep -Fx 'libssl3-3.5.9-r0' \
     && printf '%s\n' "$installed_packages" | grep -Fx 'libuuid-2.42.3-r1' \
-    && python -c 'import ssl; assert ssl.OPENSSL_VERSION_INFO[:3] == (3, 5, 9), ssl.OPENSSL_VERSION'
+    && python -c 'import ssl; assert ssl.OPENSSL_VERSION_INFO == (3, 5, 0, 9, 0), (ssl.OPENSSL_VERSION_INFO, ssl.OPENSSL_VERSION)'
 WORKDIR /app
 COPY backend/requirements.lock .
 RUN pip install --prefix=/install --only-binary=:all: --require-hashes -r requirements.lock
@@ -54,7 +54,7 @@ RUN apk add --no-cache --upgrade \
     && printf '%s\n' "$installed_packages" | grep -Fx 'libcrypto3-3.5.9-r0' \
     && printf '%s\n' "$installed_packages" | grep -Fx 'libssl3-3.5.9-r0' \
     && printf '%s\n' "$installed_packages" | grep -Fx 'libuuid-2.42.3-r1' \
-    && python -c 'import ssl; assert ssl.OPENSSL_VERSION_INFO[:3] == (3, 5, 9), ssl.OPENSSL_VERSION' \
+    && python -c 'import ssl; assert ssl.OPENSSL_VERSION_INFO == (3, 5, 0, 9, 0), (ssl.OPENSSL_VERSION_INFO, ssl.OPENSSL_VERSION)' \
     && test "$(python --version)" = 'Python 3.14.7' \
     && sh /tmp/verify-patched-zlib.sh \
     && rm -f /tmp/zlib-runtime-probe /tmp/verify-patched-zlib.sh \

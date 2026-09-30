@@ -28,7 +28,7 @@ PRIOR_VERSION = "3.1.33"
 CANDIDATE_VERSION = "3.1.36"
 DATABASE_HEAD = "0085"
 PRIOR_SOURCE_SHA256 = '3930b746ef2f2ae1375fe989bbeccf3342efd1ba53d243e319318426e67c0736'
-CANDIDATE_SOURCE_SHA256 = '054f069fba96e8658015dfd426ccbf7f02122e14670cff2635c9ec4233c8cdf3'
+CANDIDATE_SOURCE_SHA256 = 'acd38c815628b7f192c828a9f71435ed5c0e5d5a1aedc225070cbefba0817f8b'
 PRIOR_BACKEND_MANIFEST_SHA256 = "bc5f10ff1bc2d7359333b6eb97d42e777c1438e89e318c7b0c18ea5420a3993d"
 HISTORICAL_VERIFIER = "infra/scripts/verify-code30-2-post-cleanup-state.py"
 MAX_STATE_BYTES = 1024 * 1024
@@ -81,7 +81,7 @@ REVIEWED_PAIRS = {'.env.production.example': ('f27985296627c02601b59cdb8af541fa4
  'docker-compose.prod.yml': ('907d7e29a7765117dc8c4c547b52a28e437ad06dd351e71561754e19f2bed299',
                              '70dfd8854ec352dd5730a290794a4dcb1d3af69eb27dc865b7e1a59e3743d601'),
  'infra/docker/backend.Dockerfile': ('6ea2f833c7a5eff6f2427a433f99b447ebabd901fdc6bc077a54ae1a39548016',
-                                     '366786c2cc5fd369b9c5b24a23c5903369e51d1981da033d433e523206699ee6'),
+                                     'a293cc747ea6b600465fd4d9207e6a6ecf901456b308e0297f051ec8dccca490'),
  'infra/docker/caddy.Dockerfile': ('e5f0486572636a283a81b5ed2415936cd06836537d394644b801b0b9de054bee',
                                    '5fe8c0adce4b2f69404fcf9462c58383e7f9015528be08fe5cd465da3ed4cde8'),
  'infra/docker/frontend.Dockerfile': ('e49dd25cb75dbbf962a118cd328a0d174fc0f60b29263662d225297fe843475c',
