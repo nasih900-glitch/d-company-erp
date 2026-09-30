@@ -14,6 +14,7 @@ connected_report_dir="${android_root}/app/build/reports/androidTests/connected/d
 shard_evidence_root="${diagnostics_dir}/instrumentation-shards"
 discovered_tests_file="${shard_evidence_root}/discovered-tests.txt"
 shard_verifier="${repo_root}/scripts/verify_android_instrumentation_shards.py"
+startup_diagnostics="${repo_root}/scripts/capture_android_startup_diagnostics.py"
 functional_shard_count=4
 stress_class='cloud.dcompany.erp.ui.PhysicalComponentFrameStressUiTest'
 gaming_board_class='cloud.dcompany.erp.ui.screens.gaming.GamingBoardUiTest'
@@ -37,6 +38,18 @@ run_gradle_ci() {
   ./gradlew --no-daemon --max-workers=1 --stacktrace \
     '-Dorg.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8' \
     -Pkotlin.compiler.execution.strategy=in-process "$@"
+}
+
+capture_startup_diagnostics() {
+  local phase=$1
+  if ! python3 "${startup_diagnostics}" \
+    --phase "${phase}" \
+    --output-dir "${diagnostics_dir}/startup" \
+    --serial "${device_serial}" \
+    --overall-timeout 45; then
+    echo "Android startup diagnostic capture failed during ${phase}; preserving the original CI status." >&2
+  fi
+  return 0
 }
 
 device_is_connected() {
@@ -291,6 +304,10 @@ discover_instrumentation_tests() {
     discovery_status=1
   fi
 
+  if [[ "${discovery_status}" -ne 0 ]]; then
+    capture_startup_diagnostics discovery-failure
+  fi
+
   adb -s "${device_serial}" shell am force-stop "${test_package}" >/dev/null 2>&1 || true
   adb -s "${device_serial}" shell am force-stop "${app_package}" >/dev/null 2>&1 || true
   adb -s "${device_serial}" uninstall "${test_package}" >/dev/null 2>&1 || true
@@ -426,11 +443,15 @@ mkdir -p "${shard_evidence_root}"
 # Discover the exact runner inventory once, without executing test bodies. The
 # later verifier rejects a missing, duplicated or unexpected test across all
 # functional shards and both isolated Gaming and physical-frame lanes.
+capture_startup_diagnostics pre-assembly
 if ! run_gradle_ci :app:assembleDebug :app:assembleDebugAndroidTest \
   2>&1 | tee "${shard_evidence_root}/assemble.log"; then
   status=1
-elif ! discover_instrumentation_tests; then
-  status=1
+else
+  capture_startup_diagnostics pre-discovery
+  if ! discover_instrumentation_tests; then
+    status=1
+  fi
 fi
 
 if [[ "${status}" -eq 0 ]]; then

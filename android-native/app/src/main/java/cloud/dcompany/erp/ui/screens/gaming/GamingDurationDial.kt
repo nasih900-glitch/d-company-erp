@@ -84,12 +84,33 @@ internal fun GamingDurationDial(
     dialSize: Dp = 280.dp,
     showChoiceChips: Boolean = true,
     segmentTick: (() -> Unit)? = null,
+    gestureContextKey: Any? = null,
 ) {
     if (choices.isEmpty()) return
     val options = choices.sortedWith(compareBy(GamingDurationChoice::minutes, GamingDurationChoice::packageId))
     val selectedIndex = options.indexOfFirst { it.packageId == selectedPackageId }
         .takeIf { it >= 0 } ?: 0
     val selected = options[selectedIndex]
+    var observedSelection by remember(options, gestureContextKey) {
+        mutableStateOf(selected.packageId)
+    }
+    var lastPublishedSelection by remember(options, gestureContextKey) {
+        mutableStateOf(selected.packageId)
+    }
+    var liveDragAngle by remember(options, gestureContextKey) { mutableStateOf<Float?>(null) }
+    var snapToSelectedStop by remember(options, gestureContextKey) { mutableStateOf(false) }
+    var gestureRevision by remember(options, gestureContextKey) { mutableStateOf(0) }
+    SideEffect {
+        if (observedSelection != selected.packageId) {
+            observedSelection = selected.packageId
+            if (lastPublishedSelection != selected.packageId) {
+                lastPublishedSelection = selected.packageId
+                liveDragAngle = null
+                snapToSelectedStop = false
+                gestureRevision++
+            }
+        }
+    }
     val compactMarkers = dialSize < 270.dp
     val compactCentre = dialSize < 200.dp
     val targetAngle = durationDialStopAngles(options.size)[selectedIndex]
@@ -98,6 +119,7 @@ internal fun GamingDurationDial(
         animationSpec = tween(durationMillis = Motion.medium, easing = Motion.emphasized),
         label = "Gaming duration selection",
     )
+    val displayedAngle = liveDragAngle ?: if (snapToSelectedStop) targetAngle else animatedAngle
     val currentRequestedSelection by rememberUpdatedState(selectedPackageId)
     val currentDisplayedSelection by rememberUpdatedState(selected.packageId)
     val currentOnSelect by rememberUpdatedState(onSelect)
@@ -106,21 +128,17 @@ internal fun GamingDurationDial(
         { ViewCompat.performHapticFeedback(view, HapticFeedbackConstantsCompat.SEGMENT_TICK) }
     }
     val currentSegmentTick by rememberUpdatedState(segmentTick ?: platformSegmentTick)
-    val optionIds = options.map(GamingDurationChoice::packageId)
-    var observedSelection by remember(optionIds) { mutableStateOf(selected.packageId) }
-    var lastPublishedSelection by remember(optionIds) { mutableStateOf(selected.packageId) }
-    SideEffect {
-        if (observedSelection != selected.packageId) {
-            observedSelection = selected.packageId
-            lastPublishedSelection = selected.packageId
-        }
-    }
-    fun publishUserSelection(packageId: String, repeatSameSelection: Boolean) {
+    fun publishUserSelection(
+        packageId: String,
+        repeatSameSelection: Boolean,
+        snapAngle: Boolean = false,
+    ) {
         val changed = packageId != lastPublishedSelection
         if (changed) {
             lastPublishedSelection = packageId
             currentSegmentTick()
         }
+        if (snapAngle) snapToSelectedStop = true else if (changed) snapToSelectedStop = false
         if (changed || repeatSameSelection) currentOnSelect(packageId)
     }
 
@@ -146,42 +164,59 @@ internal fun GamingDurationDial(
                         true
                     }
                 }
-                .pointerInput(options.map(GamingDurationChoice::packageId)) {
-                    fun selectAt(position: Offset) {
-                        val index = closestDurationDialStop(position, size, options.size) ?: return
+                .pointerInput(options, gestureContextKey) {
+                    fun selectAt(angle: Float, allowNormalization: Boolean = false) {
+                        val index = nearestDurationDialStop(angle, options.size)
                         val id = options[index].packageId
                         val needsSelectionNormalization =
+                            allowNormalization &&
                             currentRequestedSelection != currentDisplayedSelection &&
                                 id == currentDisplayedSelection
-                        publishUserSelection(id, repeatSameSelection = needsSelectionNormalization)
+                        publishUserSelection(
+                            packageId = id,
+                            repeatSameSelection = needsSelectionNormalization,
+                            snapAngle = true,
+                        )
                     }
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = false)
-                        if (closestDurationDialStop(down.position, size, options.size) == null) {
+                        val downAngle = durationDialAngleOnRing(down.position, size)
+                        if (downAngle == null) {
                             return@awaitEachGesture
                         }
+                        val startedAtRevision = gestureRevision
                         var dragging = false
-                        while (true) {
-                            val change = awaitPointerEvent().changes.firstOrNull { it.id == down.id }
-                                ?: break
-                            if (change.isConsumed && !dragging) break
-                            val dx = change.position.x - down.position.x
-                            val dy = change.position.y - down.position.y
-                            val moved = hypot(dx, dy)
-                            if (!change.pressed) {
-                                if (dragging || moved < viewConfiguration.touchSlop) {
-                                    selectAt(change.position)
+                        liveDragAngle = downAngle
+                        snapToSelectedStop = true
+                        try {
+                            while (true) {
+                                if (startedAtRevision != gestureRevision) break
+                                val change = awaitPointerEvent().changes.firstOrNull { it.id == down.id }
+                                    ?: break
+                                if (startedAtRevision != gestureRevision) break
+                                if (change.isConsumed && !dragging) break
+                                val dx = change.position.x - down.position.x
+                                val dy = change.position.y - down.position.y
+                                val moved = hypot(dx, dy)
+                                val angle = durationDialAngle(change.position, size)
+                                if (!change.pressed) {
+                                    if (angle != null && (dragging || moved < viewConfiguration.touchSlop)) {
+                                        liveDragAngle = angle
+                                        selectAt(angle, allowNormalization = !dragging)
+                                    }
+                                    break
                                 }
-                                break
+                                if (!dragging && moved >= viewConfiguration.touchSlop) {
+                                    dragging = true
+                                }
+                                if (dragging && angle != null) {
+                                    liveDragAngle = angle
+                                    selectAt(angle)
+                                    change.consume()
+                                }
                             }
-                            if (!dragging && moved >= viewConfiguration.touchSlop) {
-                                if (abs(dx) <= abs(dy)) break
-                                dragging = true
-                            }
-                            if (dragging) {
-                                selectAt(change.position)
-                                change.consume()
-                            }
+                        } finally {
+                            liveDragAngle = null
                         }
                     }
                 },
@@ -251,10 +286,11 @@ internal fun GamingDurationDial(
                     center = center,
                     style = Stroke(5.dp.toPx()),
                 )
+                val selectedSweep = durationDialSweep(displayedAngle)
                 drawArc(
                     color = vividGold.copy(alpha = 0.13f),
                     startAngle = 170f,
-                    sweepAngle = (animatedAngle - 170f).coerceAtLeast(0f),
+                    sweepAngle = selectedSweep,
                     useCenter = false,
                     topLeft = topLeft,
                     size = Size(diameter, diameter),
@@ -263,7 +299,7 @@ internal fun GamingDurationDial(
                 drawArc(
                     color = vividGold.copy(alpha = 0.29f),
                     startAngle = 170f,
-                    sweepAngle = (animatedAngle - 170f).coerceAtLeast(0f),
+                    sweepAngle = selectedSweep,
                     useCenter = false,
                     topLeft = topLeft,
                     size = Size(diameter, diameter),
@@ -276,13 +312,13 @@ internal fun GamingDurationDial(
                         end = Offset(center.x + radius, center.y - radius),
                     ),
                     startAngle = 170f,
-                    sweepAngle = (animatedAngle - 170f).coerceAtLeast(0f),
+                    sweepAngle = selectedSweep,
                     useCenter = false,
                     topLeft = topLeft,
                     size = Size(diameter, diameter),
                     style = Stroke(width = stroke, cap = StrokeCap.Round),
                 )
-                val radians = Math.toRadians(animatedAngle.toDouble())
+                val radians = Math.toRadians(displayedAngle.toDouble())
                 val knob = Offset(
                     center.x + radius * cos(radians).toFloat(),
                     center.y + radius * sin(radians).toFloat(),
@@ -439,7 +475,12 @@ internal fun durationDialStopAngles(count: Int): List<Float> {
 }
 
 internal fun closestDurationDialStop(position: Offset, size: IntSize, count: Int): Int? {
-    if (count <= 0 || size.width <= 0 || size.height <= 0) return null
+    val angle = durationDialAngleOnRing(position, size) ?: return null
+    return nearestDurationDialStop(angle, count)
+}
+
+internal fun durationDialAngleOnRing(position: Offset, size: IntSize): Float? {
+    if (size.width <= 0 || size.height <= 0) return null
     val centerX = size.width / 2f
     val centerY = size.height / 2f
     val dx = position.x - centerX
@@ -448,11 +489,29 @@ internal fun closestDurationDialStop(position: Offset, size: IntSize, count: Int
     if (abs(hypot(dx, dy) - radius) > size.width.coerceAtMost(size.height) * 0.12f) {
         return null
     }
-    val angle = (Math.toDegrees(atan2(dy, dx).toDouble()).toFloat() + 360f) % 360f
-    if (angle !in 160f..350f) return null
+    return durationDialAngle(position, size)
+}
+
+internal fun durationDialAngle(position: Offset, size: IntSize): Float? {
+    if (size.width <= 0 || size.height <= 0) return null
+    val dx = position.x - size.width / 2f
+    val dy = position.y - size.height / 2f
+    if (dx == 0f && dy == 0f) return null
+    return (Math.toDegrees(atan2(dy, dx).toDouble()).toFloat() + 360f) % 360f
+}
+
+internal fun nearestDurationDialStop(angle: Float, count: Int): Int {
+    require(count > 0)
     val stops = durationDialStopAngles(count)
     return stops.indices.minBy { index ->
-        val difference = abs(angle - stops[index])
-        minOf(difference, 360f - difference)
+        circularAngleDistance(angle, stops[index])
     }
 }
+
+internal fun circularAngleDistance(first: Float, second: Float): Float {
+    val difference = abs((first - second) % 360f)
+    return minOf(difference, 360f - difference)
+}
+
+internal fun durationDialSweep(angle: Float, startAngle: Float = 170f): Float =
+    (angle - startAngle + 360f) % 360f

@@ -2,10 +2,15 @@ package cloud.dcompany.erp.ui.screens.gaming
 
 import android.graphics.Bitmap
 import androidx.activity.ComponentActivity
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableLongStateOf
@@ -14,6 +19,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.ExperimentalTestApi
@@ -45,6 +51,7 @@ import cloud.dcompany.erp.ui.theme.DCompanyTheme
 import java.io.File
 import kotlin.math.abs
 import kotlin.math.roundToInt
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -193,7 +200,7 @@ class GamingBoardUiTest {
     }
 
     @Test
-    fun durationHapticDragTicksOncePerChangedStopBeforeParentRecomposition() {
+    fun durationHapticFullCircleDragTracksBothDirectionsWithoutDuplicateStops() {
         val selections = mutableListOf<String>()
         var tickCount = 0
         compose.setContent {
@@ -215,23 +222,179 @@ class GamingBoardUiTest {
             val thirty = Offset(width * 0.30f, height * 0.15f)
             val sixty = Offset(width * 0.60f, height * 0.11f)
             val ninety = Offset(width * 0.85f, height * 0.30f)
+            val right = Offset(width * 0.90f, height * 0.50f)
+            val seamAbove = Offset(width * 0.89f, height * 0.43f)
+            val seamBelow = Offset(width * 0.89f, height * 0.57f)
+            val bottom = Offset(width * 0.50f, height * 0.90f)
+            val lowerLeft = Offset(width * 0.15f, height * 0.70f)
+            val left = Offset(width * 0.10f, height * 0.50f)
             down(thirty)
-            moveTo(sixty)
-            moveTo(sixty)
-            moveTo(ninety)
+            moveTo(left)
+            moveTo(lowerLeft)
+            moveTo(bottom)
+            moveTo(seamBelow)
+            moveTo(right)
+            moveTo(seamAbove)
+            moveTo(seamBelow)
             moveTo(ninety)
             moveTo(sixty)
             moveTo(thirty)
+            moveTo(sixty)
+            moveTo(sixty)
+            moveTo(ninety)
+            moveTo(seamAbove)
+            moveTo(right)
+            moveTo(seamBelow)
+            moveTo(bottom)
+            moveTo(lowerLeft)
+            moveTo(left)
             moveTo(thirty)
             up()
         }
 
         compose.runOnIdle {
-            assertEquals(4, tickCount)
+            assertEquals(6, tickCount)
             assertEquals(
-                listOf("single-60", "single-90", "single-60", "single-30"),
+                listOf(
+                    "single-90", "single-60", "single-30",
+                    "single-60", "single-90", "single-30",
+                ),
                 selections,
             )
+        }
+    }
+
+    @Test
+    fun cancelledDurationDragSnapsToPublishedStopAndAcceptsNextGesture() {
+        val selected = mutableStateOf("single-30")
+        var tickCount = 0
+        compose.setContent {
+            DCompanyTheme {
+                GamingDurationDial(
+                    choices = listOf(
+                        GamingDurationChoice("single-30", 30, 8_000),
+                        GamingDurationChoice("single-60", 60, 12_000),
+                        GamingDurationChoice("single-90", 90, 16_000),
+                    ),
+                    selectedPackageId = selected.value,
+                    onSelect = { selected.value = it },
+                    segmentTick = { tickCount++ },
+                )
+            }
+        }
+
+        val dial = compose.onNodeWithContentDescription("Session duration dial")
+        dial.performTouchInput {
+            down(Offset(width * 0.30f, height * 0.15f))
+            moveTo(Offset(width * 0.50f, height * 0.90f))
+            cancel()
+        }
+        compose.onNodeWithText("90 min").assertIsDisplayed()
+        compose.runOnIdle { selected.value = "single-30" }
+        compose.waitForIdle()
+        dial.performTouchInput { click(Offset(width * 0.60f, height * 0.11f)) }
+
+        compose.runOnIdle {
+            assertEquals("single-60", selected.value)
+            assertEquals(2, tickCount)
+        }
+    }
+
+    @Test
+    fun externalSelectionDuringHeldDragStopsOldGestureBeforeItCanRepublish() {
+        val selected = mutableStateOf("single-30")
+        val selections = mutableListOf<String>()
+        var tickCount = 0
+        compose.setContent {
+            DCompanyTheme {
+                GamingDurationDial(
+                    choices = listOf(
+                        GamingDurationChoice("single-30", 30, 8_000),
+                        GamingDurationChoice("single-60", 60, 12_000),
+                        GamingDurationChoice("single-90", 90, 16_000),
+                    ),
+                    selectedPackageId = selected.value,
+                    onSelect = {
+                        selections += it
+                        selected.value = it
+                    },
+                    segmentTick = { tickCount++ },
+                )
+            }
+        }
+
+        val dial = compose.onNodeWithContentDescription("Session duration dial")
+        dial.performTouchInput {
+            down(Offset(width * 0.30f, height * 0.15f))
+            moveTo(Offset(width * 0.50f, height * 0.90f))
+        }
+        compose.waitForIdle()
+        compose.runOnIdle { selected.value = "single-60" }
+        compose.waitForIdle()
+        dial.performTouchInput {
+            moveTo(Offset(width * 0.85f, height * 0.30f))
+            up()
+        }
+
+        compose.runOnIdle {
+            assertEquals("single-60", selected.value)
+            assertEquals(listOf("single-90"), selections)
+        }
+        dial.performTouchInput { click(Offset(width * 0.30f, height * 0.15f)) }
+        compose.runOnIdle {
+            assertEquals("single-30", selected.value)
+            assertEquals(listOf("single-90", "single-30"), selections)
+            assertEquals(2, tickCount)
+        }
+    }
+
+    @Test
+    fun centreVerticalGestureScrollsParentWithoutPublishingDuration() {
+        val selections = mutableListOf<String>()
+        lateinit var parentScroll: ScrollState
+        compose.setContent {
+            DCompanyTheme {
+                parentScroll = rememberScrollState()
+                Column(Modifier.height(250.dp).verticalScroll(parentScroll)) {
+                    GamingDurationDial(
+                        choices = listOf(
+                            GamingDurationChoice("single-30", 30, 8_000),
+                            GamingDurationChoice("single-60", 60, 12_000),
+                        ),
+                        selectedPackageId = "single-30",
+                        onSelect = selections::add,
+                    )
+                    Spacer(Modifier.height(400.dp))
+                }
+            }
+        }
+
+        val dial = compose.onNodeWithContentDescription("Session duration dial")
+        dial.performTouchInput {
+            swipe(
+                start = Offset(width * 0.50f, height * 0.50f),
+                end = Offset(width * 0.50f, height * 0.15f),
+                durationMillis = 300,
+            )
+        }
+        compose.runOnIdle {
+            assertTrue(parentScroll.value > 0)
+            assertTrue(selections.isEmpty())
+        }
+
+        runBlocking { parentScroll.scrollTo(0) }
+        compose.waitForIdle()
+        val ringDragScrollBaseline = parentScroll.value
+        dial.performTouchInput {
+            swipe(
+                start = Offset(width * 0.90f, height * 0.50f),
+                end = Offset(width * 0.50f, height * 0.90f),
+                durationMillis = 300,
+            )
+        }
+        compose.runOnIdle {
+            assertEquals(listOf("single-60"), selections)
+            assertEquals(ringDragScrollBaseline, parentScroll.value)
         }
     }
 
@@ -613,6 +776,141 @@ class GamingBoardUiTest {
     }
 
     @Test
+    fun vrModeDialSubmitsExactPublishedBasePackage() {
+        var submitted: String? = null
+        compose.setContent {
+            DCompanyTheme {
+                StartSessionEditor(
+                    station = Station("vr-1", "VR-1", "VR Pod 1", "vr", 12_000),
+                    packages = listOf(
+                        GamingPackage("games-15", "vr-games-15m", "vr", "standard", "vr_games", 1, 1, "base", "VR Games 15", 15, 8_000),
+                        GamingPackage("games-30", "vr-games-30m", "vr", "standard", "vr_games", 1, 1, "base", "VR Games 30", 30, 12_000),
+                        GamingPackage("racing-15", "vr-racing-15m", "vr", "standard", "vr_racing", 1, 1, "base", "VR Racing 15", 15, 10_000),
+                        GamingPackage("racing-30", "vr-racing-30m", "vr", "standard", "vr_racing", 1, 1, "base", "VR Racing 30", 30, 14_000),
+                    ),
+                    onDismiss = {},
+                    onConfirm = { _, _, _, _, packageId, _ -> submitted = packageId },
+                )
+            }
+        }
+
+        compose.onNodeWithText("VR Racing Sim").performClick()
+        compose.onNodeWithContentDescription("Session duration dial")
+            .performTouchInput { click(Offset(width * 0.83f, height * 0.31f)) }
+        compose.onNodeWithText("Start 30 min · ₹140.00")
+            .assertIsDisplayed().performClick()
+        compose.runOnIdle { assertEquals("racing-30", submitted) }
+    }
+
+    @Test
+    fun inlinePackageExtensionChargesOnlyOnOneExplicitConfirm() {
+        val station = Station("ps5-1", "PS5-1", "PS5 Station 1", "ps5", 12_000)
+        val session = GameSession(
+            id = "session-1", stationId = station.id, shiftId = "shift-1",
+            status = "active", startAt = "2026-09-30T10:00:00Z",
+            timerMinutes = 60, amountMinor = 12_000, billingMode = "package",
+            packageId = "single-60", packagePriceMinorSnapshot = 12_000,
+            packageDurationMinutesSnapshot = 60, packageVariantSnapshot = "single",
+            packageStationTypeSnapshot = "ps5", packagePricingTierSnapshot = "standard",
+            effectivePackageId = "single-60", effectivePackagePriceMinor = 12_000,
+            effectivePackageDurationMinutes = 60, effectivePackageVariant = "single",
+            effectivePackageStationType = "ps5", effectivePackagePricingTier = "standard",
+        )
+        val extensions = listOf(
+            GamingPackage("extend-30", "single-extension-30m", "ps5", "standard", "single", 1, 1, "extension", "Add 30 minutes", 30, 6_000),
+            GamingPackage("extend-60", "single-extension-60m", "ps5", "standard", "single", 1, 1, "extension", "Add 60 minutes", 60, 10_000),
+        )
+        val state = mutableStateOf(GamingUiState(
+            stations = listOf(station), packages = extensions, sessions = listOf(session),
+            activeShiftId = "shift-1", activeShiftServerConfirmed = true,
+            everSynced = true, refreshing = false, online = true,
+        ))
+        var confirms = 0
+        var confirmedPackageId: String? = null
+        var fallbackDialogs = 0
+        compose.setContent {
+            DCompanyTheme {
+                GamingCommandWorkspace(
+                    state = state.value,
+                    access = GamingAccess(canManageSessions = true),
+                    filters = listOf(StationFilter("all", "All")),
+                    selectedFilter = "all",
+                    visibleStations = listOf(station),
+                    selectedStationId = station.id,
+                    showDetail = false,
+                    focusStationId = null,
+                    focusRequested = false,
+                    startTerminalBlockMessage = null,
+                    wallClock = remember { mutableLongStateOf(1_780_134_000_000L) },
+                    attentionCount = 0,
+                    onSelectFilter = {}, onSelectStation = {}, onBackToBoard = {},
+                    onOpenAttention = {}, onRefresh = {}, onStart = {},
+                    onConfirmStart = { _, _, _, _, _, _, _ -> },
+                    onStop = { _, _ -> }, onSend = {}, onCancelUnbilled = {},
+                    onExtendTimer = {}, onExtendPackage = { _, _ -> fallbackDialogs++ },
+                    onTransfer = {}, onPauseResume = {}, onReconcile = {},
+                    onRepairBilling = {}, onResolveLegacyStart = {},
+                    onDiscardPackageExtension = {}, onAddItems = {},
+                    onVoidAddon = { _, _ -> }, onReviewRejectedAddon = {},
+                    onManageParticipants = {},
+                    onConfirmExtension = { review ->
+                        confirms++
+                        confirmedPackageId = review.extension.id
+                        null
+                    },
+                )
+            }
+        }
+
+        compose.onNodeWithText("Extend").performScrollTo().performClick()
+        compose.onNodeWithTag("gaming-extension-preview").assertIsDisplayed()
+        compose.onNodeWithText("ELAPSED").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Session duration dial").performTouchInput {
+            down(Offset(width * 0.30f, height * 0.15f))
+            moveTo(Offset(width * 0.50f, height * 0.90f))
+            up()
+        }
+        compose.onNodeWithText("Resulting booked total · ₹220.00")
+            .performScrollTo().assertIsDisplayed()
+        compose.runOnIdle {
+            assertEquals(0, confirms)
+            assertEquals(0, fallbackDialogs)
+        }
+        compose.onNodeWithText("Cancel").performScrollTo().assertIsDisplayed().performClick()
+        compose.runOnIdle { assertEquals(0, confirms) }
+
+        compose.onNodeWithText("Extend").performScrollTo().performClick()
+        compose.onNodeWithContentDescription("Session duration dial").performTouchInput {
+            click(Offset(width * 0.83f, height * 0.31f))
+        }
+        compose.runOnIdle {
+            state.value = state.value.copy(
+                packages = extensions.map {
+                    if (it.id == "extend-60") it.copy(priceMinor = 11_000) else it
+                },
+            )
+        }
+        compose.onNodeWithText(
+            "The extension price or duration changed. Reopen Extend and review the new total.",
+        ).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Confirm extension").assertIsNotEnabled()
+        compose.runOnIdle { assertEquals(0, confirms) }
+        compose.onNodeWithText("Cancel").performScrollTo().performClick()
+        compose.runOnIdle { state.value = state.value.copy(packages = extensions) }
+
+        compose.onNodeWithText("Extend").performScrollTo().performClick()
+        compose.onNodeWithContentDescription("Session duration dial").performTouchInput {
+            click(Offset(width * 0.83f, height * 0.31f))
+        }
+        compose.onNodeWithText("Confirm extension").performScrollTo().assertIsDisplayed().performClick()
+        compose.runOnIdle {
+            assertEquals(1, confirms)
+            assertEquals("extend-60", confirmedPackageId)
+            assertEquals(0, fallbackDialogs)
+        }
+    }
+
+    @Test
     fun fullTabletWorkspaceShowsBoardDialCustomerAndStartTogether() {
         val stations = (1..4).map { number ->
             Station("ps5-$number", "PS5-$number", "PS5 Station $number", "ps5", 12_000)
@@ -735,13 +1033,61 @@ class GamingBoardUiTest {
                 .assertIsDisplayed()
             compose.onNodeWithText("₹80.00").assertIsDisplayed()
             compose.onNodeWithText("Start 30 min · ₹80.00").assertIsDisplayed()
-            val dialBounds = dial.getUnclippedBoundsInRoot()
-            val search = compose.onNodeWithContentDescription("Search saved customers by name or phone")
-                .getUnclippedBoundsInRoot()
-            val start = compose.onNodeWithText("Start 30 min · ₹80.00")
-                .getUnclippedBoundsInRoot()
-            assertTrue("Duration dial must not overlap customer controls", dialBounds.right <= search.left)
-            assertTrue("Customer lookup stays above the Start action", search.bottom <= start.top)
+            compose.onNodeWithText("Est. finish ·", substring = true).assertIsDisplayed()
+            compose.onNodeWithContentDescription(
+                "Expected finish if started now, about",
+                substring = true,
+            ).assertIsDisplayed()
+            val dialNode = dial.fetchSemanticsNode()
+            val searchNode = compose.onNodeWithContentDescription(
+                "Search saved customers by name or phone",
+            ).fetchSemanticsNode()
+            val clippedSearchBounds = searchNode.boundsInRoot
+            val startNode = compose.onNodeWithText("Start 30 min · ₹80.00")
+                .fetchSemanticsNode()
+            val paneNode = compose.onNodeWithTag("gaming-control-pane").fetchSemanticsNode()
+            val dialPosition = dialNode.positionOnScreen
+            val searchPosition = searchNode.positionOnScreen
+            val startPosition = startNode.positionOnScreen
+            val panePosition = paneNode.positionOnScreen
+            val dialBounds = Rect(
+                dialPosition.x, dialPosition.y,
+                dialPosition.x + dialNode.size.width, dialPosition.y + dialNode.size.height,
+            )
+            val searchBounds = Rect(
+                searchPosition.x, searchPosition.y,
+                searchPosition.x + searchNode.size.width,
+                searchPosition.y + searchNode.size.height,
+            )
+            val startBounds = Rect(
+                startPosition.x, startPosition.y,
+                startPosition.x + startNode.size.width,
+                startPosition.y + startNode.size.height,
+            )
+            val paneBounds = Rect(
+                panePosition.x, panePosition.y,
+                panePosition.x + paneNode.size.width, panePosition.y + paneNode.size.height,
+            )
+            val tolerancePx = 1f
+            assertTrue(
+                "Duration dial must not overlap customer controls: dial=$dialBounds, " +
+                    "search=$searchBounds",
+                dialBounds.right <= searchBounds.left + tolerancePx,
+            )
+            assertTrue(
+                "The complete customer lookup must fit inside the control pane above the " +
+                    "Start footer: search=$searchBounds, start=$startBounds, pane=$paneBounds",
+                searchBounds.left >= paneBounds.left - tolerancePx &&
+                    searchBounds.top >= paneBounds.top - tolerancePx &&
+                    searchBounds.right <= paneBounds.right + tolerancePx &&
+                    searchBounds.bottom <= startBounds.top + tolerancePx &&
+                    startBounds.bottom <= paneBounds.bottom + tolerancePx,
+            )
+            assertTrue(
+                "The customer lookup must not be clipped by the form viewport: " +
+                    "clipped=$clippedSearchBounds, measured=$searchBounds",
+                abs(clippedSearchBounds.height - searchNode.size.height) <= tolerancePx,
+            )
             capture("gaming-full-workspace-960x600-board-and-dial.png", "gaming-full-workspace")
             dial.performTouchInput {
                 swipe(Offset(width * 0.17f, height * 0.31f),

@@ -1918,6 +1918,16 @@ class GamingDialogUiTest {
                     durationMillis = 300,
                 )
             }
+        compose.onNodeWithText("Start 60 min · ₹120.00").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Session duration dial")
+            .bringIntoViewIfNeeded()
+            .performTouchInput {
+                swipe(
+                    start = Offset(width * 0.83f, height * 0.31f),
+                    end = Offset(width * 0.17f, height * 0.31f),
+                    durationMillis = 300,
+                )
+            }
         compose.onNodeWithText("Start 30 min · ₹80.00").assertIsDisplayed()
         compose.onNodeWithContentDescription("Session duration dial")
             .bringIntoViewIfNeeded()
@@ -1981,7 +1991,9 @@ class GamingDialogUiTest {
                     station = testStation().copy(type = "simulator", name = "Racing Simulator 1"),
                     packages = listOf(
                         GamingPackage("simdrive-15", "standard-simdrive-session-15m", "simulator", "standard", "simdrive", 1, 1, "base", "Racing Sim · 15 min", 15, 7_000),
+                        GamingPackage("simdrive-30", "standard-simdrive-session-30m", "simulator", "standard", "simdrive", 1, 1, "base", "Racing Sim · 30 min", 30, 10_000),
                         GamingPackage("vr-racing-15", "vr-racing-session-15m", "simulator", "standard", "vr_racing", 1, 1, "base", "VR Racing Sim · 15 min", 15, 10_000),
+                        GamingPackage("vr-racing-30", "vr-racing-session-30m", "simulator", "standard", "vr_racing", 1, 1, "base", "VR Racing Sim · 30 min", 30, 14_000),
                         GamingPackage("premium-stale", "premium-single-session-60m", "simulator", "premium", "simdrive", 1, 1, "base", "Premium stale", 60, 15_000),
                     ),
                     onDismiss = {},
@@ -1992,9 +2004,14 @@ class GamingDialogUiTest {
 
         compose.onNodeWithText("Premium stale").assertDoesNotExist()
         compose.onNodeWithText("VR Racing Sim").performClick()
-        compose.onNodeWithText("15 min · ₹100.00 total").performClick()
-        compose.onNodeWithText("Start 15 min · ₹100.00").performClick()
-        compose.runOnIdle { assertEquals("vr-racing-15", submittedPackage) }
+        compose.onNodeWithContentDescription("Session duration dial")
+            .bringIntoViewIfNeeded()
+            .performTouchInput { click(Offset(width * 0.83f, height * 0.31f)) }
+        compose.onNodeWithContentDescription("Expected finish if started now", substring = true)
+            .bringIntoViewIfNeeded()
+            .assertIsDisplayed()
+        compose.onNodeWithText("Start 30 min · ₹140.00").bringIntoViewIfNeeded().performClick()
+        compose.runOnIdle { assertEquals("vr-racing-30", submittedPackage) }
     }
 
     @Test
