@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
@@ -80,6 +81,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cloud.dcompany.erp.core.auth.CustomersAccess
 import cloud.dcompany.erp.core.net.asRupees
@@ -99,6 +101,7 @@ import cloud.dcompany.erp.ui.components.SearchInput
 import cloud.dcompany.erp.ui.components.SectionCard
 import cloud.dcompany.erp.ui.components.UiTone
 import cloud.dcompany.erp.ui.theme.Brand
+import cloud.dcompany.erp.ui.theme.controlDeckBackdrop
 import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.theme.Spacing
 import cloud.dcompany.erp.ui.components.ViewOnlyNotice
@@ -124,7 +127,13 @@ fun CustomersScreen(access: CustomersAccess = CustomersAccess()) {
     val playtime by playtimeVm.state.collectAsStateWithLifecycle()
     val focusManager = LocalFocusManager.current
     var listFilter by rememberSaveable { mutableStateOf(CustomerListFilter.All) }
-    var viewMode by rememberSaveable { mutableStateOf(CustomerViewMode.Directory) }
+    val scopedPlaytime = playtimeVm.stateForCurrentScope(playtime)
+    val viewSelection = rememberCustomerViewMode(
+        playtime = scopedPlaytime,
+        hasCachedCustomers = state.rows.isNotEmpty(),
+        refreshAttempted = playtimeVm.hasAttemptedRefreshForCurrentScope(),
+    )
+    val viewMode = viewSelection.mode
     LaunchedEffect(viewMode) {
         if (viewMode == CustomerViewMode.PlayHours) playtimeVm.refresh()
     }
@@ -135,7 +144,7 @@ fun CustomersScreen(access: CustomersAccess = CustomersAccess()) {
     }
 
     Column(
-        Modifier.fillMaxSize().padding(Spacing.lg),
+        Modifier.fillMaxSize().controlDeckBackdrop().padding(Spacing.lg),
         verticalArrangement = Arrangement.spacedBy(Spacing.md),
     ) {
         Row(
@@ -145,17 +154,17 @@ fun CustomersScreen(access: CustomersAccess = CustomersAccess()) {
         ) {
             Icon(Icons.Default.People, contentDescription = null,
                 tint = Brand.GoldBright, modifier = Modifier.size(32.dp))
-            Column {
+            Column(Modifier.weight(1f)) {
                 Text("CUSTOMERS", color = Brand.Foreground,
                     style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                 Text("Players make D Company", color = Brand.ForegroundMuted,
                     style = MaterialTheme.typography.labelMedium)
             }
-        }
-        CustomerViewModeSelector(viewMode) { next ->
-            focusManager.clearFocus()
-            if (next == CustomerViewMode.PlayHours) vm.clearSelection()
-            viewMode = next
+            CustomerViewModeSelector(viewMode) { next ->
+                focusManager.clearFocus()
+                if (next == CustomerViewMode.PlayHours) vm.clearSelection()
+                viewSelection.select(next)
+            }
         }
         if (viewMode == CustomerViewMode.Directory) {
             CustomerActionRow(
@@ -195,7 +204,7 @@ fun CustomersScreen(access: CustomersAccess = CustomersAccess()) {
 
             when {
                 viewMode == CustomerViewMode.PlayHours -> CustomerLeaderboardPanel(
-                    state = playtimeVm.stateForCurrentScope(playtime),
+                    state = scopedPlaytime,
                     onRefresh = playtimeVm::refresh,
                     onLoadMore = playtimeVm::loadMore,
                     modifier = Modifier.fillMaxSize(),
@@ -300,22 +309,58 @@ private fun formatPlayMinutes(minutes: Int): String {
 
 internal enum class CustomerViewMode { Directory, PlayHours }
 
+internal class CustomerViewModeSelection(
+    val mode: CustomerViewMode,
+    val select: (CustomerViewMode) -> Unit,
+)
+
+/** Keep the cached directory usable if the initial online-only rank load fails. */
 @Composable
-private fun CustomerViewModeSelector(selected: CustomerViewMode, onSelect: (CustomerViewMode) -> Unit) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-        ErpButton(
-            text = "Customer directory",
-            onClick = { onSelect(CustomerViewMode.Directory) },
-            modifier = Modifier.weight(1f),
-            intent = if (selected == CustomerViewMode.Directory) ActionIntent.Primary else ActionIntent.Secondary,
-        )
-        ErpButton(
-            text = "Playtime leaderboard",
-            onClick = { onSelect(CustomerViewMode.PlayHours) },
-            modifier = Modifier.weight(1f),
-            intent = if (selected == CustomerViewMode.PlayHours) ActionIntent.Primary else ActionIntent.Secondary,
-        )
+internal fun rememberCustomerViewMode(
+    playtime: CustomerPlaytimeUiState,
+    hasCachedCustomers: Boolean,
+    refreshAttempted: Boolean,
+): CustomerViewModeSelection {
+    var mode by rememberSaveable { mutableStateOf(CustomerViewMode.PlayHours) }
+    var userSelectedMode by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(mode, playtime.error, playtime.items.size, hasCachedCustomers,
+        refreshAttempted, userSelectedMode) {
+        if (!userSelectedMode && mode == CustomerViewMode.PlayHours &&
+            refreshAttempted && playtime.error != null &&
+            playtime.items.isEmpty() && hasCachedCustomers
+        ) {
+            mode = CustomerViewMode.Directory
+        }
     }
+    return CustomerViewModeSelection(mode) { next ->
+        userSelectedMode = true
+        mode = next
+    }
+}
+
+@Composable
+internal fun CustomerViewModeSelector(
+    selected: CustomerViewMode,
+    onSelect: (CustomerViewMode) -> Unit,
+) {
+    val next = if (selected == CustomerViewMode.PlayHours) {
+        CustomerViewMode.Directory
+    } else {
+        CustomerViewMode.PlayHours
+    }
+    ErpButton(
+        text = if (next == CustomerViewMode.Directory) "Directory" else "Leaderboard",
+        onClick = { onSelect(next) },
+        intent = ActionIntent.Secondary,
+        leadingIcon = if (next == CustomerViewMode.Directory) Icons.Default.People else Icons.Default.Star,
+        modifier = Modifier.semantics {
+            contentDescription = if (next == CustomerViewMode.Directory) {
+                "Open saved customer directory"
+            } else {
+                "Open playtime leaderboard"
+            }
+        },
+    )
 }
 
 // ------------------------------------------------------------------ header
@@ -575,122 +620,148 @@ internal fun CustomerLeaderboardPanel(
     onLoadMore: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Column(
-        modifier.clip(Radius.shapeLg).background(Brand.Surface)
-            .border(1.dp, Brand.Gold.copy(alpha = 0.38f), Radius.shapeLg),
-    ) {
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = Spacing.lg, vertical = Spacing.md),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
+    BoxWithConstraints(modifier, contentAlignment = Alignment.TopCenter) {
+        val panelWidth = maxWidth.coerceAtMost(1_080.dp)
+        val bodyLimit = (maxHeight - 166.dp).coerceAtLeast(132.dp)
+        Column(
+            Modifier.width(panelWidth).fillMaxHeight(),
+            verticalArrangement = Arrangement.spacedBy(Spacing.md),
         ) {
-            Column {
-                Text("Playtime leaderboard", color = Brand.GoldBright,
-                    style = MaterialTheme.typography.titleMedium)
-                Text(
-                    state.total?.let { "${state.items.size} of $it ranked customers" }
-                        ?: "Online playtime ranking",
-                    color = Brand.ForegroundMuted,
-                    style = MaterialTheme.typography.labelSmall,
+            Row(
+                Modifier.fillMaxWidth().clip(Radius.shapeLg)
+                    .background(Brush.horizontalGradient(
+                        listOf(Brand.Gold.copy(alpha = 0.15f), Brand.Surface, Brand.Surface),
+                    ))
+                    .border(1.dp, Brand.Gold.copy(alpha = 0.38f), Radius.shapeLg)
+                    .padding(horizontal = Spacing.lgPlus, vertical = Spacing.md),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("PLAYTIME LEADERBOARD", color = Brand.GoldBright,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold, letterSpacing = 0.6.sp)
+                    Text(
+                        state.total?.let { "${state.items.size} of $it ranked customers" }
+                            ?: "Online playtime ranking",
+                        color = Brand.ForegroundMuted,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
+                ErpButton(
+                    text = "Refresh",
+                    onClick = onRefresh,
+                    enabled = !state.loading,
+                    intent = ActionIntent.Secondary,
+                    leadingIcon = Icons.Default.Refresh,
                 )
             }
-            ErpButton(
-                text = "Refresh",
-                onClick = onRefresh,
-                enabled = !state.loading,
-                intent = ActionIntent.Secondary,
-                leadingIcon = Icons.Default.Refresh,
-            )
-        }
-        PanelDivider()
-        when {
-            state.loading && state.items.isEmpty() -> {
-                Box(Modifier.weight(1f).fillMaxWidth().padding(Spacing.lg)) {
-                    LoadingSkeleton(lines = 7)
-                }
-            }
-            state.items.isEmpty() -> {
-                Column(
-                    Modifier.weight(1f).fillMaxWidth().padding(Spacing.lg),
-                    verticalArrangement = Arrangement.Center,
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    Text(
-                        when {
-                            state.error != null -> "Playtime ranking unavailable"
-                            state.total == 0 -> "No customers to rank yet"
-                            else -> "Connect to load playtime ranks"
-                        },
-                        color = Brand.Foreground,
-                        style = MaterialTheme.typography.titleMedium,
-                    )
-                    Text(
-                        state.error ?: "Completed sessions will appear after the first online refresh.",
-                        color = if (state.error == null) Brand.ForegroundMuted else Brand.Warning,
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    if (state.error != null) ErpButton("Retry", onRefresh)
-                }
-            }
-            else -> {
-                BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
-                    val wide = maxWidth >= 700.dp
-                    LazyColumn(Modifier.fillMaxSize()) {
-                        if (wide) item(key = "header") { CustomerTableHeader() }
-                        items(state.items, key = PlaytimeLeaderboardItem::customerId) { item ->
-                            CustomerLeaderboardRow(item, state.program?.rewardsEnabled == true, wide)
-                            PanelDivider()
+            Column(
+                Modifier.fillMaxWidth().clip(Radius.shapeLg)
+                    .background(Brand.Surface.copy(alpha = 0.96f))
+                    .border(1.dp, Brand.BorderSubtle, Radius.shapeLg),
+            ) {
+                Box(
+                    Modifier.fillMaxWidth().height(1.dp)
+                        .background(Brush.horizontalGradient(listOf(
+                            Brand.Gold.copy(alpha = 0.72f),
+                            Brand.Gold.copy(alpha = 0.12f),
+                            Color.Transparent,
+                        ))),
+                )
+                when {
+                    state.loading && state.items.isEmpty() -> {
+                        Box(Modifier.fillMaxWidth().height(220.dp).padding(Spacing.lg)) {
+                            LoadingSkeleton(lines = 7)
                         }
-                        if (state.error != null) item(key = "error") {
-                            Column(Modifier.fillMaxWidth().padding(Spacing.md)) {
-                                Text("Remaining ranks unavailable: ${state.error}", color = Brand.Warning)
-                                ErpButton("Refresh leaderboard", onRefresh, intent = ActionIntent.Secondary)
-                            }
-                        } else if (state.canLoadMore) item(key = "load-more") {
-                            ErpButton(
-                                text = if (state.loading) "Loading more…" else "Load more ranks",
-                                onClick = onLoadMore,
-                                busy = state.loading,
-                                modifier = Modifier.fillMaxWidth().padding(Spacing.md),
-                                intent = ActionIntent.Secondary,
+                    }
+                    state.items.isEmpty() -> {
+                        Column(
+                            Modifier.fillMaxWidth().height(220.dp).padding(Spacing.lg),
+                            verticalArrangement = Arrangement.Center,
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            Text(
+                                when {
+                                    state.error != null -> "Playtime ranking unavailable"
+                                    state.total == 0 -> "No customers to rank yet"
+                                    else -> "Connect to load playtime ranks"
+                                },
+                                color = Brand.Foreground,
+                                style = MaterialTheme.typography.titleMedium,
                             )
+                            Text(
+                                state.error ?: "Completed sessions will appear after the first online refresh.",
+                                color = if (state.error == null) Brand.ForegroundMuted else Brand.Warning,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                            if (state.error != null) ErpButton("Retry", onRefresh)
+                        }
+                    }
+                    else -> {
+                        BoxWithConstraints(Modifier.fillMaxWidth()) {
+                            val wide = maxWidth >= 700.dp
+                            val extraRow = state.error != null || state.canLoadMore
+                            val contentHeight = (state.items.size.coerceAtMost(7) * 72 +
+                                (if (wide) 38 else 0) + (if (extraRow) 68 else 0)).dp
+                            LazyColumn(Modifier.fillMaxWidth().height(contentHeight.coerceAtMost(bodyLimit))) {
+                                if (wide) item(key = "header") { CustomerTableHeader() }
+                                items(state.items, key = PlaytimeLeaderboardItem::customerId) { item ->
+                                    CustomerLeaderboardRow(item, state.program?.rewardsEnabled == true, wide)
+                                    PanelDivider()
+                                }
+                                if (state.error != null) item(key = "error") {
+                                    Column(Modifier.fillMaxWidth().padding(Spacing.md)) {
+                                        Text("Remaining ranks unavailable: ${state.error}", color = Brand.Warning)
+                                        ErpButton("Refresh leaderboard", onRefresh, intent = ActionIntent.Secondary)
+                                    }
+                                } else if (state.canLoadMore) item(key = "load-more") {
+                                    ErpButton(
+                                        text = if (state.loading) "Loading more…" else "Load more ranks",
+                                        onClick = onLoadMore,
+                                        busy = state.loading,
+                                        modifier = Modifier.fillMaxWidth().padding(Spacing.md),
+                                        intent = ActionIntent.Secondary,
+                                    )
+                                }
+                            }
                         }
                     }
                 }
             }
+            val rewardNote = if (state.program?.rewardsEnabled == true ||
+                state.program?.messagingEnabled == true
+            ) "Check Web ERP for play rewards and messages"
+            else "Play rewards and messages are off"
+            Text(
+                "Server-ranked completed playtime · Recorded visits are settled purchases · $rewardNote",
+                modifier = Modifier.padding(horizontal = Spacing.sm),
+                color = Brand.ForegroundMuted,
+                style = MaterialTheme.typography.labelSmall,
+            )
         }
-        val rewardNote = if (state.program?.rewardsEnabled == true ||
-            state.program?.messagingEnabled == true
-        ) "Check Web ERP for play rewards and messages"
-        else "Play rewards and messages are off"
-        Text(
-            "Server-ranked completed playtime · Recorded visits are settled purchases · $rewardNote",
-            modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.sm),
-            color = Brand.ForegroundMuted,
-            style = MaterialTheme.typography.labelSmall,
-        )
     }
 }
 
 @Composable
 private fun CustomerTableHeader() {
     Row(
-        Modifier.fillMaxWidth().background(Brand.BackgroundSecondary)
-            .padding(horizontal = Spacing.md, vertical = Spacing.sm),
+        Modifier.fillMaxWidth().background(Brand.BackgroundSecondary.copy(alpha = 0.9f))
+            .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text("#", Modifier.width(48.dp), color = Brand.ForegroundMuted,
-            style = MaterialTheme.typography.labelSmall)
+            style = MaterialTheme.typography.labelSmall, letterSpacing = 0.6.sp)
         Text("Customer", Modifier.weight(1f), color = Brand.ForegroundMuted,
-            style = MaterialTheme.typography.labelSmall)
+            style = MaterialTheme.typography.labelSmall, letterSpacing = 0.6.sp)
         Text("Hours played", Modifier.width(112.dp), color = Brand.ForegroundMuted,
-            style = MaterialTheme.typography.labelSmall)
+            style = MaterialTheme.typography.labelSmall, letterSpacing = 0.6.sp)
         Text("Paid hours", Modifier.width(96.dp), color = Brand.ForegroundMuted,
-            style = MaterialTheme.typography.labelSmall)
+            style = MaterialTheme.typography.labelSmall, letterSpacing = 0.6.sp)
         Text("Recorded visits", Modifier.width(116.dp), color = Brand.ForegroundMuted,
-            style = MaterialTheme.typography.labelSmall)
+            style = MaterialTheme.typography.labelSmall, letterSpacing = 0.6.sp)
         Text("Play rewards", Modifier.width(132.dp), color = Brand.ForegroundMuted,
-            style = MaterialTheme.typography.labelSmall)
+            style = MaterialTheme.typography.labelSmall, letterSpacing = 0.6.sp)
     }
 }
 
@@ -703,16 +774,16 @@ private fun CustomerLeaderboardRow(
     val rank = playtime.rank
     val rankColor = leaderboardRankColor(rank)
     Row(
-        Modifier.fillMaxWidth().heightIn(min = 64.dp)
+        Modifier.fillMaxWidth().heightIn(min = 72.dp)
             .background(
                 when {
                     rankColor != null -> Brush.horizontalGradient(
-                        listOf(rankColor.copy(alpha = 0.14f), Brand.Surface, Brand.Surface),
+                        listOf(rankColor.copy(alpha = 0.17f), Brand.Surface, Brand.Surface),
                     )
                     else -> Brush.horizontalGradient(listOf(Brand.Surface, Brand.Surface))
                 },
             )
-            .padding(horizontal = Spacing.md, vertical = Spacing.sm),
+            .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
@@ -728,7 +799,7 @@ private fun CustomerLeaderboardRow(
                 ) {
                     Icon(Icons.Default.Star, contentDescription = null,
                         tint = rankColor, modifier = Modifier.size(15.dp))
-                    Text(rank.toString(), color = rankColor, fontWeight = FontWeight.Bold)
+                Text(rank.toString(), color = rankColor, fontWeight = FontWeight.Bold)
                 }
             } else {
                 Text(rank.toString(),
@@ -742,7 +813,7 @@ private fun CustomerLeaderboardRow(
         ) {
             Box(
                 Modifier.size(38.dp).clip(CircleShape)
-                    .background((rankColor ?: Brand.Gold).copy(alpha = 0.16f))
+                    .background((rankColor ?: Brand.Gold).copy(alpha = 0.20f))
                     .border(
                         1.dp,
                         (rankColor ?: Brand.Gold).copy(alpha = if (rankColor == null) 0.22f else 0.68f),
@@ -767,7 +838,8 @@ private fun CustomerLeaderboardRow(
         }
         Text(
             formatPlayMinutes(playtime.totalPlayedMinutes),
-            modifier = Modifier.width(if (wide) 112.dp else 90.dp), color = rankColor ?: Brand.Foreground,
+            modifier = Modifier.width(if (wide) 112.dp else 90.dp),
+            color = rankColor ?: Brand.Foreground,
             fontWeight = FontWeight.SemiBold,
         )
         if (wide) {
@@ -778,7 +850,7 @@ private fun CustomerLeaderboardRow(
             Text(
                 if (rewardsEnabled) "See Web" else "Coming soon",
                 modifier = Modifier.width(132.dp).clip(Radius.shapePill)
-                    .background(Brand.SurfaceRaised)
+                    .background(Brand.SurfaceRaised.copy(alpha = 0.72f))
                     .padding(horizontal = Spacing.sm, vertical = Spacing.xs),
                 color = Brand.ForegroundMuted,
                 style = MaterialTheme.typography.labelSmall,

@@ -1,19 +1,29 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import subprocess
+import sys
+import types
 from pathlib import Path
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
 CODE28_SCANNER_BASE = "aac3a2167a298b0eae5330a831fb01875c37bf25"
 CODE28_SIGNED_BASE = "ab10a3138f41c5acf709e6275dfac55c6652d0d8"
 CODE29_SIGNED_BASE = "0949620b4632ebd6accdfa62a203be8d85b31a24"
+BUILD42_RELEASE_BASE = "1c1c7582eb8d6d6c509ddddc159014af10ce5f89"
+BUILD43_RELEASE_BASE = "8418e349eac0707ef62629f6cd3b7dc434690436"
 OLD_BINARY_SHA256 = "73c0169f0b72b465e2ae20bdb67a3e017044b2ab3d267816398b9d6ece243fb0"
 PATCHED_BINARY_SHA256 = "951a0136950bb9edf60ff5cec6ca2df0a041b27ded9e610f0aab49b168739dac"
 GO_MOD = ROOT / "infra" / "docker" / "caddy-build" / "go.mod"
 GO_SUM = ROOT / "infra" / "docker" / "caddy-build" / "go.sum"
 CADDY_DOCKERFILE = ROOT / "infra" / "docker" / "caddy.Dockerfile"
+POSTGRES_DOCKERFILE = ROOT / "infra" / "docker" / "postgres.Dockerfile"
+BACKEND_DOCKERFILE = ROOT / "infra" / "docker" / "backend.Dockerfile"
+FRONTEND_DOCKERFILE = ROOT / "infra" / "docker" / "frontend.Dockerfile"
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
 CURRENT_WORKFLOW_SHA256 = {
@@ -140,7 +150,115 @@ def test_caddy_build_contract_adds_only_reviewed_module_and_zlib_changes() -> No
         "    sh /tmp/verify-patched-zlib.sh; \\\n"
         "    rm -f /tmp/zlib-runtime-probe /tmp/verify-patched-zlib.sh\n",
     )
+    expected = _replace_once(
+        expected, "'libcrypto3=3.5.8-r0'", "'libcrypto3=3.5.9-r0'"
+    )
+    expected = _replace_once(
+        expected, "'libssl3=3.5.8-r0'", "'libssl3=3.5.9-r0'"
+    )
+    expected = _replace_once(
+        expected, "'libcrypto3-3.5.8-r0'", "'libcrypto3-3.5.9-r0'"
+    )
+    expected = _replace_once(
+        expected, "'libssl3-3.5.8-r0'", "'libssl3-3.5.9-r0'"
+    )
     assert CADDY_DOCKERFILE.read_text(encoding="utf-8") == expected
+
+
+def test_postgres_runtime_changes_only_reviewed_openssl_patch_release() -> None:
+    expected = _file_at(BUILD42_RELEASE_BASE, POSTGRES_DOCKERFILE)
+    for old, new in (
+        ("'libcrypto3=3.5.8-r0'", "'libcrypto3=3.5.9-r0'"),
+        ("'libssl3=3.5.8-r0'", "'libssl3=3.5.9-r0'"),
+        ("'libcrypto3-3.5.8-r0'", "'libcrypto3-3.5.9-r0'"),
+        ("'libssl3-3.5.8-r0'", "'libssl3-3.5.9-r0'"),
+    ):
+        expected = _replace_once(expected, old, new)
+    assert POSTGRES_DOCKERFILE.read_text(encoding="utf-8") == expected
+
+
+def test_backend_image_changes_only_reviewed_openssl_runtime_controls() -> None:
+    expected = _file_at(BUILD43_RELEASE_BASE, BACKEND_DOCKERFILE)
+    package_install = (
+        "RUN apk add --no-cache --upgrade \\\n"
+        "      'libcrypto3=3.5.9-r0' \\\n"
+        "      'libssl3=3.5.9-r0' \\\n"
+        "      'libuuid=2.42.3-r1' \\\n"
+        "    && installed_packages=\"$(apk info -v)\" \\\n"
+        "    && printf '%s\\n' \"$installed_packages\" | grep -Fx 'libcrypto3-3.5.9-r0' \\\n"
+        "    && printf '%s\\n' \"$installed_packages\" | grep -Fx 'libssl3-3.5.9-r0' \\\n"
+        "    && printf '%s\\n' \"$installed_packages\" | grep -Fx 'libuuid-2.42.3-r1' \\\n"
+        "    && python -c 'import ssl; assert ssl.OPENSSL_VERSION_INFO == (3, 5, 0, 9, 0), (ssl.OPENSSL_VERSION_INFO, ssl.OPENSSL_VERSION)'"
+    )
+    expected = _replace_once(
+        expected,
+        "RUN apk add --no-cache --upgrade 'libuuid=2.42.3-r1'\nWORKDIR /app",
+        package_install + "\nWORKDIR /app",
+    )
+    expected = _replace_once(
+        expected,
+        "RUN apk add --no-cache --upgrade 'libuuid=2.42.3-r1' \\\n"
+        "    && test \"$(python --version)\" = 'Python 3.14.7' \\\n",
+        package_install
+        + " \\\n"
+        + "    && test \"$(python --version)\" = 'Python 3.14.7' \\\n",
+    )
+    assert BACKEND_DOCKERFILE.read_text(encoding="utf-8") == expected
+
+
+@pytest.mark.parametrize(
+    ("version_info", "accepted"),
+    (
+        ((3, 5, 0, 9, 0), True),
+        ((3, 5, 0, 8, 0), False),
+        ((3, 5, 0, 10, 0), False),
+        ((3, 6, 0, 9, 0), False),
+        ((3, 5, 9), False),
+    ),
+)
+def test_backend_openssl_assertions_require_exact_legacy_version_tuple(
+    monkeypatch: pytest.MonkeyPatch,
+    version_info: tuple[int, ...],
+    accepted: bool,
+) -> None:
+    commands = re.findall(
+        r"python -c '([^'\n]*OPENSSL_VERSION_INFO[^'\n]*)'",
+        BACKEND_DOCKERFILE.read_text(encoding="utf-8"),
+    )
+    assert len(commands) == 2
+
+    synthetic_ssl = types.ModuleType("ssl")
+    synthetic_ssl.OPENSSL_VERSION_INFO = version_info
+    synthetic_ssl.OPENSSL_VERSION = f"OpenSSL synthetic {version_info!r}"
+    monkeypatch.setitem(sys.modules, "ssl", synthetic_ssl)
+
+    for command in commands:
+        if accepted:
+            exec(command, {})
+        else:
+            with pytest.raises(AssertionError) as error:
+                exec(command, {})
+            assert error.value.args == (
+                (version_info, synthetic_ssl.OPENSSL_VERSION),
+            )
+
+
+def test_frontend_image_changes_only_reviewed_openssl_runtime_controls() -> None:
+    expected = _file_at(BUILD43_RELEASE_BASE, FRONTEND_DOCKERFILE)
+    expected = _replace_once(
+        expected,
+        "RUN set -eux; \\\n"
+        "    apk info -e zlib; \\\n",
+        "RUN set -eux; \\\n"
+        "    apk add --no-cache --upgrade \\\n"
+        "      'libcrypto3=3.5.9-r0' \\\n"
+        "      'libssl3=3.5.9-r0'; \\\n"
+        "    installed_packages=\"$(apk info -v)\"; \\\n"
+        "    printf '%s\\n' \"$installed_packages\" | grep -Fx 'libcrypto3-3.5.9-r0'; \\\n"
+        "    printf '%s\\n' \"$installed_packages\" | grep -Fx 'libssl3-3.5.9-r0'; \\\n"
+        "    apk info -e zlib; \\\n",
+    )
+    assert FRONTEND_DOCKERFILE.read_text(encoding="utf-8") == expected
 
 
 def test_caddy_binary_hash_is_coordinated_across_ci_and_release() -> None:

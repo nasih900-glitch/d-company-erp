@@ -62,6 +62,7 @@ data class ShiftUiState(
     /** Used only to explain whether this employee or somebody else opened the shift. */
     val currentUserId: String? = null,
     val canClose: Boolean = false,
+    val closeOriginMessage: String? = null,
     /**
      * A refused open/close attempt, not yet dismissed. Previously invisible:
      * a rejected row was excluded from both `open` and `history`, so the
@@ -248,6 +249,9 @@ class ShiftViewModel : ViewModel() {
         val online = session.online
         val syncing = session.syncing
         val profile = session.profile
+        val closeOrigin = current?.let {
+            shiftCloseOriginDecision(it, app.updateTelemetry.installation.installationId())
+        }
         val justClosed = historyState.latestLocalClosed?.takeIf {
             shouldShowShiftResult(
                 itemId = it.localId,
@@ -282,7 +286,8 @@ class ShiftViewModel : ViewModel() {
             currentUserId = profile?.userId,
             // Shift-close authority comes from the authenticated permission.
             // The opener remains attribution, not an extra ownership lock.
-            canClose = current != null && interaction.access.canClose,
+            canClose = current != null && interaction.access.canClose && closeOrigin?.allowed == true,
+            closeOriginMessage = closeOrigin?.message,
             rejectedShift = latestRejected,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ShiftUiState())
@@ -400,6 +405,11 @@ class ShiftViewModel : ViewModel() {
             return
         }
         val local = shift.local
+        val origin = shiftCloseOriginDecision(shift, app.updateTelemetry.installation.installationId())
+        if (!origin.allowed) {
+            operationError.value = origin.message
+            return
+        }
         if (local != null && local.state !in setOf(ShiftState.OPEN_PENDING, ShiftState.OPEN_SYNCED)) {
             operationError.value = when (local.state) {
                 ShiftState.CLOSE_PENDING ->
@@ -435,9 +445,8 @@ class ShiftViewModel : ViewModel() {
                                 closedAtMillis = closedAt,
                             )
                         } else {
-                            // A shift opened on another account/device becomes a local
-                            // close outbox only when an authorised person requests the
-                            // close. The server cache itself remains read-only.
+                            // An authorised colleague may adopt this installation's
+                            // verified shift. The server cache stays read-only.
                             captureResult = db.shiftCloseSafetyDao().captureAdoptedClose(
                                 LocalShiftEntity(
                                     localId = UUID.randomUUID().toString(),
@@ -489,6 +498,11 @@ class ShiftViewModel : ViewModel() {
         }
         val shift = resolved.local?.takeIf { it.state == ShiftState.CLOSE_REJECTED } ?: run {
             operationError.value = "This shift has no rejected close to retry. Review its current status first."
+            return
+        }
+        val origin = shiftCloseOriginDecision(resolved, app.updateTelemetry.installation.installationId())
+        if (!origin.allowed) {
+            operationError.value = origin.message
             return
         }
         if (busy.value) {

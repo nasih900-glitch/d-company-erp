@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Text
@@ -19,11 +20,16 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotFocused
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
+import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
@@ -33,6 +39,7 @@ import cloud.dcompany.erp.ui.components.ActionIntent
 import cloud.dcompany.erp.ui.components.ErpButton
 import cloud.dcompany.erp.ui.theme.DCompanyTheme
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 
@@ -183,18 +190,25 @@ class ShiftCompactUiTest {
             DCompanyTheme {
                 // A 1280 x 800dp app window leaves roughly this bounded dialog
                 // surface after system bars and the dialog's outer margin.
-                Box(Modifier.width(960.dp).height(680.dp)) {
+                Box(Modifier.width(960.dp).height(680.dp).testTag("drawer-host")) {
                     DrawerCountDialogContent(
                         initialCounts = emptyMap(),
                         expectedMinor = 50_200L,
                         enabled = true,
                         onDismiss = {},
                         onApply = { applied = it },
-                        modifier = Modifier.fillMaxSize(),
+                        modifier = Modifier.fillMaxWidth().heightIn(max = 680.dp),
                     )
                 }
             }
         }
+
+        val hostBounds = compose.onNodeWithTag("drawer-host").getUnclippedBoundsInRoot()
+        val dialogBounds = compose.onNodeWithContentDescription("Drawer count dialog")
+            .getUnclippedBoundsInRoot()
+        val hostHeight = hostBounds.bottom - hostBounds.top
+        val dialogHeight = dialogBounds.bottom - dialogBounds.top
+        assertTrue("Drawer count should wrap its content on a tablet", dialogHeight < hostHeight - 48.dp)
 
         DENOMINATIONS.forEach { note ->
             compose.onNodeWithContentDescription("Count of ₹$note notes")
@@ -219,6 +233,70 @@ class ShiftCompactUiTest {
             assertEquals("2", applied?.get(1L))
             assertEquals(50_200L, drawerCountedMinor(applied.orEmpty()))
         }
+    }
+
+    @Test
+    fun drawerCountDialogScrollsToFinalDenominationAndApplyActionInCompactViewport() {
+        var applied: Map<Long, String>? = null
+
+        compose.setContent {
+            DCompanyTheme {
+                Box(Modifier.width(360.dp).height(400.dp)) {
+                    DrawerCountDialogContent(
+                        initialCounts = emptyMap(),
+                        expectedMinor = 100L,
+                        enabled = true,
+                        onDismiss = {},
+                        onApply = { applied = it },
+                        modifier = Modifier.fillMaxWidth().heightIn(max = 400.dp),
+                    )
+                }
+            }
+        }
+
+        compose.onNodeWithContentDescription("Count of ₹1 notes")
+            .performScrollTo()
+            .assertIsDisplayed()
+            .performTextReplacement("1")
+        compose.onNodeWithText("Use drawer count")
+            .performScrollTo()
+            .assertIsDisplayed()
+            .performClick()
+
+        compose.runOnIdle { assertEquals("1", applied?.get(1L)) }
+    }
+
+    @Test
+    fun actualDrawerCountDialogKeepsApplyReachableWhileLowestDenominationIsBeingEdited() {
+        var applied: Map<Long, String>? = null
+
+        compose.setContent {
+            DCompanyTheme {
+                DrawerCountDialog(
+                    initialCounts = emptyMap(),
+                    expectedMinor = 100L,
+                    enabled = true,
+                    onDismiss = {},
+                    onApply = { applied = it },
+                )
+            }
+        }
+
+        // The Dialog creates its own window. Earlier tests mounted only its
+        // content, so they could not catch reachability lost at that boundary.
+        compose.onNode(isDialog()).assertExists()
+        compose.onNodeWithContentDescription("Count of ₹1 notes")
+            .performScrollTo()
+            .performClick()
+            .assertIsFocused()
+            .performTextReplacement("1")
+        compose.onNodeWithText("Use drawer count")
+            .performScrollTo()
+            .assertIsDisplayed()
+            .assertIsEnabled()
+            .performClick()
+
+        compose.runOnIdle { assertEquals("1", applied?.get(1L)) }
     }
 
     @Test

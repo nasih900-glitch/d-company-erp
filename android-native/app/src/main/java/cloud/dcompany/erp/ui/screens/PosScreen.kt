@@ -12,6 +12,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -49,10 +50,13 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LocalCafe
+import androidx.compose.material.icons.filled.LocalDrink
+import androidx.compose.material.icons.filled.Fastfood
 import androidx.compose.material.icons.filled.RestaurantMenu
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.SearchOff
 import androidx.compose.material.icons.filled.ShoppingCart
+import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material3.AlertDialog
@@ -82,6 +86,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
@@ -136,6 +141,7 @@ import cloud.dcompany.erp.ui.components.resolvedVoidReason
 import cloud.dcompany.erp.ui.screens.gaming.OperationalAlarmPermissionCard
 import cloud.dcompany.erp.ui.screens.customers.MINOR_PER_POINT
 import cloud.dcompany.erp.ui.theme.Brand
+import cloud.dcompany.erp.ui.theme.controlDeckBackdrop
 import cloud.dcompany.erp.ui.theme.Motion
 import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.theme.Spacing
@@ -146,6 +152,22 @@ import java.util.Locale
 
 private val PosTeal = Color(0xFF43D9D0)
 private val PosTealMuted = Color(0xFF12343B)
+private val PosInk = Color(0xFF09131A)
+private val PosInkRaised = Color(0xFF12222A)
+
+/** A visual hint only. Product identity, price and availability always come from the catalogue. */
+private fun posProductIcon(item: MenuItemEntity, categoryName: String?): ImageVector {
+    val label = "${item.type} ${categoryName.orEmpty()} ${item.name}".lowercase(Locale.ROOT)
+    return when {
+        item.type.equals("gaming", ignoreCase = true) -> Icons.Filled.SportsEsports
+        listOf("coffee", "tea", "latte", "cappuccino").any(label::contains) -> Icons.Filled.LocalCafe
+        listOf("drink", "beverage", "cola", "soda", "juice", "water", "shake", "mojito")
+            .any(label::contains) -> Icons.Filled.LocalDrink
+        listOf("crisps", "chips", "fries", "nachos", "burger", "pizza", "sandwich", "snack")
+            .any(label::contains) -> Icons.Filled.Fastfood
+        else -> Icons.Filled.RestaurantMenu
+    }
+}
 
 @Composable
 fun PosScreen(
@@ -316,7 +338,7 @@ fun PosScreen(
         }
     }
 
-    Column(Modifier.fillMaxSize()) {
+    Column(Modifier.fillMaxSize().controlDeckBackdrop()) {
         if (!access.canCreateAndCollect) {
             ViewOnlyNotice("POS is view only — ask a cashier or manager to create or collect an order.")
         }
@@ -338,6 +360,7 @@ fun PosScreen(
                 posWorkspaceMetrics(maxWidth = maxWidth, horizontalGap = Spacing.md)
             }
             val compactWorkspace = maxHeight < 480.dp
+            val cartHeight = maxHeight.coerceAtMost(500.dp)
             val cataloguePane: @Composable (Modifier) -> Unit = { modifier ->
                 val paneModifier = modifier.testTag("pos-catalog")
                 if (state.menuEmpty) {
@@ -379,8 +402,10 @@ fun PosScreen(
                         onDecrementLine = onDecrementLine,
                         onClear = onClearCart,
                         onEditDetails = { showOrderDetails = true },
+                        // A bounded order card reads like a deliberate counter
+                        // surface on a tall tablet; the line list still scrolls.
                         modifier = Modifier.width(requireNotNull(workspace.cartWidth))
-                            .fillMaxHeight().testTag("pos-cart"),
+                            .height(cartHeight).testTag("pos-cart"),
                     ) { requestDirectPayment() }
                 }
             } else {
@@ -2196,7 +2221,10 @@ private fun ProductCatalogPanel(
         categories.associate { category -> category.id to category.name }
     }
     Column(
-        modifier = modifier.clip(Radius.shapeLg).background(Brand.Background),
+        // Let the shared light treatment show through a sparse real catalogue.
+        modifier = modifier.clip(Radius.shapeLg)
+            .background(PosInk.copy(alpha = 0.82f))
+            .border(1.dp, Brand.Gold.copy(alpha = 0.12f), Radius.shapeLg),
     ) {
         SearchInput(
             value = query,
@@ -2209,6 +2237,26 @@ private fun ProductCatalogPanel(
             selectedCategoryId = selectedCategoryId,
             onSelect = onSelectCategory,
         )
+
+        if (visibleItems.isNotEmpty()) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = Spacing.sm, vertical = Spacing.xs),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "MENU",
+                    color = Brand.GoldBright,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(
+                    "${visibleItems.size} ITEM${if (visibleItems.size == 1) "" else "S"}",
+                    color = Brand.ForegroundFaint,
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            }
+        }
 
         if (visibleItems.isEmpty()) {
             DesignedEmptyState(
@@ -2265,10 +2313,10 @@ private fun CategoryStrip(
     onSelect: (String?) -> Unit,
 ) {
     val colors = FilterChipDefaults.filterChipColors(
-        containerColor = Brand.Surface,
+        containerColor = PosInkRaised,
         labelColor = Brand.ForegroundMuted,
-        selectedContainerColor = Brand.Gold,
-        selectedLabelColor = Brand.Background,
+        selectedContainerColor = Color(0xFFE2B85F),
+        selectedLabelColor = PosInk,
     )
     LazyRow(
         contentPadding = PaddingValues(horizontal = Spacing.sm),
@@ -2309,9 +2357,10 @@ private fun MenuTile(
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val scale by animateFloatAsState(if (pressed) 0.94f else 1f, tween(Motion.fast, easing = Motion.emphasized), label = "tileScale")
+    val icon = remember(item.type, item.name, categoryName) { posProductIcon(item, categoryName) }
     Column(
         modifier = modifier
-            .height(if (compact) 104.dp else 116.dp)
+            .height(if (compact) 116.dp else 148.dp)
             .testTag("pos-product-${item.id}")
             .graphicsLayer {
                 scaleX = scale
@@ -2319,10 +2368,14 @@ private fun MenuTile(
                 alpha = if (enabled) 1f else 0.55f
             }
             .clip(Radius.shapeLg)
-            .background(Brush.verticalGradient(listOf(Brand.SurfaceRaised, Brand.Surface)))
+            .background(
+                Brush.verticalGradient(
+                    listOf(Color(0xFF1B292E), Color(0xFF101E25), PosInk),
+                ),
+            )
             .border(
                 1.dp,
-                if (pressed && enabled) Brand.GoldBright else Brand.Gold.copy(alpha = 0.25f),
+                if (pressed && enabled) Brand.GoldBright else Brand.Gold.copy(alpha = 0.30f),
                 Radius.shapeLg,
             )
             .semantics {
@@ -2347,21 +2400,53 @@ private fun MenuTile(
             Modifier.fillMaxWidth().weight(1f).clip(Radius.shapeSm)
                 .background(
                     Brush.radialGradient(
-                        listOf(Brand.Gold.copy(alpha = 0.16f), Brand.SurfaceHover),
+                        listOf(
+                            Color(0xFF4A3822),
+                            Color(0xFF17252B),
+                            Color(0xFF0A171E),
+                        ),
                     ),
-                ),
+                )
+                .border(1.dp, Brand.Gold.copy(alpha = 0.13f), Radius.shapeSm),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(
-                Icons.Filled.RestaurantMenu,
-                contentDescription = null,
-                tint = if (enabled) Brand.GoldBright else Brand.Disabled,
-                modifier = Modifier.size(30.dp),
-            )
+            if (!categoryName.isNullOrBlank() && !compact) {
+                Text(
+                    categoryName.uppercase(Locale.ROOT),
+                    modifier = Modifier.align(Alignment.TopStart)
+                        .padding(horizontal = Spacing.xs, vertical = 3.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Brand.GoldBright,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Box(
+                Modifier.size(if (compact) 48.dp else 78.dp)
+                    .clip(CircleShape)
+                    .background(
+                        Brush.radialGradient(
+                            listOf(
+                                Brand.Gold.copy(alpha = 0.18f),
+                                Brand.Gold.copy(alpha = 0.04f),
+                                Color.Transparent,
+                            ),
+                        ),
+                    )
+                    .border(1.dp, Brand.Gold.copy(alpha = 0.34f), CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    icon,
+                    contentDescription = null,
+                    tint = if (enabled) Brand.GoldBright else Brand.Disabled,
+                    modifier = Modifier.size(if (compact) 29.dp else 41.dp),
+                )
+            }
         }
         Text(
             item.name,
-            style = MaterialTheme.typography.labelMedium,
+            style = MaterialTheme.typography.bodySmall,
             fontWeight = FontWeight.SemiBold,
             color = Brand.Foreground,
             maxLines = 1,
@@ -2370,7 +2455,7 @@ private fun MenuTile(
         NumericValue(
             value = item.basePriceMinor.asRupees(),
             color = Brand.GoldBright,
-            style = MaterialTheme.typography.labelMedium,
+            style = MaterialTheme.typography.labelLarge,
         )
     }
 }
@@ -2388,7 +2473,7 @@ private fun PosCheckoutButton(
     val active = enabled && !busy
     val finish = if (active) {
         Brush.horizontalGradient(
-            listOf(Color(0xFFFFDB78), Color(0xFFE8AF45), Color(0xFFFFD46D)),
+            listOf(Color(0xFFF2CF78), Color(0xFFD4A651), Color(0xFFEFC574)),
         )
     } else {
         Brush.horizontalGradient(listOf(Brand.SurfaceRaised, Brand.SurfaceHover))
@@ -2408,7 +2493,7 @@ private fun PosCheckoutButton(
             .background(finish)
             .border(
                 1.dp,
-                if (active) Color(0xFFFFE5A3) else Brand.BorderSubtle,
+                if (active) Color(0xFFFFDE91) else Brand.BorderSubtle,
                 Radius.shapeMd,
             )
             .semantics { if (busy) stateDescription = "$text in progress" },
@@ -2441,14 +2526,29 @@ private fun CartPanel(
     onPay: () -> Unit,
 ) {
     Column(
-        modifier = modifier.clip(Radius.shapeLg).background(Brand.Surface)
-            .border(1.dp, Brand.BorderSubtle, Radius.shapeLg),
+        modifier = modifier.clip(Radius.shapeLg)
+            .background(
+                Brush.verticalGradient(
+                    listOf(Color(0xFF142127), PosInkRaised, PosInk),
+                ),
+            )
+            .border(1.dp, Brand.Gold.copy(alpha = 0.32f), Radius.shapeLg),
     ) {
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = Spacing.md, vertical = Spacing.sm),
+            Modifier.fillMaxWidth()
+                .background(
+                    Brush.horizontalGradient(
+                        listOf(Brand.Gold.copy(alpha = 0.13f), Color.Transparent),
+                    ),
+                )
+                .padding(horizontal = Spacing.md, vertical = Spacing.sm),
             horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            Box(
+                Modifier.width(3.dp).height(22.dp).clip(Radius.shapePill)
+                    .background(Brand.GoldBright),
+            )
             Text(
                 "Current order",
                 modifier = Modifier.weight(1f),
@@ -2511,7 +2611,8 @@ private fun CartPanel(
                                 Text(
                                     line.item.name,
                                     color = Brand.Foreground,
-                                    style = MaterialTheme.typography.labelMedium,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.SemiBold,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                 )
@@ -2535,7 +2636,8 @@ private fun CartPanel(
                                 Text(
                                     line.lineTotalMinor.asRupees(),
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = Brand.ForegroundMuted,
+                                    color = Brand.GoldBright,
+                                    fontWeight = FontWeight.SemiBold,
                                 )
                             }
                             QtyButton(
@@ -2594,10 +2696,10 @@ private fun CartPanel(
                 Modifier.fillMaxWidth().clip(Radius.shapeMd)
                     .background(
                         Brush.horizontalGradient(
-                            listOf(Brand.Gold.copy(alpha = 0.16f), Brand.SurfaceRaised),
+                            listOf(Brand.Gold.copy(alpha = 0.18f), PosInkRaised),
                         ),
                     )
-                    .border(1.dp, Brand.Gold.copy(alpha = 0.42f), Radius.shapeMd)
+                    .border(1.dp, Brand.Gold.copy(alpha = 0.48f), Radius.shapeMd)
                     .padding(horizontal = Spacing.sm, vertical = Spacing.xs),
             ) {
                 Row(
@@ -2630,8 +2732,8 @@ private fun CartPanel(
             if (state.cart.isNotEmpty()) {
                 Box(
                     Modifier.fillMaxWidth().clip(Radius.shapeMd)
-                        .background(PosTealMuted.copy(alpha = 0.55f))
-                        .border(1.dp, PosTeal.copy(alpha = 0.34f), Radius.shapeMd)
+                        .background(PosTealMuted.copy(alpha = 0.30f))
+                        .border(1.dp, PosTeal.copy(alpha = 0.22f), Radius.shapeMd)
                         .padding(horizontal = Spacing.sm, vertical = Spacing.xs),
                 ) {
                     if (compact) {
@@ -4145,11 +4247,16 @@ private fun QtyButton(
         contentAlignment = Alignment.Center,
     ) {
         Box(
-            Modifier.size(32.dp).clip(Radius.shapeSm).background(Brand.SurfaceRaised)
-                .border(1.dp, Brand.BorderSubtle, Radius.shapeSm),
+            Modifier.size(32.dp).clip(Radius.shapeSm)
+                .background(if (pressed && enabled) Brand.Gold.copy(alpha = 0.18f) else PosInkRaised)
+                .border(
+                    1.dp,
+                    if (pressed && enabled) Brand.GoldBright else Brand.Gold.copy(alpha = 0.18f),
+                    Radius.shapeSm,
+                ),
             contentAlignment = Alignment.Center,
         ) {
-            Text(label, color = Brand.Foreground, fontWeight = FontWeight.Bold)
+            Text(label, color = Brand.GoldBright, fontWeight = FontWeight.Bold)
         }
     }
 }

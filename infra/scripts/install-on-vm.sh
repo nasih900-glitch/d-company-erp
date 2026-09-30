@@ -194,6 +194,7 @@ EMULATOR_QUARANTINE_VERIFIER="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-code30-
 EMULATOR_QUARANTINE_EVIDENCE="$CANDIDATE_BUILD_ROOT/releases/evidence/code30-2-emulator-quarantine.json"
 POST_CLEANUP_STATE_VERIFIER="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-code30-2-post-cleanup-state.py"
 POST_CLEANUP_STATE_SQL="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-code30-2-post-cleanup-state.sql"
+BUILD42_PENDING_COMPATIBILITY_VERIFIER="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-build42-pending-compatibility.py"
 BUSINESS_QUIESCENCE_VERIFIER="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-production-business-quiescence.py"
 BUSINESS_QUIESCENCE_SQL="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-production-business-quiescence.sql"
 CLEANUP_RUNNER="$REPO_DIR/infra/scripts/cleanup-code30-production-trial-data.sh"
@@ -202,6 +203,7 @@ for release_input in \
   "$PREPARE_ENV_TOOL" "$CAPACITY_CHECK_TOOL" "$HARDENED_SCANNER_TOOL" \
   "$EMULATOR_QUARANTINE_VERIFIER" "$EMULATOR_QUARANTINE_EVIDENCE" \
   "$POST_CLEANUP_STATE_VERIFIER" "$POST_CLEANUP_STATE_SQL" \
+  "$BUILD42_PENDING_COMPATIBILITY_VERIFIER" \
   "$BUSINESS_QUIESCENCE_VERIFIER" "$BUSINESS_QUIESCENCE_SQL"; do
   if [ ! -f "$release_input" ] || [ -L "$release_input" ]; then
     echo "Frozen production release snapshot is incomplete or linked." >&2
@@ -401,6 +403,9 @@ if [ -f .env ]; then
   PRIOR_BACKEND_IMAGE=$(docker inspect --format '{{.Image}}' "$EXISTING_BACKEND_CONTAINER")
   IMAGE_REVISION=$(docker image inspect \
     --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' \
+    "$PRIOR_BACKEND_IMAGE")
+  PRIOR_APP_VERSION=$(docker image inspect \
+    --format '{{index .Config.Labels "org.opencontainers.image.version"}}' \
     "$PRIOR_BACKEND_IMAGE")
   if [[ "$IMAGE_REVISION" =~ ^[0-9a-f]{40}$ ]]; then
     if [ -n "$LEGACY_CODE14_REVISION" ] || [ -n "$LEGACY_CODE16_REVISION" ]; then
@@ -700,6 +705,7 @@ fi
 PROMOTION_COMPLETE=false
 CODE30_2_STALE_OUTBOX_BRIDGE_USED=false
 CODE30_2_POST_CLEANUP_STALE_OUTBOX_ACCEPTED=false
+BUILD42_PENDING_CARRIED_UNRESOLVED=false
 CODE30_2_CLEANUP_WINDOW_ACTIVE=false
 CODE30_2_CLEANUP_SUCCEEDED=false
 handle_install_failure() {
@@ -1190,10 +1196,64 @@ if [ -n "$EXISTING_POSTGRES_CONTAINER" ]; then
     post_cleanup_state_json=$(docker exec -i "$EXISTING_POSTGRES_CONTAINER" \
       psql -X --no-psqlrc --quiet -U erp -d erp --tuples-only --no-align \
       < "$POST_CLEANUP_STATE_SQL")
+    # Preserve the complete, unmodified query result even when compatibility
+    # is refused. The scoped proof below never overwrites this private evidence.
+    RAW_PENDING_STATE="$UPGRADE_SNAPSHOT/tablet-pending-raw.json"
+    (umask 077; printf '%s\n' "$post_cleanup_state_json" > "$RAW_PENDING_STATE")
+    chmod 600 "$RAW_PENDING_STATE"
     if printf '%s\n' "$post_cleanup_state_json" \
        | python3 "$POST_CLEANUP_STATE_VERIFIER" --quiet; then
       CODE30_2_POST_CLEANUP_STALE_OUTBOX_ACCEPTED=true
       echo "==> Verified completed Code30.2 cleanup and retained historical outbox evidence."
+    elif [ "$CANDIDATE_APP_VERSION" = 3.1.36 ] && \
+         [ "$PRIOR_REVISION" = 099daa28ea5b9cb3c4b167a66c82302896ad4acc ]; then
+      # This is a source-verified server compatibility proof, never permission
+      # to clear tablet queues or classify other installation counters as stale.
+      PENDING_COMPATIBILITY_REPORT="$UPGRADE_SNAPSHOT/build44-pending-compatibility.json"
+      PRIOR_RUNTIME_ENV="$UPGRADE_SNAPSHOT/build41-backend-environment.json"
+      CANDIDATE_IMAGE_ENV="$UPGRADE_SNAPSHOT/build44-backend-image-environment.json"
+      CANDIDATE_COMPOSE_CONFIG="$UPGRADE_SNAPSHOT/build44-compose-config.json"
+      CANDIDATE_BACKEND_IMAGE_ID=$(python3 -c \
+        'import json,sys; print(json.loads(sys.argv[1])["services"]["backend"]["image_id"])' \
+        "$CANDIDATE_IMAGE_ATTESTATION")
+      if ! [[ "$CANDIDATE_BACKEND_IMAGE_ID" =~ ^sha256:[0-9a-f]{64}$ ]] || \
+         [ "$(docker image inspect --format '{{.Id}}' \
+           "d-company-erp-backend:$CURRENT_REVISION")" != "$CANDIDATE_BACKEND_IMAGE_ID" ]; then
+        echo "Candidate backend image no longer matches scanned identity." >&2
+        exit 1
+      fi
+      # The pinned Compose has no env_file. This exact render uses the same
+      # shell and immutable project/config as startup; only the env-file path
+      # changes when these candidate bytes are atomically promoted to .env.
+      (umask 077
+       docker inspect \
+         --format '{"image_id":{{json .Image}},"environment":{{json .Config.Env}}}' \
+         "$EXISTING_BACKEND_CONTAINER" > "$PRIOR_RUNTIME_ENV"
+       docker image inspect \
+         --format '{"image_id":{{json .Id}},"environment":{{json .Config.Env}}}' \
+         "$CANDIDATE_BACKEND_IMAGE_ID" > "$CANDIDATE_IMAGE_ENV"
+       "${candidate_compose[@]}" --env-file "$ENV_CANDIDATE" config --format json \
+         > "$CANDIDATE_COMPOSE_CONFIG")
+      chmod 600 "$PRIOR_RUNTIME_ENV" "$CANDIDATE_IMAGE_ENV" "$CANDIDATE_COMPOSE_CONFIG"
+      if ! (umask 077; python3 "$BUILD42_PENDING_COMPATIBILITY_VERIFIER" \
+        --prior-source-root "$PRIOR_SOURCE_ROOT" \
+        --candidate-source-root "$CANDIDATE_BUILD_ROOT" \
+        --prior-revision "$PRIOR_REVISION" --prior-version "$PRIOR_APP_VERSION" \
+        --prior-db-head "$PRIOR_DB_HEAD" --candidate-revision "$CURRENT_REVISION" \
+        --candidate-version "$CANDIDATE_APP_VERSION" --prior-image-id "$PRIOR_BACKEND_IMAGE" \
+        --candidate-image-id "$CANDIDATE_BACKEND_IMAGE_ID" \
+        --prior-backend-manifest-sha256 "$SOURCE_MANIFEST_DIGEST" \
+        --prior-env "$UPGRADE_SNAPSHOT/.env" --live-env "$REPO_DIR/.env" \
+        --candidate-env "$ENV_CANDIDATE" --raw-state "$RAW_PENDING_STATE" \
+        --prior-runtime-env "$PRIOR_RUNTIME_ENV" --candidate-image-env "$CANDIDATE_IMAGE_ENV" \
+        --candidate-compose-config "$CANDIDATE_COMPOSE_CONFIG" \
+        --expected-pending "$pending_outbox_count" > "$PENDING_COMPATIBILITY_REPORT"); then
+        echo "Build43 compatibility proof failed; reported tablet queues remain unresolved." >&2
+        exit 1
+      fi
+      chmod 600 "$PENDING_COMPATIBILITY_REPORT"
+      BUILD42_PENDING_CARRIED_UNRESOLVED=true
+      echo "==> Exact build41-to-build44 server compatibility verified; reported tablet pending count $pending_outbox_count is carried UNRESOLVED."
     else
       # Before the cleanup exists, permit the exact reviewed row only for the
       # Code30.2 migration from 0073. The row remains untouched and protected
@@ -1233,9 +1293,22 @@ if [ -n "$EXISTING_POSTGRES_CONTAINER" ]; then
       CODE30_2_STALE_OUTBOX_BRIDGE_USED=true
     fi
   fi
+  # Preserve the original legacy-path guard unless the exact build44 proof passed.
   if [ "$pending_outbox_count" -ne 0 ] && \
+     [ "$BUILD42_PENDING_CARRIED_UNRESOLVED" = false ] && \
      [ "$CODE30_2_POST_CLEANUP_STALE_OUTBOX_ACCEPTED" = \
        "$CODE30_2_STALE_OUTBOX_BRIDGE_USED" ]; then
+    echo "Retained tablet outbox was not accepted by exactly one guarded path." >&2
+    exit 1
+  fi
+  accepted_pending_paths=0
+  for accepted_path in "$CODE30_2_POST_CLEANUP_STALE_OUTBOX_ACCEPTED" \
+      "$CODE30_2_STALE_OUTBOX_BRIDGE_USED" "$BUILD42_PENDING_CARRIED_UNRESOLVED"; do
+    if [ "$accepted_path" = true ]; then
+      accepted_pending_paths=$((accepted_pending_paths + 1))
+    fi
+  done
+  if [ "$pending_outbox_count" -ne 0 ] && [ "$accepted_pending_paths" -ne 1 ]; then
     echo "Retained tablet outbox was not accepted by exactly one guarded path." >&2
     exit 1
   fi

@@ -1,6 +1,7 @@
 package cloud.dcompany.erp.ui.screens
 
 import android.graphics.Bitmap
+import android.view.PixelCopy
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -40,8 +41,35 @@ import cloud.dcompany.erp.ui.screens.shift.ShiftDashboardOverview
 import cloud.dcompany.erp.ui.screens.shift.ShiftUiState
 import cloud.dcompany.erp.ui.theme.DCompanyTheme
 import java.io.File
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertSame
+import org.junit.Assert.assertThrows
 import org.junit.Rule
 import org.junit.Test
+
+private const val COMPOSE_PIXEL_COPY_EXCEPTION =
+    "androidx.compose.ui.test.android.PixelCopyException"
+
+private fun RuntimeException.isPixelCopyTimeout(): Boolean {
+    if (javaClass.name != COMPOSE_PIXEL_COPY_EXCEPTION) return false
+    val status = try {
+        javaClass.getMethod("getCopyResultStatus").invoke(this) as? Int
+    } catch (_: ReflectiveOperationException) {
+        null
+    }
+    return status == PixelCopy.ERROR_TIMEOUT
+}
+
+private fun <T> captureWithSinglePixelCopyTimeoutRetry(
+    beforeRetry: () -> Unit = {},
+    capture: () -> T,
+): T = try {
+    capture()
+} catch (error: RuntimeException) {
+    if (!error.isPixelCopyTimeout()) throw error
+    beforeRetry()
+    capture()
+}
 
 /** Deterministic visual fixture: synthetic values are never written to the ERP. */
 class ControlDeckFullShellScreenshotsUiTest {
@@ -92,7 +120,7 @@ class ControlDeckFullShellScreenshotsUiTest {
         capture("control-deck-shift-full-1280x800.png")
 
         compose.runOnIdle { current.value = Destination.Customers }
-        compose.onNodeWithText("Playtime leaderboard").assertIsDisplayed()
+        compose.onNodeWithText("PLAYTIME LEADERBOARD").assertIsDisplayed()
         compose.onNodeWithText("D COMPANY").assertIsDisplayed()
         compose.onNodeWithContentDescription("Rank 1 by completed playtime").assertIsDisplayed()
         compose.onNodeWithText("••••••3210").assertIsDisplayed()
@@ -104,13 +132,95 @@ class ControlDeckFullShellScreenshotsUiTest {
     private fun capture(filename: String) {
         compose.waitForIdle()
         val output = File(requireNotNull(compose.activity.getExternalFilesDir(null)), filename)
-        val bitmap = compose.onNodeWithTag("control-deck-full-shell")
-            .captureToImage().asAndroidBitmap()
+        val bitmap = captureWithSinglePixelCopyTimeoutRetry(
+            beforeRetry = {
+                compose.runOnIdle { compose.activity.window.decorView.invalidate() }
+                compose.waitForIdle()
+            },
+        ) {
+            compose.onNodeWithTag("control-deck-full-shell")
+                .captureToImage().asAndroidBitmap()
+        }
         try {
             output.outputStream().use { check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)) }
+            check(output.isFile && output.length() > 0L) {
+                "Screenshot PNG was not written: $filename"
+            }
         } finally {
             bitmap.recycle()
         }
+    }
+}
+
+class ControlDeckScreenshotCaptureRetryPolicyTest {
+    @Test fun timeoutThenSuccessCapturesExactlyTwice() {
+        val timeout = pixelCopyFailure(PixelCopy.ERROR_TIMEOUT)
+        var captures = 0
+        var retries = 0
+
+        val result = captureWithSinglePixelCopyTimeoutRetry(
+            beforeRetry = { retries++ },
+        ) {
+            captures++
+            if (captures == 1) throw timeout
+            "captured"
+        }
+
+        assertEquals("captured", result)
+        assertEquals(2, captures)
+        assertEquals(1, retries)
+    }
+
+    @Test fun exhaustedTimeoutRethrowsSecondFailure() {
+        val first = pixelCopyFailure(PixelCopy.ERROR_TIMEOUT)
+        val second = pixelCopyFailure(PixelCopy.ERROR_TIMEOUT)
+        var captures = 0
+
+        val thrown = assertThrows(RuntimeException::class.java) {
+            captureWithSinglePixelCopyTimeoutRetry {
+                captures++
+                throw if (captures == 1) first else second
+            }
+        }
+
+        assertSame(second, thrown)
+        assertEquals(2, captures)
+    }
+
+    @Test fun nonTimeoutPixelCopyFailureIsNotRetried() {
+        val failure = pixelCopyFailure(PixelCopy.ERROR_SOURCE_NO_DATA)
+        var captures = 0
+
+        val thrown = assertThrows(RuntimeException::class.java) {
+            captureWithSinglePixelCopyTimeoutRetry {
+                captures++
+                throw failure
+            }
+        }
+
+        assertSame(failure, thrown)
+        assertEquals(1, captures)
+    }
+
+    @Test fun unexpectedExceptionIsUnchanged() {
+        val failure = IllegalStateException("unexpected capture failure")
+        var captures = 0
+
+        val thrown = assertThrows(IllegalStateException::class.java) {
+            captureWithSinglePixelCopyTimeoutRetry {
+                captures++
+                throw failure
+            }
+        }
+
+        assertSame(failure, thrown)
+        assertEquals(1, captures)
+    }
+
+    private fun pixelCopyFailure(status: Int): RuntimeException {
+        val type = Class.forName(COMPOSE_PIXEL_COPY_EXCEPTION)
+        return type.getConstructor(Int::class.javaPrimitiveType, String::class.java)
+            .newInstance(status, null) as RuntimeException
     }
 }
 

@@ -41,6 +41,12 @@ COPY --from=zlib-builder /out/etc/dcompany/zlib-patch-evidence.env /etc/dcompany
 COPY --from=zlib-builder /out/zlib-runtime-probe /tmp/zlib-runtime-probe
 COPY infra/docker/zlib/verify-patched-zlib.sh /tmp/verify-patched-zlib.sh
 RUN set -eux; \
+    apk add --no-cache --upgrade \
+      'libcrypto3=3.5.9-r0' \
+      'libssl3=3.5.9-r0'; \
+    installed_packages="$(apk info -v)"; \
+    printf '%s\n' "$installed_packages" | grep -Fx 'libcrypto3-3.5.9-r0'; \
+    printf '%s\n' "$installed_packages" | grep -Fx 'libssl3-3.5.9-r0'; \
     apk info -e zlib; \
     apk info -v | grep -Fx 'zlib-1.3.2-r0'; \
     sh /tmp/verify-patched-zlib.sh; \

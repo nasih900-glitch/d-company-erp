@@ -5,6 +5,9 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import cloud.dcompany.erp.BuildConfig
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -34,6 +37,49 @@ class UpdatePersistenceTest {
         assertNotNull(first)
         assertEquals(first, second)
         assertEquals(4, UUID.fromString(first).version())
+    }
+
+    @Test
+    fun simultaneousFirstUseAcrossStoresPersistsExactlyOneIdentity() {
+        val threads = Executors.newFixedThreadPool(16)
+        try {
+            repeat(12) {
+                clearStores()
+                val stores = List(16) { InstallationIdentityStore(context) }
+                val ready = CountDownLatch(stores.size)
+                val start = CountDownLatch(1)
+                val results = stores.map { store ->
+                    threads.submit<String?> {
+                        ready.countDown()
+                        check(start.await(10, TimeUnit.SECONDS))
+                        store.installationId()
+                    }
+                }
+                assertTrue(ready.await(10, TimeUnit.SECONDS))
+                start.countDown()
+                val ids = results.map { it.get(10, TimeUnit.SECONDS) }
+                assertTrue(ids.all { it != null })
+                assertEquals(1, ids.toSet().size)
+                assertEquals(ids.first(), InstallationIdentityStore(context).installationId())
+            }
+        } finally {
+            threads.shutdownNow()
+        }
+    }
+
+    @Test
+    fun identityAndPendingUpgradeSurviveSeparateStoreWriters() {
+        val identityStore = InstallationIdentityStore(context)
+        val first = identityStore.installationId()
+        val versionStore = InstallationIdentityStore(context)
+        assertTrue(versionStore.observeInstalledVersion(BuildConfig.VERSION_CODE, BuildConfig.VERSION_NAME, false))
+        assertTrue(versionStore.observeInstalledVersion(BuildConfig.VERSION_CODE + 1, "3.1.4", false))
+        val reloaded = InstallationIdentityStore(context)
+        assertEquals(first, reloaded.installationId())
+        assertEquals(BuildConfig.VERSION_CODE + 1, reloaded.pendingUpgrade()?.targetVersionCode)
+        assertTrue(identityStore.clearPendingUpgrade(BuildConfig.VERSION_CODE + 1))
+        assertEquals(first, reloaded.installationId())
+        assertNull(reloaded.pendingUpgrade())
     }
 
     @Test

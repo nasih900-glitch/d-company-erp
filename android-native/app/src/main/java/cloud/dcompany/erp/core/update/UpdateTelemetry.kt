@@ -344,7 +344,6 @@ internal fun shouldRecordUpgrade(
  */
 internal class InstallationIdentityStore(context: Context) {
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-    private val lock = Any()
 
     fun installationId(): String? = synchronized(lock) {
         prefs.getString(KEY_INSTALLATION_ID, null)
@@ -432,6 +431,9 @@ internal class InstallationIdentityStore(context: Context) {
     private fun isUuid(raw: String): Boolean = isCanonicalRandomUuidV4(raw)
 
     private companion object {
+        // Telemetry, diagnostics and remote assistance create separate stores.
+        // Serialize their first read/create so one process cannot mint two IDs.
+        val lock = Any()
         const val PREFS_NAME = "dcompany_installation_identity"
         const val KEY_INSTALLATION_ID = "installation_id"
         const val KEY_OBSERVED_VERSION_CODE = "observed_version_code"

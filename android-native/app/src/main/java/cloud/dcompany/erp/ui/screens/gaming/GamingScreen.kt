@@ -59,6 +59,7 @@ import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.RestaurantMenu
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.SportsEsports
@@ -74,6 +75,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -178,6 +180,7 @@ import cloud.dcompany.erp.ui.components.resolvedVoidReason
 import cloud.dcompany.erp.ui.screens.ProductConfigurationDialog
 import cloud.dcompany.erp.ui.screens.businessClockTime
 import cloud.dcompany.erp.ui.theme.Brand
+import cloud.dcompany.erp.ui.theme.controlDeckBackdrop
 import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.theme.Spacing
 import cloud.dcompany.erp.ui.remote.RemoteSensitiveContent
@@ -218,6 +221,23 @@ private data class PackageExtensionRequest(
     val session: GameSession,
     val extensions: List<GamingPackage>,
 )
+
+internal data class PackageExtensionReview(
+    val station: Station,
+    val session: GameSession,
+    val extension: GamingPackage,
+)
+
+private data class InlinePackageExtensionPreview(
+    val station: Station,
+    val session: GameSession,
+    val extensions: List<GamingPackage>,
+    val selectedPackageId: String,
+) {
+    fun review(): PackageExtensionReview? = extensions.firstOrNull {
+        it.id == selectedPackageId
+    }?.let { PackageExtensionReview(station, session, it) }
+}
 
 private data class PackageExtensionDiscardRequest(
     val action: PackageExtensionActionUi,
@@ -500,6 +520,18 @@ fun GamingScreen(
                     onExtendTimer = vm::extendTimer,
                     onExtendPackage = { session, extensions ->
                         extendingPackage = PackageExtensionRequest(session, extensions)
+                    },
+                    onConfirmExtension = { review ->
+                        val currentState = vm.state.value
+                        val reviewError = packageExtensionReviewError(review, currentState, access)
+                        if (reviewError != null) {
+                            reviewError
+                        } else {
+                            val currentSession = currentState.sessions.first { it.id == review.session.id }
+                            val currentExtension = currentState.packages.first { it.id == review.extension.id }
+                            vm.extendWithPackage(currentSession, currentExtension)
+                            null
+                        }
                     },
                     onTransfer = { transferring = it },
                     onPauseResume = { if (it.status == "paused") vm.resumeSession(it) else pausing = it },
@@ -1537,6 +1569,7 @@ internal fun GamingCommandWorkspace(
     onVoidAddon: (GameSession, GamingSessionAddonUi) -> Unit,
     onReviewRejectedAddon: (String) -> Unit,
     onManageParticipants: (GameSession) -> Unit,
+    onConfirmExtension: ((PackageExtensionReview) -> String?)? = null,
 ) {
     // Selection changes the control pane; it never removes the station board.
     // `showDetail`/`onBackToBoard` remain as compatibility inputs for deep-link
@@ -1546,6 +1579,9 @@ internal fun GamingCommandWorkspace(
     val selectedStation = visibleStations.firstOrNull { it.id == selectedStationId }
         ?: visibleStations.firstOrNull()
     val selectedSession = selectedStation?.let { state.activeFor(it.id) }
+    var extensionPreview by remember { mutableStateOf<InlinePackageExtensionPreview?>(null) }
+    var extensionReviewError by remember { mutableStateOf<String?>(null) }
+    var extensionConfirming by remember { mutableStateOf(false) }
     var customerCacheRequested by remember { mutableStateOf(false) }
     LaunchedEffect(selectedStation != null && selectedSession == null, access.canManageSessions) {
         if (selectedStation != null && selectedSession == null &&
@@ -1566,6 +1602,57 @@ internal fun GamingCommandWorkspace(
         !state.activeShiftServerConfirmed && !state.activeShiftAllowsQueuedStart ->
             "Waiting for the open shift to sync before starting."
         else -> null
+    }
+    LaunchedEffect(selectedStation?.id, selectedSession?.id) {
+        val preview = extensionPreview ?: return@LaunchedEffect
+        if (preview.station.id != selectedStation?.id || preview.session.id != selectedSession?.id) {
+            extensionPreview = null
+            extensionReviewError = "The selected station or session changed. Reopen Extend to review current details."
+            extensionConfirming = false
+        }
+    }
+    LaunchedEffect(extensionPreview, state, access) {
+        val preview = extensionPreview ?: return@LaunchedEffect
+        val review = preview.review() ?: return@LaunchedEffect
+        val currentSession = state.sessions.firstOrNull { it.id == review.session.id }
+        val terminalChange = currentSession == null || currentSession.status !in setOf("active", "paused") ||
+            currentSession.orderId != null
+        val operationalBlock = currentSession != null && (
+            gamingCleanupWorkflowMessageOrNull(currentSession.lastError) != null ||
+                state.packageExtensionFor(currentSession.id) != null ||
+                state.unresolvedSequencedActionsFor(currentSession).any {
+                    it.state == GamingSessionActionState.REJECTED
+                }
+            )
+        val error = packageExtensionReviewError(review, state, access)
+        if (terminalChange || operationalBlock) {
+            extensionPreview = null
+            extensionReviewError = error
+            extensionConfirming = false
+        } else {
+            extensionReviewError = error
+        }
+    }
+    val openPackageExtension: (GameSession, List<GamingPackage>) -> Unit = { session, extensions ->
+        if (onConfirmExtension == null) {
+            onExtendPackage(session, extensions)
+        } else {
+            val station = state.stations.firstOrNull { it.id == session.stationId }
+            val first = extensions.firstOrNull()
+            if (station != null && first != null) {
+                val preview = InlinePackageExtensionPreview(
+                    station = station,
+                    session = session,
+                    extensions = extensions,
+                    selectedPackageId = first.id,
+                )
+                extensionPreview = preview
+                extensionReviewError = preview.review()?.let {
+                    packageExtensionReviewError(it, state, access)
+                }
+                extensionConfirming = false
+            }
+        }
     }
 
     val controlPane: @Composable (Modifier) -> Unit = { paneModifier ->
@@ -1612,6 +1699,56 @@ internal fun GamingCommandWorkspace(
                     sessionAddons = selectedSession?.let(state::addonsFor).orEmpty(),
                     wallClock = wallClock,
                 )
+                extensionPreview?.takeIf {
+                    it.station.id == selectedStation.id && it.session.id == selectedSession?.id
+                }?.let { preview ->
+                    RemoteSensitiveContent {
+                        PackageExtensionInlineReview(
+                            preview = preview,
+                            error = extensionReviewError,
+                            confirming = extensionConfirming,
+                            onSelect = { packageId ->
+                                extensionPreview = preview.copy(selectedPackageId = packageId)
+                                extensionReviewError = preview.extensions.firstOrNull {
+                                    it.id == packageId
+                                }?.let { extension ->
+                                    packageExtensionReviewError(
+                                        PackageExtensionReview(preview.station, preview.session, extension),
+                                        state,
+                                        access,
+                                    )
+                                }
+                            },
+                            onConfirm = {
+                                val review = preview.review()
+                                if (review != null && extensionReviewError == null && !extensionConfirming) {
+                                    extensionConfirming = true
+                                    val error = onConfirmExtension?.invoke(review)
+                                    if (error == null) {
+                                        extensionPreview = null
+                                        extensionReviewError = null
+                                    } else {
+                                        extensionReviewError = error
+                                        extensionConfirming = false
+                                    }
+                                }
+                            },
+                            onCancel = {
+                                extensionPreview = null
+                                extensionReviewError = null
+                                extensionConfirming = false
+                            },
+                        )
+                    }
+                }
+                if (extensionPreview == null) extensionReviewError?.let { error ->
+                    Text(
+                        error,
+                        color = Brand.Danger,
+                        style = MaterialTheme.typography.labelMedium,
+                        modifier = Modifier.testTag("gaming-extension-review-error"),
+                    )
+                }
                 // The existing card continues to own authority, recovery,
                 // billing and all active/payment actions in this side pane.
     GamingStationCard(
@@ -1643,7 +1780,7 @@ internal fun GamingCommandWorkspace(
         onSend = onSend,
         onCancelUnbilled = onCancelUnbilled,
         onExtendTimer = onExtendTimer,
-        onExtendPackage = onExtendPackage,
+        onExtendPackage = openPackageExtension,
         onTransfer = onTransfer,
         onPauseResume = onPauseResume,
         onReconcile = onReconcile,
@@ -1666,6 +1803,7 @@ internal fun GamingCommandWorkspace(
         // The 960dp tablet must keep its station board and duration dial in
         // the same viewport; narrower screens retain the scroll fallback.
         val sideBySide = maxWidth >= 900.dp
+        val denseGrid = maxWidth < 1_100.dp
         val noticeRailMaxHeight = minOf(144.dp, maxHeight * 0.19f)
         val columns = when {
             sideBySide -> 4
@@ -1725,14 +1863,15 @@ internal fun GamingCommandWorkspace(
                         selectedStationId = selectedStation?.id,
                         focusStationId = focusStationId,
                         wallClock = wallClock, columns = columns,
+                        dense = denseGrid,
                         onSelectStation = onSelectStation,
-                        modifier = Modifier.weight(0.45f).fillMaxHeight()
+                        modifier = Modifier.weight(0.35f).fillMaxHeight()
                             .verticalScroll(rememberScrollState()),
                     )
                     controlPane(
-                        Modifier.weight(0.55f).fillMaxHeight()
+                        Modifier.weight(0.65f).fillMaxHeight()
                             .clip(Radius.shapeLg)
-                            .border(1.dp, Brand.Gold.copy(alpha = 0.42f), Radius.shapeLg)
+                            .border(1.dp, Brand.Gold.copy(alpha = 0.28f), Radius.shapeLg)
                             .testTag("gaming-control-pane"),
                     )
                 }
@@ -1753,6 +1892,7 @@ internal fun GamingCommandWorkspace(
                             selectedStationId = selectedStation?.id,
                             focusStationId = focusStationId,
                             wallClock = wallClock, columns = columns,
+                            dense = denseGrid,
                             onSelectStation = { stationId ->
                                 onSelectStation(stationId)
                                 compactScrollScope.launch {
@@ -1766,7 +1906,7 @@ internal fun GamingCommandWorkspace(
                         controlPane(
                             Modifier.fillMaxWidth().height(560.dp)
                                 .clip(Radius.shapeLg)
-                                .border(1.dp, Brand.Gold.copy(alpha = 0.42f), Radius.shapeLg)
+                                .border(1.dp, Brand.Gold.copy(alpha = 0.28f), Radius.shapeLg)
                                 .testTag("gaming-control-pane"),
                         )
                     }
@@ -1779,29 +1919,7 @@ internal fun GamingCommandWorkspace(
 /** Static ambient light keeps the board legible and does not schedule idle redraws. */
 @Composable
 private fun GamingAmbientBackdrop() {
-    Canvas(Modifier.fillMaxSize()) {
-        val gold = Color(0xFFF4C65A)
-        val horizon = size.height * 0.59f
-        repeat(3) { index ->
-            val offset = index * 14.dp.toPx()
-            val path = Path().apply {
-                moveTo(-size.width * 0.07f, horizon + offset)
-                cubicTo(
-                    size.width * 0.16f, horizon - 52.dp.toPx() + offset,
-                    size.width * 0.24f, horizon + 33.dp.toPx() + offset,
-                    size.width * 0.43f, horizon - 21.dp.toPx() + offset,
-                )
-            }
-            drawPath(
-                path = path,
-                brush = Brush.horizontalGradient(
-                    listOf(Color.Transparent, gold.copy(alpha = 0.13f), Color.Transparent),
-                ),
-                style = Stroke(width = if (index == 0) 2.dp.toPx() else 1.dp.toPx(),
-                    cap = StrokeCap.Round),
-            )
-        }
-    }
+    Box(Modifier.fillMaxSize().controlDeckBackdrop())
 }
 
 @Composable
@@ -1812,6 +1930,7 @@ private fun GamingStationSelectionGrid(
     focusStationId: String?,
     wallClock: State<Long>,
     columns: Int,
+    dense: Boolean,
     onSelectStation: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -1834,7 +1953,7 @@ private fun GamingStationSelectionGrid(
                         focused = station.id == focusStationId,
                         combinedBillSnapshotMinor = session?.let(state::pendingBillSnapshotMinor),
                         onSelect = { onSelectStation(station.id) },
-                        compact = true,
+                        compact = true, dense = dense,
                         modifier = Modifier.weight(1f),
                     )
                 }
@@ -2355,6 +2474,14 @@ private fun GamingStationArtwork(type: String, modifier: Modifier = Modifier) {
     }
 }
 
+private fun compactStationTitle(name: String): String = when {
+    name.startsWith("PS5 Station ") -> "PS5 " + name.removePrefix("PS5 Station ")
+    name.startsWith("Racing Simulator ") -> "Racing " + name.removePrefix("Racing Simulator ")
+    name.startsWith("Streaming Booth ") -> "Stream " + name.removePrefix("Streaming Booth ")
+    name.startsWith("Shisha Table ") -> "Shisha " + name.removePrefix("Shisha Table ")
+    else -> name
+}
+
 @Composable
 internal fun GamingStationTile(
     station: Station,
@@ -2368,6 +2495,7 @@ internal fun GamingStationTile(
     combinedBillSnapshotMinor: Long?,
     onSelect: () -> Unit,
     compact: Boolean = false,
+    dense: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val shouldTick = session?.status == "active" ||
@@ -2430,17 +2558,38 @@ internal fun GamingStationTile(
         StationVisualState.StartFailed -> "Evidence retained"
         StationVisualState.Unavailable -> "Refresh required"
     }
+    val missingTariff = session == null && supportingValue == "Fixed-price tariff not synced"
+    val tileStatusLabel = when {
+        missingTariff -> if (dense) "Sync" else if (compact) "Sync rates" else "Rates unavailable"
+        dense -> when (presentation.state) {
+            StationVisualState.Available -> "Ready"
+            StationVisualState.PaymentDue -> "Due"
+            StationVisualState.Overtime -> "Overtime"
+            StationVisualState.StartFailed, StationVisualState.StopFailed,
+            StationVisualState.SendRejected, StationVisualState.BillingMissing -> "Review"
+            StationVisualState.CancellationRequired -> "Resolve"
+            StationVisualState.SendPending -> "Sending"
+            StationVisualState.Unavailable -> "Check"
+            else -> presentation.statusLabel
+        }
+        else -> presentation.statusLabel
+    }
+    val tileStatusColor = if (missingTariff) Brand.Warning else accent
 
 
     val highlighted = selected || focused
     Column(
-        modifier.fillMaxWidth().heightIn(min = if (compact) 128.dp else 178.dp)
+        modifier.fillMaxWidth().heightIn(min = when {
+            dense -> 140.dp
+            compact -> 154.dp
+            else -> 178.dp
+        })
             .clip(Radius.shapeLg)
             .background(
                 Brush.verticalGradient(
                     if (highlighted) listOf(
-                        Color(0xFF393324), Color(0xFF1C292B), Color(0xFF101B21),
-                    ) else listOf(Color(0xFF14242A), Color(0xFF0B171D)),
+                        Color(0xFF29261B), Color(0xFF172124), Color(0xFF091419),
+                    ) else listOf(Color(0xFF101D22), Color(0xFF071218)),
                 ),
             )
             .border(if (highlighted) 2.dp else 1.dp, borderColor, Radius.shapeLg)
@@ -2451,7 +2600,8 @@ internal fun GamingStationTile(
                 contentDescription = if (startsSessionOnTap) {
                     station.name + ". Available. Start session. " + supportingValue
                 } else if (session == null) {
-                    "${station.name}. ${presentation.statusLabel}. $primaryValue. $supportingValue. Select station"
+                    "${station.name}. ${if (missingTariff) "Rates unavailable" else presentation.statusLabel}. " +
+                        "$primaryValue. $supportingValue. Select station"
                 } else {
                     station.name + ". " + presentation.statusLabel + ". Select station controls"
                 }
@@ -2460,21 +2610,20 @@ internal fun GamingStationTile(
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         Box(
-            Modifier.fillMaxWidth().height(if (compact) 50.dp else 86.dp)
-                .clip(Radius.shapeMd)
+            Modifier.fillMaxWidth().height(if (dense) 68.dp else if (compact) 76.dp else 96.dp)
                 .background(
                     Brush.radialGradient(
                         if (highlighted) listOf(
-                            Brand.Gold.copy(alpha = 0.20f), Brand.Background,
-                        ) else listOf(Color(0xFF14242A), Brand.Background),
+                            Brand.Gold.copy(alpha = 0.20f), Color.Transparent,
+                        ) else listOf(Brand.Gold.copy(alpha = 0.06f), Color.Transparent),
                     ),
                 ),
             contentAlignment = Alignment.Center,
         ) {
-            GamingStationArtwork(station.type, Modifier.size(if (compact) 56.dp else 84.dp))
+            GamingStationArtwork(station.type, Modifier.fillMaxSize())
         }
         Text(
-            station.name,
+            if (dense) compactStationTitle(station.name) else station.name,
             color = Brand.Foreground,
             style = MaterialTheme.typography.titleSmall,
             fontWeight = FontWeight.SemiBold,
@@ -2487,14 +2636,21 @@ internal fun GamingStationTile(
             horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
         ) {
             if (compact) {
-                Canvas(Modifier.size(8.dp)) { drawCircle(accent) }
+                Canvas(Modifier.size(8.dp)) { drawCircle(tileStatusColor) }
                 Text(
-                    presentation.statusLabel,
-                    color = accent,
+                    tileStatusLabel,
+                    color = tileStatusColor,
                     style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
+                )
+                Spacer(Modifier.weight(1f))
+                if (!missingTariff && !dense) Icon(
+                    Icons.Filled.ChevronRight,
+                    contentDescription = null,
+                    tint = if (selected || focused) Brand.GoldBright else Brand.ForegroundMuted,
+                    modifier = Modifier.size(18.dp),
                 )
             } else {
                 OperationalStatusBadge(
@@ -2522,7 +2678,7 @@ internal fun GamingStationTile(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-        } else if (!compact || supportingValue.contains("not synced")) {
+        } else if (!compact) {
             Text(
                 supportingValue,
                 color = Brand.ForegroundMuted,
@@ -4491,6 +4647,116 @@ private fun TransferSessionDialog(
 }
 
 @Composable
+private fun PackageExtensionInlineReview(
+    preview: InlinePackageExtensionPreview,
+    error: String?,
+    confirming: Boolean,
+    onSelect: (String) -> Unit,
+    onConfirm: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    val selected = preview.extensions.firstOrNull { it.id == preview.selectedPackageId }
+        ?: return
+    val selectedSurcharge = extraControllerExtensionSurchargeMinor(
+        extraControllers = preview.session.extraControllers,
+        currentDurationMinutes = preview.session.timerMinutes ?: 0,
+        extensionMinutes = selected.durationMinutes,
+    )
+    val incrementalTotal = runCatching {
+        Math.addExact(selected.priceMinor, selectedSurcharge)
+    }.getOrNull()
+    val resultingTotal = incrementalTotal?.let { increment ->
+        preview.session.amountMinor?.let { current ->
+            runCatching { Math.addExact(current, increment) }.getOrNull()
+        }
+    }
+    val choices = preview.extensions.map { extension ->
+        val surcharge = extraControllerExtensionSurchargeMinor(
+            extraControllers = preview.session.extraControllers,
+            currentDurationMinutes = preview.session.timerMinutes ?: 0,
+            extensionMinutes = extension.durationMinutes,
+        )
+        GamingDurationChoice(
+            packageId = extension.id,
+            minutes = extension.durationMinutes,
+            totalMinor = runCatching { Math.addExact(extension.priceMinor, surcharge) }
+                .getOrDefault(extension.priceMinor),
+        )
+    }
+    Surface(
+        color = Brand.SurfaceOverlay,
+        contentColor = Brand.Foreground,
+        shape = Radius.shapeLg,
+        border = BorderStroke(1.dp, Brand.Gold.copy(alpha = 0.35f)),
+        modifier = Modifier.fillMaxWidth().testTag("gaming-extension-preview"),
+    ) {
+        Column(
+            Modifier.padding(Spacing.md),
+            verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text("ADD PAID TIME", color = Brand.GoldBright, style = MaterialTheme.typography.labelSmall)
+            Text("Review extension", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            GamingDurationDial(
+                choices = choices,
+                selectedPackageId = selected.id,
+                onSelect = onSelect,
+                dialSize = 210.dp,
+                showChoiceChips = choices.size > 2,
+                gestureContextKey = Triple(preview.station, preview.session, error),
+            )
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Column {
+                    Text("Added time", color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelSmall)
+                    Text("+${selected.durationMinutes} min", fontWeight = FontWeight.Bold)
+                }
+                Column(horizontalAlignment = Alignment.End) {
+                    Text("Incremental charge", color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelSmall)
+                    Text(incrementalTotal?.asRupees() ?: "Unavailable", fontWeight = FontWeight.Bold)
+                }
+            }
+            Text(
+                "Resulting booked total · ${resultingTotal?.asRupees() ?: "Unavailable"}",
+                color = Brand.GoldBright,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+            )
+            Text(
+                "Selecting a duration only updates this review. No time or charge is added until Confirm extension.",
+                color = Brand.ForegroundMuted,
+                style = MaterialTheme.typography.labelSmall,
+            )
+            error?.let {
+                Text(it, color = Brand.Danger, style = MaterialTheme.typography.labelMedium)
+            }
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+            ) {
+                ErpButton(
+                    text = "Cancel",
+                    onClick = onCancel,
+                    intent = ActionIntent.Secondary,
+                    enabled = !confirming,
+                    modifier = Modifier.weight(1f),
+                )
+                ErpButton(
+                    text = "Confirm extension",
+                    onClick = onConfirm,
+                    enabled = error == null && resultingTotal != null && !confirming,
+                    busy = confirming,
+                    leadingIcon = Icons.Filled.Add,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun PackageExtensionDialog(
     extensions: List<GamingPackage>,
     extraControllers: Int,
@@ -5027,6 +5293,109 @@ private fun DiscardRejectedExtensionDialog(
     )
 }
 
+internal fun packageExtensionReviewError(
+    review: PackageExtensionReview,
+    state: GamingUiState,
+    access: GamingAccess,
+): String? {
+    if (!access.canManageSessions) return "Session access changed. Reopen the extension after access is restored."
+    if (state.busyStationId != null) return "Another station action is saving. Reopen the extension when it finishes."
+    val currentStation = state.stations.firstOrNull { it.id == review.station.id }
+        ?: return "This station is no longer available. Reopen the station before extending."
+    if (currentStation != review.station) {
+        return "The station details changed. Reopen Extend and review the current station."
+    }
+    if (!currentStation.isActive) return "This station is disabled. No extension was added."
+    val currentSession = state.sessions.firstOrNull { it.id == review.session.id }
+        ?: return "This session is no longer available. No extension was added."
+    if (currentSession != review.session) {
+        return "The session changed after this review opened. Reopen Extend to review its current timer and total."
+    }
+    val currentExtension = state.packages.firstOrNull { it.id == review.extension.id }
+        ?: return "This extension is no longer available. Reopen Extend and choose a current option."
+    if (currentExtension != review.extension) {
+        return "The extension price or duration changed. Reopen Extend and review the new total."
+    }
+    if (currentExtension.durationMinutes !in 1..1_440 || currentExtension.priceMinor <= 0L) {
+        return "This extension has an invalid duration or price. Refresh Gaming before extending."
+    }
+    if (currentSession.status !in setOf("active", "paused")) {
+        return "This session is no longer running. No extension was added."
+    }
+    if (currentSession.orderId != null) {
+        return "This session is already linked to POS. No extension was added."
+    }
+    gamingCleanupWorkflowMessageOrNull(currentSession.lastError)?.let {
+        return "Finish the protected session recovery before adding paid time."
+    }
+    if (!currentSession.hasLockedPackageExtensionSnapshot()) {
+        return "The locked package timer or total is unavailable. Refresh Gaming before extending."
+    }
+    val currentMinutes = currentSession.timerMinutes
+        ?: return "The booked timer is unavailable. Refresh Gaming."
+    val resultingMinutes = currentMinutes.toLong() + currentExtension.durationMinutes.toLong()
+    if (currentMinutes !in 1..1_440 || resultingMinutes !in 1L..1_440L) {
+        return "This extension would exceed the 24-hour gaming limit. Choose a shorter extension."
+    }
+    val currentAmount = currentSession.amountMinor
+        ?: return "The locked package total is unavailable. Refresh Gaming before extending."
+    val surcharge = extraControllerExtensionSurchargeMinor(
+        extraControllers = currentSession.extraControllers,
+        currentDurationMinutes = currentMinutes,
+        extensionMinutes = currentExtension.durationMinutes,
+    )
+    val safeTotal = runCatching {
+        Math.addExact(currentAmount, Math.addExact(currentExtension.priceMinor, surcharge))
+    }.getOrNull()
+    if (currentAmount < 0L || safeTotal == null) {
+        return "The reviewed extension total is invalid. Refresh Gaming before extending."
+    }
+    if (currentSession.authority(state.activeShiftId) != GamingSessionAuthority.CURRENT_SHIFT) {
+        return "The current POS shift no longer owns this session. Reopen it on the terminal that started it."
+    }
+    if (state.packageExtensionFor(currentSession.id) != null) {
+        return "A paid extension is already unresolved. Wait for it to finish or review it before adding another."
+    }
+    if (state.unresolvedSequencedActionsFor(currentSession).any {
+            it.state == GamingSessionActionState.REJECTED
+        }
+    ) {
+        return "Resolve the refused saved session action before adding paid time."
+    }
+    if (matchingPackageExtensions(currentSession, currentStation, state.packages).none {
+            it == currentExtension
+        }
+    ) {
+        return "This extension no longer matches the session's locked package. Reopen Extend and choose again."
+    }
+    return null
+}
+
+@Composable
+private fun ExpectedSessionFinishPreview(durationMinutes: Int) {
+    var nowMillis by remember(durationMinutes) { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(durationMinutes) {
+        while (isActive) {
+            val untilNextMinute = 60_000L - (System.currentTimeMillis() % 60_000L)
+            delay(untilNextMinute)
+            nowMillis = System.currentTimeMillis()
+        }
+    }
+    val finish = remember(durationMinutes, nowMillis) {
+        Instant.ofEpochMilli(nowMillis + durationMinutes.toLong() * 60_000L)
+            .toString()
+            .businessClockTime()
+    }
+    Text(
+        "Est. finish · $finish",
+        color = Brand.GoldBright,
+        style = MaterialTheme.typography.labelMedium,
+        modifier = Modifier.semantics {
+            contentDescription = "Expected finish if started now, about $finish"
+        },
+    )
+}
+
 @Composable
 private fun ReconcileSessionDialog(
     stationName: String,
@@ -5165,8 +5534,8 @@ internal fun StartSessionEditor(
             ),
         )
     }
-    val prominentPs5Dial = stationFilterId(station.type) == "ps5" &&
-        durationChoices.size in 2..4 &&
+    val prominentDurationDial = stationFilterId(station.type) in setOf("ps5", "racing", "vr") &&
+        durationChoices.size >= 2 &&
         durationChoices.map(GamingDurationChoice::minutes).distinct().size == durationChoices.size
     val hasFixedTariff = basePackages.isNotEmpty()
     val fixedTariffRequired = requiresCanonicalGamingTariff(station.type)
@@ -5186,7 +5555,7 @@ internal fun StartSessionEditor(
 
     // One form owns the package, customer and start payload in either presentation.
     val optionsContent: @Composable () -> Unit = {
-        if (!prominentPs5Dial) Row(
+        if (!prominentDurationDial) Row(
             Modifier.fillMaxWidth().clip(Radius.shapeMd).background(Brand.Surface)
                 .border(1.dp, Brand.BorderSubtle, Radius.shapeMd).padding(Spacing.md),
             verticalAlignment = Alignment.CenterVertically,
@@ -5211,7 +5580,7 @@ internal fun StartSessionEditor(
                 color = Brand.Foreground,
             )
         }
-        if (!prominentPs5Dial) Text(
+        if (!prominentDurationDial) Text(
             "Billing option", color = Brand.Foreground,
             style = MaterialTheme.typography.labelLarge,
         )
@@ -5225,7 +5594,7 @@ internal fun StartSessionEditor(
                 style = MaterialTheme.typography.bodyMedium,
             )
         } else if (hasFixedTariff) {
-            if (stationFilterId(station.type) == "racing" && availableVariants.size > 1) {
+            if (stationFilterId(station.type) in setOf("racing", "vr") && availableVariants.size > 1) {
                 Text("Mode", color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelMedium)
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
                     items(availableVariants) { variant ->
@@ -5239,19 +5608,20 @@ internal fun StartSessionEditor(
                     }
                 }
             }
-            if (!prominentPs5Dial) Text(
+            if (!prominentDurationDial) Text(
                 "Duration", color = Brand.ForegroundMuted,
                 style = MaterialTheme.typography.labelMedium,
             )
-            if (!prominentPs5Dial && durationChoices.size in 2..4 &&
+            if (!prominentDurationDial && durationChoices.size in 2..4 &&
                 durationChoices.map(GamingDurationChoice::minutes).distinct().size == durationChoices.size
             ) {
                 GamingDurationDial(
                     choices = durationChoices,
                     selectedPackageId = selectedPackageId,
                     onSelect = { selectedPackageId = it },
+                    gestureContextKey = station,
                 )
-            } else if (!prominentPs5Dial) {
+            } else if (!prominentDurationDial) {
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
                     items(durationChoices, key = GamingDurationChoice::packageId) { option ->
                         FilterChip(
@@ -5278,7 +5648,7 @@ internal fun StartSessionEditor(
                 }
             }
         }
-        if (selectedPackage != null && !prominentPs5Dial) {
+        if (selectedPackage != null && !prominentDurationDial) {
             SectionCard(
                 title = selectedPackage.name,
                 subtitle = "${selectedPackage.durationMinutes} minutes · ${requireNotNull(selectedPackageTotalMinor).asRupees()} total",
@@ -5297,29 +5667,45 @@ internal fun StartSessionEditor(
                 }
             }
         }
+        val previewMinutes = selectedPackage?.durationMinutes ?: minutes
+        if (previewMinutes != null) ExpectedSessionFinishPreview(previewMinutes)
         if (supportsPlayerModes) {
             if (!embedded) Text("Mode", color = Brand.ForegroundMuted,
                 style = MaterialTheme.typography.labelMedium)
+            val compactEmbeddedPlayers = embedded &&
+                LocalConfiguration.current.screenHeightDp < 700
             Row(
                 Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                horizontalArrangement = Arrangement.spacedBy(
+                    if (compactEmbeddedPlayers) Spacing.xs else Spacing.sm,
+                ),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 FilterChip(
                     selected = playerCount == 1,
                     onClick = { playerCount = 1 },
-                    label = { Text("Single · 1 player") },
+                    label = { Text(if (compactEmbeddedPlayers) "Single" else "Single · 1 player") },
                     colors = gamingPackageChipColors(),
                     modifier = Modifier.weight(1f).heightIn(min = 48.dp),
                 )
                 if (maximumPlayers >= 2) FilterChip(
                     selected = playerCount >= 2,
                     onClick = { playerCount = 2 },
-                    label = { Text("Dual · 2+ players") },
+                    label = { Text(if (compactEmbeddedPlayers) {
+                        if (playerCount > 2) "Dual $playerCount" else "Dual"
+                    } else "Dual · 2+ players") },
                     colors = gamingPackageChipColors(),
                     modifier = Modifier.weight(1f).heightIn(min = 48.dp),
                 )
+                if (compactEmbeddedPlayers) IconButton(
+                    onClick = { playerCount = (playerCount + 1).coerceAtMost(maximumPlayers) },
+                    enabled = playerCount < maximumPlayers,
+                    modifier = Modifier.size(48.dp),
+                ) {
+                    Icon(Icons.Filled.Add, contentDescription = "Add player")
+                }
             }
-            Row(
+            if (!compactEmbeddedPlayers) Row(
                 Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(Spacing.md),
@@ -5342,6 +5728,10 @@ internal fun StartSessionEditor(
                     modifier = Modifier.heightIn(min = 48.dp),
                 ) { Text("Remove last") }
             }
+            if (compactEmbeddedPlayers && playerCount > 2) TextButton(
+                onClick = { playerCount-- },
+                modifier = Modifier.heightIn(min = 48.dp),
+            ) { Text("Remove last player") }
             if (extraControllers > 0) {
                 Text(
                     "${extraControllers.asControllerCount()} · " +
@@ -5428,7 +5818,10 @@ internal fun StartSessionEditor(
                         customerQuery = it.take(200)
                         onSearchCustomer(customerQuery)
                     },
-                    label = { Text("Search by name or phone") },
+                    placeholder = { Text(if (embedded) "Search customer" else "Search by name or phone") },
+                    leadingIcon = if (embedded) {
+                        { Icon(Icons.Filled.Search, contentDescription = null, tint = Brand.Gold) }
+                    } else null,
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth().semantics {
                         contentDescription = "Search saved customers by name or phone"
@@ -5518,42 +5911,23 @@ internal fun StartSessionEditor(
     }
 
     val formContent: @Composable (Boolean, Modifier) -> Unit = { compactIme, formModifier ->
-        Surface(color = Brand.Background, modifier = formModifier) {
+        Surface(
+            color = if (embedded) Color.Transparent else Brand.Background,
+            contentColor = Brand.Foreground,
+            modifier = formModifier,
+        ) {
             Column(
                 Modifier.fillMaxSize()
                     .then(if (embedded) Modifier.background(
                         Brush.verticalGradient(
                             colors = listOf(
-                                Brand.Gold.copy(alpha = 0.12f),
+                                Brand.Gold.copy(alpha = 0.055f),
                                 Color.Transparent,
-                                Brand.Gold.copy(alpha = 0.025f),
+                                Brand.Gold.copy(alpha = 0.012f),
                             ),
                             endY = 800f,
                         ),
                     ) else Modifier)
-                    .then(if (embedded) Modifier.drawBehind {
-                        val gold = Color(0xFFF8CB67)
-                        val light = Brush.horizontalGradient(
-                            listOf(Color.Transparent, gold.copy(alpha = 0.23f),
-                                gold.copy(alpha = 0.11f), Color.Transparent),
-                        )
-                        repeat(3) { index ->
-                            val y = size.height * 0.57f + index * 19.dp.toPx()
-                            val path = Path().apply {
-                                moveTo(-size.width * 0.07f, y)
-                                cubicTo(size.width * 0.15f, y - 55.dp.toPx(),
-                                    size.width * 0.26f, y + 38.dp.toPx(),
-                                    size.width * 0.48f, y - 16.dp.toPx())
-                                cubicTo(size.width * 0.70f, y - 49.dp.toPx(),
-                                    size.width * 0.86f, y + 28.dp.toPx(),
-                                    size.width * 1.06f, y - 10.dp.toPx())
-                            }
-                            drawPath(path, light, style = Stroke(
-                                width = if (index == 0) 2.dp.toPx() else 1.dp.toPx(),
-                                cap = StrokeCap.Round,
-                            ))
-                        }
-                    } else Modifier)
                     .padding(
                     horizontal = if (embedded) Spacing.md else Spacing.lgPlus,
                     vertical = if (compactIme || embedded) Spacing.sm else Spacing.md,
@@ -5569,19 +5943,27 @@ internal fun StartSessionEditor(
                         Icon(Icons.Filled.ChevronLeft, contentDescription = null)
                         Text("Back")
                     }
+                    val compactEmbeddedHeader = embedded && LocalConfiguration.current.screenHeightDp < 700
                     Column(Modifier.weight(1f), horizontalAlignment = if (embedded) Alignment.Start else Alignment.CenterHorizontally) {
+                        if (embedded && !compactEmbeddedHeader) Text(
+                            "START SESSION",
+                            color = Brand.GoldBright,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold,
+                        )
                         Text(
                             if (embedded) station.name else "START SESSION",
                             color = Brand.Foreground,
-                            style = if (embedded) MaterialTheme.typography.titleLarge
+                            style = if (compactEmbeddedHeader) MaterialTheme.typography.titleMedium
+                                else if (embedded) MaterialTheme.typography.titleLarge
                                 else MaterialTheme.typography.headlineSmall,
                             fontWeight = FontWeight.Bold,
                         )
                         if (!compactIme && !embedded) Text(station.name, color = Brand.ForegroundMuted)
-                        if (embedded) Text("Available · select a published duration",
+                        if (embedded && !compactEmbeddedHeader) Text("Available · select a published duration",
                             color = statusColor(UiTone.Success), style = MaterialTheme.typography.labelMedium)
                     }
-                    if (supportsPlayerModes) {
+                    if (supportsPlayerModes && !embedded) {
                         Text(
                             if (playerCount == 1) "Single mode" else "$playerCount players",
                             color = Brand.GoldBright,
@@ -5590,18 +5972,27 @@ internal fun StartSessionEditor(
                     }
                 }
                 BoxWithConstraints(
-                    Modifier.fillMaxWidth().weight(1f)
-                        .verticalScroll(rememberScrollState()),
+                    Modifier.fillMaxWidth().weight(1f),
                     contentAlignment = Alignment.TopCenter,
                 ) {
                 val availableFormWidth = maxWidth
+                val availableFormHeight = maxHeight
                 Column(
                     Modifier.widthIn(max = 760.dp).fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
                         .padding(vertical = if (embedded) Spacing.xs else Spacing.md),
                     verticalArrangement = Arrangement.spacedBy(if (embedded) Spacing.xs else Spacing.md),
                 ) {
-                val wideEmbeddedDial = embedded && prominentPs5Dial && availableFormWidth >= 600.dp
+                // Keep the dial and customer/player controls alongside each
+                // other on the 960dp tablet as well as the wider layout.
+                val wideEmbeddedDial = embedded && prominentDurationDial && availableFormWidth >= 420.dp
                 if (wideEmbeddedDial) {
+                    val dialColumnWidth = (availableFormWidth - Spacing.md) * 0.62f
+                    val dialSize = minOf(
+                        if (LocalConfiguration.current.screenHeightDp < 700) 232.dp else 344.dp,
+                        dialColumnWidth,
+                        (availableFormHeight - Spacing.sm * 2).coerceAtLeast(160.dp),
+                    )
                     Row(
                         Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(Spacing.md),
@@ -5611,25 +6002,31 @@ internal fun StartSessionEditor(
                             choices = durationChoices,
                             selectedPackageId = selectedPackageId,
                             onSelect = { selectedPackageId = it },
-                            modifier = Modifier.weight(0.55f),
-                            dialSize = 344.dp,
+                            modifier = Modifier.weight(0.62f),
+                            dialSize = dialSize,
                             showChoiceChips = durationChoices.size > 2,
+                            gestureContextKey = station,
                         )
                         Column(
-                            Modifier.weight(0.45f),
+                            Modifier.weight(0.38f),
                             verticalArrangement = Arrangement.spacedBy(Spacing.xs),
                         ) {
                             optionsContent()
                         }
                     }
                 } else {
-                    if (prominentPs5Dial) {
+                    if (prominentDurationDial) {
                         GamingDurationDial(
                             choices = durationChoices,
                             selectedPackageId = selectedPackageId,
                             onSelect = { selectedPackageId = it },
-                            dialSize = if (embedded || LocalConfiguration.current.screenHeightDp < 700) 220.dp else 280.dp,
+                            dialSize = when {
+                                embedded && LocalConfiguration.current.screenHeightDp < 700 -> 170.dp
+                                embedded || LocalConfiguration.current.screenHeightDp < 700 -> 220.dp
+                                else -> 280.dp
+                            },
                             showChoiceChips = durationChoices.size > 2,
+                            gestureContextKey = station,
                         )
                     }
                     optionsContent()

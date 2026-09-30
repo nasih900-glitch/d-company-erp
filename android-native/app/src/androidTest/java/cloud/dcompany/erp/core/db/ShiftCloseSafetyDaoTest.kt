@@ -5,6 +5,7 @@ import androidx.room.Room
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.flow.first
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -54,6 +55,108 @@ class ShiftCloseSafetyDaoTest {
         db.shiftDao().markClosed("uncertain-close", 0)
         db.shiftDao().notePendingError("uncertain-close", "stale failure")
         assertNull(db.shiftDao().byLocalId("uncertain-close")?.lastError)
+    }
+
+    @Test
+    fun continuingWrongInstallationCloseUnlocksCountButRetainsDefinitiveRefusal() = runBlocking {
+        val error = "This Android app installation is not verified as the one that opened this shift. The shift remains open."
+        db.shiftDao().insert(openShift("wrong-origin"))
+        safety.captureExistingClose("wrong-origin", TERMINAL, 0, 2000)
+        db.shiftDao().markCloseRejected("wrong-origin", error)
+
+        assertEquals(1, db.shiftDao().cancelRejectedClose("wrong-origin"))
+        val continued = db.shiftDao().byLocalId("wrong-origin")!!
+        assertEquals(ShiftState.OPEN_SYNCED, continued.state)
+        assertNull(continued.countedMinor)
+        assertNull(continued.closedAtMillis)
+        assertEquals(error, continued.lastError)
+
+        db.shiftDao().markCloseRejected("wrong-origin", "One unpaid bill remains")
+        assertEquals(1, db.shiftDao().cancelRejectedClose("wrong-origin"))
+        assertNull(db.shiftDao().byLocalId("wrong-origin")?.lastError)
+    }
+
+    @Test
+    fun rejectedCloseReconcilesAfterWebClosureWithoutErasingItsSavedCount() = runBlocking {
+        val row = openShift("remote-closed")
+        db.shiftDao().insert(row)
+        safety.captureExistingClose(row.localId, TERMINAL, 0, 2000)
+        db.shiftDao().markCloseRejected(row.localId, "Origin installation does not match")
+        db.shiftDao().upsertServerOpen(
+            ServerOpenShiftEntity(
+                terminalId = TERMINAL, serverShiftId = SERVER_SHIFT, branchId = "branch", status = "open",
+                openingFloatMinor = 0, openedAtMillis = 1000, verifiedAtMillis = 2000,
+            ),
+        )
+
+        db.shiftDao().reconcileServerOpen(TERMINAL, null, 3000)
+
+        val retained = db.shiftDao().byLocalId(row.localId)!!
+        assertEquals(ShiftState.CLOSED, retained.state)
+        assertEquals(0L, retained.countedMinor)
+        assertTrue(retained.closeResultPending)
+        assertNull(db.shiftDao().currentForTerminal(TERMINAL))
+        assertNull(db.shiftDao().serverOpen(TERMINAL))
+        assertTrue(retained.lastError.orEmpty().contains("Server reconciliation"))
+
+        val history = ShiftHistoryCacheEntity(
+            id = SERVER_SHIFT, branchId = "branch", terminalId = TERMINAL, status = "closed",
+            openedAtMillis = 1000, closedAtMillis = 2500, openingFloatMinor = 0,
+            expectedMinor = 183500, countedMinor = 183500, varianceMinor = 0,
+            posSalesMinor = 529000, membershipSalesMinor = 0, grossCollectionsMinor = 529000,
+            cashCollectionsMinor = 183500, cardCollectionsMinor = 0, upiCollectionsMinor = 345500,
+            otherCollectionsMinor = 0, settledPosRefundsMinor = 0, settledMembershipRefundsMinor = 0,
+            totalRefundsMinor = 0, netCollectionsMinor = 529000, openedByUserId = "opener",
+            openedByName = "Sameer", openedByEmail = null, closedByUserId = "owner",
+            closedByName = "Owner", closedByEmail = null, fetchedAtMillis = 3000,
+        )
+        db.shiftDao().replaceServerHistoryForTerminal(TERMINAL, listOf(history))
+        val merged = ShiftHistoryMergePolicy.merge(
+            db.shiftDao().observeServerHistoryForTerminal(TERMINAL).first(), listOf(retained),
+        )
+        assertEquals(1, merged.size)
+        assertEquals(ShiftHistorySource.SERVER, merged.single().source)
+        assertEquals(183500L, merged.single().countedMinor)
+        assertEquals("owner", merged.single().closedByUserId)
+    }
+
+    @Test
+    fun uncertainCloseIsRetainedUntilReplayIsDefinitivelyRejectedThenReconciles() = runBlocking {
+        val row = openShift("pending-remote-closed")
+        db.shiftDao().insert(row)
+        safety.captureExistingClose(row.localId, TERMINAL, 1200, 2000)
+        val pending = db.shiftDao().byLocalId(row.localId)!!
+
+        db.shiftDao().reconcileServerOpen(TERMINAL, null, 3000)
+        assertEquals(pending, db.shiftDao().byLocalId(row.localId))
+
+        db.shiftDao().markCloseRejected(row.localId, "This shift was already closed using a different cash count.")
+        db.shiftDao().reconcileServerOpen(TERMINAL, null, 4000)
+        assertEquals(ShiftState.CLOSED, db.shiftDao().byLocalId(row.localId)?.state)
+        assertEquals(1200L, db.shiftDao().byLocalId(row.localId)?.countedMinor)
+        assertNull(db.shiftDao().currentForTerminal(TERMINAL))
+    }
+
+    @Test
+    fun newServerShiftReplacesRemotelyClosedRejectedLocalWithoutRebindingItsCount() = runBlocking {
+        val row = openShift("older-remote-closed")
+        db.shiftDao().insert(row)
+        safety.captureExistingClose(row.localId, TERMINAL, 900, 2000)
+        db.shiftDao().markCloseRejected(row.localId, "Close refused")
+        val next = ServerOpenShiftEntity(
+            terminalId = TERMINAL, serverShiftId = "next-shift", branchId = "branch", status = "open",
+            openingFloatMinor = 200, openedAtMillis = 3000, verifiedAtMillis = 4000,
+        )
+
+        db.shiftDao().reconcileServerOpen(TERMINAL, next, 4000)
+
+        assertEquals(900L, db.shiftDao().byLocalId(row.localId)?.countedMinor)
+        assertEquals(ShiftState.CLOSED, db.shiftDao().byLocalId(row.localId)?.state)
+        val resolved = ShiftResolutionPolicy.resolve(
+            db.shiftDao().currentForTerminal(TERMINAL), db.shiftDao().serverOpen(TERMINAL),
+        )!!
+        assertEquals("next-shift", resolved.shiftId)
+        assertNull(resolved.local)
     }
 
     @Test

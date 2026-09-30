@@ -481,6 +481,23 @@ async def test_android_open_cannot_be_closed_remotely_but_same_tablet_staff_can(
     saved = await session.get(Shift, UUID(opened.json()["id"]))
     assert saved is not None and saved.status == "open" and saved.closed_by is None
 
+    wrong_installation = await client.post(
+        f"/api/v1/pos/shifts/{opened.json()['id']}/close",
+        json={"counted_minor": 5_000},
+        headers=base | {
+            "X-Client-Platform": "android",
+            "X-Client-Version-Code": "24",
+            "X-Installation-Id": str(uuid4()),
+        },
+    )
+    assert wrong_installation.status_code == 422, wrong_installation.text
+    wrong_error = wrong_installation.json()["error"]
+    assert wrong_error["details"]["issue"] == "android_shift_close_requires_origin_tablet"
+    assert "Android app installation is not verified" in wrong_error["message"]
+    assert "from this browser" not in wrong_error["message"]
+    await session.refresh(saved)
+    assert saved.status == "open" and saved.closed_by is None and saved.counted_minor is None
+
     # A clean account switch purges user-scoped Room rows. The newly signed-in
     # colleague therefore adopts the server shift under a different local
     # close identity, while the stable app-installation UUID proves this is

@@ -1,6 +1,6 @@
 [project]
 name = "d-company-erp-backend"
-version = "3.1.33"
+version = "3.1.36"
 description = "D Company ERP — backend (FastAPI, SQLAlchemy, PostgreSQL)"
 requires-python = ">=3.11"
 dependencies = [
@@ -16,7 +16,7 @@ dependencies = [
   "asyncpg>=0.29",
   "passlib[argon2]>=1.7.4",
   "cryptography>=42.0",
-  "PyJWT[crypto]>=2.13.0",
+  "PyJWT[crypto]>=2.14.0",
   "python-multipart>=0.0.9",
   "redis>=5.0",
   "arq>=0.25",

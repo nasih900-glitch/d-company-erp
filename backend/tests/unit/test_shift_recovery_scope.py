@@ -6,6 +6,8 @@ from uuid import uuid4
 import pytest
 
 from app.api.v1.pos.router import (
+    _android_shift_close_identity_matches,
+    _android_shift_origin_close_message,
     _is_new_protocol_android_shift,
     _require_recovery_shift_scope,
     _shift_read_installation_id,
@@ -114,3 +116,23 @@ def test_shift_read_echoes_installation_only_to_exact_android_installation() -> 
             }
         ),
     ) == installation_id
+
+
+def test_android_origin_refusal_uses_native_guidance_without_browser_confusion() -> None:
+    request = SimpleNamespace(headers={"X-Client-Platform": "android"})
+    message = _android_shift_origin_close_message(request)
+    assert "Android app installation is not verified" in message
+    assert "browser" not in message
+    assert "from this browser" in _android_shift_origin_close_message(None)
+
+
+def test_android_close_requires_exact_installation_but_not_opener_identity() -> None:
+    installation_id = uuid4()
+    shift = SimpleNamespace(opening_client_installation_id=installation_id)
+    request = SimpleNamespace(headers={"X-Client-Platform": "android", "X-Installation-Id": str(installation_id)})
+    assert _android_shift_close_identity_matches(shift, request)
+    request.headers["X-Installation-Id"] = str(uuid4())
+    assert not _android_shift_close_identity_matches(shift, request)
+    request.headers["X-Client-Platform"] = "web"
+    request.headers["X-Installation-Id"] = str(installation_id)
+    assert not _android_shift_close_identity_matches(shift, request)
