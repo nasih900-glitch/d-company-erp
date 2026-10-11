@@ -54,6 +54,64 @@ fix is available.
 
 ## Evidence available before the release commit
 
+### Completed e492 CI and subsequent correction
+
+Run `38148940575` used a GitHub merge tree identical to committed candidate
+`e492524474397b0e5244a0f78bba243f335d1bf2`. It passed 1,647 repository
+contracts, 1,801 backend tests with 87% coverage, 638 Web tests, 1,170 Android
+app JVM tests and 7 driver JVM tests. Its full native release assembly/bundle
+and lint completed. Production, CI and backup Python lock audits passed.
+Inherited advisory checks still report 1,590 Ruff findings, 488 mypy errors
+across 54 files and 28 Android lint warnings; they are not clean quality gates.
+
+Both actual Docker stores failed at the same Caddy package check. Its pinned
+curl/OpenSSL installation transitively installed official zlib `1.3.2-r1`,
+overwriting the earlier reviewed library copy while the check expected r0.
+The subsequent bounded correction pins Caddy's r1 package explicitly and
+installs/checks the packages before copying and proving the unchanged reviewed
+four-patch runtime. The existing image-scoped r0 VEX remains unchanged and is
+used only for the other four services. Caddy has no VEX generated, mounted,
+supplied to either Grype boundary or retained. Caddy requires a retained Syft
+1.42.3 image-ID-bound catalogue proving exactly one consistent r1 APK and a
+Grype 0.118.0 report with zero ignored findings,
+no residual target CVE, and the unchanged high/critical gate. Both scanner
+boundaries consume that SBOM; the other four services retain their exact r0
+one-reviewed-ignore contract. A genuine older Syft catalogue advanced to r1
+only as a fixture proves parser compatibility, not an actual r1 image. New
+hosted builds, scans, migration and rollback gates must pass the final source.
+The revised seven-file correction passed an independent source review and
+76-test rerun. The current installer contract uses the build-45 action digest
+and exact four-service VEX assertions; historical hashes remain unchanged.
+Two additional current-action tests preserve all five scanner/image/connection
+gates while requiring four VEX inputs and the Caddy SBOM boundary. Their
+36-case focused suite and independent review passed. The corrected complete
+repository run and exact-source hosted gates remain required.
+
+Android instrumentation failed before discovery with a real startup ANR in a
+one-vCPU emulator under severe CPU starvation. Twelve system-app ANRs preceded
+the ERP launch. Native source and runner match the earlier passing 407-case
+run, but that does not erase the failed gate. A separate first-ever launch of
+the exact archived build-45 debug APK completed in 1,963 ms with no ANR on a
+fresh, network-disabled API-35 ARM emulator. It used four guest CPUs and about
+4 GB actual guest RAM (the emulator increased the requested 2 GB). Different
+CPU architecture, emulator version, memory and workload limit the comparison;
+it is not a hosted instrumentation, signed upgrade or physical-device pass.
+The launch skipped 40 frames and captured only five startup frames, four
+janky; it is not a representative steady-state smoothness result.
+No speculative Android initialization or test-discovery workaround was added.
+
+Production remains at build 44/0085. The 15:01 UTC preflight found a real open
+shift and an unresolved separate build-41/one-pending installation last seen
+on 28 September. The owner's uncertainty is not a retirement confirmation;
+existing exact pending guards do not cover that installation. Preserve its
+work and the current business activity. Production cutover, operations-schedule
+installation, owner-receiver activation and tablet offer remain blocked until
+their actual gates are satisfied.
+A second read-only preflight at 15:56 UTC found the same shift and historical
+pending records. Current build 44 had synced at 15:49 UTC with zero pending.
+
+### Earlier local and isolated component evidence
+
 The following is local or isolated candidate evidence. It is useful source and
 runtime evidence, but it is not exact-commit branch CI, signed-artifact,
 production-deployment, or physical-tablet acceptance.

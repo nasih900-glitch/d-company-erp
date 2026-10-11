@@ -72,7 +72,16 @@ elif args[0] == "create":
         kind = "syft"
     else:
         kind = "grype"
+    service = next(
+        (
+            service
+            for service in ("backend", "frontend", "caddy", "postgres", "redis")
+            if f"/{service} image.tar" in " ".join(args)
+        ),
+        "probe",
+    )
     (state / f"container-{container_id}").write_text(kind)
+    (state / f"service-{container_id}").write_text(service)
     (state / f"name-{name}").write_text(container_id)
     (state / f"ownership-{container_id}").write_text(f"{label}|{name}")
     if os.environ.get("FAKE_SCANNER_LOSE_CREATE_RESPONSE") == kind:
@@ -84,6 +93,7 @@ elif args[0] == "start":
     if name_path.exists():
         container_id = name_path.read_text()
     kind = (state / f"container-{container_id}").read_text()
+    service = (state / f"service-{container_id}").read_text()
     if os.environ.get("FAKE_SCANNER_RUNNING") == kind:
         (state / f"running-{container_id}").write_text("true")
     if os.environ.get("FAKE_SCANNER_TIMEOUT") == kind:
@@ -95,16 +105,53 @@ elif args[0] == "start":
     if kind == "probe":
         print("scanner_cache_mount_verified=true")
     elif kind == "syft":
-        print(json.dumps({
-            "artifacts": [],
-            "descriptor": {"name": "syft", "version": "1.42.3"},
+        report = {
+            "artifacts": [{"name": "musl", "version": "1.2.5-r21", "type": "apk"}],
+            "artifactRelationships": [{"parent": "zlib-r1", "child": "musl", "type": "dependency-of"}],
+            "files": [{"id": "runtime", "location": {"path": "/usr/lib/libz.so.1.3.2"}}],
+            "distro": {"id": "alpine", "versionID": "3.23.5"},
+            "schema": {
+                "version": "16.1.3",
+                "url": "https://raw.githubusercontent.com/anchore/syft/main/schema/json/schema-16.1.3.json",
+            },
+            "descriptor": {
+                "name": "syft",
+                "version": "1.42.3",
+                "configuration": {"catalogers": {"used": ["apk-db-cataloger"]}},
+            },
             "source": {"type": "image", "metadata": {
                 "imageID": os.environ.get("FAKE_SYFT_IMAGE_ID", os.environ["FAKE_IMAGE_ID"]),
                 "architecture": "",
                 "os": "",
                 "manifestDigest": "sha256:" + "e" * 64,
             }},
-        }))
+        }
+        if service == "caddy":
+            report["artifacts"].insert(0, {
+                "id": "zlib-r1",
+                "name": "zlib",
+                "version": "1.3.2-r1",
+                "type": "apk",
+                "foundBy": "apk-db-cataloger",
+                "locations": [{
+                    "path": "/lib/apk/db/installed",
+                    "accessPath": "/lib/apk/db/installed",
+                    "layerID": "sha256:" + "b" * 64,
+                    "annotations": {"evidence": "primary"},
+                }],
+                "purl": "pkg:apk/alpine/zlib@1.3.2-r1?arch=x86_64&distro=alpine-3.23.5",
+                "metadataType": "apk-db-entry",
+                "metadata": {
+                    "package": "zlib",
+                    "originPackage": "zlib",
+                    "version": "1.3.2-r1",
+                    "architecture": "x86_64",
+                    "gitCommitOfApkPort": "0afa2da0e8c8051c6f8f64a7a388e5a259904245",
+                    "provides": ["so:libz.so.1=1.3.2"],
+                    "files": [{"path": "/usr/lib/libz.so.1.3.2"}],
+                },
+            })
+        print(json.dumps(report))
     else:
         valid = os.environ.get("FAKE_GRYPE_VALID", "true") == "true"
         image_id = os.environ.get("FAKE_GRYPE_IMAGE_ID", os.environ["FAKE_IMAGE_ID"])
@@ -128,12 +175,13 @@ elif args[0] == "start":
                 "vex-status": "fixed",
             }],
         }]
-        if os.environ.get("FAKE_GRYPE_IGNORED_COUNT") == "0":
+        if service == "caddy" or os.environ.get("FAKE_GRYPE_IGNORED_COUNT") == "0":
             ignored = []
         report = {
             "descriptor": {
                 "name": "grype",
                 "version": "0.118.0",
+                "configuration": {"fail-on-severity": "high"},
                 "db": {"status": status},
             },
             "source": {"type": "image", "target": {
@@ -141,8 +189,9 @@ elif args[0] == "start":
                 "tags": json.loads(os.environ["FAKE_IMAGE_REFS"]),
             }},
             "matches": [],
-            "ignoredMatches": ignored,
         }
+        if service != "caddy":
+            report["ignoredMatches"] = ignored
         print(json.dumps(report))
 elif args[0] == "inspect":
     template = args[args.index("--format") + 1]
@@ -191,6 +240,7 @@ elif args[0] in {"stop", "rm"}:
             (state / f"name-{name}").unlink(missing_ok=True)
             ownership.unlink()
         (state / f"container-{target}").unlink(missing_ok=True)
+        (state / f"service-{target}").unlink(missing_ok=True)
         (state / f"running-{target}").unlink(missing_ok=True)
 else:
     raise SystemExit(f"unexpected docker invocation: {args}")
@@ -436,9 +486,17 @@ def test_batch_scanner_executes_hardened_path_for_every_archive(tmp_path: Path) 
     assert all("none" in call[call.index("--network") + 1 :] for call in syft_creates)
     assert all("--network" not in call for call in grype_creates)
     assert all("GRYPE_DB_CACHE_DIR=/scanner-cache/db" in call for call in grype_creates)
-    assert all("--vex" in call for call in grype_creates)
+    caddy_grype = next(
+        call
+        for call in grype_creates
+        if any("/caddy image.tar" in argument for argument in call)
+    )
+    assert "--vex" not in caddy_grype
+    assert "/scan/zlib.openvex.json" not in caddy_grype
+    r0_grype_creates = [call for call in grype_creates if call is not caddy_grype]
+    assert all("--vex" in call for call in r0_grype_creates)
     assert all(
-        "/scan/zlib.openvex.json" in call for call in grype_creates
+        "/scan/zlib.openvex.json" in call for call in r0_grype_creates
     )
     assert all(archive.exists() for archive in archives)
     metadata_text = metadata.read_text(encoding="utf-8")
@@ -448,13 +506,18 @@ def test_batch_scanner_executes_hardened_path_for_every_archive(tmp_path: Path) 
         assert f"{service}_grype_db_schema=v6.1.9" in metadata_text
         assert f"{service}_grype_db_valid=true" in metadata_text
         assert f"{service}_source_image_id={IMAGE_ID}" in metadata_text
+    for service in ("backend", "frontend", "postgres", "redis"):
         assert f"{service}_zlib_vex_fixed_ignored_matches=1" in metadata_text
-    assert metadata_text.count("zlib_vex_sha256=") == 5
-    for service in ("backend", "frontend", "caddy", "postgres", "redis"):
+    assert "caddy_fixed_zlib_ignored_matches=0" in metadata_text
+    assert "caddy_fixed_zlib_version=1.3.2-r1" in metadata_text
+    assert "caddy_fixed_sbom_sha256=" in metadata_text
+    assert metadata_text.count("zlib_vex_sha256=") == 4
+    for service in ("backend", "frontend", "postgres", "redis"):
         vex = metadata.parent / f"{service}-zlib.openvex.json"
         assert vex.is_file()
         assert "__D_COMPANY_" not in vex.read_text(encoding="utf-8")
         assert f'"@id": "erp-{service}:test"' in vex.read_text(encoding="utf-8")
+    assert not (metadata.parent / "caddy-zlib.openvex.json").exists()
     assert "scanner_cache_sampled_max_bytes=" in metadata_text
     assert "scanner_disk_preflight_is_quota=false" in metadata_text
     assert (
@@ -553,9 +616,11 @@ def test_linux_ci_invokes_same_helper_for_all_five_candidate_archives() -> None:
     assert 'scanner_evidence="$evidence_dir/' not in action
     assert '600s docker pull "$syft_image"' in action
     assert '600s docker pull "$grype_image"' in action
+    assert '--caddy-fixed-sbom "$evidence_dir/caddy.syft.json"' in action
+    assert "caddy-zlib.openvex.json" not in action
     assert action.count(".syft.json") >= 10
     assert action.count("-grype.json") >= 11
-    assert action.count("vex: ${{ runner.temp }}/container-security/") == 5
+    assert action.count("vex: ${{ runner.temp }}/container-security/") == 4
     assert "/var/run/docker.sock" not in action
 
 

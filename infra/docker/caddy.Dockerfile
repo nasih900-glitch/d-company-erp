@@ -73,25 +73,28 @@ LABEL org.opencontainers.image.title="D Company ERP Caddy" \
       com.dcompany.zlib.followup.commit="7235b0a581227c56a79a43ff828f8ef6794194c8" \
       com.dcompany.zlib.followup.sha256="96040ee84d0d187905283912dbd3f7b66ac2033976a2ceefe9b8cca63143d9c2"
 
-COPY --from=zlib-builder /out/usr/lib/libz.so.1.3.2 /usr/lib/libz.so.1.3.2
-COPY --from=zlib-builder /out/etc/dcompany/zlib-patch-evidence.env /etc/dcompany/zlib-patch-evidence.env
-COPY --from=zlib-builder /out/zlib-runtime-probe /tmp/zlib-runtime-probe
-COPY infra/docker/zlib/verify-patched-zlib.sh /tmp/verify-patched-zlib.sh
-
 RUN set -eux; \
     apk add --no-cache --upgrade \
       'c-ares=1.34.8-r0' \
       'curl=8.22.0-r0' \
       'libcurl=8.22.0-r0' \
       'libcrypto3=3.5.9-r0' \
-      'libssl3=3.5.9-r0'; \
+      'libssl3=3.5.9-r0' \
+      'zlib=1.3.2-r1'; \
     installed_packages="$(apk info -v)"; \
     printf '%s\n' "$installed_packages" | grep -Fx 'c-ares-1.34.8-r0'; \
     printf '%s\n' "$installed_packages" | grep -Fx 'curl-8.22.0-r0'; \
     printf '%s\n' "$installed_packages" | grep -Fx 'libcurl-8.22.0-r0'; \
     printf '%s\n' "$installed_packages" | grep -Fx 'libcrypto3-3.5.9-r0'; \
     printf '%s\n' "$installed_packages" | grep -Fx 'libssl3-3.5.9-r0'; \
-    printf '%s\n' "$installed_packages" | grep -Fx 'zlib-1.3.2-r0'; \
+    printf '%s\n' "$installed_packages" | grep -Fx 'zlib-1.3.2-r1'
+
+COPY --from=zlib-builder /out/usr/lib/libz.so.1.3.2 /usr/lib/libz.so.1.3.2
+COPY --from=zlib-builder /out/etc/dcompany/zlib-patch-evidence.env /etc/dcompany/zlib-patch-evidence.env
+COPY --from=zlib-builder /out/zlib-runtime-probe /tmp/zlib-runtime-probe
+COPY infra/docker/zlib/verify-patched-zlib.sh /tmp/verify-patched-zlib.sh
+
+RUN set -eux; \
     sh /tmp/verify-patched-zlib.sh; \
     rm -f /tmp/zlib-runtime-probe /tmp/verify-patched-zlib.sh
 

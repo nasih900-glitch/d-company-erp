@@ -206,13 +206,27 @@ class DockerContextSafetyTest(unittest.TestCase):
         self.assertEqual(5, action.count("severity-cutoff: high"))
         self.assertEqual(5, action.count("fail-build: true"))
         self.assertEqual(5, action.count("only-fixed: false"))
-        self.assertEqual(5, action.count("vex: ${{ runner.temp }}/container-security/"))
+        self.assertEqual(4, action.count("vex: ${{ runner.temp }}/container-security/"))
         for component in ("backend", "frontend", "caddy", "postgres", "redis"):
             with self.subTest(component=component):
                 self.assertIn(f"{component}_image_id={{{{.Id}}}}", action)
                 self.assertIn(f"{component}.spdx.json", action)
                 self.assertIn(f"image: ${{{{ inputs.{component}-image }}}}", action)
                 self.assertIn(f"{component}-grype.json", action)
+        for component in ("backend", "frontend", "postgres", "redis"):
+            self.assertIn(
+                f"vex: ${{{{ runner.temp }}}}/container-security/"
+                f"{component}-zlib.openvex.json",
+                action,
+            )
+        self.assertNotIn("caddy-zlib.openvex.json", action)
+        self.assertIn(
+            'python3 "$verifier" \\\n'
+            '              --caddy-fixed-sbom "$evidence_dir/caddy.syft.json" \\\n'
+            '              "$image" "${config_ids[0]}" \\\n'
+            '              "caddy=$evidence_dir/caddy-grype.json" >> "$validation"',
+            action,
+        )
         self.assertNotIn("sbom: ${{ runner.temp }}/container-security", action)
         self.assertNotIn("continue-on-error", action)
 

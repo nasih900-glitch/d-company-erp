@@ -403,10 +403,15 @@ def test_composite_gates_every_scanner_on_verified_connection_and_hardened_scan(
         assert f"image: ${{{{ inputs.{input_name}-image }}}}" in sbom
         assert scan.count(hardened_guard) == 1
         assert f"image: ${{{{ inputs.{input_name}-image }}}}" in scan
-        assert (
+        vex_input = (
             f"vex: ${{{{ runner.temp }}}}/container-security/"
             f"{input_name}-zlib.openvex.json"
-        ) in scan
+        )
+        if input_name == "caddy":
+            assert vex_input not in scan
+            assert "vex:" not in scan
+        else:
+            assert vex_input in scan
 
     hardened_scan = action.split(
         "    - name: Exercise hardened archive scanner on all candidate images", 1
@@ -414,11 +419,22 @@ def test_composite_gates_every_scanner_on_verified_connection_and_hardened_scan(
     assert hardened_scan.count(connection_guard) == 1
     assert "id: hardened-scan" in hardened_scan
 
-    vex_validation = action.split(
-        "    - name: Validate exact zlib VEX dispositions", 1
+    zlib_validation = action.split(
+        "    - name: Validate exact zlib evidence", 1
     )[1].split("    - name: Retain container security evidence", 1)[0]
-    assert vex_validation.count(hardened_guard) == 1
-    assert "services=(backend frontend caddy postgres redis)" in vex_validation
+    assert zlib_validation.count(hardened_guard) == 1
+    assert "services=(backend frontend caddy postgres redis)" in zlib_validation
+    assert action.count("vex: ${{ runner.temp }}/container-security/") == 4
+    assert "caddy-zlib.openvex.json" not in action
+    assert '"$evidence_dir/$service-zlib.openvex.json"' in zlib_validation
+    assert '"$service=$evidence_dir/$service-grype.json"' in zlib_validation
+    assert (
+        'python3 "$verifier" \\\n'
+        '              --caddy-fixed-sbom "$evidence_dir/caddy.syft.json" \\\n'
+        '              "$image" "${config_ids[0]}" \\\n'
+        '              "caddy=$evidence_dir/caddy-grype.json" >> "$validation"'
+        in zlib_validation
+    )
     assert "sudo -E" not in action
     assert '"DOCKER_HOST=$EXPECTED_DOCKER_HOST"' in action
     assert "/var/run/docker.sock" not in action

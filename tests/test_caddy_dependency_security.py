@@ -133,22 +133,13 @@ def test_caddy_build_contract_adds_only_reviewed_module_and_zlib_changes() -> No
         '7235b0a581227c56a79a43ff828f8ef6794194c8" \\\n'
         '      com.dcompany.zlib.followup.sha256="'
         '96040ee84d0d187905283912dbd3f7b66ac2033976a2ceefe9b8cca63143d9c2"\n\n'
-        "COPY --from=zlib-builder /out/usr/lib/libz.so.1.3.2 "
-        "/usr/lib/libz.so.1.3.2\n"
-        "COPY --from=zlib-builder /out/etc/dcompany/zlib-patch-evidence.env "
-        "/etc/dcompany/zlib-patch-evidence.env\n"
-        "COPY --from=zlib-builder /out/zlib-runtime-probe /tmp/zlib-runtime-probe\n"
-        "COPY infra/docker/zlib/verify-patched-zlib.sh "
-        "/tmp/verify-patched-zlib.sh\n\n"
         "RUN set -eux; \\\n",
     )
     expected = _replace_once(
         expected,
         "    printf '%s\\n' \"$installed_packages\" | grep -Fx 'libssl3-3.5.8-r0'\n",
         "    printf '%s\\n' \"$installed_packages\" | grep -Fx 'libssl3-3.5.8-r0'; \\\n"
-        "    printf '%s\\n' \"$installed_packages\" | grep -Fx 'zlib-1.3.2-r0'; \\\n"
-        "    sh /tmp/verify-patched-zlib.sh; \\\n"
-        "    rm -f /tmp/zlib-runtime-probe /tmp/verify-patched-zlib.sh\n",
+        "    printf '%s\\n' \"$installed_packages\" | grep -Fx 'zlib-1.3.2-r1'\n",
     )
     expected = _replace_once(
         expected, "'libcrypto3=3.5.8-r0'", "'libcrypto3=3.5.9-r0'"
@@ -161,6 +152,29 @@ def test_caddy_build_contract_adds_only_reviewed_module_and_zlib_changes() -> No
     )
     expected = _replace_once(
         expected, "'libssl3-3.5.8-r0'", "'libssl3-3.5.9-r0'"
+    )
+    expected = _replace_once(
+        expected,
+        "      'libssl3=3.5.9-r0'; \\\n",
+        "      'libssl3=3.5.9-r0' \\\n"
+        "      'zlib=1.3.2-r1'; \\\n",
+    )
+    expected = _replace_once(
+        expected,
+        "    printf '%s\\n' \"$installed_packages\" | grep -Fx 'zlib-1.3.2-r1'\n\n"
+        "COPY --from=caddy-builder /out/caddy /usr/bin/caddy\n",
+        "    printf '%s\\n' \"$installed_packages\" | grep -Fx 'zlib-1.3.2-r1'\n\n"
+        "COPY --from=zlib-builder /out/usr/lib/libz.so.1.3.2 "
+        "/usr/lib/libz.so.1.3.2\n"
+        "COPY --from=zlib-builder /out/etc/dcompany/zlib-patch-evidence.env "
+        "/etc/dcompany/zlib-patch-evidence.env\n"
+        "COPY --from=zlib-builder /out/zlib-runtime-probe /tmp/zlib-runtime-probe\n"
+        "COPY infra/docker/zlib/verify-patched-zlib.sh "
+        "/tmp/verify-patched-zlib.sh\n\n"
+        "RUN set -eux; \\\n"
+        "    sh /tmp/verify-patched-zlib.sh; \\\n"
+        "    rm -f /tmp/zlib-runtime-probe /tmp/verify-patched-zlib.sh\n\n"
+        "COPY --from=caddy-builder /out/caddy /usr/bin/caddy\n",
     )
     assert CADDY_DOCKERFILE.read_text(encoding="utf-8") == expected
 

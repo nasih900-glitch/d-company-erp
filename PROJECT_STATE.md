@@ -9,9 +9,11 @@ commit `d915a66c9dee0d22c1a7018e2e79bc8ca9e0d7ab`, Alembic `0085`, Web/backend
 immutable build-44 history; they are not build-45 deployment evidence.
 
 The prepared local overlay has coordinated candidate identity `v3.1.37`,
-Android build `45`, Room `53`, and Alembic `0086`. It is still an uncommitted
-working tree, so it has no release commit or tag identity and has not been
-deployed, staged, signed, published, or offered to tablets. The build-45 freeze
+Android build `45`, Room `53`, and Alembic `0086`. The quality/security source
+was committed as `e492524474397b0e5244a0f78bba243f335d1bf2`; a subsequent
+Caddy package correction is being reviewed after that commit's hosted image
+build failed. There is no immutable release tag, signed package, deployment,
+staging, publication, or tablet offer for build 45. The build-45 freeze
 is based on immutable build-44 source `d915a66c9dee0d22c1a7018e2e79bc8ca9e0d7ab`;
 the eventual release SHA belongs in external release evidence after a clean
 candidate commit exists, not in this self-referential source overlay.
@@ -42,7 +44,7 @@ identity from that object and reject live build-45 identity. The verifier,
 installer, physical-audit runner/analyzer, historical hashes, accepted pairs,
 and recorded build-44 result identities are unchanged.
 
-The current uncommitted security overlay responds to the first hosted CI
+The candidate security overlay responds to the first hosted CI
 dependency gates without changing business runtime source or moving to
 Tailwind 4. It applies compatible official Capacitor, Axios, Vitest,
 source-map-js, PyJWT and urllib3 corrections and keeps both npm and pnpm frozen
@@ -55,9 +57,60 @@ installs verified the installed runtime and patch bytes. Web lint, typecheck,
 candidate baseline and the bounded private visual comparison found no layout
 change. Frontend audits now have zero high/critical findings, with the known
 moderate Tailwind 3 selector-parser chain still reported rather than waived;
-all three Python lock audits report no known vulnerabilities. Hosted exact-head
-CI, Node 22 dependency-graph/SBOM identity and an actual Docker image build
-remain release gates.
+all three Python lock audits report no known vulnerabilities. Separate Node 22
+frozen npm/pnpm installation and CSS comparisons passed. All blocking hosted
+jobs on the final reviewed source, actual image scans, signing, deployment and
+device acceptance remain release gates.
+
+Hosted run `38148940575` on the exact e492 source tree passed 1,647 repository
+contracts, 1,801 backend tests (87% coverage), 638 Web tests, 1,170 Android app
+JVM tests and 7 driver JVM tests, plus release assembly/bundle/lint. Both Docker
+stores failed at Caddy: installing its pinned curl/OpenSSL packages advanced
+zlib to official `1.3.2-r1`, while the source expected `r0` and copied its
+reviewed patched runtime before that package install could replace it. The
+correction pins Caddy's exact r1 package, installs/checks packages before the
+unchanged reviewed runtime overlay/probe, and requires image-bound Syft r1
+catalogue evidence with zero ignored Caddy findings. Caddy has no VEX document
+generated, mounted, supplied or retained. The other four services' exact r0
+VEX contracts remain unchanged; no global scanner waiver is added.
+New image builds and scanner evidence must validate that correction.
+The revised seven-file scanner correction passed an independent 76-test
+rerun and source review. The current installer contract now binds the action
+through the reviewed build-45 map and requires exactly the four r0 VEX inputs;
+the historical maps, template and generator remain unchanged.
+Two further current-action contract tests now require that same exact
+four-service VEX and Caddy SBOM boundary; their independent review and
+36-case focused suite passed. The first broader local run also exposed three
+test-fixture permission failures caused by the runner's private umask. Those
+unchanged tests passed under the ordinary test umask; no permission guard was
+relaxed. The corrected complete run and hosted gates remain required.
+
+The same hosted run's Android instrumentation failed before discovery with a
+startup ANR under severe one-vCPU emulator starvation; 12 system-app ANRs
+preceded the ERP launch. The native code and runner match the earlier passing
+407-case run. A separate first-install, network-isolated API-35 ARM emulator
+cold launch reached its first screen in 1,963 ms with no ANR. That local run
+used four guest CPUs and about 4 GB actual guest RAM, despite a 2 GB request;
+it is not the Intel hosted emulator, signed-package or physical-tablet proof.
+It skipped 40 startup frames and captured only five frames, four janky;
+this tiny cold-start sample is not steady-state smoothness acceptance.
+The failed gate remains recorded and a passing complete hosted inventory is
+still required. Inherited advisory results remain 1,590 Ruff findings, 488
+mypy errors across 54 files and 28 Android lint warnings; these advisory lanes
+are not claimed to be clean or individually triaged.
+
+Production preflight at 15:01 UTC on 11 October still found one real open shift,
+the current build-44 installation reporting zero pending, and two distinct
+historical one-pending installations. The separate build-41 installation last
+seen on 28 September is not covered by the earlier build-37 cleanup receipt or
+the existing narrow build-44 compatibility guard. The owner is unsure whether
+it can reconnect; this does not establish retirement or authorize deletion.
+The current candidate's installer therefore refuses production cutover. Do
+not reset counters, reuse another installation's identity, erase pending
+work, or close real business activity using earlier trial-data permission.
+A second read-only preflight at 15:56 UTC found the same open shift and two
+historical pending records. The current build-44 tablet had synced at 15:49
+UTC and still reported zero pending; the build-41 record remained unchanged.
 
 The bounded combined Google transport gate is complete for the unchanged
 mirror, delivery-model and receiver bytes. It used genuine HTTPS accepted and

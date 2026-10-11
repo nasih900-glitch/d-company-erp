@@ -8,12 +8,15 @@ import re
 import subprocess
 import sys
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 VEX = ROOT / "infra/security/vex/zlib-cve-2026-85091.openvex.json"
 VEX_GENERATOR = ROOT / "infra/scripts/generate-zlib-vex.py"
 VEX_VERIFIER = ROOT / "infra/scripts/verify-zlib-vex.py"
 IMAGE_PRODUCT = "erp-backend:test"
+CADDY_PRODUCT = "erp-caddy:test"
 IMAGE_ID = "sha256:" + "a" * 64
 DOCKERFILES = (
     "backend.Dockerfile",
@@ -193,7 +196,11 @@ def _zlib_match(*, cve: str = "CVE-2026-85091", status: str = "fixed") -> dict[s
     }
 
 
-def _render_vex(tmp_path: Path) -> Path:
+def _render_vex(
+    tmp_path: Path,
+    image_product: str = IMAGE_PRODUCT,
+    image_id: str = IMAGE_ID,
+) -> Path:
     tmp_path.mkdir(parents=True, exist_ok=True)
     path = tmp_path / "backend-zlib.openvex.json"
     if path.exists():
@@ -203,8 +210,8 @@ def _render_vex(tmp_path: Path) -> Path:
             sys.executable,
             str(VEX_GENERATOR),
             str(VEX),
-            IMAGE_PRODUCT,
-            IMAGE_ID,
+            image_product,
+            image_id,
             str(path),
         ],
         text=True,
@@ -215,8 +222,8 @@ def _render_vex(tmp_path: Path) -> Path:
     assert path.stat().st_mode & 0o777 == 0o444
     rendered = path.read_text(encoding="utf-8")
     assert "__D_COMPANY_" not in rendered
-    assert IMAGE_PRODUCT in rendered
-    assert IMAGE_ID in rendered
+    assert image_product in rendered
+    assert image_id in rendered
     return path
 
 
@@ -339,6 +346,343 @@ def test_vex_rejects_wrong_report_image_id_or_tag(tmp_path: Path) -> None:
     )
     assert wrong_tag.returncode != 0
     assert "image tag does not match VEX" in wrong_tag.stderr
+
+
+def _caddy_sbom(*, image_id: str = IMAGE_ID) -> dict[str, object]:
+    layer_id = "sha256:" + "b" * 64
+    return {
+        "artifacts": [
+            {
+                "id": "zlib-r1",
+                "name": "zlib",
+                "version": "1.3.2-r1",
+                "type": "apk",
+                "foundBy": "apk-db-cataloger",
+                "locations": [
+                    {
+                        "path": "/lib/apk/db/installed",
+                        "accessPath": "/lib/apk/db/installed",
+                        "layerID": layer_id,
+                        "annotations": {"evidence": "primary"},
+                    }
+                ],
+                "purl": (
+                    "pkg:apk/alpine/zlib@1.3.2-r1"
+                    "?arch=x86_64&distro=alpine-3.23.5"
+                ),
+                "metadataType": "apk-db-entry",
+                "metadata": {
+                    "package": "zlib",
+                    "originPackage": "zlib",
+                    "version": "1.3.2-r1",
+                    "architecture": "x86_64",
+                    "gitCommitOfApkPort": "0afa2da0e8c8051c6f8f64a7a388e5a259904245",
+                    "provides": ["so:libz.so.1=1.3.2"],
+                    "files": [{"path": "/usr/lib/libz.so.1.3.2"}],
+                },
+            },
+            {
+                "id": "musl",
+                "name": "musl",
+                "version": "1.2.5-r21",
+                "type": "apk",
+                "foundBy": "apk-db-cataloger",
+            },
+        ],
+        "artifactRelationships": [
+            {"parent": "zlib-r1", "child": "musl", "type": "dependency-of"}
+        ],
+        "files": [{"id": "runtime", "location": {"path": "/usr/lib/libz.so.1.3.2"}}],
+        "descriptor": {
+            "name": "syft",
+            "version": "1.42.3",
+            "configuration": {
+                "catalogers": {"used": ["apk-db-cataloger", "file-metadata-cataloger"]}
+            },
+        },
+        "schema": {
+            "version": "16.1.3",
+            "url": (
+                "https://raw.githubusercontent.com/anchore/syft/main/"
+                "schema/json/schema-16.1.3.json"
+            ),
+        },
+        "source": {"type": "image", "metadata": {"imageID": image_id}},
+        "distro": {"id": "alpine", "versionID": "3.23.5"},
+    }
+
+
+def _caddy_grype(
+    *,
+    image_id: str = IMAGE_ID,
+    matches: list[dict[str, object]] | None = None,
+    ignored: list[dict[str, object]] | None = None,
+) -> dict[str, object]:
+    return {
+        "descriptor": {
+            "name": "grype",
+            "version": "0.118.0",
+            "configuration": {"fail-on-severity": "high"},
+            "db": {
+                "status": {
+                    "built": "2026-10-11T00:00:00Z",
+                    "schemaVersion": "v6.1.9",
+                    "valid": True,
+                }
+            },
+        },
+        "source": {
+            "type": "image",
+            "target": {"imageID": image_id, "tags": [CADDY_PRODUCT]},
+        },
+        "matches": [] if matches is None else matches,
+        "ignoredMatches": [] if ignored is None else ignored,
+    }
+
+
+def _verify_caddy(
+    tmp_path: Path,
+    sbom: dict[str, object],
+    report: dict[str, object],
+) -> subprocess.CompletedProcess[str]:
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    sbom_path = tmp_path / "caddy.syft.json"
+    report_path = tmp_path / "caddy-grype.json"
+    sbom_path.write_text(json.dumps(sbom), encoding="utf-8")
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    return subprocess.run(
+        [
+            sys.executable,
+            str(VEX_VERIFIER),
+            "--caddy-fixed-sbom",
+            str(sbom_path),
+            CADDY_PRODUCT,
+            IMAGE_ID,
+            f"caddy={report_path}",
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def test_caddy_r1_requires_actual_syft_and_zero_suppressed_findings(
+    tmp_path: Path,
+) -> None:
+    sbom = _caddy_sbom()
+    report = _caddy_grype()
+    report.pop("ignoredMatches")
+    completed = _verify_caddy(tmp_path, sbom, report)
+
+    assert completed.returncode == 0, completed.stderr
+    sbom_path = tmp_path / "caddy.syft.json"
+    assert (
+        f"caddy_fixed_sbom_sha256={hashlib.sha256(sbom_path.read_bytes()).hexdigest()}"
+        in completed.stdout
+    )
+    assert "caddy_fixed_zlib_version=1.3.2-r1" in completed.stdout
+    assert "caddy_fixed_zlib_ignored_matches=0" in completed.stdout
+    assert not list(tmp_path.glob("*.openvex.json"))
+
+
+@pytest.mark.parametrize(
+    ("case", "error"),
+    [
+        ("empty", "empty or incomplete catalogue"),
+        ("duplicate", "exactly one zlib package"),
+        ("r0", "identity is inconsistent"),
+        ("version", "identity is inconsistent"),
+        ("type", "identity is inconsistent"),
+        ("purl", "PURL metadata is inconsistent"),
+        ("cataloguer", "identity is inconsistent"),
+        ("location", "location is inconsistent"),
+        ("foreign-id", "SBOM image ID mismatch"),
+        ("missing-id", "SBOM image ID mismatch"),
+        ("scanner", "unexpected Syft identity"),
+    ],
+)
+def test_caddy_r1_rejects_incomplete_or_inconsistent_syft_evidence(
+    tmp_path: Path, case: str, error: str
+) -> None:
+    sbom = _caddy_sbom()
+    zlib = sbom["artifacts"][0]  # type: ignore[index]
+    if case == "empty":
+        sbom["artifacts"] = []
+    elif case == "duplicate":
+        sbom["artifacts"].append(dict(zlib))  # type: ignore[union-attr]
+    elif case == "r0":
+        zlib["version"] = "1.3.2-r0"  # type: ignore[index]
+    elif case == "version":
+        zlib["version"] = "1.3.2-r2"  # type: ignore[index]
+    elif case == "type":
+        zlib["type"] = "deb"  # type: ignore[index]
+    elif case == "purl":
+        zlib["purl"] = "pkg:apk/alpine/zlib@1.3.2-r1?arch=aarch64&distro=alpine-3.23.5"  # type: ignore[index]
+    elif case == "cataloguer":
+        zlib["foundBy"] = "binary-classifier-cataloger"  # type: ignore[index]
+    elif case == "location":
+        zlib["locations"][0]["path"] = "/fake/installed"  # type: ignore[index]
+    elif case == "foreign-id":
+        sbom["source"] = {
+            "type": "image",
+            "metadata": {"imageID": "sha256:" + "c" * 64},
+        }
+    elif case == "missing-id":
+        sbom["source"] = {"type": "image", "metadata": {}}
+    elif case == "scanner":
+        sbom["descriptor"]["version"] = "1.42.2"  # type: ignore[index]
+
+    completed = _verify_caddy(tmp_path, sbom, _caddy_grype())
+    assert completed.returncode != 0
+    assert error in completed.stderr
+
+
+@pytest.mark.parametrize(
+    ("case", "error"),
+    [
+        ("scanner", "unexpected scanner identity"),
+        ("db", "vulnerability DB is not valid"),
+        ("db-built", "no vulnerability DB build identity"),
+        ("db-schema", "no vulnerability DB schema identity"),
+        ("foreign-id", "image ID does not match SBOM"),
+        ("missing-id", "image ID does not match SBOM"),
+        ("wrong-tag", "image tag does not match SBOM"),
+        ("ignored", "must not contain ignored findings"),
+        ("residual", "Residual CVE-2026-85091"),
+        ("high", "high or critical finding"),
+        ("arrays", "match arrays are invalid"),
+        ("fail-gate", "high severity fail gate"),
+    ],
+)
+def test_caddy_r1_rejects_untrusted_or_residual_grype_evidence(
+    tmp_path: Path, case: str, error: str
+) -> None:
+    report = _caddy_grype()
+    if case == "scanner":
+        report["descriptor"]["version"] = "0.117.0"  # type: ignore[index]
+    elif case == "db":
+        report["descriptor"]["db"]["status"]["valid"] = False  # type: ignore[index]
+    elif case == "db-built":
+        report["descriptor"]["db"]["status"]["built"] = ""  # type: ignore[index]
+    elif case == "db-schema":
+        report["descriptor"]["db"]["status"]["schemaVersion"] = ""  # type: ignore[index]
+    elif case == "foreign-id":
+        report["source"]["target"]["imageID"] = "sha256:" + "c" * 64  # type: ignore[index]
+    elif case == "missing-id":
+        report["source"]["target"].pop("imageID")  # type: ignore[index]
+    elif case == "wrong-tag":
+        report["source"]["target"]["tags"] = ["erp-caddy:other"]  # type: ignore[index]
+    elif case == "ignored":
+        report["ignoredMatches"] = [_zlib_match()]
+    elif case == "residual":
+        report["matches"] = [{"vulnerability": {"id": "CVE-2026-85091"}}]
+    elif case == "high":
+        report["matches"] = [
+            {"vulnerability": {"id": "CVE-2026-00001", "severity": "High"}}
+        ]
+    elif case == "arrays":
+        report["ignoredMatches"] = {}
+    elif case == "fail-gate":
+        report["descriptor"]["configuration"]["fail-on-severity"] = "critical"  # type: ignore[index]
+
+    completed = _verify_caddy(tmp_path, _caddy_sbom(), report)
+    assert completed.returncode != 0
+    assert error in completed.stderr
+
+
+def test_caddy_fixed_sbom_argument_is_narrowly_bound(tmp_path: Path) -> None:
+    sbom_path = tmp_path / "caddy.syft.json"
+    report_path = tmp_path / "grype.json"
+    sbom_path.write_text(json.dumps(_caddy_sbom()), encoding="utf-8")
+    report_path.write_text(json.dumps(_caddy_grype()), encoding="utf-8")
+    vex = _render_vex(tmp_path, CADDY_PRODUCT)
+    cases = (
+        (
+            [
+                sys.executable,
+                str(VEX_VERIFIER),
+                str(vex),
+                CADDY_PRODUCT,
+                IMAGE_ID,
+                f"caddy={report_path}",
+            ],
+            "Invalid Grype report binding",
+        ),
+        (
+            [
+                sys.executable,
+                str(VEX_VERIFIER),
+                "--caddy-fixed-sbom",
+                str(sbom_path),
+                CADDY_PRODUCT,
+                IMAGE_ID,
+                f"backend={report_path}",
+            ],
+            "requires exactly one caddy",
+        ),
+        (
+            [
+                sys.executable,
+                str(VEX_VERIFIER),
+                "--caddy-fixed-sbom",
+                str(sbom_path),
+                CADDY_PRODUCT,
+                IMAGE_ID,
+                f"caddy={report_path}",
+                f"caddy={report_path}",
+            ],
+            "Usage:",
+        ),
+        (
+            [
+                sys.executable,
+                str(VEX_VERIFIER),
+                str(vex),
+                CADDY_PRODUCT,
+                IMAGE_ID,
+                "--caddy-fixed-sbom",
+                str(sbom_path),
+            ],
+            "separate Caddy verifier mode",
+        ),
+    )
+    for command, error in cases:
+        completed = subprocess.run(
+            command,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert completed.returncode != 0
+        assert error in completed.stderr
+
+
+def test_scanner_evidence_rejects_duplicate_json_keys(tmp_path: Path) -> None:
+    sbom_path = tmp_path / "caddy.syft.json"
+    report_path = tmp_path / "grype.json"
+    sbom_path.write_text(json.dumps(_caddy_sbom()), encoding="utf-8")
+    report = json.dumps(_caddy_grype())
+    report_path.write_text(
+        report.replace('"matches": []', '"matches": [], "matches": []', 1),
+        encoding="utf-8",
+    )
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(VEX_VERIFIER),
+            "--caddy-fixed-sbom",
+            str(sbom_path),
+            CADDY_PRODUCT,
+            IMAGE_ID,
+            f"caddy={report_path}",
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode != 0
+    assert "duplicate object key: matches" in completed.stderr
 
 
 def test_unrendered_template_is_rejected(tmp_path: Path) -> None:

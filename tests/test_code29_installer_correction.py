@@ -1084,11 +1084,18 @@ def test_installer_verifier_and_live_workflows_are_exact() -> None:
     _assert_sha256(
         action_path,
         current_action.encode("utf-8"),
-        REVIEWED_CODE30_2_SHA256[action_path],
+        _current_reviewed_sha256(action_path, REVIEWED_CODE30_2_SHA256[action_path]),
     )
     assert "verify-zlib-vex.py" in current_action
-    assert current_action.count("-zlib.openvex.json") >= 15
-    assert current_action.count("vex: ${{ runner.temp }}/container-security/") == 5
+    vex_inputs = re.findall(
+        r"^        vex: \$\{\{ runner\.temp \}\}/container-security/"
+        r"([a-z]+)-zlib\.openvex\.json$",
+        current_action,
+        flags=re.MULTILINE,
+    )
+    assert sorted(vex_inputs) == ["backend", "frontend", "postgres", "redis"]
+    assert "caddy-zlib.openvex.json" not in current_action
+    assert '--caddy-fixed-sbom "$evidence_dir/caddy.syft.json"' in current_action
 
 
 def test_physical_lane_accepts_only_the_exact_390_step_code30_point2_plan() -> None:
