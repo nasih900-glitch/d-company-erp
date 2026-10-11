@@ -21,6 +21,21 @@ INSTALL_PERMISSION = "android.permission.REQUEST_INSTALL_PACKAGES"
 CADDYFILE = ROOT / "infra" / "caddy" / "Caddyfile"
 PROD_COMPOSE = ROOT / "docker-compose.prod.yml"
 PRODUCTION_INSTALLER = ROOT / "infra" / "scripts" / "install-on-vm.sh"
+EMULATOR_CPU_GUARD = (
+    'guest_cpu_online_raw="$(adb shell cat /sys/devices/system/cpu/online)" && '
+    'guest_cpu_online="$(printf \'%s\' "$guest_cpu_online_raw" | tr -d \'\\r\')" && '
+    'printf \'guest_cpu_online=%s\\n\' "$guest_cpu_online" && '
+    'test "$guest_cpu_online" = "0-1"'
+)
+EMULATOR_SUITE_COMMAND = (
+    "D_COMPANY_REQUIRE_NATIVE_AVD_SIZE=1 "
+    "bash scripts/run_android_instrumentation_ci.sh"
+)
+EMULATOR_CPU_GUARD_AND_SUITE = (
+    "          script: |\n"
+    f"            {EMULATOR_CPU_GUARD}\n"
+    f"            {EMULATOR_SUITE_COMMAND}\n"
+)
 GRADLE_WRAPPER = (
     ROOT / "android-native" / "gradle" / "wrapper" / "gradle-wrapper.properties"
 )
@@ -846,10 +861,7 @@ class AndroidReleasePipelineTest(unittest.TestCase):
                 "pre-emulator-launch-script: python3 scripts/configure_ci_android_avd.py test",
                 workflow,
             )
-            self.assertIn(
-                "script: D_COMPANY_REQUIRE_NATIVE_AVD_SIZE=1 bash scripts/run_android_instrumentation_ci.sh",
-                workflow,
-            )
+            self.assertEqual(workflow.count(EMULATOR_CPU_GUARD_AND_SUITE), 1)
         self.assertIn("Physical size:", instrumentation)
         self.assertIn("Physical density:", instrumentation)
 
@@ -876,9 +888,9 @@ class AndroidReleasePipelineTest(unittest.TestCase):
                 "hw.lcd.width=1280\nhw.lcd.height=800\nhw.lcd.density=160\n",
             )
 
-    def test_ci_and_release_android_emulators_use_same_host_build_and_renderer(self) -> None:
+    def test_ci_and_release_request_same_bounded_linux_emulator_quadrant(self) -> None:
         expected = (
-            "-no-window -gpu software -feature -Vulkan "
+            "-no-window -gpu swiftshader -feature -Vulkan "
             "-no-snapshot -noaudio -no-boot-anim"
         )
         for workflow_path in (CI_WORKFLOW, WORKFLOW):
@@ -889,28 +901,91 @@ class AndroidReleasePipelineTest(unittest.TestCase):
                     workflow,
                 )
                 self.assertIsNotNone(emulator_job)
-                self.assertIn("timeout-minutes: 90", emulator_job.group(0))
+                job = emulator_job.group(0)
+                self.assertIn("timeout-minutes: 90", job)
                 self.assertRegex(
-                    workflow,
-                    r"(?m)^    runs-on: macos-15-intel$",
+                    job,
+                    r"(?m)^    runs-on: ubuntu-24\.04$",
                 )
                 self.assertRegex(
-                    workflow,
+                    job,
                     r"(?m)^      - name: Enable KVM for Android emulator\n"
                     r"        if: runner\.os == 'Linux'$",
                 )
+                self.assertIn(
+                    "uses: reactivecircus/android-emulator-runner@"
+                    "a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0",
+                    job,
+                )
+                self.assertEqual(job.count("          api-level: 35\n"), 1)
+                self.assertEqual(job.count("          arch: x86_64\n"), 1)
+                self.assertEqual(job.count("          cores: 2\n"), 1)
+                self.assertEqual(job.count(EMULATOR_CPU_GUARD_AND_SUITE), 1)
                 emulator_builds = re.findall(
                     r"^\s*emulator-build:\s*(\d+)\s*$",
-                    workflow,
+                    job,
                     flags=re.MULTILINE,
                 )
                 self.assertEqual(emulator_builds, ["15081367"])
                 options = re.findall(
                     r"^\s*emulator-options:\s*(.+)$",
-                    workflow,
+                    job,
                     flags=re.MULTILINE,
                 )
                 self.assertEqual(options, [expected])
+
+    def test_emulator_cpu_guard_fails_closed_before_the_full_suite(self) -> None:
+        cases = (
+            ("exact CRLF", "printf '0-1\\r\\n'\n", True, "guest_cpu_online=0-1"),
+            ("one core", "printf '0\\r\\n'\n", False, "guest_cpu_online=0"),
+            ("transport failure", "exit 7\n", False, ""),
+            ("partial output failure", "printf '0-1\\r\\n'\nexit 7\n", False, ""),
+        )
+        for name, adb_body, expect_suite, expected_output in cases:
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as temporary_directory:
+                temporary = Path(temporary_directory)
+                suite_marker = temporary / "suite-invoked"
+                adb = temporary / "adb"
+                adb.write_text("#!/bin/sh\n" + adb_body, encoding="utf-8")
+                adb.chmod(0o755)
+                bash = temporary / "bash"
+                bash.write_text(
+                    "#!/bin/sh\n"
+                    "printf '%s|%s\\n' "
+                    '"$D_COMPANY_REQUIRE_NATIVE_AVD_SIZE" "$*" > "$SUITE_MARKER"\n',
+                    encoding="utf-8",
+                )
+                bash.chmod(0o755)
+                environment = {
+                    **os.environ,
+                    "PATH": f"{temporary_directory}:{os.environ['PATH']}",
+                    "SUITE_MARKER": str(suite_marker),
+                }
+
+                results = []
+                for command in (EMULATOR_CPU_GUARD, EMULATOR_SUITE_COMMAND):
+                    result = subprocess.run(
+                        ["sh", "-c", command],
+                        env=environment,
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    results.append(result)
+                    if result.returncode != 0:
+                        break
+
+                self.assertEqual(suite_marker.exists(), expect_suite)
+                self.assertEqual(results[0].stdout.strip(), expected_output)
+                if expect_suite:
+                    self.assertEqual([result.returncode for result in results], [0, 0])
+                    self.assertEqual(
+                        suite_marker.read_text(encoding="utf-8").strip(),
+                        "1|scripts/run_android_instrumentation_ci.sh",
+                    )
+                else:
+                    self.assertEqual(len(results), 1)
+                    self.assertNotEqual(results[0].returncode, 0)
 
     def test_ci_keeps_release_build_and_full_emulator_inventory_as_separate_gates(self) -> None:
         workflow = CI_WORKFLOW.read_text(encoding="utf-8")
@@ -929,12 +1004,9 @@ class AndroidReleasePipelineTest(unittest.TestCase):
         self.assertIn("Build and lint Android release", build)
         self.assertIn("Run Android JVM tests", build)
         self.assertNotIn("android-emulator-runner@", build)
-        self.assertIn("runs-on: macos-15-intel", instrumentation)
+        self.assertIn("runs-on: ubuntu-24.04", instrumentation)
         self.assertIn("android-emulator-runner@", instrumentation)
-        self.assertIn(
-            "script: D_COMPANY_REQUIRE_NATIVE_AVD_SIZE=1 bash scripts/run_android_instrumentation_ci.sh",
-            instrumentation,
-        )
+        self.assertEqual(instrumentation.count(EMULATOR_CPU_GUARD_AND_SUITE), 1)
 
     def test_hosted_emulator_compiler_has_the_release_build_memory_envelope(self) -> None:
         script = INSTRUMENTATION_SCRIPT.read_text(encoding="utf-8")

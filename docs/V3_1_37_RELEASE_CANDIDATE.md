@@ -54,13 +54,134 @@ fix is available.
 
 ## Evidence available before the release commit
 
+### Latest complete CI and bounded frontend security correction
+
+Run `38157536472` tested merge tree
+`0015167e37510afd59089bbe2e0775ccc919106b`, identical to source
+`5b8ef38597871599fde4a42a5b895cd9a05c4d11`. It passed 1,684 repository
+contracts without skips, 1,801 backend tests with 87% coverage under Python
+3.14.8, 638 Web tests, 1,170 Android app JVM tests and seven driver JVM tests.
+The separate Android-native lane also passed 145 Python contracts and its
+build/lint gates. Existing advisory lint/type findings remain recorded below.
+
+Both Docker stores passed their build, runtime/routing, identity, migration
+and restore/rollback steps. Their corrected backend hardened scans passed
+with zero high/critical findings and the existing exact scoped zlib ignore.
+Both frontend hardened scans failed on High `CVE-2026-103111`, identifying
+APK `pcre2` 10.48-r0 and the official fixed version 10.49-r0. The workflow
+stopped before the later hardened Caddy/PostgreSQL/Redis scans and all five
+secondary scans; those unrun gates are not accepted.
+
+The minimal follow-up pins `pcre2=10.49-r0` in the existing frontend runtime
+package transaction and verifies that exact installed-package entry. The
+official Alpine package retains the nginx-required PCRE2 SONAMEs and depends
+only on the existing musl ABI. Upstream describes 10.49 as a security-only
+release. Both base digests, nginx, OpenSSL pins, zlib copy/probe/VEX contracts,
+Web assets and scanner policy remain unchanged. The counted whole-file
+security test continues to reject unrelated Dockerfile changes. The focused
+58-case suite and 168 subtests passed; both actual corrected image stores
+and scans remain required before release acceptance.
+
+Sources: [Alpine security data](https://secdb.alpinelinux.org/v3.24/main.json)
+and [PCRE2 10.49 release](https://github.com/PCRE2Project/pcre2/releases/tag/pcre2-10.49).
+
+The full Android gate failed before discovery with an actual startup ANR;
+zero tests were discovered or executed. The standard Intel macOS host had
+four logical CPUs, and the fixed emulator explicitly forced one guest core.
+The ANR captured 98.68% CPU pressure, long main-thread runnable wait and
+preceding system-component failures; memory exhaustion is not supported.
+The Android source and instrumentation configuration were unchanged from
+the preceding 407-test passing run, which demonstrates an intermittent
+capacity-sensitive failure rather than a current pass. A bounded free
+configuration is now prepared: Ubuntu 24.04/KVM, the unchanged fixed
+emulator/API/native tablet viewport, two verified online guest CPUs, and
+direct SwiftShader with Vulkan disabled. The previous Linux failures used
+different selected renderer/Vulkan combinations. CI and release retain the
+complete cold 407-case inventory and all existing accounting gates. The
+self-contained CPU guard rejects transport failures even when adb emits
+partial correct-looking output. Runtime selected-mode evidence and an actual
+successful complete run are still required; requested flags alone are not
+acceptance. There is no paid-runner
+entitlement, runner registration or repository transfer; no test skip,
+warmed discovery, retry-only acceptance, timeout increase or speculative
+product-code workaround is introduced.
+
+The global production snapshot at 17:17 UTC found one real open shift and
+three active/paused gaming sessions, no open/held orders or ended-unbilled
+sessions, current build 44 at zero pending, and two distinct historical
+one-pending records. The owner will inspect installed tablet apps/profiles;
+that intention is not a retirement or queue-drainage confirmation. Preserve
+the unresolved build-41 work and current business activity. Production
+cutover, owner-workbook activation, signing and offer remain separate gates.
+
+### Additional saved-inventory security preflight
+
+The later image scans could not execute after the frontend refusal. Instead,
+an independent advisory preflight scanned all six retained Caddy/PostgreSQL/
+Redis SPDX inventories using one hash-verified Grype 0.118.0 database. No VEX,
+custom ignore or exclusion was supplied; actual ignored matches were zero.
+Both stores produced identical High/Critical package signatures.
+
+Caddy has ten standard-library matches in Go 1.26.8 and four x/net matches
+in 0.58.0, with official fixes in Go 1.26.9 and x/net 0.60.0. PostgreSQL's
+ten Go findings belong to the separately compiled `/usr/local/bin/gosu`, not
+its C database runtime. Redis has six OpenSSL matches across libcrypto3 and
+libssl3 3.3.7-r1, fixed in 3.3.7-r2. PostgreSQL and Redis additionally report
+their previously reviewed patched-zlib targets, retained unsuppressed in
+this advisory exercise.
+
+The Go inventories lack function symbols, so matching is at module level;
+this neither proves exploitability nor justifies dismissing a finding.
+Saved-SPDX scanning does not prove actual image identity, runtime remediation,
+native Syft evidence, future builds, signing or production acceptance. The
+bounded Redis correction installs only the two exact 3.3.7-r2 packages before
+the existing patched-zlib overlay and verifies their installed versions.
+Their official package metadata and ELF SONAMEs show a matching crypto/TLS
+pair with no libz payload or dependency. Its immutable-baseline whole-file
+guard and existing zlib/base/parity controls passed independent review.
+The combined source suite passed 59 cases and 168 subtests. Redis's base,
+server version, entrypoint, zlib proof and scanner policy remain unchanged.
+Actual installation, native SBOM, readiness and hardened scans in both stores
+remain unexecuted. No new suppression or broad version upgrade is introduced.
+
+The compiler correction pins the official Go 1.26.9 Alpine 3.24 builder index
+`3082400e369fa24d5fc60bca20edab3f6d604e0c5a690ec66b295eff4dd87ade` for
+both Caddy and gosu. Independent preflight verified the amd64 manifest,
+configuration and all five compressed-layer/diff-ID links. Caddy remains
+2.11.4 with its existing custom version, tags and build flags; gosu remains
+1.19 from the same immutable source archive. Runtime bases, patched zlib,
+scanner thresholds and VEX policy are unchanged.
+
+Caddy's minimum verified module closure is eight explicit raises (x/crypto,
+x/mod, x/net, x/sync, x/sys, x/term, x/text and x/tools) plus the transitive
+x/telemetry advance selected by x/tools. x/net becomes 0.60.0. The exact
+go.sum is additive: all 579 previous lines remain, with 16 additions and no
+removal. Clean-cache module download and read-only builds leave those bytes
+stable. Historical Code29 tests retain their original binary hashes; the
+current workflow and PostgreSQL compatibility assertions bind the new ones.
+
+Separate empty-cache builds reproduce Caddy SHA-256
+`1b95bdb9ca9ffaec90a9e3a9592e8cedc2212abd64c709219149b8b4285d07d7` and
+gosu SHA-256
+`ffd70d9dcf141b9f13ae293ec5a6c48cf8d04f56bddc80cf244c62398b24f2ea`.
+Those outputs are Darwin-host linux/amd64 cross-compiles. Content-address
+verification is not publisher-signature verification, and cross-compilation
+does not establish hosted Docker reproduction, final-image identity, native
+SBOM, completed-image scans, readiness or production acceptance. Both hosted
+image stores must reproduce the fail-closed binary assertions and pass the
+remaining gates. Independent source review, current-only freeze refresh and
+regression checks precede the next complete CI run.
+
 ### dd796 CI and Python runtime correction
 
 Run `38154270466` used a GitHub merge tree identical to candidate
 `dd796476bf6005c4d4ebf4412506b1455ba15375`. Its completed jobs passed all
 1,680 repository contracts without skips, 1,801 backend tests with 87%
 coverage, 638 Web tests, 1,170 Android app JVM tests and 7 driver JVM tests.
-Full Android instrumentation is not yet accepted in this observation.
+Its later completed Android lane passed all 407 discovered cases, including
+two deep-idle cases executed separately after their initial assumptions
+skipped them. That historical result is not acceptance of the failed newer
+run above.
 
 Both Docker stores failed the unchanged backend high/critical security gate.
 The retained exact-image Grype reports identify binary CPython 3.14.7 with

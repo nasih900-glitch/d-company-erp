@@ -16,14 +16,30 @@ CODE28_SIGNED_BASE = "ab10a3138f41c5acf709e6275dfac55c6652d0d8"
 CODE29_SIGNED_BASE = "0949620b4632ebd6accdfa62a203be8d85b31a24"
 BUILD42_RELEASE_BASE = "1c1c7582eb8d6d6c509ddddc159014af10ce5f89"
 BUILD43_RELEASE_BASE = "8418e349eac0707ef62629f6cd3b7dc434690436"
+BUILD45_RUNTIME_BASE = "5b8ef38597871599fde4a42a5b895cd9a05c4d11"
 OLD_BINARY_SHA256 = "73c0169f0b72b465e2ae20bdb67a3e017044b2ab3d267816398b9d6ece243fb0"
 PATCHED_BINARY_SHA256 = "951a0136950bb9edf60ff5cec6ca2df0a041b27ded9e610f0aab49b168739dac"
+CURRENT_BINARY_SHA256 = "1b95bdb9ca9ffaec90a9e3a9592e8cedc2212abd64c709219149b8b4285d07d7"
+OLD_GOSU_SHA256 = "cdcdfbe2a74dc15d62f6f73da877a372641b80104ff04ca5bee7bc36ee9936ab"
+CURRENT_GOSU_SHA256 = "ffd70d9dcf141b9f13ae293ec5a6c48cf8d04f56bddc80cf244c62398b24f2ea"
+OLD_GO_BUILDER = (
+    "golang:1.26.8-alpine3.24@sha256:"
+    "ce864e7223ac17b1775e6fd0b4c0db580c2eb50e7953a427916379e4b92a1628"
+)
+CURRENT_GO_BUILDER = (
+    "golang:1.26.9-alpine3.24@sha256:"
+    "3082400e369fa24d5fc60bca20edab3f6d604e0c5a690ec66b295eff4dd87ade"
+)
 GO_MOD = ROOT / "infra" / "docker" / "caddy-build" / "go.mod"
 GO_SUM = ROOT / "infra" / "docker" / "caddy-build" / "go.sum"
 CADDY_DOCKERFILE = ROOT / "infra" / "docker" / "caddy.Dockerfile"
 POSTGRES_DOCKERFILE = ROOT / "infra" / "docker" / "postgres.Dockerfile"
+POSTGRES_COMPATIBILITY = (
+    ROOT / "infra" / "scripts" / "verify-postgres16-image-compatibility.sh"
+)
 BACKEND_DOCKERFILE = ROOT / "infra" / "docker" / "backend.Dockerfile"
 FRONTEND_DOCKERFILE = ROOT / "infra" / "docker" / "frontend.Dockerfile"
+REDIS_DOCKERFILE = ROOT / "infra" / "docker" / "redis.Dockerfile"
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
 CURRENT_WORKFLOW_SHA256 = {
@@ -48,36 +64,102 @@ def _replace_once(source: str, old: str, new: str) -> str:
     return source.replace(old, new)
 
 
-def test_caddy_graph_changes_only_grpc_and_its_required_existing_xnet_module() -> None:
-    expected_go_mod = _replace_once(
+def test_caddy_graph_applies_only_the_reviewed_go_security_closure() -> None:
+    signed_go_mod = _replace_once(
         _file_at(CODE28_SCANNER_BASE, GO_MOD),
         "golang.org/x/net v0.57.0 // indirect",
         "golang.org/x/net v0.58.0 // indirect",
     )
-    expected_go_mod = _replace_once(
-        expected_go_mod,
+    signed_go_mod = _replace_once(
+        signed_go_mod,
         "google.golang.org/grpc v1.83.1 // indirect",
         "google.golang.org/grpc v1.83.2 // indirect",
     )
-    assert GO_MOD.read_text(encoding="utf-8") == expected_go_mod
-    assert GO_MOD.read_text(encoding="utf-8") == _file_at(CODE28_SIGNED_BASE, GO_MOD)
+    assert signed_go_mod == _file_at(CODE28_SIGNED_BASE, GO_MOD)
 
-    expected_go_sum = _replace_once(
+    expected_go_mod = _replace_once(signed_go_mod, "go 1.26.8", "go 1.26.9")
+    for module, old, new in (
+        ("golang.org/x/crypto", "v0.56.0", "v0.57.0"),
+        ("golang.org/x/mod", "v0.38.0", "v0.41.0"),
+        ("golang.org/x/net", "v0.58.0", "v0.60.0"),
+        ("golang.org/x/sync", "v0.22.0", "v0.23.0"),
+        ("golang.org/x/sys", "v0.47.0", "v0.48.0"),
+        ("golang.org/x/term", "v0.45.0", "v0.46.0"),
+        ("golang.org/x/text", "v0.41.0", "v0.42.0"),
+        ("golang.org/x/tools", "v0.48.0", "v0.49.0"),
+    ):
+        expected_go_mod = _replace_once(
+            expected_go_mod,
+            f"{module} {old} // indirect",
+            f"{module} {new} // indirect",
+        )
+    assert GO_MOD.read_text(encoding="utf-8") == expected_go_mod
+
+    signed_go_sum = _replace_once(
         _file_at(CODE28_SCANNER_BASE, GO_SUM),
         "golang.org/x/net v0.57.0/go.mod h1:KpXc8iv+r3XplLAG/f7Jsf9RPszJzdR0f58q9vGOuEU=",
         "golang.org/x/net v0.57.0/go.mod h1:KpXc8iv+r3XplLAG/f7Jsf9RPszJzdR0f58q9vGOuEU=\n"
         "golang.org/x/net v0.58.0 h1:ynWG7rqYi4ccpTEuPZ2QGWHktVEM9DMCj9yzDE0Q7To=\n"
         "golang.org/x/net v0.58.0/go.mod h1:YwCddHnFlT7eLQqVprV19OnhLGtc5xOKgE0RyqgfWAU=",
     )
-    expected_go_sum = _replace_once(
-        expected_go_sum,
+    signed_go_sum = _replace_once(
+        signed_go_sum,
         "google.golang.org/grpc v1.83.1/go.mod h1:kDyl6SKsiHKt0uylY5gtn5cEjkrIOhQOGDgIc4JGwzQ=",
         "google.golang.org/grpc v1.83.1/go.mod h1:kDyl6SKsiHKt0uylY5gtn5cEjkrIOhQOGDgIc4JGwzQ=\n"
         "google.golang.org/grpc v1.83.2 h1:EManeRomTObA0BU7I8vXgg/78uE5MJ9M8B39EX2WscU=\n"
         "google.golang.org/grpc v1.83.2/go.mod h1:YPI1hK3kDked6iHvgX3tR0y+nX/qpMFKhPgFsokw1S8=",
     )
+    assert signed_go_sum == _file_at(CODE28_SIGNED_BASE, GO_SUM)
+
+    expected_go_sum = signed_go_sum
+    additions = (
+        (
+            "golang.org/x/crypto v0.56.0/go.mod h1:OMW5y6CY9l38uPLmxU6l6pwcXp1obtLo3e6gT7gQR2I=",
+            "golang.org/x/crypto v0.57.0 h1:3ZVCjf8Ggz7zneR/EHRVx68Ctf+2pmIMP2UFhh9cC6M=\n"
+            "golang.org/x/crypto v0.57.0/go.mod h1:Fdz0i5U6CoizGwLda9DttjSk6qlZo25zYNtR+ycvuZA=",
+        ),
+        (
+            "golang.org/x/mod v0.38.0/go.mod h1:V6Xz0pq8TQ3dGqVQ1FVHuelZpAL0uNhSkk9ogYP3c40=",
+            "golang.org/x/mod v0.41.0 h1:qJmnOUb4YB+FsEuM3HcWucdZASCPGhsX6uljO6pog0c=\n"
+            "golang.org/x/mod v0.41.0/go.mod h1:Ek9pY8RKWXwsWvd3rQiHYtMqkjSUV+s1Rj7j4H5Ur6o=",
+        ),
+        (
+            "golang.org/x/net v0.58.0/go.mod h1:YwCddHnFlT7eLQqVprV19OnhLGtc5xOKgE0RyqgfWAU=",
+            "golang.org/x/net v0.60.0 h1:79p50tfZlm0J9YfoDsSi639qSXNGVwEzOPLCxM2FsYU=\n"
+            "golang.org/x/net v0.60.0/go.mod h1:2DA/G1UfVbCpQPeWTmMPGY7Cs2PkBkwu743bVX5PIVg=",
+        ),
+        (
+            "golang.org/x/sync v0.22.0/go.mod h1:9xrNwdLfx4jkKbNva9FpL6vEN7evnE43NNNJQ2LF3+0=",
+            "golang.org/x/sync v0.23.0 h1:KameEIfc1IkluZyXWLn39Wd4tURc6GbCiISGiZm2bQk=\n"
+            "golang.org/x/sync v0.23.0/go.mod h1:sUUOizhqBxiL6pEWpqNLUiaJn1ShEbZ6BBqskPbjZm0=",
+        ),
+        (
+            "golang.org/x/sys v0.47.0/go.mod h1:4GL1E5IUh+htKOUEOaiffhrAeqysfVGipDYzABqnCmw=",
+            "golang.org/x/sys v0.48.0 h1:bbX/i/6MgT9BVLM9RT1thmxL04yeTAhbEz4SyadbXoo=\n"
+            "golang.org/x/sys v0.48.0/go.mod h1:hNLxWAXmnKAxqDtdwIYC4bM9oQPEecfsnNMuSxOs3og=",
+        ),
+        (
+            "golang.org/x/term v0.45.0/go.mod h1:9aqxs0blBcrm/n0L9QW0aRVD+ktan8ssZromtqJC43w=",
+            "golang.org/x/term v0.46.0 h1:3+OXuTbaKDgwk8jTi3aSLHRlmWqHEUDUtxnbFigO4YE=\n"
+            "golang.org/x/term v0.46.0/go.mod h1:+K02xbkittuwc0Am4abfA3Fc+XRGXkvBXNO88NCXPoc=",
+        ),
+        (
+            "golang.org/x/text v0.41.0/go.mod h1:jvf1O8ajNzZqhSrQBPbutR/EB83Cc0CFrezNQIwbb5M=",
+            "golang.org/x/text v0.42.0 h1:JbOZXgfeCPU9gacVtYliJqOhD+zhrEqK4LfdpmlUZqI=\n"
+            "golang.org/x/text v0.42.0/go.mod h1:ojzP1Z+2QtioaF8DTtO8K5q7JWVVYwZKenzujK0Zd0E=",
+        ),
+        (
+            "golang.org/x/tools v0.48.0/go.mod h1:08xX0orndb/F7jJxGDicx061tyd5pcMto75YMAXr6lk=",
+            "golang.org/x/tools v0.49.0 h1:3NI7VXzL9+1WZD52Dx2ttoPwD5DWrFGpl9mFZDlmisI=\n"
+            "golang.org/x/tools v0.49.0/go.mod h1:SJNXV9DBKT0UbdttsQjbfJlAE/q+y36++zo3uL3N0Oo=",
+        ),
+    )
+    for anchor, added in additions:
+        expected_go_sum = _replace_once(
+            expected_go_sum, anchor, f"{anchor}\n{added}"
+        )
     assert GO_SUM.read_text(encoding="utf-8") == expected_go_sum
-    assert GO_SUM.read_text(encoding="utf-8") == _file_at(CODE28_SIGNED_BASE, GO_SUM)
+    assert len(expected_go_sum.splitlines()) == len(signed_go_sum.splitlines()) + 16
 
 
 def test_caddy_build_contract_adds_only_reviewed_module_and_zlib_changes() -> None:
@@ -176,10 +258,50 @@ def test_caddy_build_contract_adds_only_reviewed_module_and_zlib_changes() -> No
         "    rm -f /tmp/zlib-runtime-probe /tmp/verify-patched-zlib.sh\n\n"
         "COPY --from=caddy-builder /out/caddy /usr/bin/caddy\n",
     )
+    expected = _replace_once(expected, OLD_GO_BUILDER, CURRENT_GO_BUILDER)
+    expected = _replace_once(
+        expected,
+        '    test "$(go env GOVERSION)" = "go1.26.8"; \\\n',
+        '    test "$(go env GOVERSION)" = "go1.26.9"; \\\n',
+    )
+    expected = _replace_once(
+        expected,
+        "    test \"$(go list -mod=readonly -m -f '{{.Version}}' "
+        "golang.org/x/crypto)\" = \"v0.56.0\"; \\\n"
+        "    test \"$(go list -mod=readonly -m -f '{{.Version}}' "
+        "golang.org/x/net)\" = \"v0.58.0\"; \\\n"
+        "    test \"$(go list -mod=readonly -m -f '{{.Version}}' "
+        "golang.org/x/text)\" = \"v0.41.0\"; \\\n",
+        "    test \"$(go list -mod=readonly -m -f '{{.Version}}' "
+        "golang.org/x/crypto)\" = \"v0.57.0\"; \\\n"
+        "    test \"$(go list -mod=readonly -m -f '{{.Version}}' "
+        "golang.org/x/mod)\" = \"v0.41.0\"; \\\n"
+        "    test \"$(go list -mod=readonly -m -f '{{.Version}}' "
+        "golang.org/x/net)\" = \"v0.60.0\"; \\\n"
+        "    test \"$(go list -mod=readonly -m -f '{{.Version}}' "
+        "golang.org/x/sync)\" = \"v0.23.0\"; \\\n"
+        "    test \"$(go list -mod=readonly -m -f '{{.Version}}' "
+        "golang.org/x/sys)\" = \"v0.48.0\"; \\\n"
+        "    test \"$(go list -mod=readonly -m -f '{{.Version}}' "
+        "golang.org/x/telemetry)\" = "
+        "\"v0.0.0-20260811182544-a038080d80e5\"; \\\n"
+        "    test \"$(go list -mod=readonly -m -f '{{.Version}}' "
+        "golang.org/x/term)\" = \"v0.46.0\"; \\\n"
+        "    test \"$(go list -mod=readonly -m -f '{{.Version}}' "
+        "golang.org/x/text)\" = \"v0.42.0\"; \\\n"
+        "    test \"$(go list -mod=readonly -m -f '{{.Version}}' "
+        "golang.org/x/tools)\" = \"v0.49.0\"; \\\n",
+    )
+    expected = _replace_once(expected, PATCHED_BINARY_SHA256, CURRENT_BINARY_SHA256)
+    expected = _replace_once(
+        expected,
+        "    go version -m /out/caddy | grep -F 'go1.26.8'; \\\n",
+        "    go version -m /out/caddy | grep -F 'go1.26.9'; \\\n",
+    )
     assert CADDY_DOCKERFILE.read_text(encoding="utf-8") == expected
 
 
-def test_postgres_runtime_changes_only_reviewed_openssl_patch_release() -> None:
+def test_postgres_runtime_changes_only_reviewed_security_corrections() -> None:
     expected = _file_at(BUILD42_RELEASE_BASE, POSTGRES_DOCKERFILE)
     for old, new in (
         ("'libcrypto3=3.5.8-r0'", "'libcrypto3=3.5.9-r0'"),
@@ -188,7 +310,35 @@ def test_postgres_runtime_changes_only_reviewed_openssl_patch_release() -> None:
         ("'libssl3-3.5.8-r0'", "'libssl3-3.5.9-r0'"),
     ):
         expected = _replace_once(expected, old, new)
+    expected = _replace_once(expected, OLD_GO_BUILDER, CURRENT_GO_BUILDER)
+    expected = _replace_once(
+        expected,
+        '    test "$(go env GOVERSION)" = "go1.26.8"; \\\n',
+        '    test "$(go env GOVERSION)" = "go1.26.9"; \\\n',
+    )
+    expected = _replace_once(expected, OLD_GOSU_SHA256, CURRENT_GOSU_SHA256)
+    expected = _replace_once(
+        expected,
+        "    go version -m /out/gosu | grep -F 'go1.26.8'",
+        "    go version -m /out/gosu | grep -F 'go1.26.9'",
+    )
+    expected = _replace_once(
+        expected,
+        "    gosu --version | grep -F '1.19 (go1.26.8 on linux/'; \\\n",
+        "    gosu --version | grep -F '1.19 (go1.26.9 on linux/'; \\\n",
+    )
     assert POSTGRES_DOCKERFILE.read_text(encoding="utf-8") == expected
+
+
+def test_postgres_compatibility_gate_binds_the_current_gosu_binary() -> None:
+    expected = _file_at(BUILD45_RUNTIME_BASE, POSTGRES_COMPATIBILITY)
+    expected = _replace_once(
+        expected,
+        "1.19 (go1.26.8 on linux/",
+        "1.19 (go1.26.9 on linux/",
+    )
+    expected = _replace_once(expected, OLD_GOSU_SHA256, CURRENT_GOSU_SHA256)
+    assert POSTGRES_COMPATIBILITY.read_text(encoding="utf-8") == expected
 
 
 def test_backend_image_changes_only_reviewed_openssl_runtime_controls() -> None:
@@ -296,10 +446,12 @@ def test_frontend_image_changes_only_reviewed_security_controls() -> None:
         "RUN set -eux; \\\n"
         "    apk add --no-cache --upgrade \\\n"
         "      'libcrypto3=3.5.9-r0' \\\n"
-        "      'libssl3=3.5.9-r0'; \\\n"
+        "      'libssl3=3.5.9-r0' \\\n"
+        "      'pcre2=10.49-r0'; \\\n"
         "    installed_packages=\"$(apk info -v)\"; \\\n"
         "    printf '%s\\n' \"$installed_packages\" | grep -Fx 'libcrypto3-3.5.9-r0'; \\\n"
         "    printf '%s\\n' \"$installed_packages\" | grep -Fx 'libssl3-3.5.9-r0'; \\\n"
+        "    printf '%s\\n' \"$installed_packages\" | grep -Fx 'pcre2-10.49-r0'; \\\n"
         "    apk info -e zlib; \\\n",
     )
     expected = _replace_once(
@@ -313,6 +465,32 @@ def test_frontend_image_changes_only_reviewed_security_controls() -> None:
         "RUN npm ci --no-audit --no-fund\n",
     )
     assert FRONTEND_DOCKERFILE.read_text(encoding="utf-8") == expected
+
+
+def test_redis_changes_only_reviewed_openssl_packages_before_zlib_overlay() -> None:
+    expected = _file_at(BUILD45_RUNTIME_BASE, REDIS_DOCKERFILE)
+    expected = _replace_once(
+        expected,
+        "# Redis 7.4.11 on current Alpine 3.21 carries OpenSSL 3.3.7-r1. Build the\n"
+        "# independently verified zlib correction in a discarded stage, then overlay\n"
+        "# only the patched shared object and its non-secret provenance in the runtime.\n",
+        "# Preserve Redis 7.4.11 and upgrade only its OpenSSL security packages.\n"
+        "# Install packages before overlaying the independently verified zlib runtime\n"
+        "# so package transactions cannot replace the reviewed shared object.\n",
+    )
+    expected = _replace_once(
+        expected,
+        "COPY --from=zlib-builder /out/usr/lib/libz.so.1.3.2 /usr/lib/libz.so.1.3.2\n",
+        "RUN apk add --no-cache --upgrade \\\n"
+        "      'libcrypto3=3.3.7-r2' \\\n"
+        "      'libssl3=3.3.7-r2'\n\n"
+        "COPY --from=zlib-builder /out/usr/lib/libz.so.1.3.2 /usr/lib/libz.so.1.3.2\n",
+    )
+    for package in ("libcrypto3", "libssl3"):
+        expected = _replace_once(
+            expected, f"'{package}-3.3.7-r1'", f"'{package}-3.3.7-r2'"
+        )
+    assert REDIS_DOCKERFILE.read_text(encoding="utf-8") == expected
 
 
 def test_caddy_binary_hash_is_coordinated_across_ci_and_release() -> None:
@@ -342,7 +520,11 @@ def test_caddy_binary_hash_is_coordinated_across_ci_and_release() -> None:
         assert hashlib.sha256(current_bytes).hexdigest() == CURRENT_WORKFLOW_SHA256[workflow]
         assert current.count(PATCHED_BINARY_SHA256) == 1
 
-    assert "go 1.26.8" in GO_MOD.read_text(encoding="utf-8")
+        live = workflow.read_text(encoding="utf-8")
+        assert live.count(CURRENT_BINARY_SHA256) == 1
+        assert PATCHED_BINARY_SHA256 not in live
+
+    assert "go 1.26.9" in GO_MOD.read_text(encoding="utf-8")
     assert "github.com/caddyserver/caddy/v2 v2.11.4" in GO_MOD.read_text(
         encoding="utf-8"
     )

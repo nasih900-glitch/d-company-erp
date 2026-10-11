@@ -39,6 +39,7 @@ from scripts.verify_code26_regression_freeze import (
 ROOT = Path(__file__).resolve().parents[1]
 ORIGINAL_CODE29 = "0949620b4632ebd6accdfa62a203be8d85b31a24"
 CADDY_SHA256 = "951a0136950bb9edf60ff5cec6ca2df0a041b27ded9e610f0aab49b168739dac"
+CURRENT_CADDY_SHA256 = "1b95bdb9ca9ffaec90a9e3a9592e8cedc2212abd64c709219149b8b4285d07d7"
 LOCK_VERIFIER_SHA256 = "338cea91b56c2d85be109d259af1d77aa6d4ceaab4b13b379876c02e4485c029"
 HISTORICAL_CODE29_GUARD_SHA256 = (
     "2d761a871369d891849e0170c85533a0269d209f7949b376300eb0994bd5fc15"
@@ -1076,7 +1077,8 @@ def test_installer_verifier_and_live_workflows_are_exact() -> None:
             _current_reviewed_sha256(path, REVIEWED_CODE30_2_SHA256[path]),
         )
         assert current.count(_workflow_step()) == 1
-        assert current.count(CADDY_SHA256) == 1
+        assert current.count(CURRENT_CADDY_SHA256) == 1
+        assert CADDY_SHA256 not in current
         assert "continue-on-error" not in _workflow_step()
 
     action_path = ".github/actions/scan-production-images/action.yml"

@@ -77,9 +77,9 @@ docker image inspect "$HARDENED_IMAGE" >/dev/null
 test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "$HARDENED_IMAGE")" = "$EXPECTED_VERSION"
 test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$HARDENED_IMAGE")" = "$EXPECTED_REVISION"
 test "$(docker run --rm "$HARDENED_IMAGE" postgres --version)" = 'postgres (PostgreSQL) 16.15'
-docker run --rm "$HARDENED_IMAGE" gosu --version | grep -F '1.19 (go1.26.8 on linux/'
+docker run --rm "$HARDENED_IMAGE" gosu --version | grep -F '1.19 (go1.26.9 on linux/'
 docker run --rm --entrypoint sh "$HARDENED_IMAGE" -ceu \
-  'test "$(sha256sum /usr/local/bin/gosu | cut -d" " -f1)" = cdcdfbe2a74dc15d62f6f73da877a372641b80104ff04ca5bee7bc36ee9936ab; gosu nobody true; su-exec nobody true'
+  'test "$(sha256sum /usr/local/bin/gosu | cut -d" " -f1)" = ffd70d9dcf141b9f13ae293ec5a6c48cf8d04f56bddc80cf244c62398b24f2ea; gosu nobody true; su-exec nobody true'
 
 docker pull "$ORIGINAL_IMAGE" >/dev/null
 docker volume create "$compat_volume" >/dev/null

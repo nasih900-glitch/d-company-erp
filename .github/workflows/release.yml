@@ -278,7 +278,7 @@ jobs:
         run: >-
           docker run --rm --entrypoint sh erp-caddy:release-gate -ceu
           'test "$(sha256sum /usr/bin/caddy | cut -d" " -f1)" =
-          951a0136950bb9edf60ff5cec6ca2df0a041b27ded9e610f0aab49b168739dac;
+          1b95bdb9ca9ffaec90a9e3a9592e8cedc2212abd64c709219149b8b4285d07d7;
           caddy version | grep -F v2.11.4-dcompany.1;
           getcap /usr/bin/caddy | grep -F cap_net_bind_service'
       - name: Prove PostgreSQL 16 volume and rollback compatibility
@@ -327,9 +327,9 @@ jobs:
   # the unsigned build or the isolated job that receives the release keystore.
   android-instrumentation:
     needs: release-authority
-    # Keep the tagged-release emulator on the same host as CI after Linux
-    # QEMU exited during the first Gaming UI case on two emulator builds.
-    runs-on: macos-15-intel
+    # Match CI's bounded Ubuntu/KVM diagnostic. This is not reliability proof;
+    # retained runtime evidence must confirm the selected renderer and suite.
+    runs-on: ubuntu-24.04
     # Leave 20 minutes for artifact cleanup after the blocking suite.
     timeout-minutes: 90
     steps:
@@ -364,16 +364,22 @@ jobs:
         with:
           api-level: 35
           arch: x86_64
+          cores: 2
           # Match CI and the production tablet class; the shared runner script
           # then verifies the exact 1280x800dp logical viewport.
           profile: pixel_c
           disable-animations: true
           # Keep the same emulator build and host platform as CI.
           emulator-build: 15081367
-          # Match CI's software renderer for the host-platform comparison.
-          emulator-options: -no-window -gpu software -feature -Vulkan -no-snapshot -noaudio -no-boot-anim
+          # Match CI's direct swiftshader request with Vulkan disabled. The
+          # retained runtime diagnostics must prove the actually selected mode.
+          emulator-options: -no-window -gpu swiftshader -feature -Vulkan -no-snapshot -noaudio -no-boot-anim
           pre-emulator-launch-script: python3 scripts/configure_ci_android_avd.py test
-          script: D_COMPANY_REQUIRE_NATIVE_AVD_SIZE=1 bash scripts/run_android_instrumentation_ci.sh
+          # The pinned action runs each nonempty line in a fresh shell. Keep
+          # capture, normalization, logging, and assertion in one command.
+          script: |
+            guest_cpu_online_raw="$(adb shell cat /sys/devices/system/cpu/online)" && guest_cpu_online="$(printf '%s' "$guest_cpu_online_raw" | tr -d '\r')" && printf 'guest_cpu_online=%s\n' "$guest_cpu_online" && test "$guest_cpu_online" = "0-1"
+            D_COMPANY_REQUIRE_NATIVE_AVD_SIZE=1 bash scripts/run_android_instrumentation_ci.sh
       - name: Upload Android instrumentation reports
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
