@@ -54,6 +54,35 @@ fix is available.
 
 ## Evidence available before the release commit
 
+### dd796 CI and Python runtime correction
+
+Run `38154270466` used a GitHub merge tree identical to candidate
+`dd796476bf6005c4d4ebf4412506b1455ba15375`. Its completed jobs passed all
+1,680 repository contracts without skips, 1,801 backend tests with 87%
+coverage, 638 Web tests, 1,170 Android app JVM tests and 7 driver JVM tests.
+Full Android instrumentation is not yet accepted in this observation.
+
+Both Docker stores failed the unchanged backend high/critical security gate.
+The retained exact-image Grype reports identify binary CPython 3.14.7 with
+Critical `CVE-2026-19445` and High `CVE-2026-19553`. The official Python
+3.14.8 release lists both corrections. The bounded follow-up changes all three
+backend stages to the official immutable 3.14.8 Alpine 3.24 image, aligns the
+Python runtime label/assertion and backend CI/release interpreter, and updates
+only the corresponding current-byte regression assertions. Existing Python
+dependency locks and historical release maps remain unchanged.
+
+The official registry's index is
+`sha256:f6a589d43c42b9e7f7dc67a12d37132491f362859a5d750607710cc56da3bc72`.
+Its hash-verified amd64 layers retain zlib `1.3.2-r0`, OpenSSL `3.5.9-r0`
+and libuuid `2.42.3-r1`; the backend's reviewed patched zlib runtime and
+image-scoped evidence contract remain unchanged. No scanner waiver, severity
+threshold change or test skip is added. Registry/source inspection is not an
+executed image scan: both actual image stores, migration, rollback and final
+source CI must pass before signing or deployment.
+
+Sources: [official Python release](https://www.python.org/downloads/release/python-3148/)
+and [Docker official Python image](https://hub.docker.com/_/python).
+
 ### Completed e492 CI and subsequent correction
 
 Run `38148940575` used a GitHub merge tree identical to committed candidate

@@ -10,9 +10,12 @@ immutable build-44 history; they are not build-45 deployment evidence.
 
 The prepared local overlay has coordinated candidate identity `v3.1.37`,
 Android build `45`, Room `53`, and Alembic `0086`. The quality/security source
-was committed as `e492524474397b0e5244a0f78bba243f335d1bf2`; a subsequent
-Caddy package correction is being reviewed after that commit's hosted image
-build failed. There is no immutable release tag, signed package, deployment,
+was committed as `e492524474397b0e5244a0f78bba243f335d1bf2`; the subsequent
+reviewed Caddy package correction is committed as
+`dd796476bf6005c4d4ebf4412506b1455ba15375`. That commit's hosted image scan
+found two blocking CPython 3.14.7 vulnerabilities; a minimal official 3.14.8
+runtime correction is now being reviewed. There is no immutable release tag,
+signed package, deployment,
 staging, publication, or tablet offer for build 45. The build-45 freeze
 is based on immutable build-44 source `d915a66c9dee0d22c1a7018e2e79bc8ca9e0d7ab`;
 the eventual release SHA belongs in external release evidence after a clean
@@ -61,6 +64,18 @@ all three Python lock audits report no known vulnerabilities. Separate Node 22
 frozen npm/pnpm installation and CSS comparisons passed. All blocking hosted
 jobs on the final reviewed source, actual image scans, signing, deployment and
 device acceptance remain release gates.
+
+Hosted run `38154270466` used the exact dd796 candidate tree. Completed jobs
+passed 1,680 repository contracts without skips, 1,801 backend tests with 87%
+coverage, 638 Web tests, 1,170 Android app JVM tests and 7 driver JVM tests.
+Both Docker stores failed the backend security gate on CPython 3.14.7:
+Critical `CVE-2026-19445` and High `CVE-2026-19553`. The official 3.14.8
+release fixes both; the bounded correction aligns the immutable backend image,
+runtime assertions and CI/release Python interpreter. Its verified amd64 base
+retains the exact existing zlib r0, OpenSSL and libuuid package pins. Existing
+locks, patched-zlib proof, scanner thresholds and historical maps remain
+unchanged. Actual corrected image scans and full Android instrumentation are
+still required; there is no signed or offered build 45.
 
 Hosted run `38148940575` on the exact e492 source tree passed 1,647 repository
 contracts, 1,801 backend tests (87% coverage), 638 Web tests, 1,170 Android app

@@ -1,14 +1,14 @@
 # syntax=docker/dockerfile:1.7.1@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
 
 # Build the independently verified zlib correction in a discarded stage.
-FROM python:3.14.7-alpine3.24@sha256:016508ba505da24f7139765bc4bb669df4e88eb2f12eeadd571bf2f88d7533df AS zlib-builder
+FROM python:3.14.8-alpine3.24@sha256:f6a589d43c42b9e7f7dc67a12d37132491f362859a5d750607710cc56da3bc72 AS zlib-builder
 WORKDIR /tmp/dcompany-zlib
 RUN apk add --no-cache --virtual .zlib-build-deps build-base patch
 COPY infra/docker/zlib/ /tmp/dcompany-zlib/
 RUN sh /tmp/dcompany-zlib/build-patched-zlib.sh
 
 # --- Python dependency builder ---
-FROM python:3.14.7-alpine3.24@sha256:016508ba505da24f7139765bc4bb669df4e88eb2f12eeadd571bf2f88d7533df AS builder
+FROM python:3.14.8-alpine3.24@sha256:f6a589d43c42b9e7f7dc67a12d37132491f362859a5d750607710cc56da3bc72 AS builder
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
 RUN apk add --no-cache --upgrade \
       'libcrypto3=3.5.9-r0' \
@@ -24,13 +24,13 @@ COPY backend/requirements.lock .
 RUN pip install --prefix=/install --only-binary=:all: --require-hashes -r requirements.lock
 
 # --- runtime ---
-FROM python:3.14.7-alpine3.24@sha256:016508ba505da24f7139765bc4bb669df4e88eb2f12eeadd571bf2f88d7533df
+FROM python:3.14.8-alpine3.24@sha256:f6a589d43c42b9e7f7dc67a12d37132491f362859a5d750607710cc56da3bc72
 ARG APP_VERSION=dev
 ARG APP_REVISION=unknown
 LABEL org.opencontainers.image.title="D Company ERP Backend" \
       org.opencontainers.image.version="${APP_VERSION}" \
       org.opencontainers.image.revision="${APP_REVISION}" \
-      com.dcompany.python.version="3.14.7" \
+      com.dcompany.python.version="3.14.8" \
       com.dcompany.zlib.version="1.3.2" \
       com.dcompany.zlib.source.sha256="bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16" \
       com.dcompany.zlib.null-guard.commit="e3dc0a85b7032e98380dec011bc8f2c2ee0d8fca" \
@@ -55,7 +55,7 @@ RUN apk add --no-cache --upgrade \
     && printf '%s\n' "$installed_packages" | grep -Fx 'libssl3-3.5.9-r0' \
     && printf '%s\n' "$installed_packages" | grep -Fx 'libuuid-2.42.3-r1' \
     && python -c 'import ssl; assert ssl.OPENSSL_VERSION_INFO == (3, 5, 0, 9, 0), (ssl.OPENSSL_VERSION_INFO, ssl.OPENSSL_VERSION)' \
-    && test "$(python --version)" = 'Python 3.14.7' \
+    && test "$(python --version)" = 'Python 3.14.8' \
     && sh /tmp/verify-patched-zlib.sh \
     && rm -f /tmp/zlib-runtime-probe /tmp/verify-patched-zlib.sh \
     && addgroup -S -g 1001 erp \

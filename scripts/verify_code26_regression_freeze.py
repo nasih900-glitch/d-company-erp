@@ -868,7 +868,9 @@ REVIEWED_CODE30_4_BUILD44_SHA256 = {'.env.production.example': '0ae533abb6d8e815
 REVIEWED_CODE30_4_BUILD45_SHA256 = {
     '.env.production.example': 'e7c0181f0c08afb8b51e720f893517b583e2c4485da33e68950f475bee453225',
     '.github/actions/scan-production-images/action.yml': '5e2d9a223681f10a70b62e2dc0424915760cc885de8fee18b75839d8bb7d4cf1',
-    'PROJECT_STATE.md': 'd09a16a4d2fe76c47b88fb75d089867ae49c825ff779203557f3b88727eeec9d',
+    '.github/workflows/ci.yml': '0579e0f23361bc7811dc6df46b87ab3dc61dbf1a712fa3b008d8b4b465c22f7c',
+    '.github/workflows/release.yml': '160657b86c26e525fbb6fcb169adb10673137a7ed22289fc02790999f03fb996',
+    'PROJECT_STATE.md': 'a0d9fec9f22fda22a725e64e2a8aa14913486386a0fb6225fba1253810b27215',
     'android-native/app/build.gradle.kts': 'ab45fd0caf781298fe2bf143c12913c3fc1eb254d8f39b6a8a41c1e505fcabf7',
     'android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt': '03602f784f5214918831d45403ff933f0ed0f760420b2c9fd95cb989e8e90e06',
     'backend/alembic/versions/0086_google_sheets_daily_collections.py': '9c9705b0e0f7d5b5d46071b959fffe2b3dc30433287f8c5cf2a553291ff54976',
@@ -899,7 +901,7 @@ REVIEWED_CODE30_4_BUILD45_SHA256 = {
     'docker-compose.prod.yml': '325efdc85c95e7409e2f23d4ae565be0993fa575a582e694144948d363e42ee6',
     'docs/GOOGLE_SHEETS.md': '588ca9163a6d5fdc51df93459fcf6d2e48d19dc7a698bae6c3ea355086cff5a1',
     'docs/SUPPORT_REPORTING.md': 'ed9544629cdbe4b13ab2fc102f4a302dde5a0329de3237ba39d7da7cd8d94dd6',
-    'docs/V3_1_37_RELEASE_CANDIDATE.md': '467ce4aacd3576c891994311f99b6087f4a1955bf135df3c7d853c4b7c9b2947',
+    'docs/V3_1_37_RELEASE_CANDIDATE.md': 'adba262f6d55927a426176f3bc4675bfad82ad2cfb0bdce6fa0423a45596df7b',
     'frontend/.env.example': '19d955d551c8d4a32040c0b6a405d390ca267c431f2d642e86ea9cc12629bc32',
     'frontend/braces-compat/LICENSE': '4ccd8f1107089316c85cd61bd99b43b25341d4ad8f4d480ea8c1e14a14755d90',
     'frontend/braces-compat/index.cjs': 'bb48b516be4dfdba4e3800fd430a733c90e4cda44e82482246cd63e9a65bbc07',
@@ -940,6 +942,7 @@ REVIEWED_CODE30_4_BUILD45_SHA256 = {
     'frontend/vendor/dcompany-braces-depth-guard/package.json': 'e534865b77df5d26f16acc3e95153cb0d41081f4e4760d1a5c299656e19fca5c',
     'frontend/vendor/dcompany-braces-depth-guard/patches/dcompany-ancestor-depth-guard-v1.patch': '2e775aca3719326fdc772d2a835484fe874415b6a810a145cab2b89d4c20f208',
     'infra/cron/dcompany-erp-alerts': 'f295d5b563d6acd5849348269195f13920d93c98c4659497e639ddd8601a18d4',
+    'infra/docker/backend.Dockerfile': '56c28b83ce357924919b58413a6569fe95ed34dfb5dd2584ca158319e0977561',
     'infra/docker/caddy.Dockerfile': '252918bcc96f202d5b114885ab0e9945ad6728595fa89489bc0174c04a0219f8',
     'infra/docker/frontend.Dockerfile': 'f49d2758f515afa3bc9781d5a770c4757d4345f550930d053c609c62335af1ae',
     'infra/scripts/run-hardened-image-scanners.sh': 'a2169c9cd0f68b87b2b036a8444ea9ddea8f876b0eb519331839c6d7cf8c4d5e',
@@ -947,12 +950,12 @@ REVIEWED_CODE30_4_BUILD45_SHA256 = {
     'integrations/google-sheets/Code.gs': 'ce7a5b390b4b47deac709579f588ae8f9d5ae87922eb61c2c03b5579c3d5f9b6',
     'ops/backup-requirements.lock': '302371a2a06d97adea0f01f3beb0cc5ef09dee408a4194b12eef2eeb93a745bd',
     'tests/test_build42_pending_compatibility.py': 'e1b1875978c75d0c4e670204e3375cb00ed9407d45362e5aa086a3a5d4f21f92',
-    'tests/test_caddy_dependency_security.py': '7bdcd2522ddd363bde301b5bec1cb5bbf6f92b19742f71bfe01ae9decc43c554',
+    'tests/test_caddy_dependency_security.py': 'd10864a618bb6d6b261953ace5cc4d2ff78e114dc6845462594347031506d888',
     'tests/test_ci_docker_connection.py': 'a3bd96ff82ad9072d4aaec9f010ae8ba02bd25ebfa3ffb988ff3858fcfaa3706',
     'tests/test_code26_physical_audit_lane.py': '5972f637eee17072d7ba5220cc276cab5f1668f69fe37a95bbb0bf773a133cef',
     'tests/test_docker_context_safety.py': 'd7313564073232132a04b3950b01b7c0adb331c24bf3036ec83606ac2f1415e5',
     'tests/test_hardened_scanner_runtime.py': 'b1b0c5bea3362cc3808f462a2d32be01b38c42aff35011ad17527cde3eb71f21',
-    'tests/test_zlib_security_remediation.py': 'a667402d4f16e5f91bb01a575d83beda62f35a04eb9d6a72a0ccce62a3bf48a8',
+    'tests/test_zlib_security_remediation.py': '11429c56d36f9763810ab1ad6f5d66c3d729cfb115edaec79412caf1ca7c1184',
 }
 REVIEWED_CODE30_4_PRODUCTION_PATHS = frozenset(
     path

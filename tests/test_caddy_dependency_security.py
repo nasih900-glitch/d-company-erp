@@ -193,6 +193,26 @@ def test_postgres_runtime_changes_only_reviewed_openssl_patch_release() -> None:
 
 def test_backend_image_changes_only_reviewed_openssl_runtime_controls() -> None:
     expected = _file_at(BUILD43_RELEASE_BASE, BACKEND_DOCKERFILE)
+    old_base = (
+        "python:3.14.7-alpine3.24@sha256:"
+        "016508ba505da24f7139765bc4bb669df4e88eb2f12eeadd571bf2f88d7533df"
+    )
+    new_base = (
+        "python:3.14.8-alpine3.24@sha256:"
+        "f6a589d43c42b9e7f7dc67a12d37132491f362859a5d750607710cc56da3bc72"
+    )
+    assert expected.count(old_base) == 3
+    expected = expected.replace(old_base, new_base)
+    expected = _replace_once(
+        expected,
+        'com.dcompany.python.version="3.14.7"',
+        'com.dcompany.python.version="3.14.8"',
+    )
+    expected = _replace_once(
+        expected,
+        "test \"$(python --version)\" = 'Python 3.14.7'",
+        "test \"$(python --version)\" = 'Python 3.14.8'",
+    )
     package_install = (
         "RUN apk add --no-cache --upgrade \\\n"
         "      'libcrypto3=3.5.9-r0' \\\n"
@@ -212,12 +232,22 @@ def test_backend_image_changes_only_reviewed_openssl_runtime_controls() -> None:
     expected = _replace_once(
         expected,
         "RUN apk add --no-cache --upgrade 'libuuid=2.42.3-r1' \\\n"
-        "    && test \"$(python --version)\" = 'Python 3.14.7' \\\n",
+        "    && test \"$(python --version)\" = 'Python 3.14.8' \\\n",
         package_install
         + " \\\n"
-        + "    && test \"$(python --version)\" = 'Python 3.14.7' \\\n",
+        + "    && test \"$(python --version)\" = 'Python 3.14.8' \\\n",
     )
     assert BACKEND_DOCKERFILE.read_text(encoding="utf-8") == expected
+
+
+def test_backend_python_patch_version_is_exact_in_ci_and_release() -> None:
+    ci = CI_WORKFLOW.read_text(encoding="utf-8")
+    release = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+
+    assert ci.count("python-version: '3.14.8'") == 1
+    assert release.count("python-version: '3.14.8'") == 1
+    assert "python-version: '3.14.7'" not in ci
+    assert "python-version: '3.14.7'" not in release
 
 
 @pytest.mark.parametrize(
