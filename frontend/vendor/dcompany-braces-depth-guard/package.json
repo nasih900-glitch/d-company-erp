@@ -1,0 +1,24 @@
+{
+  "name": "@dcompany/braces-depth-guard",
+  "version": "3.0.3-dcompany.1",
+  "description": "D Company maintained depth-guarded derivative of @dieub/braces-depth-guard 3.0.3-pn.3",
+  "private": true,
+  "license": "MIT",
+  "main": "index.js",
+  "files": [
+    "index.js",
+    "lib",
+    "LICENSE",
+    "NOTICE.md",
+    "patches",
+    "PROVENANCE.json",
+    "UPSTREAM_README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "fill-range": "^7.1.1"
+  },
+  "dcompanySourceProvenance": "PROVENANCE.json"
+}

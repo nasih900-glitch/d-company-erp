@@ -1,0 +1,35 @@
+--- a/lib/expand.js
++++ b/lib/expand.js
+@@ -31,9 +31,13 @@
+ };
+ 
+ // Resolve the queue owner without looping forever on caller-supplied parent cycles.
+-const queueOwner = node => {
++const queueOwner = (node, maxDepth) => {
+   const seen = new Set();
++  let depth = 0;
+   while (node.type !== 'brace' && node.type !== 'root' && node.parent) {
++    if (++depth > maxDepth) {
++      throw new RangeError(`AST parent depth (${depth}), exceeds max depth (${maxDepth})`);
++    }
+     if (seen.has(node)) {
+       throw new RangeError('AST parent chain contains a cycle');
+     }
+@@ -53,7 +57,7 @@
+     }
+     node.queue = [];
+ 
+-    const q = queueOwner(parent).queue;
++    const q = queueOwner(parent, maxDepth).queue;
+ 
+     if (node.invalid || node.dollar) {
+       q.push(append(q.pop(), stringify(node, options)));
+@@ -83,7 +87,7 @@
+     }
+ 
+     const enclose = utils.encloseBrace(node);
+-    const queue = queueOwner(node).queue;
++    const queue = queueOwner(node, maxDepth).queue;
+ 
+     for (let i = 0; i < node.nodes.length; i++) {
+       const child = node.nodes[i];

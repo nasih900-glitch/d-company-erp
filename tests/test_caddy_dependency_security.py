@@ -243,7 +243,7 @@ def test_backend_openssl_assertions_require_exact_legacy_version_tuple(
             )
 
 
-def test_frontend_image_changes_only_reviewed_openssl_runtime_controls() -> None:
+def test_frontend_image_changes_only_reviewed_security_controls() -> None:
     expected = _file_at(BUILD43_RELEASE_BASE, FRONTEND_DOCKERFILE)
     expected = _replace_once(
         expected,
@@ -257,6 +257,16 @@ def test_frontend_image_changes_only_reviewed_openssl_runtime_controls() -> None
         "    printf '%s\\n' \"$installed_packages\" | grep -Fx 'libcrypto3-3.5.9-r0'; \\\n"
         "    printf '%s\\n' \"$installed_packages\" | grep -Fx 'libssl3-3.5.9-r0'; \\\n"
         "    apk info -e zlib; \\\n",
+    )
+    expected = _replace_once(
+        expected,
+        "COPY frontend/package.json frontend/package-lock.json* ./\n"
+        "RUN npm ci --no-audit --no-fund\n",
+        "COPY frontend/package.json frontend/package-lock.json* ./\n"
+        "COPY frontend/braces-compat ./braces-compat\n"
+        "COPY frontend/vendor/dcompany-braces-depth-guard "
+        "./vendor/dcompany-braces-depth-guard\n"
+        "RUN npm ci --no-audit --no-fund\n",
     )
     assert FRONTEND_DOCKERFILE.read_text(encoding="utf-8") == expected
 

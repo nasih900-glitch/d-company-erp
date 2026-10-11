@@ -31,6 +31,27 @@ Alembic 0086 is an additive child of 0085. Android production code and Room
 schema remain unchanged from build 44: `ErpDatabase` stays at version 53 with
 the existing 52-to-53 migration and schema export.
 
+The candidate also closes the dependency findings raised by the first hosted
+CI attempt. It uses the official compatible Capacitor Android 8.5.1, Capacitor
+iOS 8.4.3, Axios 1.20.0, Vitest 4.1.11, source-map-js 1.2.2, PyJWT 2.15.1 and
+urllib3 2.8.0 updates. The npm and pnpm locks retain their separate frozen-
+install contracts. Python production, CI and backup locks change only the
+reviewed PyJWT or urllib3 closures applicable to each lock.
+
+The published `braces` 3 line has no fixed release for
+`GHSA-vfj7-8cjw-p6xm`. Instead of masking that advisory or forcing an
+incompatible major toolchain migration, the candidate carries a private MIT-
+licensed derivative of the independently attested
+`@dieub/braces-depth-guard@3.0.3-pn.3`. D Company release engineering owns the
+local package. Its manifest records the upstream package, commit, registry
+integrity, archive digest and every source/result digest. All runtime files
+match that source except one reviewed ancestor-depth correction in
+`lib/expand.js`; the installed package includes that exact patch and a private
+one-line `braces` compatibility adapter. Installation does not depend on
+postinstall or other lifecycle scripts. The package must be reviewed against
+the upstream advisory on each release and replaced when an official compatible
+fix is available.
+
 ## Evidence available before the release commit
 
 The following is local or isolated candidate evidence. It is useful source and
@@ -59,13 +80,14 @@ production-deployment, or physical-tablet acceptance.
   editable protection hole blocks delivery until owner setup repairs it.
   These runs did not modify the business workbook or its production receiver.
 - Isolated real HTTPS delivery observed the Apps Script redirect edge directly:
-  the first signed POST reached the receiver but the final redirected response
-  was the exact `doGet` health document; replaying the same immutable event
-  returned `duplicate`, and the native log retained one accepted row. The
-  dispatcher now classifies only that exact health contract as retryable and
-  still requires a matching accepted/duplicate event ID and payload hash before
-  delivery. This observation used a separate synthetic deployment and workbook;
-  production transport was untouched.
+  the original signed daily event returned `accepted`; its first identical
+  replay reached the receiver but the final redirected response was the exact
+  `doGet` health document; one further bounded identical replay returned
+  `duplicate`. The native log retained one accepted row. The dispatcher now
+  classifies only that exact health contract as retryable and still requires a
+  matching accepted/duplicate event ID and payload hash before delivery. This
+  observation used a separate synthetic deployment and workbook; production
+  transport was untouched.
 - Independent adversarial review found no new health-response blocker. The
   final source passed 35 focused mirror unit tests, an independent inline
   parser probe covering 87 additional adversarial cases, rollback-only
@@ -91,7 +113,64 @@ production-deployment, or physical-tablet acceptance.
   fatal crash or ANR. A committed server close followed by a deliberately
   dropped client response was not reproduced on-device. Existing Android
   instrumentation and focused backend replay tests cover retained count/retry
-  state, but that does not replace the missing device fault-injection proof.
+  state; this historical build-44 run did not include that fault injection.
+- Separately, an exact archive of candidate commit
+  `c5c6c498de5d204bd054e6878fa382236dbfd70f` produced a build-45 debug APK that
+  exercised the committed-close/dropped-response path on an emulator. The
+  first close received upstream HTTP 200 and a verified closed database row,
+  then the proxy returned zero response bytes. The app retained the locked ₹0
+  count as pending and retried the same body and key; the already-closed server
+  state returned successfully, leaving no open shift, exactly one create and
+  one close update, and no order or payment for that shift. The app remained
+  alive with no crash or ANR. This closes the bounded debug functional case for
+  the unchanged candidate components; it is not signed-build, in-place-upgrade,
+  physical-tablet, performance or production acceptance.
+- Security dependency verification used separate clean npm and pnpm 10.20.0
+  installs with frozen locks and lifecycle scripts disabled. Both resolved
+  Chokidar and Micromatch to the same guarded implementation and verified the
+  installed provenance, runtime and patch digests. The upstream fork suite
+  passed 799 cases; independent differential review matched 1,539 bounded
+  ordinary/adversarial outputs and confirmed the local ancestor correction
+  rejects the reviewed 10,000-parent case. Docker source contracts verify that
+  both local packages are copied before `npm ci`; Docker was unavailable on the
+  authoring host, so an actual image build remains a hosted gate.
+- The dependency-adjusted Web tree passed lint, strict type checking, 103 test
+  files with 638 tests, and its production build. Its generated CSS was byte-
+  identical to the committed candidate baseline: 53,652 bytes with SHA-256
+  `677c5433375e72c10302b766cee24b22fe86b290db303075f5afc688c89d8ba2`.
+  Private rendered checks found Gaming, POS, Shift and Customers appearance
+  unchanged. Shift showed one expected extra closed record from the separate
+  zero-value ambiguity trial while the ₹140 total, zero refund and no-open-
+  shift state remained unchanged.
+- Fresh npm and pnpm audits report zero high and zero critical findings. The
+  remaining report is the same moderate `postcss-selector-parser` advisory
+  through Tailwind 3 and postcss-nested 6; its fixed major is outside their
+  compatible ranges and is not overridden or waived. Production, CI and backup
+  Python lock audits each reported no known vulnerability and exit status zero.
+  Focused access, refresh, cookie, OTP, replay, locking, retention, realtime and
+  branch tests with PyJWT 2.15.1 passed 32 cases against a fresh PostgreSQL
+  database migrated to 0086.
+- A final private Web runtime trial used PyJWT 2.15.1 through authentication,
+  one 30-minute Station 1 session at ₹80, a 30-minute ₹60 extension, pause and
+  resume, transfer to Station 2, fixed ₹140 stop, POS handoff, one ₹140 bill,
+  ₹40 Cash plus ₹100 UPI settlement, receipt 00002, and shift close with ₹40
+  counted, ₹40 expected and zero variance. This is isolated runtime evidence;
+  it is not production or physical-tablet acceptance.
+- A final combined acceptance used real HTTPS for one exact signed `accepted`
+  acknowledgement and the immutable replay's matching `duplicate`
+  acknowledgement, with one accepted native row and one projected ₹42.45
+  total. After the real first acceptance, the external harness substituted a
+  separately captured real health document for the client response. The
+  unchanged dispatcher retained the event as pending with a persisted 30-
+  second backoff, and a synthetic clock advanced to its due time for replay;
+  this does not prove elapsed worker scheduling. A separate local transaction
+  proved the default eight-attempt backoff/quarantine policy with the captured
+  health response and then rolled back. The HTTP harness buffered completed
+  responses, so this is not separate streaming-boundary proof. Component
+  digests matched the current mirror, model and receiver bytes, and the
+  synthetic endpoint was archived after readback. The earlier unexplained 404
+  remains unresolved. The business receiver, workbook and production
+  configuration were not changed.
 
 ## Immutable regression freeze
 
@@ -133,7 +212,9 @@ build-44 exception.
    full backend with PostgreSQL and Redis, Web install/lint/typecheck/tests/build,
    Android lint/build/JVM and API 35 instrumentation, and both production-image
    stores with migrations, health, rollback, SBOM, and scans. Record every skip
-   and its reviewed reason.
+   and its reviewed reason. Confirm the local derivative's identity in the
+   hosted dependency graph/SBOM and repeat both frozen frontend installers on
+   the workflow's Node 22 runtime.
 3. Create `v3.1.37` only at the reviewed clean commit. The protected tag
    workflow must independently repeat coordinated identity, source, image,
    migration, instrumentation, reproducibility, signing, and manifest checks.
@@ -141,10 +222,11 @@ build-44 exception.
    quiescence, tablet pending queues, and the normal build-45 installer path.
    Keep the candidate inactive after deployment until authenticated operations
    and migration health are accepted.
-5. Repeat the durable backend-dispatch HTTPS path from the exact candidate so
-   the health-response retry, matching duplicate acknowledgement, backoff, and
-   attempt-budget state are recorded together. Then separately verify the owner
-   workbook and deployed receiver without exposing its URL or secret.
+5. The bounded combined transport gate is complete for the unchanged mirror,
+   model and receiver component digests. Preserve its manifest during release
+   review and repeat it only if those bytes change. Separately verify the owner
+   workbook and deployed receiver without exposing its URL or secret; synthetic
+   acceptance does not activate or establish production reliability.
 6. Verify the signed build-45 in-place upgrade, offline queue replay, reconnect,
    shift and Gaming workflows, printer behavior, and required permissions on
    the intended physical tablet. Emulator profiling does not satisfy this gate.

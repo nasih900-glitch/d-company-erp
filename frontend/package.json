@@ -9,22 +9,23 @@
     "preview": "vite preview --port 5173",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "format": "prettier --write .",
-    "test": "vitest run",
+    "test": "npm run test:dependency-guards && vitest run",
+    "test:dependency-guards": "node scripts/verify-braces-depth-guard.mjs",
     "test:watch": "vitest",
     "typecheck": "tsc -b --noEmit",
     "ios:prepare:store": "VITE_API_URL=https://dcompany.duckdns.org/api/v1 VITE_ROUTER_MODE=hash VITE_APP_STORE_REVIEW=false vite build && cap sync ios",
     "ios:open": "cap open ios"
   },
   "dependencies": {
-    "@capacitor/android": "8.5.0",
+    "@capacitor/android": "8.5.1",
     "@capacitor/core": "8.5.0",
     "@capacitor/haptics": "^8.0.2",
-    "@capacitor/ios": "8.4.1",
+    "@capacitor/ios": "8.4.3",
     "@capacitor/local-notifications": "^8.2.1",
     "@capacitor/splash-screen": "^8.0.1",
     "@capacitor/status-bar": "^8.0.2",
     "@tanstack/react-query": "^5.51.0",
-    "axios": "^1.7.4",
+    "axios": "1.20.0",
     "clsx": "^2.1.1",
     "date-fns": "^3.6.0",
     "lucide-react": "^0.408.0",
@@ -38,6 +39,7 @@
   },
   "devDependencies": {
     "@capacitor/cli": "8.4.2",
+    "@dcompany/braces-depth-guard": "file:vendor/dcompany-braces-depth-guard",
     "@types/node": "^22.10.2",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
@@ -45,6 +47,7 @@
     "@typescript-eslint/parser": "^8.63.0",
     "@vitejs/plugin-react": "4.7.0",
     "autoprefixer": "^10.4.19",
+    "braces": "file:braces-compat",
     "eslint": "^8.57.1",
     "eslint-plugin-react-hooks": "^5.2.0",
     "eslint-plugin-react-refresh": "^0.4.26",
@@ -53,6 +56,14 @@
     "tailwindcss": "^3.4.6",
     "typescript": "^5.5.3",
     "vite": "6.4.3",
-    "vitest": "3.2.7"
+    "vitest": "4.1.11"
+  },
+  "overrides": {
+    "braces": "$braces"
+  },
+  "pnpm": {
+    "overrides": {
+      "braces": "file:braces-compat"
+    }
   }
 }

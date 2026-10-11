@@ -14,6 +14,20 @@ CONTAINER_SCAN_ACTION = (
 
 
 class DockerContextSafetyTest(unittest.TestCase):
+    def test_frontend_local_dependency_sources_precede_frozen_install(self) -> None:
+        dockerfile = (ROOT / "infra" / "docker" / "frontend.Dockerfile").read_text(
+            encoding="utf-8"
+        )
+        install = dockerfile.index("RUN npm ci --no-audit --no-fund")
+        for local_source in (
+            "COPY frontend/braces-compat ./braces-compat",
+            "COPY frontend/vendor/dcompany-braces-depth-guard "
+            "./vendor/dcompany-braces-depth-guard",
+        ):
+            with self.subTest(local_source=local_source):
+                self.assertIn(local_source, dockerfile)
+                self.assertLess(dockerfile.index(local_source), install)
+
     def test_production_python_dependencies_are_hash_locked(self) -> None:
         requirement_start = r"[A-Za-z0-9_.-]+(?:\[[A-Za-z0-9_,.-]+\])?=="
         for lock_name, minimum_count in (

@@ -1,0 +1,11 @@
+{
+  "name": "braces",
+  "version": "3.0.3-dcompany.1",
+  "description": "Private compatibility adapter for the D Company braces depth guard",
+  "private": true,
+  "license": "MIT",
+  "main": "index.cjs",
+  "peerDependencies": {
+    "@dcompany/braces-depth-guard": "3.0.3-dcompany.1"
+  }
+}

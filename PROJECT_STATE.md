@@ -42,6 +42,33 @@ identity from that object and reject live build-45 identity. The verifier,
 installer, physical-audit runner/analyzer, historical hashes, accepted pairs,
 and recorded build-44 result identities are unchanged.
 
+The current uncommitted security overlay responds to the first hosted CI
+dependency gates without changing business runtime source or moving to
+Tailwind 4. It applies compatible official Capacitor, Axios, Vitest,
+source-map-js, PyJWT and urllib3 corrections and keeps both npm and pnpm frozen
+locks. Because the affected `braces` line has no fixed release, the frontend
+build uses a private, lifecycle-independent MIT derivative with explicit
+upstream provenance, source/result hashes, a reviewed ancestor-depth guard and
+a one-line compatibility adapter. Independent source review and clean npm/pnpm
+installs verified the installed runtime and patch bytes. Web lint, typecheck,
+638 tests and build pass; generated CSS is byte-identical to the committed
+candidate baseline and the bounded private visual comparison found no layout
+change. Frontend audits now have zero high/critical findings, with the known
+moderate Tailwind 3 selector-parser chain still reported rather than waived;
+all three Python lock audits report no known vulnerabilities. Hosted exact-head
+CI, Node 22 dependency-graph/SBOM identity and an actual Docker image build
+remain release gates.
+
+The bounded combined Google transport gate is complete for the unchanged
+mirror, delivery-model and receiver bytes. It used genuine HTTPS accepted and
+duplicate acknowledgements, one native accepted row and its projection. The
+health response was deliberately substituted by the external harness after the
+real acceptance, and a synthetic clock advanced the persisted 30-second
+backoff; this is not spontaneous-response, elapsed worker-scheduling or
+streaming-boundary proof. The earlier unexplained 404 remains unresolved. The
+synthetic endpoint was archived. Production owner-workbook verification and
+activation remain separate gates.
+
 ## Historical state — Code30.4 patch candidate (updated 2026-09-24)
 
 Code30.4 is an additive patch on released Code30.3 (tag `v3.1.30`, commit
