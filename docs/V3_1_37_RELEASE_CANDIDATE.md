@@ -54,6 +54,38 @@ fix is available.
 
 ## Evidence available before the release commit
 
+### Latest completion and compatibility checkpoint
+
+Run `38163996683` binds the `75e158f` source tree. Web and native Android passed;
+1,693 repository contracts passed. The actual API-35 Linux emulator selected
+SwiftShader with Vulkan disabled, verified two online guest CPUs and the
+1280-by-800 tablet viewport, and executed all 407 discovered cases. Both alarm
+cases subsequently executed and passed. This is hosted emulator acceptance,
+not physical tablet or 120 Hz acceptance. Backend passed 1,800 cases and failed
+one existing timezone-dependent settings fixture. UTC yesterday now keeps that
+rotation test valid in both Kolkata and Los Angeles, without changing the API
+or its future-date rejection. Four focused settings integration cases passed
+on a fresh isolated PostgreSQL 0086 database. The run skipped Docker jobs, so
+actual final-source image, scanner and rollback gates remain open.
+
+The 18:44 UTC production read found zero open shifts, active/paused sessions,
+unpaid/unbilled work and pending Sheet deliveries. It retained ten installation
+records and exactly two historical pending reports. The owner's confirmation
+that no older app copy exists does not prove those queues empty. A new verifier
+allows only the separately reviewed `d915a66c` / 3.1.36 / 0085 to build 45 /
+3.1.37 / 0086 server transition, preserving both reports unresolved. It binds
+whole backend/runtime and Android source closures, exact fleet/guard digests,
+private immutable input evidence and reviewed Python image defaults. It does
+not widen the historical build-44 exception or authorize queue deletion,
+installation retirement or an app offer. Its identity and refusal tests cover
+changed or extra rows, counters, source, environment and image attestations.
+All normal pre-backup quiescence, restore and scanner gates remain required.
+
+The final commit must pass the complete branch and tag workflows before a
+signed artifact, coordinated deployment or offer. Daily export remains in
+legacy mode through cutover and is activated separately only after the owner's
+receiver and preserved manual history pass acceptance.
+
 ### Latest complete CI and bounded frontend security correction
 
 Run `38157536472` tested merge tree
@@ -396,20 +428,19 @@ path, canonical-file, and baseline-order guards remain fail-closed.
 The historical pending-compatibility test now reconstructs its candidate from
 the immutable build-44 `d915a66c9dee0d22c1a7018e2e79bc8ca9e0d7ab` Git object
 instead of the live build-45 working tree. It also proves that live build-45
-bytes cannot satisfy the narrow build-44 exception. The verifier, installer,
-historical hashes, and accepted source pairs are unchanged.
+bytes cannot satisfy the narrow build-44 exception. Its historical verifier,
+hashes and accepted source pairs are unchanged; the installer adds only the
+separate build-45 branch described above.
 
 The historical physical-audit test likewise reads build 44's Gradle identity
 from that Git object and proves the build-44 analyzer rejects the live build-45
 identity. The physical-audit runner, analyzer, and recorded build-44 result
 identities are unchanged; this does not relabel build-44 evidence as build 45.
 
-The build-44 unresolved-pending compatibility exception remains exact to
-3.1.36/build 44. Build 45 may use the normal installer path when pending tablet
-queues are zero or the existing reviewed historical cleanup-receipt path
-applies. Any other nonzero queue is a deployment blocker and requires safe
-drainage or a separately reviewed compatibility proof; it must not widen the
-build-44 exception.
+The historical build-44 unresolved-pending exception remains exact to
+3.1.36/build 44. Build 45 additionally has its own exact reviewed compatibility
+proof described above. Unmatched nonzero queues still block deployment; no
+historical exception is widened and no report is declared drained or retired.
 
 ## Remaining release gates
 

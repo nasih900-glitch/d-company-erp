@@ -140,7 +140,8 @@ async def test_mode_change_drains_unverified_business_and_rotates_generation(
     assert business is not None
     await session.commit()
 
-    target_day = datetime.now(UTC).astimezone(ZoneInfo("Asia/Kolkata")).date()
+    # This test changes timezones; use a date valid in both Kolkata and Los Angeles.
+    target_day = datetime.now(UTC).date() - timedelta(days=1)
     payload = {
         "webhook_url": url,
         "export_mode": "daily_collections",

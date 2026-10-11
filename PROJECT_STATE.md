@@ -2,6 +2,40 @@
 
 ## Current quality candidate (updated 2026-10-11)
 
+### Latest completion checkpoint
+
+Production remains `d915a66c` / `v3.1.36` / build 44 / Room 53 / Alembic
+0085. The 18:44 UTC read-only check found zero open shifts, active or paused
+gaming sessions, unpaid or unbilled work, or pending Sheet deliveries. The
+current tablet reports build 44 with zero pending. Two historical installations
+still report one pending item each. The owner confirmed there is no older app
+copy; this does not verify the contents or drainage of those historical queues.
+Their identities, counters, timestamps and recorded work remain preserved.
+
+Hosted run `38163996683` on the `75e158f` source tree passed the Web lane,
+Android native lane, 1,693 repository contracts and the complete Android
+instrumentation lane: 407 cases plus both separately executed alarm tests.
+Backend passed 1,800 cases and failed one timezone-dependent test fixture:
+Kolkata had reached the next date while the test changed to Los Angeles. The
+API correctly rejected a future summary date. The test now uses UTC yesterday;
+the API and separate future-date rejection test remain unchanged. The four
+settings integration tests pass on a fresh isolated 0086 database. Docker jobs
+were skipped after that backend failure and are not accepted for this source.
+
+A separate exact build-44-to-build-45 compatibility proof is prepared for the
+two historical pending reports. It binds canonical build-41 and build-44 source,
+the complete backend and Android production closures, reviewed image defaults,
+and the unchanged private fleet snapshot. It carries the reports unresolved;
+it neither deletes work nor treats an installation as retired. The original
+build-42/build-44 verifier and historical maps are unchanged. Normal business
+quiescence, backup, restore, migration, runtime and scanner gates remain active.
+
+The next gates are final source review and complete CI, protected signing,
+signed in-place upgrade acceptance, coordinated deployment, owner-workbook daily
+summary activation, and staging/offering the exact signed APK. Build 45 has not
+been signed, deployed or offered. Current evidence supersedes earlier same-day
+activity and emulator-status snapshots below without erasing those failures.
+
 Read-only AWS verification on 11 October 2026 identified the live source as
 commit `d915a66c9dee0d22c1a7018e2e79bc8ca9e0d7ab`, Alembic `0085`, Web/backend
 `v3.1.36`, Android build `44`, and Room `53`. The current local branch is
@@ -46,9 +80,10 @@ Existing runtime freeze and release policies remain unchanged. The additive
 build-45 overlay also updates one historical compatibility test fixture to read
 its candidate from the immutable build-44 Git object and reject live build-45
 bytes, and one historical physical-audit test to read build 44's Gradle
-identity from that object and reject live build-45 identity. The verifier,
-installer, physical-audit runner/analyzer, historical hashes, accepted pairs,
-and recorded build-44 result identities are unchanged.
+identity from that object and reject live build-45 identity. Historical
+verifiers, physical-audit runner/analyzer, hashes, accepted pairs and recorded
+build-44 result identities are unchanged. The installer additionally carries
+the separate exact build-45 compatibility branch described above.
 
 The candidate security overlay responds to the first hosted CI
 dependency gates without changing business runtime source or moving to
