@@ -28,6 +28,7 @@ DRIVER_PATH = ROOT / (
     "android-native/audit-driver/src/androidTest/java/"
     "cloud/dcompany/erp/auditdriver/BusinessWorkflowDeviceTest.kt"
 )
+BUILD44_REVISION = "d915a66c9dee0d22c1a7018e2e79bc8ca9e0d7ab"
 
 _SPEC = importlib.util.spec_from_file_location("code26_evidence_analyzer", ANALYZER_PATH)
 assert _SPEC and _SPEC.loader
@@ -36,12 +37,21 @@ sys.modules[_SPEC.name] = _ANALYZER
 _SPEC.loader.exec_module(_ANALYZER)
 
 
-def test_physical_audit_runner_and_analyzer_accept_current_android_identity() -> None:
-    gradle = (ROOT / "android-native/app/build.gradle.kts").read_text(encoding="utf-8")
+def test_physical_audit_runner_and_analyzer_accept_frozen_build44_android_identity() -> None:
+    gradle = subprocess.check_output(
+        [
+            "git",
+            "show",
+            f"{BUILD44_REVISION}:android-native/app/build.gradle.kts",
+        ],
+        cwd=ROOT,
+        text=True,
+    )
     version_code = re.search(r"^\s*versionCode\s*=\s*(\d+)", gradle, re.MULTILINE)
     version_name = re.search(r'^\s*versionName\s*=\s*"([^"]+)"', gradle, re.MULTILINE)
     assert version_code is not None and version_name is not None
     code, name = version_code.group(1), version_name.group(1)
+    assert (code, name) == ("44", "3.1.36")
     runner = RUNNER_PATH.read_text(encoding="utf-8")
     assert f'[[ "$VERSION_CODE" != "{code}" || "$VERSION_NAME" != "{name}" ]]' in runner
     assert (
@@ -52,6 +62,16 @@ def test_physical_audit_runner_and_analyzer_accept_current_android_identity() ->
         {"clean": True, "version_code": int(code), "version_name": name,
          "commit": "a" * 40, "tree": "b" * 40}
     ) == []
+    live_gradle = (ROOT / "android-native/app/build.gradle.kts").read_text(encoding="utf-8")
+    live_code = re.search(r"^\s*versionCode\s*=\s*(\d+)", live_gradle, re.MULTILINE)
+    live_name = re.search(r'^\s*versionName\s*=\s*"([^"]+)"', live_gradle, re.MULTILINE)
+    assert live_code is not None and live_name is not None
+    assert (live_code.group(1), live_name.group(1)) == ("45", "3.1.37")
+    assert _ANALYZER._source_errors(
+        {"clean": True, "version_code": int(live_code.group(1)),
+         "version_name": live_name.group(1), "commit": "a" * 40,
+         "tree": "b" * 40}
+    )
 
 
 def _steps() -> list[dict]:

@@ -29,10 +29,24 @@ MIRROR_SCHEMA = "erp-mirror.v1"
 MIRROR_SCHEMA_VERSION = 1
 CONNECTION_TEST_EVENT_TYPE = "mirror.connection_test"
 CONNECTION_TEST_SOURCE_TYPE = "mirror_configuration"
+LEGACY_TRANSACTIONS_EXPORT_MODE = "legacy_transactions"
+DAILY_COLLECTIONS_EXPORT_MODE = "daily_collections"
+DAILY_COLLECTIONS_CAPABILITY = "daily_collections.v1"
 # Google Sheets cells are limited to 50,000 characters. A byte ceiling below
 # that limit keeps the canonical JSON appendable even when it is all ASCII.
 MAX_CANONICAL_PAYLOAD_BYTES = 45 * 1024
 MAX_RESPONSE_BYTES = 16 * 1024
+_HEALTH_RESPONSE_KEYS = frozenset(
+    {
+        "ok",
+        "service",
+        "schema",
+        "schema_version",
+        "mode",
+        "tab",
+        "hmac_configured",
+    }
+)
 
 
 class EventIdentityConflictError(ValueError):
@@ -347,6 +361,7 @@ async def enqueue_google_sheets_event_if_enabled(
     active_configuration = select(
         Company.google_sheets_configuration_id,
         Company.google_sheets_configured_at,
+        Company.google_sheets_export_mode,
     ).where(
         Company.id == company_id,
         Company.deleted_at.is_(None),
@@ -361,8 +376,10 @@ async def enqueue_google_sheets_event_if_enabled(
     ).one_or_none()
     if configuration is None:
         return None
-    configuration_id, configured_at = configuration
+    configuration_id, configured_at, export_mode = configuration
     if configuration_id is None or configured_at is None:  # narrowed by SQL
+        return None
+    if export_mode == DAILY_COLLECTIONS_EXPORT_MODE:
         return None
     return await enqueue_google_sheets_event(
         session,
@@ -593,6 +610,29 @@ async def _bounded_response_body(response: httpx.Response) -> bytes | None:
     return bytes(body)
 
 
+def _is_exact_receiver_health_response(data: Mapping[str, object]) -> bool:
+    """Recognize only the immutable doGet health contract.
+
+    Google Apps Script may convert a redirected POST into a GET and return the
+    receiver health document even though the original POST was accepted. This
+    exact response is safe to retry because the event identity is idempotent;
+    a later duplicate acknowledgement proves delivery. Any shape or value
+    drift remains a non-retryable acknowledgement mismatch.
+    """
+
+    return (
+        set(data) == _HEALTH_RESPONSE_KEYS
+        and data.get("ok") is True
+        and data.get("service") == "D Company ERP Mirror"
+        and data.get("schema") == MIRROR_SCHEMA
+        and type(data.get("schema_version")) is int
+        and data.get("schema_version") == MIRROR_SCHEMA_VERSION
+        and data.get("mode") == "append-only"
+        and data.get("tab") == "ERP Mirror v1"
+        and data.get("hmac_configured") is True
+    )
+
+
 def _http_outcome(
     response: httpx.Response,
     delivery: ClaimedDelivery,
@@ -625,13 +665,31 @@ def _http_outcome(
             error_code="invalid_response",
             error_detail="The mirror endpoint returned an invalid response object",
         )
+    if _is_exact_receiver_health_response(data):
+        return DeliveryOutcome.failure(
+            retryable=True,
+            error_code="unexpected_health_response",
+            error_detail=(
+                "The mirror endpoint returned its health document instead of "
+                "an event acknowledgement"
+            ),
+        )
     if data.get("ok") is True:
         valid = (
             data.get("status") in {"accepted", "duplicate"}
             and data.get("event_id") == str(delivery.event_id)
             and data.get("payload_sha256") == delivery.payload_sha256
         )
-        if valid:
+        if valid and (
+            delivery.event_type != CONNECTION_TEST_EVENT_TYPE
+            or delivery.payload.get("export_mode")
+            != DAILY_COLLECTIONS_EXPORT_MODE
+            or (
+                data.get("capability") == DAILY_COLLECTIONS_CAPABILITY
+                and data.get("scope")
+                == delivery.payload.get("summary_scope")
+            )
+        ):
             return DeliveryOutcome.success()
         return DeliveryOutcome.failure(
             retryable=False,
@@ -886,6 +944,9 @@ __all__ = [
     "GoogleSheetsMirrorDispatcher",
     "CONNECTION_TEST_EVENT_TYPE",
     "CONNECTION_TEST_SOURCE_TYPE",
+    "DAILY_COLLECTIONS_CAPABILITY",
+    "DAILY_COLLECTIONS_EXPORT_MODE",
+    "LEGACY_TRANSACTIONS_EXPORT_MODE",
     "MIRROR_SCHEMA",
     "MIRROR_SCHEMA_VERSION",
     "MirrorDestination",

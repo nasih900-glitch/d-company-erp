@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import socket
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
@@ -14,6 +14,9 @@ from sqlalchemy import select
 from app.core.db import AsyncSessionLocal
 from app.core.logging import get_logger
 from app.models import Company
+from app.services.integrations.google_sheets_collection_summary import (
+    scan_daily_collection_summaries,
+)
 from app.services.integrations.google_sheets_mirror import (
     GoogleSheetsMirrorDispatcher,
     MirrorDestination,
@@ -70,10 +73,7 @@ async def resolve_google_sheets_destination(
 
 
 def build_google_sheets_dispatcher() -> GoogleSheetsMirrorDispatcher:
-    worker_id = (
-        f"{socket.gethostname()}:{os.getpid()}:"
-        f"{uuid4().hex[:12]}"
-    )
+    worker_id = f"{socket.gethostname()}:{os.getpid()}:{uuid4().hex[:12]}"
     return GoogleSheetsMirrorDispatcher(
         session_factory=AsyncSessionLocal,
         destination_resolver=resolve_google_sheets_destination,
@@ -84,11 +84,53 @@ def build_google_sheets_dispatcher() -> GoogleSheetsMirrorDispatcher:
 async def maintain_google_sheets_mirror(
     *,
     poll_seconds: float = 5.0,
+    summary_scan_seconds: float = 300.0,
 ) -> None:
     """Continuously drain committed events without blocking business writes."""
 
     dispatcher = build_google_sheets_dispatcher()
+    next_summary_scan_at = datetime.min.replace(tzinfo=UTC)
     while True:
+        now = datetime.now(UTC)
+        if now >= next_summary_scan_at:
+            try:
+                companies_scanned = 0
+                companies_failed = 0
+                days_scanned = 0
+                deliveries_enqueued = 0
+                scanned_company_ids: set[UUID] = set()
+                for _ in range(10):
+                    async with AsyncSessionLocal() as session, session.begin():
+                        scan = await scan_daily_collection_summaries(
+                            session,
+                            now=now,
+                            company_limit=1,
+                            exclude_company_ids=frozenset(scanned_company_ids),
+                        )
+                    if scan.companies_scanned == 0:
+                        break
+                    companies_scanned += scan.companies_scanned
+                    companies_failed += scan.companies_failed
+                    days_scanned += scan.days_scanned
+                    deliveries_enqueued += scan.deliveries_enqueued
+                    if scan.company_id is not None:
+                        scanned_company_ids.add(scan.company_id)
+                if deliveries_enqueued or companies_failed:
+                    log.info(
+                        "google_sheets_summary.scan_completed",
+                        companies_scanned=companies_scanned,
+                        companies_failed=companies_failed,
+                        days_scanned=days_scanned,
+                        deliveries_enqueued=deliveries_enqueued,
+                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - isolate optional summary export
+                log.warning(
+                    "google_sheets_summary.scan_failed",
+                    error_type=type(exc).__name__,
+                )
+            next_summary_scan_at = now + timedelta(seconds=summary_scan_seconds)
         try:
             claimed = await dispatcher.dispatch_once(now=datetime.now(UTC))
         except asyncio.CancelledError:

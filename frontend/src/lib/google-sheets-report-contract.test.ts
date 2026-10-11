@@ -82,8 +82,8 @@ describe('Google Sheets ERP Mirror v1 sink contract', () => {
       expect(source).toContain('LockService.getScriptLock()');
       expect(source).toContain('D_COMPANY_ERP_MIRROR_HMAC_SECRET');
       expect(source).toContain('"configuration_id", event.configuration_id, 36');
-      expect(source).toContain('sheet.appendRow(projectMirrorRow(event, payload))');
-      expect(source).not.toMatch(/deleteRow|deleteRows|clearContents|clear\(/);
+      expect(source).toContain('appendVerifiedRow(sheet, projectMirrorRow(event, payload)');
+      expect(source).not.toMatch(/deleteRows|clearContents|clear\(/);
       expect(source).not.toContain('sheet.getRange(existing, 1');
     });
 
@@ -141,16 +141,19 @@ describe('Google Sheets ERP Mirror v1 sink contract', () => {
 
     expect(settingsTab).toContain('status.connection_verified');
     expect(settingsTab).toContain('Configured · verification pending');
-    expect(settingsTab).toContain('Google Sheets transaction mirror');
+    expect(settingsTab).toContain('Google Sheets collections export');
     expect(settingsTab).toContain('Delivered (all time)');
-    expect(settingsTab).toContain('not a database backup or receipt-file backup');
-    expect(settingsTab).toContain('queued safely while verification is pending');
-    expect(settingsTab).toContain('History from before configuration is not backfilled');
+    expect(settingsTab).toContain('ERP database remains the accounting authority');
+    expect(settingsTab).toContain('Daily mode stops individual transaction exports');
+    expect(settingsTab).toContain('existing manual A2:C93 history');
     expect(settingsTab).toContain('Held for verification');
     expect(settingsTab).toContain('safely queued');
     expect(settingsTab).toContain('Rotate the Google Sheets secret?');
     expect(settingsTab).toContain('Queued entries are preserved');
     expect(settingsTab).toContain('Receipt photos and PDFs remain');
+    expect(settingsTab).toContain('getDailyCollectionsD2Fingerprint');
+    expect(settingsTab).toContain('setupDailyCollectionsProjection');
+    expect(settingsTab).toContain('last_window_blockers');
     expect(settingsTab).not.toContain('Google Sheets backup mirror');
     expect(settingsTab).not.toContain('Connected. Copy the one-time secret');
   });

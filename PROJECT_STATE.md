@@ -1,6 +1,48 @@
 # D Company ERP — current project state
 
-## Code30.4 patch candidate (updated 2026-09-24)
+## Current quality candidate (updated 2026-10-11)
+
+Read-only AWS verification on 11 October 2026 identified the live source as
+commit `d915a66c9dee0d22c1a7018e2e79bc8ca9e0d7ab`, Alembic `0085`, Web/backend
+`v3.1.36`, Android build `44`, and Room `53`. The current local branch is
+`codex/erp-quality-revenue-summary`. Those remain production observations and
+immutable build-44 history; they are not build-45 deployment evidence.
+
+The prepared local overlay has coordinated candidate identity `v3.1.37`,
+Android build `45`, Room `53`, and Alembic `0086`. It is still an uncommitted
+working tree, so it has no release commit or tag identity and has not been
+deployed, staged, signed, published, or offered to tablets. The build-45 freeze
+is based on immutable build-44 source `d915a66c9dee0d22c1a7018e2e79bc8ca9e0d7ab`;
+the eventual release SHA belongs in external release evidence after a clean
+candidate commit exists, not in this self-referential source overlay.
+
+The current quality scope preserves financial, payment, stock, idempotency, and
+audit facts while tightening tenant locks, Web operational freshness and timer
+rendering, and bounded technical retention. It adds the reviewed foundation for
+automatic daily final Cash/UPI collections: one generation-bound branch,
+business timezone and start date; no individual transaction exports in daily
+mode; an immutable revision log; and a protected future projection that keeps
+the existing manual Sheet history. The current evidence register is
+`ERP_QUALITY_PROGRESS_2026-10-11.md` in the quality workspace. Scoped contracts
+are documented in [`docs/GOOGLE_SHEETS.md`](docs/GOOGLE_SHEETS.md),
+[`docs/SUPPORT_REPORTING.md`](docs/SUPPORT_REPORTING.md), and
+[`docs/CODE30_4_RELEASE_RUNBOOK.md`](docs/CODE30_4_RELEASE_RUNBOOK.md).
+
+Review, exact-head CI, coordinated source/version/build identity, signed
+artifacts, release-offer parity, guarded deployment, production owner-workbook
+Google acceptance, and physical tablet acceptance remain separate gates.
+Coordinated source identity is now prepared, while the other gates remain open
+as described in
+[`docs/V3_1_37_RELEASE_CANDIDATE.md`](docs/V3_1_37_RELEASE_CANDIDATE.md).
+Existing runtime freeze and release policies remain unchanged. The additive
+build-45 overlay also updates one historical compatibility test fixture to read
+its candidate from the immutable build-44 Git object and reject live build-45
+bytes, and one historical physical-audit test to read build 44's Gradle
+identity from that object and reject live build-45 identity. The verifier,
+installer, physical-audit runner/analyzer, historical hashes, accepted pairs,
+and recorded build-44 result identities are unchanged.
+
+## Historical state — Code30.4 patch candidate (updated 2026-09-24)
 
 Code30.4 is an additive patch on released Code30.3 (tag `v3.1.30`, commit
 `ad5adfb93c3488f1f931ca27da53824aa57d3dc5`). It is not Code31. Its coordinated

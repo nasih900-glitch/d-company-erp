@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import datetime  # noqa: TC003 - SQLAlchemy resolves mapped types at runtime
+from datetime import date, datetime  # noqa: TC003 - SQLAlchemy resolves mapped types at runtime
 from uuid import UUID  # noqa: TC003 - SQLAlchemy resolves mapped types at runtime
 
 from sqlalchemy import (
     BigInteger,
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     ForeignKey,
     Index,
@@ -16,6 +17,7 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -60,19 +62,33 @@ class Company(Base, TimestampMixin, SoftDeleteMixin):
         default=False,
         server_default=text("false"),
     )
-    google_sheets_signing_secret_ciphertext: Mapped[str | None] = mapped_column(
-        String(256)
-    )
-    google_sheets_configured_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True)
-    )
+    google_sheets_signing_secret_ciphertext: Mapped[str | None] = mapped_column(String(256))
+    google_sheets_configured_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Identifies one immutable delivery generation. A verified, drained
     # generation gets a new value when its destination or secret changes.
     # Corrections made before first verification retain the value so already
     # held facts are not abandoned; configured_at invalidates earlier tests.
-    google_sheets_configuration_id: Mapped[UUID | None] = mapped_column(
-        PG_UUID(as_uuid=True)
+    google_sheets_configuration_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True))
+    google_sheets_export_mode: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default="legacy_transactions",
+        server_default="legacy_transactions",
     )
+    google_sheets_summary_branch_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("branches.id", ondelete="RESTRICT", use_alter=True),
+    )
+    google_sheets_summary_start_date: Mapped[date | None] = mapped_column(Date)
+    google_sheets_summary_timezone: Mapped[str | None] = mapped_column(String(64))
+    google_sheets_summary_scan_cursor_date: Mapped[date | None] = mapped_column(Date)
+    google_sheets_summary_last_scanned_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    google_sheets_summary_last_window_blockers: Mapped[list[dict[str, object]]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+    )
+    google_sheets_summary_last_error: Mapped[str | None] = mapped_column(String(200))
 
     # Merchant UPI VPA (e.g. "Q530001220@ybl") used to build the dynamic
     # UPI pay QR shown at checkout. Public payment address, not a secret.
@@ -96,10 +112,32 @@ class Company(Base, TimestampMixin, SoftDeleteMixin):
             "AND google_sheets_configuration_id IS NOT NULL)",
             name="ck_company_google_sheets_mirror_config",
         ),
+        CheckConstraint(
+            "google_sheets_export_mode IN ('legacy_transactions', 'daily_collections')",
+            name="ck_company_google_sheets_export_mode",
+        ),
+        CheckConstraint(
+            "(google_sheets_export_mode = 'legacy_transactions' "
+            "AND google_sheets_summary_branch_id IS NULL "
+            "AND google_sheets_summary_start_date IS NULL "
+            "AND google_sheets_summary_timezone IS NULL "
+            "AND google_sheets_summary_scan_cursor_date IS NULL) OR "
+            "(google_sheets_export_mode = 'daily_collections' "
+            "AND google_sheets_summary_branch_id IS NOT NULL "
+            "AND google_sheets_summary_start_date IS NOT NULL "
+            "AND google_sheets_summary_timezone IS NOT NULL "
+            "AND length(trim(google_sheets_summary_timezone)) > 0 "
+            "AND (google_sheets_summary_scan_cursor_date IS NULL OR "
+            "google_sheets_summary_scan_cursor_date >= "
+            "google_sheets_summary_start_date))",
+            name="ck_company_google_sheets_summary_scope",
+        ),
     )
 
     branches: Mapped[list[Branch]] = relationship(
-        back_populates="company", cascade="all, delete-orphan"
+        back_populates="company",
+        cascade="all, delete-orphan",
+        foreign_keys="Branch.company_id",
     )
 
 
@@ -124,7 +162,7 @@ class Branch(Base, TimestampMixin, SoftDeleteMixin):
     invoice_series_code: Mapped[str] = mapped_column(String(2), nullable=False)
     address: Mapped[str | None] = mapped_column(String(500))
     timezone: Mapped[str | None] = mapped_column(String(64))
-    opens_at: Mapped[str | None] = mapped_column(String(8))   # "09:00"
+    opens_at: Mapped[str | None] = mapped_column(String(8))  # "09:00"
     closes_at: Mapped[str | None] = mapped_column(String(8))  # "23:30"
     # ----- India / Kerala compliance -----
     # State code per GST classification. Kerala = "32".
@@ -137,7 +175,10 @@ class Branch(Base, TimestampMixin, SoftDeleteMixin):
     # Branch-specific GSTIN if registered separately (multi-state setup).
     branch_gstin: Mapped[str | None] = mapped_column(String(15))
 
-    company: Mapped[Company] = relationship(back_populates="branches")
+    company: Mapped[Company] = relationship(
+        back_populates="branches",
+        foreign_keys=[company_id],
+    )
     terminals: Mapped[list[Terminal]] = relationship(
         back_populates="branch", cascade="all, delete-orphan"
     )

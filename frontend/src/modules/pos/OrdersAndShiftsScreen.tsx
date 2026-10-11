@@ -1193,7 +1193,7 @@ export function OpenShiftStatusPanel({
           </p>
           <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-xs text-fg-muted">
             <span className="inline-flex items-center gap-1.5">
-              <Clock3 size={13} aria-hidden="true"/> {formatDateTime(shift.opened_at)}
+              <Clock3 size={13} aria-hidden="true"/> {formatShiftBusinessDateTime(shift.opened_at)}
             </span>
             <span className="inline-flex items-center gap-1.5">
               <Monitor size={13} aria-hidden="true"/> {workspaceName}
@@ -1369,7 +1369,7 @@ export function ExistingShiftFeedback({
     <div className="rounded-xl border border-accent-gold/40 bg-accent-gold/10 p-3 text-sm" role="status" aria-live="polite">
       <p className="font-semibold text-accent-gold">A shift is already open</p>
       <p className="mt-1 text-fg">
-        <strong>{shiftOpenerLabel(shift)}</strong> opened it {formatDateTime(shift.opened_at)} on {workspaceName}.
+        <strong>{shiftOpenerLabel(shift)}</strong> opened it {formatShiftBusinessDateTime(shift.opened_at)} on {workspaceName}.
       </p>
       <p className="mt-1 text-fg-muted">
         Do not open another shift. Continue with this one, or close it from Shifts after all sessions and bills are finished.
@@ -2146,7 +2146,7 @@ function CloseShiftForm({
           <div className="flex items-center gap-2 font-semibold"><UserRound size={15}/> Shift responsibility</div>
           <div className="mt-2 space-y-1">
             <Row label="Opened by" value={`${opener}${openedByCurrentUser ? ' (you)' : ''}`}/>
-            <Row label="Opened" value={formatDateTime(shift.opened_at)}/>
+            <Row label="Opened" value={formatShiftBusinessDateTime(shift.opened_at)}/>
             <Row label="Workspace" value={workspaceName}/>
             <Row label="Closing as" value={currentStaffName}/>
           </div>
@@ -2413,7 +2413,7 @@ export function RecoverAndroidShiftForm({
         <div className="rounded-xl border border-accent-bad/40 bg-accent-bad/10 p-3 text-sm">
           <p className="font-semibold text-accent-bad">Last-resort protected-owner recovery</p>
           <p className="mt-1 text-fg-muted">
-            {opener} opened this shift from the Android tablet {formatDateTime(shift.opened_at)}.
+            {opener} opened this shift from the Android tablet {formatShiftBusinessDateTime(shift.opened_at)}.
             Use this only when that originating app cannot complete its saved close.
           </p>
         </div>

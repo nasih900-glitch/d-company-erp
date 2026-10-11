@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import psycopg
 import pytest
@@ -17,7 +17,6 @@ from app.models import (
     Branch,
     ClientGamingCleanupReconciliation,
     ClientInstallation,
-    Company,
     Station,
     Terminal,
     User,
@@ -41,15 +40,30 @@ def migrated_0081_database() -> Iterator[str]:
         yield database_url
 
 
+def _insert_0079_company(session: Session, *, name: str) -> UUID:
+    """Seed only columns guaranteed by the historical migration under test."""
+
+    company_id = uuid4()
+    session.execute(
+        text(
+            "INSERT INTO companies (id, name, gst_registration_type) "
+            "VALUES (:id, :name, 'unregistered')"
+        ),
+        {"id": company_id, "name": name},
+    )
+    return company_id
+
+
 def _seed_scope(database_url: str) -> dict[str, object]:
     engine = create_engine(database_url)
     now = datetime.now(UTC)
     with Session(engine) as session:
-        company = Company(name=f"0079 trigger {uuid4()}")
-        session.add(company)
-        session.flush()
+        company_id = _insert_0079_company(
+            session,
+            name=f"0079 trigger {uuid4()}",
+        )
         branch = Branch(
-            company_id=company.id,
+            company_id=company_id,
             name="Main",
             code=f"B{uuid4().hex[:4]}",
             invoice_series_code=uuid4().hex[:2].upper(),
@@ -65,13 +79,13 @@ def _seed_scope(database_url: str) -> dict[str, object]:
         session.add(terminal)
         session.flush()
         approver = User(
-            company_id=company.id,
+            company_id=company_id,
             email=f"approver-{uuid4()}@test.local",
             password_hash="not-a-real-password-hash",
             name="Approver",
         )
         other_user = User(
-            company_id=company.id,
+            company_id=company_id,
             email=f"other-{uuid4()}@test.local",
             password_hash="not-a-real-password-hash",
             name="Other user",
@@ -79,7 +93,7 @@ def _seed_scope(database_url: str) -> dict[str, object]:
         session.add_all([approver, other_user])
         session.flush()
         station = Station(
-            company_id=company.id,
+            company_id=company_id,
             branch_id=branch.id,
             code=f"S{uuid4().hex[:6]}",
             name="0079 station",
@@ -87,7 +101,7 @@ def _seed_scope(database_url: str) -> dict[str, object]:
             rate_per_hour_minor=15_000,
         )
         installation = ClientInstallation(
-            company_id=company.id,
+            company_id=company_id,
             installation_id=uuid4(),
             registered_by_user_id=approver.id,
             last_user_id=approver.id,
@@ -106,7 +120,7 @@ def _seed_scope(database_url: str) -> dict[str, object]:
         session.flush()
         receipt = AuditLog(
             actor_user_id=approver.id,
-            company_id=company.id,
+            company_id=company_id,
             action="maintenance.production_trial_cleanup",
             entity_type="system",
             entity_id="production-trial-cleanup",
@@ -117,7 +131,7 @@ def _seed_scope(database_url: str) -> dict[str, object]:
         def reconciliation(status: str) -> ClientGamingCleanupReconciliation:
             approved = status == "approved"
             return ClientGamingCleanupReconciliation(
-                company_id=company.id,
+                company_id=company_id,
                 client_installation_id=installation.id,
                 branch_id=branch.id,
                 terminal_id=terminal.id,
@@ -249,11 +263,12 @@ def test_0081_refuses_to_fabricate_app_identity_for_populated_legacy_ledger() ->
         engine = create_engine(database_url)
         now = datetime.now(UTC)
         with Session(engine) as session:
-            company = Company(name=f"0081 legacy {uuid4()}")
-            session.add(company)
-            session.flush()
+            company_id = _insert_0079_company(
+                session,
+                name=f"0081 legacy {uuid4()}",
+            )
             branch = Branch(
-                company_id=company.id,
+                company_id=company_id,
                 name="Main",
                 code=f"B{uuid4().hex[:4]}",
                 invoice_series_code=uuid4().hex[:2].upper(),
@@ -267,13 +282,13 @@ def test_0081_refuses_to_fabricate_app_identity_for_populated_legacy_ledger() ->
                 device_id=f"0081-legacy-{uuid4()}",
             )
             user = User(
-                company_id=company.id,
+                company_id=company_id,
                 email=f"legacy-{uuid4()}@test.local",
                 password_hash="not-a-real-password-hash",
                 name="Legacy reporter",
             )
             station = Station(
-                company_id=company.id,
+                company_id=company_id,
                 branch_id=branch.id,
                 code=f"S{uuid4().hex[:6]}",
                 name="0081 legacy station",
@@ -283,7 +298,7 @@ def test_0081_refuses_to_fabricate_app_identity_for_populated_legacy_ledger() ->
             session.add_all([terminal, user, station])
             session.flush()
             installation = ClientInstallation(
-                company_id=company.id,
+                company_id=company_id,
                 installation_id=uuid4(),
                 registered_by_user_id=user.id,
                 last_user_id=user.id,
@@ -302,7 +317,7 @@ def test_0081_refuses_to_fabricate_app_identity_for_populated_legacy_ledger() ->
             session.flush()
             receipt = AuditLog(
                 actor_user_id=user.id,
-                company_id=company.id,
+                company_id=company_id,
                 action="maintenance.production_trial_cleanup",
                 entity_type="system",
                 entity_id="production-trial-cleanup",
@@ -328,7 +343,7 @@ def test_0081_refuses_to_fabricate_app_identity_for_populated_legacy_ledger() ->
                 ),
                 {
                     "id": row_id,
-                    "company_id": company.id,
+                    "company_id": company_id,
                     "installation_id": installation.id,
                     "branch_id": branch.id,
                     "terminal_id": terminal.id,

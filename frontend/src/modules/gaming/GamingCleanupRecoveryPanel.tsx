@@ -1,5 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertCircle, CheckCircle2, Copy, Loader2, RefreshCw, ShieldCheck } from 'lucide-react';
+import {
+  AlertCircle,
+  CheckCircle2,
+  ChevronDown,
+  ChevronUp,
+  Copy,
+  Loader2,
+  RefreshCw,
+  ShieldCheck,
+} from 'lucide-react';
 
 import { type ApiError } from '@/lib/api';
 import {
@@ -100,6 +109,21 @@ export function canApproveGamingCleanupCandidate(
 
 export type GamingCleanupApprovalAttempt = { reason: string; key: string };
 
+export type GamingCleanupPanelMode = 'loading' | 'error' | 'attention' | 'history' | 'empty';
+
+export function gamingCleanupPanelMode(
+  rows: readonly Pick<GamingCleanupReconciliationDTO, 'status'>[],
+  loading: boolean,
+  error: string | null,
+): GamingCleanupPanelMode {
+  if (error) return 'error';
+  if (loading) return 'loading';
+  if (rows.some((row) => row.status === 'reported' || row.status === 'approved')) {
+    return 'attention';
+  }
+  return rows.length > 0 ? 'history' : 'empty';
+}
+
 export function approvalAttemptFor(
   attempts: Map<string, GamingCleanupApprovalAttempt>,
   candidateId: string,
@@ -147,9 +171,11 @@ export default function GamingCleanupRecoveryPanel({
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [historyExpanded, setHistoryExpanded] = useState(false);
   const approvalAttempts = useRef(new Map<string, GamingCleanupApprovalAttempt>());
 
   const load = useCallback(async () => {
+    setLoading(true);
     setError(null);
     try {
       const [reconciliations, installations] = await Promise.all([
@@ -175,6 +201,11 @@ export default function GamingCleanupRecoveryPanel({
     () => new Map(stations.map((station) => [station.id, station])),
     [stations],
   );
+  const panelMode = gamingCleanupPanelMode(rows, loading, error);
+  const showRows = panelMode === 'attention'
+    || panelMode === 'error'
+    || panelMode === 'loading'
+    || (panelMode === 'history' && historyExpanded);
 
   async function approve(row: GamingCleanupReconciliationDTO) {
     const reason = (reasons[row.id] ?? '').trim();
@@ -229,19 +260,33 @@ export default function GamingCleanupRecoveryPanel({
           <div>
             <h3 id="gaming-cleanup-title" className="font-semibold">Tablet Gaming cleanup recovery</h3>
             <p className="mt-1 text-sm text-fg-muted">
-              Only candidates reported by the exact tablet and verified against the immutable production cleanup receipt appear here. Approval retires that one local overlay after the tablet refreshes.
+              {panelMode === 'empty'
+                ? 'No tablet cleanup needs review.'
+                : panelMode === 'history'
+                  ? `${rows.length} completed or superseded cleanup record${rows.length === 1 ? '' : 's'}.`
+                  : 'Only candidates reported by the exact tablet and verified against the immutable production cleanup receipt appear here. Approval retires that one local overlay after the tablet refreshes.'}
             </p>
           </div>
         </div>
-        <button type="button" className="btn btn-ghost !py-1.5" onClick={() => void load()} disabled={loading || busy !== null}>
-          {loading ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />} Refresh
-        </button>
+        <div className="flex shrink-0 gap-1">
+          {panelMode === 'history' && (
+            <button
+              type="button"
+              className="btn btn-ghost !py-1.5"
+              aria-expanded={historyExpanded}
+              onClick={() => setHistoryExpanded((expanded) => !expanded)}
+            >
+              {historyExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+              {historyExpanded ? 'Hide history' : 'Show history'}
+            </button>
+          )}
+          <button type="button" className="btn btn-ghost !py-1.5" onClick={() => void load()} disabled={loading || busy !== null}>
+            {loading ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />} Refresh
+          </button>
+        </div>
       </div>
       {error && <p className="mt-3 flex items-center gap-2 text-sm text-accent-bad"><AlertCircle size={14} />{error}</p>}
-      {!loading && rows.length === 0 && (
-        <p className="mt-4 text-sm text-fg-muted">No tablet has reported an eligible stale Gaming overlay.</p>
-      )}
-      <div className="mt-4 space-y-3">
+      {showRows && <div className="mt-4 space-y-3">
         {rows.map((row) => {
           const device = devicesById.get(row.installation_id);
           const station = stationsById.get(row.station_id);
@@ -299,7 +344,7 @@ export default function GamingCleanupRecoveryPanel({
             </article>
           );
         })}
-      </div>
+      </div>}
     </section>
   );
 }

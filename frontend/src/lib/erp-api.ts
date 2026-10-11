@@ -1256,6 +1256,13 @@ export interface CompanyDTO {
   payment_secret_set: boolean;
 }
 
+export type GoogleSheetsExportMode = 'legacy_transactions' | 'daily_collections';
+
+export interface GoogleSheetsSummaryBlockerStateDTO {
+  business_date: string;
+  blockers: string[];
+}
+
 export interface GoogleSheetsMirrorStatusDTO {
   enabled: boolean;
   connection_verified: boolean;
@@ -1268,6 +1275,14 @@ export interface GoogleSheetsMirrorStatusDTO {
   delivered_count: number;
   last_delivered_at: string | null;
   last_error: string | null;
+  export_mode: GoogleSheetsExportMode;
+  summary_branch_id: string | null;
+  summary_branch_name: string | null;
+  summary_timezone: string | null;
+  summary_start_date: string | null;
+  summary_last_scanned_at: string | null;
+  summary_last_window_blockers: GoogleSheetsSummaryBlockerStateDTO[];
+  summary_last_error: string | null;
 }
 
 export interface GoogleSheetsMirrorConfigureResultDTO extends GoogleSheetsMirrorStatusDTO {
@@ -4134,7 +4149,13 @@ export const settings = {
     api.patch<CompanyDTO>('/settings/company', body).then((r) => r.data),
   getGoogleSheetsMirror: () =>
     api.get<GoogleSheetsMirrorStatusDTO>('/settings/google-sheets').then((r) => r.data),
-  configureGoogleSheetsMirror: (body: { webhook_url: string; rotate_secret?: boolean }) =>
+  configureGoogleSheetsMirror: (body: {
+    webhook_url: string;
+    rotate_secret?: boolean;
+    export_mode?: GoogleSheetsExportMode;
+    summary_branch_id?: string;
+    summary_start_date?: string;
+  }) =>
     api.post<GoogleSheetsMirrorConfigureResultDTO>('/settings/google-sheets/configure', body)
       .then((r) => r.data),
   testGoogleSheetsMirror: () =>

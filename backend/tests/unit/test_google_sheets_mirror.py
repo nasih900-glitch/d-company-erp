@@ -102,7 +102,7 @@ async def test_conditional_enqueue_persists_while_current_generation_is_unverifi
     class _Result:
         @staticmethod
         def one_or_none():
-            return configuration_id, configured_at
+            return configuration_id, configured_at, "legacy_transactions"
 
     class _Session:
         async def execute(self, statement):
@@ -154,7 +154,7 @@ async def test_conditional_enqueue_reuses_caller_transaction_when_configured(
     class _Result:
         @staticmethod
         def one_or_none():
-            return configuration_id, configured_at
+            return configuration_id, configured_at, "legacy_transactions"
 
     class _Session:
         async def execute(self, _statement):
@@ -198,7 +198,7 @@ async def test_connection_test_can_enqueue_before_verification(monkeypatch) -> N
     class _Result:
         @staticmethod
         def one_or_none():
-            return configuration_id, configured_at
+            return configuration_id, configured_at, "legacy_transactions"
 
     class _Session:
         async def execute(self, statement):
@@ -231,6 +231,37 @@ async def test_connection_test_can_enqueue_before_verification(monkeypatch) -> N
     )
     assert "google_sheets_deliveries" not in compiled
     assert "FOR SHARE" in compiled
+
+
+async def test_summary_mode_suppresses_ordinary_transaction_enqueue(
+    monkeypatch,
+) -> None:
+    class _Result:
+        @staticmethod
+        def one_or_none():
+            return uuid4(), datetime(2026, 9, 19, tzinfo=UTC), "daily_collections"
+
+    class _Session:
+        async def execute(self, _statement):
+            return _Result()
+
+    async def fail_enqueue(*_args, **_kwargs):
+        pytest.fail("summary mode must not enqueue an individual business fact")
+
+    monkeypatch.setattr(mirror_service, "enqueue_google_sheets_event", fail_enqueue)
+    assert (
+        await mirror_service.enqueue_google_sheets_event_if_enabled(
+            _Session(),  # type: ignore[arg-type]
+            company_id=uuid4(),
+            event_type="finance.expense.recorded",
+            source_type="expense",
+            source_id=str(uuid4()),
+            source_revision="recorded-v1",
+            occurred_at=datetime(2026, 9, 19, tzinfo=UTC),
+            payload={"amount_minor": -100},
+        )
+        is None
+    )
 
 
 def test_signed_body_covers_the_exact_canonical_event() -> None:
@@ -315,6 +346,158 @@ async def test_delivery_accepts_google_redirect_and_matching_duplicate_ack() -> 
 
     assert outcome.delivered is True
     assert methods == ["POST", "GET"]
+
+
+def _receiver_health_response(**overrides: object) -> dict[str, object]:
+    response: dict[str, object] = {
+        "ok": True,
+        "service": "D Company ERP Mirror",
+        "schema": "erp-mirror.v1",
+        "schema_version": 1,
+        "mode": "append-only",
+        "tab": "ERP Mirror v1",
+        "hmac_configured": True,
+    }
+    response.update(overrides)
+    return response
+
+
+async def test_exact_receiver_health_response_is_retryable_and_never_success() -> None:
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(200, json=_receiver_health_response())
+        )
+    ) as client:
+        outcome = await send_claimed_delivery(
+            _delivery(),
+            destination=MirrorDestination(
+                "https://script.google.com/macros/s/id/exec", "s" * 32
+            ),
+            client=client,
+            config=DispatcherConfig(),
+        )
+
+    assert outcome.delivered is False
+    assert outcome.retryable is True
+    assert outcome.error_code == "unexpected_health_response"
+
+
+@pytest.mark.parametrize(
+    ("response_payload", "error_code"),
+    [
+        ({"ok": True}, "acknowledgement_mismatch"),
+        (
+            _receiver_health_response(schema_version=True),
+            "acknowledgement_mismatch",
+        ),
+        (
+            _receiver_health_response(event_id="unexpected-ack-field"),
+            "acknowledgement_mismatch",
+        ),
+        (
+            {
+                "ok": True,
+                "status": "accepted",
+                "event_id": "wrong-event",
+                "payload_sha256": "0" * 64,
+            },
+            "acknowledgement_mismatch",
+        ),
+        (
+            {
+                "ok": False,
+                "retryable": False,
+                "error_code": "signature_invalid",
+                "error": "sink rejected signature",
+            },
+            "signature_invalid",
+        ),
+    ],
+)
+async def test_non_health_responses_keep_existing_fail_closed_classification(
+    response_payload: dict[str, object], error_code: str
+) -> None:
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(200, json=response_payload)
+        )
+    ) as client:
+        outcome = await send_claimed_delivery(
+            _delivery(),
+            destination=MirrorDestination(
+                "https://script.google.com/macros/s/id/exec", "s" * 32
+            ),
+            client=client,
+            config=DispatcherConfig(),
+        )
+
+    assert outcome.delivered is False
+    assert outcome.retryable is False
+    assert outcome.error_code == error_code
+
+
+@pytest.mark.parametrize(
+    ("ack_overrides", "delivered"),
+    [
+        ({}, False),
+        ({"capability": "daily_collections.v1", "scope": {}}, False),
+        (
+            {
+                "capability": "daily_collections.v1",
+                "scope": {
+                    "branch_id": "branch-1",
+                    "business_timezone": "Asia/Kolkata",
+                    "start_date": "2026-09-01",
+                },
+            },
+            True,
+        ),
+    ],
+)
+async def test_summary_connection_requires_exact_capability_and_scope_ack(
+    ack_overrides: dict[str, object], delivered: bool
+) -> None:
+    scope = {
+        "branch_id": "branch-1",
+        "business_timezone": "Asia/Kolkata",
+        "start_date": "2026-09-01",
+    }
+    payload = {
+        "export_mode": "daily_collections",
+        "required_capability": "daily_collections.v1",
+        "summary_scope": scope,
+    }
+    connection_test = _delivery(
+        event_type=mirror_service.CONNECTION_TEST_EVENT_TYPE,
+        source_type=mirror_service.CONNECTION_TEST_SOURCE_TYPE,
+        payload=payload,
+        payload_sha256=hashlib.sha256(
+            canonical_json(payload).encode("utf-8")
+        ).hexdigest(),
+    )
+    response_payload = {
+        "ok": True,
+        "status": "accepted",
+        "event_id": str(connection_test.event_id),
+        "payload_sha256": connection_test.payload_sha256,
+        **ack_overrides,
+    }
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(200, json=response_payload)
+        )
+    ) as client:
+        outcome = await send_claimed_delivery(
+            connection_test,
+            destination=MirrorDestination(
+                "https://script.google.com/macros/s/id/exec", "s" * 32
+            ),
+            client=client,
+            config=DispatcherConfig(),
+        )
+    assert outcome.delivered is delivered
+    if not delivered:
+        assert outcome.error_code == "acknowledgement_mismatch"
 
 
 async def test_delivery_rejects_redirect_outside_allowlist_before_following() -> None:
@@ -588,10 +771,10 @@ async def test_idempotent_replay_after_rotation_keeps_original_generation() -> N
 
 
 class _OneRowResult:
-    def __init__(self, row: GoogleSheetsDelivery) -> None:
+    def __init__(self, row: GoogleSheetsDelivery | None) -> None:
         self.row = row
 
-    def scalar_one_or_none(self) -> GoogleSheetsDelivery:
+    def scalar_one_or_none(self) -> GoogleSheetsDelivery | None:
         return self.row
 
 
@@ -601,6 +784,13 @@ class _OneRowSession:
 
     async def execute(self, _statement: object) -> _OneRowResult:
         return _OneRowResult(self.row)
+
+
+class _LeaseAwareOneRowSession(_OneRowSession):
+    async def execute(self, _statement: object) -> _OneRowResult:
+        if self.row.status == "leased" and self.row.lease_owner == "worker-1":
+            return _OneRowResult(self.row)
+        return _OneRowResult(None)
 
 
 async def test_retryable_outcome_returns_row_to_pending_with_backoff() -> None:
@@ -621,6 +811,104 @@ async def test_retryable_outcome_returns_row_to_pending_with_backoff() -> None:
     assert row.available_at == now + timedelta(seconds=60)
     assert row.lease_owner is None
     assert row.quarantined_at is None
+
+
+async def test_health_retry_can_reach_duplicate_ack_once_and_is_bounded() -> None:
+    delivery = _delivery(attempt_count=1)
+    config = DispatcherConfig(max_attempts=3, retry_base_seconds=30)
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(200, json=_receiver_health_response())
+        )
+    ) as client:
+        health_outcome = await send_claimed_delivery(
+            delivery,
+            destination=MirrorDestination(
+                "https://script.google.com/macros/s/id/exec", "s" * 32
+            ),
+            client=client,
+            config=config,
+        )
+
+    row = _leased_model(attempt_count=1)
+    original_payload = dict(row.payload)
+    first_attempt_at = datetime(2026, 9, 19, 14, tzinfo=UTC)
+    assert await apply_delivery_outcome(  # type: ignore[arg-type]
+        _LeaseAwareOneRowSession(row),
+        delivery_id=row.id,
+        worker_id="worker-1",
+        outcome=health_outcome,
+        now=first_attempt_at,
+        config=config,
+    )
+    assert row.status == "pending"
+    assert row.available_at == first_attempt_at + timedelta(seconds=30)
+    assert row.last_error_code == "unexpected_health_response"
+    assert row.payload == original_payload
+
+    row.status = "leased"
+    row.lease_owner = "worker-1"
+    row.lease_expires_at = first_attempt_at + timedelta(minutes=5)
+    row.attempt_count = 2
+    duplicate_ack = {
+        "ok": True,
+        "status": "duplicate",
+        "event_id": str(delivery.event_id),
+        "payload_sha256": delivery.payload_sha256,
+    }
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(200, json=duplicate_ack)
+        )
+    ) as client:
+        duplicate_outcome = await send_claimed_delivery(
+            delivery,
+            destination=MirrorDestination(
+                "https://script.google.com/macros/s/id/exec", "s" * 32
+            ),
+            client=client,
+            config=config,
+        )
+
+    delivered_at = first_attempt_at + timedelta(minutes=1)
+    assert await apply_delivery_outcome(  # type: ignore[arg-type]
+        _LeaseAwareOneRowSession(row),
+        delivery_id=row.id,
+        worker_id="worker-1",
+        outcome=duplicate_outcome,
+        now=delivered_at,
+        config=config,
+    )
+    assert row.status == "delivered"
+    assert row.delivered_at == delivered_at
+    assert row.payload == original_payload
+    assert not await apply_delivery_outcome(  # type: ignore[arg-type]
+        _LeaseAwareOneRowSession(row),
+        delivery_id=row.id,
+        worker_id="worker-1",
+        outcome=duplicate_outcome,
+        now=delivered_at + timedelta(minutes=1),
+        config=config,
+    )
+    assert row.delivered_at == delivered_at
+
+    exhausted = _leased_model(attempt_count=config.max_attempts)
+    exhausted_payload = dict(exhausted.payload)
+    quarantine_at = first_attempt_at + timedelta(minutes=2)
+    assert await apply_delivery_outcome(  # type: ignore[arg-type]
+        _LeaseAwareOneRowSession(exhausted),
+        delivery_id=exhausted.id,
+        worker_id="worker-1",
+        outcome=health_outcome,
+        now=quarantine_at,
+        config=config,
+    )
+    assert exhausted.status == "quarantined"
+    assert exhausted.quarantined_at == quarantine_at
+    assert exhausted.quarantine_reason is not None
+    assert exhausted.quarantine_reason.startswith("unexpected_health_response:")
+    assert exhausted.payload == exhausted_payload
 
 
 async def test_permanent_outcome_quarantines_without_erasing_evidence() -> None:
