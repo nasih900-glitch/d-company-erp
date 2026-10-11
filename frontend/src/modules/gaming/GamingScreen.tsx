@@ -44,7 +44,10 @@ import {
   type MenuItemDTO,
   type StationDTO,
 } from '@/lib/erp-api';
-import { resolveRequiredOpenShift } from '@/lib/operational-context';
+import {
+  OperationalContextError,
+  resolveRequiredOpenShift,
+} from '@/lib/operational-context';
 import { GAMING_CENTRE_TERMINAL_POLICY } from '@/lib/product-profile';
 import { createOperationKey, isAmbiguousApiError } from '@/lib/retry-drafts';
 import { subscribeRealtime } from '@/lib/realtime';
@@ -68,6 +71,11 @@ import {
   type GamingWriteDispatcher,
 } from './gaming-write-controls';
 import GamingCleanupRecoveryPanel from './GamingCleanupRecoveryPanel';
+import { GamingSecondPulse } from './GamingSecondPulse';
+import {
+  gamingBoardIncompleteMessage,
+  gamingBoardScopeKey,
+} from './gaming-board-freshness';
 
 import {
   PaidExtensionPersistenceError,
@@ -399,9 +407,34 @@ type AddonVoidTarget = AddonModalTarget & {
   addon: GamingSessionAddonDTO;
 };
 
-type CurrentShiftContext =
-  | { shiftId: string; error: null }
-  | { shiftId: null; error: string };
+export type CurrentShiftContext =
+  | { shiftId: string; error: null; refreshIncomplete: false }
+  | { shiftId: null; error: string; refreshIncomplete: boolean };
+
+export async function loadGamingShiftContext(
+  findRequiredShiftId: () => Promise<string>,
+): Promise<CurrentShiftContext> {
+  try {
+    return {
+      shiftId: await findRequiredShiftId(),
+      error: null,
+      refreshIncomplete: false,
+    };
+  } catch (cause) {
+    return {
+      shiftId: null,
+      error: cause instanceof Error
+        ? cause.message
+        : 'The current shift could not be verified.',
+      // A typed no-open-shift result proves the exact server scope was read.
+      // It still blocks billable actions, but does not make the board stale.
+      refreshIncomplete: !(
+        cause instanceof OperationalContextError
+        && cause.precondition === 'no_open_shift'
+      ),
+    };
+  }
+}
 
 export function extraControllerSurchargeMinor(extraControllers: number, durationMinutes: number): number {
   if (extraControllers <= 0 || durationMinutes <= 0) return 0;
@@ -587,6 +620,8 @@ export default function GamingScreen() {
   const [loading, setLoading] = useState(true);
   const [foregroundRefreshing, setForegroundRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [lastVerifiedLoadAt, setLastVerifiedLoadAt] = useState<number | null>(null);
+  const [refreshFailure, setRefreshFailure] = useState<string | null>(null);
   const [sessions, setSessions] = useState<Record<string, LocalSession>>({});
   const [addonCatalog, setAddonCatalog] = useState<MenuItemDTO[]>([]);
   const [addonCatalogError, setAddonCatalogError] = useState<string | null>(null);
@@ -597,7 +632,6 @@ export default function GamingScreen() {
   >(new Set());
   const [currentShiftId, setCurrentShiftId] = useState<string | null>(null);
   const [shiftContextError, setShiftContextError] = useState<string | null>(null);
-  const [, setTick] = useState(0); // force overtime/countdown recompute every second
   const [pendingDuration, setPendingDuration] = useState<Record<string, number | null>>({});
   const [customDurationFor, setCustomDurationFor] = useState<string | null>(null);
   // One optional booking contact is carried through to POS. A valid phone is
@@ -700,6 +734,13 @@ export default function GamingScreen() {
   const pauseAttemptRef = useRef<{ fingerprint: string; key: string } | null>(null);
   const refreshGenerationRef = useRef(0);
   const hasVerifiedBoardRef = useRef(false);
+  const boardScopeKey = gamingBoardScopeKey({
+    userId: me?.user_id,
+    companyId: me?.company_id,
+    branchId: me?.branch_id,
+    terminalReady,
+    terminalId,
+  });
 
   const addonCreateTerminalScope = useMemo<GamingAddonCreateTerminalScope | null>(() => {
     if (
@@ -944,12 +985,7 @@ export default function GamingScreen() {
     }
     try {
       if (LIVE_MODE) {
-        const shiftContextPromise: Promise<CurrentShiftContext> = findRequiredShiftId()
-          .then((shiftId) => ({ shiftId, error: null }))
-          .catch((cause: unknown) => ({
-            shiftId: null,
-            error: cause instanceof Error ? cause.message : 'The current shift could not be verified.',
-          }));
+        const shiftContextPromise = loadGamingShiftContext(findRequiredShiftId);
         const [
           stationRows,
           operationalSessions,
@@ -1026,6 +1062,18 @@ export default function GamingScreen() {
             loadedFriendNames[friendIds[index]] = result.value.name?.trim() || result.value.phone;
           }
         });
+        const incompleteMessage = gamingBoardIncompleteMessage([
+          shiftContext.refreshIncomplete ? 'open-shift context' : null,
+          catalogResult.error ? 'drinks and snacks catalogue' : null,
+          Object.keys(loadErrors).length > 0 ? 'saved session items' : null,
+          Object.keys(participantErrors).length > 0 ? 'friend attendance' : null,
+          friendLookups.some((result) => result.status === 'rejected')
+            ? 'saved friend names'
+            : null,
+        ]);
+        if (incompleteMessage && hasVerifiedBoardRef.current) {
+          throw new Error(incompleteMessage);
+        }
         setCurrentShiftId(shiftContext.shiftId);
         setShiftContextError(shiftContext.error);
         setStations(nextStations);
@@ -1130,16 +1178,32 @@ export default function GamingScreen() {
           return next;
         });
         setTransferBoardStale(false);
-        hasVerifiedBoardRef.current = true;
-        setError(null);
+        if (incompleteMessage) {
+          setError(`${incompleteMessage} Refresh before relying on this board.`);
+        } else {
+          hasVerifiedBoardRef.current = true;
+          setLastVerifiedLoadAt(Date.now());
+          setRefreshFailure(null);
+          setError(null);
+        }
       } else {
         if (!refresh.isCurrent()) return;
         setStations(STATIONS.map(demoToDTO).filter((station) => isAppStoreAllowedType(station.type)));
         hasVerifiedBoardRef.current = true;
+        setLastVerifiedLoadAt(Date.now());
+        setRefreshFailure(null);
         setError(null);
       }
     } catch (e) {
-      if (refresh.isCurrent() && refresh.surfaceFailure) setError((e as Error).message);
+      if (refresh.isCurrent()) {
+        const message = (e as Error).message;
+        if (hasVerifiedBoardRef.current) {
+          setRefreshFailure(message);
+          setError(null);
+        } else if (refresh.surfaceFailure) {
+          setError(message);
+        }
+      }
     } finally {
       if (refresh.isCurrent()) {
         setLoading(false);
@@ -1150,9 +1214,17 @@ export default function GamingScreen() {
   const loadRef = useRef(load);
   useEffect(() => { loadRef.current = load; });
   useEffect(() => {
+    invalidateGamingRefresh(refreshGenerationRef);
+    hasVerifiedBoardRef.current = false;
+    setLastVerifiedLoadAt(null);
+    setRefreshFailure(null);
+    setError(null);
+    setStations([]);
+    setSessions({});
+    setLoading(true);
     void loadRef.current('foreground');
     return () => invalidateGamingRefresh(refreshGenerationRef);
-  }, []);
+  }, [boardScopeKey]);
 
   // Real-time push re-syncs with the server the moment another device's
   // stop/start/extend happens, instead of waiting for a timer. load()'s
@@ -1212,12 +1284,10 @@ export default function GamingScreen() {
     transferringSession,
   ]);
 
-  // Live ticking timer + alarm check. One interval drives both the countdown
-  // re-render and the "has any timer just expired" scan, using refs so it
-  // always reads current data without resubscribing every render.
+  // Alarm checks stay independent from rendering. Time-sensitive UI subscribes
+  // through GamingSecondPulse, so this large screen does not render each second.
   useEffect(() => {
     const id = setInterval(() => {
-      setTick((n) => n + 1);
       const now = Date.now();
       for (const s of Object.values(sessionsRef.current)) {
         if (s.status !== 'active' || !s.timer_ends_at || now < s.timer_ends_at) continue;
@@ -3293,12 +3363,6 @@ export default function GamingScreen() {
     && terminalId
     && !paidExtensionInventory.error
   );
-  const overtimeStations = (() => {
-    const now = Date.now();
-    return Object.values(sessions)
-      .filter((s) => s.status === 'active' && s.timer_ends_at && now >= s.timer_ends_at)
-      .map((s) => stations.find((st) => st.id === s.station_id)?.name ?? 'Unknown station');
-  })();
 
   return (
     <div>
@@ -3307,6 +3371,11 @@ export default function GamingScreen() {
           <h2 className="text-2xl font-bold">Gaming lounge</h2>
           <p className="text-fg-muted text-sm">
             {stations.length} stations · {activeCount} active session{activeCount === 1 ? '' : 's'}
+          </p>
+          <p className="mt-1 text-xs text-fg-subtle">
+            {lastVerifiedLoadAt === null
+              ? 'Board verification pending'
+              : `Last verified load ${new Date(lastVerifiedLoadAt).toLocaleString()}`}
           </p>
         </div>
         <div className="flex gap-2">
@@ -3333,6 +3402,22 @@ export default function GamingScreen() {
           </GamingWriteOnly>
         </div>
       </header>
+
+      {lastVerifiedLoadAt !== null && refreshFailure && (
+        <div
+          className="mb-4 flex items-start gap-2 rounded-xl border border-accent-gold/40 bg-accent-gold/10 p-3 text-sm"
+          role="status"
+        >
+          <AlertCircle size={14} className="mt-0.5 shrink-0 text-accent-gold" />
+          <div>
+            <span className="font-semibold text-accent-gold">Latest refresh failed.</span>{' '}
+            <span className="text-fg-muted">
+              {refreshFailure} The board verified at{' '}
+              {new Date(lastVerifiedLoadAt).toLocaleString()} remains visible.
+            </span>
+          </div>
+        </div>
+      )}
 
       {error && (
         <div className="card mb-4 border-accent-bad/40 bg-accent-bad/10 text-accent-bad text-sm flex items-center gap-2">
@@ -3480,12 +3565,21 @@ export default function GamingScreen() {
         </div>
       )}
 
-      {overtimeStations.length > 0 && (
-        <div className="card mb-4 border-accent-bad/50 bg-accent-bad/10 text-accent-bad text-sm flex items-center gap-2 font-bold">
-          <BellRing size={16} className="animate-pulse"/>
-          {overtimeStations.length} station{overtimeStations.length === 1 ? '' : 's'} timed out: {overtimeStations.join(', ')}
-        </div>
-      )}
+      <GamingSecondPulse>
+        {(now) => {
+          const overtimeStations = Object.values(sessions)
+            .filter((session) => session.status === 'active'
+              && session.timer_ends_at && now >= session.timer_ends_at)
+            .map((session) => stations.find((station) => station.id === session.station_id)?.name
+              ?? 'Unknown station');
+          return overtimeStations.length > 0 ? (
+            <div className="card mb-4 border-accent-bad/50 bg-accent-bad/10 text-accent-bad text-sm flex items-center gap-2 font-bold">
+              <BellRing size={16} className="animate-pulse"/>
+              {overtimeStations.length} station{overtimeStations.length === 1 ? '' : 's'} timed out: {overtimeStations.join(', ')}
+            </div>
+          ) : null;
+        }}
+      </GamingSecondPulse>
 
       {notifPermission === 'default' && (
         <div className="card mb-4 border-accent/40 bg-accent/10 text-sm flex items-center justify-between gap-3 flex-wrap">
@@ -3503,7 +3597,9 @@ export default function GamingScreen() {
             : 'No stations configured yet.'}
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 md:gap-4">
+        <GamingSecondPulse>
+          {(now) => (
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 md:gap-4">
           {stations.map((st) => {
             const session = sessions[st.id];
             const billingMissing = session?.status === 'ended'
@@ -3516,7 +3612,7 @@ export default function GamingScreen() {
             const legacyBillingAmbiguous = session?.billing_mode === 'legacy_ambiguous';
             const phone = sessionPhone[st.id] ?? '';
             const customerName = sessionName[st.id] ?? '';
-            const elapsedMs = session ? playedSessionMilliseconds(session, Date.now()) : 0;
+            const elapsedMs = session ? playedSessionMilliseconds(session, now) : 0;
             const elapsedMin = Math.floor(elapsedMs / 60000);
             // A package session's price is locked in at start (see backend
             // gaming/router.py stop_session) and never grows with elapsed
@@ -3862,7 +3958,7 @@ export default function GamingScreen() {
                       {session.timer_ends_at || (session.status === 'paused' && session.timer_minutes != null) ? (() => {
                         const remainingMs = session.status === 'paused'
                           ? session.timer_minutes! * 60_000 - elapsedMs
-                          : session.timer_ends_at! - Date.now();
+                          : session.timer_ends_at! - now;
                         const overtime = remainingMs <= 0;
                         const lowTime = !overtime && remainingMs <= 5 * 60000;
                         const clock = Number.isFinite(remainingMs) ? fmtClock(Math.abs(Math.round(remainingMs / 1000))) : null;
@@ -4283,7 +4379,9 @@ export default function GamingScreen() {
               </div>
             );
           })}
-        </div>
+          </div>
+          )}
+        </GamingSecondPulse>
       )}
 
       <GamingWriteOnly allowed={canManageStations}>
@@ -4413,25 +4511,34 @@ export default function GamingScreen() {
             onCancel={() => { if (!changingPause) setPendingPauseTarget(null); }}
           />
         )}
-        {pendingShortenTarget && (() => {
-          const session = sessions[pendingShortenTarget.id];
-          const target = session ? eligiblePs5ShortenTarget(session, packages,
-            playedSessionMilliseconds(session, Date.now()),
-            session.backend_session_id ? participantsBySession[session.backend_session_id] : undefined) : null;
-          return (
-            <ConfirmModal
-              title={`Change ${pendingShortenTarget.name} to 30 minutes?`}
-              message={target && session?.locked_amount_minor != null
-                ? `Change the published session package from ${inr(session.locked_amount_minor)} to ${inr(session.locked_amount_minor - (session.package_price_minor_snapshot ?? 0) + target.price_minor)}. Only available before 30 minutes of actual play, before a friend joins, an extension, or POS payment. The original booking remains in the audit history.`
-                : 'The session no longer qualifies. Refresh Gaming before trying again.'}
-              confirmLabel="Change package"
-              confirmDisabled={!target}
-              busy={gamingActionBusy === session?.backend_session_id}
-              onConfirm={() => { void shortenPs5Booking(pendingShortenTarget); }}
-              onCancel={() => { if (!gamingActionBusy) setPendingShortenTarget(null); }}
-            />
-          );
-        })()}
+        {pendingShortenTarget && (
+          <GamingSecondPulse>
+            {(now) => {
+              const session = sessions[pendingShortenTarget.id];
+              const target = session ? eligiblePs5ShortenTarget(
+                session,
+                packages,
+                playedSessionMilliseconds(session, now),
+                session.backend_session_id
+                  ? participantsBySession[session.backend_session_id]
+                  : undefined,
+              ) : null;
+              return (
+                <ConfirmModal
+                  title={`Change ${pendingShortenTarget.name} to 30 minutes?`}
+                  message={target && session?.locked_amount_minor != null
+                    ? `Change the published session package from ${inr(session.locked_amount_minor)} to ${inr(session.locked_amount_minor - (session.package_price_minor_snapshot ?? 0) + target.price_minor)}. Only available before 30 minutes of actual play, before a friend joins, an extension, or POS payment. The original booking remains in the audit history.`
+                    : 'The session no longer qualifies. Refresh Gaming before trying again.'}
+                  confirmLabel="Change package"
+                  confirmDisabled={!target}
+                  busy={gamingActionBusy === session?.backend_session_id}
+                  onConfirm={() => { void shortenPs5Booking(pendingShortenTarget); }}
+                  onCancel={() => { if (!gamingActionBusy) setPendingShortenTarget(null); }}
+                />
+              );
+            }}
+          </GamingSecondPulse>
+        )}
         {pendingFriendJoin && (
           <Modal open onClose={() => { if (!friendSaving && !gamingActionBusy) setPendingFriendJoin(null); }}
             title={`Add a friend to ${pendingFriendJoin.name}`}>
@@ -4470,36 +4577,43 @@ export default function GamingScreen() {
             onCancel={() => { if (!gamingActionBusy) setPendingFriendLeave(null); }}
           />
         )}
-        {pendingStopTarget && (() => {
-          const session = sessions[pendingStopTarget.id];
-          if (!session || session.status === 'ended') return null;
-          const elapsedMs = playedSessionMilliseconds(session, Date.now());
-          const estimatedAmountMinor = runningBillMinor({
-            billingMode: session.billing_mode,
-            lockedAmountMinor: session.locked_amount_minor,
-            ratePerHourMinor: session.rate_per_hour_minor,
-            elapsedMs,
-          });
-          const estimatedFriendMinor = session.backend_session_id
-            ? estimatedFriendControllerMinor(participantsBySession[session.backend_session_id], elapsedMs)
-            : null;
-          return (
-            <GamingStopConfirmation
-              stationName={pendingStopTarget.name}
-              elapsedMinutes={Math.max(1, Math.ceil(elapsedMs / 60_000))}
-              estimatedAmountMinor={estimatedAmountMinor}
-              estimatedFriendMinor={estimatedFriendMinor}
-              friendChargesUnverified={Boolean(session.participant_revision
-                && (estimatedFriendMinor === null
-                  || participantsBySession[session.backend_session_id!]?.participant_revision
-                    !== session.participant_revision))}
-              fixedPrice={session.billing_mode === 'package'}
-              busy={stoppingSession === pendingStopTarget.id}
-              onConfirm={() => { void stopSession(pendingStopTarget); }}
-              onCancel={() => { if (!stoppingSession) setPendingStopTarget(null); }}
-            />
-          );
-        })()}
+        {pendingStopTarget && (
+          <GamingSecondPulse>
+            {(now) => {
+              const session = sessions[pendingStopTarget.id];
+              if (!session || session.status === 'ended') return null;
+              const elapsedMs = playedSessionMilliseconds(session, now);
+              const estimatedAmountMinor = runningBillMinor({
+                billingMode: session.billing_mode,
+                lockedAmountMinor: session.locked_amount_minor,
+                ratePerHourMinor: session.rate_per_hour_minor,
+                elapsedMs,
+              });
+              const estimatedFriendMinor = session.backend_session_id
+                ? estimatedFriendControllerMinor(
+                  participantsBySession[session.backend_session_id],
+                  elapsedMs,
+                )
+                : null;
+              return (
+                <GamingStopConfirmation
+                  stationName={pendingStopTarget.name}
+                  elapsedMinutes={Math.max(1, Math.ceil(elapsedMs / 60_000))}
+                  estimatedAmountMinor={estimatedAmountMinor}
+                  estimatedFriendMinor={estimatedFriendMinor}
+                  friendChargesUnverified={Boolean(session.participant_revision
+                    && (estimatedFriendMinor === null
+                      || participantsBySession[session.backend_session_id!]?.participant_revision
+                        !== session.participant_revision))}
+                  fixedPrice={session.billing_mode === 'package'}
+                  busy={stoppingSession === pendingStopTarget.id}
+                  onConfirm={() => { void stopSession(pendingStopTarget); }}
+                  onCancel={() => { if (!stoppingSession) setPendingStopTarget(null); }}
+                />
+              );
+            }}
+          </GamingSecondPulse>
+        )}
         {cancelStationTarget && (
           <PromptModal
             title={`Cancel ${cancelStationTarget.name}`}

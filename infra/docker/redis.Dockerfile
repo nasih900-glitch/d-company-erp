@@ -1,8 +1,8 @@
 # syntax=docker/dockerfile:1.7.1@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
 
-# Redis 7.4.11 on current Alpine 3.21 carries OpenSSL 3.3.7-r1. Build the
-# independently verified zlib correction in a discarded stage, then overlay
-# only the patched shared object and its non-secret provenance in the runtime.
+# Preserve Redis 7.4.11 and upgrade only its OpenSSL security packages.
+# Install packages before overlaying the independently verified zlib runtime
+# so package transactions cannot replace the reviewed shared object.
 FROM redis:7.4.11-alpine3.21@sha256:520775a41a63e77e06c73e35d2fd9cc15921a609516818796b4ecbb813078bc7 AS zlib-builder
 WORKDIR /tmp/dcompany-zlib
 RUN apk add --no-cache --virtual .zlib-build-deps build-base patch
@@ -30,6 +30,10 @@ LABEL org.opencontainers.image.title="D Company ERP Redis" \
       com.dcompany.zlib.followup.commit="7235b0a581227c56a79a43ff828f8ef6794194c8" \
       com.dcompany.zlib.followup.sha256="96040ee84d0d187905283912dbd3f7b66ac2033976a2ceefe9b8cca63143d9c2"
 
+RUN apk add --no-cache --upgrade \
+      'libcrypto3=3.3.7-r2' \
+      'libssl3=3.3.7-r2'
+
 COPY --from=zlib-builder /out/usr/lib/libz.so.1.3.2 /usr/lib/libz.so.1.3.2
 COPY --from=zlib-builder /out/etc/dcompany/zlib-patch-evidence.env /etc/dcompany/zlib-patch-evidence.env
 COPY --from=zlib-builder /out/zlib-runtime-probe /tmp/zlib-runtime-probe
@@ -37,8 +41,8 @@ COPY infra/docker/zlib/verify-patched-zlib.sh /tmp/verify-patched-zlib.sh
 
 RUN set -eux; \
     installed_packages="$(apk info -v)"; \
-    printf '%s\n' "$installed_packages" | grep -Fx 'libcrypto3-3.3.7-r1'; \
-    printf '%s\n' "$installed_packages" | grep -Fx 'libssl3-3.3.7-r1'; \
+    printf '%s\n' "$installed_packages" | grep -Fx 'libcrypto3-3.3.7-r2'; \
+    printf '%s\n' "$installed_packages" | grep -Fx 'libssl3-3.3.7-r2'; \
     printf '%s\n' "$installed_packages" | grep -Fx 'zlib-1.3.2-r0'; \
     sh /tmp/verify-patched-zlib.sh; \
     redis-server --version | grep -F 'v=7.4.11'; \

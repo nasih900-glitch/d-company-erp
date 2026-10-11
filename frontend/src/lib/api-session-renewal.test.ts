@@ -10,6 +10,7 @@ import {
   describe,
   expect,
   it,
+  type Mock,
   type MockInstance,
   vi,
 } from 'vitest';
@@ -69,7 +70,7 @@ function refreshFailure(status?: number): AxiosError {
 
 describe('shared session renewal boundary', () => {
   let postSpy: MockInstance<typeof axios.post>;
-  let forcedLogout: ReturnType<typeof vi.fn>;
+  let forcedLogout: Mock<() => void>;
 
   beforeEach(() => {
     const storage = memoryStorage();

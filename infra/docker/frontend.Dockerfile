@@ -15,6 +15,8 @@ ENV VITE_API_URL=${VITE_API_URL} VITE_APP_VERSION=${VITE_APP_VERSION}
 RUN test "$VITE_APP_VERSION" = "$APP_VERSION" || { echo 'Web UI and release identity versions must match.' >&2; exit 1; }
 WORKDIR /app
 COPY frontend/package.json frontend/package-lock.json* ./
+COPY frontend/braces-compat ./braces-compat
+COPY frontend/vendor/dcompany-braces-depth-guard ./vendor/dcompany-braces-depth-guard
 RUN npm ci --no-audit --no-fund
 COPY frontend/ .
 RUN npm run build
@@ -43,10 +45,12 @@ COPY infra/docker/zlib/verify-patched-zlib.sh /tmp/verify-patched-zlib.sh
 RUN set -eux; \
     apk add --no-cache --upgrade \
       'libcrypto3=3.5.9-r0' \
-      'libssl3=3.5.9-r0'; \
+      'libssl3=3.5.9-r0' \
+      'pcre2=10.49-r0'; \
     installed_packages="$(apk info -v)"; \
     printf '%s\n' "$installed_packages" | grep -Fx 'libcrypto3-3.5.9-r0'; \
     printf '%s\n' "$installed_packages" | grep -Fx 'libssl3-3.5.9-r0'; \
+    printf '%s\n' "$installed_packages" | grep -Fx 'pcre2-10.49-r0'; \
     apk info -e zlib; \
     apk info -v | grep -Fx 'zlib-1.3.2-r0'; \
     sh /tmp/verify-patched-zlib.sh; \

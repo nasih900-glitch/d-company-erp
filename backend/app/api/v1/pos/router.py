@@ -5855,7 +5855,14 @@ async def record_payment(
         )
 
     order = (
-        await session.execute(select(Order).where(Order.id == order_id).with_for_update())
+        await session.execute(
+            select(Order)
+            .where(
+                Order.id == order_id,
+                Order.company_id == tenant.company_id,
+            )
+            .with_for_update()
+        )
     ).scalar_one_or_none()
     order = require_operational_order(
         order,
@@ -5872,7 +5879,14 @@ async def record_payment(
     if order.status in {"paid", "void", "refunded"}:
         raise BusinessRuleError(f"cannot pay an order in status={order.status}")
     shift = (
-        await session.execute(select(Shift).where(Shift.id == order.shift_id).with_for_update())
+        await session.execute(
+            select(Shift)
+            .where(
+                Shift.id == order.shift_id,
+                Shift.company_id == tenant.company_id,
+            )
+            .with_for_update()
+        )
     ).scalar_one_or_none()
     shift = require_open_operational_shift(
         shift,
@@ -9023,12 +9037,13 @@ async def _close_shift_impl(
     *,
     recovery: ShiftRecoveryCloseRequest | None = None,
 ) -> dict:
-    shift_query = select(Shift).where(Shift.id == shift_id)
-    if recovery is not None:
-        # Do not let a guessed foreign-tenant UUID acquire even a transient
-        # row lock. Branch validation remains separate so a same-company,
-        # wrong-branch recovery receives the actionable business error below.
-        shift_query = shift_query.where(Shift.company_id == tenant.company_id)
+    # Do not let a guessed foreign-tenant UUID acquire even a transient row
+    # lock. Branch validation remains separate so a same-company, wrong-branch
+    # close receives the actionable business error below.
+    shift_query = select(Shift).where(
+        Shift.id == shift_id,
+        Shift.company_id == tenant.company_id,
+    )
     shift = (
         await session.execute(shift_query.with_for_update())
     ).scalar_one_or_none()

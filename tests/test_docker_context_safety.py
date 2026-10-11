@@ -14,6 +14,20 @@ CONTAINER_SCAN_ACTION = (
 
 
 class DockerContextSafetyTest(unittest.TestCase):
+    def test_frontend_local_dependency_sources_precede_frozen_install(self) -> None:
+        dockerfile = (ROOT / "infra" / "docker" / "frontend.Dockerfile").read_text(
+            encoding="utf-8"
+        )
+        install = dockerfile.index("RUN npm ci --no-audit --no-fund")
+        for local_source in (
+            "COPY frontend/braces-compat ./braces-compat",
+            "COPY frontend/vendor/dcompany-braces-depth-guard "
+            "./vendor/dcompany-braces-depth-guard",
+        ):
+            with self.subTest(local_source=local_source):
+                self.assertIn(local_source, dockerfile)
+                self.assertLess(dockerfile.index(local_source), install)
+
     def test_production_python_dependencies_are_hash_locked(self) -> None:
         requirement_start = r"[A-Za-z0-9_.-]+(?:\[[A-Za-z0-9_,.-]+\])?=="
         for lock_name, minimum_count in (
@@ -192,13 +206,27 @@ class DockerContextSafetyTest(unittest.TestCase):
         self.assertEqual(5, action.count("severity-cutoff: high"))
         self.assertEqual(5, action.count("fail-build: true"))
         self.assertEqual(5, action.count("only-fixed: false"))
-        self.assertEqual(5, action.count("vex: ${{ runner.temp }}/container-security/"))
+        self.assertEqual(4, action.count("vex: ${{ runner.temp }}/container-security/"))
         for component in ("backend", "frontend", "caddy", "postgres", "redis"):
             with self.subTest(component=component):
                 self.assertIn(f"{component}_image_id={{{{.Id}}}}", action)
                 self.assertIn(f"{component}.spdx.json", action)
                 self.assertIn(f"image: ${{{{ inputs.{component}-image }}}}", action)
                 self.assertIn(f"{component}-grype.json", action)
+        for component in ("backend", "frontend", "postgres", "redis"):
+            self.assertIn(
+                f"vex: ${{{{ runner.temp }}}}/container-security/"
+                f"{component}-zlib.openvex.json",
+                action,
+            )
+        self.assertNotIn("caddy-zlib.openvex.json", action)
+        self.assertIn(
+            'python3 "$verifier" \\\n'
+            '              --caddy-fixed-sbom "$evidence_dir/caddy.syft.json" \\\n'
+            '              "$image" "${config_ids[0]}" \\\n'
+            '              "caddy=$evidence_dir/caddy-grype.json" >> "$validation"',
+            action,
+        )
         self.assertNotIn("sbom: ${{ runner.temp }}/container-security", action)
         self.assertNotIn("continue-on-error", action)
 

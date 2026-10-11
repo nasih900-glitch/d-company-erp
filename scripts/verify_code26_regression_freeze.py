@@ -190,6 +190,8 @@ CODE30_4_BUILD41_BASE = "099daa28ea5b9cb3c4b167a66c82302896ad4acc"
 CODE30_4_BUILD42_BASE = "1c1c7582eb8d6d6c509ddddc159014af10ce5f89"
 # Tagged v3.1.35 / build 43: unsigned; cancelled before signing for TLS inventory.
 CODE30_4_BUILD43_BASE = "8418e349eac0707ef62629f6cd3b7dc434690436"
+# v3.1.36 / build 44: immutable source for the build-45 quality overlay.
+CODE30_4_BUILD44_BASE = "d915a66c9dee0d22c1a7018e2e79bc8ca9e0d7ab"
 CODE30_2_FREEZE_CONTROL_PATHS = frozenset({
     "scripts/verify_code26_regression_freeze.py",
     "tests/test_code26_regression_freeze.py",
@@ -861,6 +863,111 @@ REVIEWED_CODE30_4_BUILD44_SHA256 = {'.env.production.example': '0ae533abb6d8e815
  'tests/test_build42_pending_compatibility.py': '7a433d007aeb9c77dfae48f25522610caf9eb6f235406766d4d0f927d0dc775c',
  'tests/test_caddy_dependency_security.py': 'a9e103ab73957337d91af06b20abf1c95c465ef8a544a021c4540fbfdbe1658c',
  'tests/test_code26_physical_audit_lane.py': 'ca5a3244b9d1ae376b93bcb59ea6388eeac3a8d00d1b80d74e97942aa9659609'}
+# v3.1.37 / build 45 current-tree overlay. The three freeze controls remain
+# unhashed by their own map to avoid a self-referential digest cycle.
+REVIEWED_CODE30_4_BUILD45_SHA256 = {
+    '.env.production.example': 'e7c0181f0c08afb8b51e720f893517b583e2c4485da33e68950f475bee453225',
+    '.github/actions/scan-production-images/action.yml': '5e2d9a223681f10a70b62e2dc0424915760cc885de8fee18b75839d8bb7d4cf1',
+    '.github/workflows/ci.yml': '6664ba0afe510fdf0f42d806678d6f5c83f1c39ea4028113ceb62656bf42fde3',
+    '.github/workflows/release.yml': '17e8ee7961fd629ac91f32f5cb40618b179ecbb2fd0b39ab7922cca43687535e',
+    'PROJECT_STATE.md': 'c35269b6d537067d02bfac364f7f663119bc59deafb833007574e60163cbc54c',
+    'android-native/app/build.gradle.kts': 'ab45fd0caf781298fe2bf143c12913c3fc1eb254d8f39b6a8a41c1e505fcabf7',
+    'android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt': '03602f784f5214918831d45403ff933f0ed0f760420b2c9fd95cb989e8e90e06',
+    'backend/alembic/versions/0086_google_sheets_daily_collections.py': '9c9705b0e0f7d5b5d46071b959fffe2b3dc30433287f8c5cf2a553291ff54976',
+    'backend/app/__init__.py': '2c72f9e68ac9e6c8c08e2c42fd7cd3ddd0875d091d0c5b478b1acdef95e88d64',
+    'backend/app/api/v1/pos/router.py': '8d5e2932bd8ec9973d42257de243467757c40767a5d4e27a1925797b4990f907',
+    'backend/app/api/v1/settings/google_sheets.py': 'b6b1329a6581249f89c74ae76df2f2f2732bbcc15d0fb019777c8062e9df4149',
+    'backend/app/models/tenant.py': 'ba20d20a545584f1354bce8465586b6a9bfb92056b7bd2e155a704d238988ffb',
+    'backend/app/services/auth/retention.py': '54ddb7a7658633c52ce5beb9d7c26297ab6570f38ba1fe0e54a901d0ccbfb1b2',
+    'backend/app/services/integrations/google_sheets_collection_summary.py': 'c7c0d98795453b0b31e4eec94073ab9784d2c646d254553ffaf38a02e48da521',
+    'backend/app/services/integrations/google_sheets_collections.py': 'ef5149007ce434bbba36dd9694a0a11e0e3ea8f9fcc7d7245b14dcdc553f3a46',
+    'backend/app/services/integrations/google_sheets_mirror.py': '6eb49a28eb55371475db48b905ce5397cf2aba29e810c950339f7003599daaef',
+    'backend/app/services/integrations/google_sheets_runtime.py': '7637dc3eb4d505ab606dad40e299ab9713b49a6399cb8917a9b683fa53a751d5',
+    'backend/app/workers/support_attachments.py': '387c8ee71b7afba0ef78981a5e144231f95321e7b9972bc504c7484f0ad3c566',
+    'backend/pyproject.toml': '59cd0704990c4d89832fb2578756bcc9304cd4355f43b0c9a23406a876addc54',
+    'backend/requirements-ci.lock': 'f221f5f1ccf3fcc654699b0f7f14fef563403676c125cb0f35063fab3ef90ccd',
+    'backend/requirements.lock': 'b09c0fbb7d7e21490baeeb9c97a76fa92d4579a2e96a8b2a64f04761cffcdd7c',
+    'backend/requirements.txt': '7fb347e8806e2f320f11f20921160af817ffbf1360fe25f745461d7607df64e1',
+    'backend/tests/integration/test_auth_refresh_retention.py': 'a29b93c4b638621f3b5c9fdb74564233a8106e6689a52220c0fbd5eec8a02dda',
+    'backend/tests/integration/test_gaming_cleanup_migration_0079.py': '2b788f674218e689f7c81ecac6f550843f7ccfd9ebc7bdde9bdd80bbf698ab92',
+    'backend/tests/integration/test_google_sheets_collections.py': '5be1dac362c8b0823630062c3350b3baaa4be1959fc9d839ccc273cf7eb9d065',
+    'backend/tests/integration/test_google_sheets_daily_collection_settings.py': '0f2f7fed9b1b6ba1dfddd809bd5f08d7f3b823fed9a37572ed83ea666c32ba08',
+    'backend/tests/integration/test_google_sheets_daily_collection_summary.py': 'e62dc08bd493492b0e3d947c5affe3d8a1e7e6a0a04a12c9bca3f69b903f9249',
+    'backend/tests/integration/test_pos_tenant_lock_scope.py': 'c9475a3d151459a13290d335083560718204d4ec4cc31c5e98dc4ececedbc44c',
+    'backend/tests/unit/test_google_sheets_mirror.py': '8249ce81e4073b0838e7be05a93ed9710bdef93a759301cbec93332c495a8c77',
+    'backend/tests/unit/test_release_contracts.py': '5db99562b3084de52931017cd2b947b0dfe4949966f1668fc770e2d1ec2b7df4',
+    'backend/tests/unit/test_remote_assistance_contract.py': '3910a435cd581e89f2a9e2b9f3540e63bacb598f236fc57dbe67cbfbe2019073',
+    'backend/tests/unit/test_support_retention_auth_worker.py': '0378985d258d92d4a8143f7d4189b537bfa5d1ffbb7964eb9bab855b1e0c7303',
+    'docker-compose.prod.yml': '325efdc85c95e7409e2f23d4ae565be0993fa575a582e694144948d363e42ee6',
+    'docs/GOOGLE_SHEETS.md': '588ca9163a6d5fdc51df93459fcf6d2e48d19dc7a698bae6c3ea355086cff5a1',
+    'docs/SUPPORT_REPORTING.md': 'ed9544629cdbe4b13ab2fc102f4a302dde5a0329de3237ba39d7da7cd8d94dd6',
+    'docs/V3_1_37_RELEASE_CANDIDATE.md': '96946757d7b85edd516ec043b68ae2be9cddf46fdce5b6ceb5a3e3dbc1f1ff9d',
+    'frontend/.env.example': '19d955d551c8d4a32040c0b6a405d390ca267c431f2d642e86ea9cc12629bc32',
+    'frontend/braces-compat/LICENSE': '4ccd8f1107089316c85cd61bd99b43b25341d4ad8f4d480ea8c1e14a14755d90',
+    'frontend/braces-compat/index.cjs': 'bb48b516be4dfdba4e3800fd430a733c90e4cda44e82482246cd63e9a65bbc07',
+    'frontend/braces-compat/package.json': '4542de40a7df013648388ad57d3b96b6b1fcb65557150ce04a7d853b3eef478d',
+    'frontend/package-lock.json': '3fc23b4ae42fad5ee6c9bc53a8fb9c6e7666a6422a91de4a4e1ce8252e274204',
+    'frontend/package.json': 'cb6cb1015267804b63cf405d8a0625f7bd759ac76b119411f5efa988f909f1a7',
+    'frontend/pnpm-lock.yaml': '6d3949e41368ccd2d461cf46c9896ee9b1271076266039ee689d682f1ac429d2',
+    'frontend/scripts/verify-braces-depth-guard.mjs': '58de72b05c22aac9b03e57216f070e73cd53637d35135025f809fc2a0a423403',
+    'frontend/src/lib/api-session-renewal.test.ts': '5fc8a7186962b0643871fa765075411091a899bdcc0c961563cf150e324be327',
+    'frontend/src/lib/erp-api.ts': '3f4943dfbbfc8ca9b4d40613d563724416f27b1cc7d7db6d6af6d38a6cb6ca11',
+    'frontend/src/lib/google-sheets-daily-receiver.test.ts': '3ff2f084f0f1418ca3e3bfe10439a30cd9f36fdc6b1ae2f7091ae0fb2ca1f56f',
+    'frontend/src/lib/google-sheets-report-contract.test.ts': '2aaefb0730e877f6df95abd2f44866c31835984ba006b6ff5e319c5839b2db97',
+    'frontend/src/modules/gaming/GamingCleanupRecoveryPanel.tsx': '81b798585a4747a842246e298da4c3ffcf77ccd0fa67b5ce5c4d11e416fa4bc0',
+    'frontend/src/modules/gaming/GamingCleanupRecoveryPresentation.test.ts': 'cebd542c3ace60283d09efca0b4449f10a74eb4ed67a583be8df160b157a2740',
+    'frontend/src/modules/gaming/GamingScreen.tsx': 'eea3c74f2c2e25b13eaa8ac015bab4b48b05f45397c5b420d37a3374d0d8c3c0',
+    'frontend/src/modules/gaming/GamingSecondPulse.test.tsx': 'a7bdb47e8ac0dd01498ec1da8367b2e8b9e5e2948f0c502d5cc07e8fa710aa17',
+    'frontend/src/modules/gaming/GamingSecondPulse.tsx': '3ca42755c1329e5cd479b7ed4e5f156cd3d93a904dafe1476cc8303891dd3ef3',
+    'frontend/src/modules/gaming/GamingShiftContextFreshness.test.ts': 'c7dd59c9b39f62bb35dd969e76d6c5c9f59e71e999a14581558a291125dab1ab',
+    'frontend/src/modules/gaming/LegacyPauseResolution.test.tsx': '039904c204c088954eb143f2c4a1fcad10739f8f7b4ea514ef1303f726de1009',
+    'frontend/src/modules/gaming/gaming-board-freshness.test.ts': 'd6666b819c9034aaa7fc5e60c2cc744135f89fa884e2688331984a4c4152d6ae',
+    'frontend/src/modules/gaming/gaming-board-freshness.ts': 'c0a27fd30b8c0deee9a82b68c8b24eaf264fcd4a885f79569d69ba81eb83431f',
+    'frontend/src/modules/pos/OrdersAndShiftsScreen.tsx': '6ee060e220d5cdb3911511c79b676aeac11d88568b41c0f75d9acd48c620aa19',
+    'frontend/src/modules/pos/ShiftBusinessTimezonePresentation.test.tsx': '0c866e683e662ef93bbd4a9f378dc77e4c58c63ee788f2c7b0561dcee919fc35',
+    'frontend/src/modules/settings/apps-script.txt': 'ce7a5b390b4b47deac709579f588ae8f9d5ae87922eb61c2c03b5579c3d5f9b6',
+    'frontend/src/modules/settings/tabs/SheetsTab.test.tsx': 'bc76fca21de268173e59befd76cf2361e6d788dfdff19ae1492ae31082be2985',
+    'frontend/src/modules/settings/tabs/SheetsTab.tsx': 'da78a6c9823754b67ae5b294d3ea7e0cc2d73f300826e63930cce84d616240fd',
+    'frontend/vendor/dcompany-braces-depth-guard/LICENSE': '35bdd8a44339719441900fb50fbefc5e2dca1ca662cbaed7a687de842c8b70f2',
+    'frontend/vendor/dcompany-braces-depth-guard/NOTICE.md': '1829a9d696cd094d23485143d0c8b7dd2cdcd4eca2eaf007f48cf8809adf6e87',
+    'frontend/vendor/dcompany-braces-depth-guard/PROVENANCE.json': 'a5d7bf2afe1c976f2c1b5203e5be46629a531a03310eec15c4dea7fb65e7e492',
+    'frontend/vendor/dcompany-braces-depth-guard/UPSTREAM_README.md': 'f06ecffb78d40201813ecf840cd06b280a5a56ee85a7f9a6224df3bc1453c53d',
+    'frontend/vendor/dcompany-braces-depth-guard/index.js': '332ea07c7b006361aad12aa994ca75dc1db8e8382b884909e2f38f10b85c88a4',
+    'frontend/vendor/dcompany-braces-depth-guard/lib/compile.js': '20ea98b7f04c8969ca478db458e3e08e0f3b47cc9f810a75336370bfedbf9436',
+    'frontend/vendor/dcompany-braces-depth-guard/lib/constants.js': 'f9fb688959232eee3e6ad7906a5b0e3234815db49ee857ef86983d65b917dc7c',
+    'frontend/vendor/dcompany-braces-depth-guard/lib/expand.js': '447c6ef5dc95088ae0e40e759a4d50c6b8f6aa7f46e09e7dcede5ea397faba3f',
+    'frontend/vendor/dcompany-braces-depth-guard/lib/parse.js': '43d983a546dce1ed446dbe8535438a717de9e85040ab701edae3a5a50acdc1d4',
+    'frontend/vendor/dcompany-braces-depth-guard/lib/stringify.js': 'dd47ae5c9ac1f1a0e65de7160e25500a9dd724279a65fe96011c7f1b7b7ed36c',
+    'frontend/vendor/dcompany-braces-depth-guard/lib/utils.js': '34b39e1b7d634c5460c30b1fe271dd337cfc383709b3659c31e5d84b12e92e61',
+    'frontend/vendor/dcompany-braces-depth-guard/package.json': 'e534865b77df5d26f16acc3e95153cb0d41081f4e4760d1a5c299656e19fca5c',
+    'frontend/vendor/dcompany-braces-depth-guard/patches/dcompany-ancestor-depth-guard-v1.patch': '2e775aca3719326fdc772d2a835484fe874415b6a810a145cab2b89d4c20f208',
+    'infra/cron/dcompany-erp-alerts': 'f295d5b563d6acd5849348269195f13920d93c98c4659497e639ddd8601a18d4',
+    'infra/docker/backend.Dockerfile': '56c28b83ce357924919b58413a6569fe95ed34dfb5dd2584ca158319e0977561',
+    'infra/docker/caddy-build/go.mod': '039f8288d60e807cec75b0e9e24674befd8a07ffa1a1b36ea40fcb263a5a350e',
+    'infra/docker/caddy-build/go.sum': 'a99b9d50e840864e9a746ba7d1c8afb66da4d96cbd024d18e3dabd795eb05083',
+    'infra/docker/caddy.Dockerfile': 'd9aa16cfa9ec0da96b31f15481b8d4cf50a4caf2e8048f8b300f75fc4c2659f3',
+    'infra/docker/frontend.Dockerfile': '2bbabcb5d448b73b8a71a619ca8ab53b3eb5cdc2421725024e916bd04072cebf',
+    'infra/docker/postgres.Dockerfile': 'b7cc0f0a33b0292a746e57b79760c9534ac64f0aef4b34e99d13d18f8278aa8d',
+    'infra/docker/redis.Dockerfile': 'e0286e4955b981e8155a4a188b8b4261bf8b5fa2ce477b835f41768303490945',
+    'infra/scripts/install-on-vm.sh': 'b0cdc19b6e8dde2c52c08e9f78e286a0b13db73e0ee10973b75fa9ab97d49ffd',
+    'infra/scripts/run-hardened-image-scanners.sh': 'a2169c9cd0f68b87b2b036a8444ea9ddea8f876b0eb519331839c6d7cf8c4d5e',
+    'infra/scripts/verify-build45-pending-compatibility.py': 'bf42dacc6c8f4eb92c9c65646b8ac0210490d0b78779bca8731245047f7fb51b',
+    'infra/scripts/verify-build45-pending-state.sql': '18571143f9355d75702d57a3c5616a9feffc6288c42d12d9969201225615dfda',
+    'infra/scripts/verify-postgres16-image-compatibility.sh': '2ec4e93e08d9d08e4f56d464814eb6bc75dba72b5bb7e3776ce6440317d51449',
+    'infra/scripts/verify-zlib-vex.py': '898a472c9c5da9c231a1ee98022ce6b55d574b0cb951c058b9c3d7a45e6064a6',
+    'integrations/google-sheets/Code.gs': 'ce7a5b390b4b47deac709579f588ae8f9d5ae87922eb61c2c03b5579c3d5f9b6',
+    'ops/backup-requirements.lock': '302371a2a06d97adea0f01f3beb0cc5ef09dee408a4194b12eef2eeb93a745bd',
+    'tests/test_android_release_pipeline.py': 'da43787780d9813417669514fb14ff7dc0414807cff159ed04358159128e0062',
+    'tests/test_build42_pending_compatibility.py': 'e1b1875978c75d0c4e670204e3375cb00ed9407d45362e5aa086a3a5d4f21f92',
+    'tests/test_build45_pending_compatibility.py': '11292d8763a618f608f1bbaefe0fa8751c17992d2024c5b62652e7a6df51f423',
+    'tests/test_caddy_dependency_security.py': 'b1452951bac634182dc532d7af2a4133834b882e593c70a44adfc9cc9da98305',
+    'tests/test_ci_docker_connection.py': 'a3bd96ff82ad9072d4aaec9f010ae8ba02bd25ebfa3ffb988ff3858fcfaa3706',
+    'tests/test_code26_physical_audit_lane.py': '5972f637eee17072d7ba5220cc276cab5f1668f69fe37a95bbb0bf773a133cef',
+    'tests/test_docker_context_safety.py': 'd7313564073232132a04b3950b01b7c0adb331c24bf3036ec83606ac2f1415e5',
+    'tests/test_hardened_scanner_runtime.py': 'b1b0c5bea3362cc3808f462a2d32be01b38c42aff35011ad17527cde3eb71f21',
+    'tests/test_production_installer_safety.py': 'c9f49a641fd36e72c1aa985438ae83d0b40afcef5c4b9b3de7e006a656693d30',
+    'tests/test_zlib_security_remediation.py': '11429c56d36f9763810ab1ad6f5d66c3d729cfb115edaec79412caf1ca7c1184',
+}
 REVIEWED_CODE30_4_PRODUCTION_PATHS = frozenset(
     path
     for path in (
@@ -870,13 +977,14 @@ REVIEWED_CODE30_4_PRODUCTION_PATHS = frozenset(
         | REVIEWED_CODE30_4_BUILD42_SHA256
         | REVIEWED_CODE30_4_BUILD43_SHA256
         | REVIEWED_CODE30_4_BUILD44_SHA256
+        | REVIEWED_CODE30_4_BUILD45_SHA256
     )
     if path.startswith(("backend/app/", "frontend/src/", "android-native/app/src/main/"))
 )
 
 
 def _current_code30_4_sha256(path: str, fallback: str | None = None) -> str | None:
-    return REVIEWED_CODE30_4_BUILD44_SHA256.get(path) or REVIEWED_CODE30_4_BUILD43_SHA256.get(path) or REVIEWED_CODE30_4_BUILD42_SHA256.get(
+    return REVIEWED_CODE30_4_BUILD45_SHA256.get(path) or REVIEWED_CODE30_4_BUILD44_SHA256.get(path) or REVIEWED_CODE30_4_BUILD43_SHA256.get(path) or REVIEWED_CODE30_4_BUILD42_SHA256.get(
         path,
         REVIEWED_CODE30_4_BUILD41_SHA256.get(
             path,
@@ -1091,6 +1199,7 @@ def _normalise_release_identity(path: str, text: str) -> str:
         return text
     normalised = text
     for current, baseline in (
+        ("3.1.37", "3.1.14"),
         ("3.1.36", "3.1.14"),
         ("3.1.35", "3.1.14"),
         ("3.1.34", "3.1.14"),
@@ -1171,10 +1280,10 @@ def _normalise_release_identity(path: str, text: str) -> str:
     ):
         normalised = normalised.replace(current, baseline)
     normalised = re.sub(
-        r"version_code\s*=\s*(?:26|27|28|29|30|31|32|33|34|35|36|37|38|39|40|41|42|43|44)\b", "version_code=25", normalised
+        r"version_code\s*=\s*(?:26|27|28|29|30|31|32|33|34|35|36|37|38|39|40|41|42|43|44|45)\b", "version_code=25", normalised
     )
     normalised = re.sub(
-        r"assertEquals\((?:26|27|28|29|30|31|32|33|34|35|36|37|38|39|40|41|42|43|44),\s*BuildConfig\.VERSION_CODE\)",
+        r"assertEquals\((?:26|27|28|29|30|31|32|33|34|35|36|37|38|39|40|41|42|43|44|45),\s*BuildConfig\.VERSION_CODE\)",
         "assertEquals(25, BuildConfig.VERSION_CODE)",
         normalised,
     )
@@ -1321,7 +1430,11 @@ def _code30_4_build43_delta_paths(root: Path) -> set[str]:
 
 
 def _code30_4_build44_delta_paths(root: Path) -> set[str]:
-    changed = set(_git(root, "diff", "--name-only", CODE30_4_BUILD43_BASE).splitlines())
+    return set(_git(root, "diff", "--name-only", CODE30_4_BUILD43_BASE, CODE30_4_BUILD44_BASE).splitlines())
+
+
+def _code30_4_build45_delta_paths(root: Path) -> set[str]:
+    changed = set(_git(root, "diff", "--name-only", CODE30_4_BUILD44_BASE).splitlines())
     changed.update(_git(root, "ls-files", "--others", "--exclude-standard").splitlines())
     return {path for path in changed if path}
 
@@ -1544,6 +1657,15 @@ def _verify_code30_4_exact_delta(root: Path, errors: list[str]) -> None:
         if hashlib.sha256(tagged_bytes).hexdigest() != expected_sha256:
             errors.append(f"tagged Code30.4 build-43 file differs from reviewed bytes: {path}")
 
+    for path, expected_sha256 in REVIEWED_CODE30_4_BUILD44_SHA256.items():
+        try:
+            released_bytes = _git_bytes(root, "show", f"{CODE30_4_BUILD44_BASE}:{path}")
+        except subprocess.CalledProcessError:
+            errors.append(f"Code30.4 build-44 file absent from immutable base: {path}")
+            continue
+        if hashlib.sha256(released_bytes).hexdigest() != expected_sha256:
+            errors.append(f"Code30.4 build-44 file differs from reviewed bytes: {path}")
+
     expected_build42_paths = set(REVIEWED_CODE30_4_BUILD42_SHA256) | set(
         CODE30_4_FREEZE_CONTROL_PATHS
     )
@@ -1567,6 +1689,13 @@ def _verify_code30_4_exact_delta(root: Path, errors: list[str]) -> None:
     for path in sorted(current_build44_paths - expected_build44_paths):
         errors.append(f"unreviewed path entered the Code30.4 build-44 delta: {path}")
 
+    expected_build45_paths = set(REVIEWED_CODE30_4_BUILD45_SHA256) | set(CODE30_4_FREEZE_CONTROL_PATHS)
+    current_build45_paths = _code30_4_build45_delta_paths(root)
+    for path in sorted(expected_build45_paths - current_build45_paths):
+        errors.append(f"reviewed Code30.4 build-45 delta path disappeared: {path}")
+    for path in sorted(current_build45_paths - expected_build45_paths):
+        errors.append(f"unreviewed path entered the Code30.4 build-45 delta: {path}")
+
     # Post-release Code30.3 maintenance tools are pinned by their own map.
     expected_paths = set(REVIEWED_CODE30_4_SHA256) | set(
         CODE30_4_FREEZE_CONTROL_PATHS
@@ -1576,7 +1705,7 @@ def _verify_code30_4_exact_delta(root: Path, errors: list[str]) -> None:
         REVIEWED_CODE30_4_BUILD41_SHA256
     ) | set(
         REVIEWED_CODE30_4_BUILD42_SHA256
-    ) | set(REVIEWED_CODE30_4_BUILD43_SHA256) | set(REVIEWED_CODE30_4_BUILD44_SHA256)
+    ) | set(REVIEWED_CODE30_4_BUILD43_SHA256) | set(REVIEWED_CODE30_4_BUILD44_SHA256) | set(REVIEWED_CODE30_4_BUILD45_SHA256)
     current_paths = _code30_4_delta_paths(root)
     for path in sorted(expected_paths - current_paths):
         errors.append(f"reviewed Code30.4 delta path disappeared: {path}")
@@ -1590,6 +1719,7 @@ def _verify_code30_4_exact_delta(root: Path, errors: list[str]) -> None:
         | REVIEWED_CODE30_4_BUILD42_SHA256
         | REVIEWED_CODE30_4_BUILD43_SHA256
         | REVIEWED_CODE30_4_BUILD44_SHA256
+        | REVIEWED_CODE30_4_BUILD45_SHA256
     )
     for path, expected_sha256 in current_hashes.items():
         # These files define the freeze itself and cannot carry a current-tree
@@ -1646,6 +1776,7 @@ def verify_repository(root: Path, baseline: str = CODE25_BASE) -> RegressionFree
     _git(root, "cat-file", "-e", f"{CODE30_4_BUILD41_BASE}^{{commit}}")
     _git(root, "cat-file", "-e", f"{CODE30_4_BUILD42_BASE}^{{commit}}")
     _git(root, "cat-file", "-e", f"{CODE30_4_BUILD43_BASE}^{{commit}}")
+    _git(root, "cat-file", "-e", f"{CODE30_4_BUILD44_BASE}^{{commit}}")
     _verify_code30_2_exact_delta(root, errors)
     _verify_code30_3_exact_delta(root, errors)
     _verify_code30_4_exact_delta(root, errors)
@@ -1670,7 +1801,8 @@ def verify_repository(root: Path, baseline: str = CODE25_BASE) -> RegressionFree
             path, candidate_normalised
         )
         reviewed_test_sha256 = (
-            REVIEWED_CODE30_4_BUILD44_SHA256.get(path)
+            REVIEWED_CODE30_4_BUILD45_SHA256.get(path)
+            or REVIEWED_CODE30_4_BUILD44_SHA256.get(path)
             or REVIEWED_CODE30_4_BUILD43_SHA256.get(path)
             or REVIEWED_CODE30_4_BUILD42_SHA256.get(path)
             or REVIEWED_CODE30_4_BUILD41_SHA256.get(path)

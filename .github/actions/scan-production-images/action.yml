@@ -297,7 +297,7 @@ runs:
           postgres.syft.json postgres-hardened-grype.json \
           redis.syft.json redis-hardened-grype.json \
           backend-zlib.openvex.json frontend-zlib.openvex.json \
-          caddy-zlib.openvex.json postgres-zlib.openvex.json \
+          postgres-zlib.openvex.json \
           redis-zlib.openvex.json; do
           if sudo test -f "$scanner_evidence/$evidence"; then
             sudo install -o "$runner_uid" -g "$runner_gid" -m 0600 \
@@ -318,15 +318,15 @@ runs:
           postgres.syft.json postgres-hardened-grype.json \
           redis.syft.json redis-hardened-grype.json \
           backend-zlib.openvex.json frontend-zlib.openvex.json \
-          caddy-zlib.openvex.json postgres-zlib.openvex.json \
+          postgres-zlib.openvex.json \
           redis-zlib.openvex.json; do
           sudo rm -f "$scanner_evidence/$evidence"
         done
         sudo rmdir "$scanner_work"
         sudo rmdir "$scanner_evidence"
 
-    # Keep SPDX SBOMs as retained audit evidence, but scan each image directly
-    # with the per-image VEX produced by the hardened archive identity path.
+    # Keep SPDX SBOMs as retained audit evidence. The four r0 images use their
+    # per-image VEX; Caddy's fixed r1 APK is proved directly from its SBOM.
     - name: Scan backend image
       if: ${{ !cancelled() && steps.hardened-scan.outcome == 'success' }}
       uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
@@ -362,7 +362,6 @@ runs:
         fail-build: true
         severity-cutoff: high
         only-fixed: false
-        vex: ${{ runner.temp }}/container-security/caddy-zlib.openvex.json
         output-format: json
         output-file: ${{ runner.temp }}/container-security/caddy-grype.json
 
@@ -392,7 +391,7 @@ runs:
         output-format: json
         output-file: ${{ runner.temp }}/container-security/redis-grype.json
 
-    - name: Validate exact zlib VEX dispositions
+    - name: Validate exact zlib evidence
       if: ${{ !cancelled() && steps.hardened-scan.outcome == 'success' }}
       shell: bash
       env:
@@ -409,7 +408,7 @@ runs:
         verifier="$GITHUB_ACTION_PATH/../../../infra/scripts/verify-zlib-vex.py"
         services=(backend frontend caddy postgres redis)
         images=("$BACKEND_IMAGE" "$FRONTEND_IMAGE" "$CADDY_IMAGE" "$POSTGRES_IMAGE" "$REDIS_IMAGE")
-        validation="$evidence_dir/zlib-vex-validation.txt"
+        validation="$evidence_dir/zlib-evidence-validation.txt"
         : > "$validation"
         for index in "${!services[@]}"; do
           service=${services[$index]}
@@ -423,13 +422,20 @@ runs:
              ! [[ "${runtime_ids[0]}" =~ ^sha256:[0-9a-f]{64}$ ]] || \
              ! [[ "${config_ids[0]}" =~ ^sha256:[0-9a-f]{64}$ ]] || \
              [ "$(docker image inspect --format '{{.Id}}' "$image")" != "${runtime_ids[0]}" ]; then
-            echo "Candidate $service identity changed before final VEX validation." >&2
+            echo "Candidate $service identity changed before final zlib evidence validation." >&2
             exit 1
           fi
-          python3 "$verifier" \
-            "$evidence_dir/$service-zlib.openvex.json" \
-            "$image" "${config_ids[0]}" \
-            "$service=$evidence_dir/$service-grype.json" >> "$validation"
+          if [ "$service" = caddy ]; then
+            python3 "$verifier" \
+              --caddy-fixed-sbom "$evidence_dir/caddy.syft.json" \
+              "$image" "${config_ids[0]}" \
+              "caddy=$evidence_dir/caddy-grype.json" >> "$validation"
+          else
+            python3 "$verifier" \
+              "$evidence_dir/$service-zlib.openvex.json" \
+              "$image" "${config_ids[0]}" \
+              "$service=$evidence_dir/$service-grype.json" >> "$validation"
+          fi
         done
 
     - name: Retain container security evidence

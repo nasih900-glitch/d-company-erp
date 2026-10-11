@@ -1,6 +1,251 @@
 # D Company ERP — current project state
 
-## Code30.4 patch candidate (updated 2026-09-24)
+## Current quality candidate (updated 2026-10-11)
+
+### Latest completion checkpoint
+
+Production remains `d915a66c` / `v3.1.36` / build 44 / Room 53 / Alembic
+0085. The 18:44 UTC read-only check found zero open shifts, active or paused
+gaming sessions, unpaid or unbilled work, or pending Sheet deliveries. The
+current tablet reports build 44 with zero pending. Two historical installations
+still report one pending item each. The owner confirmed there is no older app
+copy; this does not verify the contents or drainage of those historical queues.
+Their identities, counters, timestamps and recorded work remain preserved.
+
+Hosted run `38163996683` on the `75e158f` source tree passed the Web lane,
+Android native lane, 1,693 repository contracts and the complete Android
+instrumentation lane: 407 cases plus both separately executed alarm tests.
+Backend passed 1,800 cases and failed one timezone-dependent test fixture:
+Kolkata had reached the next date while the test changed to Los Angeles. The
+API correctly rejected a future summary date. The test now uses UTC yesterday;
+the API and separate future-date rejection test remain unchanged. The four
+settings integration tests pass on a fresh isolated 0086 database. Docker jobs
+were skipped after that backend failure and are not accepted for this source.
+
+A separate exact build-44-to-build-45 compatibility proof is prepared for the
+two historical pending reports. It binds canonical build-41 and build-44 source,
+the complete backend and Android production closures, reviewed image defaults,
+and the unchanged private fleet snapshot. It carries the reports unresolved;
+it neither deletes work nor treats an installation as retired. The original
+build-42/build-44 verifier and historical maps are unchanged. Normal business
+quiescence, backup, restore, migration, runtime and scanner gates remain active.
+
+The next gates are final source review and complete CI, protected signing,
+signed in-place upgrade acceptance, coordinated deployment, owner-workbook daily
+summary activation, and staging/offering the exact signed APK. Build 45 has not
+been signed, deployed or offered. Current evidence supersedes earlier same-day
+activity and emulator-status snapshots below without erasing those failures.
+
+Read-only AWS verification on 11 October 2026 identified the live source as
+commit `d915a66c9dee0d22c1a7018e2e79bc8ca9e0d7ab`, Alembic `0085`, Web/backend
+`v3.1.36`, Android build `44`, and Room `53`. The current local branch is
+`codex/erp-quality-revenue-summary`. Those remain production observations and
+immutable build-44 history; they are not build-45 deployment evidence.
+
+The prepared local overlay has coordinated candidate identity `v3.1.37`,
+Android build `45`, Room `53`, and Alembic `0086`. The quality/security source
+was committed as `e492524474397b0e5244a0f78bba243f335d1bf2`; the subsequent
+reviewed Caddy package correction is committed as
+`dd796476bf6005c4d4ebf4412506b1455ba15375`. Its two blocking CPython 3.14.7
+findings were corrected in `5b8ef38597871599fde4a42a5b895cd9a05c4d11` using
+the official immutable 3.14.8 runtime. The latest hosted run passed that
+backend image's hardened scan but found a separate frontend PCRE2 security
+dependency, for which a minimal exact-package correction is now prepared.
+There is no immutable release tag,
+signed package, deployment,
+staging, publication, or tablet offer for build 45. The build-45 freeze
+is based on immutable build-44 source `d915a66c9dee0d22c1a7018e2e79bc8ca9e0d7ab`;
+the eventual release SHA belongs in external release evidence after a clean
+candidate commit exists, not in this self-referential source overlay.
+
+The current quality scope preserves financial, payment, stock, idempotency, and
+audit facts while tightening tenant locks, Web operational freshness and timer
+rendering, and bounded technical retention. It adds the reviewed foundation for
+automatic daily final Cash/UPI collections: one generation-bound branch,
+business timezone and start date; no individual transaction exports in daily
+mode; an immutable revision log; and a protected future projection that keeps
+the existing manual Sheet history. The current evidence register is
+`ERP_QUALITY_PROGRESS_2026-10-11.md` in the quality workspace. Scoped contracts
+are documented in [`docs/GOOGLE_SHEETS.md`](docs/GOOGLE_SHEETS.md),
+[`docs/SUPPORT_REPORTING.md`](docs/SUPPORT_REPORTING.md), and
+[`docs/CODE30_4_RELEASE_RUNBOOK.md`](docs/CODE30_4_RELEASE_RUNBOOK.md).
+
+Review, exact-head CI, coordinated source/version/build identity, signed
+artifacts, release-offer parity, guarded deployment, production owner-workbook
+Google acceptance, and physical tablet acceptance remain separate gates.
+Coordinated source identity is now prepared, while the other gates remain open
+as described in
+[`docs/V3_1_37_RELEASE_CANDIDATE.md`](docs/V3_1_37_RELEASE_CANDIDATE.md).
+Existing runtime freeze and release policies remain unchanged. The additive
+build-45 overlay also updates one historical compatibility test fixture to read
+its candidate from the immutable build-44 Git object and reject live build-45
+bytes, and one historical physical-audit test to read build 44's Gradle
+identity from that object and reject live build-45 identity. Historical
+verifiers, physical-audit runner/analyzer, hashes, accepted pairs and recorded
+build-44 result identities are unchanged. The installer additionally carries
+the separate exact build-45 compatibility branch described above.
+
+The candidate security overlay responds to the first hosted CI
+dependency gates without changing business runtime source or moving to
+Tailwind 4. It applies compatible official Capacitor, Axios, Vitest,
+source-map-js, PyJWT and urllib3 corrections and keeps both npm and pnpm frozen
+locks. Because the affected `braces` line has no fixed release, the frontend
+build uses a private, lifecycle-independent MIT derivative with explicit
+upstream provenance, source/result hashes, a reviewed ancestor-depth guard and
+a one-line compatibility adapter. Independent source review and clean npm/pnpm
+installs verified the installed runtime and patch bytes. Web lint, typecheck,
+638 tests and build pass; generated CSS is byte-identical to the committed
+candidate baseline and the bounded private visual comparison found no layout
+change. Frontend audits now have zero high/critical findings, with the known
+moderate Tailwind 3 selector-parser chain still reported rather than waived;
+all three Python lock audits report no known vulnerabilities. Separate Node 22
+frozen npm/pnpm installation and CSS comparisons passed. All blocking hosted
+jobs on the final reviewed source, actual image scans, signing, deployment and
+device acceptance remain release gates.
+
+Hosted run `38154270466` used the exact dd796 candidate tree. Completed jobs
+passed 1,680 repository contracts without skips, 1,801 backend tests with 87%
+coverage, 638 Web tests, 1,170 Android app JVM tests and 7 driver JVM tests.
+Both Docker stores failed the backend security gate on CPython 3.14.7:
+Critical `CVE-2026-19445` and High `CVE-2026-19553`. The official 3.14.8
+release fixes both; the bounded correction aligns the immutable backend image,
+runtime assertions and CI/release Python interpreter. Its verified amd64 base
+retains the exact existing zlib r0, OpenSSL and libuuid package pins. Existing
+locks, patched-zlib proof, scanner thresholds and historical maps remain
+unchanged. The following completed run validates the corrected backend runtime;
+the complete image gates and full Android instrumentation are still required.
+There is no signed or offered build 45.
+
+Hosted run `38157536472` tested merge tree
+`0015167e37510afd59089bbe2e0775ccc919106b`, identical to candidate
+`5b8ef38597871599fde4a42a5b895cd9a05c4d11`. Frontend passed 638 tests;
+backend passed 1,684 repository contracts without skips and 1,801 backend
+tests at 87% coverage under actual Python 3.14.8; Android native passed 145
+Python contracts, 1,170 app JVM tests, seven driver JVM tests and its
+build/lint gates. Both image stores passed builds, routing/runtime probes,
+migration and restore/rollback gates. Their backend hardened scans had zero
+high/critical findings, while frontend scans failed on High
+`CVE-2026-103111`: APK `pcre2` 10.48-r0, fixed in 10.49-r0. Later hardened
+and secondary image scans did not run and are not accepted.
+
+The bounded frontend correction adds only `pcre2=10.49-r0` to its existing
+explicit runtime package transaction and checks the exact installed index.
+The official Alpine fix preserves the nginx-required library SONAMEs and
+introduces no zlib dependency. Base digests, nginx, OpenSSL pins, patched
+zlib proof, VEX policy, frontend assets and scanner thresholds are unchanged.
+Focused checks passed 58 cases and 168 subtests. Primary-source/package
+inspection is not actual corrected-image acceptance; both hosted image stores
+must still build and scan the final source.
+
+That same run's Android gate failed with a startup ANR before discovery:
+zero tests were discovered or executed. Its standard macOS host exposed four
+logical CPUs and emulator 36.5.10 explicitly clamped the guest to one core.
+System ANRs, 98.68% CPU pressure and long runnable wait strongly support
+scheduling starvation; available memory does not support OOM. Android code
+and runner bytes were unchanged from the preceding 407-test passing run,
+which establishes intermittency, not acceptance of this failed gate. No
+test skip, warmed discovery, timeout increase or speculative app rewrite is
+used as a workaround. A bounded free-runner correction is prepared: Ubuntu
+24.04/KVM, the same fixed emulator/API/tablet viewport, two verified online
+guest CPUs, and direct SwiftShader with Vulkan disabled. Earlier Linux runs
+used different selected renderer/Vulkan combinations. The complete cold
+407-case inventory remains blocking; this unexecuted configuration is not
+yet a dependable test pass. No paid runner or account change is authorized.
+
+An independent preflight scanned the six retained Caddy/PostgreSQL/Redis SPDX
+inventories against one verified Grype database, without VEX or custom ignores.
+Both stores produced the same additional package-level findings: Caddy's Go
+1.26.8 standard library and x/net 0.58.0 have fixes in Go 1.26.9 and x/net
+0.60.0; PostgreSQL's separately compiled gosu 1.19 carries the same Go runtime;
+Redis's libcrypto3/libssl3 3.3.7-r1 have official 3.3.7-r2 fixes. These are
+saved-inventory advisory results, not rebuilt-image or exploitability proof.
+The existing exact patched-zlib targets remain separately identified. Redis's
+two exact r2 package pins now run before its existing patched-zlib overlay;
+the installed-version checks and historical-to-current whole-file contract
+passed focused tests and independent source review. The compiler/module
+correction now pins the independently verified official Go 1.26.9 builder for
+Caddy and gosu, retains both application versions and build flags, and updates
+their exact reproducible binary assertions. The minimal Caddy closure raises
+eight explicit modules plus a ninth transitive x/telemetry selection; go.sum
+preserves all 579 previous lines and adds exactly 16. Official provenance and
+separate-cache Darwin-host linux/amd64 reproductions passed independent
+preflight review. They are not actual Linux Docker, image-scan or runtime
+acceptance. Historical Code29 hash assertions remain unchanged, with separate
+current-workflow bindings for the new binaries. No new waiver or general
+dependency upgrade has been introduced. Final source review, current-only
+freeze refresh, full regression checks and both actual image stores remain
+required before release acceptance.
+
+The global 17:17 UTC read-only production snapshot found one real open shift
+and three active/paused gaming sessions, with no open/held order or
+ended-unbilled session. The current build-44 installation reported zero
+pending; the distinct historical build-37 and unresolved build-41 records
+still each reported one. The owner will check the tablet's installed apps
+and profiles; no actual retirement or drainage result has been received.
+Keep real customer work and all pending evidence intact until the separate
+deployment gates are satisfied.
+
+Hosted run `38148940575` on the exact e492 source tree passed 1,647 repository
+contracts, 1,801 backend tests (87% coverage), 638 Web tests, 1,170 Android app
+JVM tests and 7 driver JVM tests, plus release assembly/bundle/lint. Both Docker
+stores failed at Caddy: installing its pinned curl/OpenSSL packages advanced
+zlib to official `1.3.2-r1`, while the source expected `r0` and copied its
+reviewed patched runtime before that package install could replace it. The
+correction pins Caddy's exact r1 package, installs/checks packages before the
+unchanged reviewed runtime overlay/probe, and requires image-bound Syft r1
+catalogue evidence with zero ignored Caddy findings. Caddy has no VEX document
+generated, mounted, supplied or retained. The other four services' exact r0
+VEX contracts remain unchanged; no global scanner waiver is added.
+New image builds and scanner evidence must validate that correction.
+The revised seven-file scanner correction passed an independent 76-test
+rerun and source review. The current installer contract now binds the action
+through the reviewed build-45 map and requires exactly the four r0 VEX inputs;
+the historical maps, template and generator remain unchanged.
+Two further current-action contract tests now require that same exact
+four-service VEX and Caddy SBOM boundary; their independent review and
+36-case focused suite passed. The first broader local run also exposed three
+test-fixture permission failures caused by the runner's private umask. Those
+unchanged tests passed under the ordinary test umask; no permission guard was
+relaxed. The corrected complete run and hosted gates remain required.
+
+The same hosted run's Android instrumentation failed before discovery with a
+startup ANR under severe one-vCPU emulator starvation; 12 system-app ANRs
+preceded the ERP launch. The native code and runner match the earlier passing
+407-case run. A separate first-install, network-isolated API-35 ARM emulator
+cold launch reached its first screen in 1,963 ms with no ANR. That local run
+used four guest CPUs and about 4 GB actual guest RAM, despite a 2 GB request;
+it is not the Intel hosted emulator, signed-package or physical-tablet proof.
+It skipped 40 startup frames and captured only five frames, four janky;
+this tiny cold-start sample is not steady-state smoothness acceptance.
+The failed gate remains recorded and a passing complete hosted inventory is
+still required. Inherited advisory results remain 1,590 Ruff findings, 488
+mypy errors across 54 files and 28 Android lint warnings; these advisory lanes
+are not claimed to be clean or individually triaged.
+
+Production preflight at 15:01 UTC on 11 October still found one real open shift,
+the current build-44 installation reporting zero pending, and two distinct
+historical one-pending installations. The separate build-41 installation last
+seen on 28 September is not covered by the earlier build-37 cleanup receipt or
+the existing narrow build-44 compatibility guard. The owner is unsure whether
+it can reconnect; this does not establish retirement or authorize deletion.
+The current candidate's installer therefore refuses production cutover. Do
+not reset counters, reuse another installation's identity, erase pending
+work, or close real business activity using earlier trial-data permission.
+A second read-only preflight at 15:56 UTC found the same open shift and two
+historical pending records. The current build-44 tablet had synced at 15:49
+UTC and still reported zero pending; the build-41 record remained unchanged.
+
+The bounded combined Google transport gate is complete for the unchanged
+mirror, delivery-model and receiver bytes. It used genuine HTTPS accepted and
+duplicate acknowledgements, one native accepted row and its projection. The
+health response was deliberately substituted by the external harness after the
+real acceptance, and a synthetic clock advanced the persisted 30-second
+backoff; this is not spontaneous-response, elapsed worker-scheduling or
+streaming-boundary proof. The earlier unexplained 404 remains unresolved. The
+synthetic endpoint was archived. Production owner-workbook verification and
+activation remain separate gates.
+
+## Historical state — Code30.4 patch candidate (updated 2026-09-24)
 
 Code30.4 is an additive patch on released Code30.3 (tag `v3.1.30`, commit
 `ad5adfb93c3488f1f931ca27da53824aa57d3dc5`). It is not Code31. Its coordinated

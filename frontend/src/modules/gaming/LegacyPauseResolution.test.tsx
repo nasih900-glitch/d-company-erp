@@ -39,6 +39,17 @@ const station = {
   is_active: true,
 };
 
+const reviewedEndAt = '2026-08-25T11:00:00.000Z';
+
+function datetimeLocalValue(instant: string): string {
+  const date = new Date(instant);
+  const twoDigits = (value: number) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${twoDigits(date.getMonth() + 1)}-${twoDigits(date.getDate())}`
+    + `T${twoDigits(date.getHours())}:${twoDigits(date.getMinutes())}`;
+}
+
+const reviewedEndAtLocal = datetimeLocalValue(reviewedEndAt);
+
 describe('protected legacy paused-session recovery', () => {
   it('offers recovery only to the protected audit owner for the exact unresolved state', () => {
     expect(hasLegacyPausedTimingGap(exactLegacyPause)).toBe(true);
@@ -61,7 +72,7 @@ describe('protected legacy paused-session recovery', () => {
 
   it('requires reviewed time, integer minutes, amount, reason, and acknowledgement', () => {
     const valid = validateLegacyPauseResolutionForm({
-      endedAtLocal: '2026-08-25T11:00',
+      endedAtLocal: reviewedEndAtLocal,
       sessionStartedAt: exactLegacyPause.start_at,
       billableMinutes: '57',
       amountRupees: '95.50',
@@ -71,6 +82,7 @@ describe('protected legacy paused-session recovery', () => {
     expect(valid).toMatchObject({
       ok: true,
       value: {
+        ended_at: reviewedEndAt,
         billable_minutes: 57,
         amount_minor: 9_550,
         timing_evidence_reviewed: true,
@@ -87,7 +99,7 @@ describe('protected legacy paused-session recovery', () => {
       timingEvidenceReviewed: true,
     })).toEqual({ ok: false, error: 'Enter the reviewed final session time.' });
     expect(validateLegacyPauseResolutionForm({
-      endedAtLocal: '2026-08-25T11:00',
+      endedAtLocal: reviewedEndAtLocal,
       sessionStartedAt: exactLegacyPause.start_at,
       billableMinutes: '57.5',
       amountRupees: '95.50',
@@ -95,7 +107,7 @@ describe('protected legacy paused-session recovery', () => {
       timingEvidenceReviewed: true,
     })).toEqual({ ok: false, error: 'Enter billable minutes as a whole non-negative number.' });
     expect(validateLegacyPauseResolutionForm({
-      endedAtLocal: '2026-08-25T11:00',
+      endedAtLocal: reviewedEndAtLocal,
       sessionStartedAt: exactLegacyPause.start_at,
       billableMinutes: '57',
       amountRupees: '95.50',

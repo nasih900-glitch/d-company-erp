@@ -196,6 +196,10 @@ for index in "${!SERVICES[@]}"; do
   fi
   CONFIG_IMAGE_IDS+=("$scanner_config_id")
   printf '%s\n' "$identity_validation" >> "$METADATA"
+  if [ "$service" = caddy ]; then
+    ZLIB_VEX_DOCUMENTS+=("")
+    continue
+  fi
   vex_document="$EVIDENCE_ROOT/$service-zlib.openvex.json"
   if [ -e "$vex_document" ] || [ -L "$vex_document" ]; then
     echo "Image-specific zlib VEX output already exists for $service." >&2
@@ -587,25 +591,35 @@ PY
   chmod 0444 "$syft_report"
 
   # Re-resolve the exact tag at the final boundary before Grype consumes the
-  # image-specific VEX. The archive verifier above binds this runtime identity
-  # to the config image ID that both the VEX and Grype report must carry.
+  # archive and, for the four r0 services, the image-specific VEX. The archive
+  # verifier binds this runtime identity to the config image ID carried by the
+  # scanner reports and any generated VEX.
   if [ "$(docker image inspect --format '{{.Id}}' "$image_ref")" != "$runtime_image_id" ]; then
     echo "Scanner image reference changed before Grype for $service." >&2
     exit 1
   fi
 
-  scanner_status=0
-  run_owned_container 1200s "$grype_report" online \
+  grype_arguments=(
     --tmpfs "$TMPFS_SPEC" \
     -e "GOMEMLIMIT=$GOMEMLIMIT" \
     -e "GOMAXPROCS=$GOMAXPROCS" \
     -e GRYPE_CHECK_FOR_APP_UPDATE=false \
     -e GRYPE_DB_CACHE_DIR=/scanner-cache/db \
     --mount "type=bind,src=$CACHE_MOUNT,dst=/scanner-cache" \
-    --mount "type=bind,src=$archive,dst=/scan/image.tar,readonly" \
-    --mount "type=bind,src=$zlib_vex_document,dst=/scan/zlib.openvex.json,readonly" \
-    "$GRYPE_IMAGE" "docker-archive:/scan/image.tar" --vex /scan/zlib.openvex.json \
-      --fail-on high --output json \
+    --mount "type=bind,src=$archive,dst=/scan/image.tar,readonly"
+  )
+  if [ "$service" != caddy ]; then
+    grype_arguments+=(
+      --mount "type=bind,src=$zlib_vex_document,dst=/scan/zlib.openvex.json,readonly"
+    )
+  fi
+  grype_arguments+=("$GRYPE_IMAGE" "docker-archive:/scan/image.tar")
+  if [ "$service" != caddy ]; then
+    grype_arguments+=(--vex /scan/zlib.openvex.json)
+  fi
+  grype_arguments+=(--fail-on high --output json)
+  scanner_status=0
+  run_owned_container 1200s "$grype_report" online "${grype_arguments[@]}" \
     || scanner_status=$?
   if [ "$scanner_status" -ne 0 ]; then
     echo "Grype failed for $service." >&2
@@ -615,8 +629,13 @@ PY
     echo "Grype produced no evidence for $service." >&2
     exit 1
   fi
-  python3 "$ZLIB_VEX_VERIFIER" "$zlib_vex_document" \
-    "$image_ref" "$config_image_id" "$service=$grype_report" >> "$METADATA"
+  if [ "$service" = caddy ]; then
+    python3 "$ZLIB_VEX_VERIFIER" --caddy-fixed-sbom "$syft_report" \
+      "$image_ref" "$config_image_id" "caddy=$grype_report" >> "$METADATA"
+  else
+    python3 "$ZLIB_VEX_VERIFIER" "$zlib_vex_document" \
+      "$image_ref" "$config_image_id" "$service=$grype_report" >> "$METADATA"
+  fi
   validation=$(python3 - "$grype_report" "$service" "$config_image_id" <<'PY'
 import json
 import sys

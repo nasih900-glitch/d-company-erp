@@ -81,6 +81,7 @@ def test_every_git_archive_extraction_honours_the_private_installer_umask() -> N
     extractions = (
         'tar --no-same-permissions -xf "$CANDIDATE_SOURCE_ARCHIVE"',
         'tar --no-same-permissions -xf "$PRIOR_SOURCE_ARCHIVE"',
+        'tar --no-same-permissions -xf "$BUILD41_SOURCE_ARCHIVE"',
         'tar --no-same-permissions -xf \\\n           "$UPGRADE_SNAPSHOT/prior-source.tar"',
     )
 

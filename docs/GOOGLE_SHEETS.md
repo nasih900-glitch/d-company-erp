@@ -12,8 +12,49 @@ configuration is verified. Code30.2 does not backfill historical ERP or
 spreadsheet rows. Keep the existing workbook tabs as their historical archive
 and reconcile them separately from the new append-only feed.
 
-The integration uses one bound Apps Script and one fixed tab named
-**ERP Mirror v1**. It does not modify other tabs.
+The integration uses one bound Apps Script. Legacy mode owns one fixed tab named
+**ERP Mirror v1**. Daily mode additionally owns a hidden, owner-protected
+**ERP Daily Collections v1** log, a configured future A:C range below the
+manual rows in **SHOP SALES REVENUE**, and one configured warning cell. It does
+not own the workbook's receipt/OCR script or other cells.
+
+## Daily collections mode
+
+The backend also supports an explicitly configured `daily_collections` mode for
+one company-owned branch and one generation-bound business timezone. In this
+mode ordinary transaction events are not exported. A bounded scanner instead
+appends final Cash and UPI snapshots for the shift-opening business date.
+Actual POS and membership refunds and manual cash corrections follow their
+settlement shift; manual collections retain their explicit business date.
+
+The current or future business day, an open shift, an unsupported payment rail,
+or a legacy refund without settlement scope blocks readiness. An initial
+blocked day is kept in ERP health state without creating a Sheet row. A ready
+day that later becomes blocked emits one superseding blocked revision, and the
+scanner waits for readiness before appending another revision. Source revisions
+are fixed-width 20-character ASCII text and must remain text end to end.
+
+Daily mode does not scan or enqueue until the current configuration's
+connection test is delivered with the exact `daily_collections.v1` capability
+and branch, timezone, and start-date scope acknowledgement. Changing any scope,
+including the branch's resolved timezone, drains the old generation and creates
+a new one. Receivers that only implement the legacy transaction contract cannot
+verify daily mode.
+
+The daily receiver stages every revision as a full canonical row with an empty
+**Received At**, reads the complete row back, and writes the canonical UTC
+timestamp only as the final acceptance marker. It then reads the complete row
+back again before acknowledging it. Projection and warning formulas ignore rows
+whose acceptance marker is blank or malformed, so an interrupted append cannot
+become financial output. A retry with the same event identity and hash returns
+`duplicate` only when the full accepted row still matches; reusing an event ID
+or a branch/date revision with different content fails closed. Lower revisions
+may arrive after higher revisions. The Sheet formula sorts the fixed-width
+revision as text, selects the latest revision for each ISO business date, and
+only then filters for `ready`. A later `blocked` revision therefore removes an
+older ready total instead of leaving it visible. Before accepting a row, the
+receiver also verifies that the distinct latest ready dates still fit the
+configured future range instead of relying on `ARRAY_CONSTRAIN` truncation.
 
 ## Safety model
 
@@ -24,6 +65,14 @@ The integration uses one bound Apps Script and one fixed tab named
   connection-test rows can leave the outbox until verification succeeds.
 - A background dispatcher leases committed events and retries temporary network,
   throttling, and Google failures with capped exponential backoff.
+- Google may complete an Apps Script POST and then end its redirect chain at the
+  receiver's exact `doGet` health document instead of the event acknowledgement.
+  The dispatcher treats only the complete, value-exact ERP Mirror v1 health
+  shape as retryable. It never treats that document as delivery. The idempotent
+  retry must return a matching `accepted` or `duplicate` acknowledgement;
+  otherwise the normal eight-attempt budget ends in quarantine. A health-like
+  payload with missing, additional, mistyped, or changed fields remains a
+  non-retryable acknowledgement mismatch.
 - Every request is HMAC-SHA256 signed with a tenant-specific secret. The Apps
   Script rejects unsigned, altered, or unsupported envelopes.
 - The ERP stores that signing secret only as company-bound AES-256-GCM
@@ -111,9 +160,10 @@ their totals from the mirrored transaction rows and reconcile them to the ERP.
 
 ### 1. Add the Apps Script
 
-Open the target Google Sheet, then choose **Extensions → Apps Script**. Replace
-the editor contents with the exact file at
-`integrations/google-sheets/Code.gs`, save it, and deploy it as a Web app:
+Open the target Google Sheet, then choose **Extensions → Apps Script**. Add or
+update a file named **ERP.gs** with the exact content from
+`integrations/google-sheets/Code.gs`. Do not replace or edit the unrelated
+receipt/OCR **Code.gs** file. Save the project and deploy it as a Web app:
 
 | Field | Value |
 |---|---|
@@ -146,11 +196,53 @@ support messages.
 
 ### 4. Test and verify
 
-Use the ERP connection test. It queues a real signed outbox event. Confirm that:
+For legacy mode, continue directly to the connection test below.
+
+For daily collections mode, first run the read-only Apps Script function
+`getDailyCollectionsD2Fingerprint`. Add a second Script Property named
+`D_COMPANY_ERP_DAILY_COLLECTIONS_CONFIG` with this exact JSON shape, using the
+company, branch, timezone, and date shown by the ERP settings screen and the
+D2 fingerprint printed in the Apps Script Execution log:
+
+```json
+{
+  "branch_id": "company-owned branch UUID",
+  "business_timezone": "IANA timezone captured by the ERP generation",
+  "company_id": "company UUID",
+  "d2_formula_sha256": "64 lowercase hexadecimal characters",
+  "manual_end_row": 93,
+  "projection_end_row": 5000,
+  "projection_sheet": "SHOP SALES REVENUE",
+  "start_date": "YYYY-MM-DD",
+  "status_cell": "E2"
+}
+```
+
+Choose a genuinely unused warning cell if E2 is occupied. Then run
+`setupDailyCollectionsProjection` once as the workbook owner. It validates the
+exact daily-log headers, the current D2 ARRAYFORMULA fingerprint, an empty
+future A:C range, and the receiver-owned formulas and protections. It never
+overwrites manual A2:C93, D2, a future manual value, or a non-owned status cell.
+The setup hides and owner-protects the append-only daily log. It removes target
+audience grants and clears unprotected holes from the protected log sheet; the
+runtime verification fails closed if either is added later to the log,
+projection, or warning protections. The projection constructs dates from ISO
+year/month/day parts, so the workbook timezone cannot shift the business date.
+B is UPI, C is Cash, and the preserved D formula remains responsible for their
+visible total.
+
+Now use the ERP connection test. Daily mode is verified only if the response
+acknowledges `daily_collections.v1` and the exact branch, business timezone, and
+start date after rechecking the installed formulas and protections.
+
+The connection test queues a real signed outbox event. Confirm that:
 
 - the status reports a delivered event;
-- the **ERP Mirror v1** tab appears with exactly 33 headers; and
-- one `mirror.connection_test` row is appended.
+- in legacy mode, **ERP Mirror v1** appears with exactly 33 headers and one
+  `mirror.connection_test` row is appended; or
+- in daily mode, the hidden log and future projection remain protected, and
+  the status changes from verification pending to Connected without writing an
+  individual transaction row.
 
 Business entries created after configuration may already show as **Held for
 verification**. They remain durable in PostgreSQL and become eligible for
@@ -158,7 +250,12 @@ delivery only after the current test row succeeds. A test queued before a URL
 or secret correction cannot verify the corrected connection.
 
 The dispatcher normally delivers within a few seconds. A passing health page or
-saved URL alone does not prove that the sheet accepted an event.
+saved URL alone does not prove that the sheet accepted an event. If Google's
+redirect chain returns the exact receiver health document after a POST, the ERP
+keeps the durable row pending with `unexpected_health_response`, applies capped
+backoff, and retries the same event identity. Only its matching `accepted` or
+`duplicate` acknowledgement marks the row delivered; exhaustion quarantines the
+unchanged row for owner review.
 
 ## Operating the mirror
 

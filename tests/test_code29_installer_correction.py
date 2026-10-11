@@ -18,6 +18,7 @@ from scripts.verify_code26_regression_freeze import (
     CODE30_4_BUILD41_BASE,
     CODE30_4_BUILD42_BASE,
     CODE30_4_BUILD43_BASE,
+    CODE30_4_BUILD44_BASE,
     CODE30_4_FREEZE_CONTROL_PATHS,
     REVIEWED_CODE30_2_PRODUCTION_PATHS,
     REVIEWED_CODE30_2_SHA256,
@@ -29,6 +30,7 @@ from scripts.verify_code26_regression_freeze import (
     REVIEWED_CODE30_4_BUILD42_SHA256,
     REVIEWED_CODE30_4_BUILD43_SHA256,
     REVIEWED_CODE30_4_BUILD44_SHA256,
+    REVIEWED_CODE30_4_BUILD45_SHA256,
     REVIEWED_CODE30_4_SHA256,
     REVIEWED_POST_CODE30_3_MAINTENANCE_SHA256,
 )
@@ -37,6 +39,7 @@ from scripts.verify_code26_regression_freeze import (
 ROOT = Path(__file__).resolve().parents[1]
 ORIGINAL_CODE29 = "0949620b4632ebd6accdfa62a203be8d85b31a24"
 CADDY_SHA256 = "951a0136950bb9edf60ff5cec6ca2df0a041b27ded9e610f0aab49b168739dac"
+CURRENT_CADDY_SHA256 = "1b95bdb9ca9ffaec90a9e3a9592e8cedc2212abd64c709219149b8b4285d07d7"
 LOCK_VERIFIER_SHA256 = "338cea91b56c2d85be109d259af1d77aa6d4ceaab4b13b379876c02e4485c029"
 HISTORICAL_CODE29_GUARD_SHA256 = (
     "2d761a871369d891849e0170c85533a0269d209f7949b376300eb0994bd5fc15"
@@ -560,7 +563,7 @@ def _assert_sha256(path: str, content: bytes, expected: str) -> None:
 
 
 def _current_reviewed_sha256(path: str, fallback: str) -> str:
-    return REVIEWED_CODE30_4_BUILD44_SHA256.get(path) or REVIEWED_CODE30_4_BUILD43_SHA256.get(path) or REVIEWED_CODE30_4_BUILD42_SHA256.get(
+    return REVIEWED_CODE30_4_BUILD45_SHA256.get(path) or REVIEWED_CODE30_4_BUILD44_SHA256.get(path) or REVIEWED_CODE30_4_BUILD43_SHA256.get(path) or REVIEWED_CODE30_4_BUILD42_SHA256.get(
         path,
         REVIEWED_CODE30_4_BUILD41_SHA256.get(
             path,
@@ -578,6 +581,8 @@ def _current_reviewed_sha256(path: str, fallback: str) -> str:
 
 
 def _reviewed_sha256(path: str, historical: dict[str, str]) -> str:
+    if path in REVIEWED_CODE30_4_BUILD45_SHA256:
+        return REVIEWED_CODE30_4_BUILD45_SHA256[path]
     if path in REVIEWED_CODE30_4_BUILD44_SHA256:
         return REVIEWED_CODE30_4_BUILD44_SHA256[path]
     if path in REVIEWED_CODE30_4_BUILD43_SHA256:
@@ -689,6 +694,7 @@ def test_live_delta_is_exactly_the_reviewed_code29_correction() -> None:
         | set(REVIEWED_CODE30_4_BUILD42_SHA256)
         | set(REVIEWED_CODE30_4_BUILD43_SHA256)
         | set(REVIEWED_CODE30_4_BUILD44_SHA256)
+        | set(REVIEWED_CODE30_4_BUILD45_SHA256)
     )
     protected_application_changes = {
         path
@@ -735,7 +741,7 @@ def test_live_delta_is_exactly_the_reviewed_code29_correction() -> None:
     ) | set(REVIEWED_CODE30_4_PRODUCTION_PATHS)
 
 
-def test_live_coordinated_identity_is_version_name_3_1_35_with_build_43() -> None:
+def test_live_coordinated_identity_is_version_name_3_1_37_with_build_45() -> None:
     for path in (
         "android-native/app/build.gradle.kts",
         "backend/pyproject.toml",
@@ -759,8 +765,14 @@ def test_live_coordinated_identity_is_version_name_3_1_35_with_build_43() -> Non
             _assert_exact_text(path, _current(path), _identity_expected(path))
 
     build = _current("android-native/app/build.gradle.kts")
-    assert build.count("versionCode = 44") == 1
-    assert build.count('versionName = "3.1.36"') == 1
+    assert build.count("versionCode = 45") == 1
+    assert build.count('versionName = "3.1.37"') == 1
+
+    historical_build44 = _historical_bytes(
+        CODE30_4_BUILD44_BASE, "android-native/app/build.gradle.kts"
+    ).decode("utf-8")
+    assert historical_build44.count("versionCode = 44") == 1
+    assert historical_build44.count('versionName = "3.1.36"') == 1
 
     env_replacements = (
         ("APP_VERSION=3.1.19", "APP_VERSION=3.1.30", 1),
@@ -790,7 +802,7 @@ def test_live_coordinated_identity_is_version_name_3_1_35_with_build_43() -> Non
             REVIEWED_CODE30_2_SHA256[".env.production.example"],
         ),
     )
-    assert "APP_VERSION=3.1.36" in actual_env
+    assert "APP_VERSION=3.1.37" in actual_env
     assert "ANDROID_MIN_SUPPORTED_VERSION_CODE=8" in actual_env
     assert "ANDROID_LATEST_VERSION_CODE=8" in actual_env
     assert "CLIENT_COMPATIBILITY_POLICY_REVISION=1" in actual_env
@@ -1065,7 +1077,8 @@ def test_installer_verifier_and_live_workflows_are_exact() -> None:
             _current_reviewed_sha256(path, REVIEWED_CODE30_2_SHA256[path]),
         )
         assert current.count(_workflow_step()) == 1
-        assert current.count(CADDY_SHA256) == 1
+        assert current.count(CURRENT_CADDY_SHA256) == 1
+        assert CADDY_SHA256 not in current
         assert "continue-on-error" not in _workflow_step()
 
     action_path = ".github/actions/scan-production-images/action.yml"
@@ -1073,11 +1086,18 @@ def test_installer_verifier_and_live_workflows_are_exact() -> None:
     _assert_sha256(
         action_path,
         current_action.encode("utf-8"),
-        REVIEWED_CODE30_2_SHA256[action_path],
+        _current_reviewed_sha256(action_path, REVIEWED_CODE30_2_SHA256[action_path]),
     )
     assert "verify-zlib-vex.py" in current_action
-    assert current_action.count("-zlib.openvex.json") >= 15
-    assert current_action.count("vex: ${{ runner.temp }}/container-security/") == 5
+    vex_inputs = re.findall(
+        r"^        vex: \$\{\{ runner\.temp \}\}/container-security/"
+        r"([a-z]+)-zlib\.openvex\.json$",
+        current_action,
+        flags=re.MULTILINE,
+    )
+    assert sorted(vex_inputs) == ["backend", "frontend", "postgres", "redis"]
+    assert "caddy-zlib.openvex.json" not in current_action
+    assert '--caddy-fixed-sbom "$evidence_dir/caddy.syft.json"' in current_action
 
 
 def test_physical_lane_accepts_only_the_exact_390_step_code30_point2_plan() -> None:
@@ -2575,6 +2595,8 @@ def test_reviewed_code30_point4_delta_files_are_exact() -> None:
     for path, expected_sha256 in REVIEWED_CODE30_4_BUILD43_SHA256.items():
         _assert_sha256(path, _historical_bytes(CODE30_4_BUILD43_BASE, path), expected_sha256)
     for path, expected_sha256 in REVIEWED_CODE30_4_BUILD44_SHA256.items():
+        _assert_sha256(path, _historical_bytes(CODE30_4_BUILD44_BASE, path), expected_sha256)
+    for path, expected_sha256 in REVIEWED_CODE30_4_BUILD45_SHA256.items():
         _assert_sha256(path, (ROOT / path).read_bytes(), expected_sha256)
 
 

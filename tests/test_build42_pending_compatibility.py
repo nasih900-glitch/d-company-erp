@@ -16,6 +16,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 HELPER = ROOT / "infra/scripts/verify-build42-pending-compatibility.py"
 INSTALLER = ROOT / "infra/scripts/install-on-vm.sh"
+BUILD44_REVISION = "d915a66c9dee0d22c1a7018e2e79bc8ca9e0d7ab"
 
 
 def _load(path: Path, name: str):
@@ -115,26 +116,31 @@ def test_original_archived_predecessor_and_candidate_match_production_policy(hel
     raw_archive = subprocess.check_output([
         "git", "archive", helper.PRIOR_REVISION, "--", *helper.PROTECTED_SCOPES,
     ], cwd=ROOT)
+    raw_candidate_archive = subprocess.check_output([
+        "git", "archive", BUILD44_REVISION, "--", *helper.PROTECTED_SCOPES,
+    ], cwd=ROOT)
     prior = tmp_path.resolve() / "prior"
     candidate = tmp_path.resolve() / "candidate"
     manifest = []
-    with tarfile.open(fileobj=io.BytesIO(raw_archive)) as archive:
-        for member in archive.getmembers():
-            if member.isdir():
-                continue
-            assert member.isfile() and not Path(member.name).is_absolute() and ".." not in Path(member.name).parts
-            stream = archive.extractfile(member)
-            assert stream is not None
-            original = stream.read()
-            for root, content in ((prior, original), (candidate, (ROOT / member.name).read_bytes())):
+    for raw, root in ((raw_archive, prior), (raw_candidate_archive, candidate)):
+        with tarfile.open(fileobj=io.BytesIO(raw)) as archive:
+            for member in archive.getmembers():
+                if member.isdir():
+                    continue
+                assert member.isfile() and not Path(member.name).is_absolute() and ".." not in Path(member.name).parts
+                stream = archive.extractfile(member)
+                assert stream is not None
+                content = stream.read()
                 path = root / member.name
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(content)
-            if member.name.startswith("backend/"):
-                manifest.append((member.name[8:], hashlib.sha256(original).hexdigest()))
+                if root == prior and member.name.startswith("backend/"):
+                    manifest.append((member.name[8:], hashlib.sha256(content).hexdigest()))
     expected_manifest = "".join(f"{digest}\t{path}\n" for path, digest in sorted(manifest))
     assert hashlib.sha256(expected_manifest.encode()).hexdigest() == helper.PRIOR_BACKEND_MANIFEST_SHA256
     helper._verify_sources(prior, candidate)
+    with pytest.raises(helper.CompatibilityError, match="candidate source"):
+        helper._verify_sources(prior, ROOT)
 
 
 def _identity(helper):

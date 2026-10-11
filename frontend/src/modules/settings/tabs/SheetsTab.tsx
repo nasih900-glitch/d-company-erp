@@ -5,10 +5,16 @@ import {
 } from 'lucide-react';
 
 import { LIVE_MODE } from '@/lib/demo';
-import { settings, type GoogleSheetsMirrorStatusDTO } from '@/lib/erp-api';
+import {
+  settings,
+  type BranchDTO,
+  type GoogleSheetsExportMode,
+  type GoogleSheetsMirrorStatusDTO,
+} from '@/lib/erp-api';
 import APPS_SCRIPT from '../apps-script.txt?raw';
 
 const SECRET_PROPERTY = 'D_COMPANY_ERP_MIRROR_HMAC_SECRET';
+const DAILY_CONFIG_PROPERTY = 'D_COMPANY_ERP_DAILY_COLLECTIONS_CONFIG';
 type SheetsMessageTone = 'success' | 'warning' | 'error';
 
 export function googleSheetsTestMessageTone(status: string): SheetsMessageTone {
@@ -20,6 +26,11 @@ export function googleSheetsTestMessageTone(status: string): SheetsMessageTone {
 export default function SheetsTab() {
   const [status, setStatus] = useState<GoogleSheetsMirrorStatusDTO | null>(null);
   const [url, setUrl] = useState('');
+  const [companyId, setCompanyId] = useState('');
+  const [branches, setBranches] = useState<BranchDTO[]>([]);
+  const [exportMode, setExportMode] = useState<GoogleSheetsExportMode>('legacy_transactions');
+  const [summaryBranchId, setSummaryBranchId] = useState('');
+  const [summaryStartDate, setSummaryStartDate] = useState('');
   const [secret, setSecret] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState<{
@@ -31,9 +42,18 @@ export default function SheetsTab() {
   const load = useCallback(async () => {
     if (!LIVE_MODE) return;
     try {
-      const next = await settings.getGoogleSheetsMirror();
+      const [next, branchRows, company] = await Promise.all([
+        settings.getGoogleSheetsMirror(),
+        settings.listBranches(),
+        settings.getCompany(),
+      ]);
       setStatus(next);
+      setBranches(branchRows);
+      setCompanyId(company.id);
       setUrl(next.webhook_url ?? '');
+      setExportMode(next.export_mode);
+      setSummaryBranchId(next.summary_branch_id ?? branchRows[0]?.id ?? '');
+      setSummaryStartDate(next.summary_start_date ?? '');
       setMessage(null);
     } catch (error) {
       setMessage({ tone: 'error', text: (error as Error).message });
@@ -50,15 +70,30 @@ export default function SheetsTab() {
 
   async function configure(rotateSecret = false) {
     if (!url.trim()) return;
+    if (exportMode === 'daily_collections' && (!summaryBranchId || !summaryStartDate)) {
+      setMessage({ tone: 'error', text: 'Choose the shop and first business date for daily collections.' });
+      return;
+    }
     if (rotateSecret && !window.confirm(
       'Rotate the Google Sheets secret? Queued entries are preserved, and delivery will pause until you replace the Apps Script property and deliver a new test row.',
     )) return;
     setBusy(rotateSecret ? 'rotate' : 'configure'); setMessage(null);
     try {
       const result = await settings.configureGoogleSheetsMirror({
-        webhook_url: url.trim(), rotate_secret: rotateSecret,
+        webhook_url: url.trim(),
+        rotate_secret: rotateSecret,
+        export_mode: exportMode,
+        ...(exportMode === 'daily_collections' ? {
+          summary_branch_id: summaryBranchId,
+          summary_start_date: summaryStartDate,
+        } : {}),
       });
-      setStatus(result); setUrl(result.webhook_url ?? ''); setSecret(result.signing_secret);
+      setStatus(result);
+      setUrl(result.webhook_url ?? '');
+      setExportMode(result.export_mode);
+      setSummaryBranchId(result.summary_branch_id ?? '');
+      setSummaryStartDate(result.summary_start_date ?? '');
+      setSecret(result.signing_secret);
       setMessage({
         tone: 'success',
         text: result.signing_secret
@@ -69,6 +104,24 @@ export default function SheetsTab() {
       setMessage({ tone: 'error', text: (error as Error).message });
     } finally { setBusy(null); }
   }
+
+  const dailyConfig = status?.export_mode === 'daily_collections'
+    && status.summary_branch_id
+    && status.summary_timezone
+    && status.summary_start_date
+    && companyId
+    ? JSON.stringify({
+      branch_id: status.summary_branch_id,
+      business_timezone: status.summary_timezone,
+      company_id: companyId,
+      d2_formula_sha256: 'PASTE_D2_FINGERPRINT_HERE',
+      manual_end_row: 93,
+      projection_end_row: 5000,
+      projection_sheet: 'SHOP SALES REVENUE',
+      start_date: status.summary_start_date,
+      status_cell: 'E2',
+    })
+    : null;
 
   async function sendTest() {
     setBusy('test'); setMessage(null);
@@ -114,15 +167,15 @@ export default function SheetsTab() {
         <div className="flex flex-wrap items-start gap-4">
           <div className="rounded-xl bg-[#0F9D58]/15 p-3 text-[#0F9D58]"><Sheet size={24}/></div>
           <div className="min-w-0 flex-1">
-            <h3 className="text-lg font-bold">Google Sheets transaction mirror</h3>
+            <h3 className="text-lg font-bold">Google Sheets collections export</h3>
             <p className="text-sm text-fg-muted">
-              The ERP server adds an authenticated, append-only copy of financial activity to
-              <b> ERP Mirror v1</b>. Your existing workbook tabs remain unchanged.
+              Choose the existing transaction mirror or automatic final Cash and UPI totals by
+              business day. The ERP database remains the accounting authority.
             </p>
             <p className="mt-1 text-xs text-fg-muted">
-              This is not a database backup or receipt-file backup. Transactions recorded after
-              configuration are queued safely while verification is pending, then sent after a
-              test row is delivered. History from before configuration is not backfilled.
+              Daily mode stops individual transaction exports. It appends immutable revisions to
+              a hidden owner-protected log and projects verified totals into future rows below the
+              existing manual A2:C93 history.
             </p>
           </div>
           <StatusBadge status={status}/>
@@ -147,6 +200,40 @@ export default function SheetsTab() {
             Last delivered {new Date(status.last_delivered_at).toLocaleString('en-IN')}
           </p>
         )}
+        {status?.export_mode === 'daily_collections' && (
+          <div className="mt-3 rounded-lg border border-bg-border bg-bg-raised/50 p-3 text-xs text-fg-muted">
+            <div className="grid gap-2 sm:grid-cols-2">
+              <span>Shop: <b className="text-fg">{status.summary_branch_name ?? 'Unavailable'}</b></span>
+              <span>Business timezone: <b className="text-fg">{status.summary_timezone ?? 'Unavailable'}</b></span>
+              <span>First business date: <b className="text-fg">{status.summary_start_date ?? 'Unavailable'}</b></span>
+              <span>Last scan: <b className="text-fg">{formatTimestamp(status.summary_last_scanned_at)}</b></span>
+            </div>
+            {!status.connection_verified && (
+              <p className="mt-2 text-accent-gold">
+                The selected scope is saved, but daily scanning remains paused until the exact
+                capability and projection setup pass a connection test.
+              </p>
+            )}
+          </div>
+        )}
+        {Boolean(status?.summary_last_window_blockers.length) && (
+          <div className="mt-3 rounded-lg border border-accent-gold/40 bg-accent-gold/10 p-3 text-sm text-accent-gold">
+            <p className="font-semibold">Last scanned window needs review</p>
+            <ul className="mt-1 list-disc space-y-1 pl-5 text-xs">
+              {status?.summary_last_window_blockers.map((item) => (
+                <li key={item.business_date}>
+                  {item.business_date}: {item.blockers.join(', ')}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {status?.summary_last_error && (
+          <div className="mt-3 flex items-start gap-2 rounded-lg border border-accent-bad/40 bg-accent-bad/10 p-3 text-sm text-accent-bad">
+            <AlertTriangle size={16} className="mt-0.5 shrink-0"/>
+            <span>Daily scan failed: {status.summary_last_error}</span>
+          </div>
+        )}
         {status?.last_error && (
           <div className="mt-3 flex items-start gap-2 rounded-lg border border-accent-bad/40 bg-accent-bad/10 p-3 text-sm text-accent-bad">
             <AlertTriangle size={16} className="mt-0.5 shrink-0"/><span>{status.last_error}</span>
@@ -157,8 +244,9 @@ export default function SheetsTab() {
       <div className="card space-y-4">
         <h3 className="font-semibold">Connect your existing workbook</h3>
         <SetupStep n={1} title="Install the secure mirror script">
-          In your Google Sheet, open <b>Extensions → Apps Script</b>, replace Code.gs with this
-          script, and save it.
+          In your Google Sheet, open <b>Extensions → Apps Script</b>, add or update a script file
+          named <b>ERP.gs</b>, paste this script, and save it. Keep the workbook&apos;s existing
+          receipt/OCR <b>Code.gs</b> file unchanged.
           <div className="mt-2 flex flex-wrap gap-2">
             <button className="btn btn-ghost" onClick={() => void copy(APPS_SCRIPT, 'script')}>
               {copied === 'script' ? <Check size={14}/> : <Copy size={14}/>}
@@ -174,13 +262,45 @@ export default function SheetsTab() {
           to anyone with the link. Copy the <b>/exec</b> web-app URL.
         </SetupStep>
         <SetupStep n={3} title="Connect the ERP">
+          <div className="mt-2 grid gap-2 sm:grid-cols-2">
+            <label className="block">
+              <span className="text-xs text-fg-muted">Export style</span>
+              <select className="input mt-1" value={exportMode}
+                onChange={(event) => setExportMode(event.target.value as GoogleSheetsExportMode)}>
+                <option value="legacy_transactions">Individual transactions (legacy)</option>
+                <option value="daily_collections">Daily final Cash and UPI totals</option>
+              </select>
+            </label>
+            {exportMode === 'daily_collections' && (
+              <label className="block">
+                <span className="text-xs text-fg-muted">Shop</span>
+                <select className="input mt-1" value={summaryBranchId}
+                  onChange={(event) => setSummaryBranchId(event.target.value)}>
+                  <option value="">Choose a shop</option>
+                  {branches.map((branch) => (
+                    <option key={branch.id} value={branch.id}>{branch.name}</option>
+                  ))}
+                </select>
+              </label>
+            )}
+          </div>
+          {exportMode === 'daily_collections' && (
+            <label className="mt-2 block">
+              <span className="text-xs text-fg-muted">First business date to scan</span>
+              <input type="date" className="input mt-1" value={summaryStartDate}
+                onChange={(event) => setSummaryStartDate(event.target.value)}/>
+            </label>
+          )}
           <label className="mt-2 block">
             <span className="text-xs text-fg-muted">Apps Script web-app URL</span>
             <input className="input mt-1 font-mono text-xs" value={url}
               onChange={(event) => setUrl(event.target.value)}
               placeholder="https://script.google.com/macros/s/…/exec"/>
           </label>
-          <button className="btn btn-primary mt-2" disabled={!url.trim() || busy !== null}
+          <button className="btn btn-primary mt-2"
+            disabled={!url.trim() || busy !== null || (
+              exportMode === 'daily_collections' && (!summaryBranchId || !summaryStartDate)
+            )}
             onClick={() => void configure(false)}>
             {busy === 'configure' ? <Loader2 size={14} className="animate-spin"/> : <CircleCheck size={14}/>}
             {status?.enabled ? 'Save connection' : 'Connect'}
@@ -208,9 +328,28 @@ export default function SheetsTab() {
             <p className="mt-2 text-xs text-fg-muted">Connect first to generate the secret.</p>
           )}
         </SetupStep>
-        <SetupStep n={5} title="Send a test row">
-          Transactions recorded after configuration are kept in the ERP outbox now. They are sent
-          to the Sheet only after this test row is delivered and the status above shows Connected.
+        {status?.export_mode === 'daily_collections' && (
+          <SetupStep n={5} title="Verify and install the daily projection">
+            In Apps Script, run <code className="rounded bg-bg px-1 py-0.5">getDailyCollectionsD2Fingerprint</code>.
+            Copy its 64-character value from the Execution log, replace the placeholder below, then add the whole
+            JSON as Script Property <code className="rounded bg-bg px-1 py-0.5">{DAILY_CONFIG_PROPERTY}</code>.
+            Run <code className="rounded bg-bg px-1 py-0.5">setupDailyCollectionsProjection</code> once as
+            the workbook owner. Setup fails rather than overwriting A2:C93, D2, a future manual value,
+            or a non-owned status cell.
+            {dailyConfig && (
+              <div className="mt-2 rounded-xl border border-bg-border bg-bg p-2">
+                <code className="block break-all text-[11px]">{dailyConfig}</code>
+                <button className="btn btn-ghost mt-2" onClick={() => void copy(dailyConfig, 'daily-config')}>
+                  {copied === 'daily-config' ? <Check size={14}/> : <Copy size={14}/>} Copy config template
+                </button>
+              </div>
+            )}
+          </SetupStep>
+        )}
+        <SetupStep n={status?.export_mode === 'daily_collections' ? 6 : 5} title="Send a test row">
+          New entries are kept in the ERP outbox now. They are sent only after this test is
+          delivered and the status above shows Connected. Daily mode additionally requires the
+          exact scope, protected log, projection formula, D2 fingerprint, and warning cell.
           <div className="mt-2 flex flex-wrap gap-2">
             <button className="btn btn-primary" disabled={!status?.enabled || busy !== null}
               onClick={() => void sendTest()}>
@@ -242,7 +381,8 @@ export default function SheetsTab() {
         <p className="mt-1 text-xs text-fg-muted">
           Temporary network failures retry automatically. Use retry after fixing the Apps Script
           URL or secret. A verified connection cannot change or disconnect while business entries
-          are still waiting or need attention; drain or retry them first.
+          are still waiting or need attention; drain or retry them first. Mode, shop, and start-date
+          changes create a new generation only after the old generation has drained.
         </p>
         <div className="mt-3 flex flex-wrap gap-2">
           {Boolean(status?.quarantined_count) && (
@@ -267,7 +407,7 @@ export default function SheetsTab() {
         </div>
       </div>
       <div className="rounded-xl border border-bg-border bg-bg-raised/40 p-3 text-xs text-fg-muted">
-        Google Sheets is a readable secondary transaction mirror. Receipt photos and PDFs remain
+        Google Sheets is a readable secondary export. Receipt photos and PDFs remain
         private in ERP and are not copied into the sheet. The ERP database and encrypted server
         backup remain the recovery source because a spreadsheet cannot preserve every permission,
         sync, audit, and relational record safely.
@@ -282,6 +422,12 @@ function StatusBadge({ status }: { status: GoogleSheetsMirrorStatusDTO | null })
   return status.connection_verified
     ? <div className="chip border-accent-good/40 text-accent-good">Connected</div>
     : <div className="chip border-accent-gold/40 text-accent-gold">Configured · verification pending</div>;
+}
+
+function formatTimestamp(value: string | null): string {
+  if (!value) return 'Not scanned yet';
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? 'Unavailable' : parsed.toLocaleString('en-IN');
 }
 
 function Metric({ label, value, warning = false }: { label: string; value: number; warning?: boolean }) {

@@ -3,7 +3,7 @@
 # Build the exact standard Caddy v2.11.4 module set with the patched Go
 # toolchain and dependency graph recorded under caddy-build/. The single-job
 # build bounds peak RAM on the production VM.
-FROM golang:1.26.8-alpine3.24@sha256:ce864e7223ac17b1775e6fd0b4c0db580c2eb50e7953a427916379e4b92a1628 AS caddy-builder
+FROM golang:1.26.9-alpine3.24@sha256:3082400e369fa24d5fc60bca20edab3f6d604e0c5a690ec66b295eff4dd87ade AS caddy-builder
 
 ARG TARGETOS
 ARG TARGETARCH
@@ -19,13 +19,19 @@ COPY infra/docker/caddy-build/go.mod infra/docker/caddy-build/go.sum ./
 RUN set -eux; \
     test "${TARGETOS}" = "linux"; \
     test "${TARGETARCH}" = "amd64"; \
-    test "$(go env GOVERSION)" = "go1.26.8"; \
+    test "$(go env GOVERSION)" = "go1.26.9"; \
     go mod download; \
     go mod verify; \
     test "$(go list -mod=readonly -m -f '{{.Version}}' github.com/caddyserver/caddy/v2)" = "v2.11.4"; \
-    test "$(go list -mod=readonly -m -f '{{.Version}}' golang.org/x/crypto)" = "v0.56.0"; \
-    test "$(go list -mod=readonly -m -f '{{.Version}}' golang.org/x/net)" = "v0.58.0"; \
-    test "$(go list -mod=readonly -m -f '{{.Version}}' golang.org/x/text)" = "v0.41.0"; \
+    test "$(go list -mod=readonly -m -f '{{.Version}}' golang.org/x/crypto)" = "v0.57.0"; \
+    test "$(go list -mod=readonly -m -f '{{.Version}}' golang.org/x/mod)" = "v0.41.0"; \
+    test "$(go list -mod=readonly -m -f '{{.Version}}' golang.org/x/net)" = "v0.60.0"; \
+    test "$(go list -mod=readonly -m -f '{{.Version}}' golang.org/x/sync)" = "v0.23.0"; \
+    test "$(go list -mod=readonly -m -f '{{.Version}}' golang.org/x/sys)" = "v0.48.0"; \
+    test "$(go list -mod=readonly -m -f '{{.Version}}' golang.org/x/telemetry)" = "v0.0.0-20260811182544-a038080d80e5"; \
+    test "$(go list -mod=readonly -m -f '{{.Version}}' golang.org/x/term)" = "v0.46.0"; \
+    test "$(go list -mod=readonly -m -f '{{.Version}}' golang.org/x/text)" = "v0.42.0"; \
+    test "$(go list -mod=readonly -m -f '{{.Version}}' golang.org/x/tools)" = "v0.49.0"; \
     test "$(go list -mod=readonly -m -f '{{.Version}}' google.golang.org/grpc)" = "v1.83.2"
 
 COPY infra/docker/caddy-build/main.go ./
@@ -38,8 +44,8 @@ RUN set -eux; \
         -trimpath \
         -ldflags='-s -w -buildid= -X github.com/caddyserver/caddy/v2.CustomVersion=v2.11.4-dcompany.1' \
         -o /out/caddy .; \
-    echo '951a0136950bb9edf60ff5cec6ca2df0a041b27ded9e610f0aab49b168739dac  /out/caddy' | sha256sum -c -; \
-    go version -m /out/caddy | grep -F 'go1.26.8'; \
+    echo '1b95bdb9ca9ffaec90a9e3a9592e8cedc2212abd64c709219149b8b4285d07d7  /out/caddy' | sha256sum -c -; \
+    go version -m /out/caddy | grep -F 'go1.26.9'; \
     go version -m /out/caddy | grep -F 'github.com/caddyserver/caddy/v2'; \
     go version -m /out/caddy | grep -F 'v2.11.4'
 
@@ -73,25 +79,28 @@ LABEL org.opencontainers.image.title="D Company ERP Caddy" \
       com.dcompany.zlib.followup.commit="7235b0a581227c56a79a43ff828f8ef6794194c8" \
       com.dcompany.zlib.followup.sha256="96040ee84d0d187905283912dbd3f7b66ac2033976a2ceefe9b8cca63143d9c2"
 
-COPY --from=zlib-builder /out/usr/lib/libz.so.1.3.2 /usr/lib/libz.so.1.3.2
-COPY --from=zlib-builder /out/etc/dcompany/zlib-patch-evidence.env /etc/dcompany/zlib-patch-evidence.env
-COPY --from=zlib-builder /out/zlib-runtime-probe /tmp/zlib-runtime-probe
-COPY infra/docker/zlib/verify-patched-zlib.sh /tmp/verify-patched-zlib.sh
-
 RUN set -eux; \
     apk add --no-cache --upgrade \
       'c-ares=1.34.8-r0' \
       'curl=8.22.0-r0' \
       'libcurl=8.22.0-r0' \
       'libcrypto3=3.5.9-r0' \
-      'libssl3=3.5.9-r0'; \
+      'libssl3=3.5.9-r0' \
+      'zlib=1.3.2-r1'; \
     installed_packages="$(apk info -v)"; \
     printf '%s\n' "$installed_packages" | grep -Fx 'c-ares-1.34.8-r0'; \
     printf '%s\n' "$installed_packages" | grep -Fx 'curl-8.22.0-r0'; \
     printf '%s\n' "$installed_packages" | grep -Fx 'libcurl-8.22.0-r0'; \
     printf '%s\n' "$installed_packages" | grep -Fx 'libcrypto3-3.5.9-r0'; \
     printf '%s\n' "$installed_packages" | grep -Fx 'libssl3-3.5.9-r0'; \
-    printf '%s\n' "$installed_packages" | grep -Fx 'zlib-1.3.2-r0'; \
+    printf '%s\n' "$installed_packages" | grep -Fx 'zlib-1.3.2-r1'
+
+COPY --from=zlib-builder /out/usr/lib/libz.so.1.3.2 /usr/lib/libz.so.1.3.2
+COPY --from=zlib-builder /out/etc/dcompany/zlib-patch-evidence.env /etc/dcompany/zlib-patch-evidence.env
+COPY --from=zlib-builder /out/zlib-runtime-probe /tmp/zlib-runtime-probe
+COPY infra/docker/zlib/verify-patched-zlib.sh /tmp/verify-patched-zlib.sh
+
+RUN set -eux; \
     sh /tmp/verify-patched-zlib.sh; \
     rm -f /tmp/zlib-runtime-probe /tmp/verify-patched-zlib.sh
 

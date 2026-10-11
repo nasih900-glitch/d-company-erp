@@ -25,15 +25,18 @@ Screenshot bytes currently live in PostgreSQL so the initial low-volume
 implementation is transactional and needs no separate public storage service.
 Metadata is retained as immutable support evidence; private bytes expire after
 90 days. Sanitized client diagnostics use the same retention target and have a
-separate 50,000-row company ceiling. Install `infra/cron/dcompany-erp-alerts` so
-the nightly job can purge the entire bounded diagnostic capacity independently
-of the lower screenshot work cap:
+separate 50,000-row company ceiling. Hashed authentication refresh-session rows
+are technical security data and become eligible for deletion only after their
+credentials have been expired for more than 90 days. The worker never logs
+credential digests or account details. Install `infra/cron/dcompany-erp-alerts`
+so the nightly job can apply independent finite work caps to each data class:
 
 ```bash
 python -m app.workers.support_attachments \
   --batch-size 1000 \
   --max-rows 1000 \
-  --diagnostic-max-rows 50000
+  --diagnostic-max-rows 50000 \
+  --refresh-session-max-rows 10000
 ```
 
 For materially higher support volume, move encrypted payloads to a private
