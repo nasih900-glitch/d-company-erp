@@ -1,5 +1,14 @@
 package cloud.dcompany.erp.ui.screens.tables
 
+import cloud.dcompany.erp.ui.theme.operationalDanger
+import cloud.dcompany.erp.ui.theme.operationalDangerContainer
+import cloud.dcompany.erp.ui.theme.operationalGood
+import cloud.dcompany.erp.ui.theme.operationalGoodContainer
+import cloud.dcompany.erp.ui.theme.operationalInformation
+import cloud.dcompany.erp.ui.theme.operationalInformationContainer
+import cloud.dcompany.erp.ui.theme.operationalWarning
+import cloud.dcompany.erp.ui.theme.operationalWarningContainer
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -107,7 +116,7 @@ fun TablesScreen(access: TablesAccess = TablesAccess(), vm: TablesViewModel = vi
     SideEffect { vm.updateAccess(access) }
 
     Column(
-        Modifier.fillMaxSize().background(Brand.Background).padding(Spacing.lg),
+        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(Spacing.lg),
         verticalArrangement = Arrangement.spacedBy(Spacing.md),
     ) {
         OperationalBanner(
@@ -249,7 +258,7 @@ fun TablesScreen(access: TablesAccess = TablesAccess(), vm: TablesViewModel = vi
 
     state.notice?.let { msg ->
         AlertDialog(
-            containerColor = cloud.dcompany.erp.ui.theme.Brand.SurfaceOverlay,
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
             shape = cloud.dcompany.erp.ui.theme.Radius.shapeLg,
             onDismissRequest = vm::dismissNotice,
             confirmButton = { TextButton(onClick = vm::dismissNotice) { Text("OK") } },
@@ -260,7 +269,7 @@ fun TablesScreen(access: TablesAccess = TablesAccess(), vm: TablesViewModel = vi
 
     discardAction?.let { action ->
         AlertDialog(
-            containerColor = Brand.SurfaceOverlay,
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
             shape = Radius.shapeLg,
             onDismissRequest = { discardAction = null },
             title = { Text("Discard this saved ${action.actionLabel.lowercase()}?") },
@@ -456,14 +465,14 @@ private fun BlockedCafeActionsPanel(
     ) {
         Text(
             "Retry the original saved action — never recreate the order.",
-            color = Brand.ForegroundMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.labelSmall,
         )
         LazyRow(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
             items(actions, key = BlockedCafeAction::actionId) { action ->
                 Column(
-                    Modifier.width(360.dp).clip(Radius.shapeMd).background(Brand.SurfaceRaised)
-                        .border(1.dp, Brand.Danger.copy(alpha = 0.34f), Radius.shapeMd)
+                    Modifier.width(360.dp).clip(Radius.shapeMd).background(MaterialTheme.colorScheme.surfaceVariant)
+                        .border(1.dp, MaterialTheme.colorScheme.operationalDanger.copy(alpha = 0.34f), Radius.shapeMd)
                         .padding(Spacing.md),
                     verticalArrangement = Arrangement.spacedBy(Spacing.sm),
                 ) {
@@ -474,12 +483,12 @@ private fun BlockedCafeActionsPanel(
                     ) {
                         Text(
                             "Table ${action.tableCode} · ${action.actionLabel}",
-                            color = Brand.Foreground,
+                            color = MaterialTheme.colorScheme.onSurface,
                             fontWeight = FontWeight.Bold,
                         )
                         Text(
                             formatRejectedTableOrderTime(action.createdAtMillis),
-                            color = Brand.ForegroundFaint,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.labelSmall,
                         )
                     }
@@ -489,7 +498,7 @@ private fun BlockedCafeActionsPanel(
                         } else {
                             "Why it stopped: ${action.message}"
                         },
-                        color = Brand.Danger,
+                        color = MaterialTheme.colorScheme.operationalDanger,
                         style = MaterialTheme.typography.bodySmall,
                     )
                     ErpButton(
@@ -605,10 +614,10 @@ private fun TableTile(
             .fillMaxWidth()
             .heightIn(min = 168.dp)
             .clip(Radius.shapeLg)
-            .background(if (occupied) Brand.SurfaceRaised else Brand.Surface)
+            .background(if (occupied) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surface)
             .border(
                 1.dp,
-                if (presentation.tone == UiTone.Danger) Brand.Danger.copy(alpha = 0.5f) else Brand.BorderSubtle,
+                if (presentation.tone == UiTone.Danger) MaterialTheme.colorScheme.operationalDanger.copy(alpha = 0.5f) else MaterialTheme.colorScheme.outlineVariant,
                 Radius.shapeLg,
             )
             .clickable(enabled = enabled, onClick = onClick)
@@ -624,7 +633,7 @@ private fun TableTile(
                 "Table ${table.code}",
                 modifier = Modifier.weight(1f),
                 style = MaterialTheme.typography.titleLarge,
-                color = Brand.Foreground,
+                color = MaterialTheme.colorScheme.onSurface,
                 fontWeight = FontWeight.Bold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -634,9 +643,9 @@ private fun TableTile(
         Text(
             if (table.seats == 1) "1 seat" else "${table.seats} seats",
             style = MaterialTheme.typography.labelMedium,
-            color = Brand.ForegroundMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        HorizontalDivider(color = Brand.BorderSubtle)
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         if (bill != null) {
             Row(
                 Modifier.fillMaxWidth(),
@@ -646,12 +655,12 @@ private fun TableTile(
                 Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
                     Text(
                         if (activeLines == 1) "1 active line" else "$activeLines active lines",
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.labelSmall,
                     )
                     Text(
                         if (bill.amountPending) "Estimated total" else "Current total",
-                        color = if (bill.amountPending) Brand.Warning else Brand.ForegroundMuted,
+                        color = if (bill.amountPending) MaterialTheme.colorScheme.operationalWarning else MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
@@ -663,12 +672,12 @@ private fun TableTile(
         } else {
             Text(
                 "No active bill",
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodyMedium,
             )
         }
         Spacer(Modifier.height(Spacing.xs))
-        Text(guidance, color = Brand.ForegroundFaint, style = MaterialTheme.typography.labelSmall)
+        Text(guidance, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
     }
 }
 
@@ -705,7 +714,7 @@ private fun OrderBuilder(
     AlertDialog(
         modifier = Modifier.widthIn(max = 960.dp).fillMaxWidth(0.94f).imePadding(),
         properties = DialogProperties(usePlatformDefaultWidth = false),
-        containerColor = Brand.SurfaceOverlay,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = Radius.shapeLg,
         onDismissRequest = requestDismiss,
         title = {
@@ -746,7 +755,7 @@ private fun OrderBuilder(
                             onAdd = addOrConfigure,
                             modifier = Modifier.weight(0.9f).fillMaxWidth(),
                         )
-                        HorizontalDivider(color = Brand.BorderSubtle)
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                         OrderCartPanel(
                             state = state,
                             canWrite = canWrite,
@@ -779,7 +788,7 @@ private fun OrderBuilder(
 
     if (confirmDiscard) {
         AlertDialog(
-            containerColor = Brand.SurfaceOverlay,
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
             shape = Radius.shapeLg,
             onDismissRequest = { confirmDiscard = false },
             title = { Text("Discard this unsent round?") },
@@ -830,11 +839,11 @@ private fun OrderMenuPanel(
     modifier: Modifier = Modifier,
 ) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-        Text("Menu", color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelLarge)
+        Text("Menu", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelLarge)
         if (state.menu.isEmpty()) {
             Text(
                 "No menu on this tablet yet — open POS once while online.",
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         } else {
             LazyVerticalGrid(
@@ -846,21 +855,21 @@ private fun OrderMenuPanel(
                 items(state.menu, key = { it.id }) { item ->
                     Column(
                         Modifier.fillMaxWidth().heightIn(min = 72.dp).clip(Radius.shapeSm)
-                            .background(Brand.SurfaceRaised)
-                            .border(1.dp, Brand.BorderSubtle, Radius.shapeSm)
+                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeSm)
                             .clickable(enabled = canWrite) { onAdd(item) }
                             .padding(Spacing.sm),
                         verticalArrangement = Arrangement.spacedBy(Spacing.xs),
                     ) {
                         Text(
                             item.name,
-                            color = Brand.Foreground,
+                            color = MaterialTheme.colorScheme.onSurface,
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis,
                         )
                         Text(
                             item.basePriceMinor.asRupees(),
-                            color = Brand.Foreground,
+                            color = MaterialTheme.colorScheme.onSurface,
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.SemiBold,
                         )
@@ -881,9 +890,9 @@ private fun OrderCartPanel(
     modifier: Modifier = Modifier,
 ) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-        Text("Order", color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelLarge)
+        Text("Order", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelLarge)
         if (state.cart.isEmpty()) {
-            Text("Tap a menu item to add it.", color = Brand.ForegroundMuted)
+            Text("Tap a menu item to add it.", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         LazyColumn(
             modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -892,8 +901,8 @@ private fun OrderCartPanel(
             items(state.cart, key = { it.clientLineId }) { line ->
                 Column(
                     Modifier.fillMaxWidth().clip(Radius.shapeSm)
-                        .background(Brand.SurfaceRaised)
-                        .border(1.dp, Brand.BorderSubtle, Radius.shapeSm)
+                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeSm)
                         .padding(Spacing.sm),
                     verticalArrangement = Arrangement.spacedBy(Spacing.sm),
                 ) {
@@ -901,20 +910,20 @@ private fun OrderCartPanel(
                         Column(Modifier.weight(1f)) {
                             Text(
                                 line.item.name,
-                                color = Brand.Foreground,
+                                color = MaterialTheme.colorScheme.onSurface,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
                             Text(
                                 line.lineTotalMinor.asRupees(),
                                 style = MaterialTheme.typography.labelSmall,
-                                color = Brand.ForegroundMuted,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                             line.optionLabels.takeIf(List<String>::isNotEmpty)?.let { options ->
                                 Text(
                                     options.joinToString(" · "),
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = Brand.Information,
+                                    color = MaterialTheme.colorScheme.operationalInformation,
                                 )
                             }
                         }
@@ -922,7 +931,7 @@ private fun OrderCartPanel(
                         Text(
                             "${line.qty}",
                             Modifier.padding(horizontal = Spacing.sm),
-                            color = Brand.Foreground,
+                            color = MaterialTheme.colorScheme.onSurface,
                             fontWeight = FontWeight.Bold,
                         )
                         Qty("+", enabled = canWrite) { onIncrement(line.clientLineId) }
@@ -940,17 +949,17 @@ private fun OrderCartPanel(
             }
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("Estimate", color = Brand.ForegroundMuted)
+            Text("Estimate", color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text(
                 state.estimateMinor.asRupees(),
-                color = Brand.Foreground,
+                color = MaterialTheme.colorScheme.onSurface,
                 fontWeight = FontWeight.Bold,
             )
         }
         Text(
             "This round is saved first, then released to Kitchen. Billing stays open until you choose Send to POS.",
             style = MaterialTheme.typography.labelSmall,
-            color = Brand.ForegroundMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }
@@ -994,7 +1003,7 @@ private fun BillDialog(
     AlertDialog(
         modifier = Modifier.widthIn(max = 760.dp).fillMaxWidth(0.94f).imePadding(),
         properties = DialogProperties(usePlatformDefaultWidth = false),
-        containerColor = Brand.SurfaceOverlay,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = Radius.shapeLg,
         onDismissRequest = {
             if (!busy) {
@@ -1018,9 +1027,9 @@ private fun BillDialog(
                             else -> "Open · take another round or send for billing"
                         },
                         color = when {
-                            bill.blockedActionId != null -> Brand.Danger
-                            bill.pendingActionCount > 0 || bill.status == "sending_to_pos" -> Brand.Warning
-                            else -> Brand.ForegroundMuted
+                            bill.blockedActionId != null -> MaterialTheme.colorScheme.operationalDanger
+                            bill.pendingActionCount > 0 || bill.status == "sending_to_pos" -> MaterialTheme.colorScheme.operationalWarning
+                            else -> MaterialTheme.colorScheme.onSurfaceVariant
                         },
                         style = MaterialTheme.typography.bodySmall,
                     )
@@ -1037,7 +1046,7 @@ private fun BillDialog(
                         } else {
                             "The item remains visible on KDS until Kitchen acknowledges the cancellation."
                         },
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     VoidReasonInput(
                         selectedId = cancellationReasonId,
@@ -1052,7 +1061,7 @@ private fun BillDialog(
                         Text(
                             "This snapshot is read only. The cashier must select this bill in POS; " +
                                 "do not create a replacement order.",
-                            color = Brand.ForegroundMuted,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                     LazyColumn(
@@ -1062,7 +1071,7 @@ private fun BillDialog(
                         items(bill.lines, key = CafeBillLineProjection::stableKey) { line ->
                             Column(
                                 Modifier.fillMaxWidth().clip(Radius.shapeSm)
-                                    .background(if (line.voided) Brand.DangerMuted else Brand.SurfaceRaised)
+                                    .background(if (line.voided) MaterialTheme.colorScheme.operationalDangerContainer else MaterialTheme.colorScheme.surfaceVariant)
                                     .padding(10.dp),
                                 verticalArrangement = Arrangement.spacedBy(3.dp),
                             ) {
@@ -1074,19 +1083,19 @@ private fun BillDialog(
                                     Column(Modifier.weight(1f)) {
                                         Text(
                                             "${line.qty.toQtyLabel()} × ${line.name}",
-                                            color = Brand.Foreground,
+                                            color = MaterialTheme.colorScheme.onSurface,
                                             fontWeight = FontWeight.SemiBold,
                                         )
                                         orderOptionLabels(line.variantSnapshot, line.modifiers)
                                             .takeIf(List<String>::isNotEmpty)?.let { options ->
                                                 Text(
                                                     options.joinToString(" · "),
-                                                    color = Brand.Information,
+                                                    color = MaterialTheme.colorScheme.operationalInformation,
                                                     style = MaterialTheme.typography.labelMedium,
                                                 )
                                             }
                                         line.note?.takeIf(String::isNotBlank)?.let { note ->
-                                            Text("Request: $note", color = Brand.ForegroundMuted)
+                                            Text("Request: $note", color = MaterialTheme.colorScheme.onSurfaceVariant)
                                         }
                                         Text(
                                             buildString {
@@ -1099,7 +1108,7 @@ private fun BillDialog(
                                                     },
                                                 )
                                             },
-                                            color = Brand.ForegroundMuted,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                                             style = MaterialTheme.typography.labelSmall,
                                         )
                                     }
@@ -1125,13 +1134,13 @@ private fun BillDialog(
                                 if (line.voided) {
                                     Text(
                                         "Reason: ${line.voidReason ?: "Not recorded"}",
-                                        color = Brand.Danger,
+                                        color = MaterialTheme.colorScheme.operationalDanger,
                                         style = MaterialTheme.typography.bodySmall,
                                     )
                                     if (line.kitchenCancellationPending) {
                                         Text(
                                             "Waiting for Kitchen acknowledgement",
-                                            color = Brand.Warning,
+                                            color = MaterialTheme.colorScheme.operationalWarning,
                                             style = MaterialTheme.typography.labelSmall,
                                         )
                                     }
@@ -1142,16 +1151,16 @@ private fun BillDialog(
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text(
                             if (bill.amountPending) "Estimated after sync" else "Current total",
-                            color = Brand.ForegroundMuted,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
-                        Text(bill.totalMinor.asRupees(), color = Brand.Foreground, fontWeight = FontWeight.Bold)
+                        Text(bill.totalMinor.asRupees(), color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold)
                     }
                     if (bill.amountPending) {
                         Text(
                             bill.confirmedTotalMinor?.let {
                                 "Last confirmed total: ${it.asRupees()}. Final pricing and tax are confirmed by the server."
                             } ?: "Final pricing and tax are confirmed by the server after this first round syncs.",
-                            color = Brand.Warning,
+                            color = MaterialTheme.colorScheme.operationalWarning,
                             style = MaterialTheme.typography.labelSmall,
                         )
                     }
@@ -1214,7 +1223,7 @@ private fun Double.toQtyLabel(): String =
 private fun Qty(label: String, enabled: Boolean, onClick: () -> Unit) {
     Box(
         Modifier.size(48.dp).clip(RoundedCornerShape(12.dp))
-            .background(Brand.SurfaceRaised).clickable(enabled = enabled, onClick = onClick),
+            .background(MaterialTheme.colorScheme.surfaceVariant).clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center,
-    ) { Text(label, color = Brand.Gold, fontWeight = FontWeight.Bold) }
+    ) { Text(label, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold) }
 }

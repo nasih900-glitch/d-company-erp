@@ -3,9 +3,12 @@ package cloud.dcompany.erp.ui.screens.refunds
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import cloud.dcompany.erp.DCompanyApp
+import cloud.dcompany.erp.core.auth.CacheScopeLease
 import cloud.dcompany.erp.core.auth.EffectivePermissions
 import cloud.dcompany.erp.core.auth.ErpPermission
 import cloud.dcompany.erp.core.net.MeResponse
+import cloud.dcompany.erp.core.net.ApiClient
+import cloud.dcompany.erp.core.net.CanonicalReceipt
 import cloud.dcompany.erp.core.db.LocalRefundEntity
 import cloud.dcompany.erp.core.db.RefundOrderCacheEntity
 import cloud.dcompany.erp.core.db.RefundState
@@ -84,6 +87,31 @@ internal fun refundPaymentMethodLabel(method: String): String = when (method) {
     "wallet" -> "Wallet"
     else -> "Unknown"
 }
+
+internal fun refundOrderSnapshotMatches(current: Order?, submitted: Order): Boolean =
+    current != null &&
+        current.id == submitted.id &&
+        current.checkoutVersion == submitted.checkoutVersion &&
+        current.paidMinor == submitted.paidMinor &&
+        current.refundableMinor == submitted.refundableMinor &&
+        current.pendingRefundMinor == submitted.pendingRefundMinor &&
+        current.paymentMethods.map { it.trim().lowercase(Locale.ROOT) }.distinct() ==
+        submitted.paymentMethods.map { it.trim().lowercase(Locale.ROOT) }.distinct()
+
+internal fun exactReceiptResponseIsCurrent(
+    requestGeneration: Long,
+    requestOrderId: String,
+    responseOrderId: String,
+    currentGeneration: Long,
+    currentOrderId: String?,
+): Boolean = requestGeneration == currentGeneration &&
+    requestOrderId == currentOrderId &&
+    responseOrderId == requestOrderId
+
+private data class VerifiedExactRefund(
+    val order: Order,
+    val lease: CacheScopeLease,
+)
 
 data class RefundTask(
     val localId: String,
@@ -215,7 +243,12 @@ class RefundsViewModel : ViewModel() {
 
     private val query = MutableStateFlow("")
     private val selectedId = MutableStateFlow<String?>(null)
+    private val exactOrder = MutableStateFlow<Order?>(null)
     private val busy = MutableStateFlow(false)
+    private val exactReceiptLoading = MutableStateFlow(false)
+    private var exactReceiptGeneration = 0L
+    private var requestedExactOrderId: String? = null
+    private var verifiedExactRefund: VerifiedExactRefund? = null
     private val notice = MutableStateFlow<String?>(null)
     private val refreshing = MutableStateFlow(false)
     private val localRefreshError = MutableStateFlow<RefundRefreshFailure?>(null)
@@ -244,8 +277,16 @@ class RefundsViewModel : ViewModel() {
             db.refundDao().observeRecentCompletedRefunds(),
             ::Pair,
         ),
-        combine(query, selectedId, ::Pair),
-        combine(busy, notice, refreshing, refreshError, ::InteractionState),
+        combine(query, selectedId, exactOrder, ::Triple),
+        combine(
+            combine(busy, exactReceiptLoading) { operationBusy, exactLoading ->
+                operationBusy || exactLoading
+            },
+            notice,
+            refreshing,
+            refreshError,
+            ::InteractionState,
+        ),
         combine(
             db.syncMetaDao().observe("orders"),
             appCtx.connectivity.online,
@@ -264,13 +305,17 @@ class RefundsViewModel : ViewModel() {
         },
     ) { cache, refundRows, qs, ui, context ->
         val (unresolved, recent) = refundRows
-        val (q, selId) = qs
+        val (q, selId, exact) = qs
         val unresolvedOrderIds = unresolved.mapTo(mutableSetOf()) { it.orderId }
-        val orders = cache
+        val cachedOrders = cache
             .asSequence()
             .filter { it.refundableMinor > 0 && it.id !in unresolvedOrderIds }
             .map(RefundOrderCacheEntity::toOrder)
             .toList()
+        val exactEligible = exact?.takeIf {
+            it.refundableMinor > 0 && it.pendingRefundMinor == 0L && it.id !in unresolvedOrderIds
+        }
+        val orders = listOfNotNull(exactEligible) + cachedOrders.filter { it.id != exactEligible?.id }
         val canManageMoney = context.shift?.canManageMoney(context.actor) == true
         val currentShiftIds = context.shift?.takeIf { shift ->
             shift.server?.serverShiftId != null || shift.local?.serverShiftId != null
@@ -318,8 +363,23 @@ class RefundsViewModel : ViewModel() {
 
     fun load() = refreshRecords(showConfirmation = true)
 
+    private fun invalidateExactReceipt(message: String? = null) {
+        exactReceiptGeneration += 1
+        requestedExactOrderId = null
+        verifiedExactRefund = null
+        exactOrder.value = null
+        selectedId.value = null
+        exactReceiptLoading.value = false
+        if (message != null) notice.value = message
+    }
+
     private fun refreshRecords(showConfirmation: Boolean) {
         if (refreshing.value) return
+        if (exactOrder.value != null || requestedExactOrderId != null) {
+            invalidateExactReceipt(
+                "Refund state changed. Reopen the exact receipt to verify its latest balance."
+            )
+        }
         refreshing.value = true
         localRefreshError.value = null
         appCtx.sync.requestSync()
@@ -352,6 +412,97 @@ class RefundsViewModel : ViewModel() {
 
     fun search(q: String) { query.value = q }
 
+    fun openExactReceipt(orderId: String): Boolean {
+        val targetOrderId = orderId.trim()
+        if (targetOrderId.isEmpty()) return false
+        val generation = ++exactReceiptGeneration
+        requestedExactOrderId = targetOrderId
+        verifiedExactRefund = null
+        exactOrder.value = null
+        selectedId.value = null
+        notice.value = null
+        val lease = appCtx.cacheIsolation.currentLease()
+        if (lease == null || !appCtx.connectivity.online.value) {
+            notice.value = "Reconnect and verify this exact receipt before requesting its refund."
+            return true
+        }
+        exactReceiptLoading.value = true
+        viewModelScope.launch {
+            try {
+                val receipt = ApiClient.api.receipt(targetOrderId)
+                require(
+                    exactReceiptResponseIsCurrent(
+                        requestGeneration = generation,
+                        requestOrderId = targetOrderId,
+                        responseOrderId = receipt.orderId,
+                        currentGeneration = exactReceiptGeneration,
+                        currentOrderId = requestedExactOrderId,
+                    )
+                ) {
+                    "The server returned a different receipt. Reopen the requested bill and try again."
+                }
+                val order = receipt.toExactRefundOrder()
+                val matchesScope = receipt.companyId == lease.scope.companyId &&
+                    receipt.branchId == lease.scope.branchId
+                appCtx.cacheIsolation.commitIfCurrent(lease) {
+                    if (
+                        generation != exactReceiptGeneration ||
+                        requestedExactOrderId != targetOrderId
+                    ) {
+                        return@commitIfCurrent
+                    }
+                    if (!matchesScope) {
+                        exactOrder.value = null
+                        selectedId.value = null
+                        notice.value = "This receipt belongs to another shop and cannot be opened here."
+                    } else if (order.pendingRefundMinor > 0L) {
+                        exactOrder.value = null
+                        selectedId.value = null
+                        query.value = receipt.invoiceNo
+                        notice.value = "A refund is already reserved for this receipt. Resolve its open task first."
+                    } else if (order.refundableMinor <= 0L) {
+                        exactOrder.value = null
+                        selectedId.value = null
+                        query.value = receipt.invoiceNo
+                        notice.value = "This receipt has no server-confirmed refundable balance."
+                    } else {
+                        verifiedExactRefund = VerifiedExactRefund(order, lease)
+                        exactOrder.value = order
+                        query.value = receipt.invoiceNo
+                        selectedId.value = order.id
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                if (
+                    generation == exactReceiptGeneration &&
+                    requestedExactOrderId == targetOrderId
+                ) {
+                    verifiedExactRefund = null
+                    exactOrder.value = null
+                    selectedId.value = null
+                    notice.value = error.message?.takeIf(String::isNotBlank)
+                        ?: "This exact receipt could not be verified. Refresh and try again."
+                }
+            } finally {
+                if (
+                    generation == exactReceiptGeneration &&
+                    requestedExactOrderId == targetOrderId
+                ) {
+                    exactReceiptLoading.value = false
+                    if (appCtx.cacheIsolation.currentLease() != lease) {
+                        verifiedExactRefund = null
+                        exactOrder.value = null
+                        selectedId.value = null
+                        notice.value = "The signed-in shop changed. Reopen the exact receipt."
+                    }
+                }
+            }
+        }
+        return true
+    }
+
     fun select(order: Order?) {
         if (order != null && !state.value.canManageMoney) {
             notice.value = state.value.moneyAccessMessage
@@ -370,7 +521,23 @@ class RefundsViewModel : ViewModel() {
         mode: String,
         note: String?,
     ) {
-        if (busy.value) return
+        if (busy.value || exactReceiptLoading.value) return
+        val currentSelected = state.value.selected
+        if (!refundOrderSnapshotMatches(currentSelected, order)) {
+            notice.value = "This receipt changed or is no longer selected. Reopen it and verify the current balance."
+            return
+        }
+        val exactVerification = verifiedExactRefund
+        if (requestedExactOrderId == order.id) {
+            if (
+                exactVerification == null ||
+                appCtx.cacheIsolation.currentLease() != exactVerification.lease ||
+                !refundOrderSnapshotMatches(exactVerification.order, order)
+            ) {
+                notice.value = "This exact receipt is no longer verified for the signed-in shop. Reopen it."
+                return
+            }
+        }
         val validation = when {
             amountMinor <= 0 -> "Refund amount must be greater than ₹0."
             amountMinor > order.refundableMinor ->
@@ -403,6 +570,20 @@ class RefundsViewModel : ViewModel() {
                 val capturedAt = System.currentTimeMillis()
                 var captured = false
                 if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                        val latestSelected = state.value.selected
+                        require(refundOrderSnapshotMatches(latestSelected, order)) {
+                            "This receipt changed before capture. Reopen it and verify the current balance."
+                        }
+                        if (requestedExactOrderId == order.id) {
+                            val latestExact = verifiedExactRefund
+                            require(
+                                latestExact != null &&
+                                    latestExact.lease == scopeLease &&
+                                    refundOrderSnapshotMatches(latestExact.order, order)
+                            ) {
+                                "This exact receipt is no longer verified for this shop. Reopen it."
+                            }
+                        }
                         val openShift = ShiftResolutionPolicy.resolve(
                             db.shiftDao().currentForTerminal(verifiedTerminalId),
                             db.shiftDao().serverOpen(verifiedTerminalId),
@@ -448,6 +629,7 @@ class RefundsViewModel : ViewModel() {
                     return@launch
                 }
                 selectedId.value = null
+                if (requestedExactOrderId == order.id) invalidateExactReceipt()
                 if (!appCtx.connectivity.online.value) {
                     notice.value = "Refund request saved offline. No cash or provider payout is authorised " +
                         "until the server accepts it after reconnection."
@@ -813,6 +995,35 @@ private fun RefundOrderCacheEntity.toOrder(): Order = Order(
     refundableMinor = refundableMinor,
     pendingRefundMinor = pendingRefundMinor,
     paymentMethods = paymentMethodsCsv.split(',').map(String::trim).filter(String::isNotEmpty),
+)
+
+internal fun CanonicalReceipt.toExactRefundOrder(): Order = Order(
+    id = orderId,
+    invoiceNo = invoiceNo,
+    fiscalYear = fiscalYear,
+    invoiceIssuedAt = invoiceIssuedAt,
+    status = status,
+    type = orderType,
+    sourceLabel = gamingSessions.joinToString(", ") { it.stationName }.takeIf(String::isNotBlank),
+    subtotalMinor = subtotalMinor,
+    discountMinor = discountMinor,
+    manualDiscountMinor = manualDiscountMinor,
+    pointsRedeemedMinor = pointsRedeemedMinor,
+    taxMinor = taxMinor,
+    roundOffMinor = roundOffMinor,
+    tipMinor = tipMinor,
+    totalMinor = totalMinor,
+    paidMinor = paidMinor,
+    dueMinor = 0,
+    refundableMinor = refundableMinor,
+    pendingRefundMinor = pendingRefundMinor,
+    paymentMethods = payments.map { it.method.trim().lowercase() }
+        .filter(REFUND_PAYMENT_METHODS::contains)
+        .distinct(),
+    checkoutVersion = checkoutVersion,
+    customerName = customerName,
+    customerPhone = customerPhone,
+    notes = notes,
 )
 
 private fun LocalRefundEntity.toTask() = RefundTask(

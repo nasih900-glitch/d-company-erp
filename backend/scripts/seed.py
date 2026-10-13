@@ -41,6 +41,7 @@ from app.services.accounting.accounts import (
     DEFAULT_EXPENSE_CATEGORY_ACCOUNTS,
 )
 from app.services.auth.otp import normalize_account_email
+from app.services.pos.loyalty_program import new_legacy_loyalty_program
 
 DEFAULT_ACCOUNTS: list[dict[str, str]] = [
     account.seed_dict() for account in DEFAULT_CHART_OF_ACCOUNTS
@@ -124,6 +125,11 @@ async def seed() -> None:
         # that reference its id (branch, roles, users, accounts, etc.)
         # SQLAlchemy 2.0 async batching doesn't always pick the right
         # INSERT order across many add() calls in one session.
+        await s.flush()
+        # A newly provisioned tenant is created after Alembic has already
+        # seeded existing companies. Give it the same explicit legacy
+        # baseline; a missing row remains a fail-closed corruption signal.
+        s.add(new_legacy_loyalty_program(company.id))
         await s.flush()
 
         branch = Branch(

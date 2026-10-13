@@ -1,5 +1,14 @@
 package cloud.dcompany.erp.ui.components
 
+import cloud.dcompany.erp.ui.theme.operationalDanger
+import cloud.dcompany.erp.ui.theme.operationalDangerContainer
+import cloud.dcompany.erp.ui.theme.operationalGood
+import cloud.dcompany.erp.ui.theme.operationalGoodContainer
+import cloud.dcompany.erp.ui.theme.operationalInformation
+import cloud.dcompany.erp.ui.theme.operationalInformationContainer
+import cloud.dcompany.erp.ui.theme.operationalWarning
+import cloud.dcompany.erp.ui.theme.operationalWarningContainer
+
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.RepeatMode
@@ -123,11 +132,11 @@ fun Panel(
         label = "panelScale",
     )
     val borderColor by animateColorAsState(
-        if (pressed && onClick != null) Brand.ControlBorder else Brand.BorderSubtle,
+        if (pressed && onClick != null) MaterialTheme.colorScheme.outline else MaterialTheme.colorScheme.outlineVariant,
         tween(Motion.fast),
         label = "panelBorder",
     )
-    val bg = if (elevated) Brand.SurfaceOverlay else Brand.Surface
+    val bg = if (elevated) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surface
     Column(
         modifier
             .graphicsLayer { scaleX = scale; scaleY = scale }
@@ -156,7 +165,7 @@ fun SectionTitle(text: String, modifier: Modifier = Modifier) {
     Text(
         text,
         style = MaterialTheme.typography.titleLarge,
-        color = Brand.Foreground,
+        color = MaterialTheme.colorScheme.onSurface,
         modifier = modifier.padding(bottom = Spacing.xs),
     )
 }
@@ -194,7 +203,7 @@ private fun SkeletonBlock(
     shape: RoundedCornerShape,
     alpha: Float,
 ) {
-    Box(modifier.clip(shape).background(Brand.SurfaceOverlay.copy(alpha = alpha)))
+    Box(modifier.clip(shape).background(MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = alpha)))
 }
 
 @Composable
@@ -227,7 +236,7 @@ fun LoadingSkeleton(modifier: Modifier = Modifier, lines: Int = 4) {
 @Composable
 fun Loading(modifier: Modifier = Modifier) = Box(modifier.fillMaxSize(), Alignment.Center) {
     CircularProgressIndicator(
-        color = Brand.Gold,
+        color = MaterialTheme.colorScheme.primary,
         modifier = Modifier.semantics {
             contentDescription = "Loading"
             stateDescription = "In progress"
@@ -253,12 +262,12 @@ fun EmptyState(title: String, body: String, modifier: Modifier = Modifier) {
 fun NoticeBanner(message: String, onDismiss: () -> Unit, modifier: Modifier = Modifier) {
     AnimatedVisibility(visible = true, enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
         Row(
-            modifier.fillMaxWidth().clip(Radius.shapeMd).background(Brand.SurfaceRaised)
+            modifier.fillMaxWidth().clip(Radius.shapeMd).background(MaterialTheme.colorScheme.surfaceVariant)
                 .semantics { liveRegion = LiveRegionMode.Polite }
                 .padding(horizontal = Spacing.md, vertical = Spacing.sm),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(message, color = Brand.Foreground, modifier = Modifier.weight(1f))
+            Text(message, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
             TextButton(onClick = onDismiss) { Text("Dismiss") }
         }
     }
@@ -269,7 +278,7 @@ fun NoticeBanner(message: String, onDismiss: () -> Unit, modifier: Modifier = Mo
 @Composable
 fun PendingBanner(text: String, rejected: Boolean, onRetry: () -> Unit, modifier: Modifier = Modifier) {
     Row(
-        modifier.fillMaxWidth().clip(Radius.shapeMd).background(Brand.SurfaceRaised)
+        modifier.fillMaxWidth().clip(Radius.shapeMd).background(MaterialTheme.colorScheme.surfaceVariant)
             .semantics {
                 liveRegion = if (rejected) LiveRegionMode.Assertive else LiveRegionMode.Polite
             }
@@ -277,7 +286,7 @@ fun PendingBanner(text: String, rejected: Boolean, onRetry: () -> Unit, modifier
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(text, color = if (rejected) Brand.Danger else Brand.Warning, modifier = Modifier.weight(1f))
+        Text(text, color = if (rejected) MaterialTheme.colorScheme.operationalDanger else MaterialTheme.colorScheme.operationalWarning, modifier = Modifier.weight(1f))
         if (rejected) TextButton(onClick = onRetry) { Text("Retry") }
     }
 }
@@ -287,7 +296,7 @@ fun PendingBanner(text: String, rejected: Boolean, onRetry: () -> Unit, modifier
 // ============================================================================
 
 @Composable
-fun Chip(text: String, color: Color = Brand.SurfaceRaised, contentColor: Color = Brand.Foreground) {
+fun Chip(text: String, color: Color = MaterialTheme.colorScheme.surfaceVariant, contentColor: Color = MaterialTheme.colorScheme.onSurface) {
     Text(
         text,
         style = MaterialTheme.typography.labelSmall,
@@ -342,16 +351,16 @@ fun Field(
 
 @Composable
 fun fieldColors() = TextFieldDefaults.colors(
-    focusedContainerColor = Brand.SurfaceRaised,
-    unfocusedContainerColor = Brand.SurfaceRaised,
-    disabledContainerColor = Brand.Surface,
-    focusedIndicatorColor = Brand.Gold,
-    unfocusedIndicatorColor = Brand.ControlBorder,
-    focusedLabelColor = Brand.FocusRing,
-    unfocusedLabelColor = Brand.ForegroundMuted,
-    cursorColor = Brand.FocusRing,
-    focusedTextColor = Brand.Foreground,
-    unfocusedTextColor = Brand.Foreground,
+    focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+    disabledContainerColor = MaterialTheme.colorScheme.surface,
+    focusedIndicatorColor = MaterialTheme.colorScheme.primary,
+    unfocusedIndicatorColor = MaterialTheme.colorScheme.outline,
+    focusedLabelColor = MaterialTheme.colorScheme.primary,
+    unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+    cursorColor = MaterialTheme.colorScheme.primary,
+    focusedTextColor = MaterialTheme.colorScheme.onSurface,
+    unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
 )
 
 @Composable
@@ -366,15 +375,15 @@ fun PickerField(
     var open by remember { mutableStateOf(false) }
     val rotation by animateFloatAsState(if (open) 180f else 0f, tween(Motion.fast), label = "chevron")
     Column(modifier.fillMaxWidth()) {
-        Text(label, style = MaterialTheme.typography.labelSmall, color = Brand.ForegroundMuted)
+        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(Spacing.xs))
         Box {
             Row(
                 Modifier.fillMaxWidth().clip(Radius.shapeMd)
-                    .background(Brand.SurfaceRaised)
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
                     .border(
                         1.dp,
-                        if (open) Brand.FocusRing else Brand.ControlBorder,
+                        if (open) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
                         Radius.shapeMd,
                     )
                     .semantics {
@@ -389,14 +398,14 @@ fun PickerField(
             ) {
                 Text(
                     selectedLabel,
-                    color = if (!enabled || options.isEmpty()) Brand.Disabled else Brand.Foreground,
+                    color = if (!enabled || options.isEmpty()) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
                     maxLines = 1, overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false),
                 )
                 Icon(
                     imageVector = Icons.Default.KeyboardArrowDown,
                     contentDescription = null,
-                    tint = if (enabled) Brand.Gold else Brand.Disabled,
+                    tint = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.graphicsLayer { rotationZ = rotation },
                 )
             }
@@ -448,10 +457,10 @@ fun PrimaryButton(
         enabled = enabled,
         shape = Radius.shapeMd,
         colors = ButtonDefaults.buttonColors(
-            containerColor = Brand.Gold,
-            contentColor = Brand.Background,
-            disabledContainerColor = Brand.SurfaceRaised,
-            disabledContentColor = Brand.ForegroundFaint,
+            containerColor = MaterialTheme.colorScheme.primary,
+            contentColor = MaterialTheme.colorScheme.background,
+            disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+            disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
         ),
         modifier = modifier.heightIn(min = 48.dp),
         content = content,
@@ -546,7 +555,7 @@ fun FormDialog(
                                     while (true) awaitPointerEvent()
                                 }
                             },
-                        color = Brand.SurfaceOverlay,
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
                         tonalElevation = AlertDialogDefaults.TonalElevation,
                         shape = Radius.shapeLg,
                     ) {
@@ -557,7 +566,7 @@ fun FormDialog(
                             ) {
                                 Text(
                                     title,
-                                    color = Brand.Foreground,
+                                    color = MaterialTheme.colorScheme.onSurface,
                                     style = MaterialTheme.typography.headlineSmall,
                                 )
                                 Spacer(Modifier.height(Spacing.lg))
@@ -568,7 +577,7 @@ fun FormDialog(
                                         error?.let {
                                             Text(
                                                 it,
-                                                color = Brand.Danger,
+                                                color = MaterialTheme.colorScheme.operationalDanger,
                                                 modifier = Modifier.semantics {
                                                     liveRegion = LiveRegionMode.Assertive
                                                 },
@@ -626,16 +635,16 @@ fun ConfirmDialog(
         onDismissRequest = { if (!busy) onDismiss() },
         modifier = Modifier.widthIn(max = 480.dp).fillMaxWidth(0.92f).imePadding(),
         properties = DialogProperties(usePlatformDefaultWidth = false),
-        containerColor = Brand.SurfaceOverlay,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = Radius.shapeLg,
-        title = { Text(title, color = Brand.Foreground) },
+        title = { Text(title, color = MaterialTheme.colorScheme.onSurface) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                Text(body, color = Brand.ForegroundMuted)
+                Text(body, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 error?.let {
                     Text(
                         it,
-                        color = Brand.Danger,
+                        color = MaterialTheme.colorScheme.operationalDanger,
                         modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive },
                     )
                 }
@@ -646,8 +655,8 @@ fun ConfirmDialog(
                 onClick = onConfirm, enabled = !busy,
                 shape = Radius.shapeMd,
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = if (danger) Brand.Danger else Brand.Gold,
-                    contentColor = Brand.Background,
+                    containerColor = if (danger) MaterialTheme.colorScheme.operationalDanger else MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.background,
                 ),
                 modifier = Modifier.heightIn(min = 48.dp),
             ) { Text(confirmLabel) }

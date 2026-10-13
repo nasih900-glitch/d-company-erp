@@ -30,9 +30,9 @@ class AndroidInteractionContractTest {
             "setDecorFitsSystemWindows(window, false)" in activity,
         )
         assertTrue(
-            "The full window, including system-bar regions, must retain the branded background",
+            "The full window, including system-bar regions, must retain the active theme background",
             Regex(
-                """Modifier\.fillMaxSize\(\),\s*color\s*=\s*Brand\.Background""",
+                """Modifier\.fillMaxSize\(\),\s*color\s*=\s*MaterialTheme\.colorScheme\.background""",
             ).containsMatchIn(activity),
         )
         assertTrue(

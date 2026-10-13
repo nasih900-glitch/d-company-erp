@@ -24,6 +24,7 @@ import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertCountEquals
@@ -31,6 +32,7 @@ import androidx.compose.ui.test.assertWidthIsAtLeast
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.isDisplayed
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.junit4.StateRestorationTester
@@ -43,6 +45,7 @@ import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performImeAction
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performTouchInput
@@ -63,6 +66,7 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.test.platform.app.InstrumentationRegistry
 import cloud.dcompany.erp.core.db.GamingSessionAddonActionState
+import cloud.dcompany.erp.core.db.MenuItemEntity
 import cloud.dcompany.erp.core.db.GamingSessionState
 import cloud.dcompany.erp.core.db.GamingPackageExtensionState
 import cloud.dcompany.erp.core.db.GamingLegacyResolution
@@ -71,6 +75,7 @@ import cloud.dcompany.erp.core.db.LEGACY_PACKAGE_START_REVIEW_ERROR
 import cloud.dcompany.erp.ui.theme.DCompanyTheme
 import java.time.Instant
 import java.io.File
+import java.io.FileInputStream
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.math.abs
@@ -102,6 +107,147 @@ private val PINNED_ACTIVE_ACTION_LABELS = listOf(
 class GamingDialogUiTest {
     @get:Rule
     val compose = createComposeRule()
+
+    @Test
+    fun drinkReviewShowsFrozenStationItemQuantityAndTotalBeforeOneConfirmedWrite() {
+        var confirmed = 0
+        var cancelled = 0
+        val session = GameSession(
+            id = "session-drink-review",
+            stationId = "station-1",
+            shiftId = "shift-1",
+            status = "active",
+            startAt = "2026-10-13T08:00:00Z",
+            billingMode = "hourly",
+            ratePerHourMinor = 12_000,
+        )
+        val drink = MenuItemEntity(
+            id = "drink-cola",
+            categoryId = "drinks",
+            sku = "COLA",
+            name = "QA Cola",
+            type = "product",
+            basePriceMinor = 4_000,
+            taxRate = 0.0,
+            hsnCode = null,
+            priceIncludesTax = true,
+            isAvailable = true,
+            description = null,
+        )
+
+        compose.setContent {
+            DCompanyTheme {
+                GamingAddonReviewDialog(
+                    request = AddonReviewRequest(
+                        session = session,
+                        stationName = "PS5 1",
+                        item = drink,
+                        variant = null,
+                        modifiers = emptyList(),
+                        note = "No ice",
+                        qty = 2,
+                    ),
+                    onDismiss = { cancelled += 1 },
+                    onConfirm = { confirmed += 1 },
+                )
+            }
+        }
+
+        compose.onNodeWithText("Review item before adding").assertIsDisplayed()
+        compose.onNodeWithText("QA Cola").assertIsDisplayed()
+        compose.onNodeWithText("PS5 1 · session session-").assertIsDisplayed()
+        compose.onNodeWithText("Quantity · 2").assertIsDisplayed()
+        compose.onNodeWithText("Unit price · ₹40.00").assertIsDisplayed()
+        compose.onNodeWithText("Total · ₹80.00").assertIsDisplayed()
+        compose.onNodeWithText("Modifiers · None").assertIsDisplayed()
+        compose.onNodeWithText("Note · No ice").assertIsDisplayed()
+        compose.onNodeWithText("Cancel").assertIsDisplayed().performClick()
+        compose.runOnIdle {
+            assertEquals(1, cancelled)
+            assertEquals(0, confirmed)
+        }
+
+        compose.onNodeWithText("Confirm add · ₹80.00").assertIsDisplayed().performClick()
+        compose.runOnIdle { assertEquals(1, confirmed) }
+    }
+
+    @Test
+    fun savedCustomerJoinReviewDoesNotWriteUntilConfirmAndDispatchesOnlySavedIdentity() {
+        val joins = mutableListOf<Triple<String?, String?, String?>>()
+        val session = GameSession(
+            id = "session-saved-friend-review",
+            stationId = "station-1",
+            shiftId = "shift-1",
+            status = "active",
+            startAt = "2026-10-13T08:00:00Z",
+            timerMinutes = 60,
+            amountMinor = 12_000,
+            packageId = "single-60",
+            billingMode = "package",
+            packagePriceMinorSnapshot = 12_000,
+            packageDurationMinutesSnapshot = 60,
+            packageVariantSnapshot = "single",
+            pauseVersion = 0,
+        )
+        val saved = GamingCustomerOption(
+            customerId = "customer-amina",
+            name = "Amina Rahman",
+            phone = "9876543210",
+            pending = false,
+        )
+
+        compose.setContent {
+            DCompanyTheme {
+                GamingParticipantsDialog(
+                    session = session,
+                    participants = emptyList(),
+                    rejectedAction = null,
+                    customers = listOf(saved),
+                    online = true,
+                    amendTarget = null,
+                    onSearchCustomer = {},
+                    onJoin = { customerId, name, phone -> joins += Triple(customerId, name, phone) },
+                    onLeave = {},
+                    onAmend = {},
+                    onDiscardRejected = {},
+                    onDismiss = {},
+                )
+            }
+        }
+
+        val customerSearch = compose.onNodeWithTag("gaming-customer-search")
+        customerSearch.performClick().assertIsFocused().performTextReplacement("Amina")
+        val playersList = compose.onNodeWithTag("gaming-players-list")
+        playersList.performScrollToNode(hasText("Amina Rahman · 9876543210"))
+        compose.onNodeWithText("Amina Rahman · 9876543210").performClick()
+        customerSearch.assertIsNotFocused()
+        // Selection recomposes this lazy item while the IME window is closing.
+        // Ask the list to materialize the updated row before checking its
+        // merged, clickable semantics and visible position.
+        playersList.performScrollToNode(hasText("Amina Rahman · 9876543210 · selected"))
+        compose.onNodeWithText("Amina Rahman · 9876543210 · selected").assertIsDisplayed()
+        compose.onNodeWithTag("gaming-add-player")
+            .performScrollTo()
+            .assertIsDisplayed()
+            .assertIsEnabled()
+            .performClick()
+        compose.runOnIdle { assertTrue(joins.isEmpty()) }
+        // The emulator IME reports its final onShown callback outside Compose's
+        // idling resources. Let the compact review window finish its inset
+        // layout, then keep the strict on-screen assertion below.
+        Thread.sleep(750)
+        saveImeScreenshot()
+        val reviewTitle = compose.onNodeWithText("Review friend join")
+        Log.i("GamingJoinReview", "Before strict review assertion: ${reviewTitle.dialogTouchSnapshot()}")
+        compose.onNodeWithText("Amina Rahman").assertIsDisplayed()
+        compose.onNodeWithText("Player-controller fees after join · ₹30.00 estimated")
+            .assertIsDisplayed()
+        reviewTitle.assertIsDisplayed()
+        compose.onNodeWithText("Confirm join").assertIsDisplayed().performClick()
+        compose.runOnIdle {
+            assertEquals(listOf(Triple("customer-amina", null, null)), joins)
+        }
+    }
 
     @Test
     fun globalWriteLockExplainsWhyOtherStationActionsArePaused() {
@@ -2264,14 +2410,25 @@ class GamingDialogUiTest {
 
     private fun saveImeScreenshot() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
-        instrumentation.uiAutomation.takeScreenshot()?.let { bitmap ->
-            val file = File(
-                instrumentation.targetContext.getExternalFilesDir(null),
-                "gaming-recovery-ime-open.png",
-            )
+        val file = File(
+            instrumentation.targetContext.getExternalFilesDir(null),
+            "gaming-recovery-ime-open.png",
+        )
+        val bitmap = instrumentation.uiAutomation.takeScreenshot()
+        if (bitmap != null) {
             file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
             bitmap.recycle()
+        } else {
+            instrumentation.uiAutomation.executeShellCommand("screencap -p").use { capture ->
+                FileInputStream(capture.fileDescriptor).use { input ->
+                    file.outputStream().use(input::copyTo)
+                }
+            }
         }
+        Log.i("GamingJoinReview", "Saved review screenshot: ${file.absolutePath} (${file.length()} bytes)")
+        instrumentation.uiAutomation.executeShellCommand(
+            "cp ${file.absolutePath} /sdcard/Download/gaming-saved-customer-review.png",
+        ).use { command -> FileInputStream(command.fileDescriptor).use { it.readBytes() } }
     }
 
     private fun SemanticsNodeInteraction.performAndroidScreenTouch(): SemanticsNodeInteraction {

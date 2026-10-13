@@ -22,6 +22,7 @@ import androidx.compose.runtime.MutableLongState
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.material3.Surface
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.asAndroidBitmap
@@ -45,7 +46,6 @@ import cloud.dcompany.erp.ui.screens.gaming.GameSession
 import cloud.dcompany.erp.ui.screens.gaming.GamingSavingOverlay
 import cloud.dcompany.erp.ui.screens.gaming.GamingStationCard
 import cloud.dcompany.erp.ui.screens.gaming.Station
-import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.DCompanyTheme
 import cloud.dcompany.erp.ui.theme.Spacing
 import java.io.File
@@ -326,7 +326,7 @@ class PhysicalComponentFrameStressUiTest {
             DCompanyTheme {
                 // Match MainActivity's edge-to-edge contract so the system
                 // taskbar does not overlap cards or the saving overlay.
-                Surface(Modifier.fillMaxSize(), color = Brand.Background) {
+                Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
                         WorkspaceScaffold(
                             destinations = listOf(Destination.Gaming, Destination.Pos, Destination.Shift),
@@ -431,7 +431,7 @@ private fun PhysicalGamingBoard(
     busyStationId: String?,
 ) {
     Box(
-        Modifier.fillMaxSize().background(Brand.Background)
+        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
             .testTag("physical-gaming-board"),
     ) {
         LazyVerticalGrid(

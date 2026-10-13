@@ -37,11 +37,36 @@ class GamingDurationDialHitTest {
 
     @Test
     fun circularStopDistanceIsStableAcrossZeroDegreeSeam() {
-        assertEquals(2, nearestDurationDialStop(359f, 3))
-        assertEquals(2, nearestDurationDialStop(1f, 3))
+        assertEquals(1, nearestDurationDialStop(359f, 3))
+        assertEquals(1, nearestDurationDialStop(1f, 3))
         assertEquals(2f, circularAngleDistance(359f, 1f), 0.001f)
-        assertEquals(350f, durationDialSweep(160f), 0.001f)
-        assertEquals(10f, durationDialSweep(180f), 0.001f)
+        assertEquals(0f, durationDialSweep(135f), 0.001f)
+        assertEquals(360f, durationDialSweep(495f), 0.001f)
+    }
+
+    @Test
+    fun draggingThroughZeroPreservesDirectionAndClampsAtBothEnds() {
+        assertEquals(226f, durationDialDragProgress(224f, 359f, 1f), 0.001f)
+        assertEquals(224f, durationDialDragProgress(226f, 1f, 359f), 0.001f)
+        assertEquals(360f, durationDialDragProgress(359f, 134f, 138f), 0.001f)
+        assertEquals(0f, durationDialDragProgress(1f, 136f, 132f), 0.001f)
+        assertEquals(358f, durationDialDragProgress(360f, 135f, 133f), 0.001f)
+    }
+
+    @Test
+    fun graspingSharedEndpointKeepsCurrentMinimumOrMaximum() {
+        assertEquals(0f, durationDialProgressAtAngle(135f, 0f), 0.001f)
+        assertEquals(360f, durationDialProgressAtAngle(135f, 360f), 0.001f)
+        assertEquals(360f, durationDialProgressAtAngle(134f, 360f), 0.001f)
+    }
+
+    @Test
+    fun packageBoundaryHasToleranceRatherThanRepeatedPriceSwitches() {
+        assertEquals(0, durationDialIndexAtProgress(183f, 2, previousIndex = 0))
+        assertEquals(1, durationDialIndexAtProgress(186f, 2, previousIndex = 0))
+        assertEquals(1, durationDialIndexAtProgress(177f, 2, previousIndex = 1))
+        assertEquals(0, durationDialIndexAtProgress(174f, 2, previousIndex = 1))
+        assertEquals(0, durationDialIndexAtProgress(360f, 1, previousIndex = 0))
     }
 
     @Test

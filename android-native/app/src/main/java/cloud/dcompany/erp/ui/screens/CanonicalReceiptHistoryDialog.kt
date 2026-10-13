@@ -1,5 +1,14 @@
 package cloud.dcompany.erp.ui.screens
 
+import cloud.dcompany.erp.ui.theme.operationalDanger
+import cloud.dcompany.erp.ui.theme.operationalDangerContainer
+import cloud.dcompany.erp.ui.theme.operationalGood
+import cloud.dcompany.erp.ui.theme.operationalGoodContainer
+import cloud.dcompany.erp.ui.theme.operationalInformation
+import cloud.dcompany.erp.ui.theme.operationalInformationContainer
+import cloud.dcompany.erp.ui.theme.operationalWarning
+import cloud.dcompany.erp.ui.theme.operationalWarningContainer
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -21,12 +30,15 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ReceiptLong
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -37,6 +49,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -68,17 +82,27 @@ internal fun CanonicalReceiptHistoryDialog(
     onRefresh: () -> Unit,
     onLoadMore: () -> Unit,
     onOpenReceipt: (String) -> Unit,
+    search: ReceiptSearchUiState,
+    onSearch: (String) -> Unit,
+    onLoadMoreSearch: () -> Unit,
+    onRefundReceipt: ((CanonicalReceipt) -> Unit)?,
     onDismiss: () -> Unit,
 ) {
     var selectedOrderId by rememberSaveable { mutableStateOf<String?>(null) }
-    val selected = selectedOrderId?.let { id -> receipts.firstOrNull { it.orderId == id } }
+    var searchDraft by rememberSaveable { mutableStateOf(search.query) }
+    val displayedReceipts = if (search.query.isBlank()) receipts else search.receipts
+    val selected = selectedOrderId?.let { id ->
+        search.detail?.takeIf { search.query.isNotBlank() && it.orderId == id }
+            ?: displayedReceipts.firstOrNull { it.orderId == id }
+            ?: receipts.firstOrNull { it.orderId == id }
+    }
 
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false),
     ) {
         Surface(
-            color = Brand.SurfaceOverlay,
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
             shape = Radius.shapeXl,
             tonalElevation = 0.dp,
             modifier = Modifier
@@ -86,32 +110,42 @@ internal fun CanonicalReceiptHistoryDialog(
                 .fillMaxHeight(0.9f)
                 .widthIn(max = 980.dp)
                 .heightIn(min = 420.dp, max = 760.dp)
-                .border(1.dp, Brand.Border, Radius.shapeXl),
+                .border(1.dp, MaterialTheme.colorScheme.outline, Radius.shapeXl),
         ) {
             if (selected == null) {
                 ReceiptHistoryList(
-                    receipts = receipts,
-                    hasMore = hasMore,
-                    loading = loading,
-                    error = error,
+                    receipts = displayedReceipts,
+                    hasMore = if (search.query.isBlank()) hasMore else search.hasMore,
+                    loading = if (search.query.isBlank()) loading else search.loading,
+                    error = if (search.query.isBlank()) error else search.error,
+                    searchDraft = searchDraft,
+                    search = search,
+                    onSearchDraftChange = { searchDraft = it.take(200) },
+                    onSearch = { onSearch(searchDraft) },
+                    onClearSearch = { searchDraft = ""; onSearch("") },
                     hasLocalReceipt = hasLocalReceipt,
                     onOpenLastLocalReceipt = onOpenLastLocalReceipt,
                     onSelect = {
                         selectedOrderId = it.orderId
                         onOpenReceipt(it.orderId)
                     },
-                    onRefresh = onRefresh,
-                    onLoadMore = onLoadMore,
+                    onRefresh = if (search.query.isBlank()) {
+                        onRefresh
+                    } else {
+                        { onSearch(search.query) }
+                    },
+                    onLoadMore = if (search.query.isBlank()) onLoadMore else onLoadMoreSearch,
                     onDismiss = onDismiss,
                 )
             } else {
                 CanonicalReceiptDetail(
                     receipt = selected,
-                    loading = loading,
-                    error = error,
+                    loading = if (search.query.isBlank()) loading else search.detailLoading,
+                    error = if (search.query.isBlank()) error else search.detailError,
                     onRefresh = { onOpenReceipt(selected.orderId) },
                     onBack = { selectedOrderId = null },
                     onDismiss = onDismiss,
+                    onRefundReceipt = onRefundReceipt,
                 )
             }
         }
@@ -124,6 +158,11 @@ private fun ReceiptHistoryList(
     hasMore: Boolean,
     loading: Boolean,
     error: String?,
+    searchDraft: String,
+    search: ReceiptSearchUiState,
+    onSearchDraftChange: (String) -> Unit,
+    onSearch: () -> Unit,
+    onClearSearch: () -> Unit,
     hasLocalReceipt: Boolean,
     onOpenLastLocalReceipt: () -> Unit,
     onSelect: (CanonicalReceipt) -> Unit,
@@ -144,7 +183,48 @@ private fun ReceiptHistoryList(
             refreshing = loading,
             onDismiss = onDismiss,
         )
-        HorizontalDivider(color = Brand.BorderSubtle)
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = Spacing.lg, vertical = Spacing.sm),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedTextField(
+                value = searchDraft,
+                onValueChange = onSearchDraftChange,
+                label = { Text("Invoice, suffix, order or session ID") },
+                singleLine = true,
+                modifier = Modifier.weight(1f),
+            )
+            ErpButton(
+                text = if (search.loading) "Searching…" else "Search",
+                onClick = onSearch,
+                enabled = searchDraft.isNotBlank() && !search.loading,
+                leadingIcon = Icons.Default.Search,
+                intent = ActionIntent.Secondary,
+            )
+            if (search.query.isNotBlank()) {
+                ErpButton("Clear", onClearSearch, intent = ActionIntent.Quiet)
+            }
+        }
+        if (search.query.isNotBlank()) {
+            Text(
+                when (search.source) {
+                    ReceiptSearchSource.ONLINE ->
+                        "Online search across retained history · exact identifiers · ${receipts.size} loaded"
+                    ReceiptSearchSource.CACHED -> {
+                        val cached = search.cachedAtMillis?.let {
+                            java.time.Instant.ofEpochMilli(it).toString().receiptDateTime()
+                        } ?: "time unavailable"
+                        "Offline cached lookup · bounded to receipts already on this tablet · cached $cached · not full history"
+                    }
+                    ReceiptSearchSource.NONE -> "Searching retained receipt history…"
+                },
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.xs),
+            )
+        }
 
         if (receipts.isEmpty()) {
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
@@ -156,13 +236,16 @@ private fun ReceiptHistoryList(
                     Icon(
                         Icons.AutoMirrored.Filled.ReceiptLong,
                         contentDescription = null,
-                        tint = Brand.ForegroundMuted,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(40.dp),
                     )
-                    Text("No shared receipts loaded", style = MaterialTheme.typography.titleLarge)
+                    Text(
+                        if (search.query.isBlank()) "No shared receipts loaded" else "No matching receipt",
+                        style = MaterialTheme.typography.titleLarge,
+                    )
                     Text(
                         error ?: "Completed receipts will appear here from web or Android.",
-                        color = if (error == null) Brand.ForegroundMuted else Brand.Warning,
+                        color = if (error == null) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.operationalWarning,
                         style = MaterialTheme.typography.bodyMedium,
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
@@ -222,7 +305,7 @@ private fun ReceiptHistoryList(
                 item(key = "receipt-history-scope") {
                     Text(
                         "History is scoped to this company and shop. Older pages load only when requested.",
-                        color = Brand.ForegroundFaint,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.md),
                     )
@@ -238,14 +321,14 @@ private fun ReceiptHistoryNotice(message: String) {
         Modifier
             .fillMaxWidth()
             .padding(horizontal = Spacing.lg, vertical = Spacing.sm)
-            .background(Brand.WarningMuted, Radius.shapeMd)
-            .border(1.dp, Brand.Warning.copy(alpha = 0.45f), Radius.shapeMd)
+            .background(MaterialTheme.colorScheme.operationalWarningContainer, Radius.shapeMd)
+            .border(1.dp, MaterialTheme.colorScheme.operationalWarning.copy(alpha = 0.45f), Radius.shapeMd)
             .padding(Spacing.md),
         horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(Icons.Default.Refresh, contentDescription = null, tint = Brand.Warning)
-        Text(message, color = Brand.Warning, style = MaterialTheme.typography.bodyMedium)
+        Icon(Icons.Default.Refresh, contentDescription = null, tint = MaterialTheme.colorScheme.operationalWarning)
+        Text(message, color = MaterialTheme.colorScheme.operationalWarning, style = MaterialTheme.typography.bodyMedium)
     }
 }
 
@@ -255,13 +338,13 @@ private fun ReceiptHistoryRow(receipt: CanonicalReceipt, onClick: () -> Unit) {
         ?: receipt.orderType.replace('_', ' ').replaceFirstChar(Char::uppercase)
     val paymentSummary = receiptPaymentSummary(receipt.payments)
     Surface(
-        color = Brand.SurfaceRaised,
+        color = MaterialTheme.colorScheme.surfaceVariant,
         shape = Radius.shapeLg,
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = Spacing.lg)
             .clickable(onClick = onClick)
-            .border(1.dp, Brand.BorderSubtle, Radius.shapeLg),
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeLg),
     ) {
         Row(
             Modifier.fillMaxWidth().padding(Spacing.lg),
@@ -272,7 +355,7 @@ private fun ReceiptHistoryRow(receipt: CanonicalReceipt, onClick: () -> Unit) {
                 if (receipt.gamingSessions.isEmpty()) Icons.AutoMirrored.Filled.ReceiptLong
                 else Icons.Default.SportsEsports,
                 contentDescription = null,
-                tint = if (receipt.gamingSessions.isEmpty()) Brand.ForegroundMuted else Brand.Gold,
+                tint = if (receipt.gamingSessions.isEmpty()) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary,
                 modifier = Modifier.size(28.dp),
             )
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
@@ -285,7 +368,7 @@ private fun ReceiptHistoryRow(receipt: CanonicalReceipt, onClick: () -> Unit) {
                 )
                 Text(
                     "$source · ${receipt.invoiceIssuedAt.receiptDateTime()}",
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodySmall,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -293,7 +376,7 @@ private fun ReceiptHistoryRow(receipt: CanonicalReceipt, onClick: () -> Unit) {
                 paymentSummary?.let { summary ->
                     Text(
                         summary,
-                        color = Brand.ForegroundFaint,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
@@ -306,7 +389,7 @@ private fun ReceiptHistoryRow(receipt: CanonicalReceipt, onClick: () -> Unit) {
                 )
                 Text(
                     receipt.status.uppercase(),
-                    color = if (receipt.status == "refunded") Brand.Warning else Brand.Good,
+                    color = if (receipt.status == "refunded") MaterialTheme.colorScheme.operationalWarning else MaterialTheme.colorScheme.operationalGood,
                     style = MaterialTheme.typography.labelMedium,
                 )
             }
@@ -336,7 +419,9 @@ private fun CanonicalReceiptDetail(
     onRefresh: () -> Unit,
     onBack: () -> Unit,
     onDismiss: () -> Unit,
+    onRefundReceipt: ((CanonicalReceipt) -> Unit)?,
 ) {
+    val clipboard = LocalClipboardManager.current
     Column {
         ReceiptDialogHeader(
             title = receipt.invoiceNo,
@@ -346,7 +431,7 @@ private fun CanonicalReceiptDetail(
             refreshing = loading,
             onDismiss = onDismiss,
         )
-        HorizontalDivider(color = Brand.BorderSubtle)
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         LazyColumn(
             modifier = Modifier.weight(1f).fillMaxWidth(),
             contentPadding = androidx.compose.foundation.layout.PaddingValues(Spacing.lg),
@@ -359,6 +444,7 @@ private fun CanonicalReceiptDetail(
                 ReceiptDetailSection("Sale") {
                     ReceiptValueRow("Status", receipt.status.uppercase())
                     ReceiptValueRow("Order type", receipt.orderType.replace('_', ' '))
+                    ReceiptValueRow("Order ID", receipt.orderId)
                     ReceiptValueRow("Order opened by", receipt.openedByName ?: "Staff record unavailable")
                     ReceiptValueRow("Shift opened by", receipt.shiftOpenedByName ?: "Staff record unavailable")
                     receipt.customerName?.let { ReceiptValueRow("Customer", it) }
@@ -366,9 +452,43 @@ private fun CanonicalReceiptDetail(
                 }
             }
             item {
+                ReceiptDetailSection("Copy references") {
+                    Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                        ErpButton(
+                            "Copy invoice",
+                            { clipboard.setText(AnnotatedString(receipt.invoiceNo)) },
+                            leadingIcon = Icons.Default.ContentCopy,
+                            intent = ActionIntent.Secondary,
+                        )
+                        ErpButton(
+                            "Copy order ID",
+                            { clipboard.setText(AnnotatedString(receipt.orderId)) },
+                            intent = ActionIntent.Quiet,
+                        )
+                    }
+                    receipt.gamingSessions.forEach { session ->
+                        ErpButton(
+                            "Copy session ${session.stationCode}",
+                            { clipboard.setText(AnnotatedString(session.id)) },
+                            intent = ActionIntent.Quiet,
+                        )
+                    }
+                }
+            }
+            if (onRefundReceipt != null && receipt.refundableMinor > 0L && receipt.pendingRefundMinor == 0L) {
+                item {
+                    ErpButton(
+                        text = "Open refund for this exact receipt",
+                        onClick = { onRefundReceipt(receipt) },
+                        intent = ActionIntent.Warning,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
+            item {
                 ReceiptDetailSection("Items") {
                     receipt.lines.forEachIndexed { index, line ->
-                        if (index > 0) HorizontalDivider(color = Brand.BorderSubtle)
+                        if (index > 0) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                         ReceiptLineRow(line)
                     }
                 }
@@ -377,7 +497,7 @@ private fun CanonicalReceiptDetail(
                 item {
                     ReceiptDetailSection("Gaming provenance") {
                         receipt.gamingSessions.forEachIndexed { index, session ->
-                            if (index > 0) HorizontalDivider(color = Brand.BorderSubtle)
+                            if (index > 0) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                             ReceiptGamingRow(session)
                         }
                     }
@@ -386,10 +506,10 @@ private fun CanonicalReceiptDetail(
             item {
                 ReceiptDetailSection("Payments") {
                     if (receipt.payments.isEmpty()) {
-                        Text("No payment rows recorded.", color = Brand.ForegroundMuted)
+                        Text("No payment rows recorded.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     } else {
                         receipt.payments.forEachIndexed { index, payment ->
-                            if (index > 0) HorizontalDivider(color = Brand.BorderSubtle)
+                            if (index > 0) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                             ReceiptPaymentRow(payment)
                         }
                     }
@@ -399,7 +519,7 @@ private fun CanonicalReceiptDetail(
                 item {
                     ReceiptDetailSection("Refunds") {
                         receipt.refunds.forEachIndexed { index, refund ->
-                            if (index > 0) HorizontalDivider(color = Brand.BorderSubtle)
+                            if (index > 0) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                             ReceiptRefundRow(refund)
                         }
                     }
@@ -418,19 +538,23 @@ private fun CanonicalReceiptDetail(
                     if (receipt.taxMinor != 0L) ReceiptMoneyRow("Tax", receipt.taxMinor)
                     if (receipt.tipMinor != 0L) ReceiptMoneyRow("Tip", receipt.tipMinor)
                     if (receipt.roundOffMinor != 0L) ReceiptMoneyRow("Round-off", receipt.roundOffMinor)
-                    HorizontalDivider(color = Brand.Border)
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline)
                     ReceiptMoneyRow("Total", receipt.totalMinor, emphasized = true)
                     ReceiptMoneyRow("Paid", receipt.paidMinor)
                     if (receipt.refundedMinor != 0L) {
                         ReceiptMoneyRow("Refunded", -receipt.refundedMinor)
                     }
+                    if (receipt.pendingRefundMinor != 0L) {
+                        ReceiptMoneyRow("Refund reserved", -receipt.pendingRefundMinor)
+                    }
+                    ReceiptMoneyRow("Available to refund", receipt.refundableMinor)
                     ReceiptMoneyRow("Net collected", receipt.netCollectedMinor, emphasized = true)
                 }
             }
             item {
                 Text(
                     "Order ${receipt.orderId.take(8)} · Terminal ${receipt.terminalId.take(8)} · FY ${receipt.fiscalYear}",
-                    color = Brand.ForegroundFaint,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
@@ -459,7 +583,7 @@ private fun ReceiptDialogHeader(
         }
         Column(Modifier.weight(1f)) {
             Text(title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
-            Text(subtitle, color = Brand.ForegroundMuted, style = MaterialTheme.typography.bodySmall)
+            Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
         }
         onRefresh?.let {
             IconButton(onClick = it, enabled = !refreshing, modifier = Modifier.size(48.dp)) {
@@ -479,9 +603,9 @@ private fun ReceiptDialogHeader(
 @Composable
 private fun ReceiptDetailSection(title: String, content: @Composable () -> Unit) {
     Surface(
-        color = Brand.SurfaceRaised,
+        color = MaterialTheme.colorScheme.surfaceVariant,
         shape = Radius.shapeLg,
-        modifier = Modifier.fillMaxWidth().border(1.dp, Brand.BorderSubtle, Radius.shapeLg),
+        modifier = Modifier.fillMaxWidth().border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeLg),
     ) {
         Column(
             Modifier.fillMaxWidth().padding(Spacing.lg),
@@ -511,7 +635,7 @@ private fun ReceiptLineRow(line: CanonicalReceiptLine) {
         Column(Modifier.weight(1f)) {
             Text(
                 "${line.qty.receiptQuantity()} × ${line.menuItemName}",
-                color = if (line.voidedAt == null) Brand.Foreground else Brand.ForegroundMuted,
+                color = if (line.voidedAt == null) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
                 fontWeight = FontWeight.Medium,
             )
             listOfNotNull(
@@ -526,7 +650,7 @@ private fun ReceiptLineRow(line: CanonicalReceiptLine) {
             ).forEach { detail ->
                 Text(
                     detail,
-                    color = if (line.voidedAt == null) Brand.ForegroundMuted else Brand.Danger,
+                    color = if (line.voidedAt == null) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.operationalDanger,
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
@@ -570,9 +694,29 @@ private fun ReceiptGamingRow(session: CanonicalReceiptGamingSession) {
     Column(Modifier.fillMaxWidth().padding(vertical = Spacing.xs)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(session.stationName, fontWeight = FontWeight.SemiBold)
-            session.amountMinor?.let { Text(it.asRupees(), color = Brand.Gold) }
+            session.amountMinor?.let { Text(it.asRupees(), color = MaterialTheme.colorScheme.primary) }
         }
         ReceiptValueRow("Mode", session.billingMode.replace('_', ' '))
+        when (session.billingMode) {
+            "hourly" -> ReceiptValueRow("Locked hourly rate", "${session.ratePerHourMinor.asRupees()}/hr")
+            "package" -> ReceiptValueRow(
+                "Package",
+                session.effectivePackagePriceMinorSnapshot?.let { price ->
+                    val variant = session.effectivePackageVariantSnapshot
+                        ?.replace('_', ' ')?.replaceFirstChar(Char::uppercase) ?: "Package"
+                    val duration = session.effectivePackageDurationMinutesSnapshot
+                        ?.let { "$it min" } ?: "duration unavailable"
+                    "$variant · $duration · ${price.asRupees()}"
+                } ?: "Package snapshot unavailable (legacy receipt)",
+            )
+            else -> ReceiptValueRow("Billing basis", "Unavailable for this legacy receipt")
+        }
+        session.bookedControllerSurchargeMinor?.let { ReceiptMoneyRow("Booked controller fee", it) }
+        session.extensionPackageMinor?.takeIf { it > 0L }?.let { ReceiptMoneyRow("Paid package extensions", it) }
+        session.extensionControllerSurchargeMinor?.takeIf { it > 0L }?.let {
+            ReceiptMoneyRow("Extension controller fee", it)
+        }
+        session.lateFriendChargeMinor?.let { ReceiptMoneyRow("Late player controller fee", it) }
         session.billableMinutes?.let { ReceiptValueRow("Billable time", "$it min") }
         ReceiptValueRow("Started by", session.startedByName ?: "Staff record unavailable")
         session.stoppedByName?.let { ReceiptValueRow("Stopped by", it) }
@@ -589,7 +733,7 @@ private fun ReceiptValueRow(label: String, value: String) {
         horizontalArrangement = Arrangement.spacedBy(Spacing.md),
         verticalAlignment = Alignment.Top,
     ) {
-        Text(label, color = Brand.ForegroundMuted, modifier = Modifier.weight(1f))
+        Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
         Text(value, modifier = Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis)
     }
 }
@@ -599,7 +743,7 @@ private fun ReceiptMoneyRow(label: String, amountMinor: Long, emphasized: Boolea
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
         Text(
             label,
-            color = if (emphasized) Brand.Foreground else Brand.ForegroundMuted,
+            color = if (emphasized) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
             fontWeight = if (emphasized) FontWeight.SemiBold else FontWeight.Normal,
         )
         Text(

@@ -486,11 +486,15 @@ export const pos = {
     points: number,
     idempotencyKey: string,
     expectedCheckoutVersion: number,
+    expectedProgramRevision?: number,
   ) =>
     api
       .patch<OrderDTO>(`/pos/orders/${orderId}/points`, {
         points,
         expected_checkout_version: expectedCheckoutVersion,
+        ...(expectedProgramRevision !== undefined
+          ? { expected_program_revision: expectedProgramRevision }
+          : {}),
       }, {
         headers: { 'Idempotency-Key': idempotencyKey },
       })
@@ -500,11 +504,15 @@ export const pos = {
     reward_key: string,
     idempotencyKey: string,
     expectedCheckoutVersion: number,
+    expectedProgramRevision?: number,
   ) =>
     api
       .patch<OrderDTO>(`/pos/orders/${orderId}/reward`, {
         reward_key,
         expected_checkout_version: expectedCheckoutVersion,
+        ...(expectedProgramRevision !== undefined
+          ? { expected_program_revision: expectedProgramRevision }
+          : {}),
       }, {
         headers: { 'Idempotency-Key': idempotencyKey },
       })
@@ -1977,6 +1985,10 @@ export interface CustomerDTO {
   next_gaming_rank: string | null;
   next_gaming_rank_floor: number | null;
   points_to_next_gaming_rank: number | null;
+  /** Missing only when reading from a pre-0087 server/cache. */
+  loyalty_program_revision?: number;
+  /** Exact paise value for one generic point under the producing revision. */
+  loyalty_point_value_minor?: number;
   last_visit_at: string | null;
   notes: string | null;
 }
@@ -2497,6 +2509,7 @@ export const kitchen = {
 };
 
 export interface RewardDTO {
+  program_revision: number;
   key: string;
   name: string;
   description: string;
@@ -2504,6 +2517,47 @@ export interface RewardDTO {
   value_minor: number;
   min_rank: string;
   affordable: boolean;
+}
+
+export type LoyaltyRankKey = 'rookie' | 'player' | 'pro' | 'legend';
+export type LoyaltyRewardKey =
+  | 'extra_controller' | 'snack' | 'ps5_30' | 'ps5_60'
+  | 'squad_night' | 'vr_legend' | 'legend_credit_1000';
+export interface LoyaltyRankRuleDTO {
+  key: LoyaltyRankKey;
+  label: string;
+  threshold: number;
+  bonus_points: number;
+}
+export interface LoyaltyRewardRuleDTO {
+  key: LoyaltyRewardKey;
+  label: string;
+  description: string;
+  points_cost: number;
+  value_minor: number;
+  min_rank_key: LoyaltyRankKey;
+  enabled: boolean;
+}
+export interface LoyaltyProgramRulesDTO {
+  gaming_earn_points: number;
+  gaming_earn_rupees: number;
+  minor_per_point: number;
+  ranks: LoyaltyRankRuleDTO[];
+  rewards: LoyaltyRewardRuleDTO[];
+}
+export interface LoyaltyProgramDTO {
+  company_id: string;
+  revision: number;
+  rules: LoyaltyProgramRulesDTO;
+  published_by: string | null;
+  published_at: string;
+  value_of_100_points_minor: number;
+  unresolved_reservation_count: number;
+  unresolved_reservations: Array<{
+    order_id: string;
+    reference: string;
+    status: string;
+  }>;
 }
 
 export const customers = {
@@ -2514,6 +2568,11 @@ export const customers = {
     }),
   byPhone: (phone: string) =>
     api.get<CustomerDTO | null>(`/customers/by-phone/${encodeURIComponent(phone)}`).then((r) => {
+      captureCustomerDirectoryRevision(r.headers as Record<string, unknown>);
+      return r.data;
+    }),
+  byGamingPhone: (phone: string) =>
+    api.get<CustomerDTO | null>(`/customers/gaming-by-phone/${encodeURIComponent(phone)}`).then((r) => {
       captureCustomerDirectoryRevision(r.headers as Record<string, unknown>);
       return r.data;
     }),
@@ -2852,6 +2911,13 @@ export interface ReceiptGamingSessionHistoryDTO {
   package_price_minor_snapshot: number | null;
   package_duration_minutes_snapshot: number | null;
   package_variant_snapshot: string | null;
+  effective_package_price_minor_snapshot?: number | null;
+  effective_package_duration_minutes_snapshot?: number | null;
+  effective_package_variant_snapshot?: string | null;
+  extension_package_minor?: number | null;
+  extension_controller_surcharge_minor?: number | null;
+  booked_controller_surcharge_minor?: number | null;
+  late_friend_charge_minor?: number | null;
   timer_minutes: number | null;
   paused_minutes: number;
   billable_minutes: number | null;
@@ -2875,6 +2941,7 @@ export interface ReceiptHistoryDTO {
   opened_by_name: string | null;
   invoice_no: string;
   fiscal_year: string;
+  checkout_version: number;
   status: string;
   order_type: string;
   table_id: string | null;
@@ -2892,6 +2959,8 @@ export interface ReceiptHistoryDTO {
   total_minor: number;
   paid_minor: number;
   refunded_minor: number;
+  pending_refund_minor: number;
+  refundable_minor: number;
   net_collected_minor: number;
   customer_name: string | null;
   customer_phone: string | null;
@@ -2941,6 +3010,11 @@ export interface ShiftDTO {
   settled_membership_refunds_minor: number;
   total_refunds_minor: number;
   net_collections_minor: number;
+  /** Optional while older servers remain in the rolling-upgrade window. */
+  cash_collections_minor?: number;
+  card_collections_minor?: number;
+  upi_collections_minor?: number;
+  other_collections_minor?: number;
   /** @deprecated Use gross_collections_minor. This alias is not net sales. */
   total_sales_minor: number;
   opened_by: string;
@@ -3005,7 +3079,7 @@ export const orders = {
 };
 
 export const receipts = {
-  list: (params?: { cursor?: string; limit?: number }) =>
+  list: (params?: { cursor?: string; limit?: number; q?: string }) =>
     api.get<ReceiptHistoryPageDTO>('/pos/receipts', { params }).then((r) => r.data),
   get: (orderId: string) =>
     api.get<ReceiptHistoryDTO>(`/pos/receipts/${orderId}`).then((r) => r.data),
@@ -3415,6 +3489,15 @@ export interface GamingParticipantStateDTO {
   participants: GamingParticipantDTO[];
 }
 
+export type GamingParticipantJoinBody = {
+  expected_participant_revision: number;
+  customer_id?: string;
+  customer_name?: string;
+  customer_phone?: string;
+  customer_directory_revision?: number;
+  customer_directory_company_id?: string;
+};
+
 export interface GamingPackageAmendBody {
   target_package_id: string;
   expected_timer_minutes: number;
@@ -3576,6 +3659,8 @@ export const gaming = {
       ...(options?.limit ? { limit: options.limit } : {}),
     },
   }).then((r) => r.data),
+  getSession: (id: string) =>
+    api.get<GameSessionDTO>(`/gaming/sessions/${id}`).then((r) => r.data),
   listPackages: (station_type?: string) =>
     api.get<GamingPackageDTO[]>('/gaming/packages', {
       params: station_type ? { station_type } : {},
@@ -3695,8 +3780,7 @@ export const gaming = {
     api.get<GamingParticipantStateDTO>(`/gaming/sessions/${id}/participants`).then((r) => r.data),
   joinSessionParticipant: (
     id: string,
-    body: { customer_id: string; expected_participant_revision: number;
-      customer_directory_revision?: number; customer_directory_company_id?: string },
+    body: GamingParticipantJoinBody,
     idempotencyKey: string,
   ) => api.post<GamingParticipantStateDTO>(`/gaming/sessions/${id}/participants/join`, body, {
     headers: { 'Idempotency-Key': idempotencyKey },
@@ -4147,6 +4231,14 @@ export const settings = {
   getCompany: () => api.get<CompanyDTO>('/settings/company').then((r) => r.data),
   updateCompany: (body: Partial<CompanyDTO>) =>
     api.patch<CompanyDTO>('/settings/company', body).then((r) => r.data),
+  getLoyaltyProgram: (signal?: AbortSignal) =>
+    api.get<LoyaltyProgramDTO>('/settings/loyalty-program', { signal }).then((r) => r.data),
+  publishLoyaltyProgram: (
+    body: { expected_revision: number; rules: LoyaltyProgramRulesDTO },
+    idempotencyKey: string,
+  ) => api.put<LoyaltyProgramDTO>('/settings/loyalty-program', body, {
+    headers: { 'Idempotency-Key': idempotencyKey },
+  }).then((r) => r.data),
   getGoogleSheetsMirror: () =>
     api.get<GoogleSheetsMirrorStatusDTO>('/settings/google-sheets').then((r) => r.data),
   configureGoogleSheetsMirror: (body: {

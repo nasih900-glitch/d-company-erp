@@ -163,6 +163,68 @@ data class TerminalUpdateBody(
     @SerialName("device_id") val deviceId: String? = null,
 )
 
+@Serializable
+data class LoyaltyRankRuleDto(
+    val key: String,
+    val label: String,
+    val threshold: Int,
+    @SerialName("bonus_points") val bonusPoints: Int,
+)
+
+@Serializable
+data class LoyaltyRewardRuleDto(
+    val key: String,
+    val label: String,
+    val description: String,
+    @SerialName("points_cost") val pointsCost: Int,
+    @SerialName("value_minor") val valueMinor: Long,
+    @SerialName("min_rank_key") val minRankKey: String,
+    val enabled: Boolean,
+)
+
+@Serializable
+data class LoyaltyProgramRulesDto(
+    @SerialName("gaming_earn_points") val gamingEarnPoints: Int,
+    @SerialName("gaming_earn_rupees") val gamingEarnRupees: Int,
+    @SerialName("minor_per_point") val minorPerPoint: Int,
+    val ranks: List<LoyaltyRankRuleDto>,
+    val rewards: List<LoyaltyRewardRuleDto>,
+)
+
+@Serializable
+data class LoyaltyReservationBlockerDto(
+    @SerialName("order_id") val orderId: String,
+    val reference: String,
+    val status: String,
+)
+
+@Serializable
+data class LoyaltyProgramDto(
+    @SerialName("company_id") val companyId: String,
+    val revision: Long,
+    val rules: LoyaltyProgramRulesDto,
+    @SerialName("published_by") val publishedBy: String? = null,
+    @SerialName("published_at") val publishedAt: String,
+    @SerialName("value_of_100_points_minor") val valueOf100PointsMinor: Long,
+    @SerialName("unresolved_reservation_count") val unresolvedReservationCount: Int,
+    @SerialName("unresolved_reservations") val unresolvedReservations: List<LoyaltyReservationBlockerDto>,
+)
+
+@Serializable
+data class LoyaltyProgramPublishBody(
+    @SerialName("expected_revision") val expectedRevision: Long,
+    val rules: LoyaltyProgramRulesDto,
+)
+
+/** Immutable owner review passed across the Settings confirmation boundary. */
+data class LoyaltyProgramPublicationReview(
+    val companyId: String,
+    val expectedRevision: Long,
+    val currentValueOf100PointsMinor: Long,
+    val currentRules: LoyaltyProgramRulesDto,
+    val rules: LoyaltyProgramRulesDto,
+)
+
 data class TerminalEditForm(
     val id: String,
     val branchId: String,

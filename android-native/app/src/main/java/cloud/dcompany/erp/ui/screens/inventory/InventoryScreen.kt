@@ -1,5 +1,14 @@
 package cloud.dcompany.erp.ui.screens.inventory
 
+import cloud.dcompany.erp.ui.theme.operationalDanger
+import cloud.dcompany.erp.ui.theme.operationalDangerContainer
+import cloud.dcompany.erp.ui.theme.operationalGood
+import cloud.dcompany.erp.ui.theme.operationalGoodContainer
+import cloud.dcompany.erp.ui.theme.operationalInformation
+import cloud.dcompany.erp.ui.theme.operationalInformationContainer
+import cloud.dcompany.erp.ui.theme.operationalWarning
+import cloud.dcompany.erp.ui.theme.operationalWarningContainer
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -177,7 +186,7 @@ fun InventoryScreen(
     SideEffect { vm.updateAccess(access) }
 
     Column(
-        Modifier.fillMaxSize().background(Brand.Background).padding(16.dp),
+        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         if (!access.canManageInventory) ViewOnlyNotice()
@@ -185,8 +194,8 @@ fun InventoryScreen(
         when {
             state.loading -> Box(Modifier.fillMaxSize().weight(1f), Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    CircularProgressIndicator(color = Brand.Gold)
-                    Text("Loading inventory…", color = Brand.ForegroundMuted)
+                    CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                    Text("Loading inventory…", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
 
@@ -477,11 +486,11 @@ private fun PendingRow(
     Column(
         Modifier.fillMaxWidth()
             .clip(Radius.shapeSm)
-            .background(Brand.SurfaceRaised)
+            .background(MaterialTheme.colorScheme.surfaceVariant)
             .padding(8.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(text, color = Brand.Foreground, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+            Text(text, color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
             if (rejected) {
                 TextButton(
                     onClick = onRetry,
@@ -492,7 +501,7 @@ private fun PendingRow(
         }
         Text(
             if (rejected) "Could not sync: ${error ?: "unknown error"}" else "Not synced yet",
-            color = if (rejected) Brand.Danger else Brand.Warning,
+            color = if (rejected) MaterialTheme.colorScheme.operationalDanger else MaterialTheme.colorScheme.operationalWarning,
             style = MaterialTheme.typography.labelSmall,
         )
     }
@@ -597,19 +606,19 @@ private fun RestockStrip(state: InventoryUiState, actions: InventoryPresentation
                 Icon(
                     Icons.Default.WarningAmber,
                     contentDescription = null,
-                    tint = Brand.Danger,
+                    tint = MaterialTheme.colorScheme.operationalDanger,
                     modifier = Modifier.size(24.dp),
                 )
                 Column {
                     Text(
                         "Restock priority",
-                        color = Brand.Foreground,
+                        color = MaterialTheme.colorScheme.onSurface,
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.SemiBold,
                     )
                     Text(
                         "Lowest stock first",
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
@@ -622,7 +631,7 @@ private fun RestockStrip(state: InventoryUiState, actions: InventoryPresentation
                     Row(
                         Modifier.width(205.dp).heightIn(min = 64.dp)
                             .clip(Radius.shapeSm)
-                            .background(Brand.SurfaceRaised)
+                            .background(MaterialTheme.colorScheme.surfaceVariant)
                             .clickable { actions.selectIngredient(ingredient) }
                             .padding(horizontal = 10.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -631,13 +640,13 @@ private fun RestockStrip(state: InventoryUiState, actions: InventoryPresentation
                         Icon(
                             Icons.Default.WarningAmber,
                             contentDescription = null,
-                            tint = Brand.Danger,
+                            tint = MaterialTheme.colorScheme.operationalDanger,
                             modifier = Modifier.size(18.dp),
                         )
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                             Text(
                                 ingredient.name,
-                                color = Brand.Foreground,
+                                color = MaterialTheme.colorScheme.onSurface,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                                 style = MaterialTheme.typography.bodyMedium,
@@ -645,13 +654,13 @@ private fun RestockStrip(state: InventoryUiState, actions: InventoryPresentation
                             Text(
                                 "${ingredient.currentQty.asQty()} / " +
                                     "${ingredient.reorderThreshold.asQty()} ${ingredient.baseUnit}",
-                                color = Brand.Danger,
+                                color = MaterialTheme.colorScheme.operationalDanger,
                                 style = MaterialTheme.typography.labelSmall,
                             )
                             if (ingredient.reorderQty > 0) {
                                 Text(
                                     "Order ${ingredient.reorderQty.asQty()} ${ingredient.baseUnit}",
-                                    color = Brand.ForegroundMuted,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                     style = MaterialTheme.typography.labelSmall,
@@ -771,20 +780,20 @@ private fun RecipeItemList(
                 val selected = state.selectedRecipeMenuItemId == item.id
                 DataListRow(
                     modifier = Modifier.background(
-                        if (selected) Brand.SurfaceRaised else Color.Transparent,
+                        if (selected) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent,
                     ),
                     onClick = { actions.selectRecipeMenuItem(item) },
                     content = {
                         Text(
                             item.name,
-                            color = Brand.Foreground,
+                            color = MaterialTheme.colorScheme.onSurface,
                             fontWeight = FontWeight.SemiBold,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
                         Text(
                             "${item.sku} · ${item.type}",
-                            color = Brand.ForegroundMuted,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.labelSmall,
                         )
                     },
@@ -849,7 +858,7 @@ internal fun RecipeDetailPresentation(
                 icon = Icons.Default.Inventory2,
             )
             state.recipesLoading -> Box(Modifier.fillMaxSize(), Alignment.Center) {
-                CircularProgressIndicator(color = Brand.Gold)
+                CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
             }
             state.recipesError != null -> LazyColumn(Modifier.fillMaxSize()) {
                 item {
@@ -878,16 +887,16 @@ internal fun RecipeDetailPresentation(
                     Column {
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {
-                                Text(active.name, color = Brand.Foreground, fontWeight = FontWeight.Bold)
+                                Text(active.name, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold)
                                 Text(
                                     "Version ${active.version} · yield ${active.yieldQty.asQty()}",
-                                    color = Brand.ForegroundMuted,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     style = MaterialTheme.typography.labelSmall,
                                 )
                             }
                             TextButton(
                                 onClick = { onDeactivateRecipe(active) },
-                            ) { Text("Deactivate", color = Brand.Danger) }
+                            ) { Text("Deactivate", color = MaterialTheme.colorScheme.operationalDanger) }
                         }
                         Spacer(Modifier.height(12.dp))
                     }
@@ -908,7 +917,7 @@ internal fun RecipeDetailPresentation(
                     Column {
                         Text(
                             "Ingredient deductions",
-                            color = Brand.Foreground,
+                            color = MaterialTheme.colorScheme.onSurface,
                             fontWeight = FontWeight.SemiBold,
                         )
                         Spacer(Modifier.height(12.dp))
@@ -932,19 +941,19 @@ internal fun RecipeDetailPresentation(
                         val ingredient = state.syncedIngredients.firstOrNull { it.id == line.ingredientId }
                         Column(
                             Modifier.fillMaxWidth().clip(Radius.shapeSm)
-                                .background(Brand.SurfaceRaised).padding(10.dp),
+                                .background(MaterialTheme.colorScheme.surfaceVariant).padding(10.dp),
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Column(Modifier.weight(1f)) {
                                     Text(
                                         ingredient?.name ?: "Unavailable ingredient",
-                                        color = if (ingredient == null) Brand.Danger else Brand.Foreground,
+                                        color = if (ingredient == null) MaterialTheme.colorScheme.operationalDanger else MaterialTheme.colorScheme.onSurface,
                                         fontWeight = FontWeight.SemiBold,
                                     )
                                     Text(
                                         "${line.qty.asQty()} ${ingredient?.baseUnit.orEmpty()}" +
                                             if (line.wastagePct > 0) " + ${(line.wastagePct * 100).asQty()}% waste" else "",
-                                        color = Brand.ForegroundMuted,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         style = MaterialTheme.typography.labelSmall,
                                     )
                                 }
@@ -953,7 +962,7 @@ internal fun RecipeDetailPresentation(
                                 ) { Text("Edit") }
                                 TextButton(
                                     onClick = { onRemoveRecipeLine(active, line) },
-                                ) { Text("Remove", color = Brand.Danger) }
+                                ) { Text("Remove", color = MaterialTheme.colorScheme.operationalDanger) }
                             }
                         }
                         Spacer(
@@ -1146,8 +1155,8 @@ private fun IngredientRowCard(
 
     Column(
         Modifier.fillMaxWidth()
-            .background(if (selected) Brand.SurfaceRaised else Brand.Surface)
-            .border(1.dp, if (selected) Brand.GoldMuted else Color.Transparent),
+            .background(if (selected) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surface)
+            .border(1.dp, if (selected) MaterialTheme.colorScheme.secondary else Color.Transparent),
     ) {
         DataListRow(
             modifier = Modifier.testTag(inventoryIngredientRowTag(ingredient.sku)),
@@ -1156,7 +1165,7 @@ private fun IngredientRowCard(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         ingredient.name,
-                        color = Brand.Foreground,
+                        color = MaterialTheme.colorScheme.onSurface,
                         style = MaterialTheme.typography.bodyLarge,
                         fontWeight = FontWeight.SemiBold,
                         maxLines = 1,
@@ -1167,7 +1176,7 @@ private fun IngredientRowCard(
                 }
                 Text(
                     "${ingredient.sku} · reorder at ${ingredient.reorderThreshold.asQty()} ${ingredient.baseUnit}",
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.labelSmall,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -1178,12 +1187,12 @@ private fun IngredientRowCard(
                 Column(horizontalAlignment = Alignment.End, modifier = Modifier.width(132.dp)) {
                 Text(
                     "${ingredient.currentQty.asQty()} ${ingredient.baseUnit}",
-                    color = if (ingredient.isLow) Brand.Danger else Brand.Foreground,
+                    color = if (ingredient.isLow) MaterialTheme.colorScheme.operationalDanger else MaterialTheme.colorScheme.onSurface,
                     fontWeight = FontWeight.Bold,
                 )
                 Text(
                     ingredient.stockValueMinor?.asRupees() ?: "Value unavailable",
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.labelSmall,
                 )
                 }
@@ -1200,7 +1209,7 @@ private fun IngredientRowCard(
         if (ingredient.createConfirmationPending) {
             Text(
                 "Create confirmation pending — details stay locked so a retry cannot create a duplicate.",
-                color = Brand.Warning,
+                color = MaterialTheme.colorScheme.operationalWarning,
                 style = MaterialTheme.typography.labelSmall,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
             )
@@ -1211,7 +1220,7 @@ private fun IngredientRowCard(
             ) {
                 Text(
                     "Removal pending sync",
-                    color = Brand.Warning,
+                    color = MaterialTheme.colorScheme.operationalWarning,
                     style = MaterialTheme.typography.labelSmall,
                     modifier = Modifier.weight(1f),
                 )
@@ -1220,17 +1229,17 @@ private fun IngredientRowCard(
         } else if (ingredient.pendingLocalId != null) {
             Text(
                 "Not synced yet",
-                color = Brand.Information,
+                color = MaterialTheme.colorScheme.operationalInformation,
                 style = MaterialTheme.typography.labelSmall,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
             )
         } else if (ingredient.rejectedError != null) {
             Column(
                 Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).clip(Radius.shapeSm)
-                    .background(Brand.SurfaceRaised).border(1.dp, Brand.Danger, Radius.shapeSm)
+                    .background(MaterialTheme.colorScheme.surfaceVariant).border(1.dp, MaterialTheme.colorScheme.operationalDanger, Radius.shapeSm)
                     .padding(8.dp),
             ) {
-                Text("Could not sync: ${ingredient.rejectedError}", color = Brand.Danger, style = MaterialTheme.typography.labelSmall)
+                Text("Could not sync: ${ingredient.rejectedError}", color = MaterialTheme.colorScheme.operationalDanger, style = MaterialTheme.typography.labelSmall)
                 Row {
                     TextButton(onClick = onRetrySync, enabled = canWrite) { Text("Retry") }
                     if (ingredient.hasQueuedDelete) {
@@ -1256,7 +1265,7 @@ private fun IngredientActionsMenu(
         }
         Box {
             IconButton(onClick = { expanded = true }) {
-                Icon(Icons.Default.MoreVert, contentDescription = "More ingredient actions", tint = Brand.ForegroundMuted)
+                Icon(Icons.Default.MoreVert, contentDescription = "More ingredient actions", tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
                 DropdownMenuItem(
@@ -1265,8 +1274,8 @@ private fun IngredientActionsMenu(
                     onClick = { expanded = false; onEdit() },
                 )
                 DropdownMenuItem(
-                    text = { Text("Delete ingredient", color = Brand.Danger) },
-                    leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = Brand.Danger) },
+                    text = { Text("Delete ingredient", color = MaterialTheme.colorScheme.operationalDanger) },
+                    leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.operationalDanger) },
                     onClick = { expanded = false; onDelete() },
                 )
             }
@@ -1281,17 +1290,17 @@ private fun LevelBar(ingredient: IngredientRow, modifier: Modifier = Modifier) {
     val denom = if (ingredient.reorderThreshold > 0) ingredient.reorderThreshold * 4 else 1.0
     val fraction = (ingredient.currentQty / denom).coerceIn(0.0, 1.0).toFloat()
     val colour = when {
-        ingredient.isLow -> Brand.Danger
-        fraction < 0.4f -> Brand.Warning
-        else -> Brand.Good
+        ingredient.isLow -> MaterialTheme.colorScheme.operationalDanger
+        fraction < 0.4f -> MaterialTheme.colorScheme.operationalWarning
+        else -> MaterialTheme.colorScheme.operationalGood
     }
-    Box(modifier.height(6.dp).clip(RoundedCornerShape(3.dp)).background(Brand.SurfaceRaised)) {
+    Box(modifier.height(6.dp).clip(RoundedCornerShape(3.dp)).background(MaterialTheme.colorScheme.surfaceVariant)) {
         Box(Modifier.fillMaxWidth(fraction).height(6.dp).background(colour))
     }
 }
 
 @Composable
-private fun SmallAction(label: String, onClick: () -> Unit, tint: Color = Brand.Information) {
+private fun SmallAction(label: String, onClick: () -> Unit, tint: Color = MaterialTheme.colorScheme.operationalInformation) {
     Text(
         label,
         color = tint,
@@ -1338,7 +1347,7 @@ private fun DetailPanel(
                 InfoRow(
                     label = "On hand",
                     value = "${ingredient.currentQty.asQty()} ${ingredient.baseUnit}",
-                    valueColor = if (ingredient.isLow) Brand.Danger else Brand.Foreground,
+                    valueColor = if (ingredient.isLow) MaterialTheme.colorScheme.operationalDanger else MaterialTheme.colorScheme.onSurface,
                 )
             }
             item {
@@ -1351,7 +1360,7 @@ private fun DetailPanel(
                 InfoRow(
                     label = "Exact FIFO value",
                     value = ingredient.stockValueMinor?.asRupees() ?: "Unavailable — refresh Inventory",
-                    valueColor = if (ingredient.stockValueMinor == null) Brand.Warning else Brand.Foreground,
+                    valueColor = if (ingredient.stockValueMinor == null) MaterialTheme.colorScheme.operationalWarning else MaterialTheme.colorScheme.onSurface,
                 )
             }
             item {
@@ -1377,7 +1386,7 @@ private fun DetailPanel(
                 Text(
                     "Batches (oldest first)",
                     style = MaterialTheme.typography.labelLarge,
-                    color = Brand.Foreground,
+                    color = MaterialTheme.colorScheme.onSurface,
                 )
             }
             if (state.batchesLoading) {
@@ -1387,11 +1396,11 @@ private fun DetailPanel(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         CircularProgressIndicator(
-                            color = Brand.Gold,
+                            color = MaterialTheme.colorScheme.primary,
                             strokeWidth = 2.dp,
                             modifier = Modifier.width(20.dp).height(20.dp),
                         )
-                        Text("Refreshing batches…", color = Brand.ForegroundMuted)
+                        Text("Refreshing batches…", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }
@@ -1399,16 +1408,16 @@ private fun DetailPanel(
                 item {
                     Column(
                         Modifier.fillMaxWidth().clip(Radius.shapeSm)
-                            .background(Brand.SurfaceRaised)
-                            .border(1.dp, Brand.Danger, Radius.shapeSm)
+                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                            .border(1.dp, MaterialTheme.colorScheme.operationalDanger, Radius.shapeSm)
                             .padding(10.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
-                        Text(message, color = Brand.Danger, style = MaterialTheme.typography.bodyMedium)
+                        Text(message, color = MaterialTheme.colorScheme.operationalDanger, style = MaterialTheme.typography.bodyMedium)
                         if (state.batches.isNotEmpty()) {
                             Text(
                                 "Saved batch quantities are shown below and may be out of date.",
-                                color = Brand.ForegroundMuted,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 style = MaterialTheme.typography.labelSmall,
                             )
                         }
@@ -1420,7 +1429,7 @@ private fun DetailPanel(
                 ingredient.isUnsyncedDraft -> item {
                     Text(
                         "No batches yet — this ingredient hasn't synced.",
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.bodyMedium,
                     )
                 }
@@ -1430,7 +1439,7 @@ private fun DetailPanel(
                     Text(
                         "No open batches. Record a stock receipt (GRN) — a positive adjustment " +
                             "needs an existing batch to attach to.",
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.bodyMedium,
                     )
                 }
@@ -1450,21 +1459,21 @@ private fun DetailPanel(
 private fun BatchRow(batch: BatchCacheEntity, unit: String, branchName: String?) {
     Column(
         Modifier.fillMaxWidth().clip(Radius.shapeSm)
-            .background(Brand.SurfaceRaised).testTag(inventoryBatchRowTag(batch.id)).padding(10.dp),
+            .background(MaterialTheme.colorScheme.surfaceVariant).testTag(inventoryBatchRowTag(batch.id)).padding(10.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(
                 "${batch.qtyOnHand.asQty()} $unit",
-                color = Brand.Foreground,
+                color = MaterialTheme.colorScheme.onSurface,
                 fontWeight = FontWeight.Bold,
             )
-            Text("${batch.costPerUnitMinor.asRupees()}/$unit", color = Brand.Foreground)
+            Text("${batch.costPerUnitMinor.asRupees()}/$unit", color = MaterialTheme.colorScheme.onSurface)
         }
         Text(
             (branchName?.let { "$it · " } ?: "") + "Received ${batch.receivedAt.asDay()}" +
                 (batch.lotCode?.let { " · lot $it" } ?: ""),
-            color = Brand.ForegroundMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.labelSmall,
         )
         batch.expiresAt?.let { expiry ->
@@ -1472,7 +1481,7 @@ private fun BatchRow(batch: BatchCacheEntity, unit: String, branchName: String?)
             val expired = day < today()
             Text(
                 if (expired) "Expired $day" else "Expires $day",
-                color = if (expired) Brand.Danger else Brand.ForegroundMuted,
+                color = if (expired) MaterialTheme.colorScheme.operationalDanger else MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelSmall,
             )
         }
@@ -1595,14 +1604,14 @@ private fun SupplierRowCard(
         else -> "Ready" to UiTone.Success
     }
     Column(
-        Modifier.fillMaxWidth().background(Brand.Surface),
+        Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface),
     ) {
         DataListRow(
             content = {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         supplier.name,
-                        color = Brand.Foreground,
+                        color = MaterialTheme.colorScheme.onSurface,
                         style = MaterialTheme.typography.bodyLarge,
                         fontWeight = FontWeight.SemiBold,
                         maxLines = 1,
@@ -1617,7 +1626,7 @@ private fun SupplierRowCard(
                 }
                 Text(
                     supplier.contact ?: "No contact saved",
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.labelSmall,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -1628,7 +1637,7 @@ private fun SupplierRowCard(
                     if (presentation.showsRestaurantOperations) {
                         Text(
                             supplier.gstin?.let { "GSTIN $it" } ?: "GSTIN not saved",
-                            color = Brand.Foreground,
+                            color = MaterialTheme.colorScheme.onSurface,
                             style = MaterialTheme.typography.bodySmall,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
@@ -1636,7 +1645,7 @@ private fun SupplierRowCard(
                     }
                     Text(
                         supplier.paymentTerms ?: "No payment terms",
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.labelSmall,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -1650,7 +1659,7 @@ private fun SupplierRowCard(
         if (supplier.createConfirmationPending) {
             Text(
                 "Create confirmation pending — details stay locked so a retry cannot create a duplicate.",
-                color = Brand.Warning,
+                color = MaterialTheme.colorScheme.operationalWarning,
                 style = MaterialTheme.typography.labelSmall,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
             )
@@ -1661,7 +1670,7 @@ private fun SupplierRowCard(
             ) {
                 Text(
                     "Removal pending sync",
-                    color = Brand.Warning,
+                    color = MaterialTheme.colorScheme.operationalWarning,
                     style = MaterialTheme.typography.labelSmall,
                     modifier = Modifier.weight(1f),
                 )
@@ -1670,17 +1679,17 @@ private fun SupplierRowCard(
         } else if (supplier.pendingLocalId != null) {
             Text(
                 "Not synced yet",
-                color = Brand.Information,
+                color = MaterialTheme.colorScheme.operationalInformation,
                 style = MaterialTheme.typography.labelSmall,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
             )
         } else if (supplier.rejectedError != null) {
             Column(
                 Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).clip(Radius.shapeSm)
-                    .background(Brand.SurfaceRaised).border(1.dp, Brand.Danger, Radius.shapeSm)
+                    .background(MaterialTheme.colorScheme.surfaceVariant).border(1.dp, MaterialTheme.colorScheme.operationalDanger, Radius.shapeSm)
                     .padding(8.dp),
             ) {
-                Text("Could not sync: ${supplier.rejectedError}", color = Brand.Danger, style = MaterialTheme.typography.labelSmall)
+                Text("Could not sync: ${supplier.rejectedError}", color = MaterialTheme.colorScheme.operationalDanger, style = MaterialTheme.typography.labelSmall)
                 Row {
                     TextButton(onClick = onRetrySync, enabled = canWrite) { Text("Retry") }
                     if (supplier.hasQueuedDelete) {
@@ -1697,7 +1706,7 @@ private fun SupplierActionsMenu(onEdit: () -> Unit, onDelete: () -> Unit) {
     var expanded by remember { mutableStateOf(false) }
     Box {
         IconButton(onClick = { expanded = true }) {
-            Icon(Icons.Default.MoreVert, contentDescription = "More supplier actions", tint = Brand.ForegroundMuted)
+            Icon(Icons.Default.MoreVert, contentDescription = "More supplier actions", tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             DropdownMenuItem(
@@ -1706,8 +1715,8 @@ private fun SupplierActionsMenu(onEdit: () -> Unit, onDelete: () -> Unit) {
                 onClick = { expanded = false; onEdit() },
             )
             DropdownMenuItem(
-                text = { Text("Delete supplier", color = Brand.Danger) },
-                leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = Brand.Danger) },
+                text = { Text("Delete supplier", color = MaterialTheme.colorScheme.operationalDanger) },
+                leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.operationalDanger) },
                 onClick = { expanded = false; onDelete() },
             )
         }
@@ -1728,8 +1737,8 @@ private fun EmptyState(
             verticalArrangement = Arrangement.spacedBy(12.dp),
             modifier = Modifier.widthIn(max = 480.dp).fillMaxWidth().padding(24.dp),
         ) {
-            Text(title, style = MaterialTheme.typography.titleLarge, color = Brand.Foreground)
-            Text(body, color = Brand.ForegroundMuted)
+            Text(title, style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
+            Text(body, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Button(onClick = onAction, enabled = actionEnabled) { Text(actionLabel) }
         }
     }
@@ -1982,13 +1991,13 @@ private fun RecipeCreateDialog(
         )
         Text(
             "Example: if the quantities make 4 portions, enter yield 4. The server divides each ingredient deduction by 4 per sale.",
-            color = Brand.ForegroundMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.labelSmall,
         )
         lines.forEachIndexed { index, line ->
             Column(
                 Modifier.fillMaxWidth().clip(Radius.shapeSm)
-                    .background(Brand.SurfaceRaised).padding(10.dp),
+                    .background(MaterialTheme.colorScheme.surfaceVariant).padding(10.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 PickerField(
@@ -2016,7 +2025,7 @@ private fun RecipeCreateDialog(
                 }
                 if (lines.size > 1) {
                     TextButton(onClick = { lines = lines.removeAt(index) }) {
-                        Text("Remove line", color = Brand.Danger)
+                        Text("Remove line", color = MaterialTheme.colorScheme.operationalDanger)
                     }
                 }
             }
@@ -2162,20 +2171,20 @@ private fun GrnDialog(state: InventoryUiState, vm: InventoryViewModel) {
             Text(
                 "No branches cached, so this receipt cannot be attributed to one. " +
                     "Close, tap Refresh once back online, and try again.",
-                color = Brand.Danger,
+                color = MaterialTheme.colorScheme.operationalDanger,
             )
         }
         if (pickableSuppliers.isEmpty()) {
             Text(
                 "No synced suppliers yet — add one on the Suppliers tab first and wait for " +
                     "it to sync. A GRN can't reference a supplier that hasn't synced.",
-                color = Brand.Danger,
+                color = MaterialTheme.colorScheme.operationalDanger,
             )
         }
         if (pickableIngredients.isEmpty()) {
             Text(
                 "No synced ingredients yet — add one first and wait for it to sync.",
-                color = Brand.Danger,
+                color = MaterialTheme.colorScheme.operationalDanger,
             )
         }
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -2211,15 +2220,15 @@ private fun GrnDialog(state: InventoryUiState, vm: InventoryViewModel) {
             "The invoice total must equal the capitalised line total after each line is rounded to paise. " +
                 "Separate freight, tax, discounts or unexplained variance cannot be queued here. " +
                 "Received time is captured when you tap Queue receipt.",
-            color = Brand.ForegroundMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.labelSmall,
         )
 
-        Text("Lines", style = MaterialTheme.typography.labelLarge, color = Brand.Foreground)
+        Text("Lines", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurface)
         lines.forEachIndexed { index, line ->
             Column(
                 Modifier.fillMaxWidth().clip(Radius.shapeSm)
-                    .background(Brand.SurfaceRaised).padding(10.dp),
+                    .background(MaterialTheme.colorScheme.surfaceVariant).padding(10.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Row(
@@ -2251,7 +2260,7 @@ private fun GrnDialog(state: InventoryUiState, vm: InventoryViewModel) {
                         modifier = Modifier.weight(0.7f),
                     )
                     if (lines.size > 1) {
-                        SmallAction("Remove", { lines = lines.removeAt(index) }, Brand.Danger)
+                        SmallAction("Remove", { lines = lines.removeAt(index) }, MaterialTheme.colorScheme.operationalDanger)
                     }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -2277,7 +2286,7 @@ private fun GrnDialog(state: InventoryUiState, vm: InventoryViewModel) {
                 lineTotals[index]?.let { lineTotal ->
                     Text(
                         "Line total ${lineTotal.asRupees()}",
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
@@ -2291,7 +2300,7 @@ private fun GrnDialog(state: InventoryUiState, vm: InventoryViewModel) {
             OutlinedButton(onClick = { lines = lines + GrnLineDraft() }) { Text("Add line") }
             Text(
                 totalMinor?.let { "Capitalised total ${it.asRupees()}" } ?: "Complete all lines",
-                color = Brand.Foreground,
+                color = MaterialTheme.colorScheme.onSurface,
                 style = MaterialTheme.typography.titleLarge,
             )
         }
@@ -2344,7 +2353,7 @@ private fun AdjustDialog(
     ) {
         Text(
             "On hand now: ${ingredient.currentQty.asQty()} ${ingredient.baseUnit}",
-            color = Brand.ForegroundMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         InfoRow(
             label = "Branch",
@@ -2352,7 +2361,7 @@ private fun AdjustDialog(
         )
         Text(
             TRANSFER_UNAVAILABLE_MESSAGE,
-            color = Brand.Warning,
+            color = MaterialTheme.colorScheme.operationalWarning,
             style = MaterialTheme.typography.labelSmall,
         )
         PickerField(
@@ -2384,7 +2393,7 @@ private fun AdjustDialog(
         if (delta != null && delta != 0.0 && after != null) {
             Column(
                 Modifier.fillMaxWidth().clip(Radius.shapeSm)
-                    .background(Brand.SurfaceRaised).padding(12.dp),
+                    .background(MaterialTheme.colorScheme.surfaceVariant).padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 Text(
@@ -2393,18 +2402,18 @@ private fun AdjustDialog(
                     } else {
                         "Adds ${delta.asQty()} ${ingredient.baseUnit} to stock"
                     },
-                    color = if (delta < 0) Brand.Danger else Brand.Good,
+                    color = if (delta < 0) MaterialTheme.colorScheme.operationalDanger else MaterialTheme.colorScheme.operationalGood,
                     fontWeight = FontWeight.Bold,
                 )
                 Text(
                     "${ingredient.currentQty.asQty()} → ${after.asQty()} ${ingredient.baseUnit}",
                     style = MaterialTheme.typography.titleLarge,
-                    color = Brand.Foreground,
+                    color = MaterialTheme.colorScheme.onSurface,
                 )
                 if (delta < 0 && ingredient.currentQty + delta < 0) {
                     Text(
                         "That exceeds this branch's recorded balance and cannot be queued.",
-                        color = Brand.Warning,
+                        color = MaterialTheme.colorScheme.operationalWarning,
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }

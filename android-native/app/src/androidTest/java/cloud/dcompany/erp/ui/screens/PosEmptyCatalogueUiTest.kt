@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Surface
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
@@ -39,10 +40,13 @@ import cloud.dcompany.erp.core.auth.PosAccess
 import cloud.dcompany.erp.core.db.MenuCategoryEntity
 import cloud.dcompany.erp.core.db.MenuItemEntity
 import cloud.dcompany.erp.core.db.SyncState
+import cloud.dcompany.erp.core.net.CustomerRewardEligibility
 import cloud.dcompany.erp.ui.WorkspaceFeatureProfiles
 import cloud.dcompany.erp.ui.WorkspacePresentationPolicy
 import cloud.dcompany.erp.ui.presentationPolicy
-import cloud.dcompany.erp.ui.theme.Brand
+import cloud.dcompany.erp.ui.screens.settings.LoyaltyProgramRulesDto
+import cloud.dcompany.erp.ui.screens.settings.LoyaltyRankRuleDto
+import cloud.dcompany.erp.ui.screens.settings.LoyaltyRewardRuleDto
 import cloud.dcompany.erp.ui.theme.DCompanyTheme
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Rule
@@ -344,18 +348,104 @@ class PosEmptyCatalogueUiTest {
         compose.onNodeWithText("CONTINUE TO PAYMENT").assertDoesNotExist()
     }
 
+    @Test
+    fun namedRewardRequiresReviewAndDispatchesItsStableKeyOnce() {
+        val dispatched = mutableListOf<String>()
+        render(
+            PosUiState(
+                online = true,
+                activeShiftId = "shift-1",
+                canCollectPayment = true,
+                customerPhone = "9999999999",
+                customerLoyaltyPoints = 100,
+                loyaltyProgramRevision = 4,
+                loyaltyProgramRules = LoyaltyProgramRulesDto(
+                    gamingEarnPoints = 2,
+                    gamingEarnRupees = 10,
+                    minorPerPoint = 11,
+                    ranks = listOf(
+                        LoyaltyRankRuleDto("rookie", "Rookie", 0, 0),
+                        LoyaltyRankRuleDto("player", "Player", 200, 50),
+                        LoyaltyRankRuleDto("pro", "Pro", 500, 150),
+                        LoyaltyRankRuleDto("legend", "Legend", 1_000, 300),
+                    ),
+                    rewards = listOf(
+                        LoyaltyRewardRuleDto(
+                            key = "snack",
+                            label = "Free snack or drink",
+                            description = "One fixed credit on this bill",
+                            pointsCost = 60,
+                            valueMinor = 4_000,
+                            minRankKey = "rookie",
+                            enabled = true,
+                        ),
+                    ),
+                ),
+                directCheckoutReview = DirectCheckoutReview(
+                    localId = "direct-reward-1",
+                    revision = 1,
+                    orderId = "server-reward-1",
+                    shiftId = "shift-1",
+                    subtotalMinor = 12_000,
+                    discountMinor = 0,
+                    pointsRedeemedMinor = 0,
+                    pointsRedeemed = 0,
+                    taxMinor = 0,
+                    roundOffMinor = 0,
+                    totalMinor = 12_000,
+                    dueMinor = 12_000,
+                    checkoutVersion = 7,
+                ),
+            ),
+            eligibleRewardCatalog = EligibleRewardCatalogState(
+                phone = "9999999999",
+                programRevision = 4,
+                rewards = listOf(
+                    CustomerRewardEligibility(
+                        programRevision = 4,
+                        key = "snack",
+                        name = "Free snack or drink",
+                        description = "One fixed credit on this bill",
+                        pointsCost = 60,
+                        valueMinor = 4_000,
+                        minRank = "Rookie",
+                        affordable = true,
+                    ),
+                ),
+                verified = true,
+            ),
+            onRedeemDirectReward = { dispatched += it.key },
+        )
+
+        compose.onNodeWithText("Free snack or drink · 60 pts → ₹40.00")
+            .performScrollTo().assertIsDisplayed().assertIsEnabled().performClick()
+        compose.runOnIdle { assertTrue(dispatched.isEmpty()) }
+        compose.onNodeWithText("Review Free snack or drink")
+            .performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(
+            "60 points → ₹40.00 fixed bill credit · program revision 4",
+        ).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Confirm reward")
+            .performScrollTo().assertIsDisplayed().assertIsEnabled().performClick()
+        compose.runOnIdle { assertEquals(listOf("snack"), dispatched) }
+    }
+
     private fun render(
         state: PosUiState,
         presentation: WorkspacePresentationPolicy =
             WorkspaceFeatureProfiles.Active.presentationPolicy(),
         onUpdateHeldOrderDiscount: (String, Long) -> Unit = { _, _ -> },
         onPrepareDirectCheckout: () -> Unit = {},
+        onRedeemDirectReward: (ReviewedRewardRedemption) -> Unit = {},
+        eligibleRewardCatalog: EligibleRewardCatalogState = EligibleRewardCatalogState(),
     ) {
         renderDynamic(
             state = mutableStateOf(state),
             presentation = presentation,
             onUpdateHeldOrderDiscount = onUpdateHeldOrderDiscount,
             onPrepareDirectCheckout = onPrepareDirectCheckout,
+            onRedeemDirectReward = onRedeemDirectReward,
+            eligibleRewardCatalog = eligibleRewardCatalog,
         )
     }
 
@@ -366,6 +456,8 @@ class PosEmptyCatalogueUiTest {
         onUpdateHeldOrderDiscount: (String, Long) -> Unit = { _, _ -> },
         onDismissNotice: () -> Unit = {},
         onPrepareDirectCheckout: () -> Unit = {},
+        onRedeemDirectReward: (ReviewedRewardRedemption) -> Unit = {},
+        eligibleRewardCatalog: EligibleRewardCatalogState = EligibleRewardCatalogState(),
         onAddItem: (MenuItemEntity) -> Unit = {},
         onIncrementLine: (String) -> Unit = {},
         onClearCart: () -> Unit = {},
@@ -373,7 +465,7 @@ class PosEmptyCatalogueUiTest {
     ) {
         compose.setContent {
             DCompanyTheme {
-                Surface(Modifier.fillMaxSize(), color = Brand.Background) {
+                Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     val viewportModifier = viewportSize?.value?.let { (widthDp, heightDp) ->
                         Modifier.width(widthDp.dp).height(heightDp.dp)
                     } ?: Modifier.fillMaxSize()
@@ -381,7 +473,7 @@ class PosEmptyCatalogueUiTest {
                     // direct child. A loose parent lets this test exercise the
                     // requested content viewport instead of silently using 1280x900.
                     Box(Modifier.fillMaxSize()) {
-                    Box(viewportModifier.background(Brand.Background).testTag("pos-layout-root")) {
+                    Box(viewportModifier.background(MaterialTheme.colorScheme.background).testTag("pos-layout-root")) {
                         PosScreen(
                             state = state.value,
                             recentReceipts = emptyList(),
@@ -410,6 +502,7 @@ class PosEmptyCatalogueUiTest {
                             onDismissDirectCheckout = {},
                             onConfirmDirectZero = {},
                             onRedeemDirectPoints = {},
+                            onRedeemDirectReward = onRedeemDirectReward,
                             onCapture = { _, _, _ -> },
                             onCaptureSplit = { _, _ -> },
                             onRetryRejectedSale = {},
@@ -432,6 +525,7 @@ class PosEmptyCatalogueUiTest {
                             onSnoozeOverdue = {},
                             onUnmuteOverdue = {},
                             onDismissHeldFocus = {},
+                            eligibleRewardCatalog = eligibleRewardCatalog,
                             presentation = presentation,
                         )
                     }

@@ -18,6 +18,7 @@ HELPER = ROOT / "infra/scripts/verify-build45-pending-compatibility.py"
 STATE_SQL = ROOT / "infra/scripts/verify-build45-pending-state.sql"
 INSTALLER = ROOT / "infra/scripts/install-on-vm.sh"
 HISTORICAL_TEST = ROOT / "tests/test_code30_2_post_cleanup_installer_guard.py"
+BUILD45_REVISION = "ee025b5b78dff7397e16612cad80aebd1a4904d3"
 
 
 def _load(path: Path, name: str):
@@ -68,15 +69,8 @@ def _extract_git_archive(ref: str, destination: Path) -> bytes:
 
 
 def _candidate_snapshot(destination: Path) -> None:
-    _extract_git_archive("HEAD", destination)
-    for relative in (
-        "backend/tests/integration/test_google_sheets_daily_collection_settings.py",
-        "infra/scripts/install-on-vm.sh",
-        "infra/scripts/verify-build45-pending-state.sql",
-    ):
-        target = destination / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes((ROOT / relative).read_bytes())
+    # Build 45 stays bound to its immutable release object after later releases.
+    _extract_git_archive(BUILD45_REVISION, destination)
 
 
 def test_exact_add_change_delete_pairs_are_content_bound(helper, tmp_path):
@@ -678,5 +672,7 @@ def test_historical_verifier_query_helper_and_build42_policy_bytes_are_unchanged
     # The one narrow test edit only teaches the old three-path harness about
     # the new false-by-default fourth flag. Historical proof bytes stay exact.
     for relative in protected[:3]:
-        expected = subprocess.check_output(["git", "show", f"HEAD:{relative}"], cwd=ROOT)
+        expected = subprocess.check_output(
+            ["git", "show", f"{BUILD45_REVISION}:{relative}"], cwd=ROOT
+        )
         assert (ROOT / relative).read_bytes() == expected

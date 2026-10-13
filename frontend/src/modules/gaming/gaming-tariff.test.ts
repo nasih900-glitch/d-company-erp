@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  bookedControllerSurchargeMinor,
+  exactGamingCustomerIdForPhone,
   extraControllerExtensionSurchargeMinor,
   extraControllerSurchargeMinor,
   eligibleNewStartPackages,
   eligiblePaidExtensions,
   eligiblePs5ShortenTarget,
   estimatedFriendControllerMinor,
+  estimatedFriendControllerMinorAfterJoin,
   gamingModeLabel,
   gamingPackageSelectionLabel,
   requiresFixedGamingTariff,
@@ -28,6 +31,36 @@ describe('gaming tariff controller charges', () => {
     expect(extraControllerExtensionSurchargeMinor(1, 60, 30)).toBe(3_000);
     expect(extraControllerExtensionSurchargeMinor(1, 90, 30)).toBe(0);
     expect(extraControllerExtensionSurchargeMinor(1, 120, 30)).toBe(3_000);
+  });
+
+  it('shows the booked controller fee from the extended timer', () => {
+    expect(bookedControllerSurchargeMinor({
+      extra_controllers: 1,
+      timer_minutes: 90,
+      effective_package_duration_minutes: 60,
+      package_duration_minutes_snapshot: 60,
+    })).toBe(6_000);
+    expect(bookedControllerSurchargeMinor({
+      extra_controllers: 0,
+      timer_minutes: 90,
+      effective_package_duration_minutes: 60,
+      package_duration_minutes_snapshot: 60,
+    })).toBe(0);
+  });
+
+  it('normalizes an Indian country prefix before a typed-phone rejoin preview', () => {
+    expect(exactGamingCustomerIdForPhone(
+      { id: 'friend-1', phone: '9876543210' },
+      '+91 98765 43210',
+    )).toBe('friend-1');
+    expect(exactGamingCustomerIdForPhone(
+      { id: 'other', phone: '9876543211' },
+      '+91 98765 43210',
+    )).toBeNull();
+    expect(exactGamingCustomerIdForPhone(
+      { id: 'friend-1', phone: '9876543210' },
+      '001 9876543210',
+    )).toBeNull();
   });
 
   it('uses the printed customer-facing names for the fixed modes', () => {
@@ -120,6 +153,11 @@ describe('gaming tariff controller charges', () => {
       active_friend_count: 2, current_player_count: 3, max_player_count: 4, participants: rows };
     // friend-1: 30 + 45 minutes -> two started hours, friend-2: 28 minutes -> one.
     expect(estimatedFriendControllerMinor(state, 4_700_000)).toBe(9_000);
+    // Rejoining the same saved customer preserves the cumulative two-hour
+    // bucket; it does not add another per-interval minimum.
+    expect(estimatedFriendControllerMinorAfterJoin(state, 4_700_000, 'friend-1')).toBe(9_000);
+    // A distinct phone identity starts with the ₹30 minimum at confirmation.
+    expect(estimatedFriendControllerMinorAfterJoin(state, 4_700_000)).toBe(12_000);
     expect(estimatedFriendControllerMinor(undefined, 4_700_000)).toBeNull();
   });
 

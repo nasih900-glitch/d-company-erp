@@ -36,6 +36,74 @@ class MigrationTest {
     )
 
     @Test
+    fun migrate53To54PreservesCapturedMoneyAndLeavesProgramProvenanceUnknown() {
+        helper.createDatabase(dbName, 53).apply {
+            execSQL(
+                "INSERT INTO local_orders " +
+                    "(localId, shiftId, type, estimateMinor, serverTotalMinor, " +
+                    "serverPointsRedeemedMinor, serverPointsRedeemed, checkoutVersion, " +
+                    "paymentMethod, tenderedMinor, tipMinor, createdAtMillis, syncState) VALUES " +
+                    "('legacy-order', 'shift-1', 'dine_in', 5000, 4800, 200, 20, 7, " +
+                    "'cash', 4800, 0, 1000, 'awaiting_payment')",
+            )
+            execSQL(
+                "INSERT INTO local_held_order_payments " +
+                    "(localId, targetOrderId, method, amountMinor, tenderedMinor, " +
+                    "expectedTotalMinor, expectedDueMinor, claimOrderVersion, shiftId, terminalId, " +
+                    "createdAtMillis, syncState) VALUES " +
+                    "('legacy-payment', 'server-order', 'cash', 4800, 5000, 4800, 4800, 7, " +
+                    "'shift-1', 'terminal-1', 1000, 'pending')",
+            )
+            execSQL(
+                "INSERT INTO customer_cache " +
+                    "(id, name, phone, visitCount, totalSpentMinor, loyaltyPoints, " +
+                    "lifetimeGamingPointsEarned, gamingRank, gamingRankFloor) VALUES " +
+                    "('customer-1', 'Amina', '9876543210', 2, 4800, 80, 20, 'Rookie', 0)",
+            )
+            close()
+        }
+
+        val migrated = helper.runMigrationsAndValidate(dbName, 54, true, MIGRATION_53_54)
+        migrated.query(
+            "SELECT serverTotalMinor, serverPointsRedeemedMinor, serverPointsRedeemed, " +
+                "checkoutVersion, syncState FROM local_orders WHERE localId = 'legacy-order'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(4800L, cursor.getLong(0))
+            assertEquals(200L, cursor.getLong(1))
+            assertEquals(20, cursor.getInt(2))
+            assertEquals(7L, cursor.getLong(3))
+            assertEquals("awaiting_payment", cursor.getString(4))
+        }
+        migrated.query(
+            "SELECT amountMinor, tenderedMinor, expectedDueMinor, claimOrderVersion, syncState " +
+                "FROM local_held_order_payments WHERE localId = 'legacy-payment'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(4800L, cursor.getLong(0))
+            assertEquals(5000L, cursor.getLong(1))
+            assertEquals(4800L, cursor.getLong(2))
+            assertEquals(7L, cursor.getLong(3))
+            assertEquals("pending", cursor.getString(4))
+        }
+        migrated.query(
+            "SELECT loyaltyProgramRevision, loyaltyPointValueMinor FROM customer_cache " +
+                "WHERE id = 'customer-1'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertTrue(cursor.isNull(0))
+            assertTrue(cursor.isNull(1))
+        }
+        for (table in listOf("loyalty_program_cache", "local_points_redemption_actions")) {
+            migrated.query("SELECT COUNT(*) FROM $table").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals(0, cursor.getInt(0))
+            }
+        }
+        migrated.close()
+    }
+
+    @Test
     fun migrate46To47PreservesQueuedStartAndAddsStableCustomerIdentity() {
         helper.createDatabase(dbName, 46).apply {
             execSQL(

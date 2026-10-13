@@ -11,11 +11,11 @@
  *   3. Close the shift — variance is recorded
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Receipt, Loader2, AlertCircle, RefreshCw, Eye, Lock, ShieldCheck,
   ClipboardList, X, Gamepad2, CreditCard, UserRound, ChevronDown,
-  Clock3, Monitor, CheckCircle2,
+  Clock3, Monitor, CheckCircle2, Search, Copy, RotateCcw,
 } from 'lucide-react';
 
 import { LIVE_MODE } from '@/lib/demo';
@@ -25,12 +25,13 @@ import { resolveOpenShift, shiftResolutionMessage } from '@/lib/operational-cont
 import { profileMembershipMoneyLabel } from '@/lib/product-profile';
 import {
   orders, receipts, shifts,
-  type OrderListItemDTO, type ReceiptHistoryDTO, type ShiftDTO,
+  type OrderListItemDTO, type ReceiptGamingSessionHistoryDTO, type ReceiptHistoryDTO, type ShiftDTO,
   type ShiftRecoveryCandidateDTO, type ShiftRecoveryCloseDTO,
 } from '@/lib/erp-api';
 import Modal from '@/components/ui/Modal';
 import { useNotifications } from '@/components/ui/Notifications';
 import { useAuth } from '@/modules/auth/AuthContext';
+import { canAccessRefunds } from '@/modules/refunds/refund-policy';
 import { subscribeRealtime } from '@/lib/realtime';
 import { SkeletonCard } from '@/components/ui/Skeleton';
 import { useRealtimeRefresh } from '@/hooks/useRealtimeRefresh';
@@ -65,13 +66,79 @@ type Tab = 'orders' | 'shifts';
 export function operationsInitialTab(searchParams: Pick<URLSearchParams, 'get'>): Tab {
   return searchParams.get('tab') === 'shifts' ? 'shifts' : 'orders';
 }
+
+export type ShiftCollectionRails = {
+  cash: number;
+  card: number;
+  upi: number;
+  other: number;
+};
+
+/** Do not turn an older server's missing payment-rail fields into false zeros. */
+export function shiftCollectionRails(shift: ShiftDTO): ShiftCollectionRails | null {
+  const values = [
+    shift.cash_collections_minor,
+    shift.card_collections_minor,
+    shift.upi_collections_minor,
+    shift.other_collections_minor,
+  ];
+  if (!values.every((value): value is number => typeof value === 'number' && Number.isFinite(value))) {
+    return null;
+  }
+  return { cash: values[0], card: values[1], upi: values[2], other: values[3] };
+}
+
+export function receiptGamingChargeRows(
+  session: ReceiptGamingSessionHistoryDTO,
+): Array<{ label: string; amountMinor: number }> {
+  const rows: Array<{ label: string; amountMinor: number }> = [];
+  const add = (label: string, amount: number | null | undefined, includeZero = false) => {
+    if (typeof amount === 'number' && Number.isFinite(amount) && (includeZero || amount > 0)) {
+      rows.push({ label, amountMinor: amount });
+    }
+  };
+  if (session.billing_mode === 'package') {
+    add('Booked controller fee', session.booked_controller_surcharge_minor, true);
+    add('Paid package extensions', session.extension_package_minor);
+    add('Extension controller fee', session.extension_controller_surcharge_minor);
+  }
+  add('Late player controller fee', session.late_friend_charge_minor, true);
+  return rows;
+}
+
+function ShiftRailBreakdown({ shift }: { shift: ShiftDTO }) {
+  const rails = shiftCollectionRails(shift);
+  if (!rails) {
+    return (
+      <p className="mt-3 border-t border-bg-border/60 pt-3 text-xs text-fg-muted">
+        Payment rail breakdown is unavailable from this server. Gross and net totals above remain authoritative.
+      </p>
+    );
+  }
+  return (
+    <div className="mt-3 grid grid-cols-2 gap-3 border-t border-bg-border/60 pt-3 md:grid-cols-4">
+      <Stat label="Cash collected" value={inr(rails.cash)}/>
+      <Stat label="UPI collected" value={inr(rails.upi)}/>
+      <Stat label="Card collected" value={inr(rails.card)}/>
+      <Stat label="Other collected" value={inr(rails.other)}/>
+    </div>
+  );
+}
 // Fallback only — real-time push (see subscribeRealtime below) is what
 // actually keeps this current; this just covers a missed/dropped push.
 const OPERATIONS_POLL_MS = 120_000;
 
 export default function OrdersAndShiftsScreen() {
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [tab, setTab] = useState<Tab>(() => operationsInitialTab(searchParams));
+  const requestedTab = operationsInitialTab(searchParams);
+
+  useEffect(() => setTab(requestedTab), [requestedTab]);
+
+  const selectTab = (next: Tab) => {
+    setTab(next);
+    setSearchParams(next === 'shifts' ? { tab: 'shifts' } : {}, { replace: true });
+  };
 
   return (
     <div>
@@ -83,10 +150,10 @@ export default function OrdersAndShiftsScreen() {
       </header>
 
       <div className="scroll-strip flex gap-1 mb-6 border-b border-bg-border -mx-3 px-3 md:mx-0 md:px-0">
-        <TabBtn active={tab === 'orders'} onClick={() => setTab('orders')}>
+        <TabBtn active={tab === 'orders'} onClick={() => selectTab('orders')}>
           <Receipt size={14}/> Orders
         </TabBtn>
-        <TabBtn active={tab === 'shifts'} onClick={() => setTab('shifts')}>
+        <TabBtn active={tab === 'shifts'} onClick={() => selectTab('shifts')}>
           <ClipboardList size={14}/> Shifts
         </TabBtn>
       </div>
@@ -110,6 +177,8 @@ function OrdersTab() {
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [receiptQueryInput, setReceiptQueryInput] = useState('');
+  const [receiptQuery, setReceiptQuery] = useState('');
   const [operationalView, setOperationalView] = useState<OrderListItemDTO | null>(null);
   const [receiptView, setReceiptView] = useState<{ orderId: string; invoiceNo: string } | null>(null);
   const [recoveryTarget, setRecoveryTarget] = useState<OrderListItemDTO | null>(null);
@@ -142,7 +211,7 @@ function OrdersTab() {
     if (showLoading) setReceiptsLoading(true);
     setReceiptsError(null);
     try {
-      const page = await receipts.list({ limit: 50 });
+      const page = await receipts.list({ limit: 50, ...(receiptQuery ? { q: receiptQuery } : {}) });
       if (sequence !== receiptSequence.current) return;
       setReceiptRows(page.items);
       setNextCursor(page.next_cursor);
@@ -152,7 +221,7 @@ function OrdersTab() {
     } finally {
       if (sequence === receiptSequence.current) setReceiptsLoading(false);
     }
-  }, []);
+  }, [receiptQuery]);
 
   const refreshAll = useCallback(async () => {
     await Promise.all([loadOperational(false), loadReceipts(false)]);
@@ -180,7 +249,11 @@ function OrdersTab() {
     setLoadingMore(true);
     setReceiptsError(null);
     try {
-      const page = await receipts.list({ cursor: nextCursor, limit: 50 });
+      const page = await receipts.list({
+        cursor: nextCursor,
+        limit: 50,
+        ...(receiptQuery ? { q: receiptQuery } : {}),
+      });
       if (sequence !== receiptSequence.current) return;
       setReceiptRows((current) => {
         const known = new Set(current.map((receipt) => receipt.order_id));
@@ -193,7 +266,7 @@ function OrdersTab() {
     } finally {
       if (sequence === receiptSequence.current) setLoadingMore(false);
     }
-  }, [loadingMore, nextCursor, receiptsLoading]);
+  }, [loadingMore, nextCursor, receiptQuery, receiptsLoading]);
 
   const beginRecovery = useCallback((order: OrderListItemDTO) => {
     if (!me?.protected_access || !isDirectOrderRecoveryEligible(order)) return;
@@ -296,12 +369,47 @@ function OrdersTab() {
             <div className="font-mono text-sm font-semibold">{receiptRows.length} loaded</div>
           </div>
         </div>
+        <form
+          className="flex flex-col gap-2 border-b border-bg-border px-4 py-3 sm:flex-row"
+          onSubmit={(event) => {
+            event.preventDefault();
+            setReceiptQuery(receiptQueryInput.trim());
+          }}
+        >
+          <label className="relative min-w-0 flex-1">
+            <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-fg-muted" size={15}/>
+            <span className="sr-only">Find a finalized receipt</span>
+            <input
+              className="input w-full pl-9"
+              value={receiptQueryInput}
+              maxLength={200}
+              onChange={(event) => setReceiptQueryInput(event.target.value)}
+              placeholder="Invoice number, numeric suffix, order ID or Gaming session ID"
+            />
+          </label>
+          <button type="submit" className="btn btn-primary" disabled={receiptsLoading}>
+            <Search size={14}/> Find receipt
+          </button>
+          {receiptQuery && (
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => { setReceiptQueryInput(''); setReceiptQuery(''); }}
+            >
+              <RotateCcw size={14}/> Clear
+            </button>
+          )}
+        </form>
         {receiptsError && <InlineLoadError message={receiptsError} onRetry={() => { void loadReceipts(true); }}/>}
         {receiptsLoading ? <div className="p-4"><SkeletonCard/></div> : !receiptRows.length && !receiptsError ? (
           <div className="px-4 py-10 text-center">
             <Receipt className="mx-auto mb-2 text-fg-muted" size={26}/>
-            <p className="font-medium">No finalized receipts yet</p>
-            <p className="mt-1 text-xs text-fg-muted">A receipt appears here after a successful Cash, UPI or other payment.</p>
+            <p className="font-medium">{receiptQuery ? 'No matching finalized receipt' : 'No finalized receipts yet'}</p>
+            <p className="mt-1 text-xs text-fg-muted">
+              {receiptQuery
+                ? 'Check the complete invoice number, numeric suffix, order ID or Gaming session ID.'
+                : 'A receipt appears here after a successful Cash, UPI or other payment.'}
+            </p>
           </div>
         ) : receiptRows.length ? <ReceiptHistoryList rows={receiptRows} onView={setReceiptView}/> : null}
         {hasMore && (
@@ -651,6 +759,18 @@ function ReceiptViewModal({ orderId, invoiceNo, onClose }: {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const requestSequence = useRef(0);
+  const navigate = useNavigate();
+  const { me } = useAuth();
+  const notifications = useNotifications();
+
+  const copyReference = useCallback(async (label: string, value: string) => {
+    try {
+      await navigator.clipboard.writeText(value);
+      notifications.success(`${label} copied.`);
+    } catch {
+      notifications.error(`Could not copy ${label.toLowerCase()}. Select the value and copy it manually.`);
+    }
+  }, [notifications]);
 
   const load = useCallback(async () => {
     const sequence = ++requestSequence.current;
@@ -676,14 +796,26 @@ function ReceiptViewModal({ orderId, invoiceNo, onClose }: {
       ) : receipt ? (
         <>
           {error && <InlineLoadError message={error} onRetry={() => { void load(); }}/>}
-          <ReceiptDetail receipt={receipt} refreshing={loading}/>
+          <ReceiptDetail
+            receipt={receipt}
+            refreshing={loading}
+            onCopy={copyReference}
+            onRefund={canAccessRefunds(me)
+              ? () => navigate(`/refunds?order_id=${encodeURIComponent(receipt.order_id)}`)
+              : undefined}
+          />
         </>
       ) : null}
     </Modal>
   );
 }
 
-function ReceiptDetail({ receipt, refreshing }: { receipt: ReceiptHistoryDTO; refreshing: boolean }) {
+function ReceiptDetail({ receipt, refreshing, onCopy, onRefund }: {
+  receipt: ReceiptHistoryDTO;
+  refreshing: boolean;
+  onCopy: (label: string, value: string) => void;
+  onRefund?: () => void;
+}) {
   return (
     <div className="space-y-5">
       <section className="rounded-xl border border-bg-border bg-bg-raised/35 p-4">
@@ -710,6 +842,24 @@ function ReceiptDetail({ receipt, refreshing }: { receipt: ReceiptHistoryDTO; re
           <InfoTile label="Source" value={receiptSourceLabel(receipt.gaming_sessions, receipt.order_type)}/>
           <InfoTile label="Customer" value={receipt.customer_name || 'Walk-in'}/>
           <InfoTile label="Payments recorded by" value={receiptPaymentActorLabel(receipt.payments)}/>
+        </div>
+        <div className="mt-4 flex flex-wrap gap-2 border-t border-bg-border pt-3">
+          <button type="button" className="btn btn-ghost" onClick={() => onCopy('Invoice number', receipt.invoice_no)}>
+            <Copy size={14}/> Copy invoice
+          </button>
+          <button type="button" className="btn btn-ghost" onClick={() => onCopy('Order ID', receipt.order_id)}>
+            <Copy size={14}/> Copy order ID
+          </button>
+          {receipt.gaming_sessions.map((session) => (
+            <button key={session.id} type="button" className="btn btn-ghost" onClick={() => onCopy('Gaming session ID', session.id)}>
+              <Copy size={14}/> Copy session ID
+            </button>
+          ))}
+          {onRefund && receipt.refundable_minor > 0 && (
+            <button type="button" className="btn btn-primary" onClick={onRefund}>
+              <RotateCcw size={14}/> Refund this receipt
+            </button>
+          )}
         </div>
       </section>
 
@@ -876,6 +1026,8 @@ function ReceiptTotals({ receipt }: { receipt: ReceiptHistoryDTO }) {
         <Row label="Total" value={inr(receipt.total_minor)} bold/>
         <Row label="Original payments" value={inr(receipt.paid_minor)} bold/>
         {receipt.refunded_minor > 0 && <Row label="Refunded" value={`−${inr(receipt.refunded_minor)}`}/>}
+        {receipt.pending_refund_minor > 0 && <Row label="Reserved by pending refund" value={`−${inr(receipt.pending_refund_minor)}`}/>}
+        <Row label="Available to refund" value={inr(receipt.refundable_minor)} bold/>
         {receipt.refunded_minor > 0 && <Row label="Net collected" value={inr(receipt.net_collected_minor)} bold/>}
       </div>
     </section>
@@ -898,7 +1050,23 @@ function GamingProvenance({ receipt }: { receipt: ReceiptHistoryDTO }) {
             </div>
             <div className="mt-3 space-y-1">
               <Row label="Billing" value={orderTypeLabel(session.billing_mode)}/>
-              <Row label="Rate" value={`${inr(session.rate_per_hour_minor)}/hr`}/>
+              {session.billing_mode === 'hourly' ? (
+                <Row label="Locked hourly rate" value={`${inr(session.rate_per_hour_minor)}/hr`}/>
+              ) : session.billing_mode === 'package' ? (
+                <Row
+                  label="Package"
+                  value={session.effective_package_price_minor_snapshot == null
+                    ? 'Package snapshot unavailable (legacy receipt)'
+                    : `${session.effective_package_variant_snapshot
+                      ? orderTypeLabel(session.effective_package_variant_snapshot)
+                      : 'Package'} · ${sessionDurationLabel(session.effective_package_duration_minutes_snapshot ?? null)} · ${inr(session.effective_package_price_minor_snapshot)}`}
+                />
+              ) : (
+                <Row label="Billing basis" value="Unavailable for this legacy receipt"/>
+              )}
+              {receiptGamingChargeRows(session).map((row) => (
+                <Row key={row.label} label={row.label} value={inr(row.amountMinor)}/>
+              ))}
               <Row label="Billable time" value={sessionDurationLabel(session.billable_minutes)}/>
               {session.paused_minutes > 0 && <Row label="Paused" value={sessionDurationLabel(session.paused_minutes)}/>}
               <Row label="Started" value={formatDateTime(session.started_at)}/>
@@ -950,8 +1118,8 @@ function actorLabel(name: string | null, id: string | null): string {
   return id ? `Employee ${id.slice(0, 8)}` : 'Legacy record — not recorded';
 }
 
-function formatDateTime(value: string): string {
-  return new Date(value).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' });
+export function formatDateTime(value: string): string {
+  return formatShiftBusinessDateTime(value);
 }
 
 function formatOptionalDateTime(value: string | null): string {
@@ -1791,6 +1959,7 @@ function ShiftsTab() {
                         <Stat label="Total refunds" value={inr(s.total_refunds_minor ?? 0)}/>
                         <Stat label="Net collections" value={inr(s.net_collections_minor ?? 0)} tone="good"/>
                       </div>
+                      <ShiftRailBreakdown shift={s}/>
                       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3 pt-3 border-t border-bg-border/60">
                         <Stat label="Opening float" value={inr(s.opening_float_minor)}/>
                         <Stat label="Expected cash" value={s.expected_minor != null ? inr(s.expected_minor) : '—'}/>
@@ -2156,6 +2325,19 @@ function CloseShiftForm({
               and this closure is recorded under your account.
             </p>
           )}
+        </div>
+        <div className="rounded-xl border border-bg-border bg-bg-raised/35 p-3 text-sm">
+          <div className="font-semibold">Collection review</div>
+          <div className="mt-2 grid grid-cols-2 gap-3">
+            <Stat label="Gross collections" value={inr(shift.gross_collections_minor)}/>
+            <Stat label="Refunds settled" value={inr(shift.total_refunds_minor)}/>
+            <Stat label="Net collections" value={inr(shift.net_collections_minor)} tone="good"/>
+            <Stat label="Expected cash" value={shift.expected_minor == null ? 'Pending server calculation' : inr(shift.expected_minor)}/>
+          </div>
+          <ShiftRailBreakdown shift={shift}/>
+          <p className="mt-3 text-xs text-fg-muted">
+            The server checks unpaid bills, running gaming sessions and other close blockers again when you submit this cash count.
+          </p>
         </div>
         <p className="text-sm text-fg-muted">
           Count all the cash in the drawer (notes + coins), then enter the total below.

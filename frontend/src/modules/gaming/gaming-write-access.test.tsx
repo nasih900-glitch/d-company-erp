@@ -1,4 +1,5 @@
 import { renderToStaticMarkup } from 'react-dom/server';
+import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { gaming } from '@/lib/erp-api';
@@ -49,7 +50,7 @@ afterEach(() => {
 describe('gaming write access boundary', () => {
   it('renders the real Gaming screen as view-only and omits management controls', async () => {
     const { default: GamingScreen } = await import('./GamingScreen');
-    const markup = renderToStaticMarkup(<GamingScreen />);
+    const markup = renderToStaticMarkup(<MemoryRouter><GamingScreen /></MemoryRouter>);
 
     expect(markup).toContain('Gaming is view-only');
     expect(markup).toContain('does not have gaming.write');

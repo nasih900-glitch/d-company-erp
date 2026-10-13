@@ -13,6 +13,7 @@ import { lazy, Suspense, useEffect, useState } from 'react';
 import {
   Building2,
   Crown,
+  Gift,
   HeartPulse,
   IndianRupee,
   Sheet,
@@ -30,6 +31,7 @@ import BranchesTab from './tabs/BranchesTab';
 import SheetsTab from './tabs/SheetsTab';
 import MembershipsTab from './tabs/MembershipsTab';
 import PricingTab from './tabs/PricingTab';
+import LoyaltyProgramTab from './tabs/LoyaltyProgramTab';
 import AccessControlTab from './tabs/AccessControlTab';
 import { GAMING_CENTRE_FEATURES } from '@/lib/product-profile';
 import { hasSupportAccess } from '@/lib/admin-access';
@@ -42,6 +44,7 @@ type Tab =
   | 'company'
   | 'branches'
   | 'pricing'
+  | 'points'
   | 'sheets'
   | 'memberships'
   | 'access'
@@ -80,7 +83,7 @@ export default function SettingsScreen() {
       || (tab === 'health' && canViewSystemHealth)
       || (tab === 'devices' && canManageDeviceUpdates)
       || (
-        (['company', 'branches', 'pricing', 'sheets'] as Tab[]).includes(tab)
+        (['company', 'branches', 'pricing', 'points', 'sheets'] as Tab[]).includes(tab)
         && canManageSettings
       )
     );
@@ -123,6 +126,9 @@ export default function SettingsScreen() {
             <TabBtn active={tab === 'pricing'} onClick={() => setTab('pricing')}>
               <IndianRupee size={14}/> Pricing
             </TabBtn>
+            <TabBtn active={tab === 'points'} onClick={() => setTab('points')}>
+              <Gift size={14}/> Points
+            </TabBtn>
             <TabBtn active={tab === 'sheets'} onClick={() => setTab('sheets')}>
               <Sheet size={14}/> Google Sheets
             </TabBtn>
@@ -149,6 +155,7 @@ export default function SettingsScreen() {
       {tab === 'company' && canManageSettings && <CompanyTab/>}
       {tab === 'branches' && canManageSettings && <BranchesTab/>}
       {tab === 'pricing' && canManageSettings && <PricingTab/>}
+      {tab === 'points' && canManageSettings && <LoyaltyProgramTab/>}
       {tab === 'memberships' && canManageMemberships && <MembershipsTab/>}
       {tab === 'sheets' && canManageSettings && <SheetsTab/>}
       {tab === 'access' && hasAuditAccess && <AccessControlTab/>}

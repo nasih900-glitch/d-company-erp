@@ -1,5 +1,14 @@
 package cloud.dcompany.erp.ui.screens
 
+import cloud.dcompany.erp.ui.theme.operationalDanger
+import cloud.dcompany.erp.ui.theme.operationalDangerContainer
+import cloud.dcompany.erp.ui.theme.operationalGood
+import cloud.dcompany.erp.ui.theme.operationalGoodContainer
+import cloud.dcompany.erp.ui.theme.operationalInformation
+import cloud.dcompany.erp.ui.theme.operationalInformationContainer
+import cloud.dcompany.erp.ui.theme.operationalWarning
+import cloud.dcompany.erp.ui.theme.operationalWarningContainer
+
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -82,13 +91,13 @@ fun TerminalSelectionScreen(
                 Text(
                     if (isReassignment) "Change this tablet's till" else "Select this tablet's till",
                     style = MaterialTheme.typography.headlineSmall,
-                    color = Brand.Foreground,
+                    color = MaterialTheme.colorScheme.onSurface,
                     textAlign = TextAlign.Center,
                 )
                 Text(
                     "Signed in as $employeeName",
                     style = MaterialTheme.typography.bodyMedium,
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
                 )
                 Text(
@@ -100,7 +109,7 @@ fun TerminalSelectionScreen(
                             "will be recorded against it."
                     },
                     style = MaterialTheme.typography.bodyMedium,
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
                 )
             }
@@ -117,7 +126,7 @@ fun TerminalSelectionScreen(
                             "No till is currently available for this branch."
                         },
                         style = MaterialTheme.typography.bodyMedium,
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center,
                         modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
                     )
@@ -135,9 +144,9 @@ fun TerminalSelectionScreen(
                             ),
                         colors = CardDefaults.cardColors(
                             containerColor = if (isSelected) {
-                                Brand.Gold.copy(alpha = 0.14f)
+                                MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
                             } else {
-                                Brand.Surface
+                                MaterialTheme.colorScheme.surface
                             },
                         ),
                     ) {
@@ -152,15 +161,15 @@ fun TerminalSelectionScreen(
                                     terminal.name,
                                     style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.SemiBold,
-                                    color = Brand.Foreground,
+                                    color = MaterialTheme.colorScheme.onSurface,
                                 )
                                 Text(
                                     TerminalPurpose.displayLabel(terminal.purpose),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = if (TerminalPurpose.isKnown(terminal.purpose)) {
-                                        Brand.ForegroundMuted
+                                        MaterialTheme.colorScheme.onSurfaceVariant
                                     } else {
-                                        Brand.Warning
+                                        MaterialTheme.colorScheme.operationalWarning
                                     },
                                 )
                             }
@@ -194,7 +203,7 @@ fun TerminalSelectionScreen(
                     CircularProgressIndicator(
                         modifier = Modifier.height(20.dp),
                         strokeWidth = 2.dp,
-                        color = Brand.Background,
+                        color = MaterialTheme.colorScheme.background,
                     )
                 } else {
                     Text(if (isReassignment) "Change to selected till" else "Use selected till")

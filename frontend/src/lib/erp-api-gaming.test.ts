@@ -20,6 +20,14 @@ describe('gaming paid-extension API contract', () => {
     expect(api.get).toHaveBeenCalledExactlyOnceWith('/gaming/sessions', { params: { unbilled_only: true, limit: 500 } });
   });
 
+  it('loads one canonical session by id even after it has an order', async () => {
+    const session = { id: 'session-1', status: 'ended', order_id: 'order-1' };
+    vi.mocked(api.get).mockResolvedValue({ data: session });
+
+    await expect(gaming.getSession('session-1')).resolves.toEqual(session);
+    expect(api.get).toHaveBeenCalledExactlyOnceWith('/gaming/sessions/session-1');
+  });
+
   it('sends the caller-retained idempotency key for a legacy extension', async () => {
     const response = {
       id: 'session-1',

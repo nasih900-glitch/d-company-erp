@@ -1,5 +1,14 @@
 package cloud.dcompany.erp.ui.components
 
+import cloud.dcompany.erp.ui.theme.operationalDanger
+import cloud.dcompany.erp.ui.theme.operationalDangerContainer
+import cloud.dcompany.erp.ui.theme.operationalGood
+import cloud.dcompany.erp.ui.theme.operationalGoodContainer
+import cloud.dcompany.erp.ui.theme.operationalInformation
+import cloud.dcompany.erp.ui.theme.operationalInformationContainer
+import cloud.dcompany.erp.ui.theme.operationalWarning
+import cloud.dcompany.erp.ui.theme.operationalWarningContainer
+
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -56,7 +65,7 @@ fun PricingUnlockDialog(onDismiss: () -> Unit, onUnlocked: () -> Unit) {
                 Text(
                     "Re-enter your account password to confirm it's you before changing prices.",
                     style = MaterialTheme.typography.bodyMedium,
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 OutlinedTextField(
                     value = password,
@@ -71,7 +80,7 @@ fun PricingUnlockDialog(onDismiss: () -> Unit, onUnlocked: () -> Unit) {
                     modifier = Modifier.fillMaxWidth(),
                 )
                 if (error != null) {
-                    Text(error!!, color = Brand.Danger, style = MaterialTheme.typography.bodyMedium)
+                    Text(error!!, color = MaterialTheme.colorScheme.operationalDanger, style = MaterialTheme.typography.bodyMedium)
                 }
             }
         },
@@ -115,9 +124,9 @@ fun PricingUnlockDialog(onDismiss: () -> Unit, onUnlocked: () -> Unit) {
         dismissButton = {
             TextButton(onClick = onDismiss, enabled = !loading) { Text("Cancel") }
         },
-        containerColor = Brand.SurfaceRaised,
-        titleContentColor = Brand.Foreground,
-        textContentColor = Brand.Foreground,
+        containerColor = MaterialTheme.colorScheme.surfaceVariant,
+        titleContentColor = MaterialTheme.colorScheme.onSurface,
+        textContentColor = MaterialTheme.colorScheme.onSurface,
     )
     }
 }

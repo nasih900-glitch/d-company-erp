@@ -152,6 +152,9 @@ interface ShiftCloseSafetyDao {
             (SELECT COUNT(*) FROM local_held_order_payments
               WHERE syncState = 'pending' AND terminalId = :terminalId AND
                 (shiftId = :localShiftId OR (:serverShiftId IS NOT NULL AND shiftId = :serverShiftId))) +
+            (SELECT COUNT(*) FROM local_points_redemption_actions
+              WHERE state = 'pending' AND
+                (shiftId = :localShiftId OR (:serverShiftId IS NOT NULL AND shiftId = :serverShiftId))) +
             (SELECT COUNT(*) FROM local_expenses
               WHERE syncState = 'pending' AND paidVia = 'cash' AND
                 (shiftId = :localShiftId OR (:serverShiftId IS NOT NULL AND shiftId = :serverShiftId))) +
@@ -204,6 +207,9 @@ interface ShiftCloseSafetyDao {
             (SELECT COUNT(*) FROM local_held_order_payments
               WHERE syncState NOT IN ('pending', 'synced') AND terminalId = :terminalId AND
                 (shiftId = :localShiftId OR (:serverShiftId IS NOT NULL AND shiftId = :serverShiftId))) +
+            (SELECT COUNT(*) FROM local_points_redemption_actions
+              WHERE state NOT IN ('pending', 'synced') AND
+                (shiftId = :localShiftId OR (:serverShiftId IS NOT NULL AND shiftId = :serverShiftId))) +
             (SELECT COUNT(*) FROM local_expenses
               WHERE syncState NOT IN ('pending', 'synced') AND paidVia = 'cash' AND
                 (shiftId = :localShiftId OR (:serverShiftId IS NOT NULL AND shiftId = :serverShiftId))) +
@@ -252,6 +258,9 @@ interface ShiftCloseSafetyDao {
               WHERE state <> 'synced' AND trim(shiftId) = '') +
             (SELECT COUNT(*) FROM local_held_order_payments
               WHERE syncState <> 'synced' AND (shiftId IS NULL OR terminalId IS NULL)) +
+            (SELECT COUNT(*) FROM local_points_redemption_actions
+              WHERE state <> 'synced' AND
+                (trim(ownerCompanyId) = '' OR trim(ownerUserId) = '' OR trim(shiftId) = '')) +
             (SELECT COUNT(*) FROM local_expenses
               WHERE syncState <> 'synced' AND paidVia = 'cash' AND
                 (shiftId IS NULL OR trim(shiftId) = '')) +
@@ -513,6 +522,11 @@ internal fun installShiftClosingWriteGuards(db: SupportSQLiteDatabase) {
             "local_held_order_payments",
             "NEW.shiftId",
             "NEW.syncState = 'pending'",
+        ),
+        GuardedTable(
+            "local_points_redemption_actions",
+            "NEW.shiftId",
+            "NEW.state = 'pending'",
         ),
         GuardedTable(
             "local_expenses",

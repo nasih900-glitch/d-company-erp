@@ -34,11 +34,29 @@ from app.services.pos.membership_benefits import (
     reservable_quantity,
     reserve_membership_benefits,
 )
+from app.services.pos.loyalty_program import LEGACY_RULES, LoadedLoyaltyProgram
 from app.services.pos.pricing import (
     MembershipDiscountRates,
     OrderPricingService,
     gaming_minutes_allowance_minor,
 )
+
+
+def _legacy_program() -> LoadedLoyaltyProgram:
+    return LoadedLoyaltyProgram(
+        revision=0,
+        rules=LEGACY_RULES,
+        published_by=None,
+        published_at=datetime.now(UTC),
+    )
+
+
+@pytest.fixture(autouse=True)
+def _explicit_legacy_program(monkeypatch):
+    async def _load(*_args, **_kwargs):
+        return _legacy_program()
+
+    monkeypatch.setattr(pos_router, "load_loyalty_program", _load)
 
 
 class _Result:
@@ -747,6 +765,7 @@ async def test_shared_finalizer_consumes_allowance_and_runs_sale_side_effects(
         company_id=company_id,
         actor_user_id=order.opened_by,
         at=finalized_at,
+        loyalty_program=_legacy_program(),
     )
 
     assert order.status == "paid"

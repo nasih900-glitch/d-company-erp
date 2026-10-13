@@ -1,5 +1,14 @@
 package cloud.dcompany.erp.ui.screens
 
+import cloud.dcompany.erp.ui.theme.operationalDanger
+import cloud.dcompany.erp.ui.theme.operationalDangerContainer
+import cloud.dcompany.erp.ui.theme.operationalGood
+import cloud.dcompany.erp.ui.theme.operationalGoodContainer
+import cloud.dcompany.erp.ui.theme.operationalInformation
+import cloud.dcompany.erp.ui.theme.operationalInformationContainer
+import cloud.dcompany.erp.ui.theme.operationalWarning
+import cloud.dcompany.erp.ui.theme.operationalWarningContainer
+
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -91,7 +100,7 @@ fun LoginScreen(
     fun submit() = if (canSubmit) onSignIn(email, password) else Unit
 
     Box(
-        modifier = Modifier.fillMaxSize().background(Brand.Background).imePadding(),
+        modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).imePadding(),
         contentAlignment = Alignment.Center,
     ) {
         Column(
@@ -103,9 +112,9 @@ fun LoginScreen(
         ) {
             Surface(
                 modifier = Modifier.fillMaxWidth(),
-                color = Brand.Surface,
+                color = MaterialTheme.colorScheme.surface,
                 shape = Radius.shapeXl,
-                border = BorderStroke(1.dp, Brand.BorderSubtle),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                 shadowElevation = 8.dp,
             ) {
                 Column(
@@ -120,20 +129,20 @@ fun LoginScreen(
                     Text(
                         "D COMPANY",
                         style = MaterialTheme.typography.headlineMedium,
-                        color = Brand.Foreground,
+                        color = MaterialTheme.colorScheme.onSurface,
                         fontWeight = FontWeight.Bold,
                         letterSpacing = 0.6.sp,
                     )
                     Text(
                         "BUSINESS OPERATIONS",
                         style = MaterialTheme.typography.labelMedium,
-                        color = Brand.GoldMuted,
+                        color = MaterialTheme.colorScheme.secondary,
                         fontWeight = FontWeight.SemiBold,
                         letterSpacing = 1.2.sp,
                     )
 
                     Spacer(Modifier.height(Spacing.xs))
-                    HorizontalDivider(color = Brand.BorderSubtle)
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                     Spacer(Modifier.height(Spacing.xs))
 
                     Column(
@@ -143,12 +152,12 @@ fun LoginScreen(
                         Text(
                             "Welcome back",
                             style = MaterialTheme.typography.titleLarge,
-                            color = Brand.Foreground,
+                            color = MaterialTheme.colorScheme.onSurface,
                         )
                         Text(
                             "Sign in to continue securely.",
                             style = MaterialTheme.typography.bodyMedium,
-                            color = Brand.ForegroundMuted,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
 
@@ -157,7 +166,7 @@ fun LoginScreen(
                         onValueChange = { email = it },
                         label = { Text("Email") },
                         leadingIcon = {
-                            Icon(Icons.Outlined.Email, contentDescription = null, tint = Brand.ForegroundFaint)
+                            Icon(Icons.Outlined.Email, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
                         },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
@@ -174,7 +183,7 @@ fun LoginScreen(
                         onValueChange = { password = it },
                         label = { Text("Password") },
                         leadingIcon = {
-                            Icon(Icons.Outlined.Lock, contentDescription = null, tint = Brand.ForegroundFaint)
+                            Icon(Icons.Outlined.Lock, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
                         },
                         trailingIcon = {
                             IconButton(
@@ -185,7 +194,7 @@ fun LoginScreen(
                                     imageVector = if (showPassword) Icons.Outlined.VisibilityOff
                                     else Icons.Outlined.Visibility,
                                     contentDescription = if (showPassword) "Hide password" else "Show password",
-                                    tint = Brand.ForegroundMuted,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
                         },
@@ -217,7 +226,7 @@ fun LoginScreen(
                     recoveryState.successNotice?.let { notice ->
                         LoginNotice(
                             message = notice,
-                            color = Brand.Good,
+                            color = MaterialTheme.colorScheme.operationalGood,
                             icon = Icons.Filled.CheckCircle,
                             liveRegionMode = LiveRegionMode.Polite,
                         )
@@ -230,7 +239,7 @@ fun LoginScreen(
                     error?.let { message ->
                         LoginNotice(
                             message = message,
-                            color = Brand.Danger,
+                            color = MaterialTheme.colorScheme.operationalDanger,
                             icon = Icons.Filled.ErrorOutline,
                             liveRegionMode = LiveRegionMode.Assertive,
                         )

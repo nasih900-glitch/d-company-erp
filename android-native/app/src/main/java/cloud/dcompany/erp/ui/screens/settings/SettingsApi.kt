@@ -45,6 +45,16 @@ interface SettingsApi {
         @HeaderMap provenance: Map<String, String> = emptyMap(),
     ): CompanyDto
 
+    @GET("settings/loyalty-program")
+    suspend fun loyaltyProgram(): LoyaltyProgramDto
+
+    @retrofit2.http.PUT("settings/loyalty-program")
+    suspend fun publishLoyaltyProgram(
+        @Body body: LoyaltyProgramPublishBody,
+        @Header("Idempotency-Key") idempotencyKey: String,
+        @HeaderMap provenance: Map<String, String> = emptyMap(),
+    ): LoyaltyProgramDto
+
     @GET("settings/branches")
     suspend fun branches(): List<BranchDto>
 

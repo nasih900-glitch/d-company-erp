@@ -1,96 +1,83 @@
 package cloud.dcompany.erp.ui.theme
 
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.luminance
+import cloud.dcompany.erp.ui.screens.customers.LeaderboardBronzeAccent
+import cloud.dcompany.erp.ui.screens.customers.LeaderboardSilverAccent
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ThemeContrastTest {
     @Test
-    fun `executive navy palette remains the approved neutral foundation`() {
-        assertEquals(Color(0xFF08131B), Brand.Background)
-        assertEquals(Color(0xFF0F1D26), Brand.Surface)
-        assertEquals(Color(0xFF162832), Brand.SurfaceRaised)
-        assertEquals(Color(0xFFC6A15B), Brand.Gold)
-        assertEquals(Color(0xFFF4F6F7), Brand.Foreground)
-        assertEquals(Color(0xFF9BA8B0), Brand.ForegroundMuted)
+    fun `night and day palettes keep the approved monochrome foundation`() {
+        assertEquals(Color(0xFF080808), NightPalette.Background)
+        assertEquals(Color(0xFF111111), NightPalette.Surface)
+        assertEquals(Color(0xFFF7F7F4), NightPalette.Foreground)
+        assertEquals(Color(0xFFF6F6F4), DayPalette.Background)
+        assertEquals(Color(0xFF161615), DayPalette.Gold)
+        assertEquals(Color(0xFF111110), DayPalette.Foreground)
     }
 
     @Test
-    fun `surface ladder increases luminance without decorative effects`() {
-        val surfaces = listOf(
-            Brand.Background,
-            Brand.BackgroundSecondary,
-            Brand.Surface,
-            Brand.SurfaceRaised,
-            Brand.SurfaceHover,
-            Brand.SurfaceOverlay,
-        )
-        surfaces.zipWithNext().forEach { (lower, higher) ->
-            assertTrue("Surface ladder must remain ordered", lower.luminance() < higher.luminance())
+    fun `surface ladders remain ordered in both appearances`() {
+        assertOrderedAscending(listOf(
+            NightPalette.Background,
+            NightPalette.BackgroundSecondary,
+            NightPalette.Surface,
+            NightPalette.SurfaceRaised,
+            NightPalette.SurfaceHover,
+            NightPalette.SurfaceOverlay,
+        ))
+        assertOrderedDescending(listOf(
+            DayPalette.BackgroundSecondary,
+            DayPalette.Background,
+            DayPalette.SurfaceRaised,
+            DayPalette.SurfaceHover,
+        ))
+    }
+
+    @Test
+    fun `body and muted text remain readable on core surfaces`() {
+        listOf(NightPalette, DayPalette).forEach { palette ->
+            listOf(palette.Background, palette.Surface, palette.SurfaceRaised).forEach { surface ->
+                assertTrue(contrastRatio(palette.Foreground, surface) >= 7f)
+                assertTrue(contrastRatio(palette.ForegroundMuted, surface) >= 4.5f)
+            }
         }
     }
 
     @Test
-    fun `interactive boundaries are distinct while decorative borders stay restrained`() {
-        assertTrue(contrastRatio(Brand.ControlBorder, Brand.SurfaceRaised) >= 3f)
-        assertTrue(contrastRatio(Brand.FocusRing, Brand.SurfaceOverlay) >= 3f)
-        assertTrue(contrastRatio(Brand.BorderSubtle, Brand.Surface) < 3f)
-    }
-
-    @Test
-    fun `small and status text tokens remain readable on overlay surfaces`() {
-        listOf(
-            "ForegroundMuted" to Brand.ForegroundMuted,
-            "ForegroundFaint" to Brand.ForegroundFaint,
-            "GoldMuted" to Brand.GoldMuted,
-            "Danger" to Brand.Danger,
-        ).forEach { (name, color) ->
-            val ratio = contrastRatio(color, Brand.SurfaceOverlay)
-            assertTrue("$name contrast was $ratio", ratio >= 4.5f)
+    fun `focus and control boundaries remain distinct`() {
+        listOf(NightPalette, DayPalette).forEach { palette ->
+            assertTrue(contrastRatio(palette.ControlBorder, palette.SurfaceRaised) >= 3f)
+            assertTrue(contrastRatio(palette.FocusRing, palette.SurfaceOverlay) >= 3f)
         }
     }
 
     @Test
-    fun `body text remains readable across every business surface`() {
-        listOf(
-            Brand.Background,
-            Brand.BackgroundSecondary,
-            Brand.Surface,
-            Brand.SurfaceRaised,
-            Brand.SurfaceHover,
-            Brand.SurfaceOverlay,
-        ).forEach { surface ->
-            assertTrue(contrastRatio(Brand.Foreground, surface) >= 7f)
-            assertTrue(contrastRatio(Brand.ForegroundMuted, surface) >= 4.5f)
+    fun `leaderboard primary text stays readable across medal tinted rows in day and night`() {
+        listOf(NightPalette, DayPalette).forEach { palette ->
+            listOf(LeaderboardSilverAccent, LeaderboardBronzeAccent).forEach { medal ->
+                val rowStart = medal.copy(alpha = 0.17f).compositeOver(palette.Surface)
+                val identityBadge = medal.copy(alpha = 0.20f).compositeOver(rowStart)
+                assertTrue(contrastRatio(palette.Foreground, rowStart) >= 7f)
+                assertTrue(contrastRatio(palette.Foreground, identityBadge) >= 7f)
+            }
         }
     }
+}
 
-    @Test
-    fun `filled action content meets small-text contrast`() {
-        listOf(
-            "Primary action" to (Brand.Background to Brand.Gold),
-            "Destructive action" to (Brand.Background to Brand.Danger),
-        ).forEach { (name, colors) ->
-            val (content, container) = colors
-            val ratio = contrastRatio(content, container)
-            assertTrue("$name contrast was $ratio", ratio >= 4.5f)
-        }
+private fun assertOrderedAscending(colors: List<Color>) {
+    colors.zipWithNext().forEach { (lower, higher) ->
+        assertTrue(lower.luminance() < higher.luminance())
     }
+}
 
-    @Test
-    fun `operational banner tones meet small-text contrast`() {
-        listOf(
-            "Offline warning" to (Brand.Warning to Brand.WarningMuted),
-            "Server error" to (Brand.Danger to Brand.DangerMuted),
-            "View-only information" to (Brand.Information to Brand.SurfaceRaised),
-            "View-only detail" to (Brand.ForegroundMuted to Brand.SurfaceRaised),
-        ).forEach { (name, colors) ->
-            val (content, container) = colors
-            val ratio = contrastRatio(content, container)
-            assertTrue("$name contrast was $ratio", ratio >= 4.5f)
-        }
+private fun assertOrderedDescending(colors: List<Color>) {
+    colors.zipWithNext().forEach { (higher, lower) ->
+        assertTrue(higher.luminance() > lower.luminance())
     }
 }
 

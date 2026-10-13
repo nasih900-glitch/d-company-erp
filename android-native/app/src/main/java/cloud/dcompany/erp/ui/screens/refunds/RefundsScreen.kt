@@ -1,5 +1,14 @@
 package cloud.dcompany.erp.ui.screens.refunds
 
+import cloud.dcompany.erp.ui.theme.operationalDanger
+import cloud.dcompany.erp.ui.theme.operationalDangerContainer
+import cloud.dcompany.erp.ui.theme.operationalGood
+import cloud.dcompany.erp.ui.theme.operationalGoodContainer
+import cloud.dcompany.erp.ui.theme.operationalInformation
+import cloud.dcompany.erp.ui.theme.operationalInformationContainer
+import cloud.dcompany.erp.ui.theme.operationalWarning
+import cloud.dcompany.erp.ui.theme.operationalWarningContainer
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -40,6 +49,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -78,8 +88,17 @@ import java.text.DateFormat
 import java.util.Date
 
 @Composable
-fun RefundsScreen(vm: RefundsViewModel = viewModel()) {
+fun RefundsScreen(
+    exactReceiptOrderId: String? = null,
+    onExactReceiptConsumed: () -> Unit = {},
+    vm: RefundsViewModel = viewModel(),
+) {
     val state by vm.state.collectAsStateWithLifecycle()
+    LaunchedEffect(exactReceiptOrderId) {
+        exactReceiptOrderId?.let {
+            if (vm.openExactReceipt(it)) onExactReceiptConsumed()
+        }
+    }
     var beginHandoff by remember { mutableStateOf<RefundTask?>(null) }
     var confirmCash by remember { mutableStateOf<RefundTask?>(null) }
     var beginProvider by remember { mutableStateOf<RefundTask?>(null) }
@@ -206,14 +225,14 @@ fun RefundsScreen(vm: RefundsViewModel = viewModel()) {
                 if (state.tasks.isNotEmpty()) {
                     item("task-heading") {
                         Column(
-                            Modifier.fillMaxWidth().background(Brand.SurfaceRaised)
+                            Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant)
                                 .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
                             verticalArrangement = Arrangement.spacedBy(2.dp),
                         ) {
-                            Text("OPEN REFUND TASKS", color = Brand.ForegroundFaint, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                            Text("OPEN REFUND TASKS", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
                             Text(
                                 "Complete or reconcile each exact task before refunding that order again.",
-                                color = Brand.ForegroundMuted,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 style = MaterialTheme.typography.bodySmall,
                             )
                         }
@@ -252,14 +271,14 @@ fun RefundsScreen(vm: RefundsViewModel = viewModel()) {
 
                 item("orders-heading") {
                     Column(
-                        Modifier.fillMaxWidth().background(Brand.SurfaceRaised)
+                        Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant)
                             .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
                         verticalArrangement = Arrangement.spacedBy(2.dp),
                     ) {
-                        Text("REFUNDABLE ORDERS", color = Brand.ForegroundFaint, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                        Text("REFUNDABLE ORDERS", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
                         Text(
                             "Only paid orders with an available balance are shown.",
-                            color = Brand.ForegroundMuted,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
@@ -272,11 +291,11 @@ fun RefundsScreen(vm: RefundsViewModel = viewModel()) {
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.Center,
                         ) {
-                            CircularProgressIndicator(color = Brand.Gold)
+                            CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
                             Text(
                                 "Waiting for the first server sync",
                                 modifier = Modifier.padding(Spacing.md),
-                                color = Brand.Foreground,
+                                color = MaterialTheme.colorScheme.onSurface,
                             )
                         }
                     }
@@ -315,20 +334,20 @@ fun RefundsScreen(vm: RefundsViewModel = viewModel()) {
                             content = {
                                 Text(
                                     order.invoiceNo ?: "No invoice number",
-                                    color = Brand.Foreground,
+                                    color = MaterialTheme.colorScheme.onSurface,
                                     fontWeight = FontWeight.SemiBold,
                                 )
                                 Text(
                                     "${order.type} · collected ${order.paidMinor.asRupees()} · " +
                                         refundRailSummary(order.paymentMethods),
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = Brand.ForegroundMuted,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             },
                             trailing = {
                                 Column(horizontalAlignment = Alignment.End) {
-                                    Text("AVAILABLE", color = Brand.ForegroundFaint, style = MaterialTheme.typography.labelSmall)
-                                    Text(order.refundableMinor.asRupees(), color = Brand.Foreground, fontWeight = FontWeight.Bold)
+                                    Text("AVAILABLE", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
+                                    Text(order.refundableMinor.asRupees(), color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold)
                                 }
                             },
                         )
@@ -340,19 +359,19 @@ fun RefundsScreen(vm: RefundsViewModel = viewModel()) {
                     item("history-divider") { PanelDivider() }
                     item("history-heading") {
                         Column(
-                            Modifier.fillMaxWidth().background(Brand.SurfaceRaised)
+                            Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant)
                                 .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
                             verticalArrangement = Arrangement.spacedBy(2.dp),
                         ) {
                             Text(
                                 "RECENT REFUND HISTORY",
-                                color = Brand.ForegroundFaint,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 style = MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.Bold,
                             )
                             Text(
                                 "Server-backed receipts and the employees recorded at each money stage.",
-                                color = Brand.ForegroundMuted,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 style = MaterialTheme.typography.bodySmall,
                             )
                         }
@@ -409,7 +428,7 @@ fun RefundsScreen(vm: RefundsViewModel = viewModel()) {
                         confirmCash = null
                         vm.confirmCashHandedOver(task.localId)
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = Brand.Danger),
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.operationalDanger),
                 ) { Text("Cash was handed over") }
             },
             dismissButton = {
@@ -471,7 +490,7 @@ fun RefundsScreen(vm: RefundsViewModel = viewModel()) {
                         cancelRequest = null
                         vm.cancelRejected(task.localId)
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = Brand.Danger),
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.operationalDanger),
                 ) { Text("Cancel refused request") }
             },
             dismissButton = {
@@ -533,7 +552,7 @@ fun RefundsScreen(vm: RefundsViewModel = viewModel()) {
 
     state.notice?.let { msg ->
         AlertDialog(
-            containerColor = Brand.SurfaceOverlay,
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
             shape = Radius.shapeLg,
             onDismissRequest = vm::dismissNotice,
             confirmButton = { TextButton(onClick = vm::dismissNotice) { Text("OK") } },
@@ -620,10 +639,10 @@ private fun RefundTaskCard(
                     DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT)
                         .format(Date(capturedAt))
                 }
-                InfoRow("Local payout captured", captured, valueColor = Brand.Danger)
+                InfoRow("Local payout captured", captured, valueColor = MaterialTheme.colorScheme.operationalDanger)
             }
             task.externalReference?.takeIf(String::isNotBlank)?.let {
-                InfoRow("Local provider reference", it, valueColor = Brand.Danger)
+                InfoRow("Local provider reference", it, valueColor = MaterialTheme.colorScheme.operationalDanger)
             }
             task.withdrawnByNameOrId()?.let { InfoRow("Server withdrawal recorded by", it) }
             task.withdrawalAtMillis?.let { withdrawnAt ->
@@ -634,9 +653,9 @@ private fun RefundTaskCard(
                 InfoRow("Server withdrawal recorded", withdrawn)
             }
         }
-        Text(instruction, color = Brand.Foreground, style = MaterialTheme.typography.bodySmall)
+        Text(instruction, color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.bodySmall)
         task.receiptNo?.let {
-            InfoRow("Receipt", it, valueColor = Brand.Good)
+            InfoRow("Receipt", it, valueColor = MaterialTheme.colorScheme.operationalGood)
         }
         task.error?.takeIf(String::isNotBlank)?.let {
             OperationalBanner(
@@ -824,7 +843,7 @@ private fun RefundHistoryRow(task: RefundTask) {
         content = {
             Text(
                 task.invoiceNo ?: "Order ${task.orderId.take(8)}…",
-                color = Brand.Foreground,
+                color = MaterialTheme.colorScheme.onSurface,
                 fontWeight = FontWeight.SemiBold,
             )
             Text(
@@ -832,27 +851,27 @@ private fun RefundHistoryRow(task: RefundTask) {
                     append(refundPaymentMethodLabel(task.settlementMethod.orEmpty()))
                     terminalActor?.let { append(" · recorded by $it") }
                 },
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelSmall,
             )
             if (needsReview) {
                 Text(
                     task.error ?: "Owner reconciliation evidence remains incomplete.",
-                    color = Brand.Warning,
+                    color = MaterialTheme.colorScheme.operationalWarning,
                     style = MaterialTheme.typography.labelSmall,
                 )
             }
         },
         trailing = {
             Column(horizontalAlignment = Alignment.End) {
-                Text(task.amountMinor.asRupees(), color = Brand.Foreground, fontWeight = FontWeight.Bold)
+                Text(task.amountMinor.asRupees(), color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold)
                 Text(
                     task.receiptNo ?: when {
                         task.payoutConflict -> "Payout conflict"
                         task.state == RefundState.WITHDRAWN -> "No payout"
                         else -> "Receipt pending"
                     },
-                    color = if (needsReview) Brand.Warning else Brand.ForegroundMuted,
+                    color = if (needsReview) MaterialTheme.colorScheme.operationalWarning else MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.labelSmall,
                 )
             }
@@ -1012,19 +1031,19 @@ private fun RefundDialog(order: Order, busy: Boolean, online: Boolean, vm: Refun
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("Collected", color = Brand.ForegroundMuted)
-                    Text(order.paidMinor.asRupees(), color = Brand.Foreground, fontWeight = FontWeight.Bold)
+                    Text("Collected", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(order.paidMinor.asRupees(), color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold)
                 }
                 if (alreadyRefunded > 0) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("Already settled refunds", color = Brand.ForegroundMuted)
-                        Text(alreadyRefunded.asRupees(), color = Brand.ForegroundMuted)
+                        Text("Already settled refunds", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(alreadyRefunded.asRupees(), color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
                 if (pendingRefund > 0) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("Reserved in open refund tasks", color = Brand.ForegroundMuted)
-                        Text(pendingRefund.asRupees(), color = Brand.Warning)
+                        Text("Reserved in open refund tasks", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(pendingRefund.asRupees(), color = MaterialTheme.colorScheme.operationalWarning)
                     }
                 }
                 OutlinedTextField(
@@ -1037,12 +1056,12 @@ private fun RefundDialog(order: Order, busy: Boolean, online: Boolean, vm: Refun
                     modifier = Modifier.fillMaxWidth(),
                 )
                 when {
-                    invalidAmount -> Text("Use rupees with no more than 2 decimal places.", color = Brand.Danger)
-                    amountMinor <= 0 -> Text("Refund amount must be greater than ₹0.", color = Brand.Danger)
-                    overRefund -> Text("That is above the latest refundable balance.", color = Brand.Danger)
+                    invalidAmount -> Text("Use rupees with no more than 2 decimal places.", color = MaterialTheme.colorScheme.operationalDanger)
+                    amountMinor <= 0 -> Text("Refund amount must be greater than ₹0.", color = MaterialTheme.colorScheme.operationalDanger)
+                    overRefund -> Text("That is above the latest refundable balance.", color = MaterialTheme.colorScheme.operationalDanger)
                 }
 
-                Text("Original payment", color = Brand.ForegroundMuted)
+                Text("Original payment", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 when (railPolicy.kind) {
                     RefundRailKind.UNKNOWN -> OperationalBanner(
                         title = "Payment rail unavailable — refund locked",
@@ -1054,7 +1073,7 @@ private fun RefundDialog(order: Order, busy: Boolean, online: Boolean, vm: Refun
                         InfoRow("Collected through", "Cash")
                         Text(
                             "This refund must use the cash handover workflow.",
-                            color = Brand.ForegroundMuted,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
@@ -1062,7 +1081,7 @@ private fun RefundDialog(order: Order, busy: Boolean, online: Boolean, vm: Refun
                         InfoRow("Collected through", refundRailSummary(railPolicy.methods))
                         Text(
                             "Mixed-payment refunds use the explicit cash workflow under the current server contract.",
-                            color = Brand.Warning,
+                            color = MaterialTheme.colorScheme.operationalWarning,
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
@@ -1093,7 +1112,7 @@ private fun RefundDialog(order: Order, busy: Boolean, online: Boolean, vm: Refun
                             } else {
                                 "Cash uses the guarded drawer handover workflow even though the original payment was $originalLabel."
                             },
-                            color = Brand.ForegroundMuted,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
@@ -1106,7 +1125,7 @@ private fun RefundDialog(order: Order, busy: Boolean, online: Boolean, vm: Refun
                     icon = Icons.Default.Warning,
                 )
 
-                Text("Reason", color = Brand.ForegroundMuted)
+                Text("Reason", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 BoxWithConstraints(Modifier.fillMaxWidth()) {
                     val columns = when {
                         maxWidth >= 500.dp -> 3
@@ -1148,7 +1167,7 @@ private fun RefundDialog(order: Order, busy: Boolean, online: Boolean, vm: Refun
                         online -> "Submitting asks the server to reserve the cash refund. Do not give cash yet."
                         else -> "Offline: the request will be saved. Do not give cash until server acceptance appears."
                     },
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
@@ -1157,7 +1176,7 @@ private fun RefundDialog(order: Order, busy: Boolean, online: Boolean, vm: Refun
             Button(
                 onClick = { confirming = true },
                 enabled = valid && !busy,
-                colors = ButtonDefaults.buttonColors(containerColor = Brand.Danger),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.operationalDanger),
             ) { Text(if (busy) "Saving…" else "Review ${amountMinor.asRupees()}") }
         },
         dismissButton = {
@@ -1185,7 +1204,7 @@ private fun RefundDialog(order: Order, busy: Boolean, online: Boolean, vm: Refun
                         vm.refund(order, amountMinor, reason, mode, note)
                     },
                     enabled = !busy,
-                    colors = ButtonDefaults.buttonColors(containerColor = Brand.Danger),
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.operationalDanger),
                 ) { Text("Submit request") }
             },
             dismissButton = { TextButton(onClick = { confirming = false }) { Text("Go back") } },
@@ -1227,7 +1246,7 @@ private fun ProviderCompletionDialog(
                 )
                 Text(
                     "The reference and completion time are saved durably before sync. A connection failure must not cause another payout.",
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
@@ -1236,7 +1255,7 @@ private fun ProviderCompletionDialog(
             Button(
                 enabled = !busy && valid,
                 onClick = { onConfirm(externalReference.trim()) },
-                colors = ButtonDefaults.buttonColors(containerColor = Brand.Danger),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.operationalDanger),
             ) { Text("Provider payout completed") }
         },
         dismissButton = {
@@ -1281,7 +1300,7 @@ private fun ResolveCashHandoffDialog(
             Button(
                 enabled = !busy && online && reason.trim().length >= 3,
                 onClick = { onConfirm(reason.trim()) },
-                colors = ButtonDefaults.buttonColors(containerColor = Brand.Danger),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.operationalDanger),
             ) { Text("Confirm no cash moved") }
         },
         dismissButton = { TextButton(onClick = onDismiss, enabled = !busy) { Text("Stop and verify") } },
@@ -1323,7 +1342,7 @@ private fun WithdrawProviderDialog(
             Button(
                 enabled = !busy && online && reason.trim().length >= 3,
                 onClick = { onConfirm(reason.trim()) },
-                colors = ButtonDefaults.buttonColors(containerColor = Brand.Danger),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.operationalDanger),
             ) { Text("Withdraw — no payout started") }
         },
         dismissButton = { TextButton(onClick = onDismiss, enabled = !busy) { Text("Keep task") } },
@@ -1363,7 +1382,7 @@ private fun ResolveProviderPayoutDialog(
                     "Refund reconciliation access is required. Search the provider for this exact ${task.amountMinor.asRupees()} payout first. " +
                         "If it succeeded, stop and record its successful reference instead.",
                 )
-                Text("Verified provider outcome", color = Brand.ForegroundMuted)
+                Text("Verified provider outcome", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 PROVIDER_FAILURE_STATUSES.forEach { (code, label) ->
                     FilterChip(
                         selected = providerStatus == code,
@@ -1394,7 +1413,7 @@ private fun ResolveProviderPayoutDialog(
                 onClick = {
                     onConfirm(providerStatus, verificationReference.trim(), reason.trim())
                 },
-                colors = ButtonDefaults.buttonColors(containerColor = Brand.Danger),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.operationalDanger),
             ) { Text("Confirm no provider payout") }
         },
         dismissButton = { TextButton(onClick = onDismiss, enabled = !busy) { Text("Stop and verify") } },
@@ -1435,7 +1454,7 @@ private fun WithdrawCashDialog(
             Button(
                 enabled = !busy && reason.trim().length >= 3,
                 onClick = { onConfirm(reason) },
-                colors = ButtonDefaults.buttonColors(containerColor = Brand.Danger),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.operationalDanger),
             ) { Text("Withdraw unpaid refund") }
         },
         dismissButton = { TextButton(onClick = onDismiss, enabled = !busy) { Text("Go back") } },
@@ -1444,6 +1463,6 @@ private fun WithdrawCashDialog(
 
 @Composable
 private fun refundChipColors() = FilterChipDefaults.filterChipColors(
-    selectedContainerColor = Brand.Gold,
-    selectedLabelColor = Brand.Background,
+    selectedContainerColor = MaterialTheme.colorScheme.primary,
+    selectedLabelColor = MaterialTheme.colorScheme.background,
 )

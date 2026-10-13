@@ -12,6 +12,7 @@ import { Loader2, AlertCircle, Coffee, Utensils, IceCream, Gamepad2, Tv, Flame }
 import { inr } from '@/lib/inr';
 import { isAppStoreAllowedType } from '@/lib/app-store-compliance';
 import { publicApi, type PublicMenuDTO, type PublicMenuItemDTO } from '@/lib/erp-api';
+import DCompanyBrandMark from '@/components/brand/DCompanyBrandMark';
 
 const TYPE_ICON: Record<string, React.ReactNode> = {
   food:    <Utensils size={16}/>,
@@ -70,12 +71,7 @@ export default function PublicMenuScreen() {
       <header className="sticky top-0 bg-bg-surface border-b border-bg-border px-4 py-4 z-10 shadow-md"
         style={{ paddingTop: 'max(1rem, env(safe-area-inset-top))' }}>
         <div className="max-w-2xl mx-auto flex items-center gap-3">
-          <img
-            src="/brand/den-emblem-gold.png"
-            alt=""
-            aria-hidden="true"
-            className="h-12 w-12 shrink-0 rounded-full object-contain bg-bg/80 ring-1 ring-accent-gold/50"
-          />
+          <DCompanyBrandMark className="h-12 w-12"/>
           <div className="min-w-0">
             <h1 className="truncate text-2xl font-bold tracking-tight">{data.company_name}</h1>
             <p className="text-xs text-fg-muted">Browse our menu · prices include GST</p>

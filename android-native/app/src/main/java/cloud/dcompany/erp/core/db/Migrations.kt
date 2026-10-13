@@ -3022,6 +3022,33 @@ val MIGRATION_52_53 = object : Migration(52, 53) {
     }
 }
 
+/** Program metadata stays unknown after upgrade until a scoped server pull.
+ * Existing accepted order/payment fields are evidence of outcomes, not enough
+ * evidence to reconstruct a request revision or idempotency key. */
+val MIGRATION_53_54 = object : Migration(53, 54) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `customer_cache` ADD COLUMN `loyaltyProgramRevision` INTEGER")
+        db.execSQL("ALTER TABLE `customer_cache` ADD COLUMN `loyaltyPointValueMinor` INTEGER")
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `loyalty_program_cache` (" +
+                "`companyId` TEXT NOT NULL, `revision` INTEGER NOT NULL, `rulesJson` TEXT NOT NULL, " +
+                "`publishedAt` TEXT NOT NULL, `loadedAtMillis` INTEGER NOT NULL, PRIMARY KEY(`companyId`))",
+        )
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `local_points_redemption_actions` (" +
+                "`actionId` TEXT NOT NULL, `ownerCompanyId` TEXT NOT NULL, `ownerUserId` TEXT NOT NULL, " +
+                "`shiftId` TEXT NOT NULL, `orderId` TEXT NOT NULL, `localOrderId` TEXT NOT NULL, " +
+                "`actionKind` TEXT NOT NULL, `points` INTEGER, `rewardKey` TEXT, `programRevision` INTEGER, " +
+                "`expectedCheckoutVersion` INTEGER NOT NULL, `state` TEXT NOT NULL, " +
+                "`createdAtMillis` INTEGER NOT NULL, `lastError` TEXT, PRIMARY KEY(`actionId`))",
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_local_points_redemption_actions_state` ON `local_points_redemption_actions` (`state`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_local_points_redemption_actions_shiftId` ON `local_points_redemption_actions` (`shiftId`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_local_points_redemption_actions_orderId` ON `local_points_redemption_actions` (`orderId`)")
+        installShiftClosingWriteGuards(db)
+    }
+}
+
 val ALL_MIGRATIONS = arrayOf(
     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8,
     MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14,
@@ -3032,5 +3059,5 @@ val ALL_MIGRATIONS = arrayOf(
     MIGRATION_34_35, MIGRATION_35_36, MIGRATION_36_37, MIGRATION_37_38, MIGRATION_38_39,
     MIGRATION_39_40, MIGRATION_40_41, MIGRATION_41_42, MIGRATION_42_43, MIGRATION_43_44,
     MIGRATION_44_45, MIGRATION_45_46, MIGRATION_46_47, MIGRATION_47_48, MIGRATION_48_49,
-    MIGRATION_49_50, MIGRATION_50_51, MIGRATION_51_52, MIGRATION_52_53,
+    MIGRATION_49_50, MIGRATION_50_51, MIGRATION_51_52, MIGRATION_52_53, MIGRATION_53_54,
 )

@@ -1,5 +1,14 @@
 package cloud.dcompany.erp.ui.screens.audit
 
+import cloud.dcompany.erp.ui.theme.operationalDanger
+import cloud.dcompany.erp.ui.theme.operationalDangerContainer
+import cloud.dcompany.erp.ui.theme.operationalGood
+import cloud.dcompany.erp.ui.theme.operationalGoodContainer
+import cloud.dcompany.erp.ui.theme.operationalInformation
+import cloud.dcompany.erp.ui.theme.operationalInformationContainer
+import cloud.dcompany.erp.ui.theme.operationalWarning
+import cloud.dcompany.erp.ui.theme.operationalWarningContainer
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -82,7 +91,7 @@ fun AuditLogScreen(vm: AuditLogViewModel = viewModel()) {
     }
 
     Column(
-        Modifier.fillMaxSize().background(Brand.Background)
+        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
             .padding(horizontal = Spacing.lgPlus, vertical = Spacing.lg),
         verticalArrangement = Arrangement.spacedBy(Spacing.md),
     ) {
@@ -141,7 +150,7 @@ fun AuditLogScreen(vm: AuditLogViewModel = viewModel()) {
                 leading = {
                     Text(
                         "Audit session controls",
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.labelLarge,
                     )
                 },
@@ -276,7 +285,7 @@ private fun AuditDetailedFilters(state: AuditLogUiState, vm: AuditLogViewModel) 
             }
         }
         state.facetsError?.let { message ->
-            Text(message, color = Brand.Warning, style = MaterialTheme.typography.labelSmall)
+            Text(message, color = MaterialTheme.colorScheme.operationalWarning, style = MaterialTheme.typography.labelSmall)
         }
     }
 }
@@ -423,8 +432,8 @@ private fun AuditEntries(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(Spacing.md),
             ) {
-                CircularProgressIndicator(color = Brand.Gold)
-                Text("Loading audit activity…", color = Brand.ForegroundMuted)
+                CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                Text("Loading audit activity…", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
         state.error != null && state.entries.isEmpty() -> DesignedEmptyState(
@@ -474,7 +483,7 @@ private fun AuditEntries(
                         state.loadingMore -> CircularProgressIndicator(
                             modifier = Modifier.heightIn(max = 24.dp),
                             strokeWidth = 2.dp,
-                            color = Brand.Gold,
+                            color = MaterialTheme.colorScheme.primary,
                         )
                         !state.endReached -> ErpButton(
                             text = "Load older activity",
@@ -482,7 +491,7 @@ private fun AuditEntries(
                             intent = ActionIntent.Secondary,
                             leadingIcon = Icons.Default.History,
                         )
-                        else -> Text("End of audit activity", color = Brand.ForegroundFaint)
+                        else -> Text("End of audit activity", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }
@@ -505,14 +514,14 @@ private fun AuditEntryCard(entry: AuditEntry, onClick: () -> Unit) {
         content = {
             Text(
                 auditEntryTitle(entry),
-                color = Brand.Foreground,
+                color = MaterialTheme.colorScheme.onSurface,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
                 "${auditActor(entry)} · ${auditEntityLabel(entry.entityType)} · ${shortAuditId(entry.entityId)}",
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelMedium,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -520,7 +529,7 @@ private fun AuditEntryCard(entry: AuditEntry, onClick: () -> Unit) {
             Text(
                 listOfNotNull(client, entry.reason?.takeIf(String::isNotBlank)?.let { "Reason: $it" })
                     .joinToString(" · ").ifBlank { "Server-recorded audit event" },
-                color = Brand.ForegroundFaint,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelSmall,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -535,7 +544,7 @@ private fun AuditEntryCard(entry: AuditEntry, onClick: () -> Unit) {
                 )
                 Text(
                     formatAuditTimestamp(entry.createdAt),
-                    color = Brand.ForegroundFaint,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.labelSmall,
                 )
             }
@@ -573,9 +582,9 @@ private fun AuditEntryDialog(entry: AuditEntry, onDismiss: () -> Unit) {
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
-        containerColor = Brand.SurfaceOverlay,
-        titleContentColor = Brand.Foreground,
-        textContentColor = Brand.Foreground,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        titleContentColor = MaterialTheme.colorScheme.onSurface,
+        textContentColor = MaterialTheme.colorScheme.onSurface,
     )
 }
 
@@ -584,13 +593,13 @@ private fun AuditDetailRow(label: String, value: String) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(
             label,
-            color = Brand.ForegroundMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.labelMedium,
             modifier = Modifier.widthIn(min = 120.dp),
         )
         Text(
             value,
-            color = Brand.Foreground,
+            color = MaterialTheme.colorScheme.onSurface,
             style = MaterialTheme.typography.bodyMedium,
             modifier = Modifier.weight(1f),
         )

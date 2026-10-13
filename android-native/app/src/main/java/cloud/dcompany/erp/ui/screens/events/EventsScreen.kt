@@ -1,5 +1,14 @@
 package cloud.dcompany.erp.ui.screens.events
 
+import cloud.dcompany.erp.ui.theme.operationalDanger
+import cloud.dcompany.erp.ui.theme.operationalDangerContainer
+import cloud.dcompany.erp.ui.theme.operationalGood
+import cloud.dcompany.erp.ui.theme.operationalGoodContainer
+import cloud.dcompany.erp.ui.theme.operationalInformation
+import cloud.dcompany.erp.ui.theme.operationalInformationContainer
+import cloud.dcompany.erp.ui.theme.operationalWarning
+import cloud.dcompany.erp.ui.theme.operationalWarningContainer
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -99,7 +108,7 @@ fun EventsScreen(access: EventsAccess = EventsAccess()) {
 @Composable
 private fun EventsContent(state: EventsUiState, vm: EventsViewModel, access: EventsAccess) {
     Column(
-        Modifier.fillMaxSize().background(Brand.Background).padding(Spacing.lg),
+        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(Spacing.lg),
         verticalArrangement = Arrangement.spacedBy(Spacing.md),
     ) {
         Header(state, vm, access)
@@ -146,8 +155,8 @@ private fun EventsContent(state: EventsUiState, vm: EventsViewModel, access: Eve
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.spacedBy(Spacing.md),
                         ) {
-                            CircularProgressIndicator(color = Brand.Information)
-                            Text("Loading events…", color = Brand.ForegroundMuted)
+                            CircularProgressIndicator(color = MaterialTheme.colorScheme.operationalInformation)
+                            Text("Loading events…", color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
                 }
@@ -211,7 +220,7 @@ private fun Header(state: EventsUiState, vm: EventsViewModel, access: EventsAcce
                 Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(
                         "Event controls",
-                        color = Brand.Foreground,
+                        color = MaterialTheme.colorScheme.onSurface,
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.SemiBold,
                     )
@@ -221,7 +230,7 @@ private fun Header(state: EventsUiState, vm: EventsViewModel, access: EventsAcce
                         } else {
                             "${state.events.size} saved · ${state.upcoming.size} upcoming"
                         },
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.bodySmall,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
@@ -248,8 +257,8 @@ private fun Header(state: EventsUiState, vm: EventsViewModel, access: EventsAcce
         if (state.syncing) {
             LinearProgressIndicator(
                 modifier = Modifier.fillMaxWidth(),
-                color = Brand.Information,
-                trackColor = Brand.Surface,
+                color = MaterialTheme.colorScheme.operationalInformation,
+                trackColor = MaterialTheme.colorScheme.surface,
             )
         }
     }
@@ -365,9 +374,9 @@ private fun EventsList(
 private fun EventCard(event: Event, vm: EventsViewModel, access: EventsAccess) {
     val soldFraction = if (event.capacity > 0) event.sold.toFloat() / event.capacity else 0f
     val progressColor = when {
-        soldFraction >= 0.9f -> Brand.Danger
-        soldFraction >= 0.6f -> Brand.Warning
-        else -> Brand.Good
+        soldFraction >= 0.9f -> MaterialTheme.colorScheme.operationalDanger
+        soldFraction >= 0.6f -> MaterialTheme.colorScheme.operationalWarning
+        else -> MaterialTheme.colorScheme.operationalGood
     }
     SectionCard(elevated = true) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -376,13 +385,13 @@ private fun EventCard(event: Event, vm: EventsViewModel, access: EventsAccess) {
                     Text(
                         event.name,
                         style = MaterialTheme.typography.titleLarge,
-                        color = Brand.Foreground,
+                        color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f, fill = false),
                     )
                     Spacer(Modifier.width(8.dp))
-                    Chip(eventTypeLabel(event.eventType), Brand.SurfaceRaised)
+                    Chip(eventTypeLabel(event.eventType), MaterialTheme.colorScheme.surfaceVariant)
                     Spacer(Modifier.width(6.dp))
                     OperationalStatusBadge(
                         label = eventStatusLabel(event.status),
@@ -392,13 +401,13 @@ private fun EventCard(event: Event, vm: EventsViewModel, access: EventsAccess) {
                 Text(
                     "${event.startsAt.asDay()} · ${event.screen}",
                     style = MaterialTheme.typography.labelSmall,
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             Text(
                 event.baseTicketPriceMinor.asRupees(),
                 style = MaterialTheme.typography.titleLarge,
-                color = Brand.Foreground,
+                color = MaterialTheme.colorScheme.onSurface,
                 fontWeight = FontWeight.SemiBold,
             )
         }
@@ -406,14 +415,14 @@ private fun EventCard(event: Event, vm: EventsViewModel, access: EventsAccess) {
         Text(
             "${event.sold} / ${event.capacity} sold · ${event.remaining} remaining",
             style = MaterialTheme.typography.labelSmall,
-            color = Brand.ForegroundMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.height(4.dp))
         LinearProgressIndicator(
             progress = { soldFraction.coerceIn(0f, 1f) },
             modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)),
             color = progressColor,
-            trackColor = Brand.SurfaceRaised,
+            trackColor = MaterialTheme.colorScheme.surfaceVariant,
         )
         Spacer(Modifier.height(10.dp))
         EventActionBar(event, vm, access)
@@ -421,7 +430,7 @@ private fun EventCard(event: Event, vm: EventsViewModel, access: EventsAccess) {
             Text(
                 "New tickets require POS payment, invoice, shift, and GST reconciliation.",
                 style = MaterialTheme.typography.labelSmall,
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }
@@ -473,7 +482,7 @@ private fun EventManagementMenu(event: Event, vm: EventsViewModel) {
             )
             if (event.status in setOf("scheduled", "live")) {
                 DropdownMenuItem(
-                    text = { Text("Cancel event", color = Brand.Danger) },
+                    text = { Text("Cancel event", color = MaterialTheme.colorScheme.operationalDanger) },
                     onClick = {
                         expanded = false
                         vm.openConfirmCancel(event)
@@ -482,7 +491,7 @@ private fun EventManagementMenu(event: Event, vm: EventsViewModel) {
             }
             if (event.sold == 0) {
                 DropdownMenuItem(
-                    text = { Text("Delete event", color = Brand.Danger) },
+                    text = { Text("Delete event", color = MaterialTheme.colorScheme.operationalDanger) },
                     onClick = {
                         expanded = false
                         vm.openConfirmDelete(event)
@@ -496,14 +505,14 @@ private fun EventManagementMenu(event: Event, vm: EventsViewModel) {
 @Composable
 private fun ActionErrorBanner(message: String, onDismiss: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().clip(Radius.shapeMd).background(Brand.DangerMuted)
-            .border(1.dp, Brand.Danger, Radius.shapeMd).padding(12.dp),
+        Modifier.fillMaxWidth().clip(Radius.shapeMd).background(MaterialTheme.colorScheme.operationalDangerContainer)
+            .border(1.dp, MaterialTheme.colorScheme.operationalDanger, Radius.shapeMd).padding(12.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
-            Text("Event action not completed", color = Brand.Danger, fontWeight = FontWeight.Bold)
-            Text(message, style = MaterialTheme.typography.bodyMedium, color = Brand.Foreground)
+            Text("Event action not completed", color = MaterialTheme.colorScheme.operationalDanger, fontWeight = FontWeight.Bold)
+            Text(message, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
         }
         ErpButton("Dismiss", onDismiss, intent = ActionIntent.Quiet)
     }
@@ -514,7 +523,7 @@ private fun Chip(text: String, color: Color) {
     Text(
         text,
         style = MaterialTheme.typography.labelSmall,
-        color = Brand.Foreground,
+        color = MaterialTheme.colorScheme.onSurface,
         modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(color).padding(horizontal = 8.dp, vertical = 3.dp),
     )
 }
@@ -537,10 +546,10 @@ private fun PendingEventChangesPanel(
 ) {
     Column(
         Modifier.fillMaxWidth().clip(Radius.shapeMd)
-            .background(Brand.Surface).padding(12.dp),
+            .background(MaterialTheme.colorScheme.surface).padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Text("Pending event changes", style = MaterialTheme.typography.labelLarge, color = Brand.Foreground)
+        Text("Pending event changes", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurface)
         state.pendingTicketSales.forEach { row ->
             EventPendingRow(
                 text = "${row.qty} ticket(s) for ${row.eventName} — ${row.customerName}",
@@ -574,10 +583,10 @@ private fun EventPendingRow(
     onAction: () -> Unit,
 ) {
     Column(
-        Modifier.fillMaxWidth().clip(Radius.shapeSm).background(Brand.SurfaceRaised).padding(8.dp),
+        Modifier.fillMaxWidth().clip(Radius.shapeSm).background(MaterialTheme.colorScheme.surfaceVariant).padding(8.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(text, color = Brand.Foreground, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+            Text(text, color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
             if (actionLabel != null) {
                 ErpButton(
                     text = actionLabel,
@@ -593,7 +602,7 @@ private fun EventPendingRow(
         }
         Text(
             if (rejected) "Could not sync: ${error ?: "unknown error"}" else "Not synced yet",
-            color = if (rejected) Brand.Danger else Brand.Warning,
+            color = if (rejected) MaterialTheme.colorScheme.operationalDanger else MaterialTheme.colorScheme.operationalWarning,
             style = MaterialTheme.typography.labelSmall,
         )
     }
@@ -602,11 +611,11 @@ private fun EventPendingRow(
 @Composable
 private fun NoticeBanner(message: String, onDismiss: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().clip(Radius.shapeSm).background(Brand.SurfaceRaised)
+        Modifier.fillMaxWidth().clip(Radius.shapeSm).background(MaterialTheme.colorScheme.surfaceVariant)
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(message, color = Brand.Foreground, modifier = Modifier.weight(1f))
+        Text(message, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
         ErpButton("Dismiss", onDismiss, intent = ActionIntent.Quiet)
     }
 }
@@ -614,14 +623,14 @@ private fun NoticeBanner(message: String, onDismiss: () -> Unit) {
 @Composable
 private fun ErrorBanner(message: String, onRetry: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().clip(Radius.shapeMd).background(Brand.Surface)
-            .border(1.dp, Brand.Danger, Radius.shapeMd).padding(12.dp),
+        Modifier.fillMaxWidth().clip(Radius.shapeMd).background(MaterialTheme.colorScheme.surface)
+            .border(1.dp, MaterialTheme.colorScheme.operationalDanger, Radius.shapeMd).padding(12.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f).padding(end = 12.dp)) {
-            Text("Couldn't refresh", color = Brand.Danger, fontWeight = FontWeight.Bold)
-            Text(message, style = MaterialTheme.typography.bodyMedium, color = Brand.Foreground)
+            Text("Couldn't refresh", color = MaterialTheme.colorScheme.operationalDanger, fontWeight = FontWeight.Bold)
+            Text(message, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
         }
         ErpButton("Retry", onRetry)
     }
@@ -711,7 +720,7 @@ private fun EventFormDialog(editing: Event?, state: EventsUiState, vm: EventsVie
         if (editing != null) {
             Text(
                 "Changing the price needs a fresh password unlock, same as Menu.",
-                style = MaterialTheme.typography.labelSmall, color = Brand.ForegroundMuted,
+                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
         OutlinedTextField(
@@ -759,7 +768,7 @@ private fun SellTicketsDialog(event: Event, state: EventsUiState, vm: EventsView
     ) {
         Text(
             "${event.remaining} of ${event.capacity} remaining · ${event.baseTicketPriceMinor.asRupees()} each",
-            style = MaterialTheme.typography.labelSmall, color = Brand.ForegroundMuted,
+            style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         OutlinedTextField(
             value = customerName, onValueChange = { customerName = it },
@@ -803,7 +812,7 @@ private fun TicketsDialog(
     canCheckIn: Boolean,
 ) {
     AlertDialog(
-        containerColor = cloud.dcompany.erp.ui.theme.Brand.SurfaceOverlay,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = cloud.dcompany.erp.ui.theme.Radius.shapeLg,
         onDismissRequest = vm::closeDialog,
         modifier = Modifier.widthIn(max = 640.dp).fillMaxWidth(0.92f),
@@ -811,7 +820,7 @@ private fun TicketsDialog(
         title = { Text("Tickets — ${event.name}") },
         text = {
             if (state.tickets.isEmpty()) {
-                Text("No tickets sold yet.", color = Brand.ForegroundMuted)
+                Text("No tickets sold yet.", color = MaterialTheme.colorScheme.onSurfaceVariant)
             } else {
                 LazyColumn(
                     modifier = Modifier.heightIn(max = 480.dp),
@@ -839,23 +848,23 @@ private fun TicketRow(
 ) {
     val pendingCheckIn = state.pendingCheckIns.any { it.ticketId == ticket.id }
     Row(
-        Modifier.fillMaxWidth().clip(Radius.shapeSm).background(Brand.SurfaceRaised).padding(10.dp),
+        Modifier.fillMaxWidth().clip(Radius.shapeSm).background(MaterialTheme.colorScheme.surfaceVariant).padding(10.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f).padding(end = 8.dp)) {
-            Text(ticket.ticketNo, style = MaterialTheme.typography.bodyMedium, color = Brand.Foreground)
+            Text(ticket.ticketNo, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
             Text(
                 "${ticket.customerName ?: "—"}${ticket.seat?.let { " · Seat $it" } ?: ""}",
-                style = MaterialTheme.typography.labelSmall, color = Brand.ForegroundMuted,
+                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Text(
                 if (pendingCheckIn) "Checking in — not synced yet" else ticketStatusLabel(ticket.status),
                 style = MaterialTheme.typography.labelSmall,
-                color = if (ticket.status == "checked_in" || pendingCheckIn) Brand.Good else Brand.ForegroundMuted,
+                color = if (ticket.status == "checked_in" || pendingCheckIn) MaterialTheme.colorScheme.operationalGood else MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        Text(ticket.pricePaidMinor.asRupees(), style = MaterialTheme.typography.bodyMedium, color = Brand.Foreground)
+        Text(ticket.pricePaidMinor.asRupees(), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
         Spacer(Modifier.width(8.dp))
         if (ticket.status == "sold" && !pendingCheckIn) {
             ErpButton(
@@ -875,7 +884,7 @@ private fun TicketRow(
 // ============================================================================
 @Composable
 private fun SectionTitle(text: String) {
-    Text(text, style = MaterialTheme.typography.titleLarge, color = Brand.Foreground, modifier = Modifier.padding(bottom = 2.dp))
+    Text(text, style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.padding(bottom = 2.dp))
 }
 
 /** "2026-08-22T20:00" (from an HTML-datetime-local-style input) -> a full

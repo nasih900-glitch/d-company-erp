@@ -1,6 +1,7 @@
 package cloud.dcompany.erp.ui.screens.gaming
 
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
@@ -36,15 +37,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.setProgress
@@ -58,7 +60,6 @@ import androidx.compose.ui.unit.dp
 import androidx.core.view.HapticFeedbackConstantsCompat
 import androidx.core.view.ViewCompat
 import cloud.dcompany.erp.core.net.asRupees
-import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Motion
 import cloud.dcompany.erp.ui.theme.Spacing
 import kotlin.math.abs
@@ -98,7 +99,6 @@ internal fun GamingDurationDial(
         mutableStateOf(selected.packageId)
     }
     var liveDragAngle by remember(options, gestureContextKey) { mutableStateOf<Float?>(null) }
-    var snapToSelectedStop by remember(options, gestureContextKey) { mutableStateOf(false) }
     var gestureRevision by remember(options, gestureContextKey) { mutableStateOf(0) }
     SideEffect {
         if (observedSelection != selected.packageId) {
@@ -106,7 +106,6 @@ internal fun GamingDurationDial(
             if (lastPublishedSelection != selected.packageId) {
                 lastPublishedSelection = selected.packageId
                 liveDragAngle = null
-                snapToSelectedStop = false
                 gestureRevision++
             }
         }
@@ -115,11 +114,12 @@ internal fun GamingDurationDial(
     val compactCentre = dialSize < 200.dp
     val targetAngle = durationDialStopAngles(options.size)[selectedIndex]
     val animatedAngle by animateFloatAsState(
-        targetValue = targetAngle,
-        animationSpec = tween(durationMillis = Motion.medium, easing = Motion.emphasized),
+        targetValue = liveDragAngle ?: targetAngle,
+        animationSpec = if (liveDragAngle != null) snap()
+            else tween(durationMillis = Motion.medium, easing = Motion.emphasized),
         label = "Gaming duration selection",
     )
-    val displayedAngle = liveDragAngle ?: if (snapToSelectedStop) targetAngle else animatedAngle
+    val displayedAngle = liveDragAngle ?: animatedAngle
     val currentRequestedSelection by rememberUpdatedState(selectedPackageId)
     val currentDisplayedSelection by rememberUpdatedState(selected.packageId)
     val currentOnSelect by rememberUpdatedState(onSelect)
@@ -128,17 +128,20 @@ internal fun GamingDurationDial(
         { ViewCompat.performHapticFeedback(view, HapticFeedbackConstantsCompat.SEGMENT_TICK) }
     }
     val currentSegmentTick by rememberUpdatedState(segmentTick ?: platformSegmentTick)
+    val dialAccent = MaterialTheme.colorScheme.onSurface
+    val dialAccentSoft = MaterialTheme.colorScheme.onSurfaceVariant
+    val dialCentre = MaterialTheme.colorScheme.surface
+    val dialTrack = MaterialTheme.colorScheme.outline
+    val focusRing = MaterialTheme.colorScheme.primary
     fun publishUserSelection(
         packageId: String,
         repeatSameSelection: Boolean,
-        snapAngle: Boolean = false,
     ) {
         val changed = packageId != lastPublishedSelection
         if (changed) {
             lastPublishedSelection = packageId
             currentSegmentTick()
         }
-        if (snapAngle) snapToSelectedStop = true else if (changed) snapToSelectedStop = false
         if (changed || repeatSameSelection) currentOnSelect(packageId)
     }
 
@@ -150,6 +153,7 @@ internal fun GamingDurationDial(
         Box(
             modifier = Modifier
                 .size(dialSize)
+                .testTag("gaming-control-ring")
                 .semantics {
                     contentDescription = "Session duration dial"
                     stateDescription = "${selected.minutes} minutes, ${selected.totalMinor.asRupees()} total"
@@ -163,10 +167,30 @@ internal fun GamingDurationDial(
                         publishUserSelection(options[index].packageId, repeatSameSelection = true)
                         true
                     }
+                    customActions = listOf(
+                        CustomAccessibilityAction("Previous duration") {
+                            val previous = (selectedIndex - 1).coerceAtLeast(0)
+                            if (previous == selectedIndex) false else {
+                                publishUserSelection(options[previous].packageId, repeatSameSelection = true)
+                                true
+                            }
+                        },
+                        CustomAccessibilityAction("Next duration") {
+                            val next = (selectedIndex + 1).coerceAtMost(options.lastIndex)
+                            if (next == selectedIndex) false else {
+                                publishUserSelection(options[next].packageId, repeatSameSelection = true)
+                                true
+                            }
+                        },
+                    )
                 }
                 .pointerInput(options, gestureContextKey) {
-                    fun selectAt(angle: Float, allowNormalization: Boolean = false) {
-                        val index = nearestDurationDialStop(angle, options.size)
+                    fun selectAt(progress: Float, dragging: Boolean, allowNormalization: Boolean = false) {
+                        val previous = options.indexOfFirst { it.packageId == lastPublishedSelection }
+                        val index = durationDialIndexAtProgress(
+                            progress, options.size,
+                            previousIndex = previous.takeIf { dragging && it >= 0 },
+                        )
                         val id = options[index].packageId
                         val needsSelectionNormalization =
                             allowNormalization &&
@@ -175,7 +199,6 @@ internal fun GamingDurationDial(
                         publishUserSelection(
                             packageId = id,
                             repeatSameSelection = needsSelectionNormalization,
-                            snapAngle = true,
                         )
                     }
                     awaitEachGesture {
@@ -186,8 +209,14 @@ internal fun GamingDurationDial(
                         }
                         val startedAtRevision = gestureRevision
                         var dragging = false
-                        liveDragAngle = downAngle
-                        snapToSelectedStop = true
+                        val currentIndex = options.indexOfFirst { it.packageId == currentDisplayedSelection }
+                            .coerceAtLeast(0)
+                        var progress = durationDialProgressAtAngle(
+                            downAngle,
+                            durationDialStopAngles(options.size)[currentIndex] - DURATION_DIAL_START,
+                        )
+                        var previousAngle: Float = downAngle
+                        liveDragAngle = DURATION_DIAL_START + progress
                         try {
                             while (true) {
                                 if (startedAtRevision != gestureRevision) break
@@ -201,8 +230,11 @@ internal fun GamingDurationDial(
                                 val angle = durationDialAngle(change.position, size)
                                 if (!change.pressed) {
                                     if (angle != null && (dragging || moved < viewConfiguration.touchSlop)) {
-                                        liveDragAngle = angle
-                                        selectAt(angle, allowNormalization = !dragging)
+                                        progress = if (dragging) {
+                                            durationDialDragProgress(progress, previousAngle, angle)
+                                        } else durationDialProgressAtAngle(angle, progress)
+                                        liveDragAngle = DURATION_DIAL_START + progress
+                                        selectAt(progress, dragging, allowNormalization = !dragging)
                                     }
                                     break
                                 }
@@ -210,8 +242,10 @@ internal fun GamingDurationDial(
                                     dragging = true
                                 }
                                 if (dragging && angle != null) {
-                                    liveDragAngle = angle
-                                    selectAt(angle)
+                                    progress = durationDialDragProgress(progress, previousAngle, angle)
+                                    previousAngle = angle
+                                    liveDragAngle = DURATION_DIAL_START + progress
+                                    selectAt(progress, dragging = true)
                                     change.consume()
                                 }
                             }
@@ -223,49 +257,26 @@ internal fun GamingDurationDial(
             contentAlignment = Alignment.Center,
         ) {
             Canvas(modifier = Modifier.size(dialSize)) {
-                val vividGold = Color(0xFFFFD76D)
-                val paleGold = Color(0xFFFFF0AE)
-                val stroke = 14.dp.toPx()
+                val vividGold = dialAccent
+                val paleGold = dialAccentSoft
                 val radius = size.minDimension * 0.40f
                 val center = Offset(size.width / 2f, size.height / 2f)
                 val topLeft = Offset(center.x - radius, center.y - radius)
                 val diameter = radius * 2f
                 val tickOuter = radius - 12.dp.toPx()
 
-                // Static depth stays behind the controls; only the selected arc
-                // animates, so an idle board does not continuously redraw.
                 drawCircle(
-                    brush = Brush.radialGradient(
-                        colorStops = arrayOf(
-                            0f to Color.Transparent,
-                            0.72f to Color.Transparent,
-                            0.88f to vividGold.copy(alpha = 0.10f),
-                            1f to Color.Transparent,
-                        ),
-                        center = center,
-                        radius = radius + 32.dp.toPx(),
-                    ),
-                    radius = radius + 32.dp.toPx(),
-                    center = center,
-                )
-                drawCircle(
-                    brush = Brush.radialGradient(
-                        colors = listOf(Color(0xFF0D1A20), Color(0xFF050E14)),
-                        center = Offset(center.x - radius * 0.22f, center.y - radius * 0.28f),
-                        radius = radius * 1.45f,
-                    ),
+                    color = dialCentre,
                     radius = radius - 6.dp.toPx(),
                     center = center,
                 )
-                // Fine instrument marks and concentric outlines keep the dial
-                // legible against the dark centre at every published duration.
                 drawCircle(
-                    vividGold.copy(alpha = 0.14f),
-                    radius = radius + 14.dp.toPx(), center = center,
+                    dialTrack.copy(alpha = 0.52f),
+                    radius = radius + 8.dp.toPx(), center = center,
                     style = Stroke(1.dp.toPx()),
                 )
                 drawCircle(
-                    vividGold.copy(alpha = 0.09f),
+                    dialTrack.copy(alpha = 0.34f),
                     radius = radius - 23.dp.toPx(), center = center,
                     style = Stroke(1.dp.toPx()),
                 )
@@ -274,67 +285,38 @@ internal fun GamingDurationDial(
                     val direction = Offset(cos(angle).toFloat(), sin(angle).toFloat())
                     val inner = tickOuter - (if (index % 8 == 0) 9.dp.toPx() else 4.dp.toPx())
                     drawLine(
-                        color = vividGold.copy(alpha = if (index % 8 == 0) 0.30f else 0.12f),
+                        color = dialAccentSoft.copy(alpha = if (index % 8 == 0) 0.58f else 0.28f),
                         start = center + direction * inner,
                         end = center + direction * tickOuter,
                         strokeWidth = if (index % 8 == 0) 1.1.dp.toPx() else 0.7.dp.toPx(),
                     )
                 }
                 drawCircle(
-                    Color(0xFF1A272C),
+                    dialTrack,
                     radius = radius,
                     center = center,
-                    style = Stroke(5.dp.toPx()),
+                    style = Stroke(2.dp.toPx()),
                 )
                 val selectedSweep = durationDialSweep(displayedAngle)
                 drawArc(
-                    color = vividGold.copy(alpha = 0.13f),
-                    startAngle = 170f,
+                    color = vividGold,
+                    startAngle = DURATION_DIAL_START,
                     sweepAngle = selectedSweep,
                     useCenter = false,
                     topLeft = topLeft,
                     size = Size(diameter, diameter),
-                    style = Stroke(width = 30.dp.toPx(), cap = StrokeCap.Round),
-                )
-                drawArc(
-                    color = vividGold.copy(alpha = 0.29f),
-                    startAngle = 170f,
-                    sweepAngle = selectedSweep,
-                    useCenter = false,
-                    topLeft = topLeft,
-                    size = Size(diameter, diameter),
-                    style = Stroke(width = 21.dp.toPx(), cap = StrokeCap.Round),
-                )
-                drawArc(
-                    brush = Brush.linearGradient(
-                        colors = listOf(vividGold, paleGold, vividGold),
-                        start = Offset(center.x - radius, center.y + radius),
-                        end = Offset(center.x + radius, center.y - radius),
-                    ),
-                    startAngle = 170f,
-                    sweepAngle = selectedSweep,
-                    useCenter = false,
-                    topLeft = topLeft,
-                    size = Size(diameter, diameter),
-                    style = Stroke(width = stroke, cap = StrokeCap.Round),
+                    style = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round),
                 )
                 val radians = Math.toRadians(displayedAngle.toDouble())
                 val knob = Offset(
                     center.x + radius * cos(radians).toFloat(),
                     center.y + radius * sin(radians).toFloat(),
                 )
+                drawCircle(dialCentre, radius = 8.dp.toPx(), center = knob)
+                drawCircle(paleGold, radius = 6.dp.toPx(), center = knob)
                 drawCircle(
-                    brush = Brush.radialGradient(
-                        colors = listOf(vividGold.copy(alpha = 0.55f), Color.Transparent),
-                        center = knob, radius = 34.dp.toPx(),
-                    ),
-                    radius = 34.dp.toPx(), center = knob,
-                )
-                drawCircle(vividGold.copy(alpha = 0.50f), radius = 17.dp.toPx(), center = knob)
-                drawCircle(paleGold, radius = 13.dp.toPx(), center = knob)
-                drawCircle(
-                    Color.White.copy(alpha = 0.9f), radius = 13.dp.toPx(), center = knob,
-                    style = Stroke(1.2.dp.toPx()),
+                    vividGold, radius = 8.dp.toPx(), center = knob,
+                    style = Stroke(1.5.dp.toPx()),
                 )
             }
             if (options.size == 2) {
@@ -369,7 +351,7 @@ internal fun GamingDurationDial(
                                     .drawBehind {
                                         if (hovered || focused || pressed) {
                                             drawLine(
-                                                color = Brand.GoldBright,
+                                                color = dialAccent,
                                                 start = Offset(0f, size.height - 2.dp.toPx()),
                                                 end = Offset(size.width, size.height - 2.dp.toPx()),
                                                 strokeWidth = 2.dp.toPx(),
@@ -377,7 +359,7 @@ internal fun GamingDurationDial(
                                         }
                                         if (focused) {
                                             drawRoundRect(
-                                                color = Brand.FocusRing,
+                                                color = focusRing,
                                                 style = Stroke(width = 1.dp.toPx()),
                                             )
                                         }
@@ -397,8 +379,8 @@ internal fun GamingDurationDial(
                                         this.selected = option.packageId == selected.packageId
                                     },
                                 color = if (option.packageId == selected.packageId) {
-                                    Color(0xFFFFD76D)
-                                } else Brand.ForegroundMuted,
+                                    MaterialTheme.colorScheme.onSurface
+                                } else MaterialTheme.colorScheme.onSurfaceVariant,
                                 style = if (compactMarkers) MaterialTheme.typography.labelMedium
                                     else MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold,
@@ -414,23 +396,23 @@ internal fun GamingDurationDial(
             ) {
                 Text(
                     "${selected.minutes} min",
-                    color = Color(0xFFFFD76D),
+                    color = MaterialTheme.colorScheme.onSurface,
                     style = if (compactCentre) MaterialTheme.typography.headlineLarge
                         else MaterialTheme.typography.displayLarge,
                     fontWeight = FontWeight.Bold,
                 )
                 HorizontalDivider(
                     modifier = Modifier.width(dialSize * 0.42f),
-                    color = Brand.Gold.copy(alpha = 0.35f),
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.35f),
                 )
                 Text(
                     "Session price",
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.labelMedium,
                 )
                 Text(
                     selected.totalMinor.asRupees(),
-                    color = Brand.Foreground,
+                    color = MaterialTheme.colorScheme.onSurface,
                     style = if (compactCentre) MaterialTheme.typography.headlineMedium
                         else MaterialTheme.typography.headlineLarge,
                 )
@@ -471,7 +453,38 @@ internal fun GamingDurationDial(
 internal fun durationDialStopAngles(count: Int): List<Float> {
     require(count > 0)
     if (count == 1) return listOf(270f)
-    return List(count) { index -> 240f + 90f * index / (count - 1) }
+    return List(count) { index -> DURATION_DIAL_START + 360f * index / (count - 1) }
+}
+
+internal const val DURATION_DIAL_START = 135f
+
+/** A turn is bounded: reaching the maximum never wraps back to the cheapest package. */
+internal fun durationDialDragProgress(progress: Float, previousAngle: Float, angle: Float): Float {
+    val delta = ((angle - previousAngle + 540f) % 360f) - 180f
+    return (progress + delta).coerceIn(0f, 360f)
+}
+
+internal fun durationDialProgressAtAngle(angle: Float, selectedProgress: Float = 0f): Float {
+    val progress = (angle - DURATION_DIAL_START + 360f) % 360f
+    // The minimum and maximum meet on the ring. Keep the selected endpoint
+    // when grabbing its handle, then use unwrapped movement for the whole gesture.
+    if (progress < 8f || progress > 352f) return if (selectedProgress > 180f) 360f else 0f
+    return progress
+}
+
+internal fun durationDialIndexAtProgress(progress: Float, count: Int, previousIndex: Int? = null): Int {
+    require(count > 0)
+    if (count == 1) return 0
+    val step = 360f / (count - 1)
+    val candidate = (progress.coerceIn(0f, 360f) / step).roundToInt().coerceIn(0, count - 1)
+    if (previousIndex == null || previousIndex !in 0 until count || candidate == previousIndex) return candidate
+    val boundary = step * (candidate + previousIndex) / 2f
+    val tolerance = minOf(5f, step / 8f)
+    return when {
+        candidate > previousIndex && progress <= boundary + tolerance -> previousIndex
+        candidate < previousIndex && progress >= boundary - tolerance -> previousIndex
+        else -> candidate
+    }
 }
 
 internal fun closestDurationDialStop(position: Offset, size: IntSize, count: Int): Int? {
@@ -501,11 +514,7 @@ internal fun durationDialAngle(position: Offset, size: IntSize): Float? {
 }
 
 internal fun nearestDurationDialStop(angle: Float, count: Int): Int {
-    require(count > 0)
-    val stops = durationDialStopAngles(count)
-    return stops.indices.minBy { index ->
-        circularAngleDistance(angle, stops[index])
-    }
+    return durationDialIndexAtProgress(durationDialProgressAtAngle(angle), count)
 }
 
 internal fun circularAngleDistance(first: Float, second: Float): Float {
@@ -513,5 +522,5 @@ internal fun circularAngleDistance(first: Float, second: Float): Float {
     return minOf(difference, 360f - difference)
 }
 
-internal fun durationDialSweep(angle: Float, startAngle: Float = 170f): Float =
-    (angle - startAngle + 360f) % 360f
+internal fun durationDialSweep(angle: Float, startAngle: Float = DURATION_DIAL_START): Float =
+    (angle - startAngle).coerceIn(0f, 360f)

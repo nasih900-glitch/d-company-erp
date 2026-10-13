@@ -1,5 +1,14 @@
 package cloud.dcompany.erp.ui.screens.finance
 
+import cloud.dcompany.erp.ui.theme.operationalDanger
+import cloud.dcompany.erp.ui.theme.operationalDangerContainer
+import cloud.dcompany.erp.ui.theme.operationalGood
+import cloud.dcompany.erp.ui.theme.operationalGoodContainer
+import cloud.dcompany.erp.ui.theme.operationalInformation
+import cloud.dcompany.erp.ui.theme.operationalInformationContainer
+import cloud.dcompany.erp.ui.theme.operationalWarning
+import cloud.dcompany.erp.ui.theme.operationalWarningContainer
+
 import android.app.DatePickerDialog
 import android.net.Uri
 
@@ -134,7 +143,7 @@ private fun FinanceContent(
     var tab by remember { mutableIntStateOf(0) }
     val tabs = listOf("Overview", "Expenses", "Collections", "Tip payouts", "Assets", "Partners")
 
-    Column(Modifier.fillMaxSize().background(Brand.Background)) {
+    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         Header(state, onRefresh = vm::load)
         when (state.primaryContentState) {
             FinancePrimaryContentState.ERROR -> ErrorBlock(
@@ -150,8 +159,8 @@ private fun FinanceContent(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    CircularProgressIndicator(color = Brand.Information)
-                    Text("Reading the books…", color = Brand.ForegroundMuted)
+                    CircularProgressIndicator(color = MaterialTheme.colorScheme.operationalInformation)
+                    Text("Reading the books…", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
 
@@ -236,13 +245,13 @@ private fun Header(state: FinanceUiState, onRefresh: () -> Unit) {
                             state.loading -> "Loading financial records"
                             else -> "Financial records unavailable"
                         },
-                        color = Brand.Foreground,
+                        color = MaterialTheme.colorScheme.onSurface,
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.SemiBold,
                     )
                     Text(
                         "Review server-backed receipt-basis figures and authorised entries.",
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.bodySmall,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
@@ -265,8 +274,8 @@ private fun Header(state: FinanceUiState, onRefresh: () -> Unit) {
             if (state.loading && state.loaded) {
                 LinearProgressIndicator(
                     modifier = Modifier.fillMaxWidth(),
-                    color = Brand.Information,
-                    trackColor = Brand.Surface,
+                    color = MaterialTheme.colorScheme.operationalInformation,
+                    trackColor = MaterialTheme.colorScheme.surface,
                 )
             }
         }
@@ -294,7 +303,7 @@ private fun FinanceStatusRegion(
         if (!hasStatus) {
             Text(
                 "Finance records are online · no saved finance actions need attention",
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelSmall,
                 modifier = Modifier.align(Alignment.CenterStart),
             )
@@ -344,16 +353,16 @@ private fun OverviewTab(state: FinanceUiState, presentation: WorkspacePresentati
         Text(
             "This period · ${pl.periodStart.asDayShort()} – ${pl.periodEnd.asDay()}",
             style = MaterialTheme.typography.labelSmall,
-            color = Brand.ForegroundMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
         state.allocationWarning?.let { AllocationUnavailableNotice(it) }
 
         val coverage = state.verifiedCostingCoverage
-        Panel(border = if (coverage?.isComplete == true) Brand.Good else Brand.Warning) {
+        Panel(border = if (coverage?.isComplete == true) MaterialTheme.colorScheme.operationalGood else MaterialTheme.colorScheme.operationalWarning) {
             Text(
                 coverage?.warningTitle ?: "Inventory costing status unavailable",
-                color = if (coverage?.isComplete == true) Brand.Good else Brand.Warning,
+                color = if (coverage?.isComplete == true) MaterialTheme.colorScheme.operationalGood else MaterialTheme.colorScheme.operationalWarning,
                 fontWeight = FontWeight.Bold,
             )
             Text(
@@ -361,18 +370,18 @@ private fun OverviewTab(state: FinanceUiState, presentation: WorkspacePresentati
                     ?: "COGS may be understated, so gross profit and operating profit may be overstated " +
                         "until recipe and ingredient-cost coverage can be verified.",
                 style = MaterialTheme.typography.bodyMedium,
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
 
         if (state.periodIdle) {
-            Panel(border = Brand.BorderSubtle) {
-                Text("No activity this period yet.", color = Brand.Foreground, fontWeight = FontWeight.Bold)
+            Panel(border = MaterialTheme.colorScheme.outlineVariant) {
+                Text("No activity this period yet.", color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold)
                 Text(
                     "Take an order in POS or record an authorised expense. The next successful " +
                         "sync will update these server-calculated figures.",
                     style = MaterialTheme.typography.bodyMedium,
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }
@@ -544,13 +553,13 @@ private fun ExpenseActionBar(state: FinanceUiState, canWrite: Boolean, onCreate:
                 Text(
                     countLabel(state.expenses.size, "expense"),
                     style = MaterialTheme.typography.titleSmall,
-                    color = Brand.Foreground,
+                    color = MaterialTheme.colorScheme.onSurface,
                     fontWeight = FontWeight.SemiBold,
                 )
                 Text(
                     "Active loaded total ${state.expenseTotalMinor.asRupees()}",
                     style = MaterialTheme.typography.bodySmall,
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         },
@@ -567,13 +576,13 @@ private fun ExpenseActionBar(state: FinanceUiState, canWrite: Boolean, onCreate:
 
 @Composable
 private fun ExpenseRow(expense: Expense, categoryName: String) {
-    Panel(border = if (expense.isCorrected) Brand.Warning.copy(alpha = 0.55f) else null) {
+    Panel(border = if (expense.isCorrected) MaterialTheme.colorScheme.operationalWarning.copy(alpha = 0.55f) else null) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
             Column(Modifier.weight(1f)) {
                 Text(
                     categoryName,
                     style = MaterialTheme.typography.bodyLarge,
-                    color = Brand.Foreground,
+                    color = MaterialTheme.colorScheme.onSurface,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -581,20 +590,20 @@ private fun ExpenseRow(expense: Expense, categoryName: String) {
                 Text(
                     "${expense.paidAt.asDay()} · ${expense.vendorName ?: "No vendor"}",
                     style = MaterialTheme.typography.labelSmall,
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 expense.invoiceNo?.takeIf { it.isNotBlank() }?.let {
                     Text(
                         "Invoice $it",
                         style = MaterialTheme.typography.labelSmall,
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 expense.note?.takeIf { it.isNotBlank() }?.let {
                     Text(
                         it,
                         style = MaterialTheme.typography.labelSmall,
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -608,7 +617,7 @@ private fun ExpenseRow(expense: Expense, categoryName: String) {
                     Text(
                         "Corrected ${it.correctedAt.asDay()}: ${it.reason}",
                         style = MaterialTheme.typography.labelSmall,
-                        color = Brand.Warning,
+                        color = MaterialTheme.colorScheme.operationalWarning,
                     )
                 }
             }
@@ -616,16 +625,16 @@ private fun ExpenseRow(expense: Expense, categoryName: String) {
                 Text(
                     expense.amountMinor.asRupees(),
                     style = MaterialTheme.typography.bodyLarge,
-                    color = Brand.Foreground,
+                    color = MaterialTheme.colorScheme.onSurface,
                     fontWeight = FontWeight.Bold,
                 )
                 Text(
                     paidViaLabel(expense.paidVia),
                     style = MaterialTheme.typography.labelSmall,
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 if (expense.isCorrected) {
-                    Text("CORRECTED", color = Brand.Warning, style = MaterialTheme.typography.labelSmall)
+                    Text("CORRECTED", color = MaterialTheme.colorScheme.operationalWarning, style = MaterialTheme.typography.labelSmall)
                 }
             }
         }
@@ -689,13 +698,13 @@ private fun ManualCollectionsTab(
                         Text(
                             "Immutable collection register",
                             style = MaterialTheme.typography.titleSmall,
-                            color = Brand.Foreground,
+                            color = MaterialTheme.colorScheme.onSurface,
                             fontWeight = FontWeight.SemiBold,
                         )
                         Text(
                             "Newest business date first · server-authoritative",
                             style = MaterialTheme.typography.bodySmall,
-                            color = Brand.ForegroundMuted,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                 },
@@ -731,7 +740,7 @@ private fun ManualCollectionsTab(
                         } else {
                             "Normal sales should continue through Gaming or direct counter POS. Use Add collection only when no itemized bill exists."
                         },
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.bodyMedium,
                     )
                 }
@@ -759,8 +768,8 @@ private fun ManualCollectionRow(
 ) {
     Panel(
         border = when {
-            row.isVoided -> Brand.Danger.copy(alpha = 0.45f)
-            row.isCorrected -> Brand.Warning.copy(alpha = 0.55f)
+            row.isVoided -> MaterialTheme.colorScheme.operationalDanger.copy(alpha = 0.45f)
+            row.isCorrected -> MaterialTheme.colorScheme.operationalWarning.copy(alpha = 0.55f)
             else -> null
         },
     ) {
@@ -769,31 +778,31 @@ private fun ManualCollectionRow(
                 Text(
                     row.sourceRef,
                     style = MaterialTheme.typography.bodyLarge,
-                    color = Brand.Foreground,
+                    color = MaterialTheme.colorScheme.onSurface,
                     fontWeight = FontWeight.SemiBold,
                     textDecoration = if (row.isVoided) TextDecoration.LineThrough else null,
                 )
                 Text(
                     "${row.businessDate.asDay()} · $branchName · ${paidViaLabel(row.method)}",
                     style = MaterialTheme.typography.labelSmall,
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Text(
                     "Recorded by ${row.createdByName ?: "verified employee"} · ${row.createdAt.asDay()}",
                     style = MaterialTheme.typography.labelSmall,
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 row.note?.takeIf(String::isNotBlank)?.let {
-                    Text(it, style = MaterialTheme.typography.bodySmall, color = Brand.ForegroundMuted)
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 row.voidReason?.let {
-                    Text("Void reason: $it", style = MaterialTheme.typography.bodySmall, color = Brand.Danger)
+                    Text("Void reason: $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.operationalDanger)
                 }
                 row.correction?.let {
                     Text(
                         "Corrected ${it.correctedAt.asDay()}: ${it.reason}",
                         style = MaterialTheme.typography.bodySmall,
-                        color = Brand.Warning,
+                        color = MaterialTheme.colorScheme.operationalWarning,
                     )
                 }
             }
@@ -801,13 +810,13 @@ private fun ManualCollectionRow(
                 Text(
                     row.amountMinor.asRupees(),
                     style = MaterialTheme.typography.titleLarge,
-                    color = if (row.isVoided) Brand.ForegroundMuted else Brand.Foreground,
+                    color = if (row.isVoided) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
                     textDecoration = if (row.isVoided) TextDecoration.LineThrough else null,
                 )
                 if (row.isVoided) {
-                    Text("VOIDED", color = Brand.Danger, style = MaterialTheme.typography.labelSmall)
+                    Text("VOIDED", color = MaterialTheme.colorScheme.operationalDanger, style = MaterialTheme.typography.labelSmall)
                 } else if (row.isCorrected) {
-                    Text("CORRECTED", color = Brand.Warning, style = MaterialTheme.typography.labelSmall)
+                    Text("CORRECTED", color = MaterialTheme.colorScheme.operationalWarning, style = MaterialTheme.typography.labelSmall)
                 } else {
                     ErpButton(
                         text = "Void",
@@ -875,13 +884,13 @@ private fun TipPayoutsTab(state: FinanceUiState, vm: FinanceViewModel, canWrite:
                         Text(
                             "Immutable payout register",
                             style = MaterialTheme.typography.titleSmall,
-                            color = Brand.Foreground,
+                            color = MaterialTheme.colorScheme.onSurface,
                             fontWeight = FontWeight.SemiBold,
                         )
                         Text(
                             "Newest payout first · server-authoritative",
                             style = MaterialTheme.typography.bodySmall,
-                            color = Brand.ForegroundMuted,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                 },
@@ -911,7 +920,7 @@ private fun TipPayoutsTab(state: FinanceUiState, vm: FinanceViewModel, canWrite:
                     Spacer(Modifier.height(6.dp))
                     Text(
                         "Tips collected on paid orders remain in Tips Payable until staff are actually paid here.",
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.bodyMedium,
                     )
                 }
@@ -939,8 +948,8 @@ private fun TipPayoutRow(
 ) {
     Panel(
         border = when {
-            row.isVoided -> Brand.Danger.copy(alpha = 0.45f)
-            row.isCorrected -> Brand.Warning.copy(alpha = 0.55f)
+            row.isVoided -> MaterialTheme.colorScheme.operationalDanger.copy(alpha = 0.45f)
+            row.isCorrected -> MaterialTheme.colorScheme.operationalWarning.copy(alpha = 0.55f)
             else -> null
         },
     ) {
@@ -949,28 +958,28 @@ private fun TipPayoutRow(
                 Text(
                     row.note,
                     style = MaterialTheme.typography.bodyLarge,
-                    color = Brand.Foreground,
+                    color = MaterialTheme.colorScheme.onSurface,
                     fontWeight = FontWeight.SemiBold,
                     textDecoration = if (row.isVoided) TextDecoration.LineThrough else null,
                 )
                 Text(
                     "${row.paidAt.asDay()} · $branchName · ${paidViaLabel(row.method)}",
                     style = MaterialTheme.typography.labelSmall,
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Text(
                     "Recorded by ${row.createdByName ?: "verified employee"} · ${row.createdAt.asDay()}",
                     style = MaterialTheme.typography.labelSmall,
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 row.voidReason?.let {
-                    Text("Void reason: $it", style = MaterialTheme.typography.bodySmall, color = Brand.Danger)
+                    Text("Void reason: $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.operationalDanger)
                 }
                 row.correction?.let {
                     Text(
                         "Corrected ${it.correctedAt.asDay()}: ${it.reason}",
                         style = MaterialTheme.typography.bodySmall,
-                        color = Brand.Warning,
+                        color = MaterialTheme.colorScheme.operationalWarning,
                     )
                 }
             }
@@ -978,13 +987,13 @@ private fun TipPayoutRow(
                 Text(
                     row.amountMinor.asRupees(),
                     style = MaterialTheme.typography.titleLarge,
-                    color = if (row.isVoided) Brand.ForegroundMuted else Brand.Foreground,
+                    color = if (row.isVoided) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
                     textDecoration = if (row.isVoided) TextDecoration.LineThrough else null,
                 )
                 if (row.isVoided) {
-                    Text("VOIDED", color = Brand.Danger, style = MaterialTheme.typography.labelSmall)
+                    Text("VOIDED", color = MaterialTheme.colorScheme.operationalDanger, style = MaterialTheme.typography.labelSmall)
                 } else if (row.isCorrected) {
-                    Text("CORRECTED", color = Brand.Warning, style = MaterialTheme.typography.labelSmall)
+                    Text("CORRECTED", color = MaterialTheme.colorScheme.operationalWarning, style = MaterialTheme.typography.labelSmall)
                 } else {
                     ErpButton(
                         text = "Void",
@@ -1080,13 +1089,13 @@ private fun AssetActionBar(state: FinanceUiState, canWrite: Boolean, onCreate: (
                 Text(
                     countLabel(state.assets.size, "asset"),
                     style = MaterialTheme.typography.titleSmall,
-                    color = Brand.Foreground,
+                    color = MaterialTheme.colorScheme.onSurface,
                     fontWeight = FontWeight.SemiBold,
                 )
                 Text(
                     "Straight-line depreciation is calculated automatically.",
                     style = MaterialTheme.typography.bodySmall,
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -1111,7 +1120,7 @@ private fun AssetRow(asset: Asset, presentation: WorkspacePresentationPolicy) {
                 Text(
                     asset.name,
                     style = MaterialTheme.typography.bodyLarge,
-                    color = Brand.Foreground,
+                    color = MaterialTheme.colorScheme.onSurface,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -1119,30 +1128,30 @@ private fun AssetRow(asset: Asset, presentation: WorkspacePresentationPolicy) {
                 Text(
                     "${assetCategoryLabel(asset.type, presentation)} · Bought ${asset.purchaseDate.asDay()}",
                     style = MaterialTheme.typography.labelSmall,
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Text(
                     "Purchase ${asset.purchaseMinor.asRupees()} · ${asset.usefulLifeMonths} months useful life",
                     style = MaterialTheme.typography.labelSmall,
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             Column(horizontalAlignment = Alignment.End) {
                 Text(
                     "Book value",
                     style = MaterialTheme.typography.labelSmall,
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Text(
                     asset.bookValueMinor.asRupees(),
                     style = MaterialTheme.typography.bodyLarge,
-                    color = Brand.Foreground,
+                    color = MaterialTheme.colorScheme.onSurface,
                     fontWeight = FontWeight.Bold,
                 )
                 Text(
                     "Depreciated ${asset.accumulatedDepreciationMinor.asRupees()}",
                     style = MaterialTheme.typography.labelSmall,
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }
@@ -1167,7 +1176,7 @@ private fun PartnersTab(state: FinanceUiState, vm: FinanceViewModel, canWrite: B
             Panel {
                 Text(
                     "Company-wide finance access required",
-                    color = Brand.Foreground,
+                    color = MaterialTheme.colorScheme.onSurface,
                     fontWeight = FontWeight.Bold,
                 )
                 Text(
@@ -1175,7 +1184,7 @@ private fun PartnersTab(state: FinanceUiState, vm: FinanceViewModel, canWrite: B
                         "safely by branch. Sign in with a company-wide owner or partner " +
                         "assignment to view these figures.",
                     style = MaterialTheme.typography.bodyMedium,
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             return@Column
@@ -1192,11 +1201,11 @@ private fun PartnersTab(state: FinanceUiState, vm: FinanceViewModel, canWrite: B
 
         if (state.partners.isEmpty()) {
             Panel {
-                Text("No partners yet", color = Brand.Foreground, fontWeight = FontWeight.Bold)
+                Text("No partners yet", color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold)
                 Text(
                     "No partner records are available. A protected owner must create the partner before capital movements can be recorded.",
                     style = MaterialTheme.typography.bodyMedium,
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             return@Column
@@ -1205,7 +1214,7 @@ private fun PartnersTab(state: FinanceUiState, vm: FinanceViewModel, canWrite: B
         Text(
             countLabel(state.partners.size, "partner"),
             style = MaterialTheme.typography.labelSmall,
-            color = Brand.ForegroundMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
         val shareByPartnerId = if (distributable?.authoritativeDistributionCapMinor() != null) {
@@ -1236,18 +1245,18 @@ private fun PartnersTab(state: FinanceUiState, vm: FinanceViewModel, canWrite: B
 
 @Composable
 private fun AllocationUnavailableNotice(reason: String) {
-    Panel(border = Brand.Warning) {
+    Panel(border = MaterialTheme.colorScheme.operationalWarning) {
         Text(
             "Partner allocations unavailable",
-            color = Brand.Warning,
+            color = MaterialTheme.colorScheme.operationalWarning,
             fontWeight = FontWeight.Bold,
         )
-        Text(reason, style = MaterialTheme.typography.bodyMedium, color = Brand.Foreground)
+        Text(reason, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
         Text(
             "Sales, collections, P&L and capital history remain separate from partner allocations. " +
                 "No profit shares or distribution amounts are assumed.",
             style = MaterialTheme.typography.bodyMedium,
-            color = Brand.ForegroundMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }
@@ -1257,7 +1266,7 @@ private fun DistributableCard(d: DistributableProfit) {
     val spendable = d.authoritativeSpendableCashMinor()
     val distributionCap = d.authoritativeDistributionCapMinor()
     val distributionUnavailable = distributionCap == null
-    Panel(border = if (distributionUnavailable) Brand.Warning else Brand.BorderSubtle) {
+    Panel(border = if (distributionUnavailable) MaterialTheme.colorScheme.operationalWarning else MaterialTheme.colorScheme.outlineVariant) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Column(Modifier.weight(1f).padding(end = 12.dp)) {
                 Text(
@@ -1267,7 +1276,7 @@ private fun DistributableCard(d: DistributableProfit) {
                         "Safe-to-distribute cap · server calculation"
                     },
                     style = MaterialTheme.typography.titleLarge,
-                    color = Brand.Foreground,
+                    color = MaterialTheme.colorScheme.onSurface,
                 )
                 Text(
                     if (distributionUnavailable) {
@@ -1279,13 +1288,13 @@ private fun DistributableCard(d: DistributableProfit) {
                             "includes ${d.lifetimeDepreciationMinor.asRupees()} of server-calculated depreciation."
                     },
                     style = MaterialTheme.typography.labelSmall,
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             Text(
                 distributionCap?.asRupees() ?: "Unavailable",
                 style = MaterialTheme.typography.headlineMedium,
-                color = if (distributionUnavailable) Brand.Warning else Brand.Foreground,
+                color = if (distributionUnavailable) MaterialTheme.colorScheme.operationalWarning else MaterialTheme.colorScheme.onSurface,
             )
         }
         Spacer(Modifier.height(10.dp))
@@ -1309,12 +1318,12 @@ private fun DistributableCard(d: DistributableProfit) {
                     ),
                 ),
                 columns = 2,
-                surface = Brand.SurfaceRaised,
+                surface = MaterialTheme.colorScheme.surfaceVariant,
             )
             Text(
                 d.authoritativeAllocationUnavailableReason(),
                 style = MaterialTheme.typography.labelSmall,
-                color = Brand.Warning,
+                color = MaterialTheme.colorScheme.operationalWarning,
                 modifier = Modifier.padding(top = 10.dp),
             )
         } else {
@@ -1339,7 +1348,7 @@ private fun DistributableCard(d: DistributableProfit) {
                     ),
                 ),
                 columns = 4,
-                surface = Brand.SurfaceRaised,
+                surface = MaterialTheme.colorScheme.surfaceVariant,
             )
             d.cashPosition?.let { position ->
                 Spacer(Modifier.height(8.dp))
@@ -1350,7 +1359,7 @@ private fun DistributableCard(d: DistributableProfit) {
                         " · Card ${position.cardClearingMinor.asRupees()}" +
                         " · Wallet ${position.walletClearingMinor.asRupees()}",
                     style = MaterialTheme.typography.labelSmall,
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             if (spendable != null && d.cashBasedCapacityMinor < d.profitBasedCapacityMinor) {
@@ -1359,14 +1368,14 @@ private fun DistributableCard(d: DistributableProfit) {
                     "Limited by spendable cash, not by profit — some value may be tied up in " +
                         "stock, equipment, or provider settlement receivables.",
                     style = MaterialTheme.typography.labelSmall,
-                    color = Brand.Warning,
+                    color = MaterialTheme.colorScheme.operationalWarning,
                 )
             }
         }
         Text(
             "As of ${d.asOf.asDay()}",
             style = MaterialTheme.typography.labelSmall,
-            color = Brand.ForegroundMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(top = 8.dp),
         )
     }
@@ -1385,29 +1394,29 @@ private fun PartnerCard(
                 Text(
                     partner.name,
                     style = MaterialTheme.typography.titleLarge,
-                    color = Brand.Foreground,
+                    color = MaterialTheme.colorScheme.onSurface,
                 )
                 Text(
                     "Share: ${partner.sharePct.asSharePct()} · Since ${partner.joinedAt.asDay()}",
                     style = MaterialTheme.typography.labelSmall,
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             Column(horizontalAlignment = Alignment.End) {
                 Text(
                     "Active capital balance",
                     style = MaterialTheme.typography.labelSmall,
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Text(
                     partner.capitalBalanceMinor.asRupees(),
                     style = MaterialTheme.typography.titleLarge,
-                    color = if (partner.capitalBalanceMinor < 0) Brand.Danger else Brand.Foreground,
+                    color = if (partner.capitalBalanceMinor < 0) MaterialTheme.colorScheme.operationalDanger else MaterialTheme.colorScheme.onSurface,
                 )
                 Text(
                     "Voided entries excluded",
                     style = MaterialTheme.typography.labelSmall,
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }
@@ -1425,18 +1434,18 @@ private fun PartnerCard(
                     Text(
                         "Safe to take out right now",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Text(
                         "Withdrawn to date: ${shareRecord.lifetimeWithdrawnMinor.asRupees()}",
                         style = MaterialTheme.typography.labelSmall,
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 Text(
                     authoritativeAmount.asRupees(),
                     style = MaterialTheme.typography.titleLarge,
-                    color = Brand.Foreground,
+                    color = MaterialTheme.colorScheme.onSurface,
                 )
             }
         }
@@ -1463,9 +1472,10 @@ private data class StatSpec(
     val tone: Tone = Tone.Default,
 )
 
+@Composable
 private fun Tone.color(): Color = when (this) {
-    Tone.Bad -> Brand.Danger
-    Tone.Default -> Brand.Foreground
+    Tone.Bad -> MaterialTheme.colorScheme.operationalDanger
+    Tone.Default -> MaterialTheme.colorScheme.onSurface
 }
 
 /**
@@ -1477,7 +1487,7 @@ private fun Tone.color(): Color = when (this) {
 private fun StatGrid(
     stats: List<StatSpec>,
     columns: Int = 3,
-    surface: Color = Brand.Surface,
+    surface: Color = MaterialTheme.colorScheme.surface,
 ) {
     BoxWithConstraints(Modifier.fillMaxWidth()) {
         val responsiveColumns = when {
@@ -1510,14 +1520,14 @@ private fun StatCard(stat: StatSpec, surface: Color, modifier: Modifier = Modifi
         modifier = modifier
             .clip(Radius.shapeLg)
             .background(surface)
-            .border(1.dp, Brand.BorderSubtle, Radius.shapeLg)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeLg)
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         Text(
             stat.label,
             style = MaterialTheme.typography.labelSmall,
-            color = Brand.ForegroundMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Text(
             stat.value,
@@ -1525,7 +1535,7 @@ private fun StatCard(stat: StatSpec, surface: Color, modifier: Modifier = Modifi
             color = stat.tone.color(),
         )
         stat.sub?.let {
-            Text(it, style = MaterialTheme.typography.labelSmall, color = Brand.ForegroundMuted)
+            Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
@@ -1551,20 +1561,20 @@ private fun PlRow(
             Text(
                 label,
                 style = MaterialTheme.typography.bodyMedium,
-                color = Brand.Foreground,
+                color = MaterialTheme.colorScheme.onSurface,
                 fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal,
             )
             sub?.let {
-                Text(it, style = MaterialTheme.typography.labelSmall, color = Brand.ForegroundMuted)
+                Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
         Text(
             if (less) abs(valueMinor).asRupees() else valueMinor.asRupees(),
             style = MaterialTheme.typography.bodyLarge,
             color = when {
-                less && valueMinor != 0L -> Brand.Danger
-                valueMinor < 0 -> Brand.Danger
-                else -> Brand.Foreground
+                less && valueMinor != 0L -> MaterialTheme.colorScheme.operationalDanger
+                valueMinor < 0 -> MaterialTheme.colorScheme.operationalDanger
+                else -> MaterialTheme.colorScheme.onSurface
             },
             fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal,
         )
@@ -1581,8 +1591,8 @@ private fun Panel(
         modifier = modifier
             .fillMaxWidth()
             .clip(Radius.shapeLg)
-            .background(Brand.Surface)
-            .border(1.dp, border ?: Brand.BorderSubtle, Radius.shapeLg)
+            .background(MaterialTheme.colorScheme.surface)
+            .border(1.dp, border ?: MaterialTheme.colorScheme.outlineVariant, Radius.shapeLg)
             .padding(14.dp),
         content = content,
     )
@@ -1590,17 +1600,17 @@ private fun Panel(
 
 @Composable
 private fun SectionTitle(text: String) {
-    Text(text, style = MaterialTheme.typography.titleLarge, color = Brand.Foreground)
+    Text(text, style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
 }
 
 @Composable
 private fun HairLine() {
-    Box(Modifier.fillMaxWidth().height(1.dp).background(Brand.Border))
+    Box(Modifier.fillMaxWidth().height(1.dp).background(MaterialTheme.colorScheme.outline))
 }
 
 @Composable
 private fun Note(text: String) {
-    Text(text, style = MaterialTheme.typography.labelSmall, color = Brand.ForegroundMuted)
+    Text(text, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 }
 
 @Composable
@@ -1632,19 +1642,19 @@ private fun ErrorBanner(message: String, onRetry: () -> Unit) {
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 8.dp)
             .clip(Radius.shapeMd)
-            .background(Brand.Surface)
-            .border(1.dp, Brand.Danger, Radius.shapeMd)
+            .background(MaterialTheme.colorScheme.surface)
+            .border(1.dp, MaterialTheme.colorScheme.operationalDanger, Radius.shapeMd)
             .padding(12.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f).padding(end = 12.dp)) {
-            Text("Couldn't refresh", color = Brand.Danger, fontWeight = FontWeight.Bold)
-            Text(message, style = MaterialTheme.typography.bodyMedium, color = Brand.Foreground)
+            Text("Couldn't refresh", color = MaterialTheme.colorScheme.operationalDanger, fontWeight = FontWeight.Bold)
+            Text(message, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
             Text(
                 "The figures below are from the last successful load.",
                 style = MaterialTheme.typography.labelSmall,
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
         Button(onClick = onRetry) { Text("Retry") }
@@ -1662,11 +1672,11 @@ private fun ErrorBlock(message: String, onRetry: () -> Unit) {
             Text(
                 "Couldn't load finance",
                 style = MaterialTheme.typography.titleLarge,
-                color = Brand.Foreground,
+                color = MaterialTheme.colorScheme.onSurface,
             )
             // The server's own words. "HTTP 403" tells an owner nothing;
             // "finance.read permission required" tells them who to ask.
-            Text(message, color = Brand.ForegroundMuted)
+            Text(message, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Button(onClick = onRetry) { Text("Retry") }
         }
     }
@@ -1680,8 +1690,8 @@ private fun EmptyBlock(title: String, body: String, modifier: Modifier = Modifie
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text(title, style = MaterialTheme.typography.titleLarge, color = Brand.Foreground)
-            Text(body, color = Brand.ForegroundMuted)
+            Text(title, style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
+            Text(body, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
@@ -1697,10 +1707,10 @@ private fun PendingFinanceChangesPanel(
 ) {
     Column(
         Modifier.fillMaxWidth().clip(Radius.shapeMd)
-            .background(Brand.Surface).padding(12.dp),
+            .background(MaterialTheme.colorScheme.surface).padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Text("Pending finance changes", style = MaterialTheme.typography.labelLarge, color = Brand.Foreground)
+        Text("Pending finance changes", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurface)
         state.pendingExpenses.forEach { row ->
             FinancePendingRow(
                 text = "${row.amountMinor.asRupees()} · ${row.categoryName}" +
@@ -1775,19 +1785,19 @@ private fun RejectedExpenseDiscardDialog(
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
                     "${row.amountMinor.asRupees()} · ${row.categoryName}",
-                    color = Brand.Foreground,
+                    color = MaterialTheme.colorScheme.onSurface,
                     fontWeight = FontWeight.SemiBold,
                 )
                 Text(
                     "The tablet will ask the server about this exact saved action. If it was recorded, the expense is marked synced and its saved receipts continue uploading. Only when the server proves it is absent will the exact rejected expense, receipts and private file chunks be removed.",
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Text(
                     "Use Retry if the original request is now valid. An old server or an unclear answer keeps everything unchanged.",
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                if (!online) Text("Reconnect before resolving this entry.", color = Brand.Warning)
-                error?.let { Text(it, color = Brand.Danger) }
+                if (!online) Text("Reconnect before resolving this entry.", color = MaterialTheme.colorScheme.operationalWarning)
+                error?.let { Text(it, color = MaterialTheme.colorScheme.operationalDanger) }
             }
         },
         confirmButton = {
@@ -1806,7 +1816,7 @@ private fun RejectedExpenseDiscardDialog(
                 intent = ActionIntent.Quiet,
             )
         },
-        containerColor = Brand.Surface,
+        containerColor = MaterialTheme.colorScheme.surface,
     )
 }
 
@@ -1823,11 +1833,11 @@ private fun FinancePendingRow(
     Column(
         Modifier.fillMaxWidth()
             .clip(Radius.shapeSm)
-            .background(Brand.SurfaceRaised)
+            .background(MaterialTheme.colorScheme.surfaceVariant)
             .padding(8.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(text, color = Brand.Foreground, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+            Text(text, color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
             if (rejected) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     ErpButton(
@@ -1849,7 +1859,7 @@ private fun FinancePendingRow(
         }
         Text(
             if (rejected) "Could not sync: ${error ?: "unknown error"}" else pendingLabel,
-            color = if (rejected) Brand.Danger else Brand.Warning,
+            color = if (rejected) MaterialTheme.colorScheme.operationalDanger else MaterialTheme.colorScheme.operationalWarning,
             style = MaterialTheme.typography.labelSmall,
         )
     }
@@ -1869,19 +1879,19 @@ internal fun RejectedExpenseReceiptDiscardDialog(
         title = { Text("Remove rejected receipt?") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(filename, color = Brand.Foreground, fontWeight = FontWeight.SemiBold)
+                Text(filename, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.SemiBold)
                 Text(
                     "The tablet will first refresh the server receipt list. If this exact file is already there, it will be marked synced. If the server proves it is absent, only this rejected saved file is removed; the expense stays recorded.",
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Text(
                     "Use Retry instead if the same file may now be accepted. A corrected replacement can be attached to the recorded expense from Web ERP.",
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 if (!online) {
-                    Text("Reconnect before removing saved evidence.", color = Brand.Warning)
+                    Text("Reconnect before removing saved evidence.", color = MaterialTheme.colorScheme.operationalWarning)
                 }
-                error?.let { Text(it, color = Brand.Danger) }
+                error?.let { Text(it, color = MaterialTheme.colorScheme.operationalDanger) }
             }
         },
         confirmButton = {
@@ -1900,7 +1910,7 @@ internal fun RejectedExpenseReceiptDiscardDialog(
                 intent = ActionIntent.Quiet,
             )
         },
-        containerColor = Brand.Surface,
+        containerColor = MaterialTheme.colorScheme.surface,
         properties = DialogProperties(dismissOnBackPress = !busy, dismissOnClickOutside = !busy),
     )
 }
@@ -1910,11 +1920,11 @@ private fun NoticeBanner(message: String, onDismiss: () -> Unit) {
     Row(
         Modifier.fillMaxWidth()
             .clip(Radius.shapeSm)
-            .background(Brand.SurfaceRaised)
+            .background(MaterialTheme.colorScheme.surfaceVariant)
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(message, color = Brand.Foreground, modifier = Modifier.weight(1f))
+        Text(message, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
         ErpButton("Dismiss", onDismiss, intent = ActionIntent.Quiet)
     }
 }
@@ -2207,14 +2217,14 @@ private fun TipPayoutCreateDialog(state: FinanceUiState, vm: FinanceViewModel) {
         if (exceedsOwed) {
             Text(
                 "This is more than the ${owed?.asRupees()} currently owed to staff.",
-                color = Brand.Danger,
+                color = MaterialTheme.colorScheme.operationalDanger,
                 style = MaterialTheme.typography.bodySmall,
             )
         }
         if (exceedsDrawer) {
             Text(
                 "This exceeds the ${selectedCashShift?.availableMinor?.asRupees()} available in the selected drawer.",
-                color = Brand.Danger,
+                color = MaterialTheme.colorScheme.operationalDanger,
                 style = MaterialTheme.typography.bodySmall,
             )
         }
@@ -2320,7 +2330,7 @@ private fun BusinessDatePickerField(
     val context = LocalContext.current
     val current = runCatching { LocalDate.parse(value) }.getOrDefault(financeBusinessToday())
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text("Business date", style = MaterialTheme.typography.labelSmall, color = Brand.ForegroundMuted)
+        Text("Business date", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         ErpButton(
             text = current.toString().asDay(),
             onClick = {
@@ -2487,7 +2497,7 @@ private fun ExpenseCreateDialog(state: FinanceUiState, vm: FinanceViewModel) {
             Text(
                 ExpensePaymentPolicy.CashDrawerGuidance,
                 style = MaterialTheme.typography.labelSmall,
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             PickerField(
                 "Open shift drawer",
@@ -2505,30 +2515,30 @@ private fun ExpenseCreateDialog(state: FinanceUiState, vm: FinanceViewModel) {
                         "from the Android tablet that opened the shift; for a Web-opened drawer, " +
                         "record it in Web ERP. UPI and card expenses remain available here.",
                     style = MaterialTheme.typography.labelSmall,
-                    color = Brand.Warning,
+                    color = MaterialTheme.colorScheme.operationalWarning,
                 )
             }
             selectedCashShift?.let { shift ->
                 Column(
                     Modifier.fillMaxWidth().clip(Radius.shapeSm)
-                        .background(Brand.SurfaceRaised).padding(Spacing.sm),
+                        .background(MaterialTheme.colorScheme.surfaceVariant).padding(Spacing.sm),
                     verticalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
                     Text(
                         "Opened by ${shift.openedBy}",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = Brand.Foreground,
+                        color = MaterialTheme.colorScheme.onSurface,
                     )
                     Text(
                         "${shift.expectedMinor.asRupees()} expected in drawer",
                         style = MaterialTheme.typography.labelSmall,
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     if (shift.queuedMinor > 0) {
                         Text(
                             "${shift.availableMinor.asRupees()} remains after saved cash paid-outs on this tablet",
                             style = MaterialTheme.typography.labelSmall,
-                            color = Brand.Warning,
+                            color = MaterialTheme.colorScheme.operationalWarning,
                         )
                     }
                 }
@@ -2537,7 +2547,7 @@ private fun ExpenseCreateDialog(state: FinanceUiState, vm: FinanceViewModel) {
             Text(
                 "UPI and business debit-card expenses reduce the Bank balance. Business credit-card liabilities are not supported yet; do not record a credit-card purchase as Card.",
                 style = MaterialTheme.typography.labelSmall,
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
         OutlinedTextField(
@@ -2558,12 +2568,12 @@ private fun ExpenseCreateDialog(state: FinanceUiState, vm: FinanceViewModel) {
         Text(
             "Receipt evidence (optional)",
             style = MaterialTheme.typography.labelLarge,
-            color = Brand.Foreground,
+            color = MaterialTheme.colorScheme.onSurface,
         )
         Text(
             "Take a clear photo or choose a JPEG, PNG, WebP or PDF up to 10 MB. You can save the expense without a receipt.",
             style = MaterialTheme.typography.labelSmall,
-            color = Brand.ForegroundMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         BoxWithConstraints(Modifier.fillMaxWidth()) {
             if (maxWidth < 420.dp) {
@@ -2609,20 +2619,20 @@ private fun ExpenseCreateDialog(state: FinanceUiState, vm: FinanceViewModel) {
         receipt?.let { selected ->
             Row(
                 Modifier.fillMaxWidth().clip(Radius.shapeSm)
-                    .background(Brand.SurfaceRaised).padding(Spacing.sm),
+                    .background(MaterialTheme.colorScheme.surfaceVariant).padding(Spacing.sm),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(Modifier.weight(1f)) {
                     Text(
                         selected.filename,
-                        color = Brand.Foreground,
+                        color = MaterialTheme.colorScheme.onSurface,
                         style = MaterialTheme.typography.bodyMedium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                     Text(
                         expenseReceiptSizeLabel(selected.content.size),
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
@@ -2652,10 +2662,11 @@ internal fun expenseReceiptSummary(count: Int, status: String): String {
     return "$evidence · $review"
 }
 
+@Composable
 private fun expenseReceiptStatusColor(status: String): Color = when (status) {
-    "verified", "not_required" -> Brand.Good
-    "rejected" -> Brand.Danger
-    else -> Brand.Warning
+    "verified", "not_required" -> MaterialTheme.colorScheme.operationalGood
+    "rejected" -> MaterialTheme.colorScheme.operationalDanger
+    else -> MaterialTheme.colorScheme.operationalWarning
 }
 
 internal fun expenseReceiptSizeLabel(sizeBytes: Int): String = when {
@@ -2820,7 +2831,7 @@ private fun CapitalEntryCreateDialog(partner: Partner, state: FinanceUiState, vm
         )
         Text(
             "Must be unique. On a network retry, submit the same reference instead of inventing a new one.",
-            style = MaterialTheme.typography.labelSmall, color = Brand.ForegroundMuted,
+            style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         OutlinedTextField(
             value = note, onValueChange = { note = it },

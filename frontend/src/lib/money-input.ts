@@ -14,3 +14,14 @@ export function parseRupeesToMinor(value: string): number | null {
   if (minor > BigInt(Number.MAX_SAFE_INTEGER)) return null;
   return Number(minor);
 }
+
+/** Exact editable rupee text from integer paise; never routes through a float. */
+export function minorToRupeesInput(minor: number): string {
+  if (!Number.isSafeInteger(minor)) return '';
+  const signed = BigInt(minor);
+  const negative = signed < 0n;
+  const absolute = negative ? -signed : signed;
+  const whole = absolute / 100n;
+  const fraction = (absolute % 100n).toString().padStart(2, '0');
+  return `${negative ? '-' : ''}${whole}.${fraction}`;
+}

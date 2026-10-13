@@ -1,5 +1,14 @@
 package cloud.dcompany.erp.ui.screens.shift
 
+import cloud.dcompany.erp.ui.theme.operationalDanger
+import cloud.dcompany.erp.ui.theme.operationalDangerContainer
+import cloud.dcompany.erp.ui.theme.operationalGood
+import cloud.dcompany.erp.ui.theme.operationalGoodContainer
+import cloud.dcompany.erp.ui.theme.operationalInformation
+import cloud.dcompany.erp.ui.theme.operationalInformationContainer
+import cloud.dcompany.erp.ui.theme.operationalWarning
+import cloud.dcompany.erp.ui.theme.operationalWarningContainer
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -91,7 +100,6 @@ import cloud.dcompany.erp.ui.WorkspaceFeatureProfiles
 import cloud.dcompany.erp.ui.WorkspacePresentationPolicy
 import cloud.dcompany.erp.ui.presentationPolicy
 import cloud.dcompany.erp.ui.theme.Brand
-import cloud.dcompany.erp.ui.theme.controlDeckBackdrop
 import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.theme.Spacing
 import cloud.dcompany.erp.ui.components.ActionIntent
@@ -176,7 +184,7 @@ fun ShiftScreen(
     key(shiftIdentity) {
         val closeReview = remember { BringIntoViewRequester() }
         val scope = rememberCoroutineScope()
-        Box(Modifier.fillMaxSize().controlDeckBackdrop(), contentAlignment = Alignment.TopCenter) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
             Column(
                 Modifier.widthIn(max = 860.dp).fillMaxSize()
                     .verticalScroll(rememberScrollState())
@@ -189,11 +197,11 @@ fun ShiftScreen(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Icon(Icons.Filled.AccountBalanceWallet, contentDescription = null,
-                        tint = Brand.GoldBright, modifier = Modifier.size(32.dp))
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer, modifier = Modifier.size(32.dp))
                     Column {
-                        Text("SHIFT", color = Brand.Foreground,
+                        Text("SHIFT", color = MaterialTheme.colorScheme.onSurface,
                             style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                        Text("Track. Collect. Close.", color = Brand.ForegroundMuted,
+                        Text("Track. Collect. Close.", color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.labelMedium)
                     }
                 }
@@ -250,7 +258,7 @@ fun ShiftScreen(
 
     state.operationError?.let { message ->
         AlertDialog(
-            containerColor = cloud.dcompany.erp.ui.theme.Brand.SurfaceOverlay,
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
             shape = cloud.dcompany.erp.ui.theme.Radius.shapeLg,
             onDismissRequest = vm::dismissOperationError,
             confirmButton = { TextButton(onClick = vm::dismissOperationError) { Text("OK") } },
@@ -261,7 +269,7 @@ fun ShiftScreen(
 
     state.operationNotice?.let { message ->
         AlertDialog(
-            containerColor = cloud.dcompany.erp.ui.theme.Brand.SurfaceOverlay,
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
             shape = cloud.dcompany.erp.ui.theme.Radius.shapeLg,
             onDismissRequest = vm::dismissOperationNotice,
             confirmButton = {
@@ -275,7 +283,7 @@ fun ShiftScreen(
     state.closedResult?.let { r ->
         val remotelyReconciled = shiftCloseResultKind(r) == ShiftCloseResultKind.REMOTE_RECONCILED
         AlertDialog(
-            containerColor = cloud.dcompany.erp.ui.theme.Brand.SurfaceOverlay,
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
             shape = cloud.dcompany.erp.ui.theme.Radius.shapeLg,
             onDismissRequest = vm::dismissResult,
             confirmButton = { TextButton(onClick = vm::dismissResult) { Text("OK") } },
@@ -369,10 +377,10 @@ internal fun ShiftDashboardOverview(
         offlineGamingSupported = state.offlineGamingSupported,
     )
     val statusColor = when {
-        localState == ShiftState.CLOSE_REJECTED -> Brand.Danger
-        localState == ShiftState.CLOSE_PENDING -> Brand.Information
-        confirmingOpen -> Brand.Warning
-        else -> Brand.Good
+        localState == ShiftState.CLOSE_REJECTED -> MaterialTheme.colorScheme.operationalDanger
+        localState == ShiftState.CLOSE_PENDING -> MaterialTheme.colorScheme.operationalInformation
+        confirmingOpen -> MaterialTheme.colorScheme.operationalWarning
+        else -> MaterialTheme.colorScheme.operationalGood
     }
     val workStatus = when {
         state.rejectedShift != null -> "Saved open needs review"
@@ -393,7 +401,7 @@ internal fun ShiftDashboardOverview(
                 Modifier.fillMaxWidth().clip(Radius.shapeLg)
                     .background(
                         Brush.horizontalGradient(
-                            listOf(statusColor.copy(alpha = 0.12f), Brand.Surface, Brand.BackgroundSecondary),
+                            listOf(statusColor.copy(alpha = 0.12f), MaterialTheme.colorScheme.surface, MaterialTheme.colorScheme.surfaceContainerLow),
                         ),
                     )
                     .border(1.dp, statusColor.copy(alpha = 0.34f), Radius.shapeLg)
@@ -416,7 +424,7 @@ internal fun ShiftDashboardOverview(
                     Text(if (status.value == "Open") "Shift Open" else status.value,
                         color = statusColor, style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold)
-                    Text("Opened by $opener · ${status.detail}", color = Brand.ForegroundMuted,
+                    Text("Opened by $opener · ${status.detail}", color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.labelMedium)
                 }
                 Row(
@@ -424,11 +432,11 @@ internal fun ShiftDashboardOverview(
                     horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
                 ) {
                     Icon(Icons.Filled.LockClock, contentDescription = null,
-                        tint = Brand.GoldBright, modifier = Modifier.size(18.dp))
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer, modifier = Modifier.size(18.dp))
                     Column(horizontalAlignment = Alignment.End) {
-                        Text("Time opened", color = Brand.ForegroundMuted,
+                        Text("Time opened", color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.labelSmall)
-                        Text(formatShiftBusinessTime(shift.openedAtMillis), color = Brand.Foreground,
+                        Text(formatShiftBusinessTime(shift.openedAtMillis), color = MaterialTheme.colorScheme.onSurface,
                             style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                     }
                 }
@@ -438,11 +446,11 @@ internal fun ShiftDashboardOverview(
                 Modifier.fillMaxWidth().clip(Radius.shapeLg)
                     .background(
                         Brush.verticalGradient(
-                            listOf(Brand.Surface, Brand.BackgroundSecondary, Brand.BackgroundSecondary),
+                            listOf(MaterialTheme.colorScheme.surface, MaterialTheme.colorScheme.surfaceContainerLow, MaterialTheme.colorScheme.surfaceContainerLow),
                         ),
                     )
                     .shiftCollectionAtmosphere()
-                    .border(1.dp, Brand.Gold.copy(alpha = 0.34f), Radius.shapeLg)
+                    .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.34f), Radius.shapeLg)
                     .padding(Spacing.lg),
                 verticalArrangement = Arrangement.spacedBy(Spacing.md),
             ) {
@@ -452,9 +460,9 @@ internal fun ShiftDashboardOverview(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column {
-                        Text("Live collections", color = Brand.Foreground,
+                        Text("Live collections", color = MaterialTheme.colorScheme.onSurface,
                             style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                        Text("Current shift · server accounting", color = Brand.ForegroundMuted,
+                        Text("Current shift · server accounting", color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.labelSmall)
                     }
                     TextButton(onClick = onRefresh, enabled = !state.busy && !state.syncing) {
@@ -465,7 +473,7 @@ internal fun ShiftDashboardOverview(
                     Text(
                         "Collection breakdown is unavailable until this shift is confirmed by the server. " +
                             "No cash or payment total is assumed.",
-                        color = Brand.Warning,
+                        color = MaterialTheme.colorScheme.operationalWarning,
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
@@ -477,14 +485,14 @@ internal fun ShiftDashboardOverview(
                         label = "Cash",
                         value = accounting?.cashCollectionsMinor?.asRupees() ?: "—",
                         icon = Icons.Filled.Payments,
-                        tint = Brand.Good,
+                        tint = MaterialTheme.colorScheme.operationalGood,
                         modifier = Modifier.weight(1f),
                     )
                     ShiftOverviewMoneyCard(
                         label = "UPI",
                         value = accounting?.upiCollectionsMinor?.asRupees() ?: "—",
                         icon = Icons.Filled.QrCode,
-                        tint = Brand.Information,
+                        tint = MaterialTheme.colorScheme.operationalInformation,
                         modifier = Modifier.weight(1f),
                     )
                 }
@@ -497,36 +505,36 @@ internal fun ShiftDashboardOverview(
                             .background(
                                 Brush.verticalGradient(
                                     listOf(
-                                        Brand.Gold.copy(alpha = 0.23f),
-                                        Brand.Gold.copy(alpha = 0.07f),
+                                        MaterialTheme.colorScheme.primary.copy(alpha = 0.23f),
+                                        MaterialTheme.colorScheme.primary.copy(alpha = 0.07f),
                                     ),
                                 ),
                             )
-                            .border(1.dp, Brand.GoldBright.copy(alpha = 0.70f), Radius.shapeMd)
+                            .border(1.dp, MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.70f), Radius.shapeMd)
                             .padding(vertical = Spacing.sm, horizontal = Spacing.lg),
                         horizontalArrangement = Arrangement.spacedBy(Spacing.md),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Box(
                             Modifier.size(42.dp).clip(CircleShape)
-                                .background(Brand.Gold.copy(alpha = 0.18f)),
+                                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)),
                             contentAlignment = Alignment.Center,
                         ) {
                             Icon(Icons.Filled.Payments, contentDescription = null,
-                                tint = Brand.GoldBright, modifier = Modifier.size(26.dp))
+                                tint = MaterialTheme.colorScheme.onPrimaryContainer, modifier = Modifier.size(26.dp))
                         }
                         Column(horizontalAlignment = Alignment.Start) {
-                            Text("Net collections", color = Brand.ForegroundMuted,
+                            Text("Net collections", color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 style = MaterialTheme.typography.labelMedium)
                             Text(accounting?.netCollectionsMinor?.asRupees() ?: "Unavailable",
-                                color = if (accounting == null) Brand.ForegroundMuted else Brand.GoldBright,
+                                color = if (accounting == null) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onPrimaryContainer,
                                 style = MaterialTheme.typography.headlineMedium,
                                 fontWeight = FontWeight.Bold)
                             if (accounting != null) {
                                 Text(
                                     "Gross ${accounting.grossCollectionsMinor.asRupees()} · " +
                                         "Refunds ${accounting.totalRefundsMinor.asRupees()}",
-                                    color = Brand.ForegroundMuted,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     style = MaterialTheme.typography.labelSmall,
                                 )
                             }
@@ -539,7 +547,7 @@ internal fun ShiftDashboardOverview(
                     Text(
                         "Also collected: Card ${accounting.cardCollectionsMinor.asRupees()} · " +
                             "Other ${accounting.otherCollectionsMinor.asRupees()}",
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
@@ -551,7 +559,7 @@ internal fun ShiftDashboardOverview(
                         label = "Expected cash in drawer",
                         value = state.expectedMinor?.asRupees() ?: "Unavailable",
                         icon = Icons.Filled.AccountBalanceWallet,
-                        tint = if (state.expectedMinor == null) Brand.Warning else Brand.Good,
+                        tint = if (state.expectedMinor == null) MaterialTheme.colorScheme.operationalWarning else MaterialTheme.colorScheme.operationalGood,
                         modifier = Modifier.weight(1f),
                     )
                     ShiftOverviewMoneyCard(
@@ -559,7 +567,7 @@ internal fun ShiftDashboardOverview(
                         value = workStatus,
                         icon = Icons.Filled.LockClock,
                         tint = if (localState == ShiftState.CLOSE_REJECTED || state.rejectedShift != null)
-                            Brand.Danger else Brand.Information,
+                            MaterialTheme.colorScheme.operationalDanger else MaterialTheme.colorScheme.operationalInformation,
                         modifier = Modifier.weight(1f),
                     )
                 }
@@ -574,17 +582,15 @@ internal fun ShiftDashboardOverview(
                     shape = Radius.shapeMd,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = Color.Transparent,
-                        contentColor = Brand.Background,
+                        contentColor = MaterialTheme.colorScheme.onPrimary,
                     ),
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
                     modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)
                         .clip(Radius.shapeMd)
                         .background(
-                            Brush.horizontalGradient(
-                                listOf(Brand.Gold, Color(0xFFFFDA79), Brand.GoldBright),
-                            ),
+                            MaterialTheme.colorScheme.primary,
                         )
-                        .border(1.dp, Brand.GoldBright, Radius.shapeMd),
+                        .border(1.dp, MaterialTheme.colorScheme.onPrimaryContainer, Radius.shapeMd),
                 ) {
                     Box(Modifier.fillMaxWidth().padding(horizontal = Spacing.lg)) {
                         Text(reviewLabel, modifier = Modifier.align(Alignment.Center),
@@ -599,8 +605,12 @@ internal fun ShiftDashboardOverview(
 }
 
 /** Cached ambient light and connecting traces from the reference's shift collection deck. */
-private fun Modifier.shiftCollectionAtmosphere(): Modifier = drawWithCache {
-    val gold = Color(0xFFFFD477)
+@Composable
+private fun Modifier.shiftCollectionAtmosphere(): Modifier {
+    val trace = MaterialTheme.colorScheme.onSurfaceVariant
+    val information = MaterialTheme.colorScheme.operationalInformation
+    return drawWithCache {
+    val gold = trace
     val center = Offset(size.width * 0.5f, size.height * 0.55f)
     val glow = Brush.radialGradient(
         listOf(gold.copy(alpha = 0.13f), Color.Transparent),
@@ -623,7 +633,7 @@ private fun Modifier.shiftCollectionAtmosphere(): Modifier = drawWithCache {
         listOf(Color.Transparent, gold.copy(alpha = 0.48f), Color.Transparent),
     )
     val blueTrace = Brush.horizontalGradient(
-        listOf(Color.Transparent, Brand.Information.copy(alpha = 0.38f), Color.Transparent),
+        listOf(Color.Transparent, information.copy(alpha = 0.38f), Color.Transparent),
     )
     val stroke = Stroke(width = 1.dp.toPx(), cap = StrokeCap.Round)
     onDrawBehind {
@@ -631,6 +641,7 @@ private fun Modifier.shiftCollectionAtmosphere(): Modifier = drawWithCache {
         drawPath(left, goldTrace, style = stroke)
         drawPath(right, blueTrace, style = stroke)
     }
+}
 }
 
 @Composable
@@ -645,7 +656,7 @@ private fun ShiftOverviewMoneyCard(
         modifier.heightIn(min = 68.dp).clip(Radius.shapeMd)
             .background(
                 Brush.verticalGradient(
-                    listOf(Brand.SurfaceRaised.copy(alpha = 0.95f), Brand.Surface.copy(alpha = 0.96f)),
+                    listOf(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.95f), MaterialTheme.colorScheme.surface.copy(alpha = 0.96f)),
                 ),
             )
             .border(1.dp, tint.copy(alpha = 0.47f), Radius.shapeMd)
@@ -658,8 +669,8 @@ private fun ShiftOverviewMoneyCard(
             Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(23.dp))
         }
         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(label, color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelSmall)
-            Text(value, color = Brand.Foreground, style = MaterialTheme.typography.titleMedium,
+            Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
+            Text(value, color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold)
         }
     }
@@ -758,13 +769,13 @@ private fun PastShiftsPanel(state: ShiftUiState, modifier: Modifier = Modifier) 
         modifier = modifier,
     ) {
         state.historyMessage?.let { message ->
-            Text(message, color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelSmall)
+            Text(message, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
         }
         val businessDays = state.businessDayHistory
         if (businessDays.isEmpty()) {
             if (state.historyRefreshing) {
                 Box(Modifier.fillMaxWidth().heightIn(min = 160.dp), Alignment.Center) {
-                    CircularProgressIndicator(color = Brand.Gold)
+                    CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
                 }
             } else {
                 DesignedEmptyState(
@@ -781,7 +792,7 @@ private fun PastShiftsPanel(state: ShiftUiState, modifier: Modifier = Modifier) 
         }
         Text(
             "Built from up to the latest 200 immutable shift segments for this device.",
-            color = Brand.ForegroundFaint,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.labelSmall,
         )
     }
@@ -855,7 +866,7 @@ internal fun OpenShiftForm(
     ) {
         Text(
             "Billing remains blocked until the shift is open. The opening float may be ₹0.00 when the drawer starts empty.",
-            color = Brand.ForegroundMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         if (!online) {
             Text(
@@ -864,7 +875,7 @@ internal fun OpenShiftForm(
                 } else {
                     "No connection — the shift can be saved, but reconnect to confirm it before starting Gaming."
                 },
-                color = Brand.Information,
+                color = MaterialTheme.colorScheme.operationalInformation,
                 style = MaterialTheme.typography.labelMedium,
             )
         }
@@ -899,8 +910,8 @@ private fun RejectedShiftCard(
     )
     Column(
         Modifier.fillMaxWidth().clip(Radius.shapeLg)
-            .background(Brand.SurfaceRaised)
-            .border(1.dp, Brand.Danger, Radius.shapeLg)
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .border(1.dp, MaterialTheme.colorScheme.operationalDanger, Radius.shapeLg)
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
@@ -908,30 +919,30 @@ private fun RejectedShiftCard(
             if (currentShift == null) "Couldn't open a shift" else "A shift is already open",
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.Bold,
-            color = Brand.Danger,
+            color = MaterialTheme.colorScheme.operationalDanger,
         )
         if (currentShift != null) {
             Text(
                 shiftAlreadyOpenMessage(currentShift, workspaceLabel),
-                color = Brand.Foreground,
+                color = MaterialTheme.colorScheme.onSurface,
             )
             Text(
                 "Saved attempt: ${rejected.lastError ?: "The server refused the duplicate open."}",
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelSmall,
             )
         } else {
-            Text(rejected.lastError ?: "The server refused this shift open.", color = Brand.Foreground)
+            Text(rejected.lastError ?: "The server refused this shift open.", color = MaterialTheme.colorScheme.onSurface)
         }
         Text(
             actions.guidance,
-            color = Brand.ForegroundMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.labelSmall,
         )
         if (!online) {
             Text(
                 "A live connection is required to clear the attempt safely.",
-                color = Brand.Warning,
+                color = MaterialTheme.colorScheme.operationalWarning,
                 style = MaterialTheme.typography.labelSmall,
             )
         }
@@ -998,8 +1009,8 @@ internal fun CloseShiftCard(
     val cardModifier = if (compactLayout) Modifier.fillMaxWidth() else Modifier.fillMaxSize()
     Column(
         cardModifier.clip(Radius.shapeLg)
-            .background(Brand.Surface)
-            .border(1.dp, Brand.Gold.copy(alpha = 0.52f), Radius.shapeLg)
+            .background(MaterialTheme.colorScheme.surface)
+            .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.52f), Radius.shapeLg)
             .padding(Spacing.lg),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
@@ -1025,8 +1036,8 @@ internal fun CloseShiftCard(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text("Close current shift", style = MaterialTheme.typography.titleLarge, color = Brand.Foreground)
-                Text("Review collections, count the drawer, then confirm.", color = Brand.ForegroundMuted, style = MaterialTheme.typography.bodySmall)
+                Text("Close current shift", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
+                Text("Review collections, count the drawer, then confirm.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
             }
             OperationalStatusBadge(
                 label = when {
@@ -1062,7 +1073,7 @@ internal fun CloseShiftCard(
         InfoRow(
             label = "Expected in drawer",
             value = state.expectedMinor?.asRupees() ?: "Not available offline",
-            valueColor = if (state.expectedMinor == null) Brand.Warning else Brand.Foreground,
+            valueColor = if (state.expectedMinor == null) MaterialTheme.colorScheme.operationalWarning else MaterialTheme.colorScheme.onSurface,
         )
         val accounting = shift.accountingBreakdownOrNull()
         if (accounting != null) {
@@ -1073,7 +1084,7 @@ internal fun CloseShiftCard(
             ) {
                 Text(
                     "Collections (excludes opening float)",
-                    color = Brand.Foreground,
+                    color = MaterialTheme.colorScheme.onSurface,
                     fontWeight = FontWeight.SemiBold,
                 )
                 TextButton(onClick = { accountingExpanded = !accountingExpanded }) {
@@ -1093,7 +1104,7 @@ internal fun CloseShiftCard(
                     label = "Refunds",
                     value = accounting.totalRefundsMinor.asRupees(),
                     modifier = Modifier.weight(1f),
-                    valueColor = if (accounting.totalRefundsMinor > 0) Brand.Danger else Brand.Foreground,
+                    valueColor = if (accounting.totalRefundsMinor > 0) MaterialTheme.colorScheme.operationalDanger else MaterialTheme.colorScheme.onSurface,
                 )
                 CollectionMetric(
                     label = "Net",
@@ -1103,7 +1114,7 @@ internal fun CloseShiftCard(
             }
             Text(
                 "Payment methods (gross collections)",
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelSmall,
             )
             Row(
@@ -1139,31 +1150,31 @@ internal fun CloseShiftCard(
                         } else {
                             "POS and gaming receipts (may include tips)"
                         },
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    Text(accounting.posCollectionsMinor.asRupees(), color = Brand.Foreground)
+                    Text(accounting.posCollectionsMinor.asRupees(), color = MaterialTheme.colorScheme.onSurface)
                 }
                 shiftLegacyMoneyRows(accounting, presentation).forEach { row ->
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text(row.label, color = Brand.ForegroundMuted)
+                        Text(row.label, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Text(
                             row.amountMinor.asRupees(),
-                            color = if (row.isRefund && row.amountMinor > 0) Brand.Danger else Brand.Foreground,
+                            color = if (row.isRefund && row.amountMinor > 0) MaterialTheme.colorScheme.operationalDanger else MaterialTheme.colorScheme.onSurface,
                         )
                     }
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("Settled POS refunds", color = Brand.ForegroundMuted)
+                    Text("Settled POS refunds", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text(
                         accounting.settledPosRefundsMinor.asRupees(),
-                        color = if (accounting.settledPosRefundsMinor > 0) Brand.Danger else Brand.ForegroundMuted,
+                        color = if (accounting.settledPosRefundsMinor > 0) MaterialTheme.colorScheme.operationalDanger else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 if (!presentation.showsMemberships && accounting.hasLegacyPrepaidMoney()) {
                     Text(
                         "Historical hidden-module money remains included in Gross, Refunds and Net. " +
                             "Owners should reconcile it against protected history; it has not been removed.",
-                        color = Brand.Warning,
+                        color = MaterialTheme.colorScheme.operationalWarning,
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
@@ -1172,7 +1183,7 @@ internal fun CloseShiftCard(
             Text(
                 "Detailed collection and refund totals are not available from the server yet. " +
                     "Use Expected in drawer for the cash count; POS receipts can include non-cash payments.",
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelSmall,
             )
         }
@@ -1184,13 +1195,13 @@ internal fun CloseShiftCard(
                 } else {
                     Modifier.fillMaxWidth()
                 }).clip(Radius.shapeSm)
-                    .background(Brand.SurfaceRaised).padding(12.dp),
+                    .background(MaterialTheme.colorScheme.surfaceVariant).padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 Text(
                     "Close saved — waiting for server confirmation" +
                         (if (!state.online) " (no connection right now)" else "") + ".",
-                    color = Brand.Foreground,
+                    color = MaterialTheme.colorScheme.onSurface,
                     fontWeight = FontWeight.SemiBold,
                 )
                 Text(
@@ -1199,13 +1210,13 @@ internal fun CloseShiftCard(
                         missing = "This older queued close has no valid saved drawer count on this tablet. " +
                             "Do not create another close; reconnect and ask a protected owner to review it.",
                     ),
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.labelSmall,
                 )
                 shift.local?.lastError?.takeIf(String::isNotBlank)?.let { message ->
                     Text(
                         message,
-                        color = Brand.Foreground,
+                        color = MaterialTheme.colorScheme.onSurface,
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
@@ -1219,19 +1230,19 @@ internal fun CloseShiftCard(
                 } else {
                     Modifier.fillMaxWidth()
                 }).clip(Radius.shapeSm)
-                    .background(Brand.SurfaceRaised)
-                    .border(1.dp, Brand.Danger, Radius.shapeSm)
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .border(1.dp, MaterialTheme.colorScheme.operationalDanger, Radius.shapeSm)
                     .padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text(
                     "Shift is still open",
-                    color = Brand.Danger,
+                    color = MaterialTheme.colorScheme.operationalDanger,
                     fontWeight = FontWeight.Bold,
                 )
                 Text(
                     shift.local?.lastError ?: "The server refused to close this shift.",
-                    color = Brand.Foreground,
+                    color = MaterialTheme.colorScheme.onSurface,
                 )
                 Text(
                     if (state.closeOriginMessage != null) {
@@ -1243,7 +1254,7 @@ internal fun CloseShiftCard(
                         missing = "This older rejected close has no valid saved drawer count. Retry is " +
                             "disabled. Choose Continue shift, then count the drawer again before closing.",
                     ),
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.labelSmall,
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1266,16 +1277,16 @@ internal fun CloseShiftCard(
         }
 
         if (closePresentation.usesSavedCount) {
-            Text("Saved drawer count", color = Brand.Foreground, fontWeight = FontWeight.SemiBold)
+            Text("Saved drawer count", color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.SemiBold)
             Text(
                 closePresentation.displayedCountedMinor?.asRupees() ?: "Saved count unavailable",
-                color = if (closePresentation.displayedCountedMinor == null) Brand.Danger else Brand.Foreground,
+                color = if (closePresentation.displayedCountedMinor == null) MaterialTheme.colorScheme.operationalDanger else MaterialTheme.colorScheme.onSurface,
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold,
             )
             Text(
                 "Denomination fields are locked because this close already has a durable saved count.",
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelSmall,
             )
             if (!compactLayout) Spacer(Modifier.weight(1f))
@@ -1290,10 +1301,10 @@ internal fun CloseShiftCard(
         ) {
             PanelDivider()
             if (!closePresentation.usesSavedCount) {
-                Text("Count the drawer", color = Brand.Foreground, fontWeight = FontWeight.SemiBold)
+                Text("Count the drawer", color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.SemiBold)
                 Text(
                     "Count each note and coin in a focused view. Your total and difference stay visible here.",
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.labelSmall,
                 )
                 ErpButton(
@@ -1310,23 +1321,23 @@ internal fun CloseShiftCard(
                 state.expectedMinor?.let { expected -> counted - expected }
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("Counted", color = Brand.ForegroundMuted)
+                Text("Counted", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text(
                     displayedCountedMinor?.asRupees() ?: "unavailable",
-                    color = if (displayedCountedMinor == null) Brand.Danger else Brand.Foreground,
+                    color = if (displayedCountedMinor == null) MaterialTheme.colorScheme.operationalDanger else MaterialTheme.colorScheme.onSurface,
                     fontWeight = FontWeight.Bold,
                 )
             }
             if (variance != null) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("Difference", color = Brand.ForegroundMuted)
+                    Text("Difference", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text(
                         when {
                             variance == 0L -> "balanced"
                             variance > 0 -> "over ${variance.asRupees()}"
                             else -> "short ${(-variance).asRupees()}"
                         },
-                        color = if (variance == 0L) Brand.Good else Brand.Danger,
+                        color = if (variance == 0L) MaterialTheme.colorScheme.operationalGood else MaterialTheme.colorScheme.operationalDanger,
                         fontWeight = FontWeight.Bold,
                     )
                 }
@@ -1382,7 +1393,7 @@ internal fun CloseShiftCard(
     }
     if (activeConfirmation != null && canClosePermission) {
         AlertDialog(
-            containerColor = cloud.dcompany.erp.ui.theme.Brand.SurfaceOverlay,
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
             shape = cloud.dcompany.erp.ui.theme.Radius.shapeLg,
             onDismissRequest = { confirmation = null },
             title = { Text("Close this shift?") },
@@ -1418,7 +1429,7 @@ internal fun CloseShiftCard(
 
     confirmationGuardMessage?.let { message ->
         AlertDialog(
-            containerColor = cloud.dcompany.erp.ui.theme.Brand.SurfaceOverlay,
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
             shape = cloud.dcompany.erp.ui.theme.Radius.shapeLg,
             onDismissRequest = { confirmationGuardMessage = null },
             title = { Text("Close cancelled safely") },
@@ -1480,11 +1491,11 @@ internal fun DrawerCountDialogContent(
     val differenceMinor = expectedMinor?.let { countedMinor - it }
 
     Surface(
-        color = Brand.SurfaceOverlay,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = Radius.shapeXl,
         tonalElevation = 0.dp,
         modifier = modifier
-            .border(1.dp, Brand.Border, Radius.shapeXl)
+            .border(1.dp, MaterialTheme.colorScheme.outline, Radius.shapeXl)
             .semantics { contentDescription = "Drawer count dialog" },
     ) {
         Column(
@@ -1503,13 +1514,13 @@ internal fun DrawerCountDialogContent(
                 ) {
                     Text(
                         "Count the drawer",
-                        color = Brand.Foreground,
+                        color = MaterialTheme.colorScheme.onSurface,
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold,
                     )
                     Text(
                         "Enter how many of each note or coin is physically in the drawer.",
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
@@ -1531,7 +1542,7 @@ internal fun DrawerCountDialogContent(
                     label = "Expected",
                     value = expectedMinor?.asRupees() ?: "Unavailable",
                     modifier = Modifier.weight(1f),
-                    valueColor = if (expectedMinor == null) Brand.Warning else Brand.Foreground,
+                    valueColor = if (expectedMinor == null) MaterialTheme.colorScheme.operationalWarning else MaterialTheme.colorScheme.onSurface,
                 )
                 CollectionMetric(
                     label = "Counted",
@@ -1548,9 +1559,9 @@ internal fun DrawerCountDialogContent(
                     },
                     modifier = Modifier.weight(1f),
                     valueColor = when {
-                        differenceMinor == null -> Brand.ForegroundMuted
-                        differenceMinor == 0L -> Brand.Good
-                        else -> Brand.Danger
+                        differenceMinor == null -> MaterialTheme.colorScheme.onSurfaceVariant
+                        differenceMinor == 0L -> MaterialTheme.colorScheme.operationalGood
+                        else -> MaterialTheme.colorScheme.operationalDanger
                     },
                 )
             }
@@ -1656,10 +1667,10 @@ private fun DenominationCountRow(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text("₹$note", color = Brand.Foreground)
+                    Text("₹$note", color = MaterialTheme.colorScheme.onSurface)
                     Text(
                         (note * 100 * (counts[note]?.toLongOrNull() ?: 0L)).asRupees(),
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 WholeNumberStepper(
@@ -1721,15 +1732,15 @@ private fun CollectionMetric(
     label: String,
     value: String,
     modifier: Modifier = Modifier,
-    valueColor: androidx.compose.ui.graphics.Color = Brand.Foreground,
+    valueColor: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.onSurface,
 ) {
     Column(
-        modifier.clip(Radius.shapeMd).background(Brand.SurfaceRaised)
-            .border(1.dp, Brand.BorderSubtle, Radius.shapeMd)
+        modifier.clip(Radius.shapeMd).background(MaterialTheme.colorScheme.surfaceVariant)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeMd)
             .padding(Spacing.md),
         verticalArrangement = Arrangement.spacedBy(Spacing.xs),
     ) {
-        Text(label, color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelMedium)
+        Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelMedium)
         Text(value, color = valueColor, fontWeight = FontWeight.Bold)
     }
 }
@@ -1748,20 +1759,20 @@ private fun ShiftOwnershipSummary(
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Text(
             "Opened by $opener",
-            color = Brand.Foreground,
+            color = MaterialTheme.colorScheme.onSurface,
             fontWeight = FontWeight.SemiBold,
         )
         if (!shift.openedByEmail.isNullOrBlank() && shift.openedByEmail != opener) {
-            Text(shift.openedByEmail, color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelSmall)
+            Text(shift.openedByEmail, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
         }
-        Text("Opened $opened", color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelSmall)
+        Text("Opened $opened", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
         workspaceLabel?.let {
-            Text("Workspace: $it", color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelSmall)
+            Text("Workspace: $it", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
         }
         shiftCloseHandoverMessage(shift, currentUserId, canClose)?.let { message ->
             Text(
                 message,
-                color = Brand.Information,
+                color = MaterialTheme.colorScheme.operationalInformation,
                 style = MaterialTheme.typography.labelMedium,
             )
         }
@@ -1778,17 +1789,17 @@ private fun BusinessDayHistoryRow(day: ShiftBusinessDaySummary) {
         day.totalRefundsMinor != null && day.netCollectionsMinor != null
     Column(
         Modifier.fillMaxWidth().clip(Radius.shapeSm)
-            .background(Brand.SurfaceRaised).padding(12.dp),
+            .background(MaterialTheme.colorScheme.surfaceVariant).padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Text(
             day.dateLabel,
-            color = Brand.Foreground,
+            color = MaterialTheme.colorScheme.onSurface,
             fontWeight = FontWeight.Bold,
         )
         Text(
             "First open ${formatShiftBusinessTime(day.firstOpenedAtMillis)} by ${day.firstOpenerLabel}",
-            color = Brand.ForegroundMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.labelSmall,
         )
         Text(
@@ -1798,7 +1809,7 @@ private fun BusinessDayHistoryRow(day: ShiftBusinessDaySummary) {
                     "Final close ${formatShiftBusinessTime(day.finalClosedAtMillis)} by ${day.finalCloserLabel}"
                 else -> "Final close time unavailable — review the shift segments"
             },
-            color = if (day.finalClosedAtMillis == null) Brand.Warning else Brand.ForegroundMuted,
+            color = if (day.finalClosedAtMillis == null) MaterialTheme.colorScheme.operationalWarning else MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.labelSmall,
         )
         Row(
@@ -1814,7 +1825,7 @@ private fun BusinessDayHistoryRow(day: ShiftBusinessDaySummary) {
                 label = "Refunds",
                 value = day.totalRefundsMinor?.asRupees() ?: "Pending",
                 modifier = Modifier.weight(1f),
-                valueColor = if ((day.totalRefundsMinor ?: 0L) > 0L) Brand.Danger else Brand.Foreground,
+                valueColor = if ((day.totalRefundsMinor ?: 0L) > 0L) MaterialTheme.colorScheme.operationalDanger else MaterialTheme.colorScheme.onSurface,
             )
             CollectionMetric(
                 label = "Net",
@@ -1825,7 +1836,7 @@ private fun BusinessDayHistoryRow(day: ShiftBusinessDaySummary) {
         if (!totalsAvailable) {
             Text(
                 "Combined totals will appear after every segment has authoritative server accounting.",
-                color = Brand.Warning,
+                color = MaterialTheme.colorScheme.operationalWarning,
                 style = MaterialTheme.typography.labelSmall,
             )
         }
@@ -1843,7 +1854,7 @@ private fun BusinessDayHistoryRow(day: ShiftBusinessDaySummary) {
             day.segments.forEachIndexed { index, segment ->
                 Text(
                     "Shift segment ${index + 1}",
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.SemiBold,
                 )
@@ -1858,17 +1869,17 @@ private fun HistoryRow(s: ShiftHistoryRow) {
     val opener = shiftHistoryOpenerLabel(s)
     Column(
         Modifier.fillMaxWidth().clip(Radius.shapeSm)
-            .background(Brand.SurfaceRaised).padding(10.dp),
+            .background(MaterialTheme.colorScheme.surfaceVariant).padding(10.dp),
     ) {
         Text(
             "Opened ${formatHistoryDate(s.openedAtMillis)} by $opener",
-            color = Brand.ForegroundMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.labelSmall,
         )
         if (s.closedAtMillis != null) {
             Text(
                 "Closed ${formatHistoryDate(s.closedAtMillis)} by ${shiftHistoryCloserLabel(s)}",
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelSmall,
             )
         }
@@ -1881,19 +1892,19 @@ private fun HistoryRow(s: ShiftHistoryRow) {
                     else -> "short ${(-s.varianceMinor).asRupees()}"
                 },
             style = MaterialTheme.typography.labelSmall,
-            color = if (s.varianceMinor == 0L) Brand.Good else Brand.ForegroundMuted,
+            color = if (s.varianceMinor == 0L) MaterialTheme.colorScheme.operationalGood else MaterialTheme.colorScheme.onSurfaceVariant,
         )
         if (s.source == ShiftHistorySource.LOCAL) {
             Text(
                 "Saved on this tablet; waiting for server history refresh.",
                 style = MaterialTheme.typography.labelSmall,
-                color = Brand.Warning,
+                color = MaterialTheme.colorScheme.operationalWarning,
             )
         } else if (s.netCollectionsMinor != null) {
             Text(
                 "net collections ${s.netCollectionsMinor.asRupees()}",
                 style = MaterialTheme.typography.labelSmall,
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             if (
                 s.cashCollectionsMinor != null &&
@@ -1911,7 +1922,7 @@ private fun HistoryRow(s: ShiftHistoryRow) {
                         "card ${s.cardCollectionsMinor.asRupees()} · " +
                         "UPI ${s.upiCollectionsMinor.asRupees()}$other",
                     style = MaterialTheme.typography.labelSmall,
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }
@@ -1922,13 +1933,13 @@ private fun HistoryRow(s: ShiftHistoryRow) {
 internal fun ShiftCloseOriginFeedback(message: String, modifier: Modifier = Modifier) {
     Column(
         modifier.fillMaxWidth().clip(Radius.shapeMd)
-            .background(Brand.Warning.copy(alpha = 0.10f))
-            .border(1.dp, Brand.Warning.copy(alpha = 0.6f), Radius.shapeMd)
+            .background(MaterialTheme.colorScheme.operationalWarning.copy(alpha = 0.10f))
+            .border(1.dp, MaterialTheme.colorScheme.operationalWarning.copy(alpha = 0.6f), Radius.shapeMd)
             .padding(Spacing.md),
         verticalArrangement = Arrangement.spacedBy(Spacing.xs),
     ) {
-        Text("Verify the opening app before closing", color = Brand.Warning, fontWeight = FontWeight.SemiBold)
-        Text(message, color = Brand.Foreground, style = MaterialTheme.typography.bodySmall)
+        Text("Verify the opening app before closing", color = MaterialTheme.colorScheme.operationalWarning, fontWeight = FontWeight.SemiBold)
+        Text(message, color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.bodySmall)
     }
 }
 

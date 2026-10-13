@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Surface
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -46,11 +47,13 @@ import cloud.dcompany.erp.core.sync.OutboxWorkStatus
 import cloud.dcompany.erp.ui.Destination
 import cloud.dcompany.erp.ui.WorkspaceScaffold
 import cloud.dcompany.erp.ui.components.SyncAvailabilityProblem
-import cloud.dcompany.erp.ui.theme.Brand
+import cloud.dcompany.erp.ui.theme.AppearancePreference
 import cloud.dcompany.erp.ui.theme.DCompanyTheme
 import java.io.File
 import kotlin.math.abs
+import kotlin.math.cos
 import kotlin.math.roundToInt
+import kotlin.math.sin
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -65,7 +68,7 @@ class GamingBoardUiTest {
     fun hoveringDurationPriceKeepsBookingUnchangedAndMarkerStillSelects() {
         val selected = mutableStateOf("single-30")
         compose.setContent {
-            DCompanyTheme {
+            DCompanyTheme(preference = AppearancePreference.Night) {
                 Box(Modifier.width(420.dp).height(420.dp).testTag("dial-hover-fixture")) {
                     GamingDurationDial(
                         choices = listOf(
@@ -147,7 +150,7 @@ class GamingBoardUiTest {
         }
 
         val dial = compose.onNodeWithContentDescription("Session duration dial")
-        dial.performTouchInput { click(Offset(width * 0.83f, height * 0.31f)) }
+        dial.performTouchInput { click(ringPoint(width, height, 125f)) }
         compose.onNodeWithText("30 min · ₹80.00").performClick()
         dial.performSemanticsAction(SemanticsActions.SetProgress) { setProgress ->
             assertTrue(setProgress(1f))
@@ -218,39 +221,26 @@ class GamingBoardUiTest {
             }
         }
 
-        compose.onNodeWithContentDescription("Session duration dial").performTouchInput {
-            val thirty = Offset(width * 0.30f, height * 0.15f)
-            val sixty = Offset(width * 0.60f, height * 0.11f)
-            val ninety = Offset(width * 0.85f, height * 0.30f)
-            val right = Offset(width * 0.90f, height * 0.50f)
-            val seamAbove = Offset(width * 0.89f, height * 0.43f)
-            val seamBelow = Offset(width * 0.89f, height * 0.57f)
-            val bottom = Offset(width * 0.50f, height * 0.90f)
-            val lowerLeft = Offset(width * 0.15f, height * 0.70f)
-            val left = Offset(width * 0.10f, height * 0.50f)
-            down(thirty)
-            moveTo(left)
-            moveTo(lowerLeft)
-            moveTo(bottom)
-            moveTo(seamBelow)
-            moveTo(right)
-            moveTo(seamAbove)
-            moveTo(seamBelow)
-            moveTo(ninety)
-            moveTo(sixty)
-            moveTo(thirty)
-            moveTo(sixty)
-            moveTo(sixty)
-            moveTo(ninety)
-            moveTo(seamAbove)
-            moveTo(right)
-            moveTo(seamBelow)
-            moveTo(bottom)
-            moveTo(lowerLeft)
-            moveTo(left)
-            moveTo(thirty)
+        val dial = compose.onNodeWithContentDescription("Session duration dial")
+        // Select the maximum without crossing the shared 135-degree endpoint.
+        dial.performTouchInput { click(ringPoint(width, height, 125f)) }
+        // Turn one full revolution counter-clockwise: max -> middle -> min.
+        dial.performTouchInput {
+            down(ringPoint(width, height, 125f))
+            repeat(24) { step ->
+                moveTo(ringPoint(width, height, 125f - (step + 1) * 15f), delayMillis = 16)
+            }
             up()
         }
+        // Turn one full revolution clockwise: min -> middle -> max.
+        dial.performTouchInput {
+            down(ringPoint(width, height, 135f))
+            repeat(24) { step ->
+                moveTo(ringPoint(width, height, 135f + (step + 1) * 15f), delayMillis = 16)
+            }
+            up()
+        }
+        dial.performTouchInput { click(ringPoint(width, height, 135f)) }
 
         compose.runOnIdle {
             assertEquals(6, tickCount)
@@ -285,14 +275,14 @@ class GamingBoardUiTest {
 
         val dial = compose.onNodeWithContentDescription("Session duration dial")
         dial.performTouchInput {
-            down(Offset(width * 0.30f, height * 0.15f))
-            moveTo(Offset(width * 0.50f, height * 0.90f))
+            down(ringPoint(width, height, 125f))
+            moveTo(ringPoint(width, height, 100f))
             cancel()
         }
         compose.onNodeWithText("90 min").assertIsDisplayed()
         compose.runOnIdle { selected.value = "single-30" }
         compose.waitForIdle()
-        dial.performTouchInput { click(Offset(width * 0.60f, height * 0.11f)) }
+        dial.performTouchInput { click(ringPoint(width, height, 315f)) }
 
         compose.runOnIdle {
             assertEquals("single-60", selected.value)
@@ -325,14 +315,14 @@ class GamingBoardUiTest {
 
         val dial = compose.onNodeWithContentDescription("Session duration dial")
         dial.performTouchInput {
-            down(Offset(width * 0.30f, height * 0.15f))
-            moveTo(Offset(width * 0.50f, height * 0.90f))
+            down(ringPoint(width, height, 125f))
+            moveTo(ringPoint(width, height, 100f))
         }
         compose.waitForIdle()
         compose.runOnIdle { selected.value = "single-60" }
         compose.waitForIdle()
         dial.performTouchInput {
-            moveTo(Offset(width * 0.85f, height * 0.30f))
+            moveTo(ringPoint(width, height, 315f))
             up()
         }
 
@@ -340,7 +330,7 @@ class GamingBoardUiTest {
             assertEquals("single-60", selected.value)
             assertEquals(listOf("single-90"), selections)
         }
-        dial.performTouchInput { click(Offset(width * 0.30f, height * 0.15f)) }
+        dial.performTouchInput { click(ringPoint(width, height, 135f)) }
         compose.runOnIdle {
             assertEquals("single-30", selected.value)
             assertEquals(listOf("single-90", "single-30"), selections)
@@ -583,7 +573,7 @@ class GamingBoardUiTest {
         var customerPrepareCalls = 0
         compose.setContent {
             DCompanyTheme {
-                Surface(Modifier.fillMaxSize(), color = Brand.Background) {
+                Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     Box(Modifier.fillMaxSize().testTag("gaming-fixture-root")) {
                         GamingCommandWorkspace(
                             state = state.value,
@@ -864,11 +854,9 @@ class GamingBoardUiTest {
 
         compose.onNodeWithText("Extend").performScrollTo().performClick()
         compose.onNodeWithTag("gaming-extension-preview").assertIsDisplayed()
-        compose.onNodeWithText("ELAPSED").assertIsDisplayed()
-        compose.onNodeWithContentDescription("Session duration dial").performTouchInput {
-            down(Offset(width * 0.30f, height * 0.15f))
-            moveTo(Offset(width * 0.50f, height * 0.90f))
-            up()
+        compose.onNodeWithText("REMAINING").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Session duration dial").performScrollTo().performTouchInput {
+            click(ringPoint(width, height, 125f))
         }
         compose.onNodeWithText("Resulting booked total · ₹220.00")
             .performScrollTo().assertIsDisplayed()
@@ -880,8 +868,8 @@ class GamingBoardUiTest {
         compose.runOnIdle { assertEquals(0, confirms) }
 
         compose.onNodeWithText("Extend").performScrollTo().performClick()
-        compose.onNodeWithContentDescription("Session duration dial").performTouchInput {
-            click(Offset(width * 0.83f, height * 0.31f))
+        compose.onNodeWithContentDescription("Session duration dial").performScrollTo().performTouchInput {
+            click(ringPoint(width, height, 125f))
         }
         compose.runOnIdle {
             state.value = state.value.copy(
@@ -899,8 +887,8 @@ class GamingBoardUiTest {
         compose.runOnIdle { state.value = state.value.copy(packages = extensions) }
 
         compose.onNodeWithText("Extend").performScrollTo().performClick()
-        compose.onNodeWithContentDescription("Session duration dial").performTouchInput {
-            click(Offset(width * 0.83f, height * 0.31f))
+        compose.onNodeWithContentDescription("Session duration dial").performScrollTo().performTouchInput {
+            click(ringPoint(width, height, 125f))
         }
         compose.onNodeWithText("Confirm extension").performScrollTo().assertIsDisplayed().performClick()
         compose.runOnIdle {
@@ -1031,6 +1019,8 @@ class GamingBoardUiTest {
             compose.onNodeWithTag("gaming-station-streaming-1").assertIsDisplayed()
             val dial = compose.onNodeWithContentDescription("Session duration dial")
                 .assertIsDisplayed()
+            val draftRingBounds = compose.onNodeWithTag("gaming-control-ring")
+                .getUnclippedBoundsInRoot()
             compose.onNodeWithText("₹80.00").assertIsDisplayed()
             compose.onNodeWithText("Start 30 min · ₹80.00").assertIsDisplayed()
             compose.onNodeWithText("Est. finish ·", substring = true).assertIsDisplayed()
@@ -1113,10 +1103,46 @@ class GamingBoardUiTest {
                 state.value = state.value.copy(sessions = listOf(GameSession(
                     id = "compact-session", stationId = "ps5-1", shiftId = "fixture-shift",
                     status = "active", startAt = "2026-09-27T10:00:00Z",
+                    timerMinutes = 30, timerEndsAt = "2026-09-27T10:30:00Z",
                     ratePerHourMinor = 12_000,
                 )))
             }
-            compose.onNodeWithText("Stop & calculate").performScrollTo().assertIsDisplayed()
+            val activeRing = compose.onNodeWithTag("gaming-control-ring").assertIsDisplayed()
+            val activeRingBounds = activeRing.getUnclippedBoundsInRoot()
+            assertTrue(
+                "Draft dial and authoritative timer must keep identical geometry: " +
+                    "draft=$draftRingBounds active=$activeRingBounds",
+                abs(draftRingBounds.left.value - activeRingBounds.left.value) <= 1f &&
+                    abs(draftRingBounds.top.value - activeRingBounds.top.value) <= 1f &&
+                    abs((draftRingBounds.right - draftRingBounds.left).value -
+                        (activeRingBounds.right - activeRingBounds.left).value) <= 1f &&
+                    abs((draftRingBounds.bottom - draftRingBounds.top).value -
+                        (activeRingBounds.bottom - activeRingBounds.top).value) <= 1f,
+            )
+            val activeRingNode = activeRing.fetchSemanticsNode()
+            val activeRingPosition = activeRingNode.positionOnScreen
+            val activeRingScreenBounds = Rect(
+                activeRingPosition.x,
+                activeRingPosition.y,
+                activeRingPosition.x + activeRingNode.size.width,
+                activeRingPosition.y + activeRingNode.size.height,
+            )
+            val stopNode = compose.onNodeWithText("Stop & calculate")
+                .assertIsDisplayed().fetchSemanticsNode()
+            val stopPosition = stopNode.positionOnScreen
+            val stopBounds = Rect(
+                stopPosition.x,
+                stopPosition.y,
+                stopPosition.x + stopNode.size.width,
+                stopPosition.y + stopNode.size.height,
+            )
+            assertTrue(
+                "The authoritative timer and Stop action must be visible together without scrolling: " +
+                    "timer=$activeRingScreenBounds stop=$stopBounds pane=$paneBounds",
+                activeRingScreenBounds.top >= paneBounds.top &&
+                    activeRingScreenBounds.bottom <= paneBounds.bottom &&
+                    stopBounds.top >= paneBounds.top && stopBounds.bottom <= paneBounds.bottom,
+            )
             capture("gaming-full-workspace-960x600-active-action.png", "gaming-full-workspace")
             compose.runOnIdle {
                 state.value = state.value.copy(sessions = listOf(GameSession(
@@ -1174,6 +1200,7 @@ class GamingBoardUiTest {
     @Test
     fun simultaneousWarningsKeepCompactBoardDialAndRecoveryActionReachable() {
         val station = Station("ps5-1", "PS5-1", "PS5 Station 1", "ps5", 12_000)
+        var startRequests = 0
         compose.setContent {
             DCompanyTheme {
                 Box(Modifier.width(960.dp).height(470.dp).testTag("warning-workspace")) {
@@ -1212,7 +1239,7 @@ class GamingBoardUiTest {
                         attentionCount = 1,
                         onSelectFilter = {}, onSelectStation = {}, onBackToBoard = {},
                         onOpenAttention = {}, onRefresh = {}, onStart = {},
-                        onConfirmStart = { _, _, _, _, _, _, _ -> },
+                        onConfirmStart = { _, _, _, _, _, _, _ -> startRequests++ },
                         onStop = { _, _ -> }, onSend = {}, onCancelUnbilled = {},
                         onExtendTimer = {}, onExtendPackage = { _, _ -> },
                         onTransfer = {}, onPauseResume = {}, onReconcile = {},
@@ -1234,7 +1261,9 @@ class GamingBoardUiTest {
         compose.onNodeWithContentDescription("Session duration dial")
             .performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("Retry acknowledgement").performScrollTo().assertIsDisplayed()
-        compose.onNodeWithText("Start 30 min · ₹80.00").assertIsDisplayed()
+        compose.onNodeWithText("Start 30 min · ₹80.00")
+            .performScrollTo().assertIsDisplayed().performClick()
+        compose.runOnIdle { assertEquals(1, startRequests) }
     }
 
     private fun capture(filename: String, rootTag: String = "gaming-fixture-root") {
@@ -1246,4 +1275,15 @@ class GamingBoardUiTest {
             bitmap.recycle()
         }
     }
+}
+
+private fun ringPoint(width: Int, height: Int, angleDegrees: Float): Offset {
+    val radians = Math.toRadians(angleDegrees.toDouble())
+    val widthPx = width.toFloat()
+    val heightPx = height.toFloat()
+    val radius = minOf(widthPx, heightPx) * 0.40f
+    return Offset(
+        x = widthPx / 2f + radius * cos(radians).toFloat(),
+        y = heightPx / 2f + radius * sin(radians).toFloat(),
+    )
 }

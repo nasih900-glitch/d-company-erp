@@ -6,6 +6,7 @@ import {
 
 import { auth } from '@/lib/erp-api';
 import { webLandingRouteFor } from '@/lib/product-profile';
+import DCompanyBrandMark from '@/components/brand/DCompanyBrandMark';
 import { useAuth } from './AuthContext';
 
 type Mode = 'login' | 'reset-request' | 'reset-confirm' | 'register-request' | 'register-confirm';
@@ -126,11 +127,7 @@ export default function Login() {
               <ArrowLeft size={19}/>
             </button>
           )}
-          <img
-            src="/brand/den-emblem-gold.png"
-            alt="D Company"
-            className="mx-auto h-20 w-20 rounded-full object-contain bg-bg/80 ring-1 ring-accent-gold/50 shadow-glow"
-          />
+          <DCompanyBrandMark className="mx-auto h-20 w-20 shadow-glow"/>
           <h1 className="text-2xl font-bold">{title}</h1>
           <p className="text-fg-muted text-sm">
             {mode === 'login' && 'Sign in to continue'}

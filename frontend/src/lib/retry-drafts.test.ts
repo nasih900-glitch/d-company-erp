@@ -452,12 +452,13 @@ describe('POS checkout retry drafts', () => {
     expect(isCartStageDiscountAlreadyApplied(0, 2_000)).toBe(false);
     expect(isCartStageDiscountAlreadyApplied(2_000, 0)).toBe(false);
 
-    expect(isCartStagePointsAlreadyApplied(1_500, 1_500)).toBe(true);
-    expect(isCartStagePointsAlreadyApplied(0, 1_500)).toBe(false);
+    expect(isCartStagePointsAlreadyApplied(1_500, 1_500, 150, 150)).toBe(true);
+    expect(isCartStagePointsAlreadyApplied(1_500, 1_500, 200, 150)).toBe(false);
+    expect(isCartStagePointsAlreadyApplied(0, 1_500, 0, 150)).toBe(false);
     // Discount may have committed while points never left the client; these
     // decisions deliberately remain independent so only points is sent next.
     expect(isCartStageDiscountAlreadyApplied(2_000, 2_000)).toBe(true);
-    expect(isCartStagePointsAlreadyApplied(0, 1_500)).toBe(false);
+    expect(isCartStagePointsAlreadyApplied(0, 1_500, 0, 150)).toBe(false);
     expect(hasUnappliedCartStageBenefit(
       { manual_discount_minor: 2_000, points_redeemed_minor: 0 },
       2_000,
@@ -467,7 +468,7 @@ describe('POS checkout retry drafts', () => {
       { manual_discount_minor: 2_000, points_redeemed_minor: 1_500 },
       2_000,
       1_500,
-    )).toBe(false);
+    )).toBe(true);
   });
 
   it('settles reflected cart benefits before claiming and keeps the payment journal reloadable', () => {
@@ -499,36 +500,31 @@ describe('POS checkout retry drafts', () => {
     );
     expect(settled).toMatchObject({
       pendingDiscountMinor: 0,
-      pendingPointsMinor: 0,
-      hasUnappliedBenefit: false,
+      pendingPointsMinor: 1_500,
+      hasUnappliedBenefit: true,
       changed: true,
     });
     expect(settled.retry.cartDiscountExpectedVersion).toBeUndefined();
-    expect(settled.retry.cartPointsExpectedVersion).toBeUndefined();
+    expect(settled.retry.cartPointsExpectedVersion).toBe(8);
 
-    const awaiting = applyCanonicalCheckoutBalance(settled.retry, {
-      id: 'order-1',
-      total_minor: 20_000,
-      due_minor: 16_500,
-      manual_discount_minor: 2_000,
-      points_redeemed_minor: 1_500,
-    });
+    // A money-only match cannot prove the accepted points count, program
+    // revision, or reward kind. Keep the frozen points instruction and its
+    // optimistic version until its exact idempotency key/body is replayed.
     const roundTrip = normalizePosRetryDraft({
       ...preparing,
       pendingCartDiscountMinor: undefined,
-      pendingCartPointsMinor: undefined,
-      pendingCartPointsCustomerPhone: undefined,
-      retry: awaiting,
+      pendingCartPointsMinor: settled.pendingPointsMinor,
+      pendingCartPointsCustomerPhone: settled.pendingPointsCustomerPhone,
+      retry: settled.retry,
     });
     expect(roundTrip?.retry).toMatchObject({
-      phase: 'awaiting_payment',
-      orderTotalMinor: 20_000,
-      paymentAmountMinor: 16_500,
+      phase: 'preparing_order',
+      cartPointsExpectedVersion: 8,
     });
     expect(roundTrip?.pendingCartDiscountMinor).toBeUndefined();
-    expect(roundTrip?.pendingCartPointsMinor).toBeUndefined();
+    expect(roundTrip?.pendingCartPointsMinor).toBe(1_500);
     expect(roundTrip?.retry?.cartDiscountExpectedVersion).toBeUndefined();
-    expect(roundTrip?.retry?.cartPointsExpectedVersion).toBeUndefined();
+    expect(roundTrip?.retry?.cartPointsExpectedVersion).toBe(8);
   });
 
   it('checkpoints each successful cart benefit before the next operation can fail', () => {

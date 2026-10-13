@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from uuid import UUID, uuid4
@@ -37,6 +38,7 @@ from app.services.accounting.accounts import (
 )
 from app.services.accounting.ledger import build_operational_ledger
 from app.services.pos.checkout_claims import acquire_checkout_claim
+from app.services.pos.loyalty_program import LEGACY_RULES
 from app.services.reports import ReportsAggregator
 from tests.integration.test_cafe_workflow_migration import (
     _disposable_database,
@@ -60,6 +62,23 @@ def _request(
             idempotency_request_hash=body_hash or f"hash:{key}",
         ),
         headers={"X-Client-Action-Id": client_action_id} if client_action_id is not None else {},
+    )
+
+
+def _seed_revision_zero_program(
+    connection: psycopg.Connection,
+    company_id: UUID,
+) -> None:
+    connection.execute(
+        "INSERT INTO loyalty_program_revisions "
+        "(id, company_id, revision, rules, published_by, published_at) "
+        "VALUES (%s, %s, 0, %s::jsonb, NULL, %s)",
+        (
+            uuid4(),
+            company_id,
+            json.dumps(LEGACY_RULES.model_dump(mode="json")),
+            datetime.now(UTC),
+        ),
     )
 
 
@@ -234,6 +253,8 @@ async def test_payment_bundle_endpoint_is_atomic_replay_safe_and_claim_scoped(
         with psycopg.connect(_sync_dsn(database_url)) as connection:
             paid_ids = _seed_open_order(connection)
             rollback_ids = _seed_open_order(connection)
+            _seed_revision_zero_program(connection, paid_ids["company"])
+            _seed_revision_zero_program(connection, rollback_ids["company"])
             connection.execute(
                 "UPDATE companies SET google_sheets_mirror_enabled=true, "
                 "google_sheets_webhook_url='https://sheets.test.invalid/mirror', "
@@ -700,6 +721,7 @@ async def test_customer_linked_bundle_records_loyalty_after_both_legs_and_retrie
         assert upgraded.returncode == 0, upgraded.stdout + upgraded.stderr
         with psycopg.connect(_sync_dsn(database_url)) as connection:
             ids = _seed_open_order(connection)
+            _seed_revision_zero_program(connection, ids["company"])
             customer_id = uuid4()
             phone = "+919000000304"
             connection.execute(
@@ -835,6 +857,7 @@ async def test_concurrent_payment_bundles_cannot_double_settle() -> None:
         assert upgraded.returncode == 0, upgraded.stdout + upgraded.stderr
         with psycopg.connect(_sync_dsn(database_url)) as connection:
             ids = _seed_open_order(connection)
+            _seed_revision_zero_program(connection, ids["company"])
 
         engine = create_async_engine(
             database_url.replace("postgresql+psycopg://", "postgresql+asyncpg://", 1),

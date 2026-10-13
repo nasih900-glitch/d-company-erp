@@ -15,6 +15,7 @@ from app.core.db import AsyncSessionLocal
 from app.core.security import hash_password
 from app.main import create_app
 from app.models import Branch, Company, Role, Terminal, User, UserRole
+from app.services.pos.loyalty_program import new_legacy_loyalty_program
 
 
 @pytest.fixture(scope="session")
@@ -68,7 +69,16 @@ async def seed_owner(session: AsyncSession) -> dict:
         password_hash=hash_password("password1234"),
         status="active",
     )
-    session.add_all([company, branch, terminal, owner_role, staff_role, owner])
+    session.add(company)
+    await session.flush()
+    session.add_all([
+        new_legacy_loyalty_program(company.id),
+        branch,
+        terminal,
+        owner_role,
+        staff_role,
+        owner,
+    ])
     await session.flush()
     session.add(UserRole(id=uuid4(), user_id=owner.id, role_id=owner_role.id))
     await session.commit()

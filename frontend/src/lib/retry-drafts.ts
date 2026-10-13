@@ -148,6 +148,10 @@ export interface PosRetryDraft {
   // draft version stays 2 rather than orphaning in-flight version-2 recoveries.
   pendingCartDiscountMinor?: number;
   pendingCartPointsMinor?: number;
+  /** Exact new-contract request count; absent means an untouched legacy minor draft. */
+  pendingCartPoints?: number;
+  /** Captured with pendingCartPoints before send; never filled from current settings on replay. */
+  pendingCartPointsProgramRevision?: number;
   /** Exact customer identity whose balance authorised pending cart-stage points. */
   pendingCartPointsCustomerPhone?: string;
   retry?: PosCheckoutRetry;
@@ -189,6 +193,10 @@ function nonEmptyString(value: unknown): string | undefined {
 // Money is whole paise: a stored draft carrying a float, a negative, or
 // anything non-numeric is corrupt and restores as "nothing pending".
 function positiveMinor(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : undefined;
+}
+
+function positiveInteger(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : undefined;
 }
 
@@ -555,6 +563,8 @@ export function normalizePosRetryDraft(value: unknown): PosRetryDraft | null {
       value.retry !== undefined
       || value.pendingCartDiscountMinor !== undefined
       || value.pendingCartPointsMinor !== undefined
+      || value.pendingCartPoints !== undefined
+      || value.pendingCartPointsProgramRevision !== undefined
       || value.pendingCartPointsCustomerPhone !== undefined
     )
   ) return null;
@@ -565,10 +575,23 @@ export function normalizePosRetryDraft(value: unknown): PosRetryDraft | null {
   if (cart.length !== value.cart.length) return null;
   const pendingCartDiscountMinor = positiveMinor(value.pendingCartDiscountMinor);
   const pendingCartPointsMinor = positiveMinor(value.pendingCartPointsMinor);
+  const pendingCartPoints = positiveInteger(value.pendingCartPoints);
+  const pendingCartPointsProgramRevision = isNonNegativeInteger(
+    value.pendingCartPointsProgramRevision,
+  ) ? value.pendingCartPointsProgramRevision : undefined;
   if (
     value.pendingCartDiscountMinor !== undefined
     && value.pendingCartDiscountMinor !== 0
     && pendingCartDiscountMinor === undefined
+  ) return null;
+  if (
+    (value.pendingCartPoints !== undefined && pendingCartPoints === undefined)
+    || (
+      value.pendingCartPointsProgramRevision !== undefined
+      && pendingCartPointsProgramRevision === undefined
+    )
+    || ((pendingCartPoints === undefined) !== (pendingCartPointsProgramRevision === undefined))
+    || (pendingCartPoints !== undefined && pendingCartPointsMinor === undefined)
   ) return null;
   if (
     value.pendingCartPointsMinor !== undefined
@@ -587,7 +610,7 @@ export function normalizePosRetryDraft(value: unknown): PosRetryDraft | null {
   ) return null;
   const pendingCartPointsCustomerPhone = nonEmptyString(value.pendingCartPointsCustomerPhone);
   if (
-    pendingCartPointsMinor
+    (pendingCartPointsMinor || pendingCartPoints)
     && (
       !pendingCartPointsCustomerPhone
       || pendingCartPointsCustomerPhone.trim() !== customerPhone.trim()
@@ -608,6 +631,10 @@ export function normalizePosRetryDraft(value: unknown): PosRetryDraft | null {
     // upgrade, so no version bump is needed to read them safely.
     ...(pendingCartDiscountMinor ? { pendingCartDiscountMinor } : {}),
     ...(pendingCartPointsMinor ? { pendingCartPointsMinor } : {}),
+    ...(pendingCartPoints ? { pendingCartPoints } : {}),
+    ...(pendingCartPointsProgramRevision !== undefined
+      ? { pendingCartPointsProgramRevision }
+      : {}),
     ...(pendingCartPointsMinor && pendingCartPointsCustomerPhone
       ? { pendingCartPointsCustomerPhone }
       : {}),
@@ -617,7 +644,7 @@ export function normalizePosRetryDraft(value: unknown): PosRetryDraft | null {
     if (!retry) return null;
     if (
       retry.phase !== 'preparing_order'
-      && (pendingCartDiscountMinor || pendingCartPointsMinor)
+      && (pendingCartDiscountMinor || pendingCartPointsMinor || pendingCartPoints)
     ) return null;
     if (
       (retry.cartDiscountExpectedVersion !== undefined && !pendingCartDiscountMinor)
@@ -675,8 +702,13 @@ export function isCartStageDiscountAlreadyApplied(
 export function isCartStagePointsAlreadyApplied(
   pointsRedeemedMinor: number | undefined,
   pendingPointsMinor: number,
+  pointsRedeemed?: number,
+  pendingPoints?: number,
 ): boolean {
-  return pendingPointsMinor > 0 && pointsRedeemedMinor === pendingPointsMinor;
+  return pendingPointsMinor > 0
+    && pendingPoints !== undefined
+    && pointsRedeemed === pendingPoints
+    && pointsRedeemedMinor === pendingPointsMinor;
 }
 
 export function hasUnappliedCartStageBenefit(
@@ -687,10 +719,7 @@ export function hasUnappliedCartStageBenefit(
   return (
     pendingDiscountMinor > 0
     && !isCartStageDiscountAlreadyApplied(order.manual_discount_minor, pendingDiscountMinor)
-  ) || (
-    pendingPointsMinor > 0
-    && !isCartStagePointsAlreadyApplied(order.points_redeemed_minor, pendingPointsMinor)
-  );
+  ) || pendingPointsMinor > 0; // replay frozen points key/body before retiring it
 }
 
 export interface ReconciledCartStageBenefits {
@@ -766,10 +795,10 @@ export function reconcileCartStageBenefitsAfterReload(
     order.manual_discount_minor,
     pendingDiscountMinor,
   );
-  const pointsSettled = isCartStagePointsAlreadyApplied(
-    order.points_redeemed_minor,
-    pendingPointsMinor,
-  );
+  // Even matching money and points cannot prove the program revision/kind.
+  // The caller must replay the frozen idempotency key/body; backend replay is
+  // checked before optimistic version and current-revision validation.
+  const pointsSettled = false;
   const remainingDiscountMinor = discountSettled ? 0 : pendingDiscountMinor;
   const remainingPointsMinor = pointsSettled ? 0 : pendingPointsMinor;
   const reconciledRetry: PosCheckoutRetry = {

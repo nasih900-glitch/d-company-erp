@@ -23,18 +23,26 @@ from app.core.idempotency import check_or_reserve, store_response
 from app.core.permissions import has_permission, requires, requires_any
 from app.core.tenant import TenantContext
 from app.models import (
+    AuditLog,
     Branch,
     Company,
     ExpenseCategory,
     InvoiceCounter,
+    LoyaltyProgramRevision,
     MembershipPayment,
     MembershipRefundSettlement,
     Order,
+    PointsRedemption,
     Refund,
     Shift,
     Terminal,
 )
 from app.services.accounting.accounts import ACCOUNT_BY_CODE
+from app.services.pos.loyalty_program import (
+    LoyaltyProgramRules,
+    load_loyalty_program,
+    points_to_minor,
+)
 
 router = APIRouter()
 
@@ -109,6 +117,67 @@ def _new_branch_invoice_series(payload: BranchCreate) -> str:
     )
 
 
+async def _loyalty_reservation_blockers(
+    session,
+    *,
+    company_id: UUID,
+    limit: int = 10,
+) -> tuple[int, list[LoyaltyReservationBlockerRead]]:
+    """Return bounded, PII-free unresolved reservation evidence."""
+    unresolved = (
+        PointsRedemption.consumed_at.is_(None),
+        Order.company_id == company_id,
+        Order.status != "void",
+    )
+    count = int(
+        (
+            await session.execute(
+                select(func.count())
+                .select_from(PointsRedemption)
+                .join(Order, Order.id == PointsRedemption.order_id)
+                .where(*unresolved)
+            )
+        ).scalar_one()
+    )
+    rows = (
+        await session.execute(
+            select(Order.id, Order.invoice_no, Order.status)
+            .select_from(PointsRedemption)
+            .join(Order, Order.id == PointsRedemption.order_id)
+            .where(*unresolved)
+            .order_by(Order.created_at, Order.id)
+            .limit(limit)
+        )
+    ).all()
+    return count, [
+        LoyaltyReservationBlockerRead(
+            order_id=order_id,
+            reference=invoice_no or str(order_id),
+            status=order_status,
+        )
+        for order_id, invoice_no, order_status in rows
+    ]
+
+
+async def _loyalty_program_read(session, *, company_id: UUID) -> LoyaltyProgramRead:
+    program = await load_loyalty_program(
+        session, company_id=company_id, company_lock="share"
+    )
+    blocker_count, blockers = await _loyalty_reservation_blockers(
+        session, company_id=company_id
+    )
+    return LoyaltyProgramRead(
+        company_id=company_id,
+        revision=program.revision,
+        rules=program.rules,
+        published_by=program.published_by,
+        published_at=program.published_at,
+        value_of_100_points_minor=points_to_minor(100, program.rules),
+        unresolved_reservation_count=blocker_count,
+        unresolved_reservations=blockers,
+    )
+
+
 # ---------------------------------------------------------------- DTOs
 class CompanyRead(BaseModel):
     id: UUID
@@ -153,6 +222,28 @@ class CompanyUpdate(BaseModel):
     @classmethod
     def require_iana_timezone(cls, value: str | None) -> str | None:
         return _require_iana_timezone(value)
+
+
+class LoyaltyReservationBlockerRead(BaseModel):
+    order_id: UUID
+    reference: str
+    status: str
+
+
+class LoyaltyProgramRead(BaseModel):
+    company_id: UUID
+    revision: int
+    rules: LoyaltyProgramRules
+    published_by: UUID | None
+    published_at: datetime
+    value_of_100_points_minor: int
+    unresolved_reservation_count: int
+    unresolved_reservations: list[LoyaltyReservationBlockerRead]
+
+
+class LoyaltyProgramPublish(BaseModel):
+    expected_revision: int = Field(ge=0, strict=True)
+    rules: LoyaltyProgramRules
 
 
 class BranchRead(BaseModel):
@@ -446,6 +537,110 @@ async def update_company(
         payment_key_id=c.payment_key_id,
         payment_secret_set=bool(c.payment_key_secret),
     )
+
+
+@router.get("/loyalty-program", response_model=LoyaltyProgramRead)
+async def get_loyalty_program(
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("pos.read")),
+) -> LoyaltyProgramRead:
+    """Current company rules for POS, Customers and owner Settings clients."""
+    return await _loyalty_program_read(session, company_id=tenant.company_id)
+
+
+@router.put("/loyalty-program", response_model=LoyaltyProgramRead)
+async def publish_loyalty_program(
+    payload: LoyaltyProgramPublish,
+    request: Request,
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("settings.manage")),
+) -> LoyaltyProgramRead:
+    """Append one complete program revision under a company-wide CAS lock."""
+    idempotency_key, request_hash = _require_idempotency(
+        request, what="loyalty program publication"
+    )
+    replay = await check_or_reserve(
+        session,
+        key=idempotency_key,
+        request_hash=request_hash,
+        user_id=tenant.user_id,
+        terminal_id=tenant.terminal_id,
+    )
+    if replay:
+        return LoyaltyProgramRead.model_validate(replay["body"])
+
+    company = (
+        await session.execute(
+            select(Company)
+            .where(Company.id == tenant.company_id)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if company is None:
+        raise NotFoundError("company not found")
+    current = await load_loyalty_program(
+        session, company_id=tenant.company_id, company_lock="none"
+    )
+    if current.revision != payload.expected_revision:
+        raise ConflictError(
+            "The points program changed. Reload Settings and review the new values before saving.",
+            details={"current_revision": current.revision},
+        )
+    blocker_count, blockers = await _loyalty_reservation_blockers(
+        session, company_id=tenant.company_id
+    )
+    if blocker_count:
+        raise ConflictError(
+            "Resolve the listed unpaid points reservations before changing the points program.",
+            details={
+                "unresolved_reservation_count": blocker_count,
+                "unresolved_reservations": [
+                    blocker.model_dump(mode="json") for blocker in blockers
+                ],
+            },
+        )
+
+    published_at = datetime.now(timezone.utc)
+    revision = current.revision + 1
+    row = LoyaltyProgramRevision(
+        id=uuid4(),
+        company_id=tenant.company_id,
+        revision=revision,
+        rules=payload.rules.model_dump(mode="json"),
+        published_by=tenant.user_id,
+        published_at=published_at,
+    )
+    session.add(row)
+    session.add(
+        AuditLog(
+            actor_user_id=tenant.user_id,
+            company_id=tenant.company_id,
+            action="loyalty_program_publish",
+            entity_type="LoyaltyProgramRevision",
+            entity_id=str(row.id),
+            before={"revision": current.revision, "rules": current.snapshot()},
+            after={"revision": revision, "rules": row.rules},
+            terminal_id=tenant.terminal_id,
+        )
+    )
+    await session.flush()
+    response = LoyaltyProgramRead(
+        company_id=tenant.company_id,
+        revision=revision,
+        rules=payload.rules,
+        published_by=tenant.user_id,
+        published_at=published_at,
+        value_of_100_points_minor=points_to_minor(100, payload.rules),
+        unresolved_reservation_count=0,
+        unresolved_reservations=[],
+    )
+    await store_response(
+        session,
+        key=idempotency_key,
+        status_code=status.HTTP_200_OK,
+        body=response.model_dump(mode="json"),
+    )
+    return response
 
 
 # ============================================================================

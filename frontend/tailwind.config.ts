@@ -6,25 +6,26 @@ export default {
   theme: {
     extend: {
       colors: {
-        // D Company black/gold brand theme.
+        // Semantic channels are provided by the appearance root so every
+        // existing utility follows day, night, or the operating-system theme.
         bg: {
-          DEFAULT: '#050403',
-          surface: '#0d0a06',
-          raised: '#17110a',
-          border: '#3a2d17',
+          DEFAULT: 'rgb(var(--color-bg) / <alpha-value>)',
+          surface: 'rgb(var(--color-bg-surface) / <alpha-value>)',
+          raised: 'rgb(var(--color-bg-raised) / <alpha-value>)',
+          border: 'rgb(var(--color-bg-border) / <alpha-value>)',
         },
         fg: {
-          DEFAULT: '#f7f1df',
-          muted: '#b9a471',
-          subtle: '#7f714b',
+          DEFAULT: 'rgb(var(--color-fg) / <alpha-value>)',
+          muted: 'rgb(var(--color-fg-muted) / <alpha-value>)',
+          subtle: 'rgb(var(--color-fg-subtle) / <alpha-value>)',
         },
         accent: {
-          DEFAULT: '#d2b36d',
-          warm: '#f0c977',
-          good: '#72d79a',
-          bad: '#ff7d8f',
-          gold: '#d6b46b',
-          purple: '#9bb7d4',
+          DEFAULT: 'rgb(var(--color-accent) / <alpha-value>)',
+          warm: 'rgb(var(--color-accent-warm) / <alpha-value>)',
+          good: 'rgb(var(--color-good) / <alpha-value>)',
+          bad: 'rgb(var(--color-bad) / <alpha-value>)',
+          gold: 'rgb(var(--color-brand-gold) / <alpha-value>)',
+          purple: 'rgb(var(--color-accent-secondary) / <alpha-value>)',
         },
       },
       fontFamily: {
@@ -39,7 +40,7 @@ export default {
       },
       borderRadius: { xl2: '1.25rem' },
       boxShadow: {
-        glow: '0 0 0 1px rgba(210,179,109,0.22), 0 10px 34px rgba(0,0,0,0.5)',
+        glow: '0 10px 32px rgb(var(--color-shadow) / 0.16)',
       },
     },
   },

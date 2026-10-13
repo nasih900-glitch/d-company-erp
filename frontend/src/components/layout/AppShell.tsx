@@ -1,12 +1,12 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { NavLink, Outlet, useLocation } from 'react-router-dom';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { NavLink, Outlet, useLocation, type To } from 'react-router-dom';
 import {
   Calculator, LayoutGrid, BookOpen, Boxes, Gamepad2,
   Wallet, ScanLine, Users, LogOut, Tv, Settings, Menu, X, FileText,
   ClipboardList, UserCircle, Sparkles, ShieldCheck, ChefHat, CalendarClock,
   MessageSquareWarning, RotateCcw,
   CreditCard, HelpCircle, LayoutDashboard,
-  TabletSmartphone,
+  TabletSmartphone, MonitorCog, Moon, Sun,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -19,8 +19,13 @@ import {
   canManageGamingCentreProducts,
   GAMING_CENTRE_TERMINAL_POLICY,
   visibleProfileNavigationGroups,
-  type ProfileNavIcon,
+  type ProfileNavIcon, type ProfileNavigationItem,
 } from '@/lib/product-profile';
+import {
+  applyAppearancePreference, nextAppearancePreference, readAppearancePreference,
+  saveAppearancePreference, type AppearancePreference,
+} from '@/lib/appearance';
+import DCompanyBrandMark from '@/components/brand/DCompanyBrandMark';
 import InstallButton from './InstallButton';
 import ConnectivityBanner from './ConnectivityBanner';
 import SupportLauncher, { openSupportLauncher } from '@/components/support/SupportLauncher';
@@ -54,12 +59,40 @@ const NAV_ICONS: Record<ProfileNavIcon, LucideIcon> = {
   insights: Sparkles,
 };
 
+function isRouteActive(item: ProfileNavigationItem, pathname: string, search: string): boolean {
+  if (!item.to) return false;
+  const [path, query = ''] = item.to.split('?');
+  if (pathname !== path) return false;
+  if (!query) return true;
+  const expected = new URLSearchParams(query);
+  const actual = new URLSearchParams(search);
+  return Array.from(expected).every(([key, value]) => actual.get(key) === value);
+}
+
+export function navigationTarget(item: Pick<ProfileNavigationItem, 'to'>): To {
+  if (item.to === '/operations?tab=shifts') {
+    return { pathname: internalAppRouteOr('/operations'), search: '?tab=shifts' };
+  }
+  return internalAppRouteOr(item.to ?? '/gaming');
+}
+
+function AppearanceIcon({ preference }: { preference: AppearancePreference }) {
+  if (preference === 'day') return <Sun size={18}/>;
+  if (preference === 'night') return <Moon size={18}/>;
+  return <MonitorCog size={18}/>;
+}
+
 export default function AppShell({ children }: { children?: ReactNode }) {
   const {
     me, logout, demo, terminalId, terminalReady, terminalOptions, terminalIssue, selectTerminal,
   } = useAuth();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const loc = useLocation();
+  const drawerRef = useRef<HTMLElement>(null);
+  const drawerTriggerRef = useRef<HTMLButtonElement>(null);
+  const mainRef = useRef<HTMLElement>(null);
+  const mobileHeaderRef = useRef<HTMLElement>(null);
+  const [appearance, setAppearance] = useState<AppearancePreference>(() => readAppearancePreference());
   // protected_access (co_owner or super_owner) bypasses per-module Access
   // Control gating below. audit_access (super_owner only) additionally
   // gates the Audit Log nav item — a co_owner must not see a tab that the
@@ -95,8 +128,8 @@ export default function AppShell({ children }: { children?: ReactNode }) {
   const navItems = useMemo(() => navGroups.flatMap((group) => group.items), [navGroups]);
 
   const current = useMemo(
-    () => navItems.find((n) => n.to === loc.pathname),
-    [loc.pathname, navItems],
+    () => navItems.find((item) => isRouteActive(item, loc.pathname, loc.search)),
+    [loc.pathname, loc.search, navItems],
   );
 
   const initials = useMemo(
@@ -111,6 +144,14 @@ export default function AppShell({ children }: { children?: ReactNode }) {
     () => terminalOptions.find((terminal) => terminal.id === terminalId) ?? null,
     [terminalId, terminalOptions],
   );
+
+  useEffect(() => applyAppearancePreference(appearance), [appearance]);
+
+  const cycleAppearance = () => {
+    const next = nextAppearancePreference(appearance);
+    saveAppearancePreference(next);
+    setAppearance(next);
+  };
 
   const refreshSupportSummary = useCallback(() => {
     if (!hasSystemAccess || demo) {
@@ -138,22 +179,49 @@ export default function AppShell({ children }: { children?: ReactNode }) {
 
   useEffect(() => {
     setDrawerOpen(false);
-  }, [loc.pathname]);
+  }, [loc.pathname, loc.search]);
 
   useEffect(() => {
     if (!drawerOpen) return undefined;
 
     const previousOverflow = document.body.style.overflow;
+    const drawerTrigger = drawerTriggerRef.current;
+    const background = [mobileHeaderRef.current, mainRef.current]
+      .filter((node): node is HTMLElement => node !== null);
+    background.forEach((node) => { node.inert = true; });
+    const focusableSelector = 'button:not([disabled]), a[href], select:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])';
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setDrawerOpen(false);
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setDrawerOpen(false);
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const focusable = Array.from(drawerRef.current?.querySelectorAll<HTMLElement>(focusableSelector) ?? []);
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
     };
 
     document.body.style.overflow = 'hidden';
     window.addEventListener('keydown', onKeyDown);
+    const focusFrame = window.requestAnimationFrame(() => {
+      drawerRef.current?.querySelector<HTMLElement>(focusableSelector)?.focus();
+    });
 
     return () => {
+      window.cancelAnimationFrame(focusFrame);
       document.body.style.overflow = previousOverflow;
       window.removeEventListener('keydown', onKeyDown);
+      background.forEach((node) => { node.inert = false; });
+      drawerTrigger?.focus();
     };
   }, [drawerOpen]);
 
@@ -163,23 +231,20 @@ export default function AppShell({ children }: { children?: ReactNode }) {
           navigation rail for landscape/desktop widths where it does not
           crowd the cashier workspace. */}
       <header
+        ref={mobileHeaderRef}
         className="lg:hidden sticky top-0 z-30 bg-bg-surface/95 backdrop-blur border-b border-bg-border flex items-center justify-between px-3 py-3"
         style={{ paddingTop: 'max(0.75rem, env(safe-area-inset-top))' }}
       >
         <div className="flex items-center gap-3">
           <button
+            ref={drawerTriggerRef}
             onClick={() => setDrawerOpen(true)}
             aria-label="Open menu"
             className="p-2 -m-2 rounded-lg hover:bg-bg-raised active:scale-95 transition"
           >
             <Menu size={22} />
           </button>
-          <img
-            src="/brand/den-emblem-gold.png"
-            alt=""
-            aria-hidden="true"
-            className="h-9 w-9 rounded-full object-contain bg-bg/80 ring-1 ring-accent-gold/45"
-          />
+          <DCompanyBrandMark className="h-9 w-9"/>
           <div>
             <div className="text-base font-bold tracking-tight leading-none">D Company</div>
             <div className="text-[10px] text-fg-muted leading-none mt-0.5">
@@ -187,8 +252,15 @@ export default function AppShell({ children }: { children?: ReactNode }) {
             </div>
           </div>
         </div>
-        <div className="w-9 h-9 rounded-full bg-gradient-to-br from-accent to-accent-purple grid place-items-center font-bold text-bg text-sm">
-          {initials}
+        <div className="flex items-center gap-1">
+          <button type="button" onClick={cycleAppearance}
+            className="tap-target grid place-items-center rounded-full text-fg-muted hover:bg-bg-raised hover:text-fg"
+            aria-label={`Appearance: ${appearance}. Change appearance`} title={`Appearance: ${appearance}`}>
+            <AppearanceIcon preference={appearance}/>
+          </button>
+          <div className="w-9 h-9 rounded-full bg-fg grid place-items-center font-bold text-bg text-sm">
+            {initials}
+          </div>
         </div>
       </header>
 
@@ -196,6 +268,8 @@ export default function AppShell({ children }: { children?: ReactNode }) {
           Landscape/desktop: always visible, fixed column.
           Compact/mobile: off-canvas drawer; slides in when drawerOpen=true. */}
       <aside
+        ref={drawerRef}
+        aria-label="Application navigation"
         className={`
           fixed inset-y-0 left-0 z-50 w-[min(84vw,280px)] bg-bg-surface border-r border-bg-border p-4 flex min-h-0 flex-col
           transition-transform duration-200 ease-out will-change-transform lg:w-[260px] lg:translate-x-0 lg:static lg:z-auto lg:will-change-auto
@@ -205,12 +279,7 @@ export default function AppShell({ children }: { children?: ReactNode }) {
       >
         <div className="flex items-center justify-between gap-3 px-2 pb-4 md:pb-6">
           <div className="flex min-w-0 items-center gap-3">
-            <img
-              src="/brand/den-emblem-gold.png"
-              alt=""
-              aria-hidden="true"
-              className="h-11 w-11 shrink-0 rounded-full object-contain bg-bg/80 ring-1 ring-accent-gold/50"
-            />
+            <DCompanyBrandMark/>
             <div className="min-w-0">
               <h1 className="truncate text-xl font-bold tracking-tight">D Company</h1>
               <p className="text-xs text-fg-muted">ERP V1</p>
@@ -266,11 +335,11 @@ export default function AppShell({ children }: { children?: ReactNode }) {
                 return (
                   <NavLink
                     key={item.id}
-                    to={internalAppRouteOr(item.to)}
+                    to={navigationTarget(item)}
                     onClick={onNavigate}
-                    className={({ isActive }) =>
+                    className={() =>
                       `flex items-center gap-3 px-3 py-3 rounded-xl text-sm font-medium ` +
-                      (isActive
+                      (isRouteActive(item, loc.pathname, loc.search)
                         ? 'bg-bg-raised text-fg shadow-glow'
                         : 'text-fg-muted hover:text-fg hover:bg-bg-raised/50 active:scale-[0.98]')
                     }
@@ -290,6 +359,12 @@ export default function AppShell({ children }: { children?: ReactNode }) {
             </div>
           )}
           <InstallButton />
+          <button type="button" onClick={cycleAppearance}
+            className="btn btn-ghost mt-3 w-full !justify-start"
+            aria-label={`Appearance: ${appearance}. Change appearance`}>
+            <AppearanceIcon preference={appearance}/>
+            Appearance · {appearance}
+          </button>
           <div className="px-2 py-3">
             <p className="text-sm font-medium">{me?.name}</p>
             <p className="text-xs text-fg-muted">{rolesLabel(me?.roles)}</p>
@@ -341,7 +416,8 @@ export default function AppShell({ children }: { children?: ReactNode }) {
 
       {/* ===================== MAIN CONTENT ===================== */}
       <main
-        key={loc.pathname}
+        ref={mainRef}
+        key={`${loc.pathname}${loc.search}`}
         className="app-scroll route-frame px-3 py-4 md:p-6 min-w-0"
         style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom))' }}
       >

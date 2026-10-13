@@ -1,5 +1,14 @@
 package cloud.dcompany.erp.ui.remote
 
+import cloud.dcompany.erp.ui.theme.operationalDanger
+import cloud.dcompany.erp.ui.theme.operationalDangerContainer
+import cloud.dcompany.erp.ui.theme.operationalGood
+import cloud.dcompany.erp.ui.theme.operationalGoodContainer
+import cloud.dcompany.erp.ui.theme.operationalInformation
+import cloud.dcompany.erp.ui.theme.operationalInformationContainer
+import cloud.dcompany.erp.ui.theme.operationalWarning
+import cloud.dcompany.erp.ui.theme.operationalWarningContainer
+
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -83,10 +92,10 @@ internal fun RemoteAssistanceConsentDialog(
     AlertDialog(
         modifier = Modifier.testTag("remote-assistance-consent"),
         onDismissRequest = {},
-        containerColor = Brand.SurfaceOverlay,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = Radius.shapeLg,
         icon = {
-            Icon(Icons.Filled.SupportAgent, contentDescription = null, tint = Brand.Gold)
+            Icon(Icons.Filled.SupportAgent, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
         },
         title = {
             Text(
@@ -101,7 +110,7 @@ internal fun RemoteAssistanceConsentDialog(
             Column(verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
                 Text(
                     "${grant.requesterName} is asking for support access on this tablet.",
-                    color = Brand.Foreground,
+                    color = MaterialTheme.colorScheme.onSurface,
                 )
                 Text(
                     (if (grant.kind == RemoteGrantKind.ANYTIME) {
@@ -113,12 +122,12 @@ internal fun RemoteAssistanceConsentDialog(
                     }) + "Every session is always visible. The owner can view only the Help screen, " +
                         "open or refresh Help, collect safe diagnostics, or end the session. Passwords, " +
                         "PINs, payments, voids, refunds and Shift close are hidden.",
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Text(
                     "No taps, screen control, microphone, files or other apps are available. You can Stop a " +
                         "session immediately and revoke this choice later in Settings.",
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         },
@@ -128,8 +137,8 @@ internal fun RemoteAssistanceConsentDialog(
                 enabled = !busy,
                 modifier = Modifier.testTag("remote-assistance-allow"),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = Brand.Gold,
-                    contentColor = Brand.Background,
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.background,
                 ),
             ) { Text(if (busy) "Saving…" else "Allow ERP support") }
         },
@@ -167,8 +176,8 @@ internal fun RemoteAssistanceActiveBanner(
         else -> "Owner can view Help only; other ERP screens are hidden."
     }
     Surface(
-        color = Brand.InformationMuted,
-        border = BorderStroke(1.dp, Brand.Information.copy(alpha = 0.55f)),
+        color = MaterialTheme.colorScheme.operationalInformationContainer,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.operationalInformation.copy(alpha = 0.55f)),
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 56.dp)
@@ -184,25 +193,25 @@ internal fun RemoteAssistanceActiveBanner(
             horizontalArrangement = Arrangement.spacedBy(Spacing.md),
         ) {
             Box(
-                Modifier.size(34.dp).background(Brand.Information.copy(alpha = 0.18f), CircleShape),
+                Modifier.size(34.dp).background(MaterialTheme.colorScheme.operationalInformation.copy(alpha = 0.18f), CircleShape),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
                     if (privacyProtected) Icons.Filled.PrivacyTip else Icons.Filled.SupportAgent,
                     contentDescription = null,
-                    tint = Brand.Information,
+                    tint = MaterialTheme.colorScheme.operationalInformation,
                     modifier = Modifier.size(21.dp),
                 )
             }
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(
                     "Owner ERP support active — Help only",
-                    color = Brand.Foreground,
+                    color = MaterialTheme.colorScheme.onSurface,
                     style = MaterialTheme.typography.labelLarge,
                 )
                 Text(
                     statusDetail,
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.labelMedium,
                 )
             }
@@ -212,8 +221,8 @@ internal fun RemoteAssistanceActiveBanner(
                     .testTag("remote-assistance-stop")
                     .semantics { role = Role.Button },
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = Brand.Danger,
-                    contentColor = Brand.Foreground,
+                    containerColor = MaterialTheme.colorScheme.operationalDanger,
+                    contentColor = MaterialTheme.colorScheme.onSurface,
                 ),
             ) {
                 Icon(Icons.Filled.StopCircle, contentDescription = null, modifier = Modifier.size(19.dp))
@@ -236,8 +245,8 @@ internal fun RemoteAssistanceRequestWaitingBanner(
 ) {
     if (!visible) return
     Surface(
-        color = Brand.InformationMuted,
-        border = BorderStroke(1.dp, Brand.Information.copy(alpha = 0.45f)),
+        color = MaterialTheme.colorScheme.operationalInformationContainer,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.operationalInformation.copy(alpha = 0.45f)),
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 48.dp)
@@ -256,13 +265,13 @@ internal fun RemoteAssistanceRequestWaitingBanner(
             Icon(
                 Icons.Filled.SupportAgent,
                 contentDescription = null,
-                tint = Brand.Information,
+                tint = MaterialTheme.colorScheme.operationalInformation,
                 modifier = Modifier.size(21.dp),
             )
             Text(
                 "Owner support request waiting — open Help to review",
                 modifier = Modifier.weight(1f),
-                color = Brand.Foreground,
+                color = MaterialTheme.colorScheme.onSurface,
                 style = MaterialTheme.typography.labelLarge,
             )
             TextButton(
@@ -287,9 +296,9 @@ internal fun RemoteAssistanceSettingsCard(
 ) {
     var confirmRevoke by remember { mutableStateOf(false) }
     Surface(
-        color = Brand.Surface,
+        color = MaterialTheme.colorScheme.surface,
         shape = Radius.shapeLg,
-        border = BorderStroke(1.dp, Brand.BorderSubtle),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         modifier = Modifier.fillMaxWidth().testTag("remote-assistance-settings"),
     ) {
         Column(
@@ -297,7 +306,7 @@ internal fun RemoteAssistanceSettingsCard(
             verticalArrangement = Arrangement.spacedBy(Spacing.md),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Filled.SupportAgent, contentDescription = null, tint = Brand.Gold)
+                Icon(Icons.Filled.SupportAgent, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                 Column(Modifier.padding(start = Spacing.md)) {
                     Text("Remote assistance", style = MaterialTheme.typography.titleMedium)
                     Text(
@@ -308,7 +317,7 @@ internal fun RemoteAssistanceSettingsCard(
                             RemoteConsentChoice.DENIED -> "Owner ERP support was denied on this tablet."
                             RemoteConsentChoice.REVOKED -> "Owner ERP support has been revoked on this tablet."
                         },
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
@@ -316,9 +325,9 @@ internal fun RemoteAssistanceSettingsCard(
                 val groupedCode = state.pairingCode?.let(::groupedRemotePairingCode)
                 if (groupedCode != null) {
                     Surface(
-                        color = Brand.BackgroundSecondary,
+                        color = MaterialTheme.colorScheme.surfaceContainerLow,
                         shape = Radius.shapeMd,
-                        border = BorderStroke(1.dp, Brand.BorderSubtle),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                         modifier = Modifier.fillMaxWidth().testTag("remote-device-pairing"),
                     ) {
                         Column(
@@ -328,16 +337,16 @@ internal fun RemoteAssistanceSettingsCard(
                             Text("Pair this tablet once", style = MaterialTheme.typography.titleSmall)
                             Text(
                                 "Ask the owner to enter this code once in Remote Assistance Device Centre.",
-                                color = Brand.ForegroundMuted,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                             Text(
                                 "The current approved key stays active until the owner approves this replacement.",
-                                color = Brand.ForegroundMuted,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                             Text(
                                 groupedCode,
                                 modifier = Modifier.testTag("remote-device-pairing-code"),
-                                color = Brand.Gold,
+                                color = MaterialTheme.colorScheme.primary,
                                 fontFamily = FontFamily.Monospace,
                                 fontSize = 24.sp,
                                 letterSpacing = 1.sp,
@@ -351,7 +360,7 @@ internal fun RemoteAssistanceSettingsCard(
                     Text(
                         "Replacing the protected device key keeps the current approved key active while " +
                             "the owner verifies a new one-time code.",
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     TextButton(
                         onClick = onReplaceDeviceKey,
@@ -364,7 +373,7 @@ internal fun RemoteAssistanceSettingsCard(
             if (state.pendingGrant != null) {
                 Text(
                     "An owner support request is waiting. Finish the current task, then open Help to review it.",
-                    color = Brand.Warning,
+                    color = MaterialTheme.colorScheme.operationalWarning,
                     modifier = Modifier.testTag("remote-assistance-settings-request-waiting"),
                 )
             }
@@ -374,7 +383,7 @@ internal fun RemoteAssistanceSettingsCard(
                         "Support cannot start until Android notifications and the Remote assistance " +
                             "channel are enabled. Tap below; Android will show the permission prompt " +
                             "or open D Company ERP notification settings.",
-                        color = Brand.Warning,
+                        color = MaterialTheme.colorScheme.operationalWarning,
                     )
                     TextButton(
                         onClick = onEnableNotifications,
@@ -384,12 +393,12 @@ internal fun RemoteAssistanceSettingsCard(
                     }
                 }
             }
-            state.statusMessage?.let { Text(it, color = Brand.ForegroundMuted) }
+            state.statusMessage?.let { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant) }
             if (state.activeSession != null) {
                 Button(
                     onClick = onStop,
                     modifier = Modifier.testTag("remote-assistance-settings-stop"),
-                    colors = ButtonDefaults.buttonColors(containerColor = Brand.Danger),
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.operationalDanger),
                 ) { Text("Stop active session") }
             }
             if (state.consent == RemoteConsentChoice.ALLOWED) {
@@ -397,7 +406,7 @@ internal fun RemoteAssistanceSettingsCard(
                     onClick = { confirmRevoke = true },
                     enabled = !state.decisionInFlight,
                     modifier = Modifier.testTag("remote-assistance-revoke"),
-                ) { Text("Revoke owner support", color = Brand.Danger) }
+                ) { Text("Revoke owner support", color = MaterialTheme.colorScheme.operationalDanger) }
             }
         }
     }
@@ -418,7 +427,7 @@ internal fun RemoteAssistanceSettingsCard(
                         onRevoke()
                     },
                     modifier = Modifier.testTag("remote-assistance-confirm-revoke"),
-                ) { Text("Revoke access", color = Brand.Danger) }
+                ) { Text("Revoke access", color = MaterialTheme.colorScheme.operationalDanger) }
             },
             dismissButton = {
                 TextButton(onClick = { confirmRevoke = false }) { Text("Keep allowed") }
@@ -434,14 +443,14 @@ internal fun RemotePrivacyPlaceholder(modifier: Modifier = Modifier) {
         modifier
             .fillMaxWidth()
             .heightIn(min = 180.dp)
-            .background(Brand.BackgroundSecondary, Radius.shapeLg)
+            .background(MaterialTheme.colorScheme.surfaceContainerLow, Radius.shapeLg)
             .testTag("remote-privacy-placeholder"),
         contentAlignment = Alignment.Center,
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Icon(Icons.Filled.PrivacyTip, contentDescription = null, tint = Brand.Gold)
+            Icon(Icons.Filled.PrivacyTip, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
             Text("Privacy protected", style = MaterialTheme.typography.titleMedium)
-            Text("Sensitive ERP details are hidden", color = Brand.ForegroundMuted)
+            Text("Sensitive ERP details are hidden", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }

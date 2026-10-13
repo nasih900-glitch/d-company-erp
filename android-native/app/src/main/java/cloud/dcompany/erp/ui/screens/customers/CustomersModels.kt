@@ -17,14 +17,10 @@ import java.util.Locale
 
 /**
  * 10 loyalty points = ₹1, i.e. one point is worth 10 paise. This mirrors
- * MINOR_PER_POINT in backend/app/services/pos/points.py, which is the only
- * place the rate is actually decided — the number here is for *display* of a
- * balance's worth, never for pricing a bill. The server prices redemptions.
- *
- * Earning is a separate rate: 2 points per ₹10 spent on gaming.
+ * Values come from the versioned company program. A migrated Room row leaves
+ * them unknown until an authoritative pull; the UI must not guess revision-0
+ * economics for an old cache.
  */
-const val MINOR_PER_POINT: Long = 10L
-
 @Serializable
 data class Customer(
     val id: String,
@@ -37,6 +33,8 @@ data class Customer(
     @SerialName("total_spent_minor") val totalSpentMinor: Long = 0,
     /** Spendable balance. */
     @SerialName("loyalty_points") val loyaltyPoints: Int = 0,
+    @SerialName("loyalty_program_revision") val loyaltyProgramRevision: Long? = null,
+    @SerialName("loyalty_point_value_minor") val loyaltyPointValueMinor: Int? = null,
     /** Only-ever-rises counter that drives the rank ladder. */
     @SerialName("lifetime_gaming_points_earned") val lifetimeGamingPointsEarned: Int = 0,
     @SerialName("gaming_rank") val gamingRank: String = "Rookie",
@@ -65,7 +63,7 @@ data class Customer(
     val localWriteId: String? = null,
 ) {
     /** What the spendable balance is worth, in paise. Never a Double. */
-    val loyaltyValueMinor: Long get() = loyaltyPoints.toLong() * MINOR_PER_POINT
+    val loyaltyValueMinor: Long? get() = loyaltyPointValueMinor?.let { loyaltyPoints.toLong() * it }
 
     val displayName: String get() = name?.takeIf { it.isNotBlank() } ?: "— no name —"
 

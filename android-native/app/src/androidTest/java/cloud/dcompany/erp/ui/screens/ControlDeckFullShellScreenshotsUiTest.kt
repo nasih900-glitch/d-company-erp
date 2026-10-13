@@ -261,7 +261,7 @@ private fun PosFullShellFixture() {
         onUpdateDraftDetails = { _, _, _, _ -> }, onRefresh = {},
         onPrepareDirectCheckout = {}, onContinueDirectCheckout = {},
         onDismissDirectCheckout = {}, onConfirmDirectZero = {},
-        onRedeemDirectPoints = {}, onCapture = { _, _, _ -> },
+        onRedeemDirectPoints = {}, onRedeemDirectReward = {}, onCapture = { _, _, _ -> },
         onCaptureSplit = { _, _ -> }, onRetryRejectedSale = {},
         onRetryHeldPayment = {}, onPrepareHeldOrder = {},
         onUpdateHeldOrderDiscount = { _, _ -> }, onContinueHeldOrder = {},

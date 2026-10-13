@@ -1,5 +1,16 @@
 package cloud.dcompany.erp.ui
 
+import cloud.dcompany.erp.ui.theme.operationalDanger
+import cloud.dcompany.erp.ui.theme.operationalDangerContainer
+import cloud.dcompany.erp.ui.theme.operationalGood
+import cloud.dcompany.erp.ui.theme.operationalGoodContainer
+import cloud.dcompany.erp.ui.theme.operationalInformation
+import cloud.dcompany.erp.ui.theme.operationalInformationContainer
+import cloud.dcompany.erp.ui.theme.operationalWarning
+import cloud.dcompany.erp.ui.theme.operationalWarningContainer
+
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -34,6 +45,7 @@ import androidx.compose.material.icons.filled.Assessment
 import androidx.compose.material.icons.filled.AttachMoney
 import androidx.compose.material.icons.filled.CardMembership
 import androidx.compose.material.icons.filled.CalendarMonth
+import androidx.compose.material.icons.filled.Brightness6
 import androidx.compose.material.icons.filled.Celebration
 import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.CloudOff
@@ -77,6 +89,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
@@ -97,13 +110,15 @@ import cloud.dcompany.erp.core.sync.OutboxWorkStatus
 import cloud.dcompany.erp.core.sync.outboxWorkVisibleLabel
 import cloud.dcompany.erp.ui.components.SyncAvailabilityProblem
 import cloud.dcompany.erp.ui.components.DCompanyBrandMark
-import cloud.dcompany.erp.ui.components.GoldAtmosphere
 import cloud.dcompany.erp.ui.components.fieldColors
 import cloud.dcompany.erp.ui.components.syncAvailabilityCopy
 import cloud.dcompany.erp.ui.components.syncAvailabilityDialogTitle
 import cloud.dcompany.erp.ui.theme.Brand
+import cloud.dcompany.erp.ui.theme.AppearancePreference
+import cloud.dcompany.erp.ui.theme.next
 import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.theme.Spacing
+import cloud.dcompany.erp.ui.theme.Motion
 import cloud.dcompany.erp.ui.remote.RemoteAssistanceActiveBanner
 import cloud.dcompany.erp.ui.remote.RemoteAssistanceRequestWaitingBanner
 
@@ -159,6 +174,8 @@ fun WorkspaceScaffold(
     remoteSupportPrivacyProtected: Boolean = true,
     remoteSupportLastCommandLabel: String? = null,
     canChangeTill: Boolean,
+    appearancePreference: AppearancePreference = AppearancePreference.System,
+    onAppearancePreferenceChanged: (AppearancePreference) -> Unit = {},
     onOpenSupport: () -> Unit,
     onChangeTill: () -> Unit,
     onSignOut: () -> Unit,
@@ -174,8 +191,15 @@ fun WorkspaceScaffold(
 
     var commandOpen by remember { mutableStateOf(false) }
     val destinationStateHolder = rememberSaveableStateHolder()
+    var routeVisible by remember(current) { mutableStateOf(false) }
+    LaunchedEffect(current) { routeVisible = true }
+    val routeProgress by animateFloatAsState(
+        targetValue = if (routeVisible) 1f else 0f,
+        animationSpec = tween(Motion.fast, easing = Motion.emphasized),
+        label = "Incoming workspace",
+    )
 
-    BoxWithConstraints(Modifier.fillMaxSize().background(Brand.Background)) {
+    BoxWithConstraints(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         // The Redmi-class target is 1280 x 800 logical pixels. Secondary
         // modules use a compact rail at this width; daily control-deck pages
         // receive the full-width board and bottom navigation instead.
@@ -205,6 +229,8 @@ fun WorkspaceScaffold(
                     pendingSupportCount = pendingSupportCount,
                     compact = compact,
                     canChangeTill = canChangeTill,
+                    appearancePreference = appearancePreference,
+                    onAppearancePreferenceChanged = onAppearancePreferenceChanged,
                     onOpenCommand = { commandOpen = true },
                     onOpenSupport = onOpenSupport,
                     onChangeTill = onChangeTill,
@@ -222,19 +248,19 @@ fun WorkspaceScaffold(
                     onStop = onStopRemoteSupport,
                 )
                 Box(Modifier.fillMaxSize()) {
-                    if (controlDeck && current != Destination.Gaming) {
-                        GoldAtmosphere()
-                    }
-                    // A full-screen crossfade renders both destination trees into
-                    // overlapping layers. On the target 2560 x 1600 tablet that
-                    // turns every sidebar tap into several expensive 4 MP frames,
-                    // delaying both the visual response and the newly opened
-                    // screen's first interaction. Route changes are operational
-                    // navigation, so swap the content immediately and reserve
-                    // motion for small, local state changes.
-                    destinationStateHolder.SaveableStateProvider(current.name) {
-                        content(current) { target ->
-                            if (target in destinations) onDestinationChanged(target)
+                    // The prior route is removed immediately. Only the incoming
+                    // surface moves, so navigation stays interruptible without
+                    // rendering two heavy operational trees at once.
+                    Box(
+                        Modifier.fillMaxSize().graphicsLayer {
+                            alpha = routeProgress
+                            translationX = size.width * 0.025f * (1f - routeProgress)
+                        },
+                    ) {
+                        destinationStateHolder.SaveableStateProvider(current.name) {
+                            content(current) { target ->
+                                if (target in destinations) onDestinationChanged(target)
+                            }
                         }
                     }
                 }
@@ -294,8 +320,8 @@ private fun ControlDeckBottomNavigation(
         Destination.Customers,
     ).filter(destinations::contains)
     Row(
-        Modifier.fillMaxWidth().height(68.dp).background(Brand.BackgroundSecondary)
-            .border(1.dp, Brand.Gold.copy(alpha = 0.28f)),
+        Modifier.fillMaxWidth().height(68.dp).background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.28f)),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         primary.forEach { destination ->
@@ -314,12 +340,12 @@ private fun ControlDeckBottomNavigation(
                 Icon(
                     destination.icon,
                     contentDescription = null,
-                    tint = if (selected) Brand.GoldBright else Brand.ForegroundMuted,
+                    tint = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(24.dp),
                 )
                 Text(
                     destination.label,
-                    color = if (selected) Brand.GoldBright else Brand.ForegroundMuted,
+                    color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.labelSmall,
                     maxLines = 1,
                 )
@@ -333,8 +359,8 @@ private fun ControlDeckBottomNavigation(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
-            Icon(Icons.Filled.MoreVert, contentDescription = null, tint = Brand.ForegroundMuted, modifier = Modifier.size(24.dp))
-            Text("More", color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelSmall)
+            Icon(Icons.Filled.MoreVert, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(24.dp))
+            Text("More", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
         }
     }
 }
@@ -355,8 +381,8 @@ private fun WorkspaceSidebar(
 
     Column(
         modifier
-            .background(Brand.BackgroundSecondary)
-            .border(width = 1.dp, color = Brand.BorderSubtle),
+            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .border(width = 1.dp, color = MaterialTheme.colorScheme.outlineVariant),
     ) {
         Row(
             Modifier.fillMaxWidth().height(68.dp)
@@ -375,14 +401,14 @@ private fun WorkspaceSidebar(
                 Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
                     Text(
                         "D COMPANY",
-                        color = Brand.Foreground,
+                        color = MaterialTheme.colorScheme.onSurface,
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold,
                         maxLines = 1,
                     )
                     Text(
                         "OPERATIONS",
-                        color = Brand.GoldMuted,
+                        color = MaterialTheme.colorScheme.secondary,
                         style = MaterialTheme.typography.labelSmall.copy(
                             fontSize = 10.sp,
                             letterSpacing = 0.5.sp,
@@ -393,7 +419,7 @@ private fun WorkspaceSidebar(
             }
         }
 
-        HorizontalDivider(color = Brand.BorderSubtle)
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
         LazyColumn(
             modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -414,7 +440,7 @@ private fun WorkspaceSidebar(
         }
 
         if (settingsAvailable) {
-            HorizontalDivider(color = Brand.BorderSubtle, modifier = Modifier.padding(horizontal = Spacing.sm))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant, modifier = Modifier.padding(horizontal = Spacing.sm))
             WorkspaceNavItem(
                 destination = Destination.Settings,
                 selected = current == Destination.Settings,
@@ -441,7 +467,7 @@ private fun WorkspaceNavItem(
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
-    val selectedBackground = Brand.SurfaceHover
+    val selectedBackground = MaterialTheme.colorScheme.secondaryContainer
     Box(
         modifier
             .fillMaxWidth()
@@ -461,7 +487,7 @@ private fun WorkspaceNavItem(
         if (selected) {
             Box(
                 Modifier.align(Alignment.CenterStart).width(3.dp).height(26.dp)
-                    .clip(Radius.shapePill).background(Brand.Gold),
+                    .clip(Radius.shapePill).background(MaterialTheme.colorScheme.primary),
             )
         }
         if (expanded) {
@@ -473,12 +499,12 @@ private fun WorkspaceNavItem(
                 Icon(
                     destination.icon,
                     contentDescription = null,
-                    tint = if (selected) Brand.Gold else Brand.ForegroundMuted,
+                    tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(21.dp),
                 )
                 Text(
                     destination.label,
-                    color = if (selected) Brand.Foreground else Brand.ForegroundMuted,
+                    color = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
                     maxLines = 1,
@@ -495,12 +521,12 @@ private fun WorkspaceNavItem(
                 Icon(
                     destination.icon,
                     contentDescription = null,
-                    tint = if (selected) Brand.Gold else Brand.ForegroundMuted,
+                    tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(20.dp),
                 )
                 Text(
                     compactLabel,
-                    color = if (selected) Brand.Foreground else Brand.ForegroundMuted,
+                    color = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.labelSmall,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -519,39 +545,39 @@ private fun WorkspaceIdentity(
 ) {
     Row(
         Modifier.fillMaxWidth().padding(horizontal = Spacing.sm, vertical = Spacing.sm)
-            .clip(Radius.shapeMd).background(Brand.Surface)
-            .border(1.dp, Brand.BorderSubtle, Radius.shapeMd)
+            .clip(Radius.shapeMd).background(MaterialTheme.colorScheme.surface)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeMd)
             .padding(if (expanded) Spacing.md else Spacing.sm),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = if (expanded) Arrangement.Start else Arrangement.Center,
     ) {
         Box(
             Modifier.size(if (narrow) 32.dp else 36.dp).clip(CircleShape)
-                .background(Brand.SurfaceHover),
+                .background(MaterialTheme.colorScheme.secondaryContainer),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(Icons.Filled.Person, contentDescription = null, tint = Brand.Gold, modifier = Modifier.size(20.dp))
+            Icon(Icons.Filled.Person, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
         }
         if (expanded) {
             Spacer(Modifier.width(Spacing.sm))
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
                 Text(
                     employeeName,
-                    color = Brand.Foreground,
+                    color = MaterialTheme.colorScheme.onSurface,
                     style = MaterialTheme.typography.labelLarge,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
                     locationLabel,
-                    color = Brand.ForegroundFaint,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.labelSmall,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
                     "v${BuildConfig.VERSION_NAME}",
-                    color = Brand.Disabled,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.labelSmall,
                 )
             }
@@ -570,6 +596,8 @@ private fun WorkspaceHeader(
     pendingSupportCount: Int,
     compact: Boolean,
     canChangeTill: Boolean,
+    appearancePreference: AppearancePreference,
+    onAppearancePreferenceChanged: (AppearancePreference) -> Unit,
     onOpenCommand: () -> Unit,
     onOpenSupport: () -> Unit,
     onChangeTill: () -> Unit,
@@ -586,8 +614,8 @@ private fun WorkspaceHeader(
     Row(
         Modifier.fillMaxWidth()
             .height(if (controlDeckDestination) 56.dp else 68.dp)
-            .background(Brand.BackgroundSecondary)
-            .border(width = 1.dp, color = Brand.BorderSubtle)
+            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .border(width = 1.dp, color = MaterialTheme.colorScheme.outlineVariant)
             .padding(horizontal = if (compact) Spacing.md else Spacing.lg),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Spacing.md),
@@ -603,7 +631,7 @@ private fun WorkspaceHeader(
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(
                     if (controlDeckDestination) "D COMPANY" else destination.label,
-                    color = if (controlDeckDestination) Brand.GoldBright else Brand.Foreground,
+                    color = if (controlDeckDestination) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = if (controlDeckDestination) FontWeight.Bold else FontWeight.Normal,
                     letterSpacing = if (controlDeckDestination) 1.sp else 0.sp,
@@ -612,7 +640,7 @@ private fun WorkspaceHeader(
                 )
                 Text(
                     if (controlDeckDestination) "GAMING LOUNGE" else destination.description,
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodySmall,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -623,18 +651,18 @@ private fun WorkspaceHeader(
         if (!compact) {
             Row(
                 Modifier.widthIn(min = 280.dp, max = 380.dp).heightIn(min = 48.dp)
-                    .clip(Radius.shapeMd).background(Brand.Surface)
-                    .border(1.dp, Brand.ControlBorder, Radius.shapeMd)
+                    .clip(Radius.shapeMd).background(MaterialTheme.colorScheme.surface)
+                    .border(1.dp, MaterialTheme.colorScheme.outline, Radius.shapeMd)
                     .clickable(onClick = onOpenCommand)
                     .semantics { role = Role.Button; contentDescription = "Find a module" }
                     .padding(horizontal = Spacing.md),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
             ) {
-                Icon(Icons.Filled.Search, contentDescription = null, tint = Brand.ForegroundFaint, modifier = Modifier.size(20.dp))
+                Icon(Icons.Filled.Search, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
                 Text(
                     "Find a module…",
-                    color = Brand.ForegroundFaint,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.weight(1f),
                 )
@@ -672,9 +700,9 @@ private fun WorkspaceHeader(
             )
         } else {
             Surface(
-                color = Brand.Surface,
+                color = MaterialTheme.colorScheme.surface,
                 shape = Radius.shapePill,
-                border = BorderStroke(1.dp, Brand.ControlBorder),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
                 modifier = Modifier.heightIn(min = 48.dp)
                     .clickable(onClick = onOpenSupport)
                     .semantics {
@@ -690,18 +718,18 @@ private fun WorkspaceHeader(
                     Icon(
                         Icons.AutoMirrored.Filled.HelpOutline,
                         contentDescription = null,
-                        tint = Brand.ForegroundMuted,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(21.dp),
                     )
                     Text(
                         "Help",
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.labelLarge,
                     )
                     if (pendingSupportCount > 0) {
                         Text(
                             pendingSupportCount.coerceAtMost(99).toString(),
-                            color = Brand.Gold,
+                            color = MaterialTheme.colorScheme.primary,
                             style = MaterialTheme.typography.labelLarge.copy(fontFeatureSettings = "tnum"),
                             fontWeight = FontWeight.Bold,
                         )
@@ -716,13 +744,13 @@ private fun WorkspaceHeader(
                     icon = Icons.Filled.Person,
                     accessibilityLabel = "Account actions",
                     onClick = { accountMenuOpen = true },
-                    tint = Brand.Gold,
+                    tint = MaterialTheme.colorScheme.primary,
                 )
             } else {
                 Surface(
-                    color = Brand.Surface,
+                    color = MaterialTheme.colorScheme.surface,
                     shape = Radius.shapeMd,
-                    border = BorderStroke(1.dp, Brand.ControlBorder),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
                     modifier = Modifier.height(48.dp)
                         .clickable { accountMenuOpen = true }
                         .semantics {
@@ -736,36 +764,46 @@ private fun WorkspaceHeader(
                         horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
                     ) {
                         Box(
-                            Modifier.size(34.dp).clip(CircleShape).background(Brand.SurfaceHover),
+                            Modifier.size(34.dp).clip(CircleShape).background(MaterialTheme.colorScheme.secondaryContainer),
                             contentAlignment = Alignment.Center,
                         ) {
-                            Icon(Icons.Filled.Person, contentDescription = null, tint = Brand.Gold, modifier = Modifier.size(19.dp))
+                            Icon(Icons.Filled.Person, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(19.dp))
                         }
                         Column(Modifier.widthIn(max = 150.dp), verticalArrangement = Arrangement.spacedBy(1.dp)) {
                             Text(
                                 employeeName,
-                                color = Brand.Foreground,
+                                color = MaterialTheme.colorScheme.onSurface,
                                 style = MaterialTheme.typography.labelLarge,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
                             Text(
                                 locationLabel,
-                                color = Brand.ForegroundFaint,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 style = MaterialTheme.typography.labelSmall,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
                         }
-                        Icon(Icons.Filled.MoreVert, contentDescription = null, tint = Brand.ForegroundMuted)
+                        Icon(Icons.Filled.MoreVert, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }
             DropdownMenu(
                 expanded = accountMenuOpen,
                 onDismissRequest = { accountMenuOpen = false },
-                containerColor = Brand.SurfaceOverlay,
+                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
             ) {
+                DropdownMenuItem(
+                    text = {
+                        Text("Appearance · ${appearancePreference.name.lowercase().replaceFirstChar(Char::uppercase)}")
+                    },
+                    leadingIcon = { Icon(Icons.Filled.Brightness6, contentDescription = null) },
+                    onClick = {
+                        accountMenuOpen = false
+                        onAppearancePreferenceChanged(appearancePreference.next())
+                    },
+                )
                 if (canChangeTill) {
                     DropdownMenuItem(
                         text = { Text("Change till") },
@@ -788,13 +826,13 @@ private fun HeaderIconAction(
     icon: ImageVector,
     accessibilityLabel: String,
     onClick: () -> Unit,
-    tint: Color = Brand.ForegroundMuted,
+    tint: Color = MaterialTheme.colorScheme.onSurfaceVariant,
     badgeCount: Int = 0,
 ) {
     Surface(
-        color = Brand.Surface,
+        color = MaterialTheme.colorScheme.surface,
         shape = Radius.shapeMd,
-        border = BorderStroke(1.dp, Brand.ControlBorder),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
         modifier = Modifier.size(48.dp)
             .clickable(onClick = onClick)
             .semantics {
@@ -807,12 +845,12 @@ private fun HeaderIconAction(
             if (badgeCount > 0) {
                 Box(
                     Modifier.align(Alignment.TopEnd).padding(top = 3.dp, end = 3.dp)
-                        .size(18.dp).clip(CircleShape).background(Brand.Gold),
+                        .size(18.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary),
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
                         badgeCount.coerceAtMost(99).toString(),
-                        color = Brand.Background,
+                        color = MaterialTheme.colorScheme.background,
                         style = MaterialTheme.typography.labelSmall.copy(
                             fontSize = 9.sp,
                             fontFeatureSettings = "tnum",
@@ -834,19 +872,19 @@ private fun ConnectivityStatus(
 ) {
     var detailsOpen by remember { mutableStateOf(false) }
     val (label, color, icon) = when (problem) {
-        SyncAvailabilityProblem.NONE -> Triple("Online", Brand.Good, Icons.Filled.CloudDone)
-        SyncAvailabilityProblem.VERIFYING -> Triple("Checking", Brand.Information, Icons.Filled.Sync)
-        SyncAvailabilityProblem.NO_NETWORK -> Triple("No internet", Brand.Warning, Icons.Filled.CloudOff)
-        SyncAvailabilityProblem.SERVER_UNREACHABLE -> Triple("Server issue", Brand.Danger, Icons.Filled.Error)
-        SyncAvailabilityProblem.RECOVERING -> Triple("Restoring", Brand.Information, Icons.Filled.Sync)
+        SyncAvailabilityProblem.NONE -> Triple("Online", MaterialTheme.colorScheme.operationalGood, Icons.Filled.CloudDone)
+        SyncAvailabilityProblem.VERIFYING -> Triple("Checking", MaterialTheme.colorScheme.operationalInformation, Icons.Filled.Sync)
+        SyncAvailabilityProblem.NO_NETWORK -> Triple("No internet", MaterialTheme.colorScheme.operationalWarning, Icons.Filled.CloudOff)
+        SyncAvailabilityProblem.SERVER_UNREACHABLE -> Triple("Server issue", MaterialTheme.colorScheme.operationalDanger, Icons.Filled.Error)
+        SyncAvailabilityProblem.RECOVERING -> Triple("Restoring", MaterialTheme.colorScheme.operationalInformation, Icons.Filled.Sync)
     }
     val background = if (problem == SyncAvailabilityProblem.NONE) {
-        Brand.Surface
+        MaterialTheme.colorScheme.surface
     } else {
         color.copy(alpha = 0.12f)
     }
     val border = if (problem == SyncAvailabilityProblem.NONE) {
-        Brand.BorderSubtle
+        MaterialTheme.colorScheme.outlineVariant
     } else {
         color.copy(alpha = 0.42f)
     }
@@ -881,7 +919,7 @@ private fun ConnectivityStatus(
             )
             Text(
                 label,
-                color = if (problem == SyncAvailabilityProblem.NONE) Brand.ForegroundMuted else color,
+                color = if (problem == SyncAvailabilityProblem.NONE) MaterialTheme.colorScheme.onSurfaceVariant else color,
                 style = MaterialTheme.typography.labelMedium,
                 fontWeight = if (problem == SyncAvailabilityProblem.NONE) FontWeight.Normal else FontWeight.SemiBold,
                 maxLines = 1,
@@ -897,7 +935,7 @@ private fun ConnectivityStatus(
             ?: "This tablet is connected to D Company ERP. Saved work can synchronise normally."
         AlertDialog(
             onDismissRequest = { detailsOpen = false },
-            containerColor = Brand.SurfaceOverlay,
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
             shape = Radius.shapeLg,
             icon = {
                 Icon(
@@ -906,11 +944,11 @@ private fun ConnectivityStatus(
                     tint = color,
                 )
             },
-            title = { Text(title, color = Brand.Foreground) },
+            title = { Text(title, color = MaterialTheme.colorScheme.onSurface) },
             text = {
                 Text(
                     detail,
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodyMedium,
                 )
             },
@@ -922,13 +960,13 @@ private fun ConnectivityStatus(
                             onOpenSupport()
                         },
                     ) {
-                        Text("Report issue", color = Brand.Gold)
+                        Text("Report issue", color = MaterialTheme.colorScheme.primary)
                     }
                 }
             },
             dismissButton = {
                 TextButton(onClick = { detailsOpen = false }) {
-                    Text("Close", color = Brand.ForegroundMuted)
+                    Text("Close", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             },
         )
@@ -954,10 +992,10 @@ private fun OutboxWorkStatusPill(
     ) {
         if (visibleLabel != null) {
             val color = when {
-                status.actionRequiredCount > 0 -> Brand.Danger
-                syncing -> Brand.Information
-                status.retryableCount > 0 -> Brand.Warning
-                else -> Brand.Information
+                status.actionRequiredCount > 0 -> MaterialTheme.colorScheme.operationalDanger
+                syncing -> MaterialTheme.colorScheme.operationalInformation
+                status.retryableCount > 0 -> MaterialTheme.colorScheme.operationalWarning
+                else -> MaterialTheme.colorScheme.operationalInformation
             }
             val accessibilityDetail = buildList {
                 if (status.actionRequiredCount > 0) add("${status.actionRequiredCount} need review")
@@ -1010,9 +1048,9 @@ private fun DestinationCommandDialog(
         onDismissRequest = onDismiss,
         modifier = Modifier.widthIn(max = 560.dp).fillMaxWidth(0.92f).imePadding(),
         properties = DialogProperties(usePlatformDefaultWidth = false),
-        containerColor = Brand.SurfaceOverlay,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = Radius.shapeLg,
-        title = { Text("Go to a module", color = Brand.Foreground) },
+        title = { Text("Go to a module", color = MaterialTheme.colorScheme.onSurface) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
                 OutlinedTextField(
@@ -1028,7 +1066,7 @@ private fun DestinationCommandDialog(
                 if (matches.isEmpty()) {
                     Text(
                         "No accessible module matches \"$normalized\".",
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.bodyMedium,
                         modifier = Modifier.padding(vertical = Spacing.xl),
                     )
@@ -1045,12 +1083,12 @@ private fun DestinationCommandDialog(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(Spacing.md),
                             ) {
-                                Icon(destination.icon, contentDescription = null, tint = Brand.ForegroundMuted)
+                                Icon(destination.icon, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
                                 Column(Modifier.weight(1f)) {
-                                    Text(destination.label, color = Brand.Foreground, style = MaterialTheme.typography.labelLarge)
+                                    Text(destination.label, color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.labelLarge)
                                     Text(
                                         destination.description,
-                                        color = Brand.ForegroundMuted,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         style = MaterialTheme.typography.labelSmall,
                                     )
                                 }

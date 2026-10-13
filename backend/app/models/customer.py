@@ -24,6 +24,7 @@ from sqlalchemy import (
     inspect,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -123,6 +124,76 @@ class GamingPlaytimeProgramSettings(Base, TimestampMixin, TenantMixin):
     company_whatsapp_phone: Mapped[str | None] = mapped_column(String(20))
 
 
+class LoyaltyProgramRevision(Base, TenantMixin):
+    """Append-only company loyalty rules; revision zero is the legacy contract."""
+
+    __tablename__ = "loyalty_program_revisions"
+    __table_args__ = (
+        UniqueConstraint("company_id", "revision", name="uq_loyalty_program_company_revision"),
+        CheckConstraint("revision >= 0", name="ck_loyalty_program_revision_nonnegative"),
+        CheckConstraint(
+            "(revision = 0 AND published_by IS NULL) OR "
+            "(revision > 0 AND published_by IS NOT NULL)",
+            name="ck_loyalty_program_publisher_shape",
+        ),
+        Index("ix_loyalty_program_company_revision", "company_id", "revision"),
+    )
+
+    id: Mapped[UUID] = _uuid_pk()
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    rules: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    published_by: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT")
+    )
+    published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class CustomerGamingRankAward(Base, TenantMixin):
+    """Permanent evidence that a customer earned one stable gaming rank."""
+
+    __tablename__ = "customer_gaming_rank_awards"
+    __table_args__ = (
+        UniqueConstraint(
+            "company_id", "customer_id", "rank_key",
+            name="uq_customer_gaming_rank_award",
+        ),
+        CheckConstraint(
+            "source IN ('legacy_baseline','paid_gaming')",
+            name="ck_customer_gaming_rank_award_source",
+        ),
+        CheckConstraint(
+            "bonus_points >= 0 AND program_revision >= 0",
+            name="ck_customer_gaming_rank_award_nonnegative",
+        ),
+        CheckConstraint(
+            "rank_key IN ('rookie','player','pro','legend')",
+            name="ck_customer_gaming_rank_award_key",
+        ),
+        CheckConstraint(
+            "(source = 'legacy_baseline' AND program_revision = 0 "
+            "AND bonus_points = 0 AND order_id IS NULL) OR "
+            "(source = 'paid_gaming' AND order_id IS NOT NULL)",
+            name="ck_customer_gaming_rank_award_shape",
+        ),
+        Index("ix_customer_gaming_rank_awards_customer", "company_id", "customer_id"),
+    )
+
+    id: Mapped[UUID] = _uuid_pk()
+    customer_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("customers.id", ondelete="RESTRICT"), nullable=False
+    )
+    rank_key: Mapped[str] = mapped_column(String(32), nullable=False)
+    rank_label_snapshot: Mapped[str] = mapped_column(String(40), nullable=False)
+    threshold_snapshot: Mapped[int] = mapped_column(Integer, nullable=False)
+    bonus_points: Mapped[int] = mapped_column(Integer, nullable=False)
+    program_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    source: Mapped[str] = mapped_column(String(24), nullable=False)
+    order_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("orders.id", ondelete="RESTRICT")
+    )
+    awarded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class PointsRedemption(Base, TimestampMixin):
     """A customer's loyalty points reserved by an unpaid order, spent for
     playtime value at POINTS_PER_RUPEE (see app/services/pos/points.py).
@@ -150,6 +221,28 @@ class PointsRedemption(Base, TimestampMixin):
     points_spent: Mapped[int] = mapped_column(Integer, nullable=False)
     amount_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
     consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    program_revision: Mapped[int | None] = mapped_column(Integer)
+    redemption_kind: Mapped[str] = mapped_column(
+        String(24), default="legacy_frozen", server_default="legacy_frozen", nullable=False
+    )
+    reward_key: Mapped[str | None] = mapped_column(String(64))
+    accepted_points_cost: Mapped[int] = mapped_column(Integer, nullable=False)
+    accepted_value_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    rules_snapshot: Mapped[dict | None] = mapped_column(JSONB)
+
+
+@event.listens_for(PointsRedemption, "before_insert")
+def _freeze_legacy_points_redemption_values(_mapper, _connection, target) -> None:
+    """Keep revision-zero ORM writers source-compatible while freezing facts.
+
+    A customized company is still rejected by the database provenance trigger.
+    This hook only makes an old revision-zero constructor explicit enough for
+    the new non-null snapshot columns and never invents a reward identity.
+    """
+    if target.accepted_points_cost is None:
+        target.accepted_points_cost = int(target.points_spent)
+    if target.accepted_value_minor is None:
+        target.accepted_value_minor = int(target.amount_minor)
 
 
 class OrderLoyaltySettlement(Base, TimestampMixin, TenantMixin):
@@ -209,6 +302,8 @@ class OrderLoyaltySettlement(Base, TimestampMixin, TenantMixin):
         DateTime(timezone=True), nullable=False
     )
     provenance: Mapped[str] = mapped_column(String(40), nullable=False)
+    program_revision: Mapped[int | None] = mapped_column(Integer)
+    rules_snapshot: Mapped[dict | None] = mapped_column(JSONB)
 
 
 class RefundLoyaltyAdjustment(Base, TimestampMixin, TenantMixin):

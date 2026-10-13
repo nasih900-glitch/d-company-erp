@@ -11,6 +11,7 @@ import cloud.dcompany.erp.core.db.LocalCompanyEditEntity
 import cloud.dcompany.erp.core.db.LocalTerminalEntity
 import cloud.dcompany.erp.core.db.SettingsWriteState
 import cloud.dcompany.erp.core.db.TerminalCacheEntity
+import cloud.dcompany.erp.core.db.LoyaltyProgramCacheEntity
 import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.ApiException
 import cloud.dcompany.erp.core.net.MeResponse
@@ -22,6 +23,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
+import kotlinx.serialization.encodeToString
 import java.util.UUID
 
 enum class SettingsTab(val label: String) {
@@ -29,6 +31,7 @@ enum class SettingsTab(val label: String) {
     Company("Company"),
     Branches("Shop"),
     Terminals("Terminals"),
+    Points("Points"),
 }
 
 data class PendingBranchRow(
@@ -102,6 +105,13 @@ data class SettingsUiState(
     val terminalFormError: String? = null,
     val terminalActionError: String? = null,
     val terminalNotice: String? = null,
+
+    val loyaltyProgramLoading: Boolean = false,
+    val loyaltyProgramSaving: Boolean = false,
+    val loyaltyProgram: LoyaltyProgramDto? = null,
+    val loyaltyProgramDraft: LoyaltyProgramRulesDto? = null,
+    val loyaltyProgramError: String? = null,
+    val loyaltyProgramNotice: String? = null,
 ) {
     val companyDirty: Boolean
         get() = company?.let { it.toForm() != companyForm } ?: false
@@ -141,6 +151,38 @@ data class SettingsUiState(
         }
         return null
     }
+}
+
+internal fun validateLoyaltyRules(rules: LoyaltyProgramRulesDto): String? {
+    if (rules.gamingEarnPoints !in 0..1_000_000 || rules.gamingEarnRupees !in 1..1_000_000) {
+        return "Gaming earn points must be 0 to 1,000,000 and rupees must be 1 to 1,000,000."
+    }
+    if (rules.minorPerPoint !in 1..1_000_000) {
+        return "The value of 100 points must be between ₹1 and ₹10,00,000."
+    }
+    val expectedRanks = listOf("rookie", "player", "pro", "legend")
+    if (rules.ranks.map { it.key } != expectedRanks) return "All four stable rank tiers are required."
+    if (rules.ranks.first().threshold != 0 || rules.ranks.zipWithNext().any { it.first.threshold >= it.second.threshold }) {
+        return "Rank thresholds must start at zero and increase strictly."
+    }
+    if (rules.ranks.any { it.label.isBlank() || it.bonusPoints !in 0..2_000_000_000 }) {
+        return "Each rank needs a label and a valid non-negative bonus."
+    }
+    if (rules.rewards.size != 7 || rules.rewards.map { it.key }.toSet().size != 7) {
+        return "All seven stable reward entries are required."
+    }
+    if (rules.rewards.any {
+            it.label.isBlank() || it.description.isBlank() || it.pointsCost !in 1..2_000_000_000 ||
+                it.valueMinor !in 1..9_999_999_999L || it.minRankKey !in expectedRanks
+        }
+    ) return "Every reward needs valid points, value, rank, label and description."
+    val bonuses = rules.ranks.sumOf { it.bonusPoints.toLong() }
+    if (bonuses > Int.MAX_VALUE) return "Combined rank bonuses exceed the customer points storage limit."
+    val maximumEarned = 9_999_999_999L * rules.gamingEarnPoints / (rules.gamingEarnRupees * 100L)
+    if (maximumEarned * 10L + bonuses > Int.MAX_VALUE) {
+        return "This earning rate and the rank bonuses can exceed the points storage limit for one bill."
+    }
+    return null
 }
 
 internal enum class SettingsReadPresentation {
@@ -198,6 +240,156 @@ class SettingsViewModel : ViewModel() {
             SettingsTab.Terminals -> {
                 loadBranches()
                 loadTerminalsCache()
+            }
+            SettingsTab.Points -> loadLoyaltyProgram()
+        }
+    }
+
+    fun loadLoyaltyProgram() {
+        if (_state.value.loyaltyProgramLoading) return
+        val lease = cacheIsolation.currentLease() ?: run {
+            _state.value = _state.value.copy(
+                loyaltyProgramError = "Sign in to load this company's points program.",
+            )
+            return
+        }
+        _state.value = _state.value.copy(
+            loyaltyProgramLoading = true,
+            loyaltyProgramError = null,
+        )
+        viewModelScope.launch {
+            try {
+                val program = api.loyaltyProgram()
+                check(program.companyId == lease.scope.companyId) {
+                    "The server returned another company's points program."
+                }
+                val committed = cacheIsolation.commitIfCurrent(lease) {
+                    db.loyaltyDao().acceptProgramMonotonically(
+                        LoyaltyProgramCacheEntity(
+                            companyId = program.companyId,
+                            revision = program.revision,
+                            rulesJson = ApiClient.json.encodeToString(program.rules),
+                            publishedAt = program.publishedAt,
+                            loadedAtMillis = System.currentTimeMillis(),
+                        ),
+                    )
+                }
+                if (!committed) return@launch
+                val accepted = db.loyaltyDao().program(program.companyId)
+                if (accepted != null && accepted.revision > program.revision) {
+                    // A load started before a successful publication. The DAO
+                    // correctly retained the newer revision; never project the
+                    // delayed response back into editable Settings state.
+                    return@launch
+                }
+                if (cacheIsolation.currentLease() != lease) return@launch
+                _state.value = _state.value.copy(
+                    loyaltyProgram = program,
+                    loyaltyProgramDraft = program.rules,
+                )
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                if (cacheIsolation.currentLease() == lease) {
+                    _state.value = _state.value.copy(
+                        loyaltyProgramError = error.settingsReadable(
+                            "Could not load the points program. Ordinary checkout remains available.",
+                        ),
+                    )
+                }
+            } finally {
+                if (cacheIsolation.currentLease() == lease) {
+                    _state.value = _state.value.copy(loyaltyProgramLoading = false)
+                }
+            }
+        }
+    }
+
+    fun updateLoyaltyRules(block: (LoyaltyProgramRulesDto) -> LoyaltyProgramRulesDto) {
+        val current = _state.value.loyaltyProgramDraft ?: return
+        _state.value = _state.value.copy(
+            loyaltyProgramDraft = block(current),
+            loyaltyProgramError = null,
+            loyaltyProgramNotice = null,
+        )
+    }
+
+    fun publishLoyaltyProgram(review: LoyaltyProgramPublicationReview) {
+        if (_state.value.loyaltyProgramSaving) return
+        val current = _state.value.loyaltyProgram ?: return
+        val rules = review.rules
+        if (
+            current.companyId != review.companyId ||
+            current.revision != review.expectedRevision ||
+            current.rules != review.currentRules ||
+            _state.value.loyaltyProgramDraft != rules
+        ) {
+            _state.value = _state.value.copy(
+                loyaltyProgramError = "The company or points program changed after review. Reload and review it again.",
+            )
+            return
+        }
+        validateLoyaltyRules(rules)?.let { message ->
+            _state.value = _state.value.copy(loyaltyProgramError = message)
+            return
+        }
+        if (rules == current.rules) {
+            _state.value = _state.value.copy(loyaltyProgramError = "Change at least one value before publishing.")
+            return
+        }
+        val lease = cacheIsolation.currentLease() ?: return
+        if (current.companyId != lease.scope.companyId) {
+            _state.value = _state.value.copy(
+                loyaltyProgramError = "The signed-in company changed. Reload Settings before publishing.",
+            )
+            return
+        }
+        val body = LoyaltyProgramPublishBody(review.expectedRevision, rules)
+        val operation = "loyalty-program:${review.companyId}:${review.expectedRevision}"
+        val key = keys.keyFor(operation, body)
+        _state.value = _state.value.copy(
+            loyaltyProgramSaving = true,
+            loyaltyProgramError = null,
+            loyaltyProgramNotice = null,
+        )
+        viewModelScope.launch {
+            try {
+                if (cacheIsolation.currentLease() != lease) return@launch
+                val saved = api.publishLoyaltyProgram(body, key)
+                check(saved.companyId == lease.scope.companyId && saved.revision > review.expectedRevision) {
+                    "The server did not confirm the expected points revision."
+                }
+                val committed = cacheIsolation.commitIfCurrent(lease) {
+                    db.loyaltyDao().acceptProgramMonotonically(
+                        LoyaltyProgramCacheEntity(
+                            companyId = saved.companyId,
+                            revision = saved.revision,
+                            rulesJson = ApiClient.json.encodeToString(saved.rules),
+                            publishedAt = saved.publishedAt,
+                            loadedAtMillis = System.currentTimeMillis(),
+                        ),
+                    )
+                }
+                if (!committed) return@launch
+                keys.done(operation)
+                if (cacheIsolation.currentLease() != lease) return@launch
+                _state.value = _state.value.copy(
+                    loyaltyProgram = saved,
+                    loyaltyProgramDraft = saved.rules,
+                    loyaltyProgramNotice = "Points program revision ${saved.revision} published. New rules apply only to future points actions.",
+                )
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                if (cacheIsolation.currentLease() == lease) {
+                    _state.value = _state.value.copy(
+                        loyaltyProgramError = error.settingsReadable("Could not publish the points program."),
+                    )
+                }
+            } finally {
+                if (cacheIsolation.currentLease() == lease) {
+                    _state.value = _state.value.copy(loyaltyProgramSaving = false)
+                }
             }
         }
     }

@@ -1,5 +1,14 @@
 package cloud.dcompany.erp.ui.screens.settings
 
+import cloud.dcompany.erp.ui.theme.operationalDanger
+import cloud.dcompany.erp.ui.theme.operationalDangerContainer
+import cloud.dcompany.erp.ui.theme.operationalGood
+import cloud.dcompany.erp.ui.theme.operationalGoodContainer
+import cloud.dcompany.erp.ui.theme.operationalInformation
+import cloud.dcompany.erp.ui.theme.operationalInformationContainer
+import cloud.dcompany.erp.ui.theme.operationalWarning
+import cloud.dcompany.erp.ui.theme.operationalWarningContainer
+
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -70,6 +79,9 @@ import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.theme.Spacing
 import cloud.dcompany.erp.core.diagnostics.AppHealthRecorder
 import cloud.dcompany.erp.core.diagnostics.healthCaptureInsight
+import cloud.dcompany.erp.core.money.minorToRupeesInput
+import cloud.dcompany.erp.core.money.parseRupeesToMinor
+import cloud.dcompany.erp.core.net.asRupees
 import java.text.DateFormat
 import java.util.Date
 
@@ -135,10 +147,272 @@ fun SettingsScreen(
                 SettingsTab.Company -> CompanyTab(state, vm, presentation)
                 SettingsTab.Branches -> BranchesTab(state, vm, presentation)
                 SettingsTab.Terminals -> TerminalsTab(state, vm, presentation)
+                SettingsTab.Points -> PointsTab(state, vm)
             }
         }
     }
 
+}
+
+@Composable
+private fun PointsTab(state: SettingsUiState, vm: SettingsViewModel) {
+    val current = state.loyaltyProgram
+    val draft = state.loyaltyProgramDraft
+    val draftError = draft?.let(::validateLoyaltyRules)
+    var reviewing by remember { mutableStateOf<LoyaltyProgramPublicationReview?>(null) }
+    Column(
+        Modifier.widthIn(max = 980.dp).fillMaxWidth().verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(Spacing.md),
+    ) {
+        if (state.loyaltyProgramLoading && current == null) Loading()
+        state.loyaltyProgramError?.let {
+            OperationalBanner("Points program", it, UiTone.Danger, Icons.Default.ErrorOutline)
+        }
+        state.loyaltyProgramNotice?.let {
+            OperationalBanner("Published", it, UiTone.Success, Icons.Default.CloudQueue)
+        }
+        if (current != null && draft != null) {
+            SectionCard(
+                title = "Points economics",
+                subtitle = "Revision ${current.revision} · future points actions only. Existing point counts stay unchanged; future redemption value follows the new rate. Accepted reservations and receipts keep their values.",
+                icon = Icons.Default.PointOfSale,
+            ) {
+                InfoRow("Current 100 points", current.valueOf100PointsMinor.asRupees())
+                PanelDivider()
+                InfoRow("Draft 100 points", (draft.minorPerPoint.toLong() * 100L).asRupees())
+                NumericSetting("Gaming points earned", draft.gamingEarnPoints, minimum = 0) { value ->
+                    vm.updateLoyaltyRules { it.copy(gamingEarnPoints = value) }
+                }
+                NumericSetting("For each rupees spent", draft.gamingEarnRupees) { value ->
+                    vm.updateLoyaltyRules { it.copy(gamingEarnRupees = value) }
+                }
+                NumericSetting("Value of 100 points (₹)", draft.minorPerPoint) { value ->
+                    vm.updateLoyaltyRules { it.copy(minorPerPoint = value) }
+                }
+            }
+            SectionCard(
+                title = "Ranks",
+                subtitle = "Stable tiers. Raising a threshold never removes a rank already awarded.",
+                icon = Icons.Default.AccountCircle,
+            ) {
+                draft.ranks.forEachIndexed { index, rank ->
+                    if (index > 0) PanelDivider()
+                    Field("${rank.key} label", rank.label) { value ->
+                        vm.updateLoyaltyRules { rules ->
+                            rules.copy(ranks = rules.ranks.map { if (it.key == rank.key) it.copy(label = value) else it })
+                        }
+                    }
+                    NumericSetting("${rank.key} threshold", rank.threshold, minimum = if (index == 0) 0 else 1) { value ->
+                        vm.updateLoyaltyRules { rules ->
+                            rules.copy(ranks = rules.ranks.map { if (it.key == rank.key) it.copy(threshold = value) else it })
+                        }
+                    }
+                    NumericSetting("${rank.key} one-time bonus", rank.bonusPoints, minimum = 0) { value ->
+                        vm.updateLoyaltyRules { rules ->
+                            rules.copy(ranks = rules.ranks.map { if (it.key == rank.key) it.copy(bonusPoints = value) else it })
+                        }
+                    }
+                }
+            }
+            SectionCard(
+                title = "Fixed bill-credit rewards",
+                subtitle = "Rewards reduce one eligible bill by the accepted fixed value. Hours and WhatsApp rewards remain disabled.",
+                icon = Icons.Default.Store,
+            ) {
+                draft.rewards.forEachIndexed { index, reward ->
+                    if (index > 0) PanelDivider()
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text(reward.label, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                        Switch(
+                            checked = reward.enabled,
+                            onCheckedChange = { enabled ->
+                                vm.updateLoyaltyRules { rules ->
+                                    rules.copy(rewards = rules.rewards.map { if (it.key == reward.key) it.copy(enabled = enabled) else it })
+                                }
+                            },
+                        )
+                    }
+                    Field("Reward label", reward.label) { value ->
+                        vm.updateLoyaltyRules { rules ->
+                            rules.copy(rewards = rules.rewards.map { if (it.key == reward.key) it.copy(label = value) else it })
+                        }
+                    }
+                    Field("Description", reward.description) { value ->
+                        vm.updateLoyaltyRules { rules ->
+                            rules.copy(rewards = rules.rewards.map { if (it.key == reward.key) it.copy(description = value) else it })
+                        }
+                    }
+                    NumericSetting("Points cost", reward.pointsCost) { value ->
+                        vm.updateLoyaltyRules { rules ->
+                            rules.copy(rewards = rules.rewards.map { if (it.key == reward.key) it.copy(pointsCost = value) else it })
+                        }
+                    }
+                    MoneySetting("Bill credit (₹)", reward.valueMinor) { value ->
+                        vm.updateLoyaltyRules { rules ->
+                            rules.copy(rewards = rules.rewards.map { if (it.key == reward.key) it.copy(valueMinor = value) else it })
+                        }
+                    }
+                    Field("Minimum rank key", reward.minRankKey) { value ->
+                        vm.updateLoyaltyRules { rules ->
+                            rules.copy(rewards = rules.rewards.map { if (it.key == reward.key) it.copy(minRankKey = value.trim().lowercase()) else it })
+                        }
+                    }
+                }
+            }
+            if (current.unresolvedReservationCount > 0) {
+                OperationalBanner(
+                    "Publishing blocked",
+                    "Resolve ${current.unresolvedReservationCount} unpaid points reservation(s): " +
+                        current.unresolvedReservations.joinToString { it.reference },
+                    UiTone.Warning,
+                    Icons.Default.Schedule,
+                )
+            }
+            draftError?.let {
+                OperationalBanner(
+                    "Fix points values before review",
+                    it,
+                    UiTone.Danger,
+                    Icons.Default.ErrorOutline,
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                ErpButton(
+                    text = if (state.loyaltyProgramSaving) "Publishing…" else "Review changes",
+                    enabled = !state.loyaltyProgramSaving && draft != current.rules &&
+                        draftError == null && current.unresolvedReservationCount == 0,
+                    onClick = {
+                        reviewing = LoyaltyProgramPublicationReview(
+                            companyId = current.companyId,
+                            expectedRevision = current.revision,
+                            currentValueOf100PointsMinor = current.valueOf100PointsMinor,
+                            currentRules = current.rules,
+                            rules = draft,
+                        )
+                    },
+                )
+                ErpButton(text = "Refresh", intent = ActionIntent.Secondary, onClick = vm::loadLoyaltyProgram)
+            }
+        }
+    }
+    reviewing?.let { review ->
+        AlertDialog(
+            onDismissRequest = { if (!state.loyaltyProgramSaving) reviewing = null },
+            title = { Text("Publish points revision ${review.expectedRevision + 1}?") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+                    Text(
+                        "100 points: ${review.currentValueOf100PointsMinor.asRupees()} → " +
+                            (review.rules.minorPerPoint.toLong() * 100L).asRupees(),
+                    )
+                    loyaltyProgramChangeSummary(review.currentRules, review.rules).forEach { change ->
+                        Text("• $change", style = MaterialTheme.typography.bodySmall)
+                    }
+                    Text(
+                        "Balances and accepted history stay unchanged. New economics apply after server confirmation.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = !state.loyaltyProgramSaving,
+                    onClick = { reviewing = null; vm.publishLoyaltyProgram(review) },
+                ) { Text("Publish") }
+            },
+            dismissButton = { TextButton(onClick = { reviewing = null }) { Text("Keep editing") } },
+        )
+    }
+}
+
+@Composable
+private fun NumericSetting(
+    label: String,
+    value: Int,
+    minimum: Int = 1,
+    onValue: (Int) -> Unit,
+) {
+    OutlinedTextField(
+        value = value.toString(),
+        onValueChange = { raw -> raw.toIntOrNull()?.takeIf { it >= minimum }?.let(onValue) },
+        label = { Text(label) },
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+        singleLine = true,
+        shape = Radius.shapeMd,
+        colors = fieldColors(),
+        modifier = Modifier.fillMaxWidth(),
+    )
+}
+
+@Composable
+private fun MoneySetting(
+    label: String,
+    valueMinor: Long,
+    onValueMinor: (Long) -> Unit,
+) {
+    var raw by remember { mutableStateOf(minorToRupeesInput(valueMinor)) }
+    var emittedMinor by remember { mutableStateOf(valueMinor) }
+    LaunchedEffect(valueMinor) {
+        if (valueMinor != emittedMinor) {
+            emittedMinor = valueMinor
+            raw = minorToRupeesInput(valueMinor)
+        }
+    }
+    OutlinedTextField(
+        value = raw,
+        onValueChange = { next ->
+            raw = next
+            val parsed = parseRupeesToMinor(next)?.takeIf { it in 1L..9_999_999_999L }
+            emittedMinor = parsed ?: 0L
+            onValueMinor(parsed ?: 0L)
+        },
+        label = { Text(label) },
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+        singleLine = true,
+        shape = Radius.shapeMd,
+        colors = fieldColors(),
+        modifier = Modifier.fillMaxWidth(),
+    )
+}
+
+internal fun loyaltyProgramChangeSummary(
+    before: LoyaltyProgramRulesDto,
+    after: LoyaltyProgramRulesDto,
+): List<String> = buildList {
+    if (before.gamingEarnPoints != after.gamingEarnPoints || before.gamingEarnRupees != after.gamingEarnRupees) {
+        add("Gaming earn: ${before.gamingEarnPoints} per ₹${before.gamingEarnRupees} → ${after.gamingEarnPoints} per ₹${after.gamingEarnRupees}")
+    }
+    if (before.minorPerPoint != after.minorPerPoint) {
+        add(
+            "100-point value: ${(before.minorPerPoint.toLong() * 100L).asRupees()} → " +
+                (after.minorPerPoint.toLong() * 100L).asRupees(),
+        )
+    }
+    after.ranks.forEach { rank ->
+        val old = before.ranks.firstOrNull { it.key == rank.key } ?: return@forEach
+        if (old != rank) {
+            val fields = buildList {
+                if (old.label != rank.label) add("label ${old.label} → ${rank.label}")
+                if (old.threshold != rank.threshold) add("threshold ${old.threshold} → ${rank.threshold}")
+                if (old.bonusPoints != rank.bonusPoints) add("bonus ${old.bonusPoints} → ${rank.bonusPoints}")
+            }
+            add("${rank.key} rank: ${fields.joinToString(" · ")}")
+        }
+    }
+    after.rewards.forEach { reward ->
+        val old = before.rewards.firstOrNull { it.key == reward.key } ?: return@forEach
+        if (old != reward) {
+            val fields = buildList {
+                if (old.label != reward.label) add("label ${old.label} → ${reward.label}")
+                if (old.description != reward.description) add("description ${old.description} → ${reward.description}")
+                if (old.pointsCost != reward.pointsCost) add("cost ${old.pointsCost} → ${reward.pointsCost} pts")
+                if (old.valueMinor != reward.valueMinor) add("credit ${old.valueMinor.asRupees()} → ${reward.valueMinor.asRupees()}")
+                if (old.minRankKey != reward.minRankKey) add("minimum rank ${old.minRankKey} → ${reward.minRankKey}")
+                if (old.enabled != reward.enabled) add(if (reward.enabled) "enabled" else "disabled")
+            }
+            add("${reward.key}: ${fields.joinToString(" · ")}")
+        }
+    }
 }
 
 internal fun showAdvancedTerminalSettings(
@@ -251,7 +525,7 @@ private fun AccountTab(
                     Text(
                         "A one-time approval code is sent to the business security contact before " +
                         "the password can be changed.",
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     ErpButton(
                         text = if (state.accountBusy) "Sending…" else "Send approval code",
@@ -271,7 +545,7 @@ private fun AccountTab(
                     }
                     Text(
                         "Code sent to $destination. It expires in $expiryText.",
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Field("6-digit approval code", code) { code = it.filter(Char::isDigit).take(6) }
                     NewPasswordField("New password", pwd) { pwd = it }
@@ -307,7 +581,7 @@ private fun AccountTab(
                 "Crash, freeze and sync-failure reporting already runs automatically. " +
                     "This extra performance recording starts only when you tap below, stays on this tablet, " +
                     "and stops when you leave the app.",
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             if (appHealth.recording) {
                 Text("Recording now. Use the screens that feel slow, then return here.")
@@ -334,14 +608,14 @@ private fun AccountTab(
                         .format(Date(capture.endedAtMillis))
                 }
                 Text("Last recording: $recordedAt · ${capture.stopReason.replace('_', ' ')}")
-                Text(healthCaptureInsight(capture), color = Brand.ForegroundMuted)
+                Text(healthCaptureInsight(capture), color = MaterialTheme.colorScheme.onSurfaceVariant)
                 val screen = capture.frames.maxByOrNull { it.slowFrames }
                 if (screen != null && screen.frames > 0) {
                     Text(
                         "${screen.screen.replaceFirstChar(Char::uppercase)}: " +
                             "${screen.slowFrames}/${screen.frames} slow frames; " +
                             "longest ${screen.longestFrameMs} ms.",
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 val refresh = capture.refreshes.maxByOrNull { it.longestRefreshMs }
@@ -349,13 +623,13 @@ private fun AccountTab(
                     Text(
                         "${refresh.resource.replaceFirstChar(Char::uppercase)} refresh: " +
                             "longest ${refresh.longestRefreshMs} ms; ${refresh.failure} failures.",
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 Text(
                     "Only the last three summaries are kept for up to 24 hours. " +
                         "No names, phone numbers, bills or request contents are recorded.",
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 ErpButton(
                     text = "Delete local health results",
@@ -372,7 +646,7 @@ private fun AccountTab(
         ) {
             Text(
                 "Describe what went wrong and the app will include only safe device, version, shop, workspace, screen, and connectivity details.",
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             ErpButton(
                 text = "Report a problem",
@@ -468,10 +742,10 @@ private fun CompanyTab(
                         )
                         Spacer(Modifier.width(Spacing.sm))
                         Column {
-                            Text("Composition scheme", color = Brand.Foreground)
+                            Text("Composition scheme", color = MaterialTheme.colorScheme.onSurface)
                             Text(
                                 "Use the business's configured tax registration scheme.",
-                                color = Brand.ForegroundMuted,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 style = MaterialTheme.typography.labelSmall,
                             )
                         }
@@ -563,7 +837,7 @@ private fun PendingBanner(
     )
     if (confirmDiscard && onDiscard != null) {
         AlertDialog(
-            containerColor = Brand.SurfaceOverlay,
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
             shape = Radius.shapeLg,
             onDismissRequest = { confirmDiscard = false },
             title = { Text("Discard failed change?") },
@@ -654,7 +928,7 @@ private fun BranchesTab(
                             content = {
                                 Text(
                                     branch.name,
-                                    color = Brand.Foreground,
+                                    color = MaterialTheme.colorScheme.onSurface,
                                     style = MaterialTheme.typography.titleMedium,
                                 )
                                 Text(
@@ -670,7 +944,7 @@ private fun BranchesTab(
                                     color = if (branch.invoiceSeriesCode.isBlank()) {
                                         MaterialTheme.colorScheme.error
                                     } else {
-                                        Brand.ForegroundMuted
+                                        MaterialTheme.colorScheme.onSurfaceVariant
                                     },
                                 )
                             },
@@ -721,7 +995,7 @@ private fun BranchFormDialog(
         if (state.branchFormDirty) confirmDiscard = true else vm.closeBranchForm()
     }
     AlertDialog(
-        containerColor = cloud.dcompany.erp.ui.theme.Brand.SurfaceOverlay,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = cloud.dcompany.erp.ui.theme.Radius.shapeLg,
         onDismissRequest = { if (!state.branchSaving) requestDismiss() },
         modifier = Modifier.widthIn(max = 620.dp).fillMaxWidth(0.92f).imePadding(),
@@ -735,7 +1009,7 @@ private fun BranchFormDialog(
                     Text(
                         "Queued and synced when back online, like every other write on " +
                             "this tablet.",
-                        style = MaterialTheme.typography.labelSmall, color = Brand.ForegroundMuted,
+                        style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 Field("Name", form.name) { v -> vm.updateBranchForm { it.copy(name = v) } }
@@ -759,7 +1033,7 @@ private fun BranchFormDialog(
                     color = if (!form.isNew && form.invoiceSeriesCode.isBlank()) {
                         MaterialTheme.colorScheme.error
                     } else {
-                        Brand.ForegroundMuted
+                        MaterialTheme.colorScheme.onSurfaceVariant
                     },
                 )
                 Field("Operational short code (optional)", form.code) { v ->
@@ -848,7 +1122,7 @@ private fun TerminalsTab(
                 } else {
                     "Use one Gaming + POS till for this shop unless a separate payment counter is genuinely required. Each configured till keeps its own accountable shift."
                 },
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodyMedium,
             )
         }
@@ -947,19 +1221,19 @@ private fun TerminalsTab(
                                 content = {
                                     Text(
                                         terminal.name,
-                                        color = Brand.Foreground,
+                                        color = MaterialTheme.colorScheme.onSurface,
                                         style = MaterialTheme.typography.titleMedium,
                                     )
                                     Text(
                                         terminalPurposeLabel(terminal.purpose, presentation),
                                         style = MaterialTheme.typography.labelSmall,
-                                        color = Brand.Gold,
+                                        color = MaterialTheme.colorScheme.primary,
                                     )
                                     Text(
                                         terminal.deviceId?.takeIf(String::isNotBlank)
                                             ?: "No tablet device ID assigned",
                                         style = MaterialTheme.typography.labelSmall,
-                                        color = Brand.ForegroundMuted,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     )
                                 },
                                 trailing = {
@@ -1004,7 +1278,7 @@ private fun TerminalsTab(
                         "Use a stable identifier such as the tablet asset tag. It helps owners " +
                             "trace which physical device used this till.",
                         style = MaterialTheme.typography.labelSmall,
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     state.terminalFormError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                     ErpButton(
@@ -1067,7 +1341,7 @@ private fun TerminalEditDialog(
             Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
                 Text(
                     "Rename this terminal in place so its existing shifts, orders, and audit history stay attached.",
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Field("Name", form.name, enabled = !busy, onChange = onNameChange)
@@ -1080,7 +1354,7 @@ private fun TerminalEditDialog(
                 if (form.purpose != form.originalPurpose) {
                     Text(
                         "Close this terminal's current shift before changing its work area. Renaming does not require closing the shift.",
-                        color = Brand.Warning,
+                        color = MaterialTheme.colorScheme.operationalWarning,
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
@@ -1092,7 +1366,7 @@ private fun TerminalEditDialog(
                 )
                 Text(
                     "Clear the device ID only when this till is no longer bound to that tablet.",
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.labelSmall,
                 )
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
@@ -1120,7 +1394,7 @@ private fun TerminalPurposeSelector(
     Column(verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
         Text(
             "Operational purpose",
-            color = Brand.Foreground,
+            color = MaterialTheme.colorScheme.onSurface,
             style = MaterialTheme.typography.labelLarge,
         )
         PremiumTabBar(
@@ -1131,7 +1405,7 @@ private fun TerminalPurposeSelector(
         Text(
             options.firstOrNull { it.id == selected }?.description
                 ?: "Choose deliberately. This controls where Gaming bills are allowed to go.",
-            color = Brand.ForegroundMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.labelSmall,
         )
     }
@@ -1209,7 +1483,7 @@ private fun DestructiveConfirmationDialog(
     onDismiss: () -> Unit,
 ) {
     AlertDialog(
-        containerColor = Brand.SurfaceOverlay,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = Radius.shapeLg,
         onDismissRequest = { if (!busy) onDismiss() },
         title = { Text(confirmation.title) },
@@ -1235,7 +1509,7 @@ private fun DestructiveConfirmationDialog(
 private fun Feedback(notice: String?, onDismiss: () -> Unit) {
     notice ?: return
     AlertDialog(
-        containerColor = cloud.dcompany.erp.ui.theme.Brand.SurfaceOverlay,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = cloud.dcompany.erp.ui.theme.Radius.shapeLg,
         onDismissRequest = onDismiss,
         confirmButton = { TextButton(onClick = onDismiss) { Text("OK") } },

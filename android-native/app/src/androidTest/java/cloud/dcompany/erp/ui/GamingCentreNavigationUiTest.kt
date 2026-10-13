@@ -11,11 +11,14 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasSetTextAction
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTextInput
 import cloud.dcompany.erp.core.sync.OutboxWorkStatus
 import cloud.dcompany.erp.ui.components.SyncAvailabilityProblem
 import cloud.dcompany.erp.ui.theme.DCompanyTheme
@@ -66,7 +69,8 @@ class GamingCentreNavigationUiTest {
             compose.onNodeWithText("Current: ${target.label}").assertIsDisplayed()
         }
         compose.onNodeWithContentDescription("More modules").performClick()
-        compose.onNodeWithText("Stock").performClick()
+        compose.onNode(hasSetTextAction()).performTextInput("Stock")
+        compose.onNode(hasText("Stock") and !hasSetTextAction()).performClick()
         compose.onNodeWithText("Current: Stock").assertIsDisplayed()
     }
 

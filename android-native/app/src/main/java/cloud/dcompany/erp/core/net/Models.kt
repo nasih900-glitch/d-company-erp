@@ -178,6 +178,15 @@ data class OrderPointsRedemptionUpdateRequest(
     /** Absolute spend, never a delta. The backend owns the conversion and balance check. */
     val points: Int,
     @SerialName("expected_checkout_version") val expectedCheckoutVersion: Long,
+    /** Null preserves the exact legacy body on retry. */
+    @SerialName("expected_program_revision") val expectedProgramRevision: Long? = null,
+)
+
+@Serializable
+data class OrderRewardRedemptionUpdateRequest(
+    @SerialName("reward_key") val rewardKey: String,
+    @SerialName("expected_checkout_version") val expectedCheckoutVersion: Long,
+    @SerialName("expected_program_revision") val expectedProgramRevision: Long? = null,
 )
 
 @Serializable
@@ -269,6 +278,18 @@ data class Order(
     @SerialName("customer_name") val customerName: String? = null,
     @SerialName("customer_phone") val customerPhone: String? = null,
     val notes: String? = null,
+)
+
+@Serializable
+data class CustomerRewardEligibility(
+    @SerialName("program_revision") val programRevision: Long,
+    val key: String,
+    val name: String,
+    val description: String,
+    @SerialName("points_cost") val pointsCost: Int,
+    @SerialName("value_minor") val valueMinor: Long,
+    @SerialName("min_rank") val minRank: String,
+    val affordable: Boolean,
 )
 
 /** Slim row from `GET /pos/orders` — the held-orders queue and Refunds' lookup both use this. */

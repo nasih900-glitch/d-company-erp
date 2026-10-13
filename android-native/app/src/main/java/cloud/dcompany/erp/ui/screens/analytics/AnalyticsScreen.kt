@@ -1,5 +1,14 @@
 package cloud.dcompany.erp.ui.screens.analytics
 
+import cloud.dcompany.erp.ui.theme.operationalDanger
+import cloud.dcompany.erp.ui.theme.operationalDangerContainer
+import cloud.dcompany.erp.ui.theme.operationalGood
+import cloud.dcompany.erp.ui.theme.operationalGoodContainer
+import cloud.dcompany.erp.ui.theme.operationalInformation
+import cloud.dcompany.erp.ui.theme.operationalInformationContainer
+import cloud.dcompany.erp.ui.theme.operationalWarning
+import cloud.dcompany.erp.ui.theme.operationalWarningContainer
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
@@ -66,7 +75,7 @@ fun AnalyticsScreen(
     val vm: AnalyticsViewModel = viewModel()
     val state by vm.state.collectAsStateWithLifecycle()
 
-    Column(Modifier.fillMaxSize().background(Brand.Background)) {
+    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         PremiumTabBar(
             options = AnalyticsTab.entries.map { TabOption(it.name, it.label) },
             selectedId = state.tab.name,
@@ -131,17 +140,17 @@ private fun TodayBody(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(prettyDate(dashboard.date), style = MaterialTheme.typography.titleLarge, color = Brand.Foreground)
+                Text(prettyDate(dashboard.date), style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
                 if (refreshing) {
                     Spacer(Modifier.size(10.dp))
-                    CircularProgressIndicator(Modifier.size(14.dp), color = Brand.Gold, strokeWidth = 2.dp)
+                    CircularProgressIndicator(Modifier.size(14.dp), color = MaterialTheme.colorScheme.primary, strokeWidth = 2.dp)
                 }
             }
             if (fetchedAtMillis != null) {
                 Text(
                     "As of ${relativeAge(fetchedAtMillis)}" + if (refreshing) " · refreshing…" else "",
                     style = MaterialTheme.typography.labelSmall,
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
 
@@ -196,7 +205,7 @@ private fun TodayBody(
                             "in discounts and customer credits applied today."
                         },
                     style = MaterialTheme.typography.labelSmall,
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
 
@@ -231,7 +240,7 @@ private fun TodayBody(
                                 "Discounts and customer credits are applied in the gross-revenue total above."
                             },
                         style = MaterialTheme.typography.labelSmall,
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     val max = revenueStreams.maxOf { it.second }
                     revenueStreams.forEach { (label, amountMinor) ->
@@ -243,7 +252,7 @@ private fun TodayBody(
                                 "in this Gaming Centre profile. Review the audited source records " +
                                 "before making a reconciliation adjustment.",
                             style = MaterialTheme.typography.labelSmall,
-                            color = Brand.ForegroundMuted,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                 }
@@ -291,13 +300,13 @@ private fun AnalyticsMoneyRow(label: String, amountMinor: Long, bold: Boolean = 
     ) {
         Text(
             label,
-            color = Brand.ForegroundMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.bodyMedium,
             modifier = Modifier.weight(1f),
         )
         Text(
             amountMinor.asRupees(),
-            color = if (amountMinor < 0) Brand.Danger else Brand.Foreground,
+            color = if (amountMinor < 0) MaterialTheme.colorScheme.operationalDanger else MaterialTheme.colorScheme.onSurface,
             fontWeight = if (bold) FontWeight.Bold else FontWeight.Medium,
         )
     }
@@ -363,15 +372,15 @@ private fun RevenueBar(label: String, amountMinor: Long, maxMinor: Long) {
     val fraction = if (maxMinor <= 0) 0f else (amountMinor.toFloat() / maxMinor.toFloat()).coerceIn(0.02f, 1f)
     Column(Modifier.padding(vertical = 6.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(label, color = Brand.Foreground, style = MaterialTheme.typography.bodyMedium)
-            Text(amountMinor.asRupees(), color = Brand.ForegroundMuted, style = MaterialTheme.typography.bodyMedium)
+            Text(label, color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.bodyMedium)
+            Text(amountMinor.asRupees(), color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
         }
         Spacer(Modifier.height(4.dp))
-        Box(Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp)).background(Brand.SurfaceRaised)) {
+        Box(Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp)).background(MaterialTheme.colorScheme.surfaceVariant)) {
             BoxWithConstraints(Modifier.fillMaxSize()) {
                 Box(
                     Modifier.fillMaxHeight().width(maxWidth * fraction)
-                        .clip(RoundedCornerShape(4.dp)).background(Brand.Information),
+                        .clip(RoundedCornerShape(4.dp)).background(MaterialTheme.colorScheme.operationalInformation),
                 )
             }
         }
@@ -434,11 +443,11 @@ private fun GrowthBody(
                         "As of ${relativeAge(state.growthFetchedAtMillis)}" +
                             if (state.growthLoading) " · refreshing…" else "",
                         style = MaterialTheme.typography.labelSmall,
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     if (state.growthLoading) {
                         Spacer(Modifier.size(8.dp))
-                        CircularProgressIndicator(Modifier.size(12.dp), color = Brand.Gold, strokeWidth = 2.dp)
+                        CircularProgressIndicator(Modifier.size(12.dp), color = MaterialTheme.colorScheme.primary, strokeWidth = 2.dp)
                     }
                 }
             }
@@ -488,7 +497,7 @@ private fun GrowthBody(
                 Text(
                     "Includes ${growth.current.manualCollectionsMinor.asRupees()} in manual collections this period.",
                     style = MaterialTheme.typography.labelSmall,
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             if (growth.current.membershipsMinor > 0 || growth.previous.membershipsMinor > 0) {
@@ -499,14 +508,14 @@ private fun GrowthBody(
                         previousLabel = growth.previous.label,
                     ),
                     style = MaterialTheme.typography.labelSmall,
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             if (growth.current.refundsMinor > 0) {
                 Text(
                     "${growth.current.refundsMinor.asRupees()} refunded this period.",
                     style = MaterialTheme.typography.labelSmall,
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
 
@@ -527,7 +536,7 @@ private fun TopItemsCard(
             CardTitle("Top items by gross line sales (this month)")
             if (state.topItemsLoading) {
                 Spacer(Modifier.weight(1f))
-                CircularProgressIndicator(Modifier.size(14.dp), color = Brand.Gold, strokeWidth = 2.dp)
+                CircularProgressIndicator(Modifier.size(14.dp), color = MaterialTheme.colorScheme.primary, strokeWidth = 2.dp)
             }
         }
         Text(
@@ -538,7 +547,7 @@ private fun TopItemsCard(
                     "discounts, refunds and accounting adjustments."
                 },
             style = MaterialTheme.typography.labelSmall,
-            color = Brand.ForegroundMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         when (
             supplementalListPresentation(
@@ -548,7 +557,7 @@ private fun TopItemsCard(
             )
         ) {
             SupplementalListPresentation.INITIAL_LOADING ->
-                Text("Loading top items…", color = Brand.ForegroundMuted)
+                Text("Loading top items…", color = MaterialTheme.colorScheme.onSurfaceVariant)
             SupplementalListPresentation.BLOCKING_ERROR -> InlineListError(
                 state.topItemsError!!,
                 onRetry,
@@ -581,19 +590,19 @@ private fun TopItemsCard(
                     ) {
                         Text(
                             "${index + 1}",
-                            color = Brand.ForegroundFaint,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.labelLarge,
                             modifier = Modifier.widthIn(min = 28.dp),
                         )
                         Column(Modifier.weight(1f)) {
-                            Text(item.name, color = Brand.Foreground, fontWeight = FontWeight.SemiBold)
+                            Text(item.name, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.SemiBold)
                             Text(
                                 "${item.type} · ${qtyLabel(item.qtySold)} sold",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = Brand.ForegroundMuted,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
-                        Text(item.revenueMinor.asRupees(), color = Brand.Foreground, fontWeight = FontWeight.Bold)
+                        Text(item.revenueMinor.asRupees(), color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -602,7 +611,7 @@ private fun TopItemsCard(
             Text(
                 "As of ${relativeAge(fetchedAt)}" + if (state.topItemsLoading) " · refreshing…" else "",
                 style = MaterialTheme.typography.labelSmall,
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }
@@ -611,11 +620,11 @@ private fun TopItemsCard(
 @Composable
 private fun InlineListError(message: String, onRetry: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().clip(Radius.shapeMd).background(Brand.SurfaceRaised).padding(10.dp),
+        Modifier.fillMaxWidth().clip(Radius.shapeMd).background(MaterialTheme.colorScheme.surfaceVariant).padding(10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Text(message, color = Brand.Danger, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+        Text(message, color = MaterialTheme.colorScheme.operationalDanger, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
         Button(onClick = onRetry) { Text("Retry") }
     }
 }
@@ -624,15 +633,15 @@ private fun InlineListError(message: String, onRetry: () -> Unit) {
 private fun StaleDataBanner(title: String, message: String, onRetry: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp)
-            .clip(Radius.shapeMd).background(Brand.SurfaceRaised)
-            .border(BorderStroke(1.dp, Brand.Danger), Radius.shapeMd)
+            .clip(Radius.shapeMd).background(MaterialTheme.colorScheme.surfaceVariant)
+            .border(BorderStroke(1.dp, MaterialTheme.colorScheme.operationalDanger), Radius.shapeMd)
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Column(Modifier.weight(1f)) {
-            Text("$title may be out of date", color = Brand.Danger, fontWeight = FontWeight.Bold)
-            Text(message, color = Brand.ForegroundMuted, style = MaterialTheme.typography.bodySmall)
+            Text("$title may be out of date", color = MaterialTheme.colorScheme.operationalDanger, fontWeight = FontWeight.Bold)
+            Text(message, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
         }
         Button(onClick = onRetry) { Text("Retry") }
     }
@@ -652,15 +661,15 @@ private fun ComparisonCard(
     deltaPct: Double?,
 ) {
     SectionCard(modifier) {
-        Text(metricLabel.uppercase(Locale.ENGLISH), style = MaterialTheme.typography.labelSmall, color = Brand.ForegroundMuted)
+        Text(metricLabel.uppercase(Locale.ENGLISH), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(4.dp))
-        Text(currentValue, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = Brand.Foreground)
+        Text(currentValue, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
         Spacer(Modifier.height(4.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             if (deltaPct == null) {
                 Text(
                     "No prior baseline",
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontWeight = FontWeight.SemiBold,
                     style = MaterialTheme.typography.bodyMedium,
                 )
@@ -668,7 +677,7 @@ private fun ComparisonCard(
                 Text(
                     (if (deltaPct >= 0) "▲ " else "▼ ") +
                         String.format(Locale.ENGLISH, "%.1f%%", kotlin.math.abs(deltaPct)),
-                    color = if (deltaPct >= 0) Brand.Good else Brand.Danger,
+                    color = if (deltaPct >= 0) MaterialTheme.colorScheme.operationalGood else MaterialTheme.colorScheme.operationalDanger,
                     fontWeight = FontWeight.SemiBold,
                     style = MaterialTheme.typography.bodyMedium,
                 )
@@ -677,7 +686,7 @@ private fun ComparisonCard(
         Text(
             "vs $previousValue $previousLabel",
             style = MaterialTheme.typography.labelSmall,
-            color = Brand.ForegroundMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }
@@ -697,9 +706,9 @@ private fun MiniStat(
             value,
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.Bold,
-            color = when (good) { null -> Brand.Foreground; true -> Brand.Good; false -> Brand.Danger },
+            color = when (good) { null -> MaterialTheme.colorScheme.onSurface; true -> MaterialTheme.colorScheme.operationalGood; false -> MaterialTheme.colorScheme.operationalDanger },
         )
-        Text(label, style = MaterialTheme.typography.labelSmall, color = Brand.ForegroundMuted, textAlign = TextAlign.Center)
+        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
     }
 }
 
@@ -710,20 +719,20 @@ private data class KpiTile(val label: String, val value: String, val negative: B
 @Composable
 private fun KpiCard(tile: KpiTile, modifier: Modifier = Modifier) {
     SectionCard(modifier) {
-        Text(tile.label.uppercase(Locale.ENGLISH), style = MaterialTheme.typography.labelSmall, color = Brand.ForegroundMuted)
+        Text(tile.label.uppercase(Locale.ENGLISH), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(4.dp))
         Text(
             tile.value,
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.Bold,
-            color = if (tile.negative) Brand.Danger else Brand.Foreground,
+            color = if (tile.negative) MaterialTheme.colorScheme.operationalDanger else MaterialTheme.colorScheme.onSurface,
         )
     }
 }
 
 @Composable
 private fun CardTitle(text: String) {
-    Text(text, style = MaterialTheme.typography.titleLarge, color = Brand.Foreground, modifier = Modifier.padding(bottom = 8.dp))
+    Text(text, style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.padding(bottom = 8.dp))
 }
 
 @Composable
@@ -735,9 +744,9 @@ private fun LoadingPanel() {
         modifier = Modifier.fillMaxSize().padding(horizontal = Spacing.lgPlus, vertical = Spacing.md),
     ) {
         Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
-            CircularProgressIndicator(color = Brand.Gold)
+            CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
             Spacer(Modifier.height(Spacing.md))
-            Text("Computing insights…", color = Brand.ForegroundMuted)
+            Text("Computing insights…", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }

@@ -1,5 +1,14 @@
 package cloud.dcompany.erp.ui.screens.staff
 
+import cloud.dcompany.erp.ui.theme.operationalDanger
+import cloud.dcompany.erp.ui.theme.operationalDangerContainer
+import cloud.dcompany.erp.ui.theme.operationalGood
+import cloud.dcompany.erp.ui.theme.operationalGoodContainer
+import cloud.dcompany.erp.ui.theme.operationalInformation
+import cloud.dcompany.erp.ui.theme.operationalInformationContainer
+import cloud.dcompany.erp.ui.theme.operationalWarning
+import cloud.dcompany.erp.ui.theme.operationalWarningContainer
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -107,7 +116,7 @@ fun StaffScreen(profile: MeResponse, access: StaffAccess) {
     val state by vm.state.collectAsStateWithLifecycle()
 
     Column(
-        Modifier.fillMaxSize().background(Brand.Background).padding(16.dp),
+        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Header(
@@ -150,8 +159,8 @@ fun StaffScreen(profile: MeResponse, access: StaffAccess) {
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        CircularProgressIndicator(color = Brand.Gold)
-                        Text("Loading staff…", color = Brand.ForegroundMuted)
+                        CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                        Text("Loading staff…", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }
@@ -201,17 +210,17 @@ fun StaffScreen(profile: MeResponse, access: StaffAccess) {
                 Text(
                     "This cannot be undone. If offline, this queues and applies once back online " +
                         "— you can cancel it from this screen any time before it syncs.",
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             },
             confirmButton = {
                 ErpButton("Remove", vm::confirmDelete, intent = ActionIntent.Destructive, leadingIcon = Icons.Default.Delete)
             },
             dismissButton = { TextButton(onClick = vm::cancelDelete) { Text("Cancel") } },
-            containerColor = Brand.SurfaceOverlay,
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = Radius.shapeLg,
-            titleContentColor = Brand.Foreground,
-            textContentColor = Brand.Foreground,
+            titleContentColor = MaterialTheme.colorScheme.onSurface,
+            textContentColor = MaterialTheme.colorScheme.onSurface,
         )
     }
 
@@ -261,7 +270,7 @@ private fun Header(
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(
                     if (attendanceOnly) "Attendance controls" else "Directory controls",
-                    color = Brand.Foreground,
+                    color = MaterialTheme.colorScheme.onSurface,
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold,
                 )
@@ -271,7 +280,7 @@ private fun Header(
                     } else {
                         "Refresh access data or create a new staff login"
                     },
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
@@ -389,24 +398,24 @@ private fun AttendanceCard(
             )
         }
         if (state.onShift.isEmpty()) {
-            Text("No staff are clocked in at this branch.", color = Brand.ForegroundMuted)
+            Text("No staff are clocked in at this branch.", color = MaterialTheme.colorScheme.onSurfaceVariant)
         } else {
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(state.onShift, key = { it.id }) { row ->
                     Column(
-                        Modifier.width(220.dp).clip(Radius.shapeMd).background(Brand.SurfaceRaised)
+                        Modifier.width(220.dp).clip(Radius.shapeMd).background(MaterialTheme.colorScheme.surfaceVariant)
                             .padding(horizontal = 12.dp, vertical = 10.dp),
                     ) {
                         Text(
                             row.userName ?: row.userEmail ?: "Unknown staff",
-                            color = Brand.Foreground,
+                            color = MaterialTheme.colorScheme.onSurface,
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.SemiBold,
                             maxLines = 1,
                         )
                         Text(
                             "Clocked in at ${formatClockInTime(row.clockInAt)}",
-                            color = Brand.ForegroundMuted,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.labelSmall,
                         )
                     }
@@ -497,31 +506,31 @@ private fun StaffRowCard(
         else -> row.status.ifBlank { "Unknown" }
     }
 
-    Column(Modifier.fillMaxWidth().background(Brand.Surface)) {
+    Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface)) {
         DataListRow(
             content = {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         row.name,
                         style = MaterialTheme.typography.titleMedium,
-                        color = Brand.Foreground,
+                        color = MaterialTheme.colorScheme.onSurface,
                         fontWeight = FontWeight.SemiBold,
                     )
                     if (row.isSelf) {
                         Spacer(Modifier.width(6.dp))
-                        Text("(you)", style = MaterialTheme.typography.labelSmall, color = Brand.ForegroundMuted)
+                        Text("(you)", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
                 Text(
                     row.email,
                     style = MaterialTheme.typography.bodySmall,
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Text(
                     row.phone?.takeIf(String::isNotBlank)?.let { "$it · ${row.roles.joinToString(", ").ifBlank { "No role" }}" }
                         ?: row.roles.joinToString(", ").ifBlank { "No role assigned" },
                     style = MaterialTheme.typography.labelSmall,
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             },
             trailing = {
@@ -546,7 +555,7 @@ private fun StaffRowCard(
             ) {
                 Text(
                     "Pending removal — will sync when back online",
-                    color = Brand.Warning,
+                    color = MaterialTheme.colorScheme.operationalWarning,
                     style = MaterialTheme.typography.labelSmall,
                     modifier = Modifier.weight(1f),
                 )
@@ -558,11 +567,11 @@ private fun StaffRowCard(
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 8.dp)
                     .clip(Radius.shapeSm)
-                    .background(Brand.SurfaceRaised)
-                    .border(1.dp, Brand.Danger, Radius.shapeSm)
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .border(1.dp, MaterialTheme.colorScheme.operationalDanger, Radius.shapeSm)
                     .padding(8.dp),
             ) {
-                Text("Could not sync: ${row.rejectedError}", color = Brand.Danger, style = MaterialTheme.typography.labelSmall)
+                Text("Could not sync: ${row.rejectedError}", color = MaterialTheme.colorScheme.operationalDanger, style = MaterialTheme.typography.labelSmall)
                 Row {
                     TextButton(onClick = onRetrySync) { Text("Retry") }
                     // Retrying a rejected delete just resends the same
@@ -580,7 +589,7 @@ private fun StaffRowCard(
         } else if (canManage && row.pendingLocalId != null) {
             Text(
                 "Not synced yet",
-                color = Brand.Information,
+                color = MaterialTheme.colorScheme.operationalInformation,
                 style = MaterialTheme.typography.labelSmall,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
             )
@@ -599,7 +608,7 @@ private fun StaffActionsMenu(
     var expanded by remember { mutableStateOf(false) }
     Box {
         IconButton(onClick = { expanded = true }) {
-            Icon(Icons.Default.MoreVert, contentDescription = "More staff actions", tint = Brand.ForegroundMuted)
+            Icon(Icons.Default.MoreVert, contentDescription = "More staff actions", tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             DropdownMenuItem(
@@ -614,8 +623,8 @@ private fun StaffActionsMenu(
             )
             if (!isSelf && canDelete) {
                 DropdownMenuItem(
-                    text = { Text("Remove staff", color = Brand.Danger) },
-                    leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = Brand.Danger) },
+                    text = { Text("Remove staff", color = MaterialTheme.colorScheme.operationalDanger) },
+                    leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.operationalDanger) },
                     onClick = { expanded = false; onDelete() },
                 )
             }
@@ -670,15 +679,15 @@ private fun EditDialog(
                             "Only the protected owner can change another owner account's role or status."
                         },
                         style = MaterialTheme.typography.labelSmall,
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 } else {
                     RoleDropdown(roles, editor.roleCode) { onChange(editor.copy(roleCode = it)) }
                     rolesError?.let {
-                        Text(it, color = Brand.Warning, style = MaterialTheme.typography.labelSmall)
+                        Text(it, color = MaterialTheme.colorScheme.operationalWarning, style = MaterialTheme.typography.labelSmall)
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("Suspended", color = Brand.Foreground, modifier = Modifier.weight(1f))
+                        Text("Suspended", color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
                         Switch(
                             checked = editor.status == "suspended",
                             onCheckedChange = { onChange(editor.copy(status = if (it) "suspended" else "active")) },
@@ -687,9 +696,9 @@ private fun EditDialog(
                 }
                 val validationError = editor.validationError
                 if (error != null) {
-                    Text(error, color = Brand.Danger, style = MaterialTheme.typography.bodyMedium)
+                    Text(error, color = MaterialTheme.colorScheme.operationalDanger, style = MaterialTheme.typography.bodyMedium)
                 } else if (validationError != null) {
-                    Text(validationError, color = Brand.Warning, style = MaterialTheme.typography.labelSmall)
+                    Text(validationError, color = MaterialTheme.colorScheme.operationalWarning, style = MaterialTheme.typography.labelSmall)
                 }
             }
         },
@@ -702,10 +711,10 @@ private fun EditDialog(
             )
         },
         dismissButton = { TextButton(onClick = onCancel, enabled = !saving) { Text("Cancel") } },
-        containerColor = Brand.SurfaceOverlay,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = Radius.shapeLg,
-        titleContentColor = Brand.Foreground,
-        textContentColor = Brand.Foreground,
+        titleContentColor = MaterialTheme.colorScheme.onSurface,
+        textContentColor = MaterialTheme.colorScheme.onSurface,
         modifier = Modifier.widthIn(max = 560.dp).fillMaxWidth(0.92f).imePadding(),
         properties = DialogProperties(usePlatformDefaultWidth = false),
     )
@@ -798,18 +807,18 @@ private fun CreateLoginDialog(
                     if (untouched) {
                         Text(
                             "Name, email, and a 10–256 character password are required.",
-                            color = Brand.ForegroundMuted,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.labelSmall,
                         )
                     } else {
                         draft.validationError?.let { validation ->
-                            Text(validation, color = Brand.Warning, style = MaterialTheme.typography.labelSmall)
+                            Text(validation, color = MaterialTheme.colorScheme.operationalWarning, style = MaterialTheme.typography.labelSmall)
                         }
                     }
                 } else {
                     Text(
                         "A 6-digit code was sent to ${challenge.destination}. Enter it to finish creating this login.",
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     OutlinedTextField(
                         value = code,
@@ -828,7 +837,7 @@ private fun CreateLoginDialog(
                     // draft and silently supersedes the old challenge.
                     TextButton(onClick = onRequestCode, enabled = !busy) { Text("Send a new code") }
                 }
-                if (error != null) Text(error, color = Brand.Danger, style = MaterialTheme.typography.bodyMedium)
+                if (error != null) Text(error, color = MaterialTheme.colorScheme.operationalDanger, style = MaterialTheme.typography.bodyMedium)
             }
         },
         confirmButton = {
@@ -849,10 +858,10 @@ private fun CreateLoginDialog(
             }
         },
         dismissButton = { TextButton(onClick = onCancel, enabled = !busy) { Text("Cancel") } },
-        containerColor = Brand.SurfaceOverlay,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = Radius.shapeLg,
-        titleContentColor = Brand.Foreground,
-        textContentColor = Brand.Foreground,
+        titleContentColor = MaterialTheme.colorScheme.onSurface,
+        textContentColor = MaterialTheme.colorScheme.onSurface,
         modifier = Modifier.widthIn(max = 560.dp).fillMaxWidth(0.92f).imePadding(),
         properties = DialogProperties(usePlatformDefaultWidth = false),
     )
@@ -883,10 +892,10 @@ private fun PasswordResetDialog(
                 if (challenge == null) {
                     Text(
                         "A 6-digit code will be sent to the company's security mailbox to confirm this reset.",
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 } else {
-                    Text("Code sent to ${challenge.destination}.", color = Brand.ForegroundMuted)
+                    Text("Code sent to ${challenge.destination}.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     OutlinedTextField(
                         value = code,
                         onValueChange = { onCodeChange(it.filter(Char::isDigit).take(6)) },
@@ -914,16 +923,16 @@ private fun PasswordResetDialog(
                     if (draft.newPassword.isEmpty() && draft.confirmNewPassword.isEmpty()) {
                         Text(
                             "Enter and confirm a 10–256 character password.",
-                            color = Brand.ForegroundMuted,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.labelSmall,
                         )
                     } else {
                         draft.validationError?.let { validation ->
-                            Text(validation, color = Brand.Warning, style = MaterialTheme.typography.labelSmall)
+                            Text(validation, color = MaterialTheme.colorScheme.operationalWarning, style = MaterialTheme.typography.labelSmall)
                         }
                     }
                 }
-                if (error != null) Text(error, color = Brand.Danger, style = MaterialTheme.typography.bodyMedium)
+                if (error != null) Text(error, color = MaterialTheme.colorScheme.operationalDanger, style = MaterialTheme.typography.bodyMedium)
             }
         },
         confirmButton = {
@@ -944,10 +953,10 @@ private fun PasswordResetDialog(
             }
         },
         dismissButton = { TextButton(onClick = onCancel, enabled = !busy) { Text("Cancel") } },
-        containerColor = Brand.SurfaceOverlay,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = Radius.shapeLg,
-        titleContentColor = Brand.Foreground,
-        textContentColor = Brand.Foreground,
+        titleContentColor = MaterialTheme.colorScheme.onSurface,
+        textContentColor = MaterialTheme.colorScheme.onSurface,
         modifier = Modifier.widthIn(max = 560.dp).fillMaxWidth(0.92f).imePadding(),
         properties = DialogProperties(usePlatformDefaultWidth = false),
     )

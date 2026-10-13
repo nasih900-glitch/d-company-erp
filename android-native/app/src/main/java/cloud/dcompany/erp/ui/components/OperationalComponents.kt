@@ -1,5 +1,14 @@
 package cloud.dcompany.erp.ui.components
 
+import cloud.dcompany.erp.ui.theme.operationalDanger
+import cloud.dcompany.erp.ui.theme.operationalDangerContainer
+import cloud.dcompany.erp.ui.theme.operationalGood
+import cloud.dcompany.erp.ui.theme.operationalGoodContainer
+import cloud.dcompany.erp.ui.theme.operationalInformation
+import cloud.dcompany.erp.ui.theme.operationalInformationContainer
+import cloud.dcompany.erp.ui.theme.operationalWarning
+import cloud.dcompany.erp.ui.theme.operationalWarningContainer
+
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -53,16 +62,17 @@ private data class ToneColors(
     val border: Color,
 )
 
+@Composable
 private fun toneColors(tone: UiTone): ToneColors = when (tone) {
-    UiTone.Neutral -> ToneColors(Brand.ForegroundMuted, Brand.SurfaceHover, Brand.Border)
-    UiTone.Brand -> ToneColors(Brand.Gold, Brand.Gold.copy(alpha = 0.12f), Brand.Gold.copy(alpha = 0.38f))
-    UiTone.Success -> ToneColors(Brand.Good, Brand.GoodMuted, Brand.Good.copy(alpha = 0.34f))
-    UiTone.Warning -> ToneColors(Brand.Warning, Brand.WarningMuted, Brand.Warning.copy(alpha = 0.36f))
-    UiTone.Danger -> ToneColors(Brand.Danger, Brand.DangerMuted, Brand.Danger.copy(alpha = 0.36f))
+    UiTone.Neutral -> ToneColors(MaterialTheme.colorScheme.onSurfaceVariant, MaterialTheme.colorScheme.secondaryContainer, MaterialTheme.colorScheme.outline)
+    UiTone.Brand -> ToneColors(MaterialTheme.colorScheme.primary, MaterialTheme.colorScheme.primary.copy(alpha = 0.12f), MaterialTheme.colorScheme.primary.copy(alpha = 0.38f))
+    UiTone.Success -> ToneColors(MaterialTheme.colorScheme.operationalGood, MaterialTheme.colorScheme.operationalGoodContainer, MaterialTheme.colorScheme.operationalGood.copy(alpha = 0.34f))
+    UiTone.Warning -> ToneColors(MaterialTheme.colorScheme.operationalWarning, MaterialTheme.colorScheme.operationalWarningContainer, MaterialTheme.colorScheme.operationalWarning.copy(alpha = 0.36f))
+    UiTone.Danger -> ToneColors(MaterialTheme.colorScheme.operationalDanger, MaterialTheme.colorScheme.operationalDangerContainer, MaterialTheme.colorScheme.operationalDanger.copy(alpha = 0.36f))
     UiTone.Information -> ToneColors(
-        Brand.Information,
-        Brand.InformationMuted,
-        Brand.Information.copy(alpha = 0.36f),
+        MaterialTheme.colorScheme.operationalInformation,
+        MaterialTheme.colorScheme.operationalInformationContainer,
+        MaterialTheme.colorScheme.operationalInformation.copy(alpha = 0.36f),
     )
 }
 
@@ -106,8 +116,8 @@ fun MetricCard(
 ) {
     val colors = toneColors(tone)
     Row(
-        modifier.heightIn(min = 88.dp).clip(Radius.shapeLg).background(Brand.Surface)
-            .border(1.dp, Brand.BorderSubtle, Radius.shapeLg)
+        modifier.heightIn(min = 88.dp).clip(Radius.shapeLg).background(MaterialTheme.colorScheme.surface)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeLg)
             .padding(Spacing.md),
         horizontalArrangement = Arrangement.spacedBy(Spacing.md),
         verticalAlignment = Alignment.CenterVertically,
@@ -121,14 +131,14 @@ fun MetricCard(
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
             Text(
                 title,
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelMedium,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
                 value,
-                color = Brand.Foreground,
+                color = MaterialTheme.colorScheme.onSurface,
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold,
                 maxLines = 1,
@@ -141,7 +151,7 @@ fun MetricCard(
                 color = if (tone == UiTone.Warning || tone == UiTone.Danger) {
                     colors.foreground
                 } else {
-                    Brand.ForegroundFaint
+                    MaterialTheme.colorScheme.onSurfaceVariant
                 },
                 style = MaterialTheme.typography.labelSmall,
                 maxLines = 1,
@@ -163,7 +173,7 @@ fun OperationalBanner(
 ) {
     val colors = toneColors(tone)
     Row(
-        modifier.fillMaxWidth().clip(Radius.shapeMd).background(Brand.SurfaceRaised)
+        modifier.fillMaxWidth().clip(Radius.shapeMd).background(MaterialTheme.colorScheme.surfaceVariant)
             .border(1.dp, colors.border, Radius.shapeMd)
             .semantics { liveRegion = LiveRegionMode.Polite }
             .padding(horizontal = Spacing.lg, vertical = if (compact) 0.dp else Spacing.sm),
@@ -173,10 +183,10 @@ fun OperationalBanner(
         Icon(icon, contentDescription = null, tint = colors.foreground,
             modifier = Modifier.size(if (compact) 18.dp else 22.dp))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(title, color = Brand.Foreground, style = MaterialTheme.typography.labelLarge)
+            Text(title, color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.labelLarge)
             Text(
                 detail,
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelSmall,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
@@ -198,15 +208,15 @@ fun ErpButton(
     contentPadding: PaddingValues = ButtonDefaults.ContentPadding,
 ) {
     val (container, content) = when (intent) {
-        ActionIntent.Primary -> Brand.Gold to Brand.Background
-        ActionIntent.Secondary -> Brand.SurfaceHover to Brand.Foreground
-        ActionIntent.Success -> Brand.Good to Brand.Background
-        ActionIntent.Warning -> Brand.Warning to Brand.Background
-        ActionIntent.Destructive -> Brand.Danger to Brand.Background
-        ActionIntent.Quiet -> Color.Transparent to Brand.ForegroundMuted
+        ActionIntent.Primary -> MaterialTheme.colorScheme.primary to MaterialTheme.colorScheme.background
+        ActionIntent.Secondary -> MaterialTheme.colorScheme.secondaryContainer to MaterialTheme.colorScheme.onSurface
+        ActionIntent.Success -> MaterialTheme.colorScheme.operationalGood to MaterialTheme.colorScheme.background
+        ActionIntent.Warning -> MaterialTheme.colorScheme.operationalWarning to MaterialTheme.colorScheme.background
+        ActionIntent.Destructive -> MaterialTheme.colorScheme.operationalDanger to MaterialTheme.colorScheme.background
+        ActionIntent.Quiet -> Color.Transparent to MaterialTheme.colorScheme.onSurfaceVariant
     }
     val border = when (intent) {
-        ActionIntent.Secondary -> BorderStroke(1.dp, Brand.ControlBorder)
+        ActionIntent.Secondary -> BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
         else -> null
     }
     Button(
@@ -216,8 +226,8 @@ fun ErpButton(
         colors = ButtonDefaults.buttonColors(
             containerColor = container,
             contentColor = content,
-            disabledContainerColor = if (busy) container else Brand.SurfaceRaised,
-            disabledContentColor = if (busy) content else Brand.Disabled,
+            disabledContainerColor = if (busy) container else MaterialTheme.colorScheme.surfaceVariant,
+            disabledContentColor = if (busy) content else MaterialTheme.colorScheme.onSurfaceVariant,
         ),
         border = border,
         contentPadding = contentPadding,
@@ -252,7 +262,7 @@ fun ErpButton(
 fun NumericValue(
     value: String,
     modifier: Modifier = Modifier,
-    color: Color = Brand.Foreground,
+    color: Color = MaterialTheme.colorScheme.onSurface,
     style: TextStyle = MaterialTheme.typography.headlineMedium,
 ) {
     Text(

@@ -162,11 +162,11 @@ export function GamingCustomerPicker({
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
             <input type="text" placeholder="Customer name (optional)" className="input !py-1.5 text-xs w-full"
               disabled={disabled} value={name} onChange={(event) => onNameChange(event.target.value)}/>
-            <input type="tel" placeholder="Customer phone (optional)" className="input !py-1.5 text-xs w-full"
+            <input type="tel" placeholder={saveContext === 'join' ? 'Customer phone (required)' : 'Customer phone (optional)'} className="input !py-1.5 text-xs w-full"
               disabled={disabled} value={phone} maxLength={20} onChange={(event) => onPhoneChange(event.target.value)}/>
           </div>
           <p className="text-[11px] text-fg-muted">{saveContext === 'join'
-            ? 'Name and phone are saved as a customer before this friend joins.'
+            ? 'Phone identifies the friend and is required. Name is optional; a blank name never replaces a saved name.'
             : 'A valid new phone is saved through session start for next time. A name alone stays an untracked receipt note.'}</p>
         </>
       )}

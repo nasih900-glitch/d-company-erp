@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import and_, case, func, select
 from sqlalchemy.exc import IntegrityError
 
+from app.core.errors import ConflictError
 from app.models import Customer
 
 _ALLOWED_PHONE = re.compile(r"^[+0-9\s().-]+$")
@@ -36,6 +37,40 @@ def _normalized_phone_expression():
         ),
         else_=None,
     )
+
+
+async def find_unique_gaming_customer_by_phone(
+    session,
+    *,
+    company_id: UUID,
+    phone: str | None,
+) -> Customer | None:
+    """Resolve a read-only gaming preview only when one live identity matches."""
+
+    normalized = normalize_indian_phone(phone)
+    if normalized is None:
+        return None
+    candidates = list(
+        (
+            await session.execute(
+                select(Customer)
+                .where(
+                    Customer.company_id == company_id,
+                    Customer.deleted_at.is_(None),
+                    _normalized_phone_expression() == normalized,
+                )
+                .order_by(Customer.id)
+                .limit(2)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if len(candidates) > 1:
+        raise ConflictError(
+            "This phone matches more than one saved customer. Choose the saved customer explicitly."
+        )
+    return candidates[0] if candidates else None
 
 
 async def resolve_gaming_customer(

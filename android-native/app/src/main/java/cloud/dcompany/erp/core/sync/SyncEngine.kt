@@ -25,6 +25,7 @@ import cloud.dcompany.erp.core.db.CafeTableEntity
 import cloud.dcompany.erp.core.db.CanonicalReceiptSyncStateEntity
 import cloud.dcompany.erp.core.db.CustomerCacheEntity
 import cloud.dcompany.erp.core.db.CustomerDirectoryStateEntity
+import cloud.dcompany.erp.core.db.LoyaltyProgramCacheEntity
 import cloud.dcompany.erp.core.db.EventCacheEntity
 import cloud.dcompany.erp.core.db.EventTicketCacheEntity
 import cloud.dcompany.erp.core.db.FloorEntity
@@ -5457,13 +5458,14 @@ class SyncEngine private constructor(
      * pushCustomerOne) triggers it, not every sync().
      */
     private suspend fun pullCustomers() {
-        val lease = cacheIsolation.currentLease() ?: return
-        val snapshot = customersApi.list(limit = 500)
-            .requireCustomerDirectorySnapshot(lease.scope.companyId)
-        cacheIsolation.commitIfCurrent(lease) {
-            db.withTransaction {
-                db.customerDao().replaceCache(
-                    snapshot.customers.map {
+        cloud.dcompany.erp.core.db.CustomerProjectionRefreshGate.mutex.withLock {
+            val lease = cacheIsolation.currentLease() ?: return@withLock
+            val snapshot = customersApi.list(limit = 500)
+                .requireCustomerDirectorySnapshot(lease.scope.companyId)
+            cacheIsolation.commitIfCurrent(lease) {
+                db.withTransaction {
+                    db.customerDao().replaceCache(
+                        snapshot.customers.map {
                             CustomerCacheEntity(
                                 id = it.id,
                                 name = it.name,
@@ -5473,6 +5475,8 @@ class SyncEngine private constructor(
                                 visitCount = it.visitCount,
                                 totalSpentMinor = it.totalSpentMinor,
                                 loyaltyPoints = it.loyaltyPoints,
+                                loyaltyProgramRevision = it.loyaltyProgramRevision,
+                                loyaltyPointValueMinor = it.loyaltyPointValueMinor,
                                 lifetimeGamingPointsEarned = it.lifetimeGamingPointsEarned,
                                 gamingRank = it.gamingRank,
                                 gamingRankFloor = it.gamingRankFloor,
@@ -5484,10 +5488,11 @@ class SyncEngine private constructor(
                             )
                     },
                 )
-                db.customerDao().upsertDirectoryState(
-                    CustomerDirectoryStateEntity(snapshot.companyId, snapshot.deletionRevision),
-                )
-                db.syncMetaDao().put(SyncMetaEntity("customers", System.currentTimeMillis()))
+                    db.customerDao().upsertDirectoryState(
+                        CustomerDirectoryStateEntity(snapshot.companyId, snapshot.deletionRevision),
+                    )
+                    db.syncMetaDao().put(SyncMetaEntity("customers", System.currentTimeMillis()))
+                }
             }
         }
     }
@@ -7835,8 +7840,28 @@ class SyncEngine private constructor(
      * resource (see onDemandPulls). */
     private suspend fun pullSettingsData() {
         pullCompany()
+        pullLoyaltyProgram()
         pullBranches()
         pullTerminals()
+    }
+
+    private suspend fun pullLoyaltyProgram() {
+        val lease = cacheIsolation.currentLease() ?: return
+        val program = settingsApi.loyaltyProgram()
+        require(program.companyId == lease.scope.companyId) {
+            "The loyalty program response belongs to another company."
+        }
+        cacheIsolation.commitIfCurrent(lease) {
+            db.loyaltyDao().acceptProgramMonotonically(
+                LoyaltyProgramCacheEntity(
+                    companyId = program.companyId,
+                    revision = program.revision,
+                    rulesJson = ApiClient.json.encodeToString(program.rules),
+                    publishedAt = program.publishedAt,
+                    loadedAtMillis = System.currentTimeMillis(),
+                ),
+            )
+        }
     }
 
     private suspend fun pullCompany() {

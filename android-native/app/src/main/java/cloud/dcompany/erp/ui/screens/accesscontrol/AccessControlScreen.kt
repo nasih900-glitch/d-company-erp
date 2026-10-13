@@ -1,5 +1,14 @@
 package cloud.dcompany.erp.ui.screens.accesscontrol
 
+import cloud.dcompany.erp.ui.theme.operationalDanger
+import cloud.dcompany.erp.ui.theme.operationalDangerContainer
+import cloud.dcompany.erp.ui.theme.operationalGood
+import cloud.dcompany.erp.ui.theme.operationalGoodContainer
+import cloud.dcompany.erp.ui.theme.operationalInformation
+import cloud.dcompany.erp.ui.theme.operationalInformationContainer
+import cloud.dcompany.erp.ui.theme.operationalWarning
+import cloud.dcompany.erp.ui.theme.operationalWarningContainer
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.selection.toggleable
@@ -83,7 +92,7 @@ fun AccessControlScreen(vm: AccessControlViewModel = viewModel()) {
     val customOverrideCount = remember(state.cells) { state.cells.count { it.override != null } }
 
     Column(
-        Modifier.fillMaxSize().background(Brand.Background)
+        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
             .padding(horizontal = Spacing.lgPlus, vertical = Spacing.lg),
         verticalArrangement = Arrangement.spacedBy(Spacing.md),
     ) {
@@ -91,7 +100,7 @@ fun AccessControlScreen(vm: AccessControlViewModel = viewModel()) {
             leading = {
                 Text(
                     "Permission matrix controls",
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.labelLarge,
                 )
             },
@@ -167,11 +176,11 @@ fun AccessControlScreen(vm: AccessControlViewModel = viewModel()) {
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.spacedBy(Spacing.md),
                     ) {
-                        CircularProgressIndicator(color = Brand.Gold)
-                        Text("Loading live permission matrix…", color = Brand.ForegroundMuted)
+                        CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                        Text("Loading live permission matrix…", color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Text(
                             "No permission can be changed until the current server rules arrive.",
-                            color = Brand.ForegroundFaint,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.labelSmall,
                         )
                     }
@@ -188,8 +197,8 @@ fun AccessControlScreen(vm: AccessControlViewModel = viewModel()) {
                     if (state.loading) {
                         LinearProgressIndicator(
                             modifier = Modifier.fillMaxWidth(),
-                            color = Brand.Information,
-                            trackColor = Brand.SurfaceRaised,
+                            color = MaterialTheme.colorScheme.operationalInformation,
+                            trackColor = MaterialTheme.colorScheme.surfaceVariant,
                         )
                     }
                     AccessGrid(
@@ -218,14 +227,14 @@ fun AccessControlScreen(vm: AccessControlViewModel = viewModel()) {
             "the maximum level permitted for this role"
         }
         AlertDialog(
-            containerColor = cloud.dcompany.erp.ui.theme.Brand.SurfaceOverlay,
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
             shape = cloud.dcompany.erp.ui.theme.Radius.shapeLg,
             onDismissRequest = { pendingChange = null },
             title = { Text(if (change.reset) "Reset permission?" else "Change permission?") },
             text = {
                 Text(
                     "${change.roleLabel} access to ${change.moduleLabel} will become $targetState immediately for every user in that role. Protected permission ceilings will still apply.",
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             },
             confirmButton = {
@@ -244,7 +253,7 @@ fun AccessControlScreen(vm: AccessControlViewModel = viewModel()) {
 
     state.actionError?.let { msg ->
         AlertDialog(
-            containerColor = cloud.dcompany.erp.ui.theme.Brand.SurfaceOverlay,
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
             shape = cloud.dcompany.erp.ui.theme.Radius.shapeLg,
             onDismissRequest = vm::dismissActionError,
             confirmButton = { TextButton(onClick = vm::dismissActionError) { Text("OK") } },
@@ -256,7 +265,7 @@ fun AccessControlScreen(vm: AccessControlViewModel = viewModel()) {
 
     detailsCell?.let { cell ->
         AlertDialog(
-            containerColor = cloud.dcompany.erp.ui.theme.Brand.SurfaceOverlay,
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
             shape = cloud.dcompany.erp.ui.theme.Radius.shapeLg,
             onDismissRequest = { detailsCell = null },
             confirmButton = { TextButton(onClick = { detailsCell = null }) { Text("Done") } },
@@ -266,35 +275,35 @@ fun AccessControlScreen(vm: AccessControlViewModel = viewModel()) {
                     if (!cell.hasExactPermissionEvidence) {
                         Text(
                             "This server did not return exact permission evidence. Treat the enabled module as partial until the backend is updated and the matrix is refreshed.",
-                            color = Brand.Warning,
+                            color = MaterialTheme.colorScheme.operationalWarning,
                         )
                     } else {
                         Text(
                             "Effective permissions",
-                            color = Brand.Foreground,
+                            color = MaterialTheme.colorScheme.onSurface,
                             fontWeight = FontWeight.SemiBold,
                         )
                         Text(
                             cell.effectivePermissions.ifEmpty { listOf("None") }.joinToString("\n"),
-                            color = Brand.ForegroundMuted,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                         if (cell.unavailablePermissions.isNotEmpty()) {
                             Text(
                                 "Currently unavailable",
-                                color = Brand.Warning,
+                                color = MaterialTheme.colorScheme.operationalWarning,
                                 fontWeight = FontWeight.SemiBold,
                             )
-                            Text(cell.unavailablePermissions.joinToString("\n"), color = Brand.ForegroundMuted)
+                            Text(cell.unavailablePermissions.joinToString("\n"), color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         if (cell.ceilingLimitedPermissions.isNotEmpty()) {
                             Text(
                                 "Cannot be granted through this matrix for this role",
-                                color = Brand.Danger,
+                                color = MaterialTheme.colorScheme.operationalDanger,
                                 fontWeight = FontWeight.SemiBold,
                             )
                             Text(
                                 cell.ceilingLimitedPermissions.joinToString("\n"),
-                                color = Brand.ForegroundMuted,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
                     }
@@ -323,13 +332,13 @@ private fun AccessGrid(
 
     Column(modifier.fillMaxSize().horizontalScroll(rememberScrollState())) {
         Row(
-            modifier = Modifier.background(Brand.SurfaceRaised).heightIn(min = 54.dp),
+            modifier = Modifier.background(MaterialTheme.colorScheme.surfaceVariant).heightIn(min = 54.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(Modifier.width(ROLE_COLUMN_WIDTH).padding(horizontal = Spacing.lg)) {
                 Text(
                     "ROLE",
-                    color = Brand.ForegroundFaint,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.Bold,
                 )
@@ -338,7 +347,7 @@ private fun AccessGrid(
                 Box(Modifier.width(MODULE_COLUMN_WIDTH).padding(Spacing.sm), Alignment.Center) {
                     Text(
                         (MODULE_LABELS[module] ?: module).uppercase(),
-                        color = Brand.ForegroundFaint,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Bold,
                         textAlign = TextAlign.Center,
@@ -351,7 +360,7 @@ private fun AccessGrid(
         LazyColumn(Modifier.weight(1f)) {
             itemsIndexed(roleEntries, key = { _, entry -> entry.key }) { index, (roleCode, description) ->
                 Row(
-                    modifier = Modifier.background(if (index % 2 == 0) Brand.Surface else Brand.SurfaceRaised.copy(alpha = 0.42f))
+                    modifier = Modifier.background(if (index % 2 == 0) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.42f))
                         .heightIn(min = 68.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -361,20 +370,20 @@ private fun AccessGrid(
                     ) {
                         Text(
                             roleDisplayName(roleCode),
-                            color = Brand.Foreground,
+                            color = MaterialTheme.colorScheme.onSurface,
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.SemiBold,
                         )
                         Text(
                             description,
-                            color = Brand.ForegroundFaint,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.labelSmall,
                             maxLines = 2,
                         )
                         val overrideCount = overrideCounts[roleCode] ?: 0
                         Text(
                             if (overrideCount == 0) "Role defaults" else "$overrideCount custom override${if (overrideCount == 1) "" else "s"}",
-                            color = if (overrideCount == 0) Brand.ForegroundFaint else Brand.ForegroundMuted,
+                            color = if (overrideCount == 0) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.labelSmall,
                         )
                     }
@@ -437,7 +446,7 @@ private fun AccessCellToggle(
             contentAlignment = Alignment.Center,
         ) {
             if (busy) {
-                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Brand.Gold)
+                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.primary)
             } else {
                 OperationalStatusBadge(
                     label = when (cell.accessLevel) {
@@ -458,7 +467,7 @@ private fun AccessCellToggle(
             Icon(
                 Icons.Default.Info,
                 contentDescription = "Show effective and unavailable permissions",
-                tint = Brand.ForegroundMuted,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(18.dp),
             )
         }
@@ -470,7 +479,7 @@ private fun AccessCellToggle(
                 Icon(
                     Icons.Filled.Refresh,
                     contentDescription = "Reset to default (${cell.defaultAccessLevel})",
-                    tint = Brand.ForegroundMuted,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(16.dp),
                 )
             }

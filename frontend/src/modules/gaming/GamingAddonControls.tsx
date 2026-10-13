@@ -145,6 +145,7 @@ export function SessionAddonsPanel({
 
 export function SessionAddonPickerModal({
   stationName,
+  sessionId,
   items,
   attempt,
   busy,
@@ -153,6 +154,7 @@ export function SessionAddonPickerModal({
   onClose,
 }: {
   stationName: string;
+  sessionId: string;
   items: MenuItemDTO[];
   attempt: GamingAddonCreateAttempt | null;
   busy: boolean;
@@ -161,7 +163,9 @@ export function SessionAddonPickerModal({
   onClose: () => void;
 }) {
   const frozen = Boolean(attempt);
-  const initialItemId = attempt?.body.menu_item_id ?? items[0]?.id ?? '';
+  // A retry reopens its immutable saved draft. A new drink addition starts
+  // empty so a staff tap, not catalogue ordering, chooses what will be sold.
+  const initialItemId = attempt?.body.menu_item_id ?? '';
   const initialItem = items.find((item) => item.id === initialItemId);
   const initialVariantId = attempt?.body.variant_id
     ?? (initialItem?.variants ?? []).filter((variant) => variant.is_active)
@@ -175,6 +179,7 @@ export function SessionAddonPickerModal({
   const [qty, setQty] = useState(attempt?.body.qty ?? 1);
   const [note, setNote] = useState(attempt?.body.note ?? '');
   const [validation, setValidation] = useState<string | null>(null);
+  const [reviewDraft, setReviewDraft] = useState<GamingAddonDraft | null>(attempt?.body ?? null);
   const selectedItem = items.find((item) => item.id === selectedItemId);
   const eligibleItemIds = useMemo(() => new Set(items.map((item) => item.id)), [items]);
   const activeVariants = (selectedItem?.variants ?? [])
@@ -192,6 +197,14 @@ export function SessionAddonPickerModal({
   const unitPrice = selectedItem
     ? catalogUnitPriceMinor(selectedItem, variantId, modifiers)
     : 0;
+  const reviewUnitPrice = reviewDraft?.expected_unit_price_minor ?? unitPrice;
+  const reviewQty = reviewDraft?.qty ?? qty;
+  const allModifierOptions = items.flatMap((item) => item.modifier_groups ?? [])
+    .flatMap((group) => group.options);
+  const reviewModifierLabels = (reviewDraft?.modifiers ?? modifiers).map((selection) => {
+    const option = allModifierOptions.find((candidate) => candidate.id === selection.modifier_id);
+    return `${option?.name ?? `Saved modifier ${selection.modifier_id.slice(0, 8)}`} × ${selection.qty}`;
+  });
 
   function selectItem(itemId: string) {
     const item = items.find((candidate) => candidate.id === itemId);
@@ -202,6 +215,7 @@ export function SessionAddonPickerModal({
     setVariantId(firstVariant?.id ?? null);
     setModifierQuantities({});
     setValidation(null);
+    setReviewDraft(null);
   }
 
   function adjustModifier(group: MenuModifierGroupDTO, optionId: string, delta: number) {
@@ -218,12 +232,17 @@ export function SessionAddonPickerModal({
       return { ...current, [optionId]: next };
     });
     setValidation(null);
+    setReviewDraft(null);
   }
 
   function submit(event: React.FormEvent) {
     event.preventDefault();
     if (attempt) {
       onSubmit(attempt.body);
+      return;
+    }
+    if (reviewDraft) {
+      onSubmit(reviewDraft);
       return;
     }
     const draft: GamingAddonDraft = {
@@ -239,7 +258,7 @@ export function SessionAddonPickerModal({
       setValidation(problem);
       return;
     }
-    onSubmit(draft);
+    setReviewDraft(draft);
   }
 
   return (
@@ -258,7 +277,7 @@ export function SessionAddonPickerModal({
           </div>
         )}
 
-        <div>
+        {!reviewDraft && <div>
           <div className="mb-2 text-xs font-semibold text-fg-muted">Available drinks and snacks</div>
           <div className="grid max-h-52 grid-cols-1 gap-2 overflow-y-auto sm:grid-cols-2">
             {items.map((item) => (
@@ -281,9 +300,9 @@ export function SessionAddonPickerModal({
               </button>
             ))}
           </div>
-        </div>
+        </div>}
 
-        {activeVariants.length > 0 && (
+        {!reviewDraft && activeVariants.length > 0 && (
           <div>
             <div className="mb-2 text-xs font-semibold text-fg-muted">Size or variant</div>
             <div className="flex flex-wrap gap-2">
@@ -302,7 +321,7 @@ export function SessionAddonPickerModal({
           </div>
         )}
 
-        {activeGroups.map((group) => {
+        {!reviewDraft && activeGroups.map((group) => {
           const options = group.options
             .filter((option) => option.is_active)
             .sort((left, right) => left.sort_order - right.sort_order);
@@ -352,7 +371,7 @@ export function SessionAddonPickerModal({
           );
         })}
 
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-[auto_1fr]">
+        {!reviewDraft && <div className="grid grid-cols-1 gap-3 sm:grid-cols-[auto_1fr]">
           <div>
             <div className="mb-1 text-xs text-fg-muted">Quantity</div>
             <div className="flex items-center gap-2">
@@ -371,23 +390,38 @@ export function SessionAddonPickerModal({
               value={note} onChange={(event) => setNote(event.target.value)}
               placeholder="For example: hand to customer at station"/>
           </label>
-        </div>
+        </div>}
 
-        <div className="rounded-xl border border-bg-border bg-bg-raised p-3">
+        <div className={`rounded-xl border p-3 ${reviewDraft ? 'border-accent bg-accent/5' : 'border-bg-border bg-bg-raised'}`}>
+          <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-fg-muted">
+            {reviewDraft ? 'Review before adding' : 'Price preview'}
+          </div>
+          {reviewDraft && (
+            <div className="mb-3 grid gap-2 text-xs sm:grid-cols-2">
+              <div><span className="text-fg-muted">Station</span><div className="font-semibold">{stationName}</div></div>
+              <div><span className="text-fg-muted">Session</span><div className="truncate font-mono">{sessionId}</div></div>
+              <div><span className="text-fg-muted">Item</span><div className="font-semibold">{selectedItem?.name ?? `Saved item ${reviewDraft.menu_item_id.slice(0, 8)}`}</div></div>
+              <div><span className="text-fg-muted">Modifiers</span><div>{reviewModifierLabels.join(', ') || 'None'}</div></div>
+            </div>
+          )}
           <div className="flex items-baseline justify-between gap-3">
-            <span className="text-sm text-fg-muted">Catalogue total</span>
-            <span className="font-mono text-xl font-bold">{inr(unitPrice * qty)}</span>
+            <span className="text-sm text-fg-muted">{reviewQty} × {inr(reviewUnitPrice)} unit</span>
+            <span className="font-mono text-xl font-bold">{inr(reviewUnitPrice * reviewQty)}</span>
           </div>
           <div className="mt-1 text-[11px] text-fg-muted">
-            The server verifies current catalogue pricing and calculates the final tax and discount snapshot.
+            {reviewDraft
+              ? 'This exact reviewed price and configuration are frozen for Confirm or safe retry. The server rejects it if the catalogue changed; edit and review again to accept a new price.'
+              : 'The server verifies current catalogue pricing and calculates the final tax and discount snapshot.'}
           </div>
         </div>
 
         <div className="flex justify-end gap-2">
+          {reviewDraft && !frozen && <button type="button" className="btn btn-ghost min-h-11" disabled={busy}
+            onClick={() => setReviewDraft(null)}>Edit</button>}
           <button type="button" className="btn btn-ghost min-h-11" disabled={busy} onClick={onClose}>Close</button>
           <button type="submit" className="btn btn-primary min-h-11" disabled={busy || (!selectedItem && !attempt)}>
             {busy ? <Loader2 size={15} className="animate-spin"/> : <ShoppingBag size={15}/>}
-            {frozen ? 'Retry exact item' : 'Add to session'}
+            {frozen ? 'Retry exact item' : reviewDraft ? 'Confirm add to session' : 'Review item'}
           </button>
         </div>
       </form>

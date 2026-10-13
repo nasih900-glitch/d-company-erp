@@ -16,6 +16,54 @@ class GamingParticipantAmendmentPolicyTest {
     private val startedAt = Instant.parse("2026-09-24T12:00:00Z").toEpochMilli()
 
     @Test
+    fun `phone identifies a new friend while name stays optional`() {
+        assertEquals(null, gamingParticipantJoinIdentityError(null, null, "9876543210"))
+        assertEquals(null, gamingParticipantJoinIdentityError(null, "Optional name", "9876543210"))
+        assertEquals(null, gamingParticipantJoinIdentityError("saved-customer", null, null))
+        assertTrue(gamingParticipantJoinIdentityError(null, "Name only", null)!!.contains("phone"))
+        assertTrue(gamingParticipantJoinIdentityError("saved-customer", null, "9876543210")!!.contains("not both"))
+    }
+
+    @Test
+    fun `rejoin intervals use one cumulative started-hour minimum per customer`() {
+        val rows = listOf(
+            GamingParticipantUi(
+                reference = "visit-1", customerId = "friend-1", name = "Friend", phone = "9876543210",
+                active = false, pending = false, joinedPlayElapsedMs = 0L, leftPlayElapsedMs = 1_800_000L,
+            ),
+            GamingParticipantUi(
+                reference = "visit-2", customerId = "friend-1", name = "Friend", phone = "9876543210",
+                active = true, pending = false, joinedPlayElapsedMs = 2_000_000L,
+            ),
+            GamingParticipantUi(
+                reference = "visit-3", customerId = "friend-2", name = null, phone = "9876543211",
+                active = true, pending = false, joinedPlayElapsedMs = 3_000_000L,
+            ),
+        )
+
+        // Friend 1: 30 + 45 minutes -> two hours. Friend 2: 28 minutes -> one.
+        assertEquals(9_000L, estimatedGamingFriendControllerMinor(rows, 4_700_000L))
+        assertEquals(
+            9_000L,
+            estimatedGamingFriendControllerMinorAfterJoin(
+                participants = rows,
+                currentPlayElapsedMs = 4_700_000L,
+                customerId = null,
+                phone = "+91 98765 43210",
+            ),
+        )
+        assertEquals(
+            12_000L,
+            estimatedGamingFriendControllerMinorAfterJoin(
+                participants = rows,
+                currentPlayElapsedMs = 4_700_000L,
+                customerId = null,
+                phone = "9876543299",
+            ),
+        )
+    }
+
+    @Test
     fun `amendment is available through 29 59 but closes at exactly 30 minutes`() {
         val session = session()
         val target = package30("ps5", "single", 8_000)
@@ -185,6 +233,9 @@ class GamingParticipantAmendmentPolicyTest {
         assertEquals(cached.id, roster.single().reference)
         assertFalse(roster.single().active)
         assertTrue(roster.single().pending)
+        assertEquals(leave.occurredAtMillis, roster.single().leftAtMillis)
+        assertEquals(leave.playElapsedMs, roster.single().leftPlayElapsedMs)
+        assertEquals(3_000L, estimatedGamingFriendControllerMinor(roster, leave.playElapsedMs!! + 60_000L))
         assertTrue(hasSavedGamingParticipantLeave(join.actionId, actions))
         assertTrue(hasSavedGamingParticipantLeave(cached.id, actions))
         assertFalse(hasSavedGamingParticipantLeave("participant-2", actions))

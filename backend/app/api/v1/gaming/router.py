@@ -289,10 +289,14 @@ class SessionParticipantJoin(BaseModel):
 
     @model_validator(mode="after")
     def validate_identity_and_capture(self) -> Self:
+        if self.customer_name is not None:
+            self.customer_name = self.customer_name.strip() or None
+        if self.customer_phone is not None:
+            self.customer_phone = self.customer_phone.strip() or None
         if self.customer_id is not None and (self.customer_name or self.customer_phone):
-            raise ValueError("select a customer or enter name and phone, not both")
-        if self.customer_id is None and (not self.customer_name or not self.customer_phone):
-            raise ValueError("a saved customer or name and phone are required")
+            raise ValueError("select a saved customer or enter a phone, not both")
+        if self.customer_id is None and not self.customer_phone:
+            raise ValueError("a saved customer or phone is required")
         captured = self.occurred_at is not None
         if captured != (self.play_elapsed_ms is not None) or captured != (self.expected_pause_version is not None):
             raise ValueError("captured time, play meter, and pause version must be supplied together")
