@@ -219,6 +219,7 @@ class GamingDialogUiTest {
             .performScrollToNode(hasText("Amina Rahman · 9876543210"))
         compose.onNodeWithText("Amina Rahman · 9876543210").performClick()
         compose.onNodeWithText("Amina Rahman · 9876543210 · selected")
+            .performScrollTo()
             .assertIsDisplayed()
         compose.onNodeWithTag("gaming-add-player")
             .performScrollTo()

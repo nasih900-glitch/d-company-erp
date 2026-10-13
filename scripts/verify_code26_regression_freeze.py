@@ -984,7 +984,7 @@ REVIEWED_CODE30_4_BUILD46_SHA256 = {
     'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/ControlDeckFullShellScreenshotsUiTest.kt': '37dbd5ea57afddd1d8c6afc111f2cb84be4a9859862d5f1f1db550bb028ca838',
     'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/PosEmptyCatalogueUiTest.kt': '29c4afed33727246fdea8632efc7a37994bbf6fdd6e558d9d2c92ec1dad459d3',
     'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingBoardUiTest.kt': 'a3485abe520e10e2863e6992c1c460d0b680d274896ff52384dc6a6017a27d4d',
-    'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingDialogUiTest.kt': '4720e1e85f10b341522f12cd6b6c8626775371b3ed2cf6fa9cd48e82e36499b2',
+    'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingDialogUiTest.kt': 'ff088da72f7f4afc003d2ea526a36001a278a3b13b77577eb676b3a1c3630ccc',
     'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/inventory/InventoryAdjustmentImeUiTest.kt': 'de7c05fbd4d83cca505322bce7dd4ad15004f546d55f670022fd931e7a3e36e2',
     'android-native/app/src/main/java/cloud/dcompany/erp/MainActivity.kt': '3ed37c673c87972dff855ea79bbc8d32ed14c41e16cb8386a5ee0165bc1ecb0c',
     'android-native/app/src/main/java/cloud/dcompany/erp/core/auth/CacheScope.kt': 'edbdf3c3bc51b05ebb4a0afee2b5c414cf2140b45b465f9ee8d452bc3d2513d3',
