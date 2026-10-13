@@ -31,7 +31,7 @@ PRIOR_SOURCE_ARCHIVE_SHA256 = "6b9bbd2b6613873663e6b23d212317041338b1f5916a39c1b
 PRIOR_BACKEND_MANIFEST_SHA256 = "8deacbab0ad0daee1809070e10906b29e36b841e05b5b653daa48e05a19e86a0"
 CANDIDATE_BACKEND_MANIFEST_SHA256 = "b5024239c3c747dc9bc4c952217b0ad1fe322ef60af867761ff842c9799b03df"
 PRIOR_SOURCE_SHA256 = "8de1fc15d670fd8beac5bebcbb5c93471ec936058d605051051657a8c3b22fd5"
-CANDIDATE_SOURCE_SHA256 = "db116bf1c1e0b4dab67e45e8945f155f67446e587af2b41938f640ac22af4139"
+CANDIDATE_SOURCE_SHA256 = "1af474780ffce4ea227d339240a60060aa17093ae8a6639980c803a2f7030f6a"
 
 HISTORICAL_HELPER = "infra/scripts/verify-build45-pending-compatibility.py"
 HISTORICAL_HELPER_SHA256 = "bf42dacc6c8f4eb92c9c65646b8ac0210490d0b78779bca8731245047f7fb51b"
@@ -113,7 +113,7 @@ REVIEWED_CHANGES: dict[str, tuple[str | None, str | None]] = {
     'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/events/EventsScreen.kt': ('e25608d26565ffab4a1d42e7a5365429f7ab33df5ce8247bff95e74d8f125641', 'decffa1863d8bed3caa87f211c0c2659e59a4231722ae518cdb18ea11ecb3575'),
     'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/finance/FinanceScreen.kt': ('7e35db04d4076fec0fd1ae04a92eaab24d7c735fad10b24c3ca5c60111c0ad6e', 'a904b8c306fb1de63c17c8ced074def7d243f29cb25b710937046b0ab4e9659d'),
     'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingDurationDial.kt': ('e5da9406b6b3c03b9910e00a09acaaf2961991b0cc90bd64296982fb02ceef84', 'd105fd9c5f9e5dc9cd16b85194836595c75c57e4c4ee4f31263ace22e950776c'),
-    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingScreen.kt': ('622b2d772dc18da7c1c5ecf306c361f92bf9d287d7e7e7166a539127b578c6c7', '4070579e92c9b6fefc0cb821dd77129b3f5337bf2fa1e787914fe25615c0c449'),
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingScreen.kt': ('622b2d772dc18da7c1c5ecf306c361f92bf9d287d7e7e7166a539127b578c6c7', '9fc613a7873aeca27f1c0cd0128cd14f74bc7a1a0c7255b2e4211ff8f1518b24'),
     'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingViewModel.kt': ('3899fa3a2e92643ba3f8c16eff83db1dab4df3b23841c3ac03456d50f668ac2f', '207e67253219d09e56dedb66183c30ac32ab20b826b6ec8e7e5f97c738be19a8'),
     'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/PauseSessionDialog.kt': ('f2e9c743b0716317c7745f8770c1cf5f1f0e863783f1cd4d8b6980cfaa88ee4f', '0cbc6e06cb696e23694387a8866816822e84787519a48894fd521a954f1eb0ea'),
     'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/inventory/InventoryScreen.kt': ('ef0b0be225b11243a918cf503a4ef0df59fd5504150cdbf65f64bad67c03c79e', '293dfa15cac61236e23a670137f5f012186ad74797da2619744bd3de172b2586'),

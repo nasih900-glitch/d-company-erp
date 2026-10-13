@@ -1139,7 +1139,7 @@ REVIEWED_CODE30_4_BUILD46_SHA256 = {
     'frontend/src/styles/index.css': 'baad0c5d205c13d5413464825150541955e7e9d3eb0cfb8db0c87f6ad65299c9',
     'frontend/tailwind.config.ts': '310b14e43611db4a5f0b334fd989732da553d19c01c5426abb1f49984f9ab74d',
     'infra/scripts/install-on-vm.sh': 'db0e152890909c81591404f609d5196b418ba4d848ce76f8404d07ac81cdcfe8',
-    'infra/scripts/verify-build46-pending-compatibility.py': '5b11cdb52f3c2197c5f60b8ca1ca57f16fffbc7f6392f2f09c817aecc6b11ea2',
+    'infra/scripts/verify-build46-pending-compatibility.py': 'bbeedb3e26f72aac290588ecef5c2ae69a559f81774220bf91dcc1d567b5adf4',
     'tests/test_build45_pending_compatibility.py': 'f4188c244be2cb70c7af04522b59d9a3eb19616f322148070aba4c39341ca4ae',
     'tests/test_build46_pending_compatibility.py': '8725f17627ce6ca74da08465cb2fe7ff8c8d9da560ef0ba961d2114361505a73',
     'tests/test_code26_physical_audit_lane.py': 'b8f9c9609e81c6a6e22306d1e30b48a757e7e8a198e009476b98f939ff244fdb',
