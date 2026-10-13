@@ -24,6 +24,7 @@ import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertCountEquals
@@ -214,13 +215,17 @@ class GamingDialogUiTest {
             }
         }
 
-        compose.onNodeWithText("Search name or phone").performTextReplacement("Amina")
-        compose.onNodeWithTag("gaming-players-list")
-            .performScrollToNode(hasText("Amina Rahman · 9876543210"))
+        val customerSearch = compose.onNodeWithTag("gaming-customer-search")
+        customerSearch.performClick().assertIsFocused().performTextReplacement("Amina")
+        val playersList = compose.onNodeWithTag("gaming-players-list")
+        playersList.performScrollToNode(hasText("Amina Rahman · 9876543210"))
         compose.onNodeWithText("Amina Rahman · 9876543210").performClick()
-        compose.onNodeWithText("Amina Rahman · 9876543210 · selected")
-            .performScrollTo()
-            .assertIsDisplayed()
+        customerSearch.assertIsNotFocused()
+        // Selection recomposes this lazy item while the IME window is closing.
+        // Ask the list to materialize the updated row before checking its
+        // merged, clickable semantics and visible position.
+        playersList.performScrollToNode(hasText("Amina Rahman · 9876543210 · selected"))
+        compose.onNodeWithText("Amina Rahman · 9876543210 · selected").assertIsDisplayed()
         compose.onNodeWithTag("gaming-add-player")
             .performScrollTo()
             .assertIsDisplayed()

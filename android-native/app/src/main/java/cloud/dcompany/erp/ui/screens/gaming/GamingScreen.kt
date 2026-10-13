@@ -6419,8 +6419,6 @@ internal fun GamingParticipantsDialog(
     onDiscardRejected: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val focusManager = LocalFocusManager.current
-    val keyboardController = LocalSoftwareKeyboardController.current
     var customerMode by rememberSaveable(session.id) { mutableStateOf("search") }
     var query by rememberSaveable(session.id) { mutableStateOf("") }
     var selected by remember(session.id) { mutableStateOf<GamingCustomerOption?>(null) }
@@ -6454,6 +6452,8 @@ internal fun GamingParticipantsDialog(
             else -> "Players & booking"
         },
         text = {
+            val focusManager = LocalFocusManager.current
+            val keyboardController = LocalSoftwareKeyboardController.current
             val review = pendingJoin
             val leaving = pendingLeave
             when {
@@ -6633,12 +6633,18 @@ internal fun GamingParticipantsDialog(
                                 onValueChange = { query = it.take(200); selected = null; onSearchCustomer(query) },
                                 label = { Text("Search name or phone") },
                                 singleLine = true,
-                                modifier = Modifier.fillMaxWidth(),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("gaming-customer-search"),
                             )
                         }
                         items(matches, key = { it.customerId ?: it.phone }) { option ->
                             TextButton(
-                                onClick = { selected = option },
+                                onClick = {
+                                    selected = option
+                                    focusManager.clearFocus(force = true)
+                                    keyboardController?.hide()
+                                },
                                 modifier = Modifier.fillMaxWidth(),
                             ) {
                                 Text(
