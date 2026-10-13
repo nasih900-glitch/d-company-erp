@@ -65,6 +65,7 @@ internal val SERVER_DERIVED_CACHE_TABLES = listOf(
     "membership_refund_attempt_cache",
     "canonical_pos_receipts",
     "canonical_receipt_sync_state",
+    "loyalty_program_cache",
 )
 
 internal val LOCAL_DURABLE_TABLES = listOf(
@@ -109,6 +110,7 @@ internal val LOCAL_DURABLE_TABLES = listOf(
     "local_branches",
     "local_terminals",
     "local_held_order_payments",
+    "local_points_redemption_actions",
     // Support images precede their parent rows for FK-safe scope purging.
     "local_bug_report_attachments",
     "local_bug_reports",

@@ -14,7 +14,7 @@
  * it remains attributed for that shift's cash and payment activity.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   Plus, Minus, Trash2, ShoppingCart, Receipt as ReceiptIcon,
   Banknote, CreditCard, Smartphone, QrCode, X, Check, Loader2,
@@ -35,15 +35,23 @@ import {
 } from '@/lib/action-feedback';
 import { parseRupeesToMinor } from '@/lib/money-input';
 import {
+  captureRewardReview,
+  matchesRewardReview,
+  type RewardReviewIntent,
+} from './reward-review-policy';
+import {
   customers,
   captureCustomerDirectoryEvidence,
   memberships,
   menu,
+  gaming,
   orders,
   pos,
+  settings as settingsApi,
   shifts,
   type CustomerDTO,
   type CustomerDirectoryEvidence,
+  type LoyaltyProgramDTO,
   type MembershipTierDTO,
   type MenuItemDTO,
   type OrderDTO,
@@ -85,7 +93,6 @@ import {
   isAmbiguousApiError,
   isBusinessRuleApiError,
   isCartStageDiscountAlreadyApplied,
-  isCartStagePointsAlreadyApplied,
   isCheckoutClaimRejection,
   inspectSplitPaymentEditorJournal,
   inspectSplitPaymentPlan,
@@ -106,6 +113,10 @@ import { QRCodeSVG } from 'qrcode.react';
 import { ConfirmModal, PromptModal } from '@/components/ui/ConfirmDialog';
 import { useNotifications } from '@/components/ui/Notifications';
 import { subscribeRealtime } from '@/lib/realtime';
+import {
+  gamingPosNavigationIntent, type GamingPosNavigationIntent,
+} from '@/modules/gaming/gaming-pos-navigation';
+import { incomingGamingBillDecision, matchesHeldOrderSearch } from './incoming-gaming-bill';
 
 const MEMBERSHIP_UI_ENABLED = GAMING_CENTRE_FEATURES.memberships;
 const RESTAURANT_ORDER_TYPES_UI_ENABLED = GAMING_CENTRE_FEATURES.restaurantOrderTypes;
@@ -263,6 +274,12 @@ function matchesConfirmedSettlement(retry: PosCheckoutRetry, order: OrderDTO): b
 }
 
 export default function LivePOSScreen() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const incomingNavigation = useMemo(
+    () => gamingPosNavigationIntent(location.search),
+    [location.search],
+  );
   const { me, terminalId, terminalReady } = useAuth();
   const notifications = useNotifications();
   const canManualDiscount = canStageManualPosDiscount(me?.effective_permissions);
@@ -329,6 +346,7 @@ export default function LivePOSScreen() {
   // Held orders — sent over from Tables/Gaming, waiting to be found and billed here.
   const [heldOrders, setHeldOrders] = useState<OrderListItemDTO[]>([]);
   const [heldLoading, setHeldLoading] = useState(false);
+  const [heldLoadedScope, setHeldLoadedScope] = useState<string | null>(null);
   const [heldError, setHeldError] = useState<string | null>(null);
   const [showHeldPicker, setShowHeldPicker] = useState(false);
   const [heldSearch, setHeldSearch] = useState('');
@@ -355,7 +373,14 @@ export default function LivePOSScreen() {
   // for points — prepareCheckout() redeems them the moment the order exists.
   const [pendingCartPointsMinor, setPendingCartPointsMinor] = useState(0);
   const [pendingCartPointsCustomerPhone, setPendingCartPointsCustomerPhone] = useState<string | null>(null);
+  const pendingCartPointsIntentRef = useRef<{
+    points: number;
+    programRevision: number;
+  } | null>(null);
+  const [loyaltyProgram, setLoyaltyProgram] = useState<LoyaltyProgramDTO | null>(null);
+  const [loyaltyProgramError, setLoyaltyProgramError] = useState<string | null>(null);
   const [rewards, setRewards] = useState<RewardDTO[]>([]);
+  const [rewardReview, setRewardReview] = useState<RewardReviewIntent | null>(null);
   const [redeemingReward, setRedeemingReward] = useState<string | null>(null);
   const [rewardError, setRewardError] = useState<string | null>(null);
   const checkoutAdjustmentBusy = applyingDiscount || applyingPoints || redeemingReward !== null;
@@ -387,6 +412,8 @@ export default function LivePOSScreen() {
   const splitInputsHydratedKeyRef = useRef<string | null>(null);
   const heldOrderScopeRef = useRef(draftKey);
   heldOrderScopeRef.current = draftKey;
+  const handledIncomingNavigationRef = useRef<string | null>(null);
+  const incomingNavigationAttemptRef = useRef<string | null>(null);
 
   // Keep one POS screen as the sole writer for this employee/terminal draft.
   // Web Locks provides actual mutual exclusion; the token checks below remain
@@ -537,6 +564,34 @@ export default function LivePOSScreen() {
     return () => { cancelled = true; };
   }, [customer?.phone]);
 
+  // Program metadata controls points previews only. A failed read disables
+  // points actions but deliberately leaves ordinary non-points checkout live.
+  useEffect(() => {
+    const companyId = me?.company_id;
+    if (!companyId) {
+      setLoyaltyProgram(null);
+      setLoyaltyProgramError(null);
+      return;
+    }
+    const controller = new AbortController();
+    setLoyaltyProgram(null);
+    setLoyaltyProgramError(null);
+    settingsApi.getLoyaltyProgram(controller.signal)
+      .then((program) => {
+        if (!controller.signal.aborted && program.company_id === companyId) {
+          setLoyaltyProgram(program);
+        }
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) {
+          setLoyaltyProgramError(
+            'Points settings are unavailable. This sale can continue without points.',
+          );
+        }
+      });
+    return () => controller.abort();
+  }, [me?.company_id]);
+
   // Load menu items, exact shift scope, and any durable checkout journal.
   useEffect(() => {
     if (
@@ -567,6 +622,7 @@ export default function LivePOSScreen() {
     setPendingCartDiscountMinor(0);
     setPendingCartPointsMinor(0);
     setPendingCartPointsCustomerPhone(null);
+    pendingCartPointsIntentRef.current = null;
     setResumingOrder(null);
     setUnresolvedResumingOrderId(null);
     setHeldOrders([]);
@@ -620,6 +676,13 @@ export default function LivePOSScreen() {
       setPendingCartDiscountMinor(storedDraft.pendingCartDiscountMinor ?? 0);
       setPendingCartPointsMinor(storedDraft.pendingCartPointsMinor ?? 0);
       setPendingCartPointsCustomerPhone(storedDraft.pendingCartPointsCustomerPhone ?? null);
+      pendingCartPointsIntentRef.current = (
+        storedDraft.pendingCartPoints !== undefined
+        && storedDraft.pendingCartPointsProgramRevision !== undefined
+      ) ? {
+          points: storedDraft.pendingCartPoints,
+          programRevision: storedDraft.pendingCartPointsProgramRevision,
+        } : null;
     }
     (async () => {
       setLoading(true);
@@ -807,6 +870,12 @@ export default function LivePOSScreen() {
                 ...storedDraft,
                 pendingCartDiscountMinor: restoredPendingDiscountMinor || undefined,
                 pendingCartPointsMinor: restoredPendingPointsMinor || undefined,
+                pendingCartPoints: restoredPendingPointsMinor > 0
+                  ? storedDraft.pendingCartPoints
+                  : undefined,
+                pendingCartPointsProgramRevision: restoredPendingPointsMinor > 0
+                  ? storedDraft.pendingCartPointsProgramRevision
+                  : undefined,
                 pendingCartPointsCustomerPhone:
                   restoredPendingPointsMinor > 0
                     ? restoredPendingPointsCustomerPhone
@@ -833,6 +902,8 @@ export default function LivePOSScreen() {
                     ...reconciledStoredDraft,
                     pendingCartDiscountMinor: undefined,
                     pendingCartPointsMinor: undefined,
+                    pendingCartPoints: undefined,
+                    pendingCartPointsProgramRevision: undefined,
                     pendingCartPointsCustomerPhone: undefined,
                     retry,
                   };
@@ -929,6 +1000,14 @@ export default function LivePOSScreen() {
             setPendingCartPointsCustomerPhone(
               restoredPendingPointsCustomerPhone ?? null,
             );
+            pendingCartPointsIntentRef.current = (
+              restoredPendingPointsMinor > 0
+              && storedDraft.pendingCartPoints !== undefined
+              && storedDraft.pendingCartPointsProgramRevision !== undefined
+            ) ? {
+                points: storedDraft.pendingCartPoints,
+                programRevision: storedDraft.pendingCartPointsProgramRevision,
+              } : null;
           }
           setCheckoutRetry(retry ?? null);
         }
@@ -1000,7 +1079,11 @@ export default function LivePOSScreen() {
 
   const loadHeldOrders = useCallback(async (silent = false) => {
     const requestScope = draftKey;
-    if (!silent) { setHeldLoading(true); setHeldError(null); }
+    if (!silent) {
+      setHeldLoading(true);
+      setHeldLoadedScope(null);
+      setHeldError(null);
+    }
     try {
       const result = await orders.list({
         status: ['held'],
@@ -1013,6 +1096,7 @@ export default function LivePOSScreen() {
       const queue = result.filter((order) => isIncomingSharedPosOrder(order.status));
       if (heldOrderScopeRef.current === requestScope) {
         setHeldOrders(queue);
+        setHeldLoadedScope(requestScope);
         if (result.length === UNBILLED_QUEUE_LIMIT) {
           setHeldError(
             'The unbilled queue reached its 500-order safety limit. Bill or void old orders and ask a protected owner to reconcile the backlog.',
@@ -1182,52 +1266,69 @@ export default function LivePOSScreen() {
     return () => clearInterval(id);
   }, [heldOrders, heldAlarmMuted]);
 
-  async function resumeOrder(row: OrderListItemDTO) {
+  async function resumeOrder(
+    row: OrderListItemDTO,
+    expectedIncoming?: GamingPosNavigationIntent,
+  ): Promise<boolean> {
     if (localWorkNeedsReconciliation) {
       setHeldError(
         'This POS tab has a locked saved bill. Reload and reconcile it before opening another incoming order.',
       );
-      return;
+      return false;
     }
     const resumeShiftId = shiftIdRef.current;
     if (!resumeShiftId) {
       setHeldError(shiftError || 'No validated shift is open. Open or refresh the shift before selecting an incoming bill.');
-      return;
+      return false;
     }
     if (cart.length) {
       setHeldError(
         'The current POS cart has unsent items. Charge or clear that cart before opening another queued order.',
       );
-      return;
+      return false;
     }
     if (resumingOrder && resumingOrder.id !== row.id) {
       setHeldError(
         'Another queued order is already open. Finish it or use Cancel before selecting a different one.',
       );
-      return;
+      return false;
     }
     if (!enterSynchronousPosFlow(checkoutFlowInFlightRef)) {
       setHeldError(
         'Another bill is already loading or being prepared. Wait for it to finish; this order was not selected.',
       );
-      return;
+      return false;
     }
     setShowHeldPicker(false);
     setError(null);
     try {
       const full = await orders.get(row.id);
+      if (expectedIncoming) {
+        const canonicalSession = await gaming.getSession(expectedIncoming.sessionId);
+        if (
+          full.type !== 'session'
+          || canonicalSession.order_id !== full.id
+          || canonicalSession.shift_id !== expectedIncoming.shiftId
+        ) {
+          setHeldError(
+            'The incoming link does not match the authoritative Gaming session and bill. Nothing was opened; refresh Gaming and send the bill again.',
+          );
+          setShowHeldPicker(true);
+          return false;
+        }
+      }
       if (shiftIdRef.current !== resumeShiftId) {
         setError(
           'The open shift changed while this bill was loading. Nothing was selected; review the shift and try again.',
         );
-        return;
+        return false;
       }
       if (full.status !== 'open' && full.status !== 'held') {
         setHeldError(
           `This incoming bill is already ${full.status}. The queue will refresh; no local draft was opened.`,
         );
         void loadHeldOrders(true);
-        return;
+        return false;
       }
       const nextCustomerName = full.customer_name ?? '';
       const nextCustomerPhone = full.customer_phone ?? '';
@@ -1245,7 +1346,7 @@ export default function LivePOSScreen() {
         setError(
           'The incoming bill could not be checkpointed safely. It was not opened; restore POS recovery storage and try again.',
         );
-        return;
+        return false;
       }
       setResumingOrder(full);
       setUnresolvedResumingOrderId(null);
@@ -1266,12 +1367,92 @@ export default function LivePOSScreen() {
       setCustomerMessage(nextCustomerPhone
         ? 'Customer loaded from this order. Use Find to refresh the customer profile before billing.'
         : null);
+      return true;
     } catch (e) {
       setError((e as Error).message);
+      return false;
     } finally {
       leaveSynchronousPosFlow(checkoutFlowInFlightRef);
     }
   }
+
+  useEffect(() => {
+    if (!incomingNavigation) return;
+    if (handledIncomingNavigationRef.current === incomingNavigation.orderId) return;
+    setHeldSearch(incomingNavigation.orderId);
+    const decision = incomingGamingBillDecision({
+      intent: incomingNavigation,
+      draftHydrated,
+      draftKey,
+      loadedScope: heldLoadedScope,
+      queueLoading: heldLoading,
+      terminalId,
+      shiftId,
+      hasOccupiedWork: Boolean(
+        cart.length || resumingOrder || unresolvedResumingOrderId || checkoutRetry,
+      ),
+      orders: heldOrders,
+    });
+    if (decision.kind === 'wait') return;
+    if (decision.kind === 'wrong_terminal') {
+      setShowHeldPicker(true);
+      setHeldError(
+        'This Gaming bill was sent to a different terminal. Open POS on that terminal; this register kept its current work unchanged.',
+      );
+      return;
+    }
+
+    if (decision.kind === 'wrong_shift') {
+      setShowHeldPicker(true);
+      setHeldError(
+        'The confirmed Gaming bill belongs to a different shift. The bill remains in the incoming queue; switch to its accountable POS shift before collecting payment.',
+      );
+      return;
+    }
+
+    if (decision.kind === 'occupied') {
+      setShowHeldPicker(true);
+      setHeldError(
+        'A confirmed Gaming bill is waiting. The current cart or payment review was preserved; finish or deliberately cancel it before opening the waiting bill.',
+      );
+      return;
+    }
+
+    if (decision.kind === 'missing') {
+      setShowHeldPicker(true);
+      setHeldError(
+        'The confirmed Gaming bill is not visible in this incoming queue yet. It remains unpaid; refresh the queue and search by its exact bill reference.',
+      );
+      return;
+    }
+    if (decision.kind !== 'open') return;
+
+    const attemptKey = `${draftKey}:${incomingNavigation.orderId}:${incomingNavigation.sessionId}`;
+    if (incomingNavigationAttemptRef.current === attemptKey) return;
+    incomingNavigationAttemptRef.current = attemptKey;
+    void resumeOrder(decision.order, incomingNavigation).then((opened) => {
+      if (incomingNavigationAttemptRef.current === attemptKey) {
+        incomingNavigationAttemptRef.current = null;
+      }
+      if (!opened) return;
+      handledIncomingNavigationRef.current = incomingNavigation.orderId;
+      navigate('/pos', { replace: true });
+    });
+  }, [
+    cart.length,
+    checkoutRetry,
+    draftHydrated,
+    draftKey,
+    heldLoading,
+    heldLoadedScope,
+    heldOrders,
+    incomingNavigation,
+    navigate,
+    resumingOrder,
+    shiftId,
+    terminalId,
+    unresolvedResumingOrderId,
+  ]);
 
   async function voidOrder(row: OrderListItemDTO, reason: string) {
     if (localWorkNeedsReconciliation) {
@@ -1514,6 +1695,13 @@ export default function LivePOSScreen() {
       orderType, deliveryVia, deliveryStateCode, customerName, customerPhone,
       ...(pendingCartDiscountMinor ? { pendingCartDiscountMinor } : {}),
       ...(pendingCartPointsMinor ? { pendingCartPointsMinor } : {}),
+      ...(pendingCartPointsMinor && pendingCartPointsIntentRef.current
+        ? {
+            pendingCartPoints: pendingCartPointsIntentRef.current.points,
+            pendingCartPointsProgramRevision:
+              pendingCartPointsIntentRef.current.programRevision,
+          }
+        : {}),
       ...(pendingCartPointsMinor && pendingCartPointsCustomerPhone
         ? { pendingCartPointsCustomerPhone }
         : {}),
@@ -1536,6 +1724,7 @@ export default function LivePOSScreen() {
     discountMinor: number;
     pointsMinor: number;
     pointsCustomerPhone?: string | null;
+    pointsIntent?: { points: number; programRevision: number } | null;
   }
 
   function buildPosDraft(
@@ -1547,6 +1736,9 @@ export default function LivePOSScreen() {
     const pointsMinor = benefits ? benefits.pointsMinor : pendingCartPointsMinor;
     const pointsCustomerPhone = benefits?.pointsCustomerPhone
       ?? pendingCartPointsCustomerPhone;
+    const pointsIntent = benefits?.pointsIntent === undefined
+      ? pendingCartPointsIntentRef.current
+      : benefits.pointsIntent;
     const draftCart = cartOverride ?? cart;
     return {
       version: 2,
@@ -1567,6 +1759,12 @@ export default function LivePOSScreen() {
       // between entering it and the order being created.
       ...(discountMinor ? { pendingCartDiscountMinor: discountMinor } : {}),
       ...(pointsMinor ? { pendingCartPointsMinor: pointsMinor } : {}),
+      ...(pointsMinor && pointsIntent
+        ? {
+            pendingCartPoints: pointsIntent.points,
+            pendingCartPointsProgramRevision: pointsIntent.programRevision,
+          }
+        : {}),
       ...(pointsMinor && pointsCustomerPhone
         ? { pendingCartPointsCustomerPhone: pointsCustomerPhone }
         : {}),
@@ -2062,6 +2260,7 @@ export default function LivePOSScreen() {
     let remainingDiscountMinor = pendingCartDiscountMinor;
     let remainingPointsMinor = pendingCartPointsMinor;
     let remainingPointsCustomerPhone = pendingCartPointsCustomerPhone;
+    let remainingPointsIntent = pendingCartPointsIntentRef.current;
     try {
       let order: OrderDTO;
       if (retry.pendingOrderId) {
@@ -2230,6 +2429,7 @@ export default function LivePOSScreen() {
           discountMinor: remainingDiscountMinor,
           pointsMinor: remainingPointsMinor,
           pointsCustomerPhone: remainingPointsCustomerPhone,
+          pointsIntent: remainingPointsIntent,
         })) {
           throw new Error(
             'The applied discount could not be checkpointed locally. Do not continue to payment; restore POS recovery storage and resume this exact bill.',
@@ -2247,10 +2447,7 @@ export default function LivePOSScreen() {
             'The saved points redemption belongs to a different customer. It was not applied; review the customer and points before payment.',
           );
         }
-        if (!isCartStagePointsAlreadyApplied(
-          order.points_redeemed_minor,
-          remainingPointsMinor,
-        )) {
+        {
           const expectedVersion = retry.cartPointsExpectedVersion
             ?? order.checkout_version;
           if (retry.cartPointsExpectedVersion === undefined) {
@@ -2264,9 +2461,10 @@ export default function LivePOSScreen() {
           cartBenefitInFlight = 'points';
           order = await pos.redeemPoints(
             order.id,
-            remainingPointsMinor / 10,
+            remainingPointsIntent?.points ?? (remainingPointsMinor / 10),
             `cart-points:${retry.key}`,
             expectedVersion,
+            remainingPointsIntent?.programRevision,
           );
           cartBenefitInFlight = null;
         }
@@ -2284,10 +2482,13 @@ export default function LivePOSScreen() {
           pointsCheckpoint.pendingPointsCustomerPhone ?? null;
         setPendingCartPointsMinor(0);
         setPendingCartPointsCustomerPhone(null);
+        pendingCartPointsIntentRef.current = null;
+        remainingPointsIntent = null;
         if (!persistCheckoutRetry(retry, {
           discountMinor: remainingDiscountMinor,
           pointsMinor: remainingPointsMinor,
           pointsCustomerPhone: remainingPointsCustomerPhone,
+          pointsIntent: remainingPointsIntent,
         })) {
           throw new Error(
             'The applied points redemption could not be checkpointed locally. Do not continue to payment; restore POS recovery storage and resume this exact bill.',
@@ -2777,6 +2978,13 @@ export default function LivePOSScreen() {
       setPointsError('This saved bill is locked to its original shift. No points were changed.');
       return;
     }
+    if (!loyaltyProgram) {
+      setPointsError(
+        loyaltyProgramError
+          ?? 'Load the current points settings before applying points.',
+      );
+      return;
+    }
     const points = Math.trunc(Number(pointsInput));
     if (!Number.isFinite(points) || points < 0) {
       setPointsError('Enter a valid number of points.');
@@ -2791,7 +2999,7 @@ export default function LivePOSScreen() {
       setPointsError(`Only ${customer.loyalty_points.toLocaleString('en-IN')} points available.`);
       return;
     }
-    const minor = points * 10; // 10 points = ₹1 — keep in sync with backend MINOR_PER_POINT
+    const minor = points * loyaltyProgram.rules.minor_per_point;
 
     const targetOrderId = resumingOrder?.id ?? checkoutRetry?.pendingOrderId;
     if (!targetOrderId) {
@@ -2801,19 +3009,26 @@ export default function LivePOSScreen() {
       const roomMinor = Math.max(0, estimatedPayable - pendingCartDiscountMinor);
       if (minor > roomMinor) {
         setPointsError(
-          `This bill can only absorb ${Math.floor(roomMinor / 10).toLocaleString('en-IN')} points (${inr(roomMinor)}).`,
+          `This bill can only absorb ${Math.floor(roomMinor / loyaltyProgram.rules.minor_per_point).toLocaleString('en-IN')} points (${inr(roomMinor)}).`,
         );
         return;
       }
+      pendingCartPointsIntentRef.current = {
+        points,
+        programRevision: loyaltyProgram.revision,
+      };
+      // Persist the captured body/revision before any later network send.
       if (!draftKey || !savePosDraft(draftKey, buildPosDraft(
         null,
         {
           discountMinor: pendingCartDiscountMinor,
           pointsMinor: minor,
           pointsCustomerPhone,
+          pointsIntent: pendingCartPointsIntentRef.current,
         },
       ))) {
-        setPointsError('The points were not applied because POS recovery storage could not save them safely.');
+        pendingCartPointsIntentRef.current = null;
+        setPointsError('The points request could not be checkpointed safely and was not applied.');
         return;
       }
       setPendingCartPointsMinor(minor);
@@ -2840,6 +3055,7 @@ export default function LivePOSScreen() {
         points,
         createOperationKey(),
         canonical.checkout_version,
+        loyaltyProgram.revision,
       );
       if (resumingOrder && order.id === resumingOrder.id) {
         setResumingOrder(order);
@@ -2853,6 +3069,7 @@ export default function LivePOSScreen() {
       }
       setPendingCartPointsMinor(0);
       setPendingCartPointsCustomerPhone(null);
+      pendingCartPointsIntentRef.current = null;
       setPointsInput('');
     } catch (e) {
       setPointsError((e as Error).message);
@@ -2862,7 +3079,21 @@ export default function LivePOSScreen() {
     }
   }
 
-  async function redeemReward(key: string) {
+  function reviewReward(reward: RewardDTO) {
+    const orderId = resumingOrder?.id ?? checkoutRetry?.pendingOrderId;
+    const checkoutVersion = resumingOrder?.checkout_version
+      ?? checkoutRetry?.checkoutClaimOrderVersion;
+    const review = captureRewardReview(reward, orderId, checkoutVersion, customer);
+    if (!review) {
+      setRewardError('Prepare and verify this customer’s live bill before reviewing a reward.');
+      return;
+    }
+    setRewardError(null);
+    setRewardReview(review);
+  }
+
+  async function redeemReward(review: RewardReviewIntent) {
+    const reward = review.reward;
     if (checkoutFlowInFlightRef.current) {
       setRewardError('The bill is being prepared or paid. Wait for that result before redeeming a reward.');
       return;
@@ -2871,9 +3102,22 @@ export default function LivePOSScreen() {
       setRewardError('This saved bill is locked to its original shift. No reward was changed.');
       return;
     }
+    if (!loyaltyProgram) {
+      setRewardError(
+        loyaltyProgramError
+          ?? 'Load the current points settings before redeeming a reward.',
+      );
+      return;
+    }
+    if (loyaltyProgram.revision !== reward.program_revision) {
+      setRewardError(
+        'The reward catalog changed while this bill was open. Refresh Points and review the current reward before redeeming it.',
+      );
+      return;
+    }
     const targetOrderId = resumingOrder?.id ?? checkoutRetry?.pendingOrderId;
-    if (!targetOrderId) {
-      setRewardError('Prepare the bill first, then redeem a reward against it.');
+    if (targetOrderId !== review.orderId || customer?.id !== review.customerId) {
+      setRewardError('The bill or customer changed after review. Refresh Points and review the reward again.');
       return;
     }
     if (checkoutMutationInFlightRef.current) {
@@ -2881,18 +3125,23 @@ export default function LivePOSScreen() {
       return;
     }
     checkoutMutationInFlightRef.current = true;
-    setRedeemingReward(key);
+    setRedeemingReward(reward.key);
     setRewardError(null);
     try {
       const activeRetry = checkoutRetry?.pendingOrderId === targetOrderId
         ? await releaseClaimBeforeCheckoutMutation(checkoutRetry)
         : null;
       const canonical = await pos.getOrder(targetOrderId);
+      if (!matchesRewardReview(review, canonical, customer)) {
+        setRewardError('The live bill, customer, or version changed after review. Refresh and review the reward again.');
+        return;
+      }
       const order = await pos.redeemReward(
         targetOrderId,
-        key,
+        reward.key,
         createOperationKey(),
         canonical.checkout_version,
+        reward.program_revision,
       );
       if (resumingOrder && order.id === resumingOrder.id) {
         setResumingOrder(order);
@@ -3386,7 +3635,12 @@ export default function LivePOSScreen() {
         {customer && customer.loyalty_points > 0 && (
           <div className="mb-4 max-w-xl space-y-2 rounded-xl border border-bg-border px-3 py-2">
             <div className="flex items-center justify-between text-xs text-fg-muted">
-              <span>Redeem points · {customer.loyalty_points.toLocaleString('en-IN')} available (10 pts = ₹1)</span>
+              <span>
+                Redeem points · {customer.loyalty_points.toLocaleString('en-IN')} available
+                {loyaltyProgram
+                  ? ` (100 pts = ${inr(loyaltyProgram.value_of_100_points_minor)})`
+                  : ' (value unavailable)'}
+              </span>
               {pendingCartPointsMinor > 0 && (
                 <span className="text-accent-good">Pending: -{inr(pendingCartPointsMinor)}</span>
               )}
@@ -3401,18 +3655,21 @@ export default function LivePOSScreen() {
                 placeholder="Points to redeem"
                 value={pointsInput}
                 onChange={(e) => setPointsInput(e.target.value)}
-                disabled={checkoutAdjustmentBusy || localWorkNeedsReconciliation || paying}
+                disabled={checkoutAdjustmentBusy || localWorkNeedsReconciliation || paying || !loyaltyProgram}
                 className="input flex-1"
               />
               <button
                 className="btn btn-ghost disabled:opacity-40"
-                disabled={checkoutAdjustmentBusy || localWorkNeedsReconciliation || paying || !pointsInput}
+                disabled={checkoutAdjustmentBusy || localWorkNeedsReconciliation || paying || !pointsInput || !loyaltyProgram}
                 onClick={redeemPoints}
               >
                 {applyingPoints ? <Loader2 size={16} className="animate-spin"/> : 'Redeem'}
               </button>
             </div>
             {pointsError && <p className="text-xs text-accent-bad">{pointsError}</p>}
+            {!pointsError && loyaltyProgramError && (
+              <p className="text-xs text-accent-bad">{loyaltyProgramError}</p>
+            )}
           </div>
         )}
 
@@ -3426,8 +3683,8 @@ export default function LivePOSScreen() {
                 <button
                   key={r.key}
                   className="btn btn-ghost !justify-between !py-1.5 text-xs disabled:opacity-40"
-                  disabled={checkoutAdjustmentBusy || localWorkNeedsReconciliation || paying || !r.affordable}
-                  onClick={() => redeemReward(r.key)}
+                  disabled={checkoutAdjustmentBusy || localWorkNeedsReconciliation || paying || !r.affordable || !loyaltyProgram || loyaltyProgram.revision !== r.program_revision}
+                  onClick={() => reviewReward(r)}
                   title={r.description}
                 >
                   <span className="text-left">
@@ -4435,10 +4692,7 @@ export default function LivePOSScreen() {
             <div className="space-y-2 max-h-[50vh] overflow-y-auto">
               {heldOrders
                 .filter((o) => {
-                  const q = heldSearch.trim().toLowerCase();
-                  if (!q) return true;
-                  return [o.source_label, o.customer_name, o.invoice_no]
-                    .some((v) => v?.toLowerCase().includes(q));
+                  return matchesHeldOrderSearch(o, heldSearch);
                 })
                 .map((o) => {
                   const heldSince = o.held_at ?? o.created_at;
@@ -4519,6 +4773,32 @@ export default function LivePOSScreen() {
           busy={paying}
           onSubmit={finishAbandonWithReason}
           onCancel={() => setAbandonReasonOrder(null)}
+        />
+      )}
+      {rewardReview && (
+        <ConfirmModal
+          title="Review points reward"
+          message={(
+            <div className="space-y-2 text-sm">
+              <p className="font-semibold">{rewardReview.reward.name}</p>
+              <p className="text-fg-muted">{rewardReview.reward.description}</p>
+              <div className="rounded-lg border border-bg-border p-3 font-mono">
+                {rewardReview.reward.points_cost.toLocaleString('en-IN')} points → {inr(rewardReview.reward.value_minor)} bill credit
+              </div>
+              <p className="text-xs text-fg-muted">
+                Program revision {rewardReview.reward.program_revision} · bill version {rewardReview.checkoutVersion} · fixed credit for this customer
+              </p>
+            </div>
+          )}
+          confirmLabel="Redeem reward"
+          busy={redeemingReward === rewardReview.reward.key}
+          confirmDisabled={!loyaltyProgram || !rewardReview.reward.affordable || loyaltyProgram.revision !== rewardReview.reward.program_revision}
+          onConfirm={() => {
+            const review = rewardReview;
+            setRewardReview(null);
+            void redeemReward(review);
+          }}
+          onCancel={() => setRewardReview(null)}
         />
       )}
     </div>

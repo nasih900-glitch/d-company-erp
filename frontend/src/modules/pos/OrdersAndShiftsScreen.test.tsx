@@ -15,8 +15,10 @@ import {
   isAndroidOriginShift,
   isUnknownShiftMutationOutcome,
   operationsInitialTab,
+  receiptGamingChargeRows,
   shiftActionErrorMessage,
   shiftCloserLabel,
+  shiftCollectionRails,
   shiftOpenerLabel,
   shiftWorkspaceLabel,
 } from './OrdersAndShiftsScreen';
@@ -26,6 +28,46 @@ describe('Operations deep links', () => {
     expect(operationsInitialTab(new URLSearchParams('tab=shifts'))).toBe('shifts');
     expect(operationsInitialTab(new URLSearchParams('tab=orders'))).toBe('orders');
     expect(operationsInitialTab(new URLSearchParams())).toBe('orders');
+  });
+});
+
+describe('shift payment rail compatibility', () => {
+  it('keeps an older server response unknown instead of inventing zero rails', () => {
+    expect(shiftCollectionRails(shift())).toBeNull();
+  });
+
+  it('returns the complete authoritative rail split when every field is present', () => {
+    expect(shiftCollectionRails(shift({
+      cash_collections_minor: 10_000,
+      upi_collections_minor: 19_000,
+      card_collections_minor: 2_000,
+      other_collections_minor: 500,
+    }))).toEqual({ cash: 10_000, upi: 19_000, card: 2_000, other: 500 });
+  });
+});
+
+describe('gaming receipt rolling-upgrade compatibility', () => {
+  it('does not render missing Phase 3 charge fields as zero or NaN', () => {
+    const legacyPackage = {
+      billing_mode: 'package',
+    } as Parameters<typeof receiptGamingChargeRows>[0];
+    expect(receiptGamingChargeRows(legacyPackage)).toEqual([]);
+  });
+
+  it('renders only server-supplied immutable charge components', () => {
+    const packageReceipt = {
+      billing_mode: 'package',
+      booked_controller_surcharge_minor: 3_000,
+      extension_package_minor: 6_000,
+      extension_controller_surcharge_minor: 3_000,
+      late_friend_charge_minor: 6_000,
+    } as Parameters<typeof receiptGamingChargeRows>[0];
+    expect(receiptGamingChargeRows(packageReceipt)).toEqual([
+      { label: 'Booked controller fee', amountMinor: 3_000 },
+      { label: 'Paid package extensions', amountMinor: 6_000 },
+      { label: 'Extension controller fee', amountMinor: 3_000 },
+      { label: 'Late player controller fee', amountMinor: 6_000 },
+    ]);
   });
 });
 

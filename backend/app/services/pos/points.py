@@ -20,12 +20,21 @@ from sqlalchemy import func, select
 from app.core.errors import BusinessRuleError
 from app.models import (
     Customer,
+    CustomerGamingRankAward,
     Order,
     OrderLoyaltySettlement,
     PointsRedemption,
     RefundLoyaltyAdjustment,
 )
 from app.services.pos.customer_identity import resolve_order_customer
+from app.services.pos.loyalty_program import (
+    LoadedLoyaltyProgram,
+    checked_points_add,
+    effective_rank_key,
+    minor_to_points as configured_minor_to_points,
+    points_to_minor as configured_points_to_minor,
+    rank_index,
+)
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -264,6 +273,7 @@ async def reserve_points_redemption(
     company_id: UUID,
     requested_points: int,
     at: datetime,
+    program: LoadedLoyaltyProgram | None = None,
 ) -> PointsRedemptionResult:
     """Replace an unpaid order's points reservation under a customer row lock.
 
@@ -312,16 +322,27 @@ async def reserve_points_redemption(
     if reserved <= 0:
         return PointsRedemptionResult()
 
+    amount_minor = (
+        configured_points_to_minor(reserved, program.rules)
+        if program is not None
+        else points_to_minor(reserved)
+    )
     session.add(
         PointsRedemption(
             id=uuid4(),
             customer_id=customer.id,
             order_id=order.id,
             points_spent=reserved,
-            amount_minor=points_to_minor(reserved),
+            amount_minor=amount_minor,
+            program_revision=program.revision if program is not None else None,
+            redemption_kind="generic" if program is not None else "legacy_frozen",
+            reward_key=None,
+            accepted_points_cost=reserved,
+            accepted_value_minor=amount_minor,
+            rules_snapshot=program.snapshot() if program is not None else None,
         )
     )
-    return PointsRedemptionResult(points_spent=reserved, amount_minor=points_to_minor(reserved))
+    return PointsRedemptionResult(points_spent=reserved, amount_minor=amount_minor)
 
 
 async def reserve_catalog_reward_redemption(
@@ -331,6 +352,8 @@ async def reserve_catalog_reward_redemption(
     company_id: UUID,
     reward_key: str,
     at: datetime,
+    program: LoadedLoyaltyProgram | None = None,
+    awarded_rank_key: str | None = None,
 ) -> PointsRedemptionResult:
     """Redeem a named REWARD_CATALOG item for its fixed points_cost, crediting
     its fixed value_minor — not the generic MINOR_PER_POINT conversion (see
@@ -338,7 +361,11 @@ async def reserve_catalog_reward_redemption(
     rather than partially filling, since "80% of a free drink" isn't a thing.
     Mirrors reserve_points_redemption's replace-on-reprice, row-locked discipline.
     """
-    reward = reward_by_key(reward_key)
+    configured_reward = (
+        next((r for r in program.rules.rewards if r.key == reward_key and r.enabled), None)
+        if program is not None else None
+    )
+    reward = configured_reward or (reward_by_key(reward_key) if program is None else None)
     if reward is None:
         raise BusinessRuleError("unknown reward")
 
@@ -362,8 +389,11 @@ async def reserve_catalog_reward_redemption(
     if customer is None:
         raise BusinessRuleError("attach a customer to this order before redeeming a reward")
 
-    if not rank_meets(gaming_rank(customer.lifetime_gaming_points_earned), reward.min_rank):
-        raise BusinessRuleError(f"{reward.name} unlocks at {reward.min_rank} rank")
+    reward_name = reward.label if program is not None else reward.name
+    reward_min_rank = reward.min_rank_key if program is not None else reward.min_rank.lower()
+    customer_rank = awarded_rank_key or gaming_rank(customer.lifetime_gaming_points_earned).lower()
+    if rank_index(customer_rank) < rank_index(reward_min_rank):
+        raise BusinessRuleError(f"{reward_name} unlocks at {reward_min_rank} rank")
 
     used_elsewhere = await _used_or_reserved_points(
         session, customer_id=customer.id, excluding_order_id=order.id
@@ -371,11 +401,11 @@ async def reserve_catalog_reward_redemption(
     available = max(0, int(customer.loyalty_points or 0) - used_elsewhere)
     if available < reward.points_cost:
         raise BusinessRuleError(
-            f"Not enough points for {reward.name} — need {reward.points_cost}, have {available}."
+            f"Not enough points for {reward_name} — need {reward.points_cost}, have {available}."
         )
     bill_room = int(order.total_minor or 0) + (existing.amount_minor if existing else 0)
     if reward.value_minor > bill_room:
-        raise BusinessRuleError(f"This bill isn't big enough to redeem {reward.name}.")
+        raise BusinessRuleError(f"This bill isn't big enough to redeem {reward_name}.")
 
     if existing is not None:
         await session.delete(existing)
@@ -388,9 +418,113 @@ async def reserve_catalog_reward_redemption(
             order_id=order.id,
             points_spent=reward.points_cost,
             amount_minor=reward.value_minor,
+            program_revision=program.revision if program is not None else None,
+            redemption_kind="fixed_reward" if program is not None else "legacy_frozen",
+            reward_key=reward_key if program is not None else None,
+            accepted_points_cost=reward.points_cost,
+            accepted_value_minor=reward.value_minor,
+            rules_snapshot=program.snapshot() if program is not None else None,
         )
     )
     return PointsRedemptionResult(points_spent=reward.points_cost, amount_minor=reward.value_minor)
+
+
+async def reprice_existing_points_redemption(
+    session: AsyncSession,
+    *,
+    order: Order,
+    company_id: UUID,
+    remaining_minor: int,
+) -> PointsRedemptionResult:
+    """Preserve the accepted reservation contract while the basket changes."""
+    existing = (
+        await session.execute(
+            select(PointsRedemption)
+            .where(PointsRedemption.order_id == order.id)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if existing is None:
+        return PointsRedemptionResult()
+    if existing.consumed_at is not None:
+        raise BusinessRuleError("cannot reprice a consumed points redemption")
+    customer = await resolve_order_customer(
+        session, order=order, company_id=company_id, for_update=True
+    )
+    if customer is None or customer.id != existing.customer_id:
+        await session.delete(existing)
+        await session.flush()
+        return PointsRedemptionResult()
+
+    kind = existing.redemption_kind or "legacy_frozen"
+    if kind in {"fixed_reward", "legacy_frozen"}:
+        if int(existing.amount_minor) > max(0, int(remaining_minor)):
+            raise BusinessRuleError(
+                "This bill is now below the accepted fixed points credit. "
+                "Remove the reward before changing the bill."
+            )
+        return PointsRedemptionResult(
+            points_spent=int(existing.points_spent),
+            amount_minor=int(existing.amount_minor),
+        )
+
+    accepted_points = int(existing.accepted_points_cost)
+    accepted_value = int(existing.accepted_value_minor)
+    if accepted_points <= 0 or accepted_value <= 0:
+        raise BusinessRuleError("This points reservation has invalid frozen value evidence.")
+    # Repricing may release part of an accepted reservation, but it must never
+    # silently reclaim those points. Another bill can reserve the released
+    # balance before this basket grows again. A larger redemption therefore
+    # requires a new, deliberately reviewed reservation under the customer
+    # lock rather than restoring the immutable accepted maximum here.
+    capped_points = min(
+        int(existing.points_spent),
+        max(0, int(remaining_minor)) * accepted_points // accepted_value,
+    )
+    if capped_points <= 0:
+        await session.delete(existing)
+        await session.flush()
+        return PointsRedemptionResult()
+    amount_minor = capped_points * accepted_value // accepted_points
+    existing.points_spent = capped_points
+    existing.amount_minor = amount_minor
+    return PointsRedemptionResult(points_spent=capped_points, amount_minor=amount_minor)
+
+
+async def award_eligible_gaming_ranks(
+    session: AsyncSession,
+    *,
+    customer: Customer,
+    order: Order,
+    program: LoadedLoyaltyProgram,
+    at: datetime,
+) -> int:
+    """Insert every newly eligible stable tier once; the customer row is locked by caller."""
+    with session.no_autoflush:
+        awarded = set(
+            (
+                await session.execute(
+                    select(CustomerGamingRankAward.rank_key).where(
+                        CustomerGamingRankAward.company_id == order.company_id,
+                        CustomerGamingRankAward.customer_id == customer.id,
+                    )
+                )
+            ).scalars().all()
+        )
+    bonus = 0
+    for rank in program.rules.ranks:
+        if rank.key in awarded or int(customer.lifetime_gaming_points_earned) < rank.threshold:
+            continue
+        session.add(CustomerGamingRankAward(
+            id=uuid4(), company_id=order.company_id, customer_id=customer.id,
+            rank_key=rank.key, rank_label_snapshot=rank.label,
+            threshold_snapshot=rank.threshold, bonus_points=rank.bonus_points,
+            program_revision=program.revision, source="paid_gaming",
+            order_id=order.id, awarded_at=at,
+        ))
+        awarded.add(rank.key)
+        bonus += rank.bonus_points
+    return bonus
 
 
 async def consume_points_redemption(session: AsyncSession, *, order_id: UUID, at: datetime) -> None:
@@ -409,7 +543,12 @@ async def consume_points_redemption(session: AsyncSession, *, order_id: UUID, at
     ).scalar_one_or_none()
     if customer is None:
         raise BusinessRuleError("points redemption cannot be settled; customer is missing")
-    customer.loyalty_points = max(0, int(customer.loyalty_points or 0) - row.points_spent)
+    balance = int(customer.loyalty_points or 0)
+    if balance < int(row.points_spent):
+        raise BusinessRuleError(
+            "points redemption cannot be settled; the reserved balance is underfunded"
+        )
+    customer.loyalty_points = balance - int(row.points_spent)
     row.consumed_at = at
 
 
@@ -448,6 +587,7 @@ async def record_order_loyalty_settlement(
     points_earned: int,
     rank_bonus_points_awarded: int,
     at: datetime,
+    program: LoadedLoyaltyProgram | None = None,
 ) -> OrderLoyaltySettlement | None:
     """Snapshot exact checkout loyalty facts in the sale transaction.
 
@@ -483,6 +623,7 @@ async def record_order_loyalty_settlement(
         max(0, int(points_earned)),
         max(0, int(rank_bonus_points_awarded)),
         "exact",
+        program.revision if program is not None else None,
     )
     if existing is not None:
         actual = (
@@ -493,6 +634,7 @@ async def record_order_loyalty_settlement(
             int(existing.points_earned),
             int(existing.rank_bonus_points),
             existing.provenance,
+            existing.program_revision,
         )
         if actual != expected:
             raise BusinessRuleError(
@@ -515,6 +657,8 @@ async def record_order_loyalty_settlement(
         rank_bonus_points=max(0, int(rank_bonus_points_awarded)),
         settled_at=at,
         provenance="exact",
+        program_revision=program.revision if program is not None else None,
+        rules_snapshot=program.snapshot() if program is not None else None,
     )
     session.add(row)
     return row
@@ -660,7 +804,9 @@ async def apply_refund_loyalty_adjustment(
     bonus_delta = target_bonus - prior_bonus
     net_delta = restored_delta - earned_delta - bonus_delta
     balance_before = int(customer.loyalty_points or 0)
-    balance_after = balance_before + net_delta
+    balance_after = checked_points_add(
+        balance_before, net_delta, label="Refunded loyalty balance"
+    )
     customer.loyalty_points = balance_after
     session.add(
         RefundLoyaltyAdjustment(

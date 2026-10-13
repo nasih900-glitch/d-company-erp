@@ -1,5 +1,7 @@
 package cloud.dcompany.erp.ui.components
 
+import androidx.compose.material3.MaterialTheme
+
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -134,7 +136,7 @@ fun VoidReasonInput(
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         if (!(compactCustomLayout && customSelected)) {
-            Text("Choose a reason", color = Brand.ForegroundMuted)
+            Text("Choose a reason", color = MaterialTheme.colorScheme.onSurfaceVariant)
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -162,8 +164,8 @@ fun VoidReasonInput(
                                         contentDescription = "Cancellation reason: ${preset.reason}"
                                     },
                                 colors = FilterChipDefaults.filterChipColors(
-                                    selectedContainerColor = Brand.Gold,
-                                    selectedLabelColor = Brand.Background,
+                                    selectedContainerColor = MaterialTheme.colorScheme.primary,
+                                    selectedLabelColor = MaterialTheme.colorScheme.background,
                                 ),
                             )
                         }
@@ -185,8 +187,8 @@ fun VoidReasonInput(
                             contentDescription = "Cancellation reason: Other or add details"
                         },
                     colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = Brand.Gold,
-                        selectedLabelColor = Brand.Background,
+                        selectedContainerColor = MaterialTheme.colorScheme.primary,
+                        selectedLabelColor = MaterialTheme.colorScheme.background,
                     ),
                 )
             }

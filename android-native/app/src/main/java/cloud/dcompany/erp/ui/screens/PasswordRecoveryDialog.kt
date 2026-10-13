@@ -1,5 +1,14 @@
 package cloud.dcompany.erp.ui.screens
 
+import cloud.dcompany.erp.ui.theme.operationalDanger
+import cloud.dcompany.erp.ui.theme.operationalDangerContainer
+import cloud.dcompany.erp.ui.theme.operationalGood
+import cloud.dcompany.erp.ui.theme.operationalGoodContainer
+import cloud.dcompany.erp.ui.theme.operationalInformation
+import cloud.dcompany.erp.ui.theme.operationalInformationContainer
+import cloud.dcompany.erp.ui.theme.operationalWarning
+import cloud.dcompany.erp.ui.theme.operationalWarningContainer
+
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -65,7 +74,7 @@ internal fun PasswordRecoveryDialog(
                     Text(
                         "Enter the employee login email. Approval is sent to the business security " +
                             "mailbox, not to the employee email.",
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     OutlinedTextField(
                         value = state.email,
@@ -78,7 +87,7 @@ internal fun PasswordRecoveryDialog(
                     )
                     Text(
                         "For privacy, the response is the same whether or not that login exists.",
-                        color = Brand.ForegroundFaint,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.bodySmall,
                     )
                 } else {
@@ -86,17 +95,17 @@ internal fun PasswordRecoveryDialog(
                     Text(
                         "Approval was sent to the business security mailbox: " +
                             challenge.destination.ifBlank { "the protected owner's mailbox" } + ".",
-                        color = Brand.Foreground,
+                        color = MaterialTheme.colorScheme.onSurface,
                     )
                     Text(
                         approvalExpiryLabel(challenge.expiresIn),
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.bodySmall,
                     )
                     Text(
                         "Ask an authorised owner for the 6-digit approval code. This screen does " +
                             "not confirm whether a login exists for ${state.email}.",
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     OutlinedTextField(
                         value = state.code,
@@ -160,14 +169,14 @@ internal fun PasswordRecoveryDialog(
                 if (state.error != null) {
                     Text(
                         state.error,
-                        color = Brand.Danger,
+                        color = MaterialTheme.colorScheme.operationalDanger,
                         style = MaterialTheme.typography.bodyMedium,
                     )
                 }
                 if (state.busy) {
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         CircularProgressIndicator(
-                            color = Brand.Gold,
+                            color = MaterialTheme.colorScheme.primary,
                             strokeWidth = 2.dp,
                         )
                         Text(
@@ -176,7 +185,7 @@ internal fun PasswordRecoveryDialog(
                             } else {
                                 "Updating password…"
                             },
-                            color = Brand.ForegroundMuted,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                 }
@@ -204,9 +213,9 @@ internal fun PasswordRecoveryDialog(
             // ViewModel invalidates its generation so a late response is ignored.
             TextButton(onClick = onCancel) { Text("Cancel") }
         },
-        containerColor = Brand.SurfaceOverlay,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = Radius.shapeLg,
-        titleContentColor = Brand.Foreground,
-        textContentColor = Brand.Foreground,
+        titleContentColor = MaterialTheme.colorScheme.onSurface,
+        textContentColor = MaterialTheme.colorScheme.onSurface,
     )
 }

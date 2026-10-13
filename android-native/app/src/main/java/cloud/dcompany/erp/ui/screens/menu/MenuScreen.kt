@@ -1,5 +1,14 @@
 package cloud.dcompany.erp.ui.screens.menu
 
+import cloud.dcompany.erp.ui.theme.operationalDanger
+import cloud.dcompany.erp.ui.theme.operationalDangerContainer
+import cloud.dcompany.erp.ui.theme.operationalGood
+import cloud.dcompany.erp.ui.theme.operationalGoodContainer
+import cloud.dcompany.erp.ui.theme.operationalInformation
+import cloud.dcompany.erp.ui.theme.operationalInformationContainer
+import cloud.dcompany.erp.ui.theme.operationalWarning
+import cloud.dcompany.erp.ui.theme.operationalWarningContainer
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -120,7 +129,7 @@ fun MenuScreen(
     }
 
     Column(
-        Modifier.fillMaxSize().background(Brand.Background)
+        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
             .padding(horizontal = Spacing.lgPlus, vertical = Spacing.lg),
         verticalArrangement = Arrangement.spacedBy(Spacing.md),
     ) {
@@ -282,7 +291,7 @@ private fun MenuCategoryPanel(
     ) {
         when {
             state.loading -> Box(Modifier.fillMaxWidth().heightIn(min = 150.dp), Alignment.Center) {
-                CircularProgressIndicator(color = Brand.Gold)
+                CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
             }
             state.couldNotLoad -> DesignedEmptyState(
                 title = "Menu not available",
@@ -359,7 +368,7 @@ private fun MenuItemsPanel(
         )
         when {
             state.loading -> Box(Modifier.fillMaxWidth().heightIn(min = 220.dp), Alignment.Center) {
-                CircularProgressIndicator(color = Brand.Gold)
+                CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
             }
             selected == null -> DesignedEmptyState(
                 title = "Select a category",
@@ -413,16 +422,16 @@ private fun CategoryRowItem(
         Modifier
             .fillMaxWidth()
             .clip(Radius.shapeSm)
-            .background(if (selected) Brand.SurfaceHover else Brand.SurfaceRaised)
-            .border(1.dp, if (selected) Brand.GoldMuted else Brand.BorderSubtle, Radius.shapeSm)
+            .background(if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceVariant)
+            .border(1.dp, if (selected) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.outlineVariant, Radius.shapeSm)
             .clickable(onClick = onClick)
             .padding(Spacing.md),
         verticalArrangement = Arrangement.spacedBy(Spacing.xs),
     ) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(cat.name, color = Brand.Foreground, fontWeight = FontWeight.SemiBold)
-                Text("Sort order ${cat.sortOrder}", color = Brand.ForegroundFaint, style = MaterialTheme.typography.labelSmall)
+                Text(cat.name, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.SemiBold)
+                Text("Sort order ${cat.sortOrder}", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
             }
             ErpButton(
                 text = "Edit",
@@ -444,7 +453,7 @@ private fun CategoryRowItem(
             },
         )
         if (cat.rejectedError != null) {
-            Text("Sync failed: ${cat.rejectedError}", color = Brand.Danger, style = MaterialTheme.typography.labelSmall)
+            Text("Sync failed: ${cat.rejectedError}", color = MaterialTheme.colorScheme.operationalDanger, style = MaterialTheme.typography.labelSmall)
             ErpButton(
                 text = "Retry sync",
                 onClick = onRetrySync,
@@ -471,21 +480,21 @@ private fun ItemRowCard(
         Modifier
             .fillMaxWidth()
             .clip(Radius.shapeMd)
-            .background(Brand.Surface)
-            .border(1.dp, Brand.BorderSubtle, Radius.shapeMd)
+            .background(MaterialTheme.colorScheme.surface)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeMd)
             .padding(Spacing.md),
         verticalArrangement = Arrangement.spacedBy(Spacing.sm),
     ) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text(item.name, color = Brand.Foreground, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                Text(item.name, color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
                 Text(
                     "${item.sku} · ${menuItemTypeLabel(item.type, presentation)}",
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.labelSmall,
                 )
                 item.description?.takeIf(String::isNotBlank)?.let {
-                    Text(it, color = Brand.ForegroundFaint, style = MaterialTheme.typography.bodySmall, maxLines = 1)
+                    Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall, maxLines = 1)
                 }
             }
             OperationalStatusBadge(
@@ -495,7 +504,7 @@ private fun ItemRowCard(
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
-                Text(item.basePriceMinor.asRupees(), color = Brand.Foreground, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text(item.basePriceMinor.asRupees(), color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 if (presentation.showsRestaurantOperations || item.taxRate != 0.0) {
                     Text(
                         if (presentation.showsRestaurantOperations) {
@@ -503,7 +512,7 @@ private fun ItemRowCard(
                         } else {
                             "${"%.0f".format(item.taxRate * 100)}% recorded tax · ${if (item.priceIncludesTax) "included" else "added"}"
                         },
-                        color = Brand.ForegroundFaint,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
@@ -519,7 +528,7 @@ private fun ItemRowCard(
             }
         }
         if (item.detailsRejected != null) {
-            Text("Sync failed: ${item.detailsRejected}", color = Brand.Danger, style = MaterialTheme.typography.labelSmall)
+            Text("Sync failed: ${item.detailsRejected}", color = MaterialTheme.colorScheme.operationalDanger, style = MaterialTheme.typography.labelSmall)
             ErpButton("Retry sync", onRetrySync, enabled = canWrite, intent = ActionIntent.Destructive, leadingIcon = Icons.Filled.Refresh)
         } else if (item.detailsPending && item.localWriteId != null) {
             OperationalStatusBadge("Details pending sync", UiTone.Information)
@@ -590,21 +599,21 @@ private fun CategoryEditorDialog(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f).padding(end = Spacing.md)) {
-                Text("Show in Gaming and POS", color = Brand.Foreground)
+                Text("Show in Gaming and POS", color = MaterialTheme.colorScheme.onSurface)
                 Text(
                     when (editor.isGamingCentreCatalog) {
                         true -> "Packaged products in this category are available to gaming staff."
                         false -> "Keep off for categories reserved for future cafe operation."
                         null -> "The older server has not confirmed this setting; it stays unchanged unless toggled."
                     },
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.labelSmall,
                 )
             }
             Switch(
                 checked = editor.isGamingCentreCatalog == true,
                 onCheckedChange = { onChange(editor.copy(isGamingCentreCatalog = it)) },
-                colors = SwitchDefaults.colors(checkedTrackColor = Brand.Gold),
+                colors = SwitchDefaults.colors(checkedTrackColor = MaterialTheme.colorScheme.primary),
             )
         }
     }
@@ -651,11 +660,11 @@ private fun ItemDetailsDialog(
             onSelect = { onChange(editor.copy(categoryId = it)) },
         )
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Text("Available for sale", color = Brand.Foreground)
+            Text("Available for sale", color = MaterialTheme.colorScheme.onSurface)
             Switch(
                 checked = editor.isAvailable,
                 onCheckedChange = { onChange(editor.copy(isAvailable = it)) },
-                colors = SwitchDefaults.colors(checkedTrackColor = Brand.Gold),
+                colors = SwitchDefaults.colors(checkedTrackColor = MaterialTheme.colorScheme.primary),
             )
         }
         Text(
@@ -665,7 +674,7 @@ private fun ItemDetailsDialog(
                 "Price is edited separately and needs your password."
             },
             style = MaterialTheme.typography.labelSmall,
-            color = Brand.ForegroundMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }
@@ -723,11 +732,11 @@ private fun ItemPricingDialog(
                 modifier = Modifier.fillMaxWidth(),
             )
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Text("Price includes tax", color = Brand.Foreground)
+                Text("Price includes tax", color = MaterialTheme.colorScheme.onSurface)
                 Switch(
                     checked = editor.priceIncludesTax,
                     onCheckedChange = { onChange(editor.copy(priceIncludesTax = it)) },
-                    colors = SwitchDefaults.colors(checkedTrackColor = Brand.Gold),
+                    colors = SwitchDefaults.colors(checkedTrackColor = MaterialTheme.colorScheme.primary),
                 )
             }
         }

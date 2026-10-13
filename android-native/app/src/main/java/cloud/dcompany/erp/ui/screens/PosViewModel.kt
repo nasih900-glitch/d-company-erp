@@ -53,10 +53,14 @@ import cloud.dcompany.erp.core.net.Order
 import cloud.dcompany.erp.core.net.OrderDiscountUpdateRequest
 import cloud.dcompany.erp.core.net.OrderLineRequest
 import cloud.dcompany.erp.core.net.OrderPointsRedemptionUpdateRequest
+import cloud.dcompany.erp.core.net.OrderRewardRedemptionUpdateRequest
+import cloud.dcompany.erp.core.db.LocalPointsRedemptionActionEntity
+import cloud.dcompany.erp.core.db.LoyaltyActionState
 import cloud.dcompany.erp.core.net.PublishDirectCheckoutClaimRequest
 import cloud.dcompany.erp.core.net.CanonicalReceipt
 import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.ui.WorkspaceFeatureProfiles
+import cloud.dcompany.erp.ui.screens.settings.LoyaltyProgramRulesDto
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -68,6 +72,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
@@ -77,8 +82,10 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.serialization.decodeFromString
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.util.UUID
@@ -330,6 +337,27 @@ data class DirectCheckoutReview(
     val checkoutVersion: Long,
 )
 
+/** Exact economics and target the cashier reviewed before applying points. */
+data class ReviewedPointsRedemption(
+    val orderId: String,
+    val checkoutVersion: Long,
+    val points: Int,
+    val programRevision: Long?,
+    val minorPerPoint: Int?,
+)
+
+/** Immutable named-reward review; never re-resolve this key against a newer catalog. */
+data class ReviewedRewardRedemption(
+    val orderId: String,
+    val checkoutVersion: Long,
+    val key: String,
+    val label: String,
+    val description: String,
+    val pointsCost: Int,
+    val valueMinor: Long,
+    val programRevision: Long,
+)
+
 /**
  * Immutable payment confirmation rendered to the cashier. Passing this back
  * to the ViewModel prevents a late cart edit or recomposition from changing
@@ -394,6 +422,15 @@ private data class CheckoutSnapshot(
     val heldSelectionBlocked: Boolean,
 )
 
+internal data class RewardCatalogRequest(
+    val phone: String?,
+    val programRevision: Long?,
+    val online: Boolean,
+    val companyId: String?,
+    val userId: String?,
+    val refreshGeneration: Long,
+)
+
 private data class PosMenuSnapshot(
     val items: List<MenuItemEntity>,
     val categories: List<MenuCategoryEntity>,
@@ -413,6 +450,42 @@ private data class PosMenuSnapshot(
  * Durable receipt rows remain in Room and are replayed on the next collection.
  */
 private val receiptUiSharing = SharingStarted.WhileSubscribed(5_000)
+
+enum class ReceiptSearchSource { NONE, ONLINE, CACHED }
+
+data class ReceiptSearchUiState(
+    val query: String = "",
+    val receipts: List<CanonicalReceipt> = emptyList(),
+    val nextCursor: String? = null,
+    val hasMore: Boolean = false,
+    val loading: Boolean = false,
+    val error: String? = null,
+    val source: ReceiptSearchSource = ReceiptSearchSource.NONE,
+    val cachedAtMillis: Long? = null,
+    val detail: CanonicalReceipt? = null,
+    val detailLoading: Boolean = false,
+    val detailError: String? = null,
+)
+
+internal fun ReceiptSearchUiState.withRefreshedDetail(receipt: CanonicalReceipt): ReceiptSearchUiState =
+    copy(
+        receipts = receipts.map { if (it.orderId == receipt.orderId) receipt else it },
+        detail = receipt,
+        detailLoading = false,
+        detailError = null,
+    )
+
+internal fun CanonicalReceipt.matchesCachedReceiptQuery(rawQuery: String): Boolean {
+    val query = rawQuery.trim()
+    if (query.isEmpty()) return true
+    if (invoiceNo.equals(query, ignoreCase = true) || orderId.equals(query, ignoreCase = true)) {
+        return true
+    }
+    if (gamingSessions.any { it.id.equals(query, ignoreCase = true) }) return true
+    if (!query.all(Char::isDigit)) return false
+    val suffix = invoiceNo.takeLastWhile(Char::isDigit)
+    return suffix == query
+}
 
 data class PosUiState(
     /** Full available catalogue retained for durable draft/retry reconstruction. */
@@ -487,6 +560,8 @@ data class PosUiState(
     val customerPhone: String? = null,
     /** Last synced display balance only; the backend authorises every redemption. */
     val customerLoyaltyPoints: Int? = null,
+    val loyaltyProgramRevision: Long? = null,
+    val loyaltyProgramRules: LoyaltyProgramRulesDto? = null,
     val orderNote: String? = null,
     val manualDiscountMinor: Long = 0,
 ) {
@@ -547,6 +622,10 @@ class PosViewModel : ViewModel() {
         .distinctUntilChanged()
     private val resolvedShift = db.shiftDao().observeResolvedOpenShift(confirmedTerminalId)
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private val loyaltyProgramCache = app.shiftCache.profile.flatMapLatest { profile ->
+        profile?.let { db.loyaltyDao().observeProgram(it.companyId) } ?: flowOf(null)
+    }
 
     val recentReceipts: StateFlow<List<PosReceiptEntity>> = db.posReceiptDao()
         .observeRecent()
@@ -554,6 +633,14 @@ class PosViewModel : ViewModel() {
 
     private val _receiptHistoryLoading = MutableStateFlow(false)
     val receiptHistoryLoading: StateFlow<Boolean> = _receiptHistoryLoading.asStateFlow()
+    private val _receiptSearch = MutableStateFlow(ReceiptSearchUiState())
+    val receiptSearch: StateFlow<ReceiptSearchUiState> = _receiptSearch.asStateFlow()
+    private var receiptSearchGeneration = 0L
+    private var receiptDetailGeneration = 0L
+    private val _eligibleRewardCatalog = MutableStateFlow(EligibleRewardCatalogState())
+    val eligibleRewardCatalog: StateFlow<EligibleRewardCatalogState> =
+        _eligibleRewardCatalog.asStateFlow()
+    private val rewardCatalogRefreshGeneration = MutableStateFlow(0L)
 
     val receiptHistorySyncState: StateFlow<CanonicalReceiptSyncStateEntity?> =
         db.canonicalReceiptDao().observeSyncState()
@@ -666,19 +753,26 @@ class PosViewModel : ViewModel() {
             heldOrderRows,
             confirmedHeldOrderIds,
             db.heldOrderDao().observeUnresolvedPayments(),
-            combine(heldAlarmClock, focusedHeldOrderId, heldBannerMute, ::Triple),
-        ) { meta, orders, confirmedIds, unresolvedPayments, alarmUi ->
-            meta to HeldQueueSnapshot(
+            combine(
+                combine(heldAlarmClock, focusedHeldOrderId, heldBannerMute, ::Triple),
+                loyaltyProgramCache,
+                ::Pair,
+            ),
+        ) { meta, orders, confirmedIds, unresolvedPayments, alarmAndProgram ->
+            Triple(meta, HeldQueueSnapshot(
                 orders = orders,
                 confirmedTargetIds = confirmedIds,
                 unresolvedPayments = unresolvedPayments,
-                nowMillis = alarmUi.first,
-                focusedOrderId = alarmUi.second,
-                bannerMute = alarmUi.third,
-            )
+                nowMillis = alarmAndProgram.first.first,
+                focusedOrderId = alarmAndProgram.first.second,
+                bannerMute = alarmAndProgram.first.third,
+            ), alarmAndProgram.second)
         },
     ) { menu, ui, net, queue, extra ->
-        val (meta, heldQueue) = extra
+        val (meta, heldQueue, programCache) = extra
+        val programRules = programCache?.let {
+            runCatching { ApiClient.json.decodeFromString<LoyaltyProgramRulesDto>(it.rulesJson) }.getOrNull()
+        }
         val uiValues = ui.first
         val checkout = ui.second.first
         val retries = ui.second.second
@@ -845,6 +939,8 @@ class PosViewModel : ViewModel() {
             customerLoyaltyPoints = draftOrder?.customerPhone?.let { phone ->
                 menu.customers.firstOrNull { it.phone == phone }?.loyaltyPoints
             },
+            loyaltyProgramRevision = if (programRules == null) null else programCache.revision,
+            loyaltyProgramRules = programRules,
             orderNote = draftOrder?.orderNote,
             manualDiscountMinor = draftOrder?.manualDiscountMinor ?: 0L,
         )
@@ -852,6 +948,96 @@ class PosViewModel : ViewModel() {
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), PosUiState())
 
     init {
+        viewModelScope.launch {
+            combine(
+                state.map { Triple(it.customerPhone, it.loyaltyProgramRevision, it.online) },
+                app.shiftCache.profile,
+                rewardCatalogRefreshGeneration,
+            ) { identity, profile, refreshGeneration ->
+                RewardCatalogRequest(
+                    phone = identity.first,
+                    programRevision = identity.second,
+                    online = identity.third,
+                    companyId = profile?.companyId,
+                    userId = profile?.userId,
+                    refreshGeneration = refreshGeneration,
+                )
+            }.distinctUntilChanged().collectLatest { request ->
+                val phone = request.phone
+                val revision = request.programRevision
+                if (phone.isNullOrBlank() || revision == null) {
+                    _eligibleRewardCatalog.value = EligibleRewardCatalogState()
+                    return@collectLatest
+                }
+                if (!request.online) {
+                    _eligibleRewardCatalog.value = EligibleRewardCatalogState(
+                        phone = phone,
+                        programRevision = revision,
+                        error = "Reconnect to verify named reward eligibility.",
+                    )
+                    return@collectLatest
+                }
+                val lease = app.cacheIsolation.currentLease()
+                if (
+                    lease == null || lease.scope.companyId != request.companyId ||
+                    lease.scope.userId != request.userId
+                ) {
+                    _eligibleRewardCatalog.value = EligibleRewardCatalogState(
+                        phone = phone,
+                        programRevision = revision,
+                        error = POS_POINTS_WORKSPACE_UNAVAILABLE_MESSAGE,
+                    )
+                    return@collectLatest
+                }
+                _eligibleRewardCatalog.value = EligibleRewardCatalogState(
+                    phone = phone,
+                    programRevision = revision,
+                    loading = true,
+                )
+                try {
+                    val rewards = ApiClient.api.customerRewards(phone)
+                    check(rewards.all { it.programRevision == revision }) {
+                        "The reward catalog changed. Refresh the bill before applying a reward."
+                    }
+                    check(rewards.map { it.key }.distinct().size == rewards.size) {
+                        "The server returned duplicate reward choices."
+                    }
+                    app.cacheIsolation.commitIfCurrent(lease) {
+                        val current = state.value
+                        if (
+                            current.customerPhone == phone &&
+                            current.loyaltyProgramRevision == revision &&
+                            rewardCatalogRefreshGeneration.value == request.refreshGeneration
+                        ) {
+                            _eligibleRewardCatalog.value = EligibleRewardCatalogState(
+                                phone = phone,
+                                programRevision = revision,
+                                rewards = rewards,
+                                verified = true,
+                            )
+                        }
+                    }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    app.cacheIsolation.commitIfCurrent(lease) {
+                        val current = state.value
+                        if (
+                            current.customerPhone == phone &&
+                            current.loyaltyProgramRevision == revision &&
+                            rewardCatalogRefreshGeneration.value == request.refreshGeneration
+                        ) {
+                            _eligibleRewardCatalog.value = EligibleRewardCatalogState(
+                                phone = phone,
+                                programRevision = revision,
+                                error = error.message
+                                    ?: "Named reward eligibility could not be verified.",
+                            )
+                        }
+                    }
+                }
+            }
+        }
         // A review owns no claim, but it must still remain bound to the exact
         // queue row that launched it. Never let cache removal silently move
         // the dialog to a neighbouring held order.
@@ -926,6 +1112,7 @@ class PosViewModel : ViewModel() {
     }
 
     fun refresh() {
+        refreshEligibleRewards()
         app.sync.requestSync()
         viewModelScope.launch {
             app.sync.refresh("menu")
@@ -939,6 +1126,12 @@ class PosViewModel : ViewModel() {
             }
             app.sync.refresh("orders")
             app.sync.refresh("receipts")
+        }
+    }
+
+    fun refreshEligibleRewards() {
+        rewardCatalogRefreshGeneration.update { generation ->
+            if (generation == Long.MAX_VALUE) 0L else generation + 1L
         }
     }
 
@@ -967,13 +1160,172 @@ class PosViewModel : ViewModel() {
     }
 
     fun refreshReceiptHistoryDetail(orderId: String) {
-        if (orderId.isBlank() || _receiptHistoryLoading.value) return
+        if (orderId.isBlank()) return
+        val activeSearch = _receiptSearch.value
+        if (activeSearch.query.isNotBlank()) {
+            val lease = app.cacheIsolation.currentLease()
+            if (lease == null || !app.connectivity.online.value) {
+                _receiptSearch.value = activeSearch.copy(
+                    detailLoading = false,
+                    detailError = "Reconnect to refresh this exact receipt.",
+                )
+                return
+            }
+            val searchGeneration = receiptSearchGeneration
+            val detailGeneration = ++receiptDetailGeneration
+            val query = activeSearch.query
+            _receiptSearch.value = activeSearch.copy(
+                detailLoading = true,
+                detailError = null,
+            )
+            viewModelScope.launch {
+                try {
+                    val receipt = ApiClient.api.receipt(orderId)
+                    require(receipt.orderId == orderId) {
+                        "The server returned a different receipt. Reopen the requested bill."
+                    }
+                    require(
+                        receipt.companyId == lease.scope.companyId &&
+                            receipt.branchId == lease.scope.branchId
+                    ) { "This receipt belongs to another shop." }
+                    app.cacheIsolation.commitIfCurrent(lease) {
+                        val latest = _receiptSearch.value
+                        if (
+                            receiptSearchGeneration == searchGeneration &&
+                            receiptDetailGeneration == detailGeneration &&
+                            latest.query == query
+                        ) {
+                            _receiptSearch.value = latest.withRefreshedDetail(receipt)
+                        }
+                    }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    val latest = _receiptSearch.value
+                    if (
+                        receiptSearchGeneration == searchGeneration &&
+                        receiptDetailGeneration == detailGeneration &&
+                        latest.query == query
+                    ) {
+                        _receiptSearch.value = latest.copy(
+                            detailLoading = false,
+                            detailError = error.message?.takeIf(String::isNotBlank)
+                                ?: "This exact receipt could not be refreshed.",
+                        )
+                    }
+                }
+            }
+            return
+        }
+        if (_receiptHistoryLoading.value) return
         viewModelScope.launch {
             _receiptHistoryLoading.value = true
             try {
                 app.sync.refreshReceiptHistoryDetail(orderId)
             } finally {
                 _receiptHistoryLoading.value = false
+            }
+        }
+    }
+
+    fun searchReceiptHistory(rawQuery: String) {
+        val query = rawQuery.trim().take(200)
+        val generation = ++receiptSearchGeneration
+        if (query.isEmpty()) {
+            _receiptSearch.value = ReceiptSearchUiState()
+            return
+        }
+        if (!app.connectivity.online.value) {
+            _receiptSearch.value = ReceiptSearchUiState(
+                query = query,
+                receipts = canonicalReceipts.value.filter { it.matchesCachedReceiptQuery(query) },
+                source = ReceiptSearchSource.CACHED,
+                cachedAtMillis = receiptHistorySyncState.value?.fetchedAtMillis,
+            )
+            return
+        }
+        val lease = app.cacheIsolation.currentLease()
+        if (lease == null) {
+            _receiptSearch.value = ReceiptSearchUiState(
+                query = query,
+                error = "This tablet's receipt workspace is not verified. Sign in online and try again.",
+            )
+            return
+        }
+        _receiptSearch.value = ReceiptSearchUiState(query = query, loading = true)
+        viewModelScope.launch {
+            try {
+                val page = ApiClient.api.receiptHistory(limit = RECEIPT_HISTORY_PAGE_SIZE, query = query)
+                app.cacheIsolation.commitIfCurrent(lease) {
+                    if (generation == receiptSearchGeneration && _receiptSearch.value.query == query) {
+                        _receiptSearch.value = ReceiptSearchUiState(
+                            query = query,
+                            receipts = page.items,
+                            nextCursor = page.nextCursor,
+                            hasMore = page.hasMore,
+                            source = ReceiptSearchSource.ONLINE,
+                        )
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                if (generation == receiptSearchGeneration && _receiptSearch.value.query == query) {
+                    _receiptSearch.value = ReceiptSearchUiState(
+                        query = query,
+                        error = error.message?.takeIf(String::isNotBlank)
+                            ?: "Receipt search could not be completed. Check the connection and try again.",
+                    )
+                }
+            }
+        }
+    }
+
+    fun loadMoreReceiptSearch() {
+        val current = _receiptSearch.value
+        val cursor = current.nextCursor
+        if (current.source != ReceiptSearchSource.ONLINE || current.loading || !current.hasMore || cursor == null) {
+            return
+        }
+        val lease = app.cacheIsolation.currentLease()
+        if (lease == null) {
+            _receiptSearch.value = current.copy(
+                loading = false,
+                error = "This tablet's receipt workspace is not verified. Sign in online and retry the search.",
+            )
+            return
+        }
+        val generation = receiptSearchGeneration
+        _receiptSearch.value = current.copy(loading = true, error = null)
+        viewModelScope.launch {
+            try {
+                val page = ApiClient.api.receiptHistory(
+                    cursor = cursor,
+                    limit = RECEIPT_HISTORY_PAGE_SIZE,
+                    query = current.query,
+                )
+                app.cacheIsolation.commitIfCurrent(lease) {
+                    val latest = _receiptSearch.value
+                    if (generation == receiptSearchGeneration && latest.query == current.query) {
+                        _receiptSearch.value = latest.copy(
+                            receipts = (latest.receipts + page.items).distinctBy(CanonicalReceipt::orderId),
+                            nextCursor = page.nextCursor,
+                            hasMore = page.hasMore,
+                            loading = false,
+                        )
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                val latest = _receiptSearch.value
+                if (generation == receiptSearchGeneration && latest.query == current.query) {
+                    _receiptSearch.value = latest.copy(
+                        loading = false,
+                        error = error.message?.takeIf(String::isNotBlank)
+                            ?: "The next receipt search page could not be loaded.",
+                    )
+                }
             }
         }
     }
@@ -1278,7 +1630,10 @@ class PosViewModel : ViewModel() {
      * server bill first, then acquire an exclusive snapshot before showing the
      * payment dialog. Staff never collect against the cached menu estimate.
      */
-    fun prepareDirectCheckout() = prepareDirectCheckout(publishRequested = false)
+    fun prepareDirectCheckout() {
+        refreshEligibleRewards()
+        prepareDirectCheckout(publishRequested = false)
+    }
 
     /** Continue only after customer, discount and points choices are final. */
     fun continueDirectCheckout() {
@@ -1367,7 +1722,7 @@ class PosViewModel : ViewModel() {
                         )
                     }
 
-                    val serverOrder = local.serverOrderId?.let { ApiClient.api.order(it) }
+                    var serverOrder = local.serverOrderId?.let { ApiClient.api.order(it) }
                         ?: ApiClient.api.createOrder(
                             CreateOrderRequest(
                                 type = local.type,
@@ -1394,6 +1749,14 @@ class PosViewModel : ViewModel() {
                             ),
                             idempotencyKey = "order:${local.localId}",
                         )
+                    if (serverOrder.id.isNotBlank()) {
+                        serverOrder = reconcileSavedPointsAction(
+                            scopeLease = scopeLease,
+                            local = local,
+                            serverShiftId = serverShiftId,
+                            canonical = serverOrder,
+                        )
+                    }
                     check(serverOrder.id.isNotBlank() && serverOrder.status in setOf("open", "held")) {
                         "The server did not return a payable bill for this cart."
                     }
@@ -1598,6 +1961,199 @@ class PosViewModel : ViewModel() {
         }
     }
 
+    /**
+     * Replays a captured response-loss request from its stored body and key.
+     * The current bill version and cached program are deliberately ignored:
+     * backend idempotency resolves the original attempt before revision/CAS
+     * checks. Canonical bill adoption and intent retirement are one scoped
+     * Room transaction, so payment cannot observe only half the recovery.
+     */
+    private suspend fun reconcileSavedPointsAction(
+        scopeLease: CacheScopeLease,
+        local: LocalOrderEntity,
+        serverShiftId: String,
+        canonical: Order,
+    ): Order {
+        val action = db.loyaltyDao().unresolvedForOrder(canonical.id) ?: return canonical
+        check(
+            action.ownerCompanyId == scopeLease.scope.companyId &&
+                action.ownerUserId == scopeLease.scope.userId &&
+                action.localOrderId == local.localId && action.orderId == canonical.id,
+        ) { POS_POINTS_WORKSPACE_UNAVAILABLE_MESSAGE }
+
+        suspend fun checkpointAndRetire(
+            updated: Order,
+            requireDefinitiveRejection: Boolean,
+        ) {
+            check(updated.id == canonical.id && updated.status in setOf("open", "held")) {
+                "The server returned the wrong bill while reconciling points."
+            }
+            val committed = app.cacheIsolation.commitResultIfCurrent(scopeLease) {
+                db.withTransaction {
+                    val saved = db.orderDao().checkpointServerDraft(
+                        localId = local.localId,
+                        serverOrderId = updated.id,
+                        serverShiftId = serverShiftId,
+                        subtotalMinor = updated.subtotalMinor,
+                        discountMinor = updated.discountMinor,
+                        pointsRedeemedMinor = updated.pointsRedeemedMinor,
+                        pointsRedeemed = updated.pointsRedeemed,
+                        taxMinor = updated.taxMinor,
+                        roundOffMinor = updated.roundOffMinor,
+                        totalMinor = updated.totalMinor,
+                        dueMinor = updated.dueMinor,
+                        checkoutVersion = updated.checkoutVersion,
+                        updatedAtMillis = System.currentTimeMillis(),
+                    )
+                    check(saved == 1) { "The reconciled points bill could not be saved." }
+                    val retired = if (requireDefinitiveRejection) {
+                        db.loyaltyDao().retireRejectedAfterCanonicalCheckpoint(
+                            actionId = action.actionId,
+                            ownerCompanyId = scopeLease.scope.companyId,
+                            ownerUserId = scopeLease.scope.userId,
+                            localOrderId = local.localId,
+                            orderId = updated.id,
+                        )
+                    } else {
+                        db.loyaltyDao().retireReconciledAfterCanonicalCheckpoint(
+                            actionId = action.actionId,
+                            ownerCompanyId = scopeLease.scope.companyId,
+                            ownerUserId = scopeLease.scope.userId,
+                            localOrderId = local.localId,
+                            orderId = updated.id,
+                        )
+                    }
+                    check(retired == 1) { "The reconciled points request could not be retired." }
+                }
+            }
+            check(committed is cloud.dcompany.erp.core.auth.ScopedCommitResult.Committed) {
+                POS_POINTS_WORKSPACE_UNAVAILABLE_MESSAGE
+            }
+        }
+
+        suspend fun resolveTerminal(
+            terminal: Order,
+            requireDefinitiveRejection: Boolean,
+        ): Nothing {
+            val disposition = canonicalPointsDisposition(terminal.status)
+            check(terminal.id == canonical.id && disposition != CanonicalPointsDisposition.REVIEWABLE) {
+                "The terminal bill changed while reconciling points."
+            }
+            val committed = app.cacheIsolation.commitResultIfCurrent(scopeLease) {
+                db.withTransaction {
+                    db.orderDao().deleteDraft(local.localId)
+                    val retired = if (requireDefinitiveRejection) {
+                        db.loyaltyDao().retireRejectedAfterCanonicalCheckpoint(
+                            actionId = action.actionId,
+                            ownerCompanyId = scopeLease.scope.companyId,
+                            ownerUserId = scopeLease.scope.userId,
+                            localOrderId = local.localId,
+                            orderId = terminal.id,
+                        )
+                    } else {
+                        db.loyaltyDao().retireReconciledAfterCanonicalCheckpoint(
+                            actionId = action.actionId,
+                            ownerCompanyId = scopeLease.scope.companyId,
+                            ownerUserId = scopeLease.scope.userId,
+                            localOrderId = local.localId,
+                            orderId = terminal.id,
+                        )
+                    }
+                    check(retired == 1) { "The reconciled points request could not be retired." }
+                }
+            }
+            check(committed is cloud.dcompany.erp.core.auth.ScopedCommitResult.Committed) {
+                POS_POINTS_WORKSPACE_UNAVAILABLE_MESSAGE
+            }
+            app.sync.requestSync()
+            throw IllegalStateException(
+                if (disposition == CanonicalPointsDisposition.VOID) {
+                    "This bill was voided on the server. Its exact points request was reconciled and the saved cart was cleared."
+                } else {
+                    "This bill was already ${terminal.status} on the server. Its exact points request was reconciled, the saved cart was cleared, and receipt history will refresh."
+                },
+            )
+        }
+
+        if (action.state == LoyaltyActionState.REJECTED) {
+            if (canonicalPointsDisposition(canonical.status) != CanonicalPointsDisposition.REVIEWABLE) {
+                resolveTerminal(canonical, requireDefinitiveRejection = true)
+            }
+            checkpointAndRetire(canonical, requireDefinitiveRejection = true)
+            notice.value =
+                "The refused points request was cleared against the live bill. Review the total before payment."
+            return canonical
+        }
+
+        var replayedCanonical: Order? = null
+        try {
+            val updatePoints: suspend (
+                String,
+                OrderPointsRedemptionUpdateRequest,
+                String,
+            ) -> Order = { id, body, key ->
+                ApiClient.api.updateOrderPoints(id = id, body = body, idempotencyKey = key)
+            }
+            val updateReward: suspend (
+                String,
+                OrderRewardRedemptionUpdateRequest,
+                String,
+            ) -> Order = { id, body, key ->
+                ApiClient.api.updateOrderReward(id = id, body = body, idempotencyKey = key)
+            }
+            replayCapturedPointsActionThenLoadCanonical(
+                action = action,
+                updatePoints = updatePoints,
+                updateReward = updateReward,
+                loadCanonical = { orderId -> ApiClient.api.order(orderId) },
+            ).also { replayedCanonical = it.canonical }.accepted
+        } catch (error: CanonicalPointsEvidenceException) {
+            app.cacheIsolation.commitIfCurrent(scopeLease) {
+                db.loyaltyDao().markAction(
+                    action.actionId,
+                    LoyaltyActionState.AMBIGUOUS,
+                    error.cause?.message ?: error.message,
+                )
+            }
+            throw error
+        } catch (error: ApiException) {
+            val state = if (error.isAmbiguous) LoyaltyActionState.AMBIGUOUS else LoyaltyActionState.REJECTED
+            app.cacheIsolation.commitIfCurrent(scopeLease) {
+                db.loyaltyDao().markAction(action.actionId, state, error.message)
+            }
+            if (error.isAmbiguous) throw error
+            val canonicalAfterRejection = ApiClient.api.order(canonical.id)
+            if (
+                canonicalPointsDisposition(canonicalAfterRejection.status) !=
+                CanonicalPointsDisposition.REVIEWABLE
+            ) {
+                resolveTerminal(
+                    canonicalAfterRejection,
+                    requireDefinitiveRejection = true,
+                )
+            }
+            checkpointAndRetire(
+                canonicalAfterRejection,
+                requireDefinitiveRejection = true,
+            )
+            notice.value = (error.message?.let { "$it " } ?: "") +
+                "The live bill was refreshed and the refused request was cleared. Review the total before payment."
+            return canonicalAfterRejection
+        }
+        val freshCanonical = requireNotNull(replayedCanonical) {
+            "The live bill was not verified after replaying points."
+        }
+        if (
+            canonicalPointsDisposition(freshCanonical.status) !=
+            CanonicalPointsDisposition.REVIEWABLE
+        ) {
+            resolveTerminal(freshCanonical, requireDefinitiveRejection = false)
+        }
+        checkpointAndRetire(freshCanonical, requireDefinitiveRejection = false)
+        notice.value = "Saved points request reconciled with the live bill. Review the total before payment."
+        return freshCanonical
+    }
+
     private suspend fun publishDirectCheckoutAndPersist(
         scopeLease: cloud.dcompany.erp.core.auth.CacheScopeLease,
         local: LocalOrderEntity,
@@ -1697,14 +2253,19 @@ class PosViewModel : ViewModel() {
      * reserving points twice. The cache balance is display-only; the locked
      * backend customer/order transaction is the authority.
      */
-    fun redeemDirectPoints(points: Int) {
+    fun redeemDirectPoints(intent: ReviewedPointsRedemption) {
         if (!requireWrite()) return
+        val points = intent.points
         if (points < 0) {
             notice.value = "Enter zero or more loyalty points."
             return
         }
         val review = state.value.directCheckoutReview ?: run {
             notice.value = "Verify the live bill before applying loyalty points."
+            return
+        }
+        if (review.orderId != intent.orderId || review.checkoutVersion != intent.checkoutVersion) {
+            notice.value = "The bill changed after points review. Refresh and review the value again."
             return
         }
         if (state.value.customerPhone.isNullOrBlank()) {
@@ -1722,12 +2283,74 @@ class PosViewModel : ViewModel() {
             prepareDirectCheckout()
             return
         }
-        if (points == review.pointsRedeemed) return
+        val programRevision = state.value.loyaltyProgramRevision
+        if (points > 0 && programRevision == null) {
+            notice.value = "Points settings are unavailable. This sale can continue without points."
+            return
+        }
+        if (
+            points > 0 &&
+            (intent.programRevision != programRevision ||
+                intent.minorPerPoint != state.value.loyaltyProgramRules?.minorPerPoint)
+        ) {
+            notice.value = "The points program changed after review. Refresh this bill and review the value again."
+            return
+        }
 
         val scopeLease = scopeLeaseOrNotice(POS_POINTS_WORKSPACE_UNAVAILABLE_MESSAGE) ?: return
         checkoutBusy.value = true
         viewModelScope.launch {
+            var action: LocalPointsRedemptionActionEntity? = null
             try {
+                val existing = db.loyaltyDao().unresolvedForOrder(review.orderId)
+                val requested = LocalPointsRedemptionActionEntity(
+                    actionId = pointsRedemptionIdempotencyKeyV2(
+                        localId = review.localId,
+                        orderId = review.orderId,
+                        checkoutVersion = review.checkoutVersion,
+                        points = points,
+                        programRevision = if (points > 0) intent.programRevision else null,
+                    ),
+                    ownerCompanyId = scopeLease.scope.companyId,
+                    ownerUserId = scopeLease.scope.userId,
+                    shiftId = review.shiftId,
+                    orderId = review.orderId,
+                    localOrderId = review.localId,
+                    actionKind = "generic",
+                    points = points,
+                    rewardKey = null,
+                    programRevision = if (points > 0) intent.programRevision else null,
+                    expectedCheckoutVersion = review.checkoutVersion,
+                    state = LoyaltyActionState.PENDING,
+                    createdAtMillis = System.currentTimeMillis(),
+                )
+                action = when {
+                    existing == null -> {
+                        val captured = app.cacheIsolation.commitIfCurrent(scopeLease) {
+                            db.loyaltyDao().insertAction(requested)
+                        }
+                        if (!captured) return@launch
+                        requested
+                    }
+                    existing.actionId == requested.actionId &&
+                        existing.points == requested.points &&
+                        existing.programRevision == requested.programRevision &&
+                        existing.expectedCheckoutVersion == requested.expectedCheckoutVersion -> existing
+                    existing.state == LoyaltyActionState.REJECTED -> {
+                        val recaptured = app.cacheIsolation.commitIfCurrent(scopeLease) {
+                            db.withTransaction {
+                                db.loyaltyDao().markAction(existing.actionId, LoyaltyActionState.SYNCED, existing.lastError)
+                                db.loyaltyDao().insertAction(requested)
+                            }
+                        }
+                        if (!recaptured) return@launch
+                        requested
+                    }
+                    else -> {
+                        notice.value = "A saved points request for this bill still needs reconciliation. Refresh the bill before making another points change."
+                        return@launch
+                    }
+                }
                 if (!app.cacheIsolation.commitIfCurrentOrNotifyStale(
                         lease = scopeLease,
                         onStale = { notice.value = POS_POINTS_WORKSPACE_UNAVAILABLE_MESSAGE },
@@ -1737,35 +2360,37 @@ class PosViewModel : ViewModel() {
                 val updated = ApiClient.api.updateOrderPoints(
                     id = review.orderId,
                     body = OrderPointsRedemptionUpdateRequest(
-                        points = points,
-                        expectedCheckoutVersion = review.checkoutVersion,
+                        points = action.points ?: error("Saved points request lost its points body."),
+                        expectedCheckoutVersion = action.expectedCheckoutVersion,
+                        expectedProgramRevision = action.programRevision,
                     ),
-                    idempotencyKey = pointsRedemptionIdempotencyKey(
-                        localId = review.localId,
-                        orderId = review.orderId,
-                        checkoutVersion = review.checkoutVersion,
-                        points = points,
-                    ),
+                    idempotencyKey = action.actionId,
                 )
                 check(updated.id == review.orderId && updated.status == "open") {
                     "The server returned the wrong bill after applying points."
                 }
                 val saved = app.cacheIsolation.commitResultIfCurrent(scopeLease) {
-                    db.orderDao().checkpointServerDraft(
-                        localId = review.localId,
-                        serverOrderId = updated.id,
-                        serverShiftId = review.shiftId,
-                        subtotalMinor = updated.subtotalMinor,
-                        discountMinor = updated.discountMinor,
-                        pointsRedeemedMinor = updated.pointsRedeemedMinor,
-                        pointsRedeemed = updated.pointsRedeemed,
-                        taxMinor = updated.taxMinor,
-                        roundOffMinor = updated.roundOffMinor,
-                        totalMinor = updated.totalMinor,
-                        dueMinor = updated.dueMinor,
-                        checkoutVersion = updated.checkoutVersion,
-                        updatedAtMillis = System.currentTimeMillis(),
-                    )
+                    db.withTransaction {
+                        val checkpointed = db.orderDao().checkpointServerDraft(
+                            localId = review.localId,
+                            serverOrderId = updated.id,
+                            serverShiftId = review.shiftId,
+                            subtotalMinor = updated.subtotalMinor,
+                            discountMinor = updated.discountMinor,
+                            pointsRedeemedMinor = updated.pointsRedeemedMinor,
+                            pointsRedeemed = updated.pointsRedeemed,
+                            taxMinor = updated.taxMinor,
+                            roundOffMinor = updated.roundOffMinor,
+                            totalMinor = updated.totalMinor,
+                            dueMinor = updated.dueMinor,
+                            checkoutVersion = updated.checkoutVersion,
+                            updatedAtMillis = System.currentTimeMillis(),
+                        )
+                        if (checkpointed == 1) {
+                            db.loyaltyDao().markAction(action.actionId, LoyaltyActionState.SYNCED, null)
+                        }
+                        checkpointed
+                    }
                 }
                 check(
                     saved is cloud.dcompany.erp.core.auth.ScopedCommitResult.Committed &&
@@ -1780,11 +2405,176 @@ class PosViewModel : ViewModel() {
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: ApiException) {
+                action?.let {
+                    app.cacheIsolation.commitIfCurrent(scopeLease) {
+                        db.loyaltyDao().markAction(
+                            it.actionId,
+                            if (error.isAmbiguous) LoyaltyActionState.AMBIGUOUS else LoyaltyActionState.REJECTED,
+                            error.message,
+                        )
+                    }
+                }
                 notice.value = error.message
                     ?: "The server could not reserve those points. No payment was recorded."
             } catch (error: Exception) {
+                action?.let {
+                    app.cacheIsolation.commitIfCurrent(scopeLease) {
+                        db.loyaltyDao().markAction(it.actionId, LoyaltyActionState.AMBIGUOUS, error.message)
+                    }
+                }
                 notice.value = error.message
                     ?: "The points change could not be verified. No payment was recorded; try again."
+            } finally {
+                checkoutBusy.value = false
+            }
+        }
+    }
+
+    /** Redeem one reviewed fixed bill credit. The catalog revision, body and
+     * idempotency key are persisted together before the request is sent. */
+    fun redeemDirectReward(intent: ReviewedRewardRedemption) {
+        if (!requireWrite()) return
+        val review = state.value.directCheckoutReview ?: run {
+            notice.value = "Verify the live bill before applying a reward."
+            return
+        }
+        val rules = state.value.loyaltyProgramRules
+        val revision = state.value.loyaltyProgramRevision
+        val reward = rules?.rewards?.singleOrNull { it.key == intent.key && it.enabled }
+        if (
+            reward == null || revision == null || review.orderId != intent.orderId ||
+            review.checkoutVersion != intent.checkoutVersion || revision != intent.programRevision ||
+            reward.label != intent.label || reward.description != intent.description ||
+            reward.pointsCost != intent.pointsCost || reward.valueMinor != intent.valueMinor
+        ) {
+            notice.value = "The reviewed reward is no longer in the current points program. Refresh and review it again."
+            return
+        }
+        val catalog = _eligibleRewardCatalog.value
+        val eligible = catalog.rewards.singleOrNull { it.key == intent.key }
+        if (
+            !catalog.verified || catalog.phone != state.value.customerPhone ||
+            catalog.programRevision != revision || eligible == null || !eligible.affordable ||
+            eligible.programRevision != revision || eligible.name != intent.label ||
+            eligible.description != intent.description || eligible.pointsCost != intent.pointsCost ||
+            eligible.valueMinor != intent.valueMinor
+        ) {
+            notice.value = "This reward's rank or live balance is not verified. Retry the reward check before redeeming it."
+            return
+        }
+        if (!app.connectivity.online.value) {
+            notice.value = "Reconnect before redeeming a reward so the live balance can be reserved safely."
+            return
+        }
+        if (checkoutBusy.value) return
+        val currentShiftId = authorisedShiftId() ?: return
+        if (currentShiftId != review.shiftId) {
+            notice.value = "The open shift changed. Verify this bill again before using a reward."
+            prepareDirectCheckout()
+            return
+        }
+        val lease = scopeLeaseOrNotice(POS_POINTS_WORKSPACE_UNAVAILABLE_MESSAGE) ?: return
+        checkoutBusy.value = true
+        viewModelScope.launch {
+            var action: LocalPointsRedemptionActionEntity? = null
+            try {
+                val requested = LocalPointsRedemptionActionEntity(
+                    actionId = "order-reward:v2:${review.localId}:${review.orderId}:${review.checkoutVersion}:$revision:${intent.key}",
+                    ownerCompanyId = lease.scope.companyId,
+                    ownerUserId = lease.scope.userId,
+                    shiftId = review.shiftId,
+                    orderId = review.orderId,
+                    localOrderId = review.localId,
+                    actionKind = "fixed_reward",
+                    points = null,
+                    rewardKey = intent.key,
+                    programRevision = revision,
+                    expectedCheckoutVersion = review.checkoutVersion,
+                    state = LoyaltyActionState.PENDING,
+                    createdAtMillis = System.currentTimeMillis(),
+                )
+                val existing = db.loyaltyDao().unresolvedForOrder(review.orderId)
+                action = when {
+                    existing == null -> {
+                        if (!app.cacheIsolation.commitIfCurrent(lease) { db.loyaltyDao().insertAction(requested) }) return@launch
+                        requested
+                    }
+                    existing.actionId == requested.actionId && existing.rewardKey == intent.key &&
+                        existing.programRevision == revision -> existing
+                    existing.state == LoyaltyActionState.REJECTED -> {
+                        if (!app.cacheIsolation.commitIfCurrent(lease) {
+                                db.withTransaction {
+                                    db.loyaltyDao().markAction(existing.actionId, LoyaltyActionState.SYNCED, existing.lastError)
+                                    db.loyaltyDao().insertAction(requested)
+                                }
+                            }
+                        ) return@launch
+                        requested
+                    }
+                    else -> {
+                        notice.value = "A saved points request for this bill still needs reconciliation. Refresh the bill before choosing another reward."
+                        return@launch
+                    }
+                }
+                val updated = ApiClient.api.updateOrderReward(
+                    id = action.orderId,
+                    body = OrderRewardRedemptionUpdateRequest(
+                        rewardKey = requireNotNull(action.rewardKey),
+                        expectedCheckoutVersion = action.expectedCheckoutVersion,
+                        expectedProgramRevision = action.programRevision,
+                    ),
+                    idempotencyKey = action.actionId,
+                )
+                check(updated.id == review.orderId && updated.status == "open") {
+                    "The server returned the wrong bill after applying the reward."
+                }
+                val saved = app.cacheIsolation.commitResultIfCurrent(lease) {
+                    db.withTransaction {
+                        val checkpointed = db.orderDao().checkpointServerDraft(
+                            localId = review.localId,
+                            serverOrderId = updated.id,
+                            serverShiftId = review.shiftId,
+                            subtotalMinor = updated.subtotalMinor,
+                            discountMinor = updated.discountMinor,
+                            pointsRedeemedMinor = updated.pointsRedeemedMinor,
+                            pointsRedeemed = updated.pointsRedeemed,
+                            taxMinor = updated.taxMinor,
+                            roundOffMinor = updated.roundOffMinor,
+                            totalMinor = updated.totalMinor,
+                            dueMinor = updated.dueMinor,
+                            checkoutVersion = updated.checkoutVersion,
+                            updatedAtMillis = System.currentTimeMillis(),
+                        )
+                        if (checkpointed == 1) {
+                            db.loyaltyDao().markAction(action.actionId, LoyaltyActionState.SYNCED, null)
+                        }
+                        checkpointed
+                    }
+                }
+                check(saved is cloud.dcompany.erp.core.auth.ScopedCommitResult.Committed && saved.value == 1) {
+                    "The reward-adjusted bill could not be saved on this tablet."
+                }
+                notice.value = "${reward.label} reserved for ${reward.valueMinor.asRupees()}. New total ${updated.totalMinor.asRupees()}."
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: ApiException) {
+                action?.let {
+                    app.cacheIsolation.commitIfCurrent(lease) {
+                        db.loyaltyDao().markAction(
+                            it.actionId,
+                            if (error.isAmbiguous) LoyaltyActionState.AMBIGUOUS else LoyaltyActionState.REJECTED,
+                            error.message,
+                        )
+                    }
+                }
+                notice.value = error.message ?: "The reward could not be reserved. No payment was recorded."
+            } catch (error: Exception) {
+                action?.let {
+                    app.cacheIsolation.commitIfCurrent(lease) {
+                        db.loyaltyDao().markAction(it.actionId, LoyaltyActionState.AMBIGUOUS, error.message)
+                    }
+                }
+                notice.value = error.message ?: "The reward result is uncertain. Refresh this bill before payment."
             } finally {
                 checkoutBusy.value = false
             }
@@ -1808,6 +2598,10 @@ class PosViewModel : ViewModel() {
         viewModelScope.launch {
             var acceptedInvoiceNo: String? = null
             try {
+                check(db.loyaltyDao().unresolvedForOrder(prepared.orderId) == null) {
+                    "A saved points or reward request still needs server reconciliation. " +
+                        "Reconnect and refresh this bill before completing it."
+                }
                 if (!app.cacheIsolation.commitIfCurrentOrNotifyStale(
                         lease = scopeLease,
                         onStale = { notice.value = POS_ZERO_WORKSPACE_UNAVAILABLE_MESSAGE },
@@ -2151,6 +2945,10 @@ class PosViewModel : ViewModel() {
                         onStale = { notice.value = POS_PAYMENT_WORKSPACE_UNAVAILABLE_MESSAGE },
                     ) {
                         db.withTransaction {
+                            check(db.loyaltyDao().unresolvedForOrder(prepared.orderId) == null) {
+                                "A saved points or reward request still needs server reconciliation. " +
+                                    "Refresh this bill before collecting payment."
+                            }
                             inserted = db.heldOrderDao().insertPayment(payment)
                             if (inserted == -1L) {
                                 existing = db.heldOrderDao().paymentForTarget(prepared.orderId)
@@ -2523,6 +3321,10 @@ class PosViewModel : ViewModel() {
         viewModelScope.launch {
             var acquiredToken: String? = null
             try {
+                check(db.loyaltyDao().unresolvedForOrder(orderId) == null) {
+                    "A saved points or reward request still needs server reconciliation. " +
+                        "Refresh this bill before collecting payment."
+                }
                 val checkoutClientInstance = CheckoutClientInstancePolicy.requireStable(
                     app.updateTelemetry.installation.installationId(),
                 )
@@ -2825,9 +3627,15 @@ class PosViewModel : ViewModel() {
                         lease = scopeLease,
                         onStale = { notice.value = POS_PAYMENT_WORKSPACE_UNAVAILABLE_MESSAGE },
                     ) {
-                        inserted = db.heldOrderDao().insertPayment(payment)
-                        if (inserted == -1L) {
-                            existing = db.heldOrderDao().paymentForTarget(prepared.orderId)
+                        db.withTransaction {
+                            check(db.loyaltyDao().unresolvedForOrder(prepared.orderId) == null) {
+                                "A saved points or reward request still needs server reconciliation. " +
+                                    "Refresh this bill before collecting payment."
+                            }
+                            inserted = db.heldOrderDao().insertPayment(payment)
+                            if (inserted == -1L) {
+                                existing = db.heldOrderDao().paymentForTarget(prepared.orderId)
+                            }
                         }
                     }
                 ) return@launch
@@ -3259,6 +4067,19 @@ internal fun pointsRedemptionIdempotencyKey(
     require(localId.isNotBlank() && orderId.isNotBlank())
     require(checkoutVersion >= 1L && points >= 0)
     return "order-points:$localId:$orderId:$checkoutVersion:$points"
+}
+
+internal fun pointsRedemptionIdempotencyKeyV2(
+    localId: String,
+    orderId: String,
+    checkoutVersion: Long,
+    points: Int,
+    programRevision: Long?,
+): String {
+    require(localId.isNotBlank() && orderId.isNotBlank())
+    require(checkoutVersion >= 1L && points >= 0)
+    if (points > 0) require(programRevision != null && programRevision >= 0)
+    return "order-points:v2:$localId:$orderId:$checkoutVersion:${programRevision ?: "legacy-clear"}:$points"
 }
 
 /** Kept pure so confirmation/refusal wording is regression-testable on the JVM. */

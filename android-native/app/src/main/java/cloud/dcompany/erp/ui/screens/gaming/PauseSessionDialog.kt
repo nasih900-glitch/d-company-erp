@@ -1,5 +1,7 @@
 package cloud.dcompany.erp.ui.screens.gaming
 
+import androidx.compose.material3.MaterialTheme
+
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -37,7 +39,7 @@ internal fun PauseSessionDialog(onDismiss: () -> Unit, onPause: (String) -> Unit
     val maxHeight = gamingDialogBodyMaxHeight(LocalConfiguration.current.screenHeightDp)
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = Brand.SurfaceOverlay,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = Radius.shapeLg,
         modifier = Modifier.widthIn(max = 560.dp).fillMaxWidth(0.92f)
             .statusBarsPadding().navigationBarsPadding().imePadding(),

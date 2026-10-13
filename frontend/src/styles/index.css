@@ -3,9 +3,59 @@
 @tailwind utilities;
 
 :root {
-  color-scheme: dark;
+  color-scheme: light dark;
   --motion-fast: 160ms;
   --motion-med: 220ms;
+  --color-bg: 246 246 244;
+  --color-bg-surface: 255 255 255;
+  --color-bg-raised: 235 235 232;
+  --color-bg-border: 202 202 197;
+  --color-fg: 17 17 16;
+  --color-fg-muted: 91 91 86;
+  --color-fg-subtle: 122 122 116;
+  --color-accent: 22 22 21;
+  --color-accent-warm: 49 49 46;
+  --color-accent-secondary: 83 83 79;
+  --color-good: 27 126 75;
+  --color-bad: 190 50 54;
+  --color-brand-gold: 198 161 91;
+  --color-shadow: 0 0 0;
+}
+
+:root[data-theme='night'] {
+  color-scheme: dark;
+  --color-bg: 8 8 8;
+  --color-bg-surface: 17 17 17;
+  --color-bg-raised: 29 29 28;
+  --color-bg-border: 61 61 58;
+  --color-fg: 247 247 244;
+  --color-fg-muted: 176 176 168;
+  --color-fg-subtle: 135 135 128;
+  --color-accent: 245 245 241;
+  --color-accent-warm: 221 221 215;
+  --color-accent-secondary: 170 170 162;
+  --color-good: 82 195 126;
+  --color-bad: 244 104 110;
+  --color-shadow: 0 0 0;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='day']) {
+    color-scheme: dark;
+    --color-bg: 8 8 8;
+    --color-bg-surface: 17 17 17;
+    --color-bg-raised: 29 29 28;
+    --color-bg-border: 61 61 58;
+    --color-fg: 247 247 244;
+    --color-fg-muted: 176 176 168;
+    --color-fg-subtle: 135 135 128;
+    --color-accent: 245 245 241;
+    --color-accent-warm: 221 221 215;
+    --color-accent-secondary: 170 170 162;
+    --color-good: 82 195 126;
+    --color-bad: 244 104 110;
+    --color-shadow: 0 0 0;
+  }
 }
 
 html,
@@ -30,10 +80,8 @@ body {
   min-height: 100%;
   overflow-x: hidden;
   overflow-y: auto;
-  background:
-    radial-gradient(950px 680px at 16% -8%, rgba(210, 179, 109, 0.17), transparent 58%),
-    radial-gradient(780px 560px at 100% 0%, rgba(155, 183, 212, 0.08), transparent 62%),
-    linear-gradient(145deg, #050403 0%, #0d0a06 48%, #030303 100%);
+  background: rgb(var(--color-bg));
+  color: rgb(var(--color-fg));
   -webkit-font-smoothing: antialiased;
   -webkit-overflow-scrolling: touch;
   -webkit-tap-highlight-color: transparent;
@@ -58,7 +106,7 @@ a:focus-visible,
 input:focus-visible,
 select:focus-visible,
 textarea:focus-visible {
-  outline: 2px solid rgba(210, 179, 109, 0.72);
+  outline: 2px solid rgb(var(--color-fg) / 0.72);
   outline-offset: 3px;
 }
 
@@ -97,7 +145,7 @@ textarea:focus-visible {
 @layer components {
   .btn {
     @apply inline-flex items-center justify-center gap-2 rounded-2xl px-5 py-3 text-base font-semibold
-           bg-bg-raised text-fg hover:bg-bg-border active:scale-[0.98] transition shadow-glow
+           bg-bg-raised text-fg hover:bg-bg-border active:scale-[0.98] transition
            select-none touch-manipulation;
     min-height: 56px;
     min-width: 56px;
@@ -107,8 +155,8 @@ textarea:focus-visible {
   .btn-ghost   { @apply bg-transparent border border-bg-border; }
 
   .card {
-    @apply rounded-2xl bg-bg-surface/95 border border-bg-border p-5 shadow-glow;
-    box-shadow: 0 0 0 1px rgba(210, 179, 109, 0.18), 0 18px 42px rgba(0, 0, 0, 0.34);
+    @apply rounded-2xl bg-bg-surface/95 border border-bg-border p-5;
+    box-shadow: 0 8px 24px rgb(var(--color-shadow) / 0.07);
   }
   .chip {
     @apply inline-flex items-center rounded-full px-3 py-1 text-xs font-medium
@@ -132,11 +180,6 @@ textarea:focus-visible {
   .app-scroll {
     @apply min-h-0 overflow-y-auto overflow-x-hidden overscroll-y-contain;
     -webkit-overflow-scrolling: touch;
-  }
-
-  .route-frame {
-    animation: route-in var(--motion-med) ease-out both;
-    transform-origin: 50% 0;
   }
 
   .tap-target {

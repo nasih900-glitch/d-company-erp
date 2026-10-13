@@ -1,5 +1,14 @@
 package cloud.dcompany.erp.ui.components
 
+import cloud.dcompany.erp.ui.theme.operationalDanger
+import cloud.dcompany.erp.ui.theme.operationalDangerContainer
+import cloud.dcompany.erp.ui.theme.operationalGood
+import cloud.dcompany.erp.ui.theme.operationalGoodContainer
+import cloud.dcompany.erp.ui.theme.operationalInformation
+import cloud.dcompany.erp.ui.theme.operationalInformationContainer
+import cloud.dcompany.erp.ui.theme.operationalWarning
+import cloud.dcompany.erp.ui.theme.operationalWarningContainer
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -109,20 +118,20 @@ private fun PageHeaderIdentity(
             eyebrow?.let {
                 Text(
                     it.uppercase(),
-                    color = Brand.ForegroundFaint,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.Bold,
                 )
             }
             Text(
                 title,
-                color = Brand.Foreground,
+                color = MaterialTheme.colorScheme.onSurface,
                 style = MaterialTheme.typography.headlineMedium,
                 fontWeight = FontWeight.SemiBold,
             )
             Text(
                 subtitle,
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodyMedium,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
@@ -138,8 +147,8 @@ fun ActionBar(
 ) {
     BoxWithConstraints(
         modifier = modifier.fillMaxWidth().clip(Radius.shapeLg)
-            .background(Brand.Surface)
-            .border(1.dp, Brand.BorderSubtle, Radius.shapeLg)
+            .background(MaterialTheme.colorScheme.surface)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeLg)
             .padding(horizontal = Spacing.md, vertical = Spacing.sm),
     ) {
         if (trailing != null && maxWidth < 640.dp) {
@@ -212,19 +221,19 @@ fun SectionCard(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val accent = when (tone) {
-        UiTone.Brand -> Brand.Gold
-        UiTone.Success -> Brand.Good
-        UiTone.Warning -> Brand.Warning
-        UiTone.Danger -> Brand.Danger
-        UiTone.Information -> Brand.Information
-        UiTone.Neutral -> Brand.ForegroundMuted
+        UiTone.Brand -> MaterialTheme.colorScheme.primary
+        UiTone.Success -> MaterialTheme.colorScheme.operationalGood
+        UiTone.Warning -> MaterialTheme.colorScheme.operationalWarning
+        UiTone.Danger -> MaterialTheme.colorScheme.operationalDanger
+        UiTone.Information -> MaterialTheme.colorScheme.operationalInformation
+        UiTone.Neutral -> MaterialTheme.colorScheme.onSurfaceVariant
     }
     Column(
         modifier = modifier.fillMaxWidth().clip(Radius.shapeLg)
-            .background(if (elevated) Brand.SurfaceRaised else Brand.Surface)
+            .background(if (elevated) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surface)
             .border(
                 1.dp,
-                if (elevated) Brand.Border else Brand.BorderSubtle,
+                if (elevated) MaterialTheme.colorScheme.outline else MaterialTheme.colorScheme.outlineVariant,
                 Radius.shapeLg,
             ),
     ) {
@@ -232,8 +241,8 @@ fun SectionCard(
             Row(
                 Modifier.fillMaxWidth()
                     .background(
-                        if (elevated) Brand.SurfaceOverlay.copy(alpha = 0.56f)
-                        else Brand.SurfaceRaised.copy(alpha = 0.48f),
+                        if (elevated) MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.56f)
+                        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.48f),
                     )
                     .padding(horizontal = Spacing.lg, vertical = Spacing.md),
                 horizontalArrangement = Arrangement.spacedBy(Spacing.md),
@@ -249,12 +258,12 @@ fun SectionCard(
                 }
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     title?.let {
-                        Text(it, color = Brand.Foreground, style = MaterialTheme.typography.titleMedium)
+                        Text(it, color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.titleMedium)
                     }
                     subtitle?.let {
                         Text(
                             it,
-                            color = Brand.ForegroundMuted,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.bodySmall,
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis,
@@ -269,7 +278,7 @@ fun SectionCard(
                     )
                 }
             }
-            HorizontalDivider(color = Brand.BorderSubtle)
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         }
         Column(
             modifier = Modifier.fillMaxWidth().padding(contentPadding),
@@ -289,17 +298,17 @@ fun CompactStatCard(
     tone: UiTone = UiTone.Neutral,
 ) {
     val accent = when (tone) {
-        UiTone.Brand -> Brand.Gold
-        UiTone.Success -> Brand.Good
-        UiTone.Warning -> Brand.Warning
-        UiTone.Danger -> Brand.Danger
-        UiTone.Information -> Brand.Information
-        UiTone.Neutral -> Brand.ForegroundMuted
+        UiTone.Brand -> MaterialTheme.colorScheme.primary
+        UiTone.Success -> MaterialTheme.colorScheme.operationalGood
+        UiTone.Warning -> MaterialTheme.colorScheme.operationalWarning
+        UiTone.Danger -> MaterialTheme.colorScheme.operationalDanger
+        UiTone.Information -> MaterialTheme.colorScheme.operationalInformation
+        UiTone.Neutral -> MaterialTheme.colorScheme.onSurfaceVariant
     }
     Row(
         modifier = modifier.heightIn(min = 82.dp).clip(Radius.shapeLg)
-            .background(Brand.Surface)
-            .border(1.dp, Brand.BorderSubtle, Radius.shapeLg)
+            .background(MaterialTheme.colorScheme.surface)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeLg)
             .padding(Spacing.md),
         horizontalArrangement = Arrangement.spacedBy(Spacing.md),
         verticalAlignment = Alignment.CenterVertically,
@@ -313,12 +322,12 @@ fun CompactStatCard(
             }
         }
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-            Text(label, color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelMedium)
+            Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelMedium)
             NumericValue(value = value, style = MaterialTheme.typography.headlineSmall)
             detail?.let {
                 Text(
                     it,
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.labelSmall,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -343,18 +352,18 @@ fun SearchInput(
         enabled = enabled,
         singleLine = true,
         shape = Radius.shapeMd,
-        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = Brand.ForegroundFaint) },
-        placeholder = { Text(placeholder, color = Brand.ForegroundFaint) },
+        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+        placeholder = { Text(placeholder, color = MaterialTheme.colorScheme.onSurfaceVariant) },
         colors = TextFieldDefaults.colors(
-            focusedContainerColor = Brand.SurfaceRaised,
-            unfocusedContainerColor = Brand.SurfaceRaised,
-            disabledContainerColor = Brand.Surface,
-            focusedIndicatorColor = Brand.FocusRing,
-            unfocusedIndicatorColor = Brand.ControlBorder,
-            disabledIndicatorColor = Brand.BorderSubtle,
-            focusedTextColor = Brand.Foreground,
-            unfocusedTextColor = Brand.Foreground,
-            cursorColor = Brand.FocusRing,
+            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+            disabledContainerColor = MaterialTheme.colorScheme.surface,
+            focusedIndicatorColor = MaterialTheme.colorScheme.primary,
+            unfocusedIndicatorColor = MaterialTheme.colorScheme.outline,
+            disabledIndicatorColor = MaterialTheme.colorScheme.outlineVariant,
+            focusedTextColor = MaterialTheme.colorScheme.onSurface,
+            unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
+            cursorColor = MaterialTheme.colorScheme.primary,
         ),
     )
 }
@@ -370,8 +379,8 @@ fun PremiumTabBar(
 ) {
     Row(
         modifier = modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
-            .clip(Radius.shapeMd).background(Brand.Surface)
-            .border(1.dp, Brand.BorderSubtle, Radius.shapeMd)
+            .clip(Radius.shapeMd).background(MaterialTheme.colorScheme.surface)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeMd)
             .padding(Spacing.xs),
         horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
     ) {
@@ -379,10 +388,10 @@ fun PremiumTabBar(
             val selected = option.id == selectedId
             Row(
                 Modifier.heightIn(min = 48.dp).clip(Radius.shapeSm)
-                    .background(if (selected) Brand.SurfaceHover else Color.Transparent)
+                    .background(if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent)
                     .border(
                         1.dp,
-                        if (selected) Brand.FocusRing else Color.Transparent,
+                        if (selected) MaterialTheme.colorScheme.primary else Color.Transparent,
                         Radius.shapeSm,
                     )
                     .selectable(
@@ -396,18 +405,18 @@ fun PremiumTabBar(
             ) {
                 Text(
                     option.label,
-                    color = if (selected) Brand.Foreground else Brand.ForegroundMuted,
+                    color = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.labelLarge,
                 )
                 option.count?.let {
                     Box(
                         Modifier.clip(CircleShape)
-                            .background(if (selected) Brand.Gold.copy(alpha = 0.18f) else Brand.SurfaceRaised)
+                            .background(if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.18f) else MaterialTheme.colorScheme.surfaceVariant)
                             .padding(horizontal = 7.dp, vertical = 2.dp),
                     ) {
                         Text(
                             it.toString(),
-                            color = if (selected) Brand.Gold else Brand.ForegroundFaint,
+                            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.labelSmall,
                         )
                     }
@@ -435,12 +444,12 @@ fun DesignedEmptyState(
     BoxWithConstraints(modifier.fillMaxWidth().heightIn(min = 216.dp)) {
         val availableWidth = maxWidth
         val accent = when (tone) {
-            UiTone.Brand -> Brand.Gold
-            UiTone.Success -> Brand.Good
-            UiTone.Warning -> Brand.Warning
-            UiTone.Danger -> Brand.Danger
-            UiTone.Information -> Brand.Information
-            UiTone.Neutral -> Brand.ForegroundMuted
+            UiTone.Brand -> MaterialTheme.colorScheme.primary
+            UiTone.Success -> MaterialTheme.colorScheme.operationalGood
+            UiTone.Warning -> MaterialTheme.colorScheme.operationalWarning
+            UiTone.Danger -> MaterialTheme.colorScheme.operationalDanger
+            UiTone.Information -> MaterialTheme.colorScheme.operationalInformation
+            UiTone.Neutral -> MaterialTheme.colorScheme.onSurfaceVariant
         }
         // Some dense dashboard cards intentionally give the shared empty state
         // less than its preferred 216dp height. Compact the internal rhythm in
@@ -457,8 +466,8 @@ fun DesignedEmptyState(
             verticalArrangement = Arrangement.Center,
         ) {
             Box(
-                Modifier.size(iconBoxSize).clip(Radius.shapeLg).background(Brand.SurfaceHover)
-                    .border(1.dp, Brand.Border, Radius.shapeLg),
+                Modifier.size(iconBoxSize).clip(Radius.shapeLg).background(MaterialTheme.colorScheme.secondaryContainer)
+                    .border(1.dp, MaterialTheme.colorScheme.outline, Radius.shapeLg),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(iconSize))
@@ -466,7 +475,7 @@ fun DesignedEmptyState(
             Spacer(Modifier.height(if (compact) Spacing.sm else Spacing.lg))
             Text(
                 title,
-                color = Brand.Foreground,
+                color = MaterialTheme.colorScheme.onSurface,
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.SemiBold,
                 textAlign = TextAlign.Center,
@@ -475,7 +484,7 @@ fun DesignedEmptyState(
             Text(
                 body,
                 modifier = Modifier.widthIn(max = 480.dp),
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodyMedium,
                 textAlign = TextAlign.Center,
                 maxLines = if (compact) 2 else Int.MAX_VALUE,
@@ -531,7 +540,7 @@ fun DataTableHeader(
     modifier: Modifier = Modifier,
 ) {
     Row(
-        modifier = modifier.fillMaxWidth().background(Brand.SurfaceRaised)
+        modifier = modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant)
             .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
         horizontalArrangement = Arrangement.spacedBy(Spacing.md),
         verticalAlignment = Alignment.CenterVertically,
@@ -540,7 +549,7 @@ fun DataTableHeader(
             Text(
                 label.uppercase(),
                 modifier = Modifier.weight(weight),
-                color = Brand.ForegroundFaint,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelSmall,
                 fontWeight = FontWeight.Bold,
                 maxLines = 1,
@@ -585,15 +594,15 @@ fun InfoRow(
     value: String,
     modifier: Modifier = Modifier,
     icon: ImageVector? = null,
-    valueColor: Color = Brand.Foreground,
+    valueColor: Color = MaterialTheme.colorScheme.onSurface,
 ) {
     Row(
         modifier = modifier.fillMaxWidth().height(IntrinsicSize.Min),
         horizontalArrangement = Arrangement.spacedBy(Spacing.md),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        icon?.let { Icon(it, contentDescription = null, tint = Brand.ForegroundFaint, modifier = Modifier.size(18.dp)) }
-        Text(label, modifier = Modifier.weight(1f), color = Brand.ForegroundMuted, style = MaterialTheme.typography.bodyMedium)
+        icon?.let { Icon(it, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp)) }
+        Text(label, modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
         Text(
             value,
             modifier = Modifier.weight(1f),
@@ -609,5 +618,5 @@ fun InfoRow(
 
 @Composable
 fun PanelDivider(modifier: Modifier = Modifier) {
-    HorizontalDivider(modifier, color = Brand.BorderSubtle)
+    HorizontalDivider(modifier, color = MaterialTheme.colorScheme.outlineVariant)
 }

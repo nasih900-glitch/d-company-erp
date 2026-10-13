@@ -9,6 +9,7 @@
  *  - Shared pause/resume (server-authoritative, versioned, online-only)
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Play, Square, Pause, PlayCircle, Gamepad2, Glasses, CarFront, Tv,
   Plus, Edit2, Trash2, Loader2, AlertCircle, RefreshCw, Settings, Flame,
@@ -94,6 +95,8 @@ import {
   type PaidExtensionLockManager,
 } from './paid-extension-attempt';
 import { resolveGamingPosRoute } from './gaming-pos-handoff';
+import { gamingPosNavigationRoute } from './gaming-pos-navigation';
+import { formatShiftBusinessTime } from '@/modules/pos/shift-business-days';
 import { runningBillMinor } from './running-bill';
 import { mayApplyRunningSessionReceipt, playedSessionMilliseconds, serverPauseClock } from './session-pause';
 import { sessionTimerMinutesForLocalState } from './session-start-snapshot';
@@ -454,6 +457,37 @@ export function extraControllerExtensionSurchargeMinor(
   );
 }
 
+export function bookedControllerSurchargeMinor(
+  session: {
+    extra_controllers?: number;
+    timer_minutes?: number | null;
+    effective_package_duration_minutes?: number | null;
+    package_duration_minutes_snapshot?: number | null;
+  },
+): number {
+  const bookedMinutes = session.timer_minutes
+    ?? session.effective_package_duration_minutes
+    ?? session.package_duration_minutes_snapshot
+    ?? 0;
+  return extraControllerSurchargeMinor(session.extra_controllers ?? 0, bookedMinutes);
+}
+
+export function normalizedGamingPhoneIdentity(rawPhone: string): string | null {
+  const digits = rawPhone.replace(/\D/g, '');
+  if (digits.length === 10) return digits;
+  if (digits.length === 12 && digits.startsWith('91')) return digits.slice(2);
+  return null;
+}
+
+export function exactGamingCustomerIdForPhone(
+  customer: Pick<CustomerDTO, 'id' | 'phone'> | null,
+  rawPhone: string,
+): string | null {
+  const requested = normalizedGamingPhoneIdentity(rawPhone);
+  const returned = customer ? normalizedGamingPhoneIdentity(customer.phone) : null;
+  return requested && returned === requested ? customer!.id : null;
+}
+
 /** A live estimate only: Stop settles the authoritative charge on the server. */
 export function estimatedFriendControllerMinor(
   state: GamingParticipantStateDTO | undefined,
@@ -468,6 +502,34 @@ export function estimatedFriendControllerMinor(
   });
   return Array.from(totals.values()).reduce((sum, duration) =>
     sum + Math.max(1, Math.ceil(duration / 3_600_000)) * 3_000, 0);
+}
+
+export function estimatedFriendControllerMinorAfterJoin(
+  state: GamingParticipantStateDTO,
+  currentPlayMs: number,
+  customerId?: string,
+): number {
+  return estimatedFriendControllerMinor({
+    ...state,
+    participants: [...state.participants, {
+      id: 'join-review',
+      customer_id: customerId ?? 'new-phone-identity',
+      joined_at: new Date().toISOString(),
+      joined_play_elapsed_ms: currentPlayMs,
+      left_at: null,
+      left_play_elapsed_ms: null,
+      join_revision: state.participant_revision + 1,
+      leave_revision: null,
+    }],
+  }, currentPlayMs) ?? 0;
+}
+
+function participantIntervalLabel(participant: GamingParticipantDTO, currentPlayMs: number): string {
+  const end = participant.left_play_elapsed_ms ?? currentPlayMs;
+  const totalMinutes = Math.max(0, Math.floor((end - participant.joined_play_elapsed_ms) / 60_000));
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return `${hours > 0 ? `${hours}h ` : ''}${minutes}m played`;
 }
 
 export function eligiblePs5ShortenTarget(
@@ -589,6 +651,7 @@ function isDefinitiveGamingActionRejection(cause: unknown): boolean {
 
 export default function GamingScreen() {
   const notifications = useNotifications();
+  const navigate = useNavigate();
   const { me, terminalId, terminalReady, terminalOptions } = useAuth();
   const currentTerminal = terminalOptions.find((terminal) => terminal.id === terminalId) ?? null;
   const canStartOnSelectedTerminal = !LIVE_MODE
@@ -648,6 +711,12 @@ export default function GamingScreen() {
   const [newFriendName, setNewFriendName] = useState('');
   const [newFriendPhone, setNewFriendPhone] = useState('');
   const [pendingFriendJoin, setPendingFriendJoin] = useState<StationDTO | null>(null);
+  const [friendPhonePreview, setFriendPhonePreview] = useState<{
+    phone: string;
+    status: 'idle' | 'checking' | 'existing' | 'new' | 'unavailable';
+    customerId?: string;
+  }>({ phone: '', status: 'idle' });
+  const friendPhonePreviewGeneration = useRef(0);
   const [friendSaving, setFriendSaving] = useState(false);
   const friendSavingRef = useRef(false);
   const [pendingFriendLeave, setPendingFriendLeave] = useState<{
@@ -682,6 +751,35 @@ export default function GamingScreen() {
   const mutedRef = useRef(mutedStations);
   useEffect(() => { mutedRef.current = mutedStations; }, [mutedStations]);
   const lastAlarmAtRef = useRef<Record<string, number>>({});
+
+  useEffect(() => {
+    const generation = ++friendPhonePreviewGeneration.current;
+    const rawPhone = newFriendPhone.trim();
+    const normalizedPhone = normalizedGamingPhoneIdentity(rawPhone);
+    if (!LIVE_MODE || !pendingFriendJoin || selectedFriend || !normalizedPhone) {
+      setFriendPhonePreview({ phone: rawPhone, status: 'idle' });
+      return;
+    }
+    setFriendPhonePreview({ phone: rawPhone, status: 'checking' });
+    const timer = window.setTimeout(() => {
+      void customers.byGamingPhone(normalizedPhone).then((customer) => {
+        if (generation !== friendPhonePreviewGeneration.current) return;
+        if (!customer) {
+          setFriendPhonePreview({ phone: rawPhone, status: 'new' });
+          return;
+        }
+        const customerId = exactGamingCustomerIdForPhone(customer, rawPhone);
+        setFriendPhonePreview(customerId
+          ? { phone: rawPhone, status: 'existing', customerId }
+          : { phone: rawPhone, status: 'unavailable' });
+      }).catch(() => {
+        if (generation === friendPhonePreviewGeneration.current) {
+          setFriendPhonePreview({ phone: rawPhone, status: 'unavailable' });
+        }
+      });
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [newFriendPhone, pendingFriendJoin, selectedFriend]);
 
   const [addOpen, setAddOpen] = useState(false);
   const [edit, setEdit] = useState<StationDTO | null>(null);
@@ -2172,27 +2270,40 @@ export default function GamingScreen() {
       notifications.error('Friend attendance changed or the station is full. Refresh Gaming.');
       return;
     }
+    if (selectedFriend && roster.participants.some(
+      (participant) => participant.customer_id === selectedFriend.id && !participant.left_at,
+    )) {
+      notifications.error('This saved customer is already playing in the session.');
+      return;
+    }
     friendSavingRef.current = true;
     setFriendSaving(true);
     try {
       let customer = selectedFriend;
-      if (!customer) {
+      let joinIdentity: { customer_id?: string; customer_name?: string; customer_phone?: string };
+      if (customer) {
+        joinIdentity = { customer_id: customer.id };
+      } else {
         const name = newFriendName.trim();
         const phone = newFriendPhone.trim();
-        if (!name || !phone) {
-          notifications.error('Select a saved customer or enter both name and phone to save this friend.');
+        if (!phone) {
+          notifications.error('Select a saved customer or enter the friend phone number.');
           return;
         }
         await customers.list(phone);
-        customer = await customers.upsert({ name, phone });
+        joinIdentity = {
+          customer_phone: phone,
+          customer_name: name || undefined,
+        };
       }
-      // Capture the deletion revision after saving or selecting the customer.
-      await customers.list(customer.phone);
+      // Capture the deletion revision after the latest directory read. The
+      // backend resolves or creates the phone identity in the same Join write.
+      if (customer) await customers.list(customer.phone);
       const evidence = captureCustomerDirectoryEvidence();
       const attempt = newGamingAction(session, {
         kind: 'join',
         payload: {
-          customer_id: customer.id,
+          ...joinIdentity,
           expected_participant_revision: roster.participant_revision,
           ...evidence,
         },
@@ -2673,13 +2784,19 @@ export default function GamingScreen() {
         setPendingPosHandoff({ station: st, targets });
         return;
       }
-      await write.dispatch('sendToPos', s.backend_session_id);
+      const result = await write.dispatch('sendToPos', s.backend_session_id);
       setSessions((map) => {
         const next = { ...map };
         delete next[st.id];
         return next;
       });
       notifications.success(`${st.name} was sent to POS for billing.`, { title: 'Ready in POS' });
+      navigate(gamingPosNavigationRoute({
+        orderId: result.order_id,
+        sessionId: s.backend_session_id,
+        shiftId: s.shift_id ?? currentShiftId!,
+        terminalId: terminalId!,
+      }));
     } catch (e) {
       const message = (e as Error).message;
       setSendErrors((errs) => ({
@@ -2743,6 +2860,14 @@ export default function GamingScreen() {
           : `${pending.station.name} is ready to bill at ${targetShift.terminal_name}.`,
         { title: result.already_linked ? 'Already in POS' : 'Sent to POS' },
       );
+      if (result.target_terminal_id === terminalId) {
+        navigate(gamingPosNavigationRoute({
+          orderId: result.order_id,
+          sessionId: current.backend_session_id,
+          shiftId: result.target_shift_id,
+          terminalId: result.target_terminal_id,
+        }));
+      }
     } catch (e) {
       const message = (e as Error).message;
       setSendErrors((errors) => ({
@@ -3582,7 +3707,7 @@ export default function GamingScreen() {
       </GamingSecondPulse>
 
       {notifPermission === 'default' && (
-        <div className="card mb-4 border-accent/40 bg-accent/10 text-sm flex items-center justify-between gap-3 flex-wrap">
+        <div className="mb-3 flex items-center justify-between gap-3 rounded-xl border border-bg-border bg-bg-surface px-3 py-2 text-xs flex-wrap">
           <span className="flex items-center gap-2"><Bell size={14}/> Turn on alerts so staff get notified the moment a session's timer ends.</span>
           <button className="btn btn-ghost !py-1.5" onClick={enableAlarmNotifications}>Enable notifications</button>
         </div>
@@ -3599,7 +3724,7 @@ export default function GamingScreen() {
       ) : (
         <GamingSecondPulse>
           {(now) => (
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 md:gap-4">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 md:gap-4 xl:grid-cols-3">
           {stations.map((st) => {
             const session = sessions[st.id];
             const billingMissing = session?.status === 'ended'
@@ -3614,6 +3739,24 @@ export default function GamingScreen() {
             const customerName = sessionName[st.id] ?? '';
             const elapsedMs = session ? playedSessionMilliseconds(session, now) : 0;
             const elapsedMin = Math.floor(elapsedMs / 60000);
+            const authoritativeRemainingMs = session?.timer_minutes != null
+              ? session.status === 'paused'
+                ? session.timer_minutes * 60_000 - elapsedMs
+                : session.timer_ends_at ? session.timer_ends_at - now : null
+              : null;
+            const authoritativeClock = authoritativeRemainingMs == null
+              ? Number.isFinite(elapsedMin)
+                ? `${Math.floor(elapsedMin / 60)}:${String(elapsedMin % 60).padStart(2, '0')}`
+                : 'Clock unavailable'
+              : Number.isFinite(authoritativeRemainingMs)
+                ? `${authoritativeRemainingMs <= 0 ? '+' : ''}${fmtClock(Math.abs(Math.round(authoritativeRemainingMs / 1000)))}`
+                : 'Clock unavailable';
+            const bookedTimerMs = session?.timer_minutes != null
+              && Number.isFinite(session.timer_minutes) && session.timer_minutes > 0
+              ? session.timer_minutes * 60_000 : null;
+            const activeRingProgress = bookedTimerMs == null || !Number.isFinite(elapsedMs)
+              ? null
+              : Math.max(0, Math.min(360, elapsedMs / bookedTimerMs * 360));
             // A package session's price is locked in at start (see backend
             // gaming/router.py stop_session) and never grows with elapsed
             // time — showing the elapsed*rate estimate here would be flat
@@ -3707,7 +3850,7 @@ export default function GamingScreen() {
                 : (shiftContextError ?? 'There is no verified open shift, so existing sessions are view-only.');
 
             return (
-              <div key={st.id} className={`card ${session ? 'border-accent/40' : ''}`}>
+              <div key={st.id} data-gaming-station-workspace className={`card ${session ? 'border-fg/30' : ''}`}>
                 <div className="flex items-start gap-3 mb-3">
                   <div className="p-3 rounded-xl bg-bg-raised text-accent">{ICON[st.type]}</div>
                   <div className="flex-1 min-w-0">
@@ -3772,7 +3915,7 @@ export default function GamingScreen() {
                   </div>
                 )}
 
-                {LIVE_MODE && session && backendSessionId && (
+                {LIVE_MODE && session?.status === 'ended' && backendSessionId && (
                   <SessionAddonsPanel
                     addons={sessionAddons}
                     ready={addonListReady}
@@ -3890,7 +4033,68 @@ export default function GamingScreen() {
                     </div>
                   </>
                 ) : session ? (
-                  <>
+                  <div className="space-y-3">
+                    <div className="rounded-2xl border border-bg-border bg-bg-raised/35 p-3">
+                      <div data-gaming-active-timer
+                        className="relative mx-auto my-2 grid aspect-square w-full max-w-[16rem] place-items-center rounded-full bg-bg-surface">
+                        <svg aria-hidden="true" viewBox="0 0 336 336" className="absolute inset-0 h-full w-full">
+                          <circle cx="168" cy="168" r="146" fill="none" stroke="rgb(var(--color-bg-border))" strokeWidth="2" />
+                          {Array.from({ length: 60 }, (_, tick) => {
+                            const angle = tick * 6 - 90;
+                            const radians = angle * Math.PI / 180;
+                            const inner = tick % 5 === 0 ? 136 : 141;
+                            return <line key={tick}
+                              x1={168 + Math.cos(radians) * inner} y1={168 + Math.sin(radians) * inner}
+                              x2={168 + Math.cos(radians) * 151} y2={168 + Math.sin(radians) * 151}
+                              stroke="rgb(var(--color-fg-muted))" strokeOpacity={tick % 5 === 0 ? 0.75 : 0.32}
+                              strokeWidth={tick % 5 === 0 ? 1.5 : 1} />;
+                          })}
+                          <circle cx="168" cy="168" r="146" fill="none"
+                            stroke={authoritativeRemainingMs != null && authoritativeRemainingMs <= 0
+                              ? 'rgb(var(--color-bad))' : 'rgb(var(--color-fg))'}
+                            strokeWidth="3" strokeLinecap="round" pathLength="360"
+                            strokeDasharray={activeRingProgress == null
+                              ? '0 360' : `${activeRingProgress} ${360 - activeRingProgress}`}
+                            transform="rotate(135 168 168)" />
+                        </svg>
+                        <div className="relative text-center">
+                          <div className="font-mono text-5xl font-semibold tabular-nums">{authoritativeClock}</div>
+                          <div className="mt-2 text-[11px] font-semibold uppercase tracking-[0.22em] text-fg-muted">
+                            {authoritativeRemainingMs == null
+                              ? 'elapsed'
+                              : authoritativeRemainingMs <= 0 ? 'overtime' : 'remaining'}
+                          </div>
+                          <div className="mt-4 font-mono text-xl font-semibold">
+                            {activeBillingUnavailable || amount == null ? 'Billing unavailable' : inr(amount)}
+                          </div>
+                        </div>
+                      </div>
+                      <GamingMutationButton
+                        canManageSessions={canManageStations}
+                        className="btn btn-primary mt-2 w-full !bg-accent-bad hover:!bg-accent-bad/80"
+                        disabled={!resolvedStopShiftId || actionPending || gamingActionBusy !== null || legacyBillingAmbiguous || legacyPauseTimingGap || paidExtensionLifecycleBlocked || addonMutationPending || stoppingSession !== null || changingPause !== null}
+                        onClick={() => setPendingStopTarget(st)}>
+                        {stoppingSession === st.id
+                          ? <Loader2 size={14} className="animate-spin"/>
+                          : <Square size={14}/>} End session
+                      </GamingMutationButton>
+                    </div>
+                    <div className="min-w-0">
+                    {LIVE_MODE && backendSessionId && (
+                      <SessionAddonsPanel
+                        addons={sessionAddons}
+                        ready={addonListReady}
+                        error={addonLoadError}
+                        canMutate={canMutateSessionAddons}
+                        canAdd={canMutateSessionAddons}
+                        catalogReady={addonCatalog.length > 0 && !addonCatalogError}
+                        pendingCreate={pendingAddonCreate}
+                        pendingVoidAddonId={pendingAddonVoidId}
+                        busy={addonMutationBusy}
+                        onAdd={() => openAddonPicker(st, backendSessionId)}
+                        onVoid={(addon) => openAddonVoid(st, backendSessionId, addon)}
+                      />
+                    )}
                     <div className="bg-bg-raised rounded-lg p-3 mb-3">
                       <div className="flex justify-between items-baseline">
                         <div>
@@ -4079,12 +4283,19 @@ export default function GamingScreen() {
                           <p className="text-accent-gold">{participantLoadError ?? 'Friend attendance is loading. Refresh before changing it.'}</p>
                         ) : (
                           <>
-                            <p className="text-fg-muted">Original booked players remain on this session. Joined friends can leave individually.</p>
+                            <div className="rounded-md bg-bg-raised px-2.5 py-2 text-fg-muted">
+                              <div>{(session.package_variant_snapshot === 'dual' ? 2 : 1) + (session.extra_controllers ?? 0)} booked and fixed · {session.package_variant_snapshot === 'dual' ? 2 : 1} included · {participantState.active_friend_count} late friend{participantState.active_friend_count === 1 ? '' : 's'} active</div>
+                              <div className="mt-1">Capacity {participantState.current_player_count}/{participantState.max_player_count}. Booked players cannot be replaced by late friends.</div>
+                            </div>
                             {participantState.participants.map((friend) => (
-                              <div key={friend.id} className="flex items-center justify-between gap-2">
-                                <span className="truncate">
-                                  {friendNames[friend.customer_id] ?? `Saved customer ${friend.customer_id.slice(0, 8)}`}
-                                  {friend.left_at ? ' · left' : ' · playing'}
+                              <div key={friend.id} className="flex items-start justify-between gap-2 rounded-md border border-bg-border px-2.5 py-2">
+                                <span className="min-w-0">
+                                  <span className="block truncate font-medium">{friendNames[friend.customer_id] ?? `Saved customer ${friend.customer_id.slice(0, 8)}`}</span>
+                                  <span className="block text-[10px] text-fg-muted">
+                                    Joined {formatShiftBusinessTime(friend.joined_at)}
+                                    {friend.left_at ? ` · Left ${formatShiftBusinessTime(friend.left_at)}` : ' · Playing now'}
+                                    {' · '}{participantIntervalLabel(friend, elapsedMs)}
+                                  </span>
                                 </span>
                                 {!friend.left_at && (
                                   <GamingMutationButton
@@ -4099,8 +4310,11 @@ export default function GamingScreen() {
                             ))}
                             {friendEstimate !== null && participantState.participants.length > 0 && (
                               <p className="text-accent-gold">
-                                Friend controller charge estimate: {inr(friendEstimate)} · estimated combined session total: {amount === null ? 'unavailable' : inr(amount + friendEstimate)}. Final bill is confirmed when End session is pressed.
+                                Late-friend controller fee: {inr(friendEstimate)} at ₹30 per started cumulative hour, minimum ₹30 per friend · estimated combined session total: {amount === null ? 'unavailable' : inr(amount + friendEstimate)}. Paused play is excluded; End session confirms the final bill.
                               </p>
+                            )}
+                            {participantState.current_player_count >= participantState.max_player_count && (
+                              <p className="font-medium text-accent-gold">Capacity full: this PS5 session already has four players.</p>
                             )}
                             {session.status === 'active'
                               && participantState.current_player_count < participantState.max_player_count && (
@@ -4115,7 +4329,7 @@ export default function GamingScreen() {
                                   setNewFriendPhone('');
                                   setPendingFriendJoin(st);
                                 }}
-                              >Add saved friend</GamingMutationButton>
+                              >Add player</GamingMutationButton>
                             )}
                           </>
                         )}
@@ -4181,20 +4395,12 @@ export default function GamingScreen() {
                           {changingPause === st.id ? <Loader2 size={14} className="animate-spin"/> : <PlayCircle size={14}/>} Resume
                         </GamingMutationButton>
                       )}
-                      <GamingMutationButton
-                        canManageSessions={canManageStations}
-                        className="btn btn-primary flex-1 !bg-accent-bad hover:!bg-accent-bad/80"
-                        disabled={!resolvedStopShiftId || actionPending || gamingActionBusy !== null || legacyBillingAmbiguous || legacyPauseTimingGap || paidExtensionLifecycleBlocked || addonMutationPending || stoppingSession !== null || changingPause !== null}
-                        onClick={() => setPendingStopTarget(st)}>
-                        {stoppingSession === st.id
-                          ? <Loader2 size={14} className="animate-spin"/>
-                          : <Square size={14}/>} End session
-                      </GamingMutationButton>
                     </div>
                     {LIVE_MODE && session.status === 'active' && !session.pause_available && (
                       <p className="mt-2 text-xs text-fg-muted">Shared pause is unavailable. Update active tablets before the owner enables it.</p>
                     )}
-                  </>
+                    </div>
+                  </div>
                 ) : packagesFor(st.type, 'base').length > 0 ? (() => {
                   const allBasePackages = packagesFor(st.type, 'base');
                   const availableVariants = Array.from(new Set(allBasePackages.map((item) => item.variant)));
@@ -4216,7 +4422,8 @@ export default function GamingScreen() {
                     requiredVariant === null || item.variant === requiredVariant
                   ));
                   return (
-                    <>
+                    <div className="space-y-2">
+                      <div>
                       <GamingCustomerPicker
                         stationId={st.id}
                         disabled={!canManageStations || !canStartOnSelectedTerminal}
@@ -4227,6 +4434,7 @@ export default function GamingScreen() {
                         onNameChange={(value) => setSessionName((current) => ({ ...current, [st.id]: value }))}
                         onPhoneChange={(value) => setSessionPhone((current) => ({ ...current, [st.id]: value }))}
                       />
+                      </div>
                       {st.type === 'simulator' && availableVariants.length > 1 && (
                         <div
                           className="flex items-center gap-1.5 mb-2"
@@ -4276,29 +4484,30 @@ export default function GamingScreen() {
                             tariff.duration_minutes,
                           );
                           return (
-                          <GamingMutationButton
-                            canManageSessions={canManageStations}
-                            key={tariff.id}
-                            className="btn btn-ghost !justify-between !py-1.5 text-xs"
-                            onClick={() => startSession(st, customerName, {
-                              packageId: tariff.id,
-                              extraControllers,
-                              playerCount: supportsPlayerModes ? playerCount : tariff.included_players,
-                            }, phone, selectedCustomers[st.id])}
-                            disabled={!st.is_active || !packageStartRecoveryReady || !canStartOnSelectedTerminal || startingSession !== null}
-                            title={packageStartRecoveryReady
-                              ? canStartOnSelectedTerminal
-                                ? `Start ${tariff.name}`
-                                : 'This device is configured for counter sales. Ask an owner to enable Gaming or Combined mode.'
-                              : 'Package sessions require verified paid-extension recovery storage on this device'}>
-                            <span className="flex items-center gap-1.5">
-                              {startingSession === st.id && <Loader2 size={13} className="animate-spin"/>}
-                              {startingSession === st.id ? 'Starting…' : `${tariff.duration_minutes} minutes`}
-                            </span>
-                            <span className="font-mono font-bold">
-                              {inr(total)}
-                            </span>
-                          </GamingMutationButton>
+                            <GamingMutationButton
+                              canManageSessions={canManageStations}
+                              key={tariff.id}
+                              className="btn btn-ghost !justify-between !py-1.5 text-xs"
+                              onClick={() => startSession(st, customerName, {
+                                packageId: tariff.id,
+                                extraControllers,
+                                playerCount: supportsPlayerModes
+                                  ? playerCount
+                                  : tariff.included_players,
+                              }, phone, selectedCustomers[st.id])}
+                              disabled={!st.is_active || !packageStartRecoveryReady
+                                || !canStartOnSelectedTerminal || startingSession !== null}
+                              title={packageStartRecoveryReady
+                                ? canStartOnSelectedTerminal
+                                  ? `Start ${tariff.name}`
+                                  : 'This device is configured for counter sales. Ask an owner to enable Gaming or Combined mode.'
+                                : 'Package sessions require verified paid-extension recovery storage on this device'}>
+                              <span className="flex items-center gap-1.5">
+                                {startingSession === st.id && <Loader2 size={13} className="animate-spin"/>}
+                                {startingSession === st.id ? 'Starting…' : `${tariff.duration_minutes} minutes`}
+                              </span>
+                              <span className="font-mono font-bold">{inr(total)}</span>
+                            </GamingMutationButton>
                           );
                         })}
                       </div>
@@ -4313,7 +4522,7 @@ export default function GamingScreen() {
                           {playerCount - 2} additional {playerCount - 2 === 1 ? 'controller' : 'controllers'} · ₹30 each per started hour, ₹30 minimum
                         </div>
                       )}
-                    </>
+                    </div>
                   );
                 })() : requiresFixedGamingTariff(st.type) ? (
                   <div className="rounded-lg border border-accent-bad/30 bg-accent-bad/10 p-3 text-xs text-accent-bad">
@@ -4389,6 +4598,7 @@ export default function GamingScreen() {
           <SessionAddonPickerModal
             key={`${addonModalTarget.sessionId}:${addonCreateAttempt?.idempotencyKey ?? 'new'}`}
             stationName={addonModalTarget.station.name}
+            sessionId={addonModalTarget.sessionId}
             items={addonCatalog}
             attempt={addonCreateAttempt?.sessionId === addonModalTarget.sessionId
               ? addonCreateAttempt
@@ -4539,11 +4749,46 @@ export default function GamingScreen() {
             }}
           </GamingSecondPulse>
         )}
-        {pendingFriendJoin && (
-          <Modal open onClose={() => { if (!friendSaving && !gamingActionBusy) setPendingFriendJoin(null); }}
+        {pendingFriendJoin && (() => {
+          const joinSession = sessions[pendingFriendJoin.id];
+          const joinRoster = joinSession?.backend_session_id
+            ? participantsBySession[joinSession.backend_session_id]
+            : undefined;
+          const joinPlayMs = joinSession ? playedSessionMilliseconds(joinSession, Date.now()) : 0;
+          const bookedPlayers = joinSession
+            ? (joinSession.package_variant_snapshot === 'dual' ? 2 : 1) + (joinSession.extra_controllers ?? 0)
+            : 0;
+          const upfrontControllerMinor = joinSession
+            ? bookedControllerSurchargeMinor(joinSession)
+            : 0;
+          const currentFriendMinor = joinRoster
+            ? estimatedFriendControllerMinor(joinRoster, joinPlayMs) ?? 0
+            : 0;
+          const inlinePreviewReady = selectedFriend
+            || friendPhonePreview.status === 'existing'
+            || friendPhonePreview.status === 'new';
+          const previewCustomerId = selectedFriend?.id ?? friendPhonePreview.customerId;
+          const afterJoinFriendMinor = joinRoster && inlinePreviewReady
+            ? estimatedFriendControllerMinorAfterJoin(joinRoster, joinPlayMs, previewCustomerId)
+            : null;
+          return <Modal open onClose={() => { if (!friendSaving && !gamingActionBusy) setPendingFriendJoin(null); }}
             title={`Add a friend to ${pendingFriendJoin.name}`}>
             <div className="space-y-3 p-1">
-              <p className="text-sm text-fg-muted">Select a saved customer, or save their name and phone now. Each joined friend adds ₹30 per started hour of their total actual playtime, minimum ₹30. The final amount is confirmed when the session ends.</p>
+              <p className="text-sm text-fg-muted">Select a saved customer, or enter a required phone and optional name. Each joined friend adds ₹30 per started hour of their cumulative actual playtime, minimum ₹30. Paused time is excluded and the final amount is confirmed when the session ends.</p>
+              <div className="grid gap-2 rounded-lg border border-bg-border bg-bg-raised p-3 text-xs sm:grid-cols-2">
+                <div><span className="text-fg-muted">Players</span><div className="font-semibold">{bookedPlayers} booked and fixed · {joinRoster?.active_friend_count ?? 0} late active · {joinRoster?.current_player_count ?? bookedPlayers}/4 total</div></div>
+                <div><span className="text-fg-muted">Late-friend rate</span><div className="font-semibold">₹30 / started cumulative hour · ₹30 minimum</div></div>
+                <div><span className="text-fg-muted">Current player-controller fees</span><div className="font-mono font-semibold">{inr(upfrontControllerMinor + currentFriendMinor)}</div></div>
+                <div><span className="text-fg-muted">After this join</span><div className="font-mono font-semibold">
+                  {afterJoinFriendMinor === null
+                    ? (friendPhonePreview.status === 'checking'
+                      ? 'Checking saved phone identity…'
+                      : friendPhonePreview.status === 'unavailable'
+                        ? 'Phone identity is unavailable · choose the saved customer'
+                        : 'Select or verify the phone for an exact estimate')
+                    : `${inr(upfrontControllerMinor + afterJoinFriendMinor)} estimated`}
+                </div></div>
+              </div>
               <GamingCustomerPicker
                 stationId={`friend-${pendingFriendJoin.id}`}
                 disabled={friendSaving || gamingActionBusy !== null}
@@ -4559,14 +4804,15 @@ export default function GamingScreen() {
                 <button type="button" className="btn btn-ghost" disabled={friendSaving || gamingActionBusy !== null}
                   onClick={() => setPendingFriendJoin(null)}>Cancel</button>
                 <GamingMutationButton canManageSessions={canManageStations} className="btn btn-primary"
-                  disabled={friendSaving || gamingActionBusy !== null || (!selectedFriend && (!newFriendName.trim() || !newFriendPhone.trim()))}
+                  disabled={friendSaving || gamingActionBusy !== null || (!selectedFriend &&
+                    friendPhonePreview.status !== 'existing' && friendPhonePreview.status !== 'new')}
                   onClick={() => { void joinSavedFriend(pendingFriendJoin); }}>
-                  {friendSaving ? <Loader2 size={14} className="animate-spin"/> : <Plus size={14}/>} Add friend
+                  {friendSaving ? <Loader2 size={14} className="animate-spin"/> : <Plus size={14}/>} Add player
                 </GamingMutationButton>
               </div>
             </div>
-          </Modal>
-        )}
+          </Modal>;
+        })()}
         {pendingFriendLeave && (
           <ConfirmModal
             title={`Mark friend as left?`}
@@ -4732,9 +4978,7 @@ function PosHandoffModal({
                 <span className="block truncate font-semibold">{target.terminal_name}</span>
                 <span className="block truncate text-xs text-fg-muted">
                   Shift opened by {target.opened_by_name} at{' '}
-                  {new Date(target.opened_at).toLocaleTimeString([], {
-                    hour: '2-digit', minute: '2-digit',
-                  })}
+                  {formatShiftBusinessTime(target.opened_at)}
                 </span>
               </span>
               <span className="btn btn-primary pointer-events-none !min-h-[36px] shrink-0 !px-3 !py-1.5 text-xs">

@@ -157,6 +157,9 @@ interface OutboxSafetyDao {
             SELECT 'held_order_payments', syncState
               FROM local_held_order_payments WHERE syncState != 'synced'
             UNION ALL
+            SELECT 'points_redemptions', state
+              FROM local_points_redemption_actions WHERE state != 'synced'
+            UNION ALL
             -- One logical help request is one blocker even when both its
             -- report and screenshot are waiting. This keeps sign-out copy
             -- truthful while still covering an attachment whose report has

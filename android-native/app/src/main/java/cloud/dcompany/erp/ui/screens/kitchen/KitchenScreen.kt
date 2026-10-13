@@ -1,5 +1,14 @@
 package cloud.dcompany.erp.ui.screens.kitchen
 
+import cloud.dcompany.erp.ui.theme.operationalDanger
+import cloud.dcompany.erp.ui.theme.operationalDangerContainer
+import cloud.dcompany.erp.ui.theme.operationalGood
+import cloud.dcompany.erp.ui.theme.operationalGoodContainer
+import cloud.dcompany.erp.ui.theme.operationalInformation
+import cloud.dcompany.erp.ui.theme.operationalInformationContainer
+import cloud.dcompany.erp.ui.theme.operationalWarning
+import cloud.dcompany.erp.ui.theme.operationalWarningContainer
+
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
@@ -144,7 +153,7 @@ fun KitchenScreen(
         }
     }
 
-    Column(Modifier.fillMaxSize().background(Brand.Background)) {
+    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         KitchenHeader(
             state,
             wallClock = wallClock,
@@ -264,8 +273,8 @@ private fun KitchenAlertStack(
 
     Column(
         Modifier.fillMaxWidth().padding(horizontal = Spacing.lg, vertical = Spacing.xs)
-            .clip(Radius.shapeLg).background(Brand.Surface)
-            .border(1.dp, Brand.BorderSubtle, Radius.shapeLg)
+            .clip(Radius.shapeLg).background(MaterialTheme.colorScheme.surface)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeLg)
             .heightIn(max = 320.dp)
             .verticalScroll(rememberScrollState())
             .padding(Spacing.xs),
@@ -274,7 +283,7 @@ private fun KitchenAlertStack(
         Text(
             "Alerts & recovery",
             modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.xs),
-            color = Brand.ForegroundMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.labelLarge,
             fontWeight = FontWeight.SemiBold,
         )
@@ -461,23 +470,23 @@ private fun KitchenHistoryLoadingBoard(modifier: Modifier = Modifier) {
         modifier.padding(horizontal = Spacing.lg, vertical = Spacing.md)
             .fillMaxWidth()
             .clip(Radius.shapeLg)
-            .background(Brand.Surface)
-            .border(1.dp, Brand.BorderSubtle, Radius.shapeLg),
+            .background(MaterialTheme.colorScheme.surface)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeLg),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        CircularProgressIndicator(color = Brand.Gold, strokeWidth = 3.dp)
+        CircularProgressIndicator(color = MaterialTheme.colorScheme.primary, strokeWidth = 3.dp)
         Text(
             "Loading served history",
             modifier = Modifier.padding(top = Spacing.lg),
-            color = Brand.Foreground,
+            color = MaterialTheme.colorScheme.onSurface,
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.Bold,
         )
         Text(
             "Fetching today's kitchen history. Live tickets will never be shown as a substitute.",
             modifier = Modifier.padding(top = Spacing.sm),
-            color = Brand.ForegroundMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.bodyMedium,
         )
     }
@@ -517,7 +526,7 @@ private fun KitchenHeader(
     onExit: () -> Unit,
 ) {
     BoxWithConstraints(
-        Modifier.fillMaxWidth().background(Brand.Surface)
+        Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface)
             .padding(horizontal = Spacing.lg, vertical = Spacing.md),
     ) {
         val wide = maxWidth >= 760.dp
@@ -536,7 +545,7 @@ private fun KitchenHeader(
                             "Move tickets through New → Preparing → Ready."
                         },
                         modifier = Modifier.weight(1f),
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.bodyMedium,
                     )
                     ErpButton(
@@ -760,13 +769,13 @@ private fun KitchenAdvanceRecoveryDialog(
                 Text(
                     "These updates were kept because the server could not safely apply or " +
                         "confirm them. Check each ticket before choosing an action.",
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 if (!canRetry) {
                     Text(
                         "This account can view recovery but cannot resend a kitchen update. " +
                             "Check the ticket, then remove only a failed local update.",
-                        color = Brand.GoldMuted,
+                        color = MaterialTheme.colorScheme.secondary,
                         fontWeight = FontWeight.SemiBold,
                     )
                 }
@@ -779,7 +788,7 @@ private fun KitchenAdvanceRecoveryDialog(
                             Modifier
                                 .fillMaxWidth()
                                 .clip(Radius.shapeMd)
-                                .background(Brand.SurfaceRaised)
+                                .background(MaterialTheme.colorScheme.surfaceVariant)
                                 .padding(12.dp),
                             verticalArrangement = Arrangement.spacedBy(6.dp),
                         ) {
@@ -787,12 +796,12 @@ private fun KitchenAdvanceRecoveryDialog(
                                 ?: row.targetState
                             Text(
                                 "Ticket #${row.orderId.take(8)} · move to $target",
-                                color = Brand.Foreground,
+                                color = MaterialTheme.colorScheme.onSurface,
                                 fontWeight = FontWeight.Bold,
                             )
                             Text(
                                 row.lastError ?: "The server did not provide a reason.",
-                                color = Brand.Danger,
+                                color = MaterialTheme.colorScheme.operationalDanger,
                                 style = MaterialTheme.typography.bodySmall,
                             )
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -833,17 +842,17 @@ private fun KitchenCancellationRecoveryDialog(
                 items(rows, key = { it.localId }) { row ->
                     Column(
                         Modifier.fillMaxWidth().clip(Radius.shapeMd)
-                            .background(Brand.SurfaceRaised).padding(12.dp),
+                            .background(MaterialTheme.colorScheme.surfaceVariant).padding(12.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
                         Text(
                             "Ticket #${row.orderId.take(8)} · cancelled line ${row.lineId.take(8)}",
-                            color = Brand.Foreground,
+                            color = MaterialTheme.colorScheme.onSurface,
                             fontWeight = FontWeight.Bold,
                         )
                         Text(
                             row.lastError ?: "The server did not provide a reason.",
-                            color = Brand.Danger,
+                            color = MaterialTheme.colorScheme.operationalDanger,
                         )
                         TextButton(
                             onClick = { onRetry(row.localId) },
@@ -869,8 +878,8 @@ private fun KitchenEmptyBoard(
         modifier.padding(horizontal = Spacing.lg, vertical = Spacing.md)
             .fillMaxWidth()
             .clip(Radius.shapeLg)
-            .background(Brand.Surface)
-            .border(1.dp, Brand.BorderSubtle, Radius.shapeLg),
+            .background(MaterialTheme.colorScheme.surface)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeLg),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
@@ -903,8 +912,8 @@ private fun KitchenBoardShell(
         modifier.padding(horizontal = Spacing.lg, vertical = Spacing.md)
             .fillMaxWidth()
             .clip(Radius.shapeLg)
-            .background(Brand.BackgroundSecondary)
-            .border(1.dp, Brand.BorderSubtle, Radius.shapeLg),
+            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeLg),
     ) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = Spacing.lg, vertical = Spacing.md),
@@ -914,7 +923,7 @@ private fun KitchenBoardShell(
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(
                     if (state.includeServed) "Today's served tickets" else "Live production board",
-                    color = Brand.Foreground,
+                    color = MaterialTheme.colorScheme.onSurface,
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                 )
@@ -924,7 +933,7 @@ private fun KitchenBoardShell(
                     } else {
                         "Ticket moves are saved on this tablet first and remain visible until reconciled."
                     },
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.labelSmall,
                 )
             }
@@ -934,7 +943,7 @@ private fun KitchenBoardShell(
                 icon = if (state.includeServed) Icons.Default.History else Icons.Default.Restaurant,
             )
         }
-        HorizontalDivider(color = Brand.BorderSubtle)
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         if (!state.includeServed && state.orders.isEmpty() && wallClock != null && onRetry != null) {
             KitchenLiveBoardStatus(
                 state = state,
@@ -942,7 +951,7 @@ private fun KitchenBoardShell(
                 onRetry = onRetry,
                 modifier = Modifier.padding(Spacing.md),
             )
-            HorizontalDivider(color = Brand.BorderSubtle)
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         }
         Box(Modifier.fillMaxWidth().weight(1f)) {
             Board(
@@ -1050,15 +1059,15 @@ private fun Board(
                     item(key = "lane:${section.title}") {
                         Row(
                             Modifier.fillMaxWidth().clip(Radius.shapeMd)
-                                .background(Brand.Surface)
-                                .border(1.dp, Brand.BorderSubtle, Radius.shapeMd)
+                                .background(MaterialTheme.colorScheme.surface)
+                                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeMd)
                                 .padding(horizontal = Spacing.md, vertical = Spacing.sm),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Text(
                                 section.title.uppercase(),
-                                color = Brand.ForegroundMuted,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 style = MaterialTheme.typography.labelLarge,
                             )
                             OperationalStatusBadge(
@@ -1071,13 +1080,13 @@ private fun Board(
                         item(key = "empty:${section.title}") {
                             Box(
                                 Modifier.fillMaxWidth().heightIn(min = 64.dp)
-                                    .clip(Radius.shapeMd).background(Brand.Surface)
-                                    .border(1.dp, Brand.BorderSubtle, Radius.shapeMd),
+                                    .clip(Radius.shapeMd).background(MaterialTheme.colorScheme.surface)
+                                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeMd),
                                 contentAlignment = Alignment.Center,
                             ) {
                                 Text(
                                     emptyLaneMessage(section.title),
-                                    color = Brand.ForegroundFaint,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     style = MaterialTheme.typography.bodySmall,
                                 )
                             }
@@ -1150,8 +1159,8 @@ private fun Lane(
     modifier: Modifier = Modifier,
 ) {
     Column(
-        modifier.fillMaxSize().clip(Radius.shapeLg).background(Brand.Surface)
-            .border(1.dp, Brand.BorderSubtle, Radius.shapeLg).padding(Spacing.md),
+        modifier.fillMaxSize().clip(Radius.shapeLg).background(MaterialTheme.colorScheme.surface)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeLg).padding(Spacing.md),
     ) {
         Row(
             Modifier.fillMaxWidth().padding(bottom = Spacing.sm),
@@ -1160,19 +1169,19 @@ private fun Lane(
             Text(
                 title.uppercase(),
                 style = MaterialTheme.typography.labelLarge,
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Text(
                 "${orders.size}",
                 style = MaterialTheme.typography.labelLarge,
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
         if (orders.isEmpty()) {
             Box(Modifier.fillMaxSize(), Alignment.Center) {
                 Text(
                     emptyLaneMessage(title),
-                    color = Brand.ForegroundFaint,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
@@ -1225,7 +1234,7 @@ private fun TicketCard(
         Modifier
             .fillMaxWidth()
             .clip(Radius.shapeLg)
-            .background(if (ticketState == KitchenState.SERVED) Brand.Surface else Brand.SurfaceRaised)
+            .background(if (ticketState == KitchenState.SERVED) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.surfaceVariant)
             .border(1.dp, accent.copy(alpha = 0.48f), Radius.shapeLg)
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -1236,14 +1245,14 @@ private fun TicketCard(
                     order.ticketLabel,
                     fontSize = 22.sp,
                     fontWeight = FontWeight.Bold,
-                    color = Brand.Foreground,
+                    color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
                     "${order.typeLabel} · ${order.whoFor}",
                     style = MaterialTheme.typography.labelSmall,
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -1261,7 +1270,7 @@ private fun TicketCard(
             val saved = cancellation.lineId in state.acknowledgingLineIds
             Column(
                 Modifier.fillMaxWidth().clip(Radius.shapeMd)
-                    .background(Brand.DangerMuted).border(2.dp, Brand.Danger, Radius.shapeMd)
+                    .background(MaterialTheme.colorScheme.operationalDangerContainer).border(2.dp, MaterialTheme.colorScheme.operationalDanger, Radius.shapeMd)
                     .padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
@@ -1269,11 +1278,11 @@ private fun TicketCard(
                     "CANCEL ${cancellation.qty.asQtyPrefix()}× ${cancellation.name}",
                     fontSize = 18.sp,
                     fontWeight = FontWeight.Bold,
-                    color = Brand.Danger,
+                    color = MaterialTheme.colorScheme.operationalDanger,
                 )
                 Text(
                     "Round ${cancellation.roundNo} · ${cancellation.reason}",
-                    color = Brand.Foreground,
+                    color = MaterialTheme.colorScheme.onSurface,
                     fontWeight = FontWeight.SemiBold,
                 )
                 kitchenOptionLabels(
@@ -1282,20 +1291,20 @@ private fun TicketCard(
                 ).takeIf(List<String>::isNotEmpty)?.let { options ->
                     Text(
                         options.joinToString(" · "),
-                        color = Brand.Foreground,
+                        color = MaterialTheme.colorScheme.onSurface,
                         fontWeight = FontWeight.SemiBold,
                     )
                 }
                 cancellation.notes?.takeIf(String::isNotBlank)?.let { note ->
-                    Text("Original request: $note", color = Brand.ForegroundMuted)
+                    Text("Original request: $note", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Button(
                     onClick = { onAcknowledgeCancellation(order.id, cancellation.lineId) },
                     enabled = canAdvance && !saved,
                     modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = Brand.Danger,
-                        contentColor = Brand.Background,
+                        containerColor = MaterialTheme.colorScheme.operationalDanger,
+                        contentColor = MaterialTheme.colorScheme.background,
                     ),
                 ) {
                     Text(
@@ -1313,13 +1322,13 @@ private fun TicketCard(
                         "${line.qty.asQtyPrefix()}×",
                         fontSize = 18.sp,
                         fontWeight = FontWeight.Bold,
-                        color = Brand.Foreground,
+                        color = MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier.width(48.dp),
                     )
                     Text(
                         "${line.name} · R${line.roundNo}",
                         fontSize = 18.sp,
-                        color = Brand.Foreground,
+                        color = MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier.weight(1f),
                     )
                 }
@@ -1329,7 +1338,7 @@ private fun TicketCard(
                             options.joinToString(" · "),
                             fontSize = 16.sp,
                             fontWeight = FontWeight.SemiBold,
-                            color = Brand.Information,
+                            color = MaterialTheme.colorScheme.operationalInformation,
                             modifier = Modifier.padding(start = 48.dp, top = 2.dp),
                         )
                     }
@@ -1340,7 +1349,7 @@ private fun TicketCard(
                         "Note: $note",
                         fontSize = 16.sp,
                         fontWeight = FontWeight.Bold,
-                        color = Brand.Warning,
+                        color = MaterialTheme.colorScheme.operationalWarning,
                         modifier = Modifier.padding(start = 48.dp, top = 2.dp),
                     )
                 }
@@ -1356,15 +1365,15 @@ private fun TicketCard(
                 shape = Radius.shapeMd,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = accent,
-                    contentColor = Brand.Background,
+                    contentColor = MaterialTheme.colorScheme.background,
                     disabledContainerColor = accent.copy(alpha = 0.35f),
-                    disabledContentColor = Brand.Background.copy(alpha = 0.6f),
+                    disabledContentColor = MaterialTheme.colorScheme.background.copy(alpha = 0.6f),
                 ),
             ) {
                 if (busy) {
                     CircularProgressIndicator(
                         modifier = Modifier.size(24.dp),
-                        color = Brand.Background,
+                        color = MaterialTheme.colorScheme.background,
                         strokeWidth = 3.dp,
                     )
                 } else {
@@ -1375,7 +1384,7 @@ private fun TicketCard(
             Text(
                 "Served",
                 style = MaterialTheme.typography.labelLarge,
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         } else {
             // Unknown state from a newer backend: show it, do not offer a move
@@ -1383,7 +1392,7 @@ private fun TicketCard(
             Text(
                 "State: ${order.kitchenState} — advance it from the till.",
                 style = MaterialTheme.typography.labelSmall,
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }
@@ -1396,9 +1405,9 @@ private fun TicketCard(
 @Composable
 private fun WaitBadge(minutes: Int) {
     val colour = when {
-        minutes >= 20 -> Brand.Danger
-        minutes >= 10 -> Brand.Warning
-        else -> Brand.ForegroundMuted
+        minutes >= 20 -> MaterialTheme.colorScheme.operationalDanger
+        minutes >= 10 -> MaterialTheme.colorScheme.operationalWarning
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
     Text(
         "${minutes}m",
@@ -1408,12 +1417,13 @@ private fun WaitBadge(minutes: Int) {
     )
 }
 
+@Composable
 private fun accentFor(state: KitchenState?): Color = when (state) {
-    KitchenState.RECEIVED -> Brand.Information
-    KitchenState.PREPARING -> Brand.Warning
-    KitchenState.READY -> Brand.Good
-    KitchenState.SERVED -> Brand.ForegroundMuted
-    else -> Brand.Danger
+    KitchenState.RECEIVED -> MaterialTheme.colorScheme.operationalInformation
+    KitchenState.PREPARING -> MaterialTheme.colorScheme.operationalWarning
+    KitchenState.READY -> MaterialTheme.colorScheme.operationalGood
+    KitchenState.SERVED -> MaterialTheme.colorScheme.onSurfaceVariant
+    else -> MaterialTheme.colorScheme.operationalDanger
 }
 
 private fun ticketTone(state: KitchenState?): UiTone = when (state) {

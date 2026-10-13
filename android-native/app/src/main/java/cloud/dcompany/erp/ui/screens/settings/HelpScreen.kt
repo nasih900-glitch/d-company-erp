@@ -30,7 +30,7 @@ fun HelpScreen(
     onOpenMyRequests: () -> Unit,
 ) {
     Column(
-        Modifier.fillMaxSize().background(Brand.Background).padding(Spacing.lgPlus),
+        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(Spacing.lgPlus),
         verticalArrangement = Arrangement.spacedBy(Spacing.lg),
     ) {
         OperationalBanner(
@@ -47,7 +47,7 @@ fun HelpScreen(
         ) {
             Text(
                 "Describe what you expected, what happened and whether you can continue working. You can deliberately attach a reviewed image when it is useful.",
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodyLarge,
             )
             Row(

@@ -306,6 +306,14 @@ async def main():
         assert "admin.system" in identity["effective_permissions"]
         protected = await client.get("/api/v1/remote-assistance/devices", headers=headers)
         assert protected.status_code == 200, protected.text
+        points = await client.get("/api/v1/settings/loyalty-program", headers=headers)
+        assert points.status_code == 200, points.text
+        program = points.json()
+        assert program["company_id"] == identity["company_id"]
+        assert program["revision"] == 0
+        assert program["published_by"] is None
+        assert program["rules"]["gaming_earn_points"] == 2
+        assert program["value_of_100_points_minor"] == 1_000
 
 
 asyncio.run(main())

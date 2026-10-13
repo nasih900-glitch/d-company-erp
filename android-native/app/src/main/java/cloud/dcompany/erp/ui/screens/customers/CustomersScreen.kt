@@ -1,5 +1,14 @@
 package cloud.dcompany.erp.ui.screens.customers
 
+import cloud.dcompany.erp.ui.theme.operationalDanger
+import cloud.dcompany.erp.ui.theme.operationalDangerContainer
+import cloud.dcompany.erp.ui.theme.operationalGood
+import cloud.dcompany.erp.ui.theme.operationalGoodContainer
+import cloud.dcompany.erp.ui.theme.operationalInformation
+import cloud.dcompany.erp.ui.theme.operationalInformationContainer
+import cloud.dcompany.erp.ui.theme.operationalWarning
+import cloud.dcompany.erp.ui.theme.operationalWarningContainer
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -101,7 +110,6 @@ import cloud.dcompany.erp.ui.components.SearchInput
 import cloud.dcompany.erp.ui.components.SectionCard
 import cloud.dcompany.erp.ui.components.UiTone
 import cloud.dcompany.erp.ui.theme.Brand
-import cloud.dcompany.erp.ui.theme.controlDeckBackdrop
 import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.theme.Spacing
 import cloud.dcompany.erp.ui.components.ViewOnlyNotice
@@ -144,7 +152,7 @@ fun CustomersScreen(access: CustomersAccess = CustomersAccess()) {
     }
 
     Column(
-        Modifier.fillMaxSize().controlDeckBackdrop().padding(Spacing.lg),
+        Modifier.fillMaxSize().padding(Spacing.lg),
         verticalArrangement = Arrangement.spacedBy(Spacing.md),
     ) {
         Row(
@@ -153,11 +161,11 @@ fun CustomersScreen(access: CustomersAccess = CustomersAccess()) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(Icons.Default.People, contentDescription = null,
-                tint = Brand.GoldBright, modifier = Modifier.size(32.dp))
+                tint = MaterialTheme.colorScheme.onPrimaryContainer, modifier = Modifier.size(32.dp))
             Column(Modifier.weight(1f)) {
-                Text("CUSTOMERS", color = Brand.Foreground,
+                Text("CUSTOMERS", color = MaterialTheme.colorScheme.onSurface,
                     style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                Text("Players make D Company", color = Brand.ForegroundMuted,
+                Text("Players make D Company", color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.labelMedium)
             }
             CustomerViewModeSelector(viewMode) { next ->
@@ -541,14 +549,14 @@ internal fun CustomerResultsPanel(
         CustomerListFilter.SyncFailed -> state.rows.filter(Customer::isRejected)
     }
     Column(
-        modifier.clip(Radius.shapeLg).background(Brand.Surface)
-            .border(1.dp, Brand.Gold.copy(alpha = 0.38f), Radius.shapeLg),
+        modifier.clip(Radius.shapeLg).background(MaterialTheme.colorScheme.surface)
+            .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.38f), Radius.shapeLg),
     ) {
         Row(
             Modifier.fillMaxWidth()
                 .background(
                     Brush.horizontalGradient(
-                        listOf(Brand.Gold.copy(alpha = 0.12f), Brand.Surface, Brand.Surface),
+                        listOf(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f), MaterialTheme.colorScheme.surface, MaterialTheme.colorScheme.surface),
                     ),
                 )
                 .padding(horizontal = Spacing.lg, vertical = Spacing.md),
@@ -556,32 +564,32 @@ internal fun CustomerResultsPanel(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text("Saved customers", color = Brand.GoldBright, style = MaterialTheme.typography.titleMedium)
+                Text("Saved customers", color = MaterialTheme.colorScheme.onPrimaryContainer, style = MaterialTheme.typography.titleMedium)
                 Text(
                     "${rows.size} shown · ${state.rows.size} in current ${if (state.searching) "search" else "directory"}",
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.labelSmall,
                 )
                 Text(
                     "${state.totalVisits.grouped()} visits · ${state.totalSpentMinor.asRupees()} spent · " +
                         "${state.totalPoints.grouped()} points",
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.labelSmall,
                 )
             }
             Column(
                 Modifier.clip(Radius.shapeMd)
-                    .background(Brand.Gold.copy(alpha = 0.1f))
-                    .border(1.dp, Brand.Gold.copy(alpha = 0.35f), Radius.shapeMd)
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.1f))
+                    .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f), Radius.shapeMd)
                     .padding(horizontal = Spacing.md, vertical = Spacing.sm),
                 horizontalAlignment = Alignment.End,
             ) {
                 Text(
                     "${state.rows.size.grouped()} customers",
-                    color = Brand.GoldBright,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
                     fontWeight = FontWeight.Bold,
                 )
-                if (state.syncing) Text("Refreshing", color = Brand.Information,
+                if (state.syncing) Text("Refreshing", color = MaterialTheme.colorScheme.operationalInformation,
                     style = MaterialTheme.typography.labelSmall)
             }
         }
@@ -590,7 +598,7 @@ internal fun CustomerResultsPanel(
             Text(
                 "No customers match ${filter.label.lowercase(Locale.getDefault())}.",
                 modifier = Modifier.weight(1f).padding(Spacing.lg),
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         } else {
             LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
@@ -607,7 +615,7 @@ internal fun CustomerResultsPanel(
         Text(
             "Saved directory works offline · playtime ranks require an online refresh",
             modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.sm),
-            color = Brand.ForegroundMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.labelSmall,
         )
     }
@@ -630,21 +638,21 @@ internal fun CustomerLeaderboardPanel(
             Row(
                 Modifier.fillMaxWidth().clip(Radius.shapeLg)
                     .background(Brush.horizontalGradient(
-                        listOf(Brand.Gold.copy(alpha = 0.15f), Brand.Surface, Brand.Surface),
+                        listOf(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f), MaterialTheme.colorScheme.surface, MaterialTheme.colorScheme.surface),
                     ))
-                    .border(1.dp, Brand.Gold.copy(alpha = 0.38f), Radius.shapeLg)
+                    .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.38f), Radius.shapeLg)
                     .padding(horizontal = Spacing.lgPlus, vertical = Spacing.md),
                 horizontalArrangement = Arrangement.spacedBy(Spacing.md),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(Modifier.weight(1f)) {
-                    Text("PLAYTIME LEADERBOARD", color = Brand.GoldBright,
+                    Text("PLAYTIME LEADERBOARD", color = MaterialTheme.colorScheme.onPrimaryContainer,
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold, letterSpacing = 0.6.sp)
                     Text(
                         state.total?.let { "${state.items.size} of $it ranked customers" }
                             ?: "Online playtime ranking",
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
@@ -658,14 +666,14 @@ internal fun CustomerLeaderboardPanel(
             }
             Column(
                 Modifier.fillMaxWidth().clip(Radius.shapeLg)
-                    .background(Brand.Surface.copy(alpha = 0.96f))
-                    .border(1.dp, Brand.BorderSubtle, Radius.shapeLg),
+                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.96f))
+                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeLg),
             ) {
                 Box(
                     Modifier.fillMaxWidth().height(1.dp)
                         .background(Brush.horizontalGradient(listOf(
-                            Brand.Gold.copy(alpha = 0.72f),
-                            Brand.Gold.copy(alpha = 0.12f),
+                            MaterialTheme.colorScheme.primary.copy(alpha = 0.72f),
+                            MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
                             Color.Transparent,
                         ))),
                 )
@@ -687,12 +695,12 @@ internal fun CustomerLeaderboardPanel(
                                     state.total == 0 -> "No customers to rank yet"
                                     else -> "Connect to load playtime ranks"
                                 },
-                                color = Brand.Foreground,
+                                color = MaterialTheme.colorScheme.onSurface,
                                 style = MaterialTheme.typography.titleMedium,
                             )
                             Text(
                                 state.error ?: "Completed sessions will appear after the first online refresh.",
-                                color = if (state.error == null) Brand.ForegroundMuted else Brand.Warning,
+                                color = if (state.error == null) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.operationalWarning,
                                 style = MaterialTheme.typography.bodySmall,
                             )
                             if (state.error != null) ErpButton("Retry", onRefresh)
@@ -712,7 +720,7 @@ internal fun CustomerLeaderboardPanel(
                                 }
                                 if (state.error != null) item(key = "error") {
                                     Column(Modifier.fillMaxWidth().padding(Spacing.md)) {
-                                        Text("Remaining ranks unavailable: ${state.error}", color = Brand.Warning)
+                                        Text("Remaining ranks unavailable: ${state.error}", color = MaterialTheme.colorScheme.operationalWarning)
                                         ErpButton("Refresh leaderboard", onRefresh, intent = ActionIntent.Secondary)
                                     }
                                 } else if (state.canLoadMore) item(key = "load-more") {
@@ -736,7 +744,7 @@ internal fun CustomerLeaderboardPanel(
             Text(
                 "Server-ranked completed playtime · Recorded visits are settled purchases · $rewardNote",
                 modifier = Modifier.padding(horizontal = Spacing.sm),
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelSmall,
             )
         }
@@ -746,21 +754,21 @@ internal fun CustomerLeaderboardPanel(
 @Composable
 private fun CustomerTableHeader() {
     Row(
-        Modifier.fillMaxWidth().background(Brand.BackgroundSecondary.copy(alpha = 0.9f))
+        Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.9f))
             .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text("#", Modifier.width(48.dp), color = Brand.ForegroundMuted,
+        Text("#", Modifier.width(48.dp), color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.labelSmall, letterSpacing = 0.6.sp)
-        Text("Customer", Modifier.weight(1f), color = Brand.ForegroundMuted,
+        Text("Customer", Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.labelSmall, letterSpacing = 0.6.sp)
-        Text("Hours played", Modifier.width(112.dp), color = Brand.ForegroundMuted,
+        Text("Hours played", Modifier.width(112.dp), color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.labelSmall, letterSpacing = 0.6.sp)
-        Text("Paid hours", Modifier.width(96.dp), color = Brand.ForegroundMuted,
+        Text("Paid hours", Modifier.width(96.dp), color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.labelSmall, letterSpacing = 0.6.sp)
-        Text("Recorded visits", Modifier.width(116.dp), color = Brand.ForegroundMuted,
+        Text("Recorded visits", Modifier.width(116.dp), color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.labelSmall, letterSpacing = 0.6.sp)
-        Text("Play rewards", Modifier.width(132.dp), color = Brand.ForegroundMuted,
+        Text("Play rewards", Modifier.width(132.dp), color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.labelSmall, letterSpacing = 0.6.sp)
     }
 }
@@ -773,14 +781,15 @@ private fun CustomerLeaderboardRow(
 ) {
     val rank = playtime.rank
     val rankColor = leaderboardRankColor(rank)
+    val primaryTextColor = MaterialTheme.colorScheme.onSurface
     Row(
         Modifier.fillMaxWidth().heightIn(min = 72.dp)
             .background(
                 when {
                     rankColor != null -> Brush.horizontalGradient(
-                        listOf(rankColor.copy(alpha = 0.17f), Brand.Surface, Brand.Surface),
+                        listOf(rankColor.copy(alpha = 0.17f), MaterialTheme.colorScheme.surface, MaterialTheme.colorScheme.surface),
                     )
-                    else -> Brush.horizontalGradient(listOf(Brand.Surface, Brand.Surface))
+                    else -> Brush.horizontalGradient(listOf(MaterialTheme.colorScheme.surface, MaterialTheme.colorScheme.surface))
                 },
             )
             .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
@@ -799,11 +808,11 @@ private fun CustomerLeaderboardRow(
                 ) {
                     Icon(Icons.Default.Star, contentDescription = null,
                         tint = rankColor, modifier = Modifier.size(15.dp))
-                Text(rank.toString(), color = rankColor, fontWeight = FontWeight.Bold)
+                    Text(rank.toString(), color = primaryTextColor, fontWeight = FontWeight.Bold)
                 }
             } else {
                 Text(rank.toString(),
-                    color = Brand.ForegroundMuted, fontWeight = FontWeight.Bold)
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.Bold)
             }
         }
         Row(
@@ -813,46 +822,46 @@ private fun CustomerLeaderboardRow(
         ) {
             Box(
                 Modifier.size(38.dp).clip(CircleShape)
-                    .background((rankColor ?: Brand.Gold).copy(alpha = 0.20f))
+                    .background((rankColor ?: MaterialTheme.colorScheme.primary).copy(alpha = 0.20f))
                     .border(
                         1.dp,
-                        (rankColor ?: Brand.Gold).copy(alpha = if (rankColor == null) 0.22f else 0.68f),
+                        (rankColor ?: MaterialTheme.colorScheme.primary).copy(alpha = if (rankColor == null) 0.22f else 0.68f),
                         CircleShape,
                     ),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(playtime.name?.trim()?.firstOrNull()?.uppercase() ?: "?",
-                    color = rankColor ?: Brand.GoldBright, fontWeight = FontWeight.Bold)
+                    color = primaryTextColor, fontWeight = FontWeight.Bold)
             }
             Column {
-                Text(playtime.name?.takeIf(String::isNotBlank) ?: "— no name —", color = Brand.Foreground,
+                Text(playtime.name?.takeIf(String::isNotBlank) ?: "— no name —", color = MaterialTheme.colorScheme.onSurface,
                     style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold,
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
                 // The leaderboard API has already masked this value and kept
                 // the last four digits for staff identification. Masking it
                 // again would erase that suffix.
                 Text(playtime.maskedPhone,
-                    color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall,
                     maxLines = 1)
             }
         }
         Text(
             formatPlayMinutes(playtime.totalPlayedMinutes),
             modifier = Modifier.width(if (wide) 112.dp else 90.dp),
-            color = rankColor ?: Brand.Foreground,
+            color = primaryTextColor,
             fontWeight = FontWeight.SemiBold,
         )
         if (wide) {
             Text(formatPlayMinutes(playtime.qualifyingPaidMinutes), Modifier.width(96.dp),
-                color = Brand.Foreground)
+                color = MaterialTheme.colorScheme.onSurface)
             Text(playtime.recordedVisits?.toString() ?: "—", Modifier.width(116.dp),
-                color = Brand.Foreground)
+                color = MaterialTheme.colorScheme.onSurface)
             Text(
                 if (rewardsEnabled) "See Web" else "Coming soon",
                 modifier = Modifier.width(132.dp).clip(Radius.shapePill)
-                    .background(Brand.SurfaceRaised.copy(alpha = 0.72f))
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f))
                     .padding(horizontal = Spacing.sm, vertical = Spacing.xs),
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelSmall,
                 maxLines = 1,
             )
@@ -861,12 +870,16 @@ private fun CustomerLeaderboardRow(
 }
 
 /** Only the server's actual top-three playtime ranks receive podium colours. */
+@Composable
 private fun leaderboardRankColor(rank: Int?): Color? = when (rank) {
-    1 -> Brand.GoldBright
-    2 -> Color(0xFFB9C7D2)
-    3 -> Color(0xFFD7A176)
+    1 -> MaterialTheme.colorScheme.onPrimaryContainer
+    2 -> LeaderboardSilverAccent
+    3 -> LeaderboardBronzeAccent
     else -> null
 }
+
+internal val LeaderboardSilverAccent = Color(0xFFB9C7D2)
+internal val LeaderboardBronzeAccent = Color(0xFFD7A176)
 
 private fun maskCustomerListPhone(phone: String): String {
     val digitCount = phone.count(Char::isDigit)
@@ -889,18 +902,18 @@ private fun maskCustomerListPhone(phone: String): String {
 private fun CustomerRow(customer: Customer, selected: Boolean, onClick: () -> Unit) {
     DataListRow(
         modifier = Modifier
-            .background(if (selected) Brand.SurfaceHover else Brand.Surface)
+            .background(if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface)
             .semantics { this.selected = selected },
         onClick = onClick,
         leading = {
             Box(
                 Modifier.size(42.dp).clip(Radius.shapeMd)
-                    .background(if (selected) Brand.Gold.copy(alpha = 0.16f) else Brand.SurfaceRaised),
+                    .background(if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.16f) else MaterialTheme.colorScheme.surfaceVariant),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
                     customer.name?.trim()?.firstOrNull()?.uppercase() ?: "?",
-                    color = if (selected) Brand.Gold else Brand.ForegroundMuted,
+                    color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                 )
@@ -913,7 +926,7 @@ private fun CustomerRow(customer: Customer, selected: Boolean, onClick: () -> Un
                     style = MaterialTheme.typography.bodyLarge,
                     fontWeight = FontWeight.SemiBold,
                     fontStyle = if (customer.name.isNullOrBlank()) FontStyle.Italic else FontStyle.Normal,
-                    color = if (customer.name.isNullOrBlank()) Brand.ForegroundMuted else Brand.Foreground,
+                    color = if (customer.name.isNullOrBlank()) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
@@ -924,7 +937,7 @@ private fun CustomerRow(customer: Customer, selected: Boolean, onClick: () -> Un
                     maskCustomerListPhone(customer.phone),
                 fontFamily = FontFamily.Monospace,
                 style = MaterialTheme.typography.labelMedium,
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         },
         trailing = {
@@ -932,19 +945,19 @@ private fun CustomerRow(customer: Customer, selected: Boolean, onClick: () -> Un
                 Text(
                     "${customer.loyaltyPoints.grouped()} pts",
                     style = MaterialTheme.typography.labelLarge,
-                    color = Brand.Foreground,
+                    color = MaterialTheme.colorScheme.onSurface,
                     fontWeight = FontWeight.SemiBold,
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         "${customer.visitCount.grouped()} visits · ",
                         style = MaterialTheme.typography.labelSmall,
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Text(
                         customer.totalSpentMinor.asRupees(),
                         style = MaterialTheme.typography.labelSmall,
-                        color = Brand.Foreground,
+                        color = MaterialTheme.colorScheme.onSurface,
                         fontWeight = FontWeight.SemiBold,
                     )
                 }
@@ -964,20 +977,21 @@ private fun RankBadge(rank: String) {
     Text(
         rank,
         style = MaterialTheme.typography.labelSmall,
-        color = if (filled) Brand.Background else colour,
+        color = if (filled) MaterialTheme.colorScheme.background else colour,
         modifier = Modifier
             .clip(Radius.shapePill)
-            .background(if (filled) colour else Brand.Background)
+            .background(if (filled) colour else MaterialTheme.colorScheme.background)
             .border(1.dp, colour, Radius.shapePill)
             .padding(horizontal = 10.dp, vertical = 3.dp),
     )
 }
 
+@Composable
 private fun rankColour(rank: String) = when (rank) {
-    "Legend" -> Brand.Gold
-    "Pro" -> Brand.Gold
-    "Player" -> Brand.Good
-    else -> Brand.ForegroundMuted
+    "Legend" -> MaterialTheme.colorScheme.primary
+    "Pro" -> MaterialTheme.colorScheme.primary
+    "Player" -> MaterialTheme.colorScheme.operationalGood
+    else -> MaterialTheme.colorScheme.onSurfaceVariant
 }
 
 // ------------------------------------------------------------------ detail
@@ -998,8 +1012,8 @@ private fun DetailPane(
         Modifier
             .fillMaxSize()
             .clip(Radius.shapeLg)
-            .background(Brand.BackgroundSecondary)
-            .border(1.dp, Brand.BorderSubtle, Radius.shapeLg)
+            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeLg)
             .padding(Spacing.md)
             .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(Spacing.md),
@@ -1075,7 +1089,9 @@ private fun DetailPane(
         CompactStatCard(
             label = "Points balance",
             value = "${customer.loyaltyPoints.grouped()} pts",
-            detail = "Redeemable for ${customer.loyaltyValueMinor.asRupees()} · 10 points = ₹1",
+            detail = customer.loyaltyValueMinor?.let { value ->
+                "Redeemable for ${value.asRupees()} · revision ${customer.loyaltyProgramRevision}"
+            } ?: "Point value unavailable until the current program is synced",
             icon = Icons.Default.Star,
             tone = UiTone.Warning,
             modifier = Modifier.fillMaxWidth(),
@@ -1146,7 +1162,7 @@ private fun PurchaseHistoryCard(
 
             isUnsyncedCustomer -> Text(
                 "This new profile will show purchases after it syncs to the server.",
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodySmall,
             )
 
@@ -1162,7 +1178,7 @@ private fun PurchaseHistoryCard(
 
             rows.isEmpty() -> Text(
                 "No server-linked purchases yet. New paid, voided, and refunded bills will appear here.",
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodySmall,
             )
 
@@ -1183,7 +1199,7 @@ private fun PurchaseHistoryCard(
                     PanelDivider()
                     Text(
                         "Showing the latest 10 of ${rows.size} cached bills.",
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
@@ -1222,7 +1238,7 @@ private fun PurchaseHistoryRow(row: CustomerOrderHistory) {
             ) {
                 Text(
                     row.invoiceNo ?: source,
-                    color = Brand.Foreground,
+                    color = MaterialTheme.colorScheme.onSurface,
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
@@ -1233,10 +1249,10 @@ private fun PurchaseHistoryRow(row: CustomerOrderHistory) {
             }
             Text(
                 "$source · ${row.itemsCount} item${if (row.itemsCount == 1) "" else "s"}",
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelSmall,
             )
-            Text(timestamp, color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelSmall)
+            Text(timestamp, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
             val details = buildList {
                 if (row.paymentMethods.isNotEmpty()) {
                     add(row.paymentMethods.joinToString(" + ") { it.uppercase(Locale.ENGLISH) })
@@ -1247,7 +1263,7 @@ private fun PurchaseHistoryRow(row: CustomerOrderHistory) {
             if (details.isNotEmpty()) {
                 Text(
                     details.joinToString(" · "),
-                    color = if (row.refundedMinor > 0) Brand.Warning else Brand.ForegroundMuted,
+                    color = if (row.refundedMinor > 0) MaterialTheme.colorScheme.operationalWarning else MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.labelSmall,
                 )
             }
@@ -1255,7 +1271,7 @@ private fun PurchaseHistoryRow(row: CustomerOrderHistory) {
         NumericValue(
             value = row.totalMinor.asRupees(),
             style = MaterialTheme.typography.titleSmall,
-            color = Brand.Foreground,
+            color = MaterialTheme.colorScheme.onSurface,
         )
     }
 }
@@ -1277,7 +1293,7 @@ private fun RankCard(customer: Customer) {
             Text(
                 "${customer.lifetimeGamingPointsEarned.grouped()} gaming pts lifetime",
                 style = MaterialTheme.typography.labelSmall,
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
 
@@ -1290,23 +1306,23 @@ private fun RankCard(customer: Customer) {
                     .fillMaxWidth()
                     .height(6.dp)
                     .clip(Radius.shapePill)
-                    .background(Brand.Border),
+                    .background(MaterialTheme.colorScheme.outline),
             ) {
                 Box(
                     Modifier
                         .fillMaxWidth(customer.rankProgress)
                         .height(6.dp)
                         .clip(Radius.shapePill)
-                        .background(Brand.Gold),
+                        .background(MaterialTheme.colorScheme.primary),
                 )
             }
             Text(
                 "${(customer.pointsToNextGamingRank ?: 0).grouped()} pts to $next",
                 style = MaterialTheme.typography.labelSmall,
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         } else {
-            Text("Top rank reached", color = Brand.Gold, fontWeight = FontWeight.SemiBold)
+            Text("Top rank reached", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
         }
     }
 }
@@ -1365,7 +1381,7 @@ private fun EditorDialog(
                             "their points and visit history to the new number — it does not " +
                             "create a second customer.",
                         style = MaterialTheme.typography.labelSmall,
-                        color = Brand.Information,
+                        color = MaterialTheme.colorScheme.operationalInformation,
                     )
                 }
 
@@ -1394,12 +1410,12 @@ private fun EditorDialog(
                         Text(
                             "Birthday (optional)",
                             style = MaterialTheme.typography.labelSmall,
-                            color = Brand.ForegroundMuted,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                         Text(
                             editor.birthday?.asDayLabel() ?: "Not set",
                             style = MaterialTheme.typography.bodyLarge,
-                            color = Brand.Foreground,
+                            color = MaterialTheme.colorScheme.onSurface,
                         )
                     }
                     OutlinedButton(
@@ -1428,7 +1444,7 @@ private fun EditorDialog(
                     Text(
                         "A phone number must be 4 to 20 characters.",
                         style = MaterialTheme.typography.labelSmall,
-                        color = Brand.Danger,
+                        color = MaterialTheme.colorScheme.operationalDanger,
                     )
                 }
                 if (editor.isUnsyncedDraft) {
@@ -1436,11 +1452,11 @@ private fun EditorDialog(
                         "If this number is already on file, the existing customer is opened — " +
                             "their points are never split across two records.",
                         style = MaterialTheme.typography.labelSmall,
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 if (error != null) {
-                    Text(error, color = Brand.Danger, style = MaterialTheme.typography.bodyMedium)
+                    Text(error, color = MaterialTheme.colorScheme.operationalDanger, style = MaterialTheme.typography.bodyMedium)
                 }
             }
         },
@@ -1463,10 +1479,10 @@ private fun EditorDialog(
                 modifier = Modifier.heightIn(min = 48.dp),
             ) { Text("Cancel") }
         },
-        containerColor = Brand.SurfaceOverlay,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = Radius.shapeLg,
-        titleContentColor = Brand.Foreground,
-        textContentColor = Brand.Foreground,
+        titleContentColor = MaterialTheme.colorScheme.onSurface,
+        textContentColor = MaterialTheme.colorScheme.onSurface,
     )
 
     if (pickingDate) {
@@ -1518,7 +1534,7 @@ private fun BirthdayPicker(
             ) { Text("Cancel") }
         },
         colors = androidx.compose.material3.DatePickerDefaults.colors(
-            containerColor = Brand.SurfaceOverlay,
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         ),
     ) {
         DatePicker(state = state)

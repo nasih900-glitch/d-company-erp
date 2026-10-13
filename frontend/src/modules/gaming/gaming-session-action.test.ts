@@ -62,6 +62,19 @@ const join: GamingSessionActionAttempt = {
   },
 };
 
+const phoneOnlyJoin: GamingSessionActionAttempt = {
+  ...scope,
+  version: 1,
+  idempotencyKey: 'gaming-session-action:join-phone-1',
+  kind: 'join',
+  payload: {
+    customer_phone: '9876543210',
+    expected_participant_revision: 1,
+    customer_directory_revision: 7,
+    customer_directory_company_id: 'company-1',
+  },
+};
+
 const leave: GamingSessionActionAttempt = {
   ...scope,
   version: 1,
@@ -81,7 +94,7 @@ const stop: GamingSessionActionAttempt = {
 
 describe('Gaming session action recovery receipts', () => {
   it('accepts exact amendment, Join, Leave and Stop snapshots and rejects incomplete revisions', () => {
-    for (const attempt of [amendment, join, leave, stop]) {
+    for (const attempt of [amendment, join, phoneOnlyJoin, leave, stop]) {
       expect(parseGamingSessionActionAttempt(attempt)).toEqual(attempt);
     }
     expect(parseGamingSessionActionAttempt({
@@ -91,6 +104,14 @@ describe('Gaming session action recovery receipts', () => {
     expect(parseGamingSessionActionAttempt({
       ...join,
       payload: { ...join.payload, customer_directory_company_id: undefined },
+    })).toBeNull();
+    expect(parseGamingSessionActionAttempt({
+      ...phoneOnlyJoin,
+      payload: { ...phoneOnlyJoin.payload, customer_phone: undefined },
+    })).toBeNull();
+    expect(parseGamingSessionActionAttempt({
+      ...phoneOnlyJoin,
+      payload: { ...phoneOnlyJoin.payload, customer_id: 'customer-1' },
     })).toBeNull();
     expect(parseGamingSessionActionAttempt({
       ...leave,

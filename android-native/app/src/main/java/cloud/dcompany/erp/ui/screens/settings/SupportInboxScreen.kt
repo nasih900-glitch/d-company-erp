@@ -1,5 +1,14 @@
 package cloud.dcompany.erp.ui.screens.settings
 
+import cloud.dcompany.erp.ui.theme.operationalDanger
+import cloud.dcompany.erp.ui.theme.operationalDangerContainer
+import cloud.dcompany.erp.ui.theme.operationalGood
+import cloud.dcompany.erp.ui.theme.operationalGoodContainer
+import cloud.dcompany.erp.ui.theme.operationalInformation
+import cloud.dcompany.erp.ui.theme.operationalInformationContainer
+import cloud.dcompany.erp.ui.theme.operationalWarning
+import cloud.dcompany.erp.ui.theme.operationalWarningContainer
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -94,7 +103,7 @@ internal class SupportInboxViewModel(
 internal fun SupportInboxScreen(vm: SupportInboxViewModel = viewModel()) {
     val state by vm.state.collectAsStateWithLifecycle()
     Column(
-        Modifier.fillMaxSize().background(Brand.Background).padding(Spacing.lgPlus),
+        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(Spacing.lgPlus),
         verticalArrangement = Arrangement.spacedBy(Spacing.md),
     ) {
         SectionCard(
@@ -114,7 +123,7 @@ internal fun SupportInboxScreen(vm: SupportInboxViewModel = viewModel()) {
         ) {
             Text(
                 if (state.total == 1) "1 request" else "${state.total} requests",
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodyMedium,
             )
         }
@@ -125,11 +134,11 @@ internal fun SupportInboxScreen(vm: SupportInboxViewModel = viewModel()) {
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center,
             ) {
-                CircularProgressIndicator(color = Brand.Gold)
+                CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
                 Text(
                     "Loading the support inbox…",
                     modifier = Modifier.padding(top = Spacing.md),
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             state.error != null && state.reports.isEmpty() -> DesignedEmptyState(
@@ -156,7 +165,7 @@ internal fun SupportInboxScreen(vm: SupportInboxViewModel = viewModel()) {
             ) {
                 state.error?.let { message ->
                     item("refresh-error") {
-                        Text(message, color = Brand.Warning, style = MaterialTheme.typography.bodyMedium)
+                        Text(message, color = MaterialTheme.colorScheme.operationalWarning, style = MaterialTheme.typography.bodyMedium)
                     }
                 }
                 items(state.reports, key = BugReportInboxItem::id) { report ->
@@ -175,9 +184,9 @@ internal fun SupportInboxScreen(vm: SupportInboxViewModel = viewModel()) {
 private fun SupportInboxRow(report: BugReportInboxItem, onClick: () -> Unit) {
     Surface(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
-        color = Brand.Surface,
+        color = MaterialTheme.colorScheme.surface,
         shape = Radius.shapeMd,
-        border = androidx.compose.foundation.BorderStroke(1.dp, Brand.BorderSubtle),
+        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
         Row(
             Modifier.fillMaxWidth().padding(Spacing.md),
@@ -187,13 +196,13 @@ private fun SupportInboxRow(report: BugReportInboxItem, onClick: () -> Unit) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
                 Text(
                     report.title,
-                    color = Brand.Foreground,
+                    color = MaterialTheme.colorScheme.onSurface,
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                 )
                 Text(
                     "${report.reporter.name} · ${report.clientContext.currentScreen ?: "Unknown screen"} · ${report.createdAt}",
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
@@ -207,26 +216,26 @@ private fun SupportInboxRow(report: BugReportInboxItem, onClick: () -> Unit) {
 private fun SupportInboxDetail(report: BugReportInboxItem, onDismiss: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = Brand.SurfaceOverlay,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = Radius.shapeLg,
-        title = { Text(report.title, color = Brand.Foreground) },
+        title = { Text(report.title, color = MaterialTheme.colorScheme.onSurface) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                Text(report.description, color = Brand.Foreground)
+                Text(report.description, color = MaterialTheme.colorScheme.onSurface)
                 Text(
                     "Reported by ${report.reporter.name} (${report.reporter.email})",
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Text(
                     "Screen: ${report.clientContext.currentScreen ?: "Not supplied"} · " +
                         "Device: ${report.clientContext.deviceModel ?: "Not supplied"} · " +
                         "Connection: ${report.clientContext.connectivity}",
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodySmall,
                 )
                 Text(
                     "Use the protected web ERP inbox to reply, change status or inspect an intentionally attached image.",
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodySmall,
                 )
             }

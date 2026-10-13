@@ -203,7 +203,28 @@ data class GamingParticipantUi(
     val active: Boolean,
     val pending: Boolean,
     val lastError: String? = null,
+    val joinedAtMillis: Long? = null,
+    val joinedPlayElapsedMs: Long? = null,
+    val leftAtMillis: Long? = null,
+    val leftPlayElapsedMs: Long? = null,
 )
+
+internal fun gamingParticipantJoinIdentityError(
+    customerId: String?,
+    name: String?,
+    phone: String?,
+): String? {
+    val hasSavedCustomer = !customerId.isNullOrBlank()
+    val hasName = !name.isNullOrBlank()
+    val hasPhone = !phone.isNullOrBlank()
+    return when {
+        hasSavedCustomer && (hasName || hasPhone) ->
+            "Choose one saved customer, or enter a phone number, not both."
+        !hasSavedCustomer && !hasPhone ->
+            "Choose a saved customer or enter the friend phone number. Name is optional."
+        else -> null
+    }
+}
 
 internal fun mergeGamingParticipants(
     session: GameSession,
@@ -215,12 +236,15 @@ internal fun mergeGamingParticipants(
     val relevantActions = actions.filter {
         it.serverSessionId == session.id || it.sessionKey == session.id
     }.sortedBy(LocalGamingSessionActionEntity::sequence)
-    val pendingLeaveRefs = relevantActions.filter {
+    val pendingLeaveByRef = relevantActions.filter {
         it.actionType == GamingSessionActionType.PARTICIPANT_LEAVE &&
             it.state in setOf(GamingSessionActionState.PENDING, GamingSessionActionState.AMBIGUOUS)
-    }.mapNotNull { it.participantReference?.let { reference ->
-        resolvedGamingParticipantReference(reference, relevantActions)
-    } }.toSet()
+    }.mapNotNull { action ->
+        action.participantReference?.let { reference ->
+            resolvedGamingParticipantReference(reference, relevantActions) to action
+        }
+    }.toMap()
+    val pendingLeaveRefs = pendingLeaveByRef.keys
     val rejectedLeaveByRef = relevantActions.filter {
         it.actionType == GamingSessionActionType.PARTICIPANT_LEAVE &&
             it.state == GamingSessionActionState.REJECTED
@@ -230,6 +254,7 @@ internal fun mergeGamingParticipants(
     val serverRows = cache.filter { it.gamingSessionId == session.id }.map { row ->
         val customer = customerById[row.customerId]
         val rejectedLeave = rejectedLeaveByRef[row.id]
+        val pendingLeave = pendingLeaveByRef[row.id]
         GamingParticipantUi(
             reference = row.id,
             customerId = row.customerId,
@@ -238,16 +263,31 @@ internal fun mergeGamingParticipants(
             active = row.leftAtMillis == null && row.id !in pendingLeaveRefs,
             pending = row.id in pendingLeaveRefs || rejectedLeave != null,
             lastError = rejectedLeave?.lastError,
+            joinedAtMillis = row.joinedAtMillis,
+            joinedPlayElapsedMs = row.joinedPlayElapsedMs,
+            leftAtMillis = row.leftAtMillis ?: pendingLeave?.occurredAtMillis,
+            leftPlayElapsedMs = row.leftPlayElapsedMs ?: pendingLeave?.playElapsedMs,
         )
     }
     val pendingJoins = relevantActions.filter {
         it.actionType == GamingSessionActionType.PARTICIPANT_JOIN &&
             it.state !in setOf(GamingSessionActionState.CONFIRMED, GamingSessionActionState.DISCARDED)
     }.map { action ->
-        val customer = action.customerId?.let(customerById::get)
+        val normalizedActionPhone = action.customerPhone?.filter(Char::isDigit)?.takeLast(10)
+        val customer = action.customerId?.let(customerById::get) ?: normalizedActionPhone?.let { phone ->
+            customers.filter { it.phone.filter(Char::isDigit).takeLast(10) == phone }.singleOrNull()
+        }
+        val pendingLeave = relevantActions.firstOrNull {
+            it.actionType == GamingSessionActionType.PARTICIPANT_LEAVE &&
+                it.participantReference?.let { reference ->
+                    resolvedGamingParticipantReference(reference, relevantActions) ==
+                        resolvedGamingParticipantReference(action.actionId, relevantActions)
+                } == true &&
+                it.state !in setOf(GamingSessionActionState.REJECTED, GamingSessionActionState.DISCARDED)
+        }
         GamingParticipantUi(
             reference = action.actionId,
-            customerId = action.customerId,
+            customerId = action.customerId ?: customer?.customerId,
             name = customer?.name ?: action.customerName,
             phone = customer?.phone ?: action.customerPhone,
             active = action.state != GamingSessionActionState.REJECTED &&
@@ -257,6 +297,10 @@ internal fun mergeGamingParticipants(
             lastError = action.lastError ?: if (session.status == "start_failed") {
                 "Start needs review before friend attendance can sync."
             } else null,
+            joinedAtMillis = action.occurredAtMillis,
+            joinedPlayElapsedMs = action.playElapsedMs,
+            leftAtMillis = pendingLeave?.occurredAtMillis,
+            leftPlayElapsedMs = pendingLeave?.playElapsedMs,
         )
     }
     return serverRows + pendingJoins
@@ -1353,6 +1397,7 @@ class GamingViewModel : ViewModel() {
             delay(250)
             try {
                 customerLookupMutex.withLock {
+                    cloud.dcompany.erp.core.db.CustomerProjectionRefreshGate.mutex.withLock {
                     if (!isCurrentGamingCustomerSearch(generation, customerSearchGeneration)) return@withLock
                     if (!appCtx.cacheIsolation.commitIfCurrentOrNotifyStale(
                             lease = lease,
@@ -1383,6 +1428,7 @@ class GamingViewModel : ViewModel() {
                                 ),
                             )
                         }
+                    }
                     }
                 }
             } catch (cancelled: CancellationException) {
@@ -3136,11 +3182,24 @@ class GamingViewModel : ViewModel() {
         if (!requireNoRejectedSequencedAction(session, "adding a friend")) return
         val normalizedName = name?.trim()?.takeIf(String::isNotEmpty)
         val normalizedPhone = phone?.trim()?.takeIf(String::isNotEmpty)
-        if ((customerId == null) != (normalizedName != null && normalizedPhone != null)) {
-            error.value = "Choose one saved customer, or enter both a name and phone number."
+        gamingParticipantJoinIdentityError(customerId, normalizedName, normalizedPhone)?.let {
+            error.value = it
             return
         }
-        val currentFriends = state.value.participantsFor(session).count(GamingParticipantUi::active)
+        val currentParticipants = state.value.participantsFor(session)
+        val normalizedIdentityPhone = normalizedPhone?.filter(Char::isDigit)?.takeLast(10)
+        if (currentParticipants.any { participant ->
+                participant.active && (
+                    customerId != null && participant.customerId == customerId ||
+                        customerId == null && normalizedIdentityPhone != null &&
+                        participant.phone?.filter(Char::isDigit)?.takeLast(10) == normalizedIdentityPhone
+                    )
+            }
+        ) {
+            error.value = "This customer is already playing in the session."
+            return
+        }
+        val currentFriends = currentParticipants.count(GamingParticipantUi::active)
         val basePlayers = (if (session.effectivePackageVariant == "dual" || session.packageVariantSnapshot == "dual") 2 else 1) +
             session.extraControllers
         if (basePlayers + currentFriends >= 4) {
@@ -4095,6 +4154,8 @@ private fun Customer.toGamingCacheEntity() = cloud.dcompany.erp.core.db.Customer
     visitCount = visitCount,
     totalSpentMinor = totalSpentMinor,
     loyaltyPoints = loyaltyPoints,
+    loyaltyProgramRevision = loyaltyProgramRevision,
+    loyaltyPointValueMinor = loyaltyPointValueMinor,
     lifetimeGamingPointsEarned = lifetimeGamingPointsEarned,
     gamingRank = gamingRank,
     gamingRankFloor = gamingRankFloor,

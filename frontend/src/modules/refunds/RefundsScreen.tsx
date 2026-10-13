@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   AlertCircle,
   AlertTriangle,
@@ -28,11 +29,13 @@ import { useLatestRequest } from '@/hooks/useLatestRequest';
 import { LIVE_MODE } from '@/lib/demo';
 import {
   orders,
+  receipts,
   refunds,
   shifts,
   type OrderDTO,
   type OrderListItemDTO,
   type PosRefundRequestDTO,
+  type ReceiptHistoryDTO,
   type ShiftDTO,
 } from '@/lib/erp-api';
 import { inr } from '@/lib/inr';
@@ -78,6 +81,30 @@ const REFUND_REASONS = [
 ] as const;
 
 const COMPLETED_STATUSES = new Set(['settled', 'withdrawn']);
+const REFUND_PAYMENT_METHODS = new Set(['cash', 'card', 'upi', 'qr', 'wallet']);
+
+export function receiptToRefundOrder(receipt: ReceiptHistoryDTO): OrderListItemDTO {
+  return {
+    id: receipt.order_id,
+    invoice_no: receipt.invoice_no,
+    type: receipt.order_type,
+    status: receipt.status,
+    table_id: receipt.table_id,
+    source_label: receipt.gaming_sessions.map((session) => session.station_name).filter(Boolean).join(', ') || null,
+    total_minor: receipt.total_minor,
+    items_count: receipt.lines.filter((line) => !line.voided_at).length,
+    customer_name: receipt.customer_name,
+    created_at: receipt.created_at,
+    held_at: receipt.held_at,
+    checkout_version: receipt.checkout_version,
+    paid_minor: receipt.paid_minor,
+    refundable_minor: receipt.refundable_minor,
+    pending_refund_minor: receipt.pending_refund_minor,
+    payment_methods: [...new Set(receipt.payments
+      .map((payment) => payment.method)
+      .filter((method): method is OrderListItemDTO['payment_methods'][number] => REFUND_PAYMENT_METHODS.has(method)))],
+  };
+}
 
 type ActionDialogState = {
   action: RefundTaskAction;
@@ -99,6 +126,35 @@ type RefundData = {
   recent: PosRefundRequestDTO[];
   openShifts: ShiftDTO[];
 };
+
+type VerifiedExactRefundTarget = {
+  orderId: string;
+  companyId: string;
+  branchId: string;
+  terminalId: string;
+  checkoutVersion: number;
+  refundableMinor: number;
+  pendingRefundMinor: number;
+};
+
+export function matchesVerifiedExactRefundTarget(
+  order: OrderListItemDTO,
+  verified: VerifiedExactRefundTarget | null,
+  scope: { companyId: string; branchId: string; terminalId: string },
+): boolean {
+  return Boolean(
+    verified
+    && verified.orderId === order.id
+    && verified.companyId === scope.companyId
+    && verified.branchId === scope.branchId
+    && verified.terminalId === scope.terminalId
+    && verified.checkoutVersion === order.checkout_version
+    && verified.refundableMinor === Number(order.refundable_minor ?? 0)
+    && verified.pendingRefundMinor === Number(order.pending_refund_minor ?? 0)
+    && verified.pendingRefundMinor === 0
+    && verified.refundableMinor > 0,
+  );
+}
 
 function actor(name: string | null, id: string | null): string | null {
   return name?.trim() || id || null;
@@ -171,6 +227,8 @@ export function taskActionDisabledReason({
 }
 
 export default function RefundsScreen() {
+  const [searchParams] = useSearchParams();
+  const exactOrderId = searchParams.get('order_id')?.trim() || null;
   const { me, demo, terminalId, terminalReady, terminalIssue } = useAuth();
   const notifications = useNotifications();
   const online = useOnlineStatus();
@@ -193,6 +251,16 @@ export default function RefundsScreen() {
   const requests = useLatestRequest();
   const mutationBusyRef = useRef(false);
   const recoveryRef = useRef<RefundRecoveryAssessment[]>([]);
+  const exactTargetOpenedRef = useRef<string | null>(null);
+  const verifiedExactTargetRef = useRef<VerifiedExactRefundTarget | null>(null);
+
+  useEffect(() => {
+    // A review prepared for one URL/workspace must not remain actionable while
+    // another exact receipt is being fetched in the same mounted screen.
+    verifiedExactTargetRef.current = null;
+    exactTargetOpenedRef.current = null;
+    setSelectedOrder(null);
+  }, [exactOrderId, me?.company_id, me?.branch_id, terminalId]);
 
   const load = useCallback(async ({
     initial = false,
@@ -228,11 +296,12 @@ export default function RefundsScreen() {
     try {
       // Independent reads start together so the operational board does not
       // waterfall through orders -> tasks -> history -> shift.
-      const [orderRows, tasks, history, openShifts] = await Promise.all([
+      const [orderRows, tasks, history, openShifts, exactReceipt] = await Promise.all([
         refunds.listOrders(),
         refunds.listRequests({ unresolved: true, limit: 200 }),
         refunds.listRequests({ unresolved: false, limit: 100 }),
         shifts.list(true),
+        exactOrderId ? receipts.get(exactOrderId) : Promise.resolve(null),
       ]);
       if (!isCurrent()) return false;
 
@@ -250,14 +319,48 @@ export default function RefundsScreen() {
       if (resolved.kind === 'ready') storeShiftId(scope, resolved.shift.id);
       else clearStoredShift();
 
+      const exactOrder = exactReceipt ? receiptToRefundOrder(exactReceipt) : null;
+      const scopedOrderRows = exactOrder
+        ? [exactOrder, ...orderRows.filter((order) => order.id !== exactOrder.id)]
+        : orderRows;
       setData({
-        orderRows,
+        orderRows: scopedOrderRows,
         tasks,
         recent: history.filter((task) => COMPLETED_STATUSES.has(task.status)).slice(0, 50),
         openShifts,
       });
       setShiftResolution(resolved);
       setStaleOrderIds(new Set());
+      if (exactOrder) {
+        verifiedExactTargetRef.current = {
+          orderId: exactOrder.id,
+          companyId: me.company_id,
+          branchId: me.branch_id,
+          terminalId,
+          checkoutVersion: exactOrder.checkout_version,
+          refundableMinor: Number(exactOrder.refundable_minor ?? 0),
+          pendingRefundMinor: Number(exactOrder.pending_refund_minor ?? 0),
+        };
+        setQuery(exactOrder.invoice_no || exactOrder.id);
+        const hasUnresolvedRequest = Number(exactOrder.pending_refund_minor ?? 0) > 0
+          || tasks.some((task) => task.order_id === exactOrder.id);
+        setSelectedOrder((current) => (
+          current?.id === exactOrder.id && !hasUnresolvedRequest && exactOrder.refundable_minor > 0
+            ? exactOrder
+            : null
+        ));
+        if (
+          exactOrder.refundable_minor > 0
+          && !hasUnresolvedRequest
+          && exactTargetOpenedRef.current !== exactOrder.id
+        ) {
+          exactTargetOpenedRef.current = exactOrder.id;
+          setSelectedOrder(exactOrder);
+        }
+      } else {
+        verifiedExactTargetRef.current = null;
+        if (exactOrderId) setSelectedOrder(null);
+      }
       const recoveryScope: RefundRecoveryScope = {
         companyId: me.company_id,
         branchId: me.branch_id,
@@ -290,7 +393,13 @@ export default function RefundsScreen() {
       setUncertainTaskIds(new Set(activeRecovery.map((assessment) => assessment.checkpoint.taskId)));
       return true;
     } catch (error) {
-      if (isCurrent()) setLoadError((error as Error).message);
+      if (isCurrent()) {
+        if (exactOrderId) {
+          verifiedExactTargetRef.current = null;
+          setSelectedOrder(null);
+        }
+        setLoadError((error as Error).message);
+      }
       return false;
     } finally {
       if (isCurrent()) {
@@ -298,7 +407,7 @@ export default function RefundsScreen() {
         setRefreshing(false);
       }
     }
-  }, [canAccess, me, online, requests, terminalId, terminalIssue, terminalReady]);
+  }, [canAccess, exactOrderId, me, online, requests, terminalId, terminalIssue, terminalReady]);
 
   useEffect(() => { void load({ initial: true }); }, [load]);
 
@@ -390,6 +499,22 @@ export default function RefundsScreen() {
     note: string;
   }) {
     if (!online || !currentShift || !canManageCurrentShift || busyKey || mutationBusyRef.current) return;
+    if (loadError || refreshing) return;
+    if (exactOrderId) {
+      const scope = {
+        companyId: me?.company_id || '',
+        branchId: me?.branch_id || '',
+        terminalId: terminalId || '',
+      };
+      if (!matchesVerifiedExactRefundTarget(order, verifiedExactTargetRef.current, scope)) {
+        setSelectedOrder(null);
+        notifications.error(
+          'This exact receipt changed or could not be verified. Refresh it before requesting a refund.',
+          { title: 'Receipt verification required', critical: true },
+        );
+        return;
+      }
+    }
     mutationBusyRef.current = true;
     const actionId = makeRefundActionId('request');
     setBusyKey(`create:${order.id}`);

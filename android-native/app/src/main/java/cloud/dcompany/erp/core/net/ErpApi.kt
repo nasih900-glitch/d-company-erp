@@ -56,10 +56,16 @@ interface ErpApi {
     @GET("pos/orders/{id}")
     suspend fun order(@Path("id") id: String): Order
 
+    @GET("customers/by-phone/{phone}/rewards")
+    suspend fun customerRewards(
+        @Path("phone") phone: String,
+    ): List<CustomerRewardEligibility>
+
     @GET("pos/receipts")
     suspend fun receiptHistory(
         @Query("cursor") cursor: String? = null,
         @Query("limit") limit: Int = 50,
+        @Query("q") query: String? = null,
     ): CanonicalReceiptPage
 
     @GET("pos/receipts/{order_id}")
@@ -99,6 +105,14 @@ interface ErpApi {
     suspend fun updateOrderPoints(
         @Path("id") id: String,
         @Body body: OrderPointsRedemptionUpdateRequest,
+        @Header("Idempotency-Key") idempotencyKey: String,
+        @HeaderMap provenance: Map<String, String> = emptyMap(),
+    ): Order
+
+    @PATCH("pos/orders/{id}/reward")
+    suspend fun updateOrderReward(
+        @Path("id") id: String,
+        @Body body: cloud.dcompany.erp.core.net.OrderRewardRedemptionUpdateRequest,
         @Header("Idempotency-Key") idempotencyKey: String,
         @HeaderMap provenance: Map<String, String> = emptyMap(),
     ): Order

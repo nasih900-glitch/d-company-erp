@@ -39,6 +39,7 @@ from app.api.v1.customers import router as customers_router
 from app.core.errors import ConflictError
 from app.core.tenant import TenantContext
 from app.models import Customer
+from app.services.pos.loyalty_program import LEGACY_RULES, LoadedLoyaltyProgram
 
 
 class _Result:
@@ -123,12 +124,39 @@ def _customer(tenant: TenantContext, **overrides) -> Customer:
     return Customer(**values)
 
 
+def _install_loyalty_projection_stubs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep this unit focused on the INSERT race while retaining the new
+    loyalty projection contract. Program loading and award lookup have their
+    own integration coverage; adding fake SQL rows here would make this test
+    depend on unrelated statement ordering and weaken its race assertions.
+    """
+    program = LoadedLoyaltyProgram(
+        revision=0,
+        rules=LEGACY_RULES,
+        published_by=None,
+        published_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+
+    async def load_program(*_args, **_kwargs):
+        return program
+
+    async def project(_session, *, company_id, customers, program):
+        del company_id
+        return [customers_router._to_read(c, program=program, awarded_keys=set()) for c in customers]
+
+    monkeypatch.setattr(customers_router, "load_loyalty_program", load_program)
+    monkeypatch.setattr(customers_router, "_customers_to_read", project)
+
+
 @pytest.mark.asyncio
-async def test_upsert_customer_heals_into_the_winner_on_a_concurrent_create_race() -> None:
+async def test_upsert_customer_heals_into_the_winner_on_a_concurrent_create_race(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Two terminals draining a queued 'create this new customer' write for
     the same brand-new phone at close to the same moment: the loser's
     request must return the winner's actual customer record, not a 500."""
     tenant = _tenant()
+    _install_loyalty_projection_stubs(monkeypatch)
     phone = "+919876500000"
     winner = _customer(tenant, phone=phone, name="Whoever Won The Race")
 
@@ -174,12 +202,15 @@ async def test_upsert_customer_heals_into_the_winner_on_a_concurrent_create_race
 
 
 @pytest.mark.asyncio
-async def test_upsert_customer_raises_a_clean_conflict_if_the_winner_vanished_before_the_requery() -> None:
+async def test_upsert_customer_raises_a_clean_conflict_if_the_winner_vanished_before_the_requery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Vanishingly unlikely (the winner would have to be soft-deleted in the
     exact instant between the IntegrityError and the re-query), but the
     re-query's `scalar_one_or_none()` finding nothing must raise a clean,
     retryable error — not let a NoResultFound-shaped 500 through."""
     tenant = _tenant()
+    _install_loyalty_projection_stubs(monkeypatch)
     phone = "+919876500000"
 
     session = _Session(

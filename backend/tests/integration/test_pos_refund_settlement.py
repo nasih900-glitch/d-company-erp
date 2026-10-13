@@ -21,6 +21,7 @@ from app.models import (
     Batch,
     Company,
     Customer,
+    CustomerGamingRankAward,
     CustomerSpendReconciliation,
     IdempotencyKey,
     Ingredient,
@@ -55,6 +56,7 @@ from app.services.accounting.accounts import (
 from app.services.accounting.ledger import build_operational_ledger
 from app.services.audit.recorder import install_audit_listeners
 from app.services.reports import ReportsAggregator
+from app.services.pos.loyalty_program import LEGACY_RULES
 
 _POS_APPEND_ONLY_TRIGGERS = (
     ("payments", "trg_payments_immutable"),
@@ -98,6 +100,10 @@ _POS_APPEND_ONLY_TRIGGERS = (
     (
         "refund_loyalty_adjustments",
         "trg_refund_loyalty_adjustments_immutable",
+    ),
+    (
+        "customer_gaming_rank_awards",
+        "trg_customer_gaming_rank_awards_immutable",
     ),
 )
 
@@ -782,6 +788,11 @@ async def _cleanup(case: _RefundCase, *, keys: tuple[str, ...]) -> None:
                 OrderLoyaltySettlement.order_id == case.order_id
             )
         )
+        await cleanup.execute(
+            delete(CustomerGamingRankAward).where(
+                CustomerGamingRankAward.order_id == case.order_id
+            )
+        )
         await cleanup.execute(delete(Order).where(Order.id == case.order_id))
         await cleanup.execute(
             delete(InvoiceCounter).where(
@@ -1343,6 +1354,8 @@ async def test_partial_refunds_restore_and_reverse_exact_loyalty_once(
         rank_bonus_points=3,
         settled_at=order.invoice_issued_at,
         provenance="exact",
+        program_revision=0,
+        rules_snapshot=LEGACY_RULES.model_dump(mode="json"),
     )
     session.add(redemption)
     # The database guard intentionally reads the immutable order/redemption
@@ -1350,6 +1363,28 @@ async def test_partial_refunds_restore_and_reverse_exact_loyalty_once(
     await session.flush()
     session.add(settlement)
     await session.commit()
+
+    # Refund allocation must remain bound to the immutable sale snapshot even
+    # when the owner publishes different economics before the refund.
+    current_program = await client.get(
+        "/api/v1/settings/loyalty-program",
+        headers=_headers(case, f"read-program-{uuid4()}"),
+    )
+    assert current_program.status_code == 200, current_program.text
+    changed_rules = current_program.json()["rules"]
+    changed_rules["minor_per_point"] = 25
+    published = await client.put(
+        "/api/v1/settings/loyalty-program",
+        headers=_headers(case, f"publish-program-{uuid4()}"),
+        json={
+            "expected_revision": current_program.json()["revision"],
+            "rules": changed_rules,
+        },
+    )
+    assert published.status_code == 200, published.text
+    assert published.json()["revision"] == 1
+    assert settlement.program_revision == 0
+    assert settlement.rules_snapshot["minor_per_point"] == 10
 
     keys: list[str] = []
 

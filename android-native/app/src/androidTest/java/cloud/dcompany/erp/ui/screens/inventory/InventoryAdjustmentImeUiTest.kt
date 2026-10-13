@@ -57,10 +57,11 @@ import cloud.dcompany.erp.ui.components.FormDialog
 import cloud.dcompany.erp.ui.components.InfoRow
 import cloud.dcompany.erp.ui.components.PickerField
 import cloud.dcompany.erp.ui.components.QuantityField
-import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.DCompanyTheme
 import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.theme.Spacing
+import cloud.dcompany.erp.ui.theme.operationalDanger
+import cloud.dcompany.erp.ui.theme.operationalWarning
 import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -97,11 +98,11 @@ class InventoryAdjustmentImeUiTest {
                         },
                         onConfirm = { confirmations++ },
                     ) {
-                        Text("On hand now: 18 kg", color = Brand.ForegroundMuted)
+                        Text("On hand now: 18 kg", color = MaterialTheme.colorScheme.onSurfaceVariant)
                         InfoRow(label = "Branch", value = "D Company Main Branch")
                         Text(
                             TRANSFER_UNAVAILABLE_MESSAGE,
-                            color = Brand.Warning,
+                            color = MaterialTheme.colorScheme.operationalWarning,
                             style = MaterialTheme.typography.labelSmall,
                         )
                         PickerField(
@@ -120,19 +121,19 @@ class InventoryAdjustmentImeUiTest {
                         if (quantity == "-1000") {
                             Column(
                                 Modifier.fillMaxWidth()
-                                    .background(Brand.SurfaceRaised, Radius.shapeSm)
+                                    .background(MaterialTheme.colorScheme.surfaceContainerHigh, Radius.shapeSm)
                                     .padding(12.dp)
                                     .testTag(PREVIEW_TAG),
                             ) {
                                 Text(
                                     "Removes 1000 kg from stock",
-                                    color = Brand.Danger,
+                                    color = MaterialTheme.colorScheme.operationalDanger,
                                     style = MaterialTheme.typography.titleMedium,
                                 )
-                                Text("18 → 0 kg", color = Brand.Foreground)
+                                Text("18 → 0 kg", color = MaterialTheme.colorScheme.onSurface)
                                 Text(
                                     PREVIEW_WARNING,
-                                    color = Brand.Warning,
+                                    color = MaterialTheme.colorScheme.operationalWarning,
                                     style = MaterialTheme.typography.labelSmall,
                                 )
                             }

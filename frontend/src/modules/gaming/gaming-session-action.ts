@@ -1,4 +1,4 @@
-import type { GamingPackageAmendBody } from '@/lib/erp-api';
+import type { GamingPackageAmendBody, GamingParticipantJoinBody } from '@/lib/erp-api';
 
 const PREFIX = 'dcompany:gaming-session-action:v1:';
 
@@ -13,8 +13,7 @@ export type GamingSessionActionScope = {
 
 export type GamingSessionActionBody =
   | { kind: 'amend'; payload: GamingPackageAmendBody }
-  | { kind: 'join'; payload: { customer_id: string; expected_participant_revision: number;
-      customer_directory_revision?: number; customer_directory_company_id?: string } }
+  | { kind: 'join'; payload: GamingParticipantJoinBody }
   | { kind: 'leave'; participantId: string; payload: { expected_participant_revision: number } }
   | { kind: 'stop'; payload: { expected_participant_revision: number; expected_billing_revision: number } };
 
@@ -67,7 +66,11 @@ function validAction(value: Record<string, unknown>): boolean {
   }
   if (value.kind === 'join') {
     const evidence = payload.customer_directory_revision;
-    return typeof payload.customer_id === 'string' && payload.customer_id.length > 0
+    const customerId = typeof payload.customer_id === 'string' && payload.customer_id.length > 0;
+    const customerPhone = typeof payload.customer_phone === 'string' && payload.customer_phone.trim().length > 0;
+    const customerName = payload.customer_name;
+    return customerId !== customerPhone
+      && (customerName === undefined || (!customerId && typeof customerName === 'string' && customerName.trim().length > 0))
       && revision(payload.expected_participant_revision)
       && (evidence === undefined || revision(evidence))
       && (evidence === undefined
@@ -75,7 +78,7 @@ function validAction(value: Record<string, unknown>): boolean {
         : typeof payload.customer_directory_company_id === 'string'
           && payload.customer_directory_company_id.length > 0)
       && Object.keys(payload).every((field) => [
-        'customer_id', 'expected_participant_revision',
+        'customer_id', 'customer_name', 'customer_phone', 'expected_participant_revision',
         'customer_directory_revision', 'customer_directory_company_id',
       ].includes(field));
   }

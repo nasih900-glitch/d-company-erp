@@ -15,6 +15,7 @@ from app.core.db import AsyncSessionLocal
 from app.models import Company, Customer, GamingSession, Order, Payment, Shift, Station
 from app.services.customers.deletion_fence import CustomerDirectoryFence
 from app.services.customers.identity import resolve_gaming_customer
+from app.services.pos.loyalty_program import LEGACY_RULES, LoadedLoyaltyProgram
 
 
 async def _login(client, seed_owner) -> str:
@@ -80,6 +81,12 @@ async def test_resolver_reuses_formatted_phone_and_never_reuses_deleted_identity
         directory_fence=CustomerDirectoryFence(
             current_revision=0,
             captured_revision=0,
+        ),
+        program=LoadedLoyaltyProgram(
+            revision=0,
+            rules=LEGACY_RULES,
+            published_by=None,
+            published_at=datetime.now(UTC),
         ),
     )
     assert settled is None

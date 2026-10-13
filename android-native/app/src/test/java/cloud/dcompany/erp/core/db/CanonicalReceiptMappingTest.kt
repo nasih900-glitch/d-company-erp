@@ -2,10 +2,17 @@ package cloud.dcompany.erp.core.db
 
 import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.CanonicalReceipt
+import cloud.dcompany.erp.ui.screens.matchesCachedReceiptQuery
+import cloud.dcompany.erp.ui.screens.ReceiptSearchSource
+import cloud.dcompany.erp.ui.screens.ReceiptSearchUiState
+import cloud.dcompany.erp.ui.screens.withRefreshedDetail
+import cloud.dcompany.erp.ui.screens.refunds.toExactRefundOrder
 import kotlinx.serialization.decodeFromString
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class CanonicalReceiptMappingTest {
@@ -21,11 +28,21 @@ class CanonicalReceiptMappingTest {
         assertEquals("Sameer", restored.lines.single().voidedByName)
         assertEquals("Rafi", restored.payments.single().recordedByName)
         assertEquals(2_000L, restored.refundedMinor)
+        assertEquals(1_000L, restored.pendingRefundMinor)
+        assertEquals(11_500L, restored.refundableMinor)
+        assertEquals(12L, restored.checkoutVersion)
         assertEquals(12_500L, restored.netCollectedMinor)
         assertEquals("Sameer", restored.refunds.single().approvedByName)
         assertEquals("PS5 Station 1", restored.gamingSessions.single().stationName)
         assertEquals("Nasih", restored.gamingSessions.single().sentToPosByName)
         assertEquals(2_000L, cached.fetchedAtMillis)
+
+        val exactRefundOrder = restored.toExactRefundOrder()
+        assertEquals(restored.orderId, exactRefundOrder.id)
+        assertEquals(1_000L, exactRefundOrder.pendingRefundMinor)
+        assertEquals(11_500L, exactRefundOrder.refundableMinor)
+        assertEquals(12L, exactRefundOrder.checkoutVersion)
+        assertEquals(listOf("upi"), exactRefundOrder.paymentMethods)
     }
 
     @Test
@@ -37,6 +54,46 @@ class CanonicalReceiptMappingTest {
         }
     }
 
+    @Test
+    fun `bounded offline receipt lookup uses exact identifiers and numeric suffix`() {
+        val receipt = ApiClient.json.decodeFromString<CanonicalReceipt>(receiptJson())
+
+        assertTrue(receipt.matchesCachedReceiptQuery("INV-1"))
+        assertTrue(receipt.matchesCachedReceiptQuery("1"))
+        assertTrue(receipt.matchesCachedReceiptQuery("order-1"))
+        assertTrue(receipt.matchesCachedReceiptQuery("session-1"))
+        assertFalse(receipt.matchesCachedReceiptQuery("01"))
+        assertFalse(receipt.matchesCachedReceiptQuery("INV"))
+    }
+
+    @Test
+    fun `exact refresh replaces the searched row without changing search scope`() {
+        val original = ApiClient.json.decodeFromString<CanonicalReceipt>(receiptJson())
+        val refreshed = original.copy(
+            checkoutVersion = 13,
+            pendingRefundMinor = 2_000,
+            refundableMinor = 10_500,
+        )
+        val state = ReceiptSearchUiState(
+            query = "00001",
+            receipts = listOf(original),
+            nextCursor = "scoped-cursor",
+            hasMore = true,
+            source = ReceiptSearchSource.ONLINE,
+            detailLoading = true,
+        )
+
+        val result = state.withRefreshedDetail(refreshed)
+
+        assertEquals("00001", result.query)
+        assertEquals("scoped-cursor", result.nextCursor)
+        assertTrue(result.hasMore)
+        assertEquals(13L, result.receipts.single().checkoutVersion)
+        assertEquals(refreshed, result.detail)
+        assertFalse(result.detailLoading)
+        assertEquals(null, result.detailError)
+    }
+
     private fun receiptJson() =
         """
         {
@@ -45,12 +102,13 @@ class CanonicalReceiptMappingTest {
           "shift_opened_by":"user-3","shift_opened_by_name":"Rafi",
           "shift_opened_at":"2026-08-29T08:00:00Z","shift_closed_at":null,
           "opened_by":"user-3","opened_by_name":"Rafi","invoice_no":"INV-1",
-          "fiscal_year":"2026-27","status":"refunded","order_type":"gaming",
+          "fiscal_year":"2026-27","checkout_version":12,"status":"refunded","order_type":"gaming",
           "table_id":null,"subtotal_minor":15000,"discount_minor":500,
           "manual_discount_minor":500,"points_redeemed_minor":0,"cgst_minor":0,
           "sgst_minor":0,"igst_minor":0,"cess_minor":0,"tax_minor":0,
           "round_off_minor":0,"tip_minor":0,"total_minor":14500,"paid_minor":14500,
-          "refunded_minor":2000,"net_collected_minor":12500,"customer_name":null,
+          "refunded_minor":2000,"pending_refund_minor":1000,"refundable_minor":11500,
+          "net_collected_minor":12500,"customer_name":null,
           "customer_phone":null,"customer_gstin":null,"customer_address":null,
           "customer_state_code":null,"place_of_supply_state_code":null,
           "is_reverse_charge":false,"irn":null,"irn_ack_no":null,

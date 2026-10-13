@@ -17,6 +17,7 @@ from app.api.v1.pos import router as pos_router
 from app.core.errors import BusinessRuleError, ConflictError
 from app.core.tenant import TenantContext
 from app.models import Order, OrderLine
+from app.services.pos.loyalty_program import LEGACY_RULES, LoadedLoyaltyProgram
 from tests.integration.test_cafe_workflow_migration import (
     _disposable_database,
     _run_alembic,
@@ -30,6 +31,15 @@ def _request(key: str, body_hash: str | None = None) -> SimpleNamespace:
             idempotency_key=key,
             idempotency_request_hash=body_hash or f"hash:{key}",
         )
+    )
+
+
+def _legacy_program() -> LoadedLoyaltyProgram:
+    return LoadedLoyaltyProgram(
+        revision=0,
+        rules=LEGACY_RULES,
+        published_by=None,
+        published_at=datetime.now(UTC),
     )
 
 
@@ -481,6 +491,7 @@ async def test_table_round_cancel_ack_handoff_and_direct_payment_release(
                             company_id=ids["company"],
                             actor_user_id=ids["user"],
                             at=datetime.now(UTC),
+                            loyalty_program=_legacy_program(),
                         )
                         await session.flush()
                         assert direct.status == "paid"
@@ -516,6 +527,7 @@ async def test_table_round_cancel_ack_handoff_and_direct_payment_release(
                         company_id=ids["company"],
                         actor_user_id=ids["user"],
                         at=datetime.now(UTC),
+                        loyalty_program=_legacy_program(),
                     )
             async with sessions() as session:
                 paid_line = await session.get(OrderLine, ids["direct_open_line"])

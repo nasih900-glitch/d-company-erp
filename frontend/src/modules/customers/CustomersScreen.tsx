@@ -22,6 +22,7 @@ import { SkeletonCard } from '@/components/ui/Skeleton';
 import CustomerPlaytimePanel from './CustomerPlaytimePanel';
 import { useAuth } from '@/modules/auth/AuthContext';
 import { canWriteCustomers } from './customer-access';
+import { customerPointsProgramSummary } from './customer-points-program';
 
 const RANK_STYLES: Record<string, string> = {
   Rookie: 'text-fg-muted border-bg-border',
@@ -92,7 +93,7 @@ export default function CustomersScreen() {
         <div>
           <h2 className="text-2xl font-bold">Customers</h2>
           <p className="text-fg-muted text-sm">
-            Phone-based loyalty · auto-saved at checkout · 2 points per ₹10 spent on gaming
+            Phone-based loyalty · auto-saved at checkout · owner-configured gaming rewards
           </p>
         </div>
         <div className="flex w-full gap-2 sm:w-auto">
@@ -349,6 +350,15 @@ function CustomerForm({
         </Field>
         {isEdit && (
           <div className="pt-3 border-t border-bg-border text-xs space-y-3">
+            {(() => {
+              const points = customerPointsProgramSummary(customer!);
+              return (
+                <div className="rounded-lg border border-bg-border p-3 space-y-1">
+                  <div className="font-semibold text-fg">{points.valueLabel}</div>
+                  <div className="text-fg-muted">{points.revisionLabel}</div>
+                </div>
+              );
+            })()}
             <div className="grid grid-cols-3 gap-3">
               <Mini icon={<ShoppingBag size={11}/>} label="Visits" value={customer!.visit_count.toString()}/>
               <Mini icon={<Phone size={11}/>} label="Total spend" value={inr(customer!.total_spent_minor)}/>

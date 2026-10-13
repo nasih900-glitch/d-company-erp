@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime, timedelta
+from urllib.parse import quote
 from uuid import UUID, uuid4
 
 import pytest
@@ -137,6 +138,117 @@ async def _participant_action(client, seed_owner, token, *, path, key, payload, 
     )
     assert response.status_code == 200, response.text
     return response.json()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_phone_only_join_resolves_identity_without_overwriting_saved_name(
+    client, session, seed_owner,
+) -> None:
+    token, shift_id, station, friends, packages = await _setup(client, session, seed_owner)
+    started = await _start(
+        client, seed_owner, token, shift_id, station,
+        packages["standard-dual-session-30m"],
+        player_count=2,
+    )
+    session_id = started["id"]
+    directory = {
+        "customer_directory_revision": 0,
+        "customer_directory_company_id": str(seed_owner["company"].id),
+    }
+
+    missing_identity = await client.post(
+        f"/api/v1/gaming/sessions/{session_id}/participants/join",
+        json={"expected_participant_revision": 0, **directory},
+        headers=_headers(seed_owner, token, f"join:{uuid4()}"),
+    )
+    assert missing_identity.status_code == 422
+
+    existing = friends[0]
+    joined = await client.post(
+        f"/api/v1/gaming/sessions/{session_id}/participants/join",
+        json={
+            "expected_participant_revision": 0,
+            "customer_name": "   ",
+            "customer_phone": f"+91 {existing.phone}",
+            **directory,
+        },
+        headers=_headers(seed_owner, token, f"join:{uuid4()}"),
+    )
+    assert joined.status_code == 200, joined.text
+    assert joined.json()["participants"][0]["customer_id"] == str(existing.id)
+    await session.refresh(existing)
+    assert existing.name == "Friend 1"
+
+    duplicate = await client.post(
+        f"/api/v1/gaming/sessions/{session_id}/participants/join",
+        json={
+            "expected_participant_revision": 1,
+            "customer_phone": existing.phone,
+            **directory,
+        },
+        headers=_headers(seed_owner, token, f"join:{uuid4()}"),
+    )
+    assert duplicate.status_code == 422
+    assert "already playing" in duplicate.text
+
+    new_phone = "9876543208"
+    created = await client.post(
+        f"/api/v1/gaming/sessions/{session_id}/participants/join",
+        json={
+            "expected_participant_revision": 1,
+            "customer_phone": new_phone,
+            **directory,
+        },
+        headers=_headers(seed_owner, token, f"join:{uuid4()}"),
+    )
+    assert created.status_code == 200, created.text
+    created_id = UUID(created.json()["participants"][-1]["customer_id"])
+    created_customer = await session.get(Customer, created_id)
+    assert created_customer is not None
+    assert created_customer.phone == new_phone
+    assert created_customer.name is None
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_gaming_phone_preview_normalizes_legacy_alias_and_rejects_ambiguity(
+    client, session, seed_owner,
+) -> None:
+    token, _, _, friends, _ = await _setup(client, session, seed_owner)
+    friends[0].phone = "+91 (98765) 00001"
+    await session.commit()
+
+    canonical = await client.get(
+        "/api/v1/customers/gaming-by-phone/9876500001",
+        headers=_headers(seed_owner, token),
+    )
+    assert canonical.status_code == 200, canonical.text
+    assert canonical.json()["id"] == str(friends[0].id)
+
+    legacy_alias = quote("+91 98765-00001", safe="")
+    alias = await client.get(
+        f"/api/v1/customers/gaming-by-phone/{legacy_alias}",
+        headers=_headers(seed_owner, token),
+    )
+    assert alias.status_code == 200, alias.text
+    assert alias.json()["id"] == str(friends[0].id)
+
+    friends[1].phone = "91-98765-00001"
+    await session.commit()
+    ambiguous = await client.get(
+        "/api/v1/customers/gaming-by-phone/9876500001",
+        headers=_headers(seed_owner, token),
+    )
+    assert ambiguous.status_code == 409, ambiguous.text
+    assert "more than one saved customer" in ambiguous.json()["error"]["message"]
+
+    invalid_prefix = await client.get(
+        "/api/v1/customers/gaming-by-phone/0019876500001",
+        headers=_headers(seed_owner, token),
+    )
+    assert invalid_prefix.status_code == 200, invalid_prefix.text
+    assert invalid_prefix.json() is None
 
 
 @pytest.mark.integration

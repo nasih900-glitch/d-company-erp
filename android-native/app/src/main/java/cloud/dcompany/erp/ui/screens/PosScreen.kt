@@ -1,5 +1,14 @@
 package cloud.dcompany.erp.ui.screens
 
+import cloud.dcompany.erp.ui.theme.operationalDanger
+import cloud.dcompany.erp.ui.theme.operationalDangerContainer
+import cloud.dcompany.erp.ui.theme.operationalGood
+import cloud.dcompany.erp.ui.theme.operationalGoodContainer
+import cloud.dcompany.erp.ui.theme.operationalInformation
+import cloud.dcompany.erp.ui.theme.operationalInformationContainer
+import cloud.dcompany.erp.ui.theme.operationalWarning
+import cloud.dcompany.erp.ui.theme.operationalWarningContainer
+
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
@@ -131,6 +140,7 @@ import cloud.dcompany.erp.ui.components.ErpButton
 import cloud.dcompany.erp.ui.components.NumericValue
 import cloud.dcompany.erp.ui.components.OperationalBanner
 import cloud.dcompany.erp.ui.components.OperationalStatusBadge
+import cloud.dcompany.erp.ui.components.PanelDivider
 import cloud.dcompany.erp.ui.components.PrimaryButton
 import cloud.dcompany.erp.ui.components.SearchInput
 import cloud.dcompany.erp.ui.components.TouchMoneyEntry
@@ -139,9 +149,7 @@ import cloud.dcompany.erp.ui.components.ViewOnlyNotice
 import cloud.dcompany.erp.ui.components.VoidReasonInput
 import cloud.dcompany.erp.ui.components.resolvedVoidReason
 import cloud.dcompany.erp.ui.screens.gaming.OperationalAlarmPermissionCard
-import cloud.dcompany.erp.ui.screens.customers.MINOR_PER_POINT
 import cloud.dcompany.erp.ui.theme.Brand
-import cloud.dcompany.erp.ui.theme.controlDeckBackdrop
 import cloud.dcompany.erp.ui.theme.Motion
 import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.theme.Spacing
@@ -150,10 +158,6 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
-private val PosTeal = Color(0xFF43D9D0)
-private val PosTealMuted = Color(0xFF12343B)
-private val PosInk = Color(0xFF09131A)
-private val PosInkRaised = Color(0xFF12222A)
 
 /** A visual hint only. Product identity, price and availability always come from the catalogue. */
 private fun posProductIcon(item: MenuItemEntity, categoryName: String?): ImageVector {
@@ -177,6 +181,7 @@ fun PosScreen(
     receiptHistoryHasMore: Boolean,
     receiptHistoryLoading: Boolean,
     receiptHistoryError: String?,
+    receiptSearch: ReceiptSearchUiState = ReceiptSearchUiState(),
     unacknowledgedReceipt: PosReceiptEntity?,
     access: PosAccess,
     onAccessChanged: (PosAccess) -> Unit,
@@ -198,7 +203,8 @@ fun PosScreen(
     onContinueDirectCheckout: () -> Unit,
     onDismissDirectCheckout: () -> Unit,
     onConfirmDirectZero: () -> Unit,
-    onRedeemDirectPoints: (Int) -> Unit,
+    onRedeemDirectPoints: (ReviewedPointsRedemption) -> Unit,
+    onRedeemDirectReward: (ReviewedRewardRedemption) -> Unit,
     onCapture: (String, Long, DirectPaymentConfirmation) -> Unit,
     onCaptureSplit: (SplitPaymentPlan, DirectPaymentConfirmation) -> Unit,
     onRetryRejectedSale: (String) -> Unit,
@@ -217,10 +223,15 @@ fun PosScreen(
     onRefreshReceiptHistory: () -> Unit,
     onLoadMoreReceiptHistory: () -> Unit,
     onOpenCanonicalReceipt: (String) -> Unit,
+    onSearchReceiptHistory: (String) -> Unit = {},
+    onLoadMoreReceiptSearch: () -> Unit = {},
+    onRefundCanonicalReceipt: ((CanonicalReceipt) -> Unit)? = null,
     onFocusOldestOverdue: () -> Unit,
     onSnoozeOverdue: () -> Unit,
     onUnmuteOverdue: () -> Unit,
     onDismissHeldFocus: () -> Unit,
+    onRefreshEligibleRewards: () -> Unit = {},
+    eligibleRewardCatalog: EligibleRewardCatalogState = EligibleRewardCatalogState(),
     presentation: WorkspacePresentationPolicy = WorkspaceFeatureProfiles.Active.presentationPolicy(),
 ) {
     var offlinePaymentConfirmation by remember { mutableStateOf<DirectPaymentConfirmation?>(null) }
@@ -338,7 +349,7 @@ fun PosScreen(
         }
     }
 
-    Column(Modifier.fillMaxSize().controlDeckBackdrop()) {
+    Column(Modifier.fillMaxSize()) {
         if (!access.canCreateAndCollect) {
             ViewOnlyNotice("POS is view only — ask a cashier or manager to create or collect an order.")
         }
@@ -460,7 +471,7 @@ fun PosScreen(
     if (showStatusDetails) {
         AlertDialog(
             onDismissRequest = { showStatusDetails = false },
-            containerColor = Brand.SurfaceOverlay,
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
             shape = Radius.shapeLg,
             title = { Text("Status & recovery details") },
             text = {
@@ -490,7 +501,7 @@ fun PosScreen(
                         item {
                             Text(
                                 "No connection, sync, shift-access or payment recovery issues are currently reported.",
-                                color = Brand.ForegroundMuted,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 style = MaterialTheme.typography.bodyMedium,
                             )
                         }
@@ -506,7 +517,7 @@ fun PosScreen(
     if (showHeldOrders && state.heldOrders.isNotEmpty()) {
         AlertDialog(
             onDismissRequest = { showHeldOrders = false },
-            containerColor = Brand.SurfaceOverlay,
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
             shape = Radius.shapeLg,
             title = {
                 Text(
@@ -590,8 +601,14 @@ fun PosScreen(
                     online = state.online,
                     busy = state.checkoutBusy,
                     loyaltyPointsBalance = state.customerLoyaltyPoints,
+                    customerPhone = state.customerPhone,
+                    loyaltyProgramRevision = state.loyaltyProgramRevision,
+                    loyaltyProgramRules = state.loyaltyProgramRules,
+                    eligibleRewardCatalog = eligibleRewardCatalog,
                     showCustomerBenefits = presentation.showsCustomers,
                     onApplyPoints = onRedeemDirectPoints,
+                    onApplyReward = onRedeemDirectReward,
+                    onRefreshEligibleRewards = onRefreshEligibleRewards,
                     onDismiss = onDismissDirectCheckout,
                     onContinue = onContinueDirectCheckout,
                 )
@@ -763,6 +780,10 @@ fun PosScreen(
             onRefresh = onRefreshReceiptHistory,
             onLoadMore = onLoadMoreReceiptHistory,
             onOpenReceipt = onOpenCanonicalReceipt,
+            search = receiptSearch,
+            onSearch = onSearchReceiptHistory,
+            onLoadMoreSearch = onLoadMoreReceiptSearch,
+            onRefundReceipt = onRefundCanonicalReceipt,
             onDismiss = { showReceiptHistory = false },
         )
     }
@@ -781,7 +802,7 @@ fun PosScreen(
     state.notice?.takeIf { visibleReceipt == null && !showReceiptHistory }?.let { message ->
         AlertDialog(
             onDismissRequest = onDismissNotice,
-            containerColor = Brand.SurfaceOverlay,
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
             shape = Radius.shapeLg,
             confirmButton = { TextButton(onClick = onDismissNotice) { Text("OK") } },
             title = { Text("POS update") },
@@ -818,14 +839,14 @@ private fun PosReceiptDialog(
     var printError by remember(receipt.receiptId) { mutableStateOf<String?>(null) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = Brand.SurfaceOverlay,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = Radius.shapeLg,
         title = {
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(receipt.invoiceNo?.let { "Receipt · $it" } ?: "Payment receipt")
                 Text(
                     receipt.sourceLabel ?: "POS order ${receipt.orderId.take(8)}",
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.labelMedium,
                 )
             }
@@ -850,7 +871,7 @@ private fun PosReceiptDialog(
                     item {
                         Text(
                             listOfNotNull(receipt.customerName, receipt.customerPhone).joinToString(" · "),
-                            color = Brand.ForegroundMuted,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
@@ -858,15 +879,15 @@ private fun PosReceiptDialog(
                 items(lines, key = { it.id ?: it.clientLineId ?: "${it.menuItemId}:${it.name}" }) { line ->
                     Row(
                         Modifier.fillMaxWidth().clip(Radius.shapeMd)
-                            .background(Brand.SurfaceRaised)
-                            .border(1.dp, Brand.BorderSubtle, Radius.shapeMd)
+                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeMd)
                             .padding(Spacing.sm),
                         horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
                     ) {
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                             Text(
                                 "${line.qty.toInt().coerceAtLeast(1)} × ${line.name}",
-                                color = Brand.Foreground,
+                                color = MaterialTheme.colorScheme.onSurface,
                                 style = MaterialTheme.typography.labelLarge,
                             )
                             val options = buildList {
@@ -882,7 +903,7 @@ private fun PosReceiptDialog(
                             if (options.isNotBlank()) {
                                 Text(
                                     options,
-                                    color = Brand.ForegroundMuted,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     style = MaterialTheme.typography.labelSmall,
                                 )
                             }
@@ -896,31 +917,31 @@ private fun PosReceiptDialog(
                 item {
                     Column(
                         Modifier.fillMaxWidth().clip(Radius.shapeMd)
-                            .background(Brand.SurfaceRaised)
-                            .border(1.dp, Brand.BorderSubtle, Radius.shapeMd)
+                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeMd)
                             .padding(Spacing.md),
                         verticalArrangement = Arrangement.spacedBy(Spacing.xs),
                     ) {
                         PaymentAmountRow("Subtotal", receipt.subtotalMinor)
                         if (receipt.discountMinor > 0L) {
-                            PaymentAmountRow("Discount", -receipt.discountMinor, Brand.Good)
+                            PaymentAmountRow("Discount", -receipt.discountMinor, MaterialTheme.colorScheme.operationalGood)
                         }
                         if (receipt.taxMinor != 0L) PaymentAmountRow("Tax", receipt.taxMinor)
                         if (receipt.roundOffMinor != 0L) {
                             PaymentAmountRow("Round-off", receipt.roundOffMinor)
                         }
-                        HorizontalDivider(color = Brand.BorderSubtle)
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                         PaymentAmountRow("Total", receipt.totalMinor, emphasized = true)
-                        PaymentAmountRow("Paid", receipt.amountMinor, Brand.Good)
+                        PaymentAmountRow("Paid", receipt.amountMinor, MaterialTheme.colorScheme.operationalGood)
                         receipt.tenderedMinor?.let { PaymentAmountRow("Cash received", it) }
-                        receipt.changeMinor?.let { PaymentAmountRow("Change", it, Brand.Good) }
+                        receipt.changeMinor?.let { PaymentAmountRow("Change", it, MaterialTheme.colorScheme.operationalGood) }
                     }
                 }
                 receipt.orderNote?.takeIf(String::isNotBlank)?.let { note ->
                     item {
                         Text(
                             "Order note: $note",
-                            color = Brand.ForegroundMuted,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
@@ -932,7 +953,7 @@ private fun PosReceiptDialog(
                             receipt.paymentId?.let { append(" · Payment ${it.take(8)}") }
                             receipt.fiscalYear?.let { append(" · FY $it") }
                         },
-                        color = Brand.ForegroundFaint,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
@@ -940,7 +961,7 @@ private fun PosReceiptDialog(
                     item {
                         Text(
                             error,
-                            color = Brand.Danger,
+                            color = MaterialTheme.colorScheme.operationalDanger,
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
@@ -986,14 +1007,14 @@ private fun PosVoidDialog(
 
     AlertDialog(
         onDismissRequest = { if (!busy) onDismiss() },
-        containerColor = Brand.SurfaceOverlay,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = Radius.shapeLg,
         title = { Text("Void ${target.label}?") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
                 Text(
                     "This cancels the unpaid bill, keeps its audit history, and notifies any linked fulfilment workflow.",
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodySmall,
                 )
                 VoidReasonInput(
@@ -1005,14 +1026,14 @@ private fun PosVoidDialog(
                 if (!online) {
                     Text(
                         "Reconnect before voiding so the audit record and linked cancellation are saved together.",
-                        color = Brand.Warning,
+                        color = MaterialTheme.colorScheme.operationalWarning,
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
                 if (busy) {
                     Text(
                         "Saving this void once. Keep this dialog open until the server confirms it.",
-                        color = Brand.Information,
+                        color = MaterialTheme.colorScheme.operationalInformation,
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
@@ -1227,19 +1248,19 @@ private fun PosTitle(modifier: Modifier = Modifier) {
         Icon(
             Icons.Filled.LocalCafe,
             contentDescription = null,
-            tint = Brand.GoldBright,
+            tint = MaterialTheme.colorScheme.onPrimaryContainer,
             modifier = Modifier.size(32.dp),
         )
         Column {
             Text(
                 "POS",
-                color = Brand.Foreground,
+                color = MaterialTheme.colorScheme.onSurface,
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.SemiBold,
             )
             Text(
                 "Snacks, drinks & more",
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelSmall,
                 maxLines = 1,
             )
@@ -1264,17 +1285,17 @@ private fun PosContextSummary(
             icon,
             contentDescription = null,
             tint = when (tone) {
-                UiTone.Danger -> Brand.Danger
-                UiTone.Warning -> Brand.Warning
-                UiTone.Information -> Brand.Information
-                else -> Brand.ForegroundMuted
+                UiTone.Danger -> MaterialTheme.colorScheme.operationalDanger
+                UiTone.Warning -> MaterialTheme.colorScheme.operationalWarning
+                UiTone.Information -> MaterialTheme.colorScheme.operationalInformation
+                else -> MaterialTheme.colorScheme.onSurfaceVariant
             },
             modifier = Modifier.size(22.dp),
         )
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(
                 title,
-                color = Brand.Foreground,
+                color = MaterialTheme.colorScheme.onSurface,
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
@@ -1282,7 +1303,7 @@ private fun PosContextSummary(
             )
             Text(
                 details,
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelSmall,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -1316,8 +1337,8 @@ private fun PosOperationalAlerts(
     Column(
         Modifier.fillMaxWidth().padding(horizontal = Spacing.md, vertical = Spacing.xs)
             .heightIn(max = 360.dp)
-            .clip(Radius.shapeLg).background(Brand.Surface)
-            .border(1.dp, Brand.BorderSubtle, Radius.shapeLg)
+            .clip(Radius.shapeLg).background(MaterialTheme.colorScheme.surface)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeLg)
             .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(Spacing.xs),
     ) {
@@ -1329,13 +1350,13 @@ private fun PosOperationalAlerts(
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(
                     "POS status & recovery",
-                    color = Brand.Foreground,
+                    color = MaterialTheme.colorScheme.onSurface,
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold,
                 )
                 Text(
                     "Connection, shift access and payments already recorded on this tablet",
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.labelSmall,
                 )
             }
@@ -1348,7 +1369,7 @@ private fun PosOperationalAlerts(
                 tone = if (urgent) UiTone.Danger else UiTone.Warning,
             )
         }
-        HorizontalDivider(color = Brand.BorderSubtle)
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         SyncBanner(state, onRefresh)
         state.shiftAccessMessage?.let { ShiftAccessBanner(it) }
         if (state.rejectedDirectSales.isNotEmpty()) {
@@ -1535,21 +1556,21 @@ private fun RejectedDirectSalesStrip(
 ) {
     Column(
         Modifier.fillMaxWidth().padding(horizontal = Spacing.md, vertical = Spacing.xs)
-            .clip(Radius.shapeMd).background(Brand.SurfaceRaised)
-            .border(1.dp, Brand.Danger.copy(alpha = 0.4f), Radius.shapeMd)
+            .clip(Radius.shapeMd).background(MaterialTheme.colorScheme.surfaceVariant)
+            .border(1.dp, MaterialTheme.colorScheme.operationalDanger.copy(alpha = 0.4f), Radius.shapeMd)
             .padding(Spacing.md),
         verticalArrangement = Arrangement.spacedBy(Spacing.sm),
     ) {
         Text(
             "Failed direct sales (${sales.size})",
-            color = Brand.Foreground,
+            color = MaterialTheme.colorScheme.onSurface,
             style = MaterialTheme.typography.titleSmall,
             fontWeight = FontWeight.Bold,
         )
         Text(
             "Payment was already captured on this tablet. Do not charge the customer again. " +
                 "Fix the server-side cause, then retry the original saved sale.",
-            color = Brand.ForegroundMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.labelSmall,
         )
         LazyRow(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
@@ -1558,7 +1579,7 @@ private fun RejectedDirectSalesStrip(
                 Column(
                     Modifier.width(360.dp)
                         .clip(Radius.shapeMd)
-                        .background(Brand.SurfaceRaised)
+                        .background(MaterialTheme.colorScheme.surfaceVariant)
                         .padding(Spacing.md),
                     verticalArrangement = Arrangement.spacedBy(Spacing.xs),
                 ) {
@@ -1569,23 +1590,23 @@ private fun RejectedDirectSalesStrip(
                     ) {
                         Text(
                             "Collected ${sale.amountMinor.asRupees()}",
-                            color = Brand.Foreground,
+                            color = MaterialTheme.colorScheme.onSurface,
                             fontWeight = FontWeight.Bold,
                         )
                         Text(
                             sale.createdAtMillis.asPosTime(),
-                            color = Brand.ForegroundFaint,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.labelSmall,
                         )
                     }
                     Text(
                         "Method · ${sale.paymentMethod.paymentMethodLabel()}",
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.labelSmall,
                     )
                     Text(
                         sale.error,
-                        color = Brand.Danger,
+                        color = MaterialTheme.colorScheme.operationalDanger,
                         style = MaterialTheme.typography.bodySmall,
                     )
                     ErpButton(
@@ -1623,11 +1644,11 @@ private fun HeldPaymentStatusStrip(
     val hasRejection = payments.any { it.state == HeldOrderPaymentState.REJECTED }
     Column(
         Modifier.fillMaxWidth().padding(horizontal = Spacing.md, vertical = Spacing.xs)
-            .clip(Radius.shapeMd).background(Brand.SurfaceRaised)
+            .clip(Radius.shapeMd).background(MaterialTheme.colorScheme.surfaceVariant)
             .border(
                 1.dp,
-                if (hasRejection) Brand.Danger.copy(alpha = 0.4f)
-                else Brand.Warning.copy(alpha = 0.4f),
+                if (hasRejection) MaterialTheme.colorScheme.operationalDanger.copy(alpha = 0.4f)
+                else MaterialTheme.colorScheme.operationalWarning.copy(alpha = 0.4f),
                 Radius.shapeMd,
             )
             .padding(Spacing.md),
@@ -1635,14 +1656,14 @@ private fun HeldPaymentStatusStrip(
     ) {
         Text(
             "Saved held-order payments (${payments.size})",
-            color = Brand.Foreground,
+            color = MaterialTheme.colorScheme.onSurface,
             style = MaterialTheme.typography.titleSmall,
             fontWeight = FontWeight.Bold,
         )
         Text(
             "Money was already marked received for these held orders. Never collect it " +
                 "again. Account switching stays locked until each saved payment is confirmed or reconciled.",
-            color = Brand.ForegroundMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.labelSmall,
         )
         LazyRow(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
@@ -1652,7 +1673,7 @@ private fun HeldPaymentStatusStrip(
                 Column(
                     Modifier.width(360.dp)
                         .clip(Radius.shapeMd)
-                        .background(Brand.SurfaceRaised)
+                        .background(MaterialTheme.colorScheme.surfaceVariant)
                         .padding(Spacing.md),
                     verticalArrangement = Arrangement.spacedBy(Spacing.xs),
                 ) {
@@ -1663,24 +1684,24 @@ private fun HeldPaymentStatusStrip(
                     ) {
                         Text(
                             payment.sourceLabel ?: "Order ${payment.targetOrderId.take(8)}",
-                            color = Brand.Foreground,
+                            color = MaterialTheme.colorScheme.onSurface,
                             fontWeight = FontWeight.Bold,
                         )
                         Text(
                             payment.createdAtMillis.asPosTime(),
-                            color = Brand.ForegroundFaint,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.labelSmall,
                         )
                     }
                     Text(
                         "Collected ${payment.amountMinor.asRupees()} · " +
                             payment.paymentMethod.paymentMethodLabel(),
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.labelSmall,
                     )
                     Text(
                         if (rejected) "Server refused this saved payment" else "Awaiting server confirmation",
-                        color = if (rejected) Brand.Danger else Brand.Warning,
+                        color = if (rejected) MaterialTheme.colorScheme.operationalDanger else MaterialTheme.colorScheme.operationalWarning,
                         style = MaterialTheme.typography.labelLarge,
                         fontWeight = FontWeight.SemiBold,
                     )
@@ -1690,7 +1711,7 @@ private fun HeldPaymentStatusStrip(
                         } else {
                             "The original safe payment identity will be replayed automatically."
                         },
-                        color = if (rejected) Brand.Danger else Brand.ForegroundMuted,
+                        color = if (rejected) MaterialTheme.colorScheme.operationalDanger else MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.bodySmall,
                     )
                     ErpButton(
@@ -1744,14 +1765,14 @@ private fun HeldOrdersStrip(
             },
             style = MaterialTheme.typography.labelLarge,
             fontWeight = FontWeight.SemiBold,
-            color = if (overdueOrderIds.isEmpty()) Brand.ForegroundMuted else Brand.Danger,
+            color = if (overdueOrderIds.isEmpty()) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.operationalDanger,
         )
         blockedReason?.let { reason ->
             Text(
                 reason,
                 modifier = Modifier.padding(top = Spacing.xs)
                     .semantics { liveRegion = LiveRegionMode.Polite },
-                color = Brand.Warning,
+                color = MaterialTheme.colorScheme.operationalWarning,
                 style = MaterialTheme.typography.labelSmall,
             )
         }
@@ -1769,7 +1790,7 @@ private fun HeldOrdersStrip(
                         "Alert opened: ${focused.sourceLabel ?: focused.invoiceNo ?: "held order"}. " +
                             "Review the highlighted card, then tap it to verify and bill.",
                         modifier = Modifier.weight(1f),
-                        color = Brand.Foreground,
+                        color = MaterialTheme.colorScheme.onSurface,
                         style = MaterialTheme.typography.labelSmall,
                     )
                     TextButton(onClick = onDismissFocus) { Text("Clear highlight") }
@@ -1788,13 +1809,13 @@ private fun HeldOrdersStrip(
                     Modifier.clip(Radius.shapeMd)
                         .background(
                             when {
-                                focused -> Brand.InformationMuted
-                                overdue -> Brand.Danger.copy(alpha = 0.16f)
-                                else -> Brand.SurfaceRaised
+                                focused -> MaterialTheme.colorScheme.operationalInformationContainer
+                                overdue -> MaterialTheme.colorScheme.operationalDanger.copy(alpha = 0.16f)
+                                else -> MaterialTheme.colorScheme.surfaceVariant
                             },
                         )
                         .then(
-                            if (focused) Modifier.border(2.dp, Brand.Information, Radius.shapeMd)
+                            if (focused) Modifier.border(2.dp, MaterialTheme.colorScheme.operationalInformation, Radius.shapeMd)
                             else Modifier,
                         )
                         .heightIn(min = 72.dp)
@@ -1804,7 +1825,7 @@ private fun HeldOrdersStrip(
                     Text(
                         order.sourceLabel ?: order.invoiceNo ?: "Order",
                         fontWeight = FontWeight.Bold,
-                        color = Brand.Foreground,
+                        color = MaterialTheme.colorScheme.onSurface,
                     )
                     Text(
                         if (preparingOrderId == order.id) {
@@ -1815,7 +1836,7 @@ private fun HeldOrdersStrip(
                             "${order.itemsCount} item(s) · due ${order.dueMinor.asRupees()}"
                         },
                         style = MaterialTheme.typography.labelSmall,
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     if (preparingOrderId == order.id) {
                         OperationalStatusBadge(
@@ -1872,8 +1893,8 @@ private fun EmptyMenuPanel(
 ) {
     Column(
         modifier = modifier.fillMaxWidth().clip(Radius.shapeLg)
-            .background(Brand.Surface)
-            .border(1.dp, Brand.BorderSubtle, Radius.shapeLg),
+            .background(MaterialTheme.colorScheme.surface)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeLg),
     ) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = Spacing.lg, vertical = Spacing.md),
@@ -1881,10 +1902,10 @@ private fun EmptyMenuPanel(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text("Menu catalogue", color = Brand.Foreground, style = MaterialTheme.typography.titleMedium)
+                Text("Menu catalogue", color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.titleMedium)
                 Text(
                     "Products available in this shop",
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
@@ -1893,7 +1914,7 @@ private fun EmptyMenuPanel(
                 tone = if (everSynced) UiTone.Neutral else UiTone.Warning,
             )
         }
-        HorizontalDivider(color = Brand.BorderSubtle)
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         DesignedEmptyState(
             title = if (everSynced) "The menu is empty" else "No menu on this tablet yet",
             body = if (everSynced) {
@@ -1942,14 +1963,14 @@ internal fun ProductConfigurationDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = Brand.SurfaceOverlay,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = Radius.shapeLg,
         title = {
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text("Customise ${item.name}")
                 Text(
                     "Unit price ${configuredPrice.asRupees()}",
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.labelMedium,
                 )
             }
@@ -2006,7 +2027,7 @@ internal fun ProductConfigurationDialog(
                                         group.minSelect > 0 -> "Choose ${group.minSelect}–${group.maxSelect}"
                                         else -> "Optional · up to ${group.maxSelect}"
                                     },
-                                    color = Brand.ForegroundMuted,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     style = MaterialTheme.typography.labelSmall,
                                 )
                             }
@@ -2023,18 +2044,18 @@ internal fun ProductConfigurationDialog(
                             val qty = selectedQuantities[option.id] ?: 0
                             Row(
                                 Modifier.fillMaxWidth().clip(Radius.shapeMd)
-                                    .background(Brand.SurfaceRaised)
-                                    .border(1.dp, Brand.BorderSubtle, Radius.shapeMd)
+                                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeMd)
                                     .padding(Spacing.sm),
                                 horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 Column(Modifier.weight(1f)) {
-                                    Text(option.name, color = Brand.Foreground)
+                                    Text(option.name, color = MaterialTheme.colorScheme.onSurface)
                                     Text(
                                         if (option.priceDeltaMinor == 0L) "Included"
                                         else "+${option.priceDeltaMinor.asRupees()} each",
-                                        color = Brand.ForegroundMuted,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         style = MaterialTheme.typography.labelSmall,
                                     )
                                 }
@@ -2070,7 +2091,7 @@ internal fun ProductConfigurationDialog(
                     )
                 }
                 groupError?.let { message ->
-                    item { Text(message, color = Brand.Warning, style = MaterialTheme.typography.labelMedium) }
+                    item { Text(message, color = MaterialTheme.colorScheme.operationalWarning, style = MaterialTheme.typography.labelMedium) }
                 }
             }
         },
@@ -2109,7 +2130,7 @@ private fun OrderDetailsDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = Brand.SurfaceOverlay,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = Radius.shapeLg,
         title = { Text("Sale details & discount") },
         text = {
@@ -2123,7 +2144,7 @@ private fun OrderDetailsDialog(
                     } else {
                         "The note and discount stay with this saved counter sale. The final total is verified online before payment."
                     },
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodySmall,
                 )
                 if (presentation.showsCustomers) {
@@ -2223,8 +2244,8 @@ private fun ProductCatalogPanel(
     Column(
         // Let the shared light treatment show through a sparse real catalogue.
         modifier = modifier.clip(Radius.shapeLg)
-            .background(PosInk.copy(alpha = 0.82f))
-            .border(1.dp, Brand.Gold.copy(alpha = 0.12f), Radius.shapeLg),
+            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.94f))
+            .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.12f), Radius.shapeLg),
     ) {
         SearchInput(
             value = query,
@@ -2246,13 +2267,13 @@ private fun ProductCatalogPanel(
             ) {
                 Text(
                     "MENU",
-                    color = Brand.GoldBright,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
                     style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.Bold,
                 )
                 Text(
                     "${visibleItems.size} ITEM${if (visibleItems.size == 1) "" else "S"}",
-                    color = Brand.ForegroundFaint,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.labelSmall,
                 )
             }
@@ -2313,10 +2334,10 @@ private fun CategoryStrip(
     onSelect: (String?) -> Unit,
 ) {
     val colors = FilterChipDefaults.filterChipColors(
-        containerColor = PosInkRaised,
-        labelColor = Brand.ForegroundMuted,
-        selectedContainerColor = Color(0xFFE2B85F),
-        selectedLabelColor = PosInk,
+        containerColor = MaterialTheme.colorScheme.surfaceContainer,
+        labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+        selectedContainerColor = MaterialTheme.colorScheme.primary,
+        selectedLabelColor = MaterialTheme.colorScheme.onPrimary,
     )
     LazyRow(
         contentPadding = PaddingValues(horizontal = Spacing.sm),
@@ -2370,12 +2391,16 @@ private fun MenuTile(
             .clip(Radius.shapeLg)
             .background(
                 Brush.verticalGradient(
-                    listOf(Color(0xFF1B292E), Color(0xFF101E25), PosInk),
+                    listOf(
+                        MaterialTheme.colorScheme.surfaceContainerHigh,
+                        MaterialTheme.colorScheme.surfaceContainer,
+                        MaterialTheme.colorScheme.surface,
+                    ),
                 ),
             )
             .border(
                 1.dp,
-                if (pressed && enabled) Brand.GoldBright else Brand.Gold.copy(alpha = 0.30f),
+                if (pressed && enabled) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.primary.copy(alpha = 0.30f),
                 Radius.shapeLg,
             )
             .semantics {
@@ -2401,13 +2426,13 @@ private fun MenuTile(
                 .background(
                     Brush.radialGradient(
                         listOf(
-                            Color(0xFF4A3822),
-                            Color(0xFF17252B),
-                            Color(0xFF0A171E),
+                            MaterialTheme.colorScheme.surfaceContainerHighest,
+                            MaterialTheme.colorScheme.surfaceContainerHigh,
+                            MaterialTheme.colorScheme.surfaceContainer,
                         ),
                     ),
                 )
-                .border(1.dp, Brand.Gold.copy(alpha = 0.13f), Radius.shapeSm),
+                .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.13f), Radius.shapeSm),
             contentAlignment = Alignment.Center,
         ) {
             if (!categoryName.isNullOrBlank() && !compact) {
@@ -2416,7 +2441,7 @@ private fun MenuTile(
                     modifier = Modifier.align(Alignment.TopStart)
                         .padding(horizontal = Spacing.xs, vertical = 3.dp),
                     style = MaterialTheme.typography.labelSmall,
-                    color = Brand.GoldBright,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -2427,19 +2452,19 @@ private fun MenuTile(
                     .background(
                         Brush.radialGradient(
                             listOf(
-                                Brand.Gold.copy(alpha = 0.18f),
-                                Brand.Gold.copy(alpha = 0.04f),
+                                MaterialTheme.colorScheme.primary.copy(alpha = 0.18f),
+                                MaterialTheme.colorScheme.primary.copy(alpha = 0.04f),
                                 Color.Transparent,
                             ),
                         ),
                     )
-                    .border(1.dp, Brand.Gold.copy(alpha = 0.34f), CircleShape),
+                    .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.34f), CircleShape),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
                     icon,
                     contentDescription = null,
-                    tint = if (enabled) Brand.GoldBright else Brand.Disabled,
+                    tint = if (enabled) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(if (compact) 29.dp else 41.dp),
                 )
             }
@@ -2448,13 +2473,13 @@ private fun MenuTile(
             item.name,
             style = MaterialTheme.typography.bodySmall,
             fontWeight = FontWeight.SemiBold,
-            color = Brand.Foreground,
+            color = MaterialTheme.colorScheme.onSurface,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
         NumericValue(
             value = item.basePriceMinor.asRupees(),
-            color = Brand.GoldBright,
+            color = MaterialTheme.colorScheme.onPrimaryContainer,
             style = MaterialTheme.typography.labelLarge,
         )
     }
@@ -2472,11 +2497,9 @@ private fun PosCheckoutButton(
 ) {
     val active = enabled && !busy
     val finish = if (active) {
-        Brush.horizontalGradient(
-            listOf(Color(0xFFF2CF78), Color(0xFFD4A651), Color(0xFFEFC574)),
-        )
+        Brush.horizontalGradient(listOf(MaterialTheme.colorScheme.primary, MaterialTheme.colorScheme.primary))
     } else {
-        Brush.horizontalGradient(listOf(Brand.SurfaceRaised, Brand.SurfaceHover))
+        Brush.horizontalGradient(listOf(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.secondaryContainer))
     }
     Button(
         onClick = onClick,
@@ -2484,22 +2507,22 @@ private fun PosCheckoutButton(
         shape = Radius.shapeMd,
         colors = ButtonDefaults.buttonColors(
             containerColor = Color.Transparent,
-            contentColor = Brand.Background,
+            contentColor = MaterialTheme.colorScheme.onPrimary,
             disabledContainerColor = Color.Transparent,
-            disabledContentColor = if (busy) Brand.Foreground else Brand.Disabled,
+            disabledContentColor = if (busy) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
         ),
         modifier = modifier.heightIn(min = 48.dp)
             .clip(Radius.shapeMd)
             .background(finish)
             .border(
                 1.dp,
-                if (active) Color(0xFFFFDE91) else Brand.BorderSubtle,
+                if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
                 Radius.shapeMd,
             )
             .semantics { if (busy) stateDescription = "$text in progress" },
     ) {
         if (busy) {
-            CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Brand.Foreground)
+            CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onSurface)
             Spacer(Modifier.width(Spacing.sm))
         }
         Text(
@@ -2529,16 +2552,20 @@ private fun CartPanel(
         modifier = modifier.clip(Radius.shapeLg)
             .background(
                 Brush.verticalGradient(
-                    listOf(Color(0xFF142127), PosInkRaised, PosInk),
+                    listOf(
+                        MaterialTheme.colorScheme.surfaceContainerHigh,
+                        MaterialTheme.colorScheme.surfaceContainer,
+                        MaterialTheme.colorScheme.surface,
+                    ),
                 ),
             )
-            .border(1.dp, Brand.Gold.copy(alpha = 0.32f), Radius.shapeLg),
+            .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.32f), Radius.shapeLg),
     ) {
         Row(
             Modifier.fillMaxWidth()
                 .background(
                     Brush.horizontalGradient(
-                        listOf(Brand.Gold.copy(alpha = 0.13f), Color.Transparent),
+                        listOf(MaterialTheme.colorScheme.primary.copy(alpha = 0.13f), Color.Transparent),
                     ),
                 )
                 .padding(horizontal = Spacing.md, vertical = Spacing.sm),
@@ -2547,13 +2574,13 @@ private fun CartPanel(
         ) {
             Box(
                 Modifier.width(3.dp).height(22.dp).clip(Radius.shapePill)
-                    .background(Brand.GoldBright),
+                    .background(MaterialTheme.colorScheme.onPrimaryContainer),
             )
             Text(
                 "Current order",
                 modifier = Modifier.weight(1f),
                 style = MaterialTheme.typography.titleMedium,
-                color = Brand.Foreground,
+                color = MaterialTheme.colorScheme.onSurface,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
             )
@@ -2579,7 +2606,7 @@ private fun CartPanel(
                 }
             }
         }
-        HorizontalDivider(color = Brand.BorderSubtle)
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
         if (state.cart.isEmpty()) {
             DesignedEmptyState(
@@ -2610,7 +2637,7 @@ private fun CartPanel(
                             ) {
                                 Text(
                                     line.item.name,
-                                    color = Brand.Foreground,
+                                    color = MaterialTheme.colorScheme.onSurface,
                                     style = MaterialTheme.typography.bodySmall,
                                     fontWeight = FontWeight.SemiBold,
                                     maxLines = 1,
@@ -2628,7 +2655,7 @@ private fun CartPanel(
                                     Text(
                                         optionLabel,
                                         style = MaterialTheme.typography.labelSmall,
-                                        color = Brand.ForegroundMuted,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
                                     )
@@ -2636,7 +2663,7 @@ private fun CartPanel(
                                 Text(
                                     line.lineTotalMinor.asRupees(),
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = Brand.GoldBright,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
                                     fontWeight = FontWeight.SemiBold,
                                 )
                             }
@@ -2659,7 +2686,7 @@ private fun CartPanel(
                                 Text(
                                     "$qty",
                                     modifier = Modifier.padding(horizontal = Spacing.xs),
-                                    color = Brand.Foreground,
+                                    color = MaterialTheme.colorScheme.onSurface,
                                     fontWeight = FontWeight.Bold,
                                 )
                             }
@@ -2671,24 +2698,24 @@ private fun CartPanel(
                                 onIncrementLine(line.lineId)
                             }
                         }
-                        HorizontalDivider(color = Brand.BorderSubtle)
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                     }
                 }
             }
         }
 
-        HorizontalDivider(color = Brand.BorderSubtle)
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         Column(
             Modifier.fillMaxWidth().padding(Spacing.md),
             verticalArrangement = Arrangement.spacedBy(Spacing.xs),
         ) {
             PaymentAmountRow("Subtotal estimate", state.estimateMinor)
             if (state.manualDiscountMinor > 0L) {
-                PaymentAmountRow("Manual discount", -state.manualDiscountMinor, Brand.Good)
+                PaymentAmountRow("Manual discount", -state.manualDiscountMinor, MaterialTheme.colorScheme.operationalGood)
             } else if (!canDiscount && state.cart.isNotEmpty()) {
                 Text(
                     "Manager permission is required for manual discounts.",
-                    color = Brand.ForegroundFaint,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.labelSmall,
                 )
             }
@@ -2696,10 +2723,13 @@ private fun CartPanel(
                 Modifier.fillMaxWidth().clip(Radius.shapeMd)
                     .background(
                         Brush.horizontalGradient(
-                            listOf(Brand.Gold.copy(alpha = 0.18f), PosInkRaised),
+                            listOf(
+                                MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                                MaterialTheme.colorScheme.surfaceContainer,
+                            ),
                         ),
                     )
-                    .border(1.dp, Brand.Gold.copy(alpha = 0.48f), Radius.shapeMd)
+                    .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.48f), Radius.shapeMd)
                     .padding(horizontal = Spacing.sm, vertical = Spacing.xs),
             ) {
                 Row(
@@ -2709,13 +2739,13 @@ private fun CartPanel(
                 ) {
                     Text(
                         "Total estimate",
-                        color = Brand.Foreground,
+                        color = MaterialTheme.colorScheme.onSurface,
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.SemiBold,
                     )
                     NumericValue(
                         value = state.estimatedDueMinor.asRupees(),
-                        color = Brand.GoldBright,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
                         style = MaterialTheme.typography.headlineSmall,
                     )
                 }
@@ -2724,7 +2754,7 @@ private fun CartPanel(
                 Text(
                     if (state.online) "Exact total is verified before collecting payment."
                     else "Offline estimate is provisional until server reconciliation.",
-                    color = if (state.online) Brand.ForegroundFaint else Brand.Warning,
+                    color = if (state.online) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.operationalWarning,
                     style = MaterialTheme.typography.labelSmall,
                     maxLines = 2,
                 )
@@ -2732,8 +2762,8 @@ private fun CartPanel(
             if (state.cart.isNotEmpty()) {
                 Box(
                     Modifier.fillMaxWidth().clip(Radius.shapeMd)
-                        .background(PosTealMuted.copy(alpha = 0.30f))
-                        .border(1.dp, PosTeal.copy(alpha = 0.22f), Radius.shapeMd)
+                        .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeMd)
                         .padding(horizontal = Spacing.sm, vertical = Spacing.xs),
                 ) {
                     if (compact) {
@@ -2745,13 +2775,13 @@ private fun CartPanel(
                             Text(
                                 "Split payment",
                                 modifier = Modifier.weight(1f),
-                                color = Brand.Foreground,
+                                color = MaterialTheme.colorScheme.onSurface,
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.SemiBold,
                             )
                             Text(
                                 if (state.online) "CASH  +  UPI" else "Reconnect first",
-                                color = if (state.online) PosTeal else Brand.ForegroundMuted,
+                                color = if (state.online) MaterialTheme.colorScheme.operationalInformation else MaterialTheme.colorScheme.onSurfaceVariant,
                                 style = MaterialTheme.typography.labelSmall,
                                 maxLines = 1,
                             )
@@ -2760,14 +2790,14 @@ private fun CartPanel(
                         Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
                             Text(
                                 "Split payment",
-                                color = Brand.Foreground,
+                                color = MaterialTheme.colorScheme.onSurface,
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.SemiBold,
                             )
                             Text(
                                 if (state.online) "Cash + UPI, or other methods, after bill verification."
                                 else "Reconnect to verify the bill before splitting payment.",
-                                color = if (state.online) PosTeal else Brand.ForegroundMuted,
+                                color = if (state.online) MaterialTheme.colorScheme.operationalInformation else MaterialTheme.colorScheme.onSurfaceVariant,
                                 style = MaterialTheme.typography.labelSmall,
                                 maxLines = 2,
                             )
@@ -2805,7 +2835,7 @@ private fun CartPanel(
                 Text(
                     "One checkout is already in progress. Wait for its confirmation before taking another payment.",
                     style = MaterialTheme.typography.labelSmall,
-                    color = Brand.Information,
+                    color = MaterialTheme.colorScheme.operationalInformation,
                 )
             }
             if (
@@ -2817,14 +2847,14 @@ private fun CartPanel(
                 Text(
                     "This bill already exists on the server. Reconnect to refresh its exact total, take payment, or void it safely.",
                     style = MaterialTheme.typography.labelSmall,
-                    color = Brand.Warning,
+                    color = MaterialTheme.colorScheme.operationalWarning,
                 )
             }
             if (state.cart.isNotEmpty() && !state.canCollectPayment) {
                 Text(
                     state.shiftAccessMessage ?: "Open a shift before taking payment.",
                     style = MaterialTheme.typography.labelSmall,
-                    color = Brand.Warning,
+                    color = MaterialTheme.colorScheme.operationalWarning,
                 )
             }
         }
@@ -2912,7 +2942,7 @@ private fun HeldOrderReviewDialog(
 
     AlertDialog(
         onDismissRequest = { if (!busy) onDismiss() },
-        containerColor = Brand.SurfaceOverlay,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = Radius.shapeLg,
         modifier = Modifier.posPaymentDialogInsets(),
         properties = posImeAwareDialogProperties,
@@ -2930,17 +2960,17 @@ private fun HeldOrderReviewDialog(
             ) {
                 Text(
                     "Live server bill · no checkout claim or payment has started yet.",
-                    color = Brand.Information,
+                    color = MaterialTheme.colorScheme.operationalInformation,
                     style = MaterialTheme.typography.labelMedium,
                 )
                 review.invoiceNo?.let {
-                    Text("Invoice $it", color = Brand.ForegroundMuted)
+                    Text("Invoice $it", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
 
                 Column(
                     Modifier.fillMaxWidth().clip(Radius.shapeMd)
-                        .background(Brand.SurfaceRaised)
-                        .border(1.dp, Brand.BorderSubtle, Radius.shapeMd)
+                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeMd)
                         .padding(Spacing.md),
                     verticalArrangement = Arrangement.spacedBy(Spacing.sm),
                 ) {
@@ -2952,12 +2982,12 @@ private fun HeldOrderReviewDialog(
                     if (review.lines.isEmpty()) {
                         Text(
                             "The server supplied totals without item-level rows.",
-                            color = Brand.Warning,
+                            color = MaterialTheme.colorScheme.operationalWarning,
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
                     review.lines.forEachIndexed { index, line ->
-                        if (index > 0) HorizontalDivider(color = Brand.BorderSubtle)
+                        if (index > 0) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                         Row(
                             Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -2969,27 +2999,27 @@ private fun HeldOrderReviewDialog(
                             ) {
                                 Text(
                                     line.name,
-                                    color = Brand.Foreground,
+                                    color = MaterialTheme.colorScheme.onSurface,
                                     fontWeight = FontWeight.SemiBold,
                                 )
                                 Text(
                                     "${heldQuantityLabel(line.quantity)} × ${line.unitPriceMinor.asRupees()}",
-                                    color = Brand.ForegroundMuted,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     style = MaterialTheme.typography.labelSmall,
                                 )
                                 line.variantName?.let {
-                                    Text("Variant: $it", color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelSmall)
+                                    Text("Variant: $it", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
                                 }
                                 line.modifiers.forEach {
-                                    Text("+ $it", color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelSmall)
+                                    Text("+ $it", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
                                 }
                                 line.note?.let {
-                                    Text("Note: $it", color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelSmall)
+                                    Text("Note: $it", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
                                 }
                                 if (line.discountMinor > 0L) {
                                     Text(
                                         "Line discount ${line.discountMinor.asRupees()}",
-                                        color = Brand.Good,
+                                        color = MaterialTheme.colorScheme.operationalGood,
                                         style = MaterialTheme.typography.labelSmall,
                                     )
                                 }
@@ -3004,17 +3034,17 @@ private fun HeldOrderReviewDialog(
 
                 Column(
                     Modifier.fillMaxWidth().clip(Radius.shapeMd)
-                        .background(Brand.SurfaceRaised)
-                        .border(1.dp, Brand.BorderSubtle, Radius.shapeMd)
+                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeMd)
                         .padding(Spacing.md),
                     verticalArrangement = Arrangement.spacedBy(Spacing.xs),
                 ) {
                     PaymentAmountRow("Subtotal", review.subtotalMinor)
                     review.lineOrMembershipDiscountMinor.takeIf { it > 0L }?.let {
-                        PaymentAmountRow("Line / membership discounts", -it, Brand.Good)
+                        PaymentAmountRow("Line / membership discounts", -it, MaterialTheme.colorScheme.operationalGood)
                     }
                     review.manualDiscountMinor.takeIf { it > 0L }?.let {
-                        PaymentAmountRow("Manual discount", -it, Brand.Good)
+                        PaymentAmountRow("Manual discount", -it, MaterialTheme.colorScheme.operationalGood)
                     }
                     review.pointsRedeemedMinor.takeIf { it > 0L }?.let {
                         PaymentAmountRow(
@@ -3024,16 +3054,16 @@ private fun HeldOrderReviewDialog(
                                 "Legacy customer credit"
                             },
                             -it,
-                            Brand.Good,
+                            MaterialTheme.colorScheme.operationalGood,
                         )
                     }
                     review.taxMinor.takeIf { it != 0L }?.let { PaymentAmountRow("Tax", it) }
                     review.roundOffMinor.takeIf { it != 0L }?.let { PaymentAmountRow("Round-off", it) }
                     review.tipMinor.takeIf { it != 0L }?.let { PaymentAmountRow("Tip", it) }
-                    HorizontalDivider(color = Brand.BorderSubtle)
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                     PaymentAmountRow("Total", review.totalMinor, emphasized = true)
                     review.paidMinor.takeIf { it > 0L }?.let {
-                        PaymentAmountRow("Already paid", -it, Brand.Good)
+                        PaymentAmountRow("Already paid", -it, MaterialTheme.colorScheme.operationalGood)
                     }
                     PaymentAmountRow("Amount due", review.dueMinor, emphasized = true)
                 }
@@ -3055,12 +3085,12 @@ private fun HeldOrderReviewDialog(
                     if (review.paidMinor > 0L) {
                         Text(
                             "This bill already has a recorded payment, so its manual discount is locked.",
-                            color = Brand.Warning,
+                            color = MaterialTheme.colorScheme.operationalWarning,
                             style = MaterialTheme.typography.labelSmall,
                         )
                     }
                     discountError?.let {
-                        Text(it, color = Brand.Danger, style = MaterialTheme.typography.labelSmall)
+                        Text(it, color = MaterialTheme.colorScheme.operationalDanger, style = MaterialTheme.typography.labelSmall)
                     }
                     Row(
                         Modifier.fillMaxWidth(),
@@ -3087,14 +3117,14 @@ private fun HeldOrderReviewDialog(
                     if (hasUnsavedDiscount) {
                         Text(
                             "Apply this edited amount or restore ${review.manualDiscountMinor.asRupees()} before continuing.",
-                            color = Brand.Warning,
+                            color = MaterialTheme.colorScheme.operationalWarning,
                             style = MaterialTheme.typography.labelSmall,
                         )
                     }
                 } else {
                     Text(
                         "Manual discount changes, including clearing an existing discount, require manager discount permission.",
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
@@ -3102,7 +3132,7 @@ private fun HeldOrderReviewDialog(
                 if (!online) {
                     Text(
                         "Reconnect before changing the discount or reserving this bill for payment.",
-                        color = Brand.Warning,
+                        color = MaterialTheme.colorScheme.operationalWarning,
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
@@ -3145,8 +3175,14 @@ private fun DirectCheckoutReviewDialog(
     online: Boolean,
     busy: Boolean,
     loyaltyPointsBalance: Int?,
+    customerPhone: String?,
+    loyaltyProgramRevision: Long?,
+    loyaltyProgramRules: cloud.dcompany.erp.ui.screens.settings.LoyaltyProgramRulesDto?,
+    eligibleRewardCatalog: EligibleRewardCatalogState,
     showCustomerBenefits: Boolean,
-    onApplyPoints: (Int) -> Unit,
+    onApplyPoints: (ReviewedPointsRedemption) -> Unit,
+    onApplyReward: (ReviewedRewardRedemption) -> Unit,
+    onRefreshEligibleRewards: () -> Unit,
     onDismiss: () -> Unit,
     onContinue: () -> Unit,
 ) {
@@ -3156,9 +3192,18 @@ private fun DirectCheckoutReviewDialog(
     var pointsText by rememberSaveable(review.orderId, review.checkoutVersion) {
         mutableStateOf(review.pointsRedeemed.takeIf { it > 0 }?.toString().orEmpty())
     }
+    var pointsReviewRevision by remember(review.orderId, review.checkoutVersion) {
+        mutableStateOf<Long?>(null)
+    }
+    var pointsReviewMinorPerPoint by remember(review.orderId, review.checkoutVersion) {
+        mutableStateOf<Int?>(null)
+    }
+    var rewardReview by remember(review.orderId, review.checkoutVersion) {
+        mutableStateOf<ReviewedRewardRedemption?>(null)
+    }
     AlertDialog(
         onDismissRequest = { if (!busy) onDismiss() },
-        containerColor = Brand.SurfaceOverlay,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = Radius.shapeLg,
         modifier = Modifier.posPaymentDialogInsets(),
         properties = posImeAwareDialogProperties,
@@ -3171,19 +3216,19 @@ private fun DirectCheckoutReviewDialog(
                 Text(
                     "The server has priced this editable bill. Apply any customer benefit now; " +
                         "payment methods appear only after you continue.",
-                    color = Brand.Information,
+                    color = MaterialTheme.colorScheme.operationalInformation,
                     style = MaterialTheme.typography.labelMedium,
                 )
                 Column(
                     Modifier.fillMaxWidth().clip(Radius.shapeMd)
-                        .background(Brand.SurfaceRaised)
-                        .border(1.dp, Brand.BorderSubtle, Radius.shapeMd)
+                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeMd)
                         .padding(Spacing.md),
                     verticalArrangement = Arrangement.spacedBy(Spacing.xs),
                 ) {
                     PaymentAmountRow("Subtotal", review.subtotalMinor)
                     review.discountMinor.takeIf { it > 0L }?.let {
-                        PaymentAmountRow("Discounts and benefits", -it, Brand.Good)
+                        PaymentAmountRow("Discounts and benefits", -it, MaterialTheme.colorScheme.operationalGood)
                     }
                     review.taxMinor.takeIf { it != 0L }?.let {
                         PaymentAmountRow("Tax", it)
@@ -3191,15 +3236,15 @@ private fun DirectCheckoutReviewDialog(
                     review.roundOffMinor.takeIf { it != 0L }?.let {
                         PaymentAmountRow("Round-off", it)
                     }
-                    HorizontalDivider(color = Brand.BorderSubtle)
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                     PaymentAmountRow("Total", review.totalMinor, emphasized = true)
                 }
 
                 if (showCustomerBenefits) {
                     Column(
                         Modifier.fillMaxWidth().clip(Radius.shapeMd)
-                            .background(Brand.SurfaceRaised)
-                            .border(1.dp, Brand.BorderSubtle, Radius.shapeMd)
+                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeMd)
                             .padding(Spacing.md),
                         verticalArrangement = Arrangement.spacedBy(Spacing.sm),
                     ) {
@@ -3211,16 +3256,18 @@ private fun DirectCheckoutReviewDialog(
                             Column(Modifier.weight(1f)) {
                                 Text(
                                     "Loyalty points",
-                                    color = Brand.Foreground,
+                                    color = MaterialTheme.colorScheme.onSurface,
                                     style = MaterialTheme.typography.titleSmall,
                                     fontWeight = FontWeight.SemiBold,
                                 )
                                 Text(
                                     loyaltyPointsBalance?.let {
-                                        "$it last synced · worth " +
-                                            (it.toLong() * MINOR_PER_POINT).asRupees()
+                                        loyaltyProgramRules?.let { rules ->
+                                            "$it last synced · worth " +
+                                                (it.toLong() * rules.minorPerPoint).asRupees()
+                                        } ?: "$it last synced · point value unavailable"
                                     } ?: "The server verifies the live balance",
-                                    color = Brand.ForegroundMuted,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     style = MaterialTheme.typography.labelSmall,
                                 )
                             }
@@ -3236,7 +3283,15 @@ private fun DirectCheckoutReviewDialog(
                             val applyPoints = {
                                 if (pointsError == null) {
                                     editingPoints = false
-                                    onApplyPoints(requireNotNull(pointsText.toIntOrNull()))
+                                    onApplyPoints(
+                                        ReviewedPointsRedemption(
+                                            orderId = review.orderId,
+                                            checkoutVersion = review.checkoutVersion,
+                                            points = requireNotNull(pointsText.toIntOrNull()),
+                                            programRevision = pointsReviewRevision,
+                                            minorPerPoint = pointsReviewMinorPerPoint,
+                                        ),
+                                    )
                                 }
                             }
                             OutlinedTextField(
@@ -3244,7 +3299,11 @@ private fun DirectCheckoutReviewDialog(
                                 onValueChange = { pointsText = it.filter(Char::isDigit).take(7) },
                                 label = { Text("Points to use") },
                                 supportingText = {
-                                    Text(pointsError ?: "10 points = ₹1 · verified by the server")
+                                    Text(
+                                        pointsError ?: pointsReviewMinorPerPoint?.let {
+                                            "100 points = ${(100L * it).asRupees()} · verified by the server"
+                                        } ?: "Point value unavailable · refresh before applying",
+                                    )
                                 },
                                 isError = pointsError != null,
                                 enabled = online && !busy,
@@ -3293,6 +3352,8 @@ private fun DirectCheckoutReviewDialog(
                                             ?.toString()
                                             ?: loyaltyPointsBalance?.takeIf { it > 0 }
                                                 ?.toString().orEmpty()
+                                        pointsReviewRevision = loyaltyProgramRevision
+                                        pointsReviewMinorPerPoint = loyaltyProgramRules?.minorPerPoint
                                         editingPoints = true
                                     },
                                     intent = ActionIntent.Secondary,
@@ -3303,11 +3364,136 @@ private fun DirectCheckoutReviewDialog(
                                 if (review.pointsRedeemed > 0) {
                                     ErpButton(
                                         text = "Remove",
-                                        onClick = { onApplyPoints(0) },
+                                        onClick = {
+                                            onApplyPoints(
+                                                ReviewedPointsRedemption(
+                                                    review.orderId,
+                                                    review.checkoutVersion,
+                                                    0,
+                                                    null,
+                                                    null,
+                                                ),
+                                            )
+                                        },
                                         intent = ActionIntent.Quiet,
                                         enabled = online && !busy,
                                         modifier = Modifier.weight(1f),
                                     )
+                                }
+                            }
+                        }
+                    }
+                    loyaltyProgramRules?.let { program ->
+                        if (program.rewards.any { it.enabled }) {
+                            PanelDivider()
+                            Text("Fixed bill-credit rewards", style = MaterialTheme.typography.titleSmall)
+                            val selected = rewardReview
+                            if (selected == null) {
+                                val phone = customerPhone
+                                val revision = loyaltyProgramRevision
+                                val choices = if (phone != null && revision != null) {
+                                    rewardEligibilityChoices(
+                                        rules = program,
+                                        revision = revision,
+                                        phone = phone,
+                                        catalog = eligibleRewardCatalog,
+                                    )
+                                } else emptyList()
+                                when {
+                                    eligibleRewardCatalog.loading -> Text(
+                                        "Checking rank eligibility…",
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        style = MaterialTheme.typography.bodySmall,
+                                    )
+                                    choices.isEmpty() -> Column(
+                                        verticalArrangement = Arrangement.spacedBy(Spacing.xs),
+                                    ) {
+                                        Text(
+                                            eligibleRewardCatalog.error
+                                                ?: "Named reward eligibility is unavailable. Refresh before choosing a reward; ordinary checkout and generic points remain available.",
+                                            color = MaterialTheme.colorScheme.operationalWarning,
+                                            style = MaterialTheme.typography.bodySmall,
+                                        )
+                                        ErpButton(
+                                            text = "Retry reward check",
+                                            onClick = onRefreshEligibleRewards,
+                                            intent = ActionIntent.Quiet,
+                                            enabled = online && !busy && phone != null && revision != null,
+                                            modifier = Modifier.fillMaxWidth(),
+                                        )
+                                    }
+                                    else -> choices.forEach { choice ->
+                                        Column(verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+                                            ErpButton(
+                                                text = "${choice.label} · ${choice.pointsCost} pts → ${choice.valueMinor.asRupees()}",
+                                                onClick = {
+                                                    check(choice.eligible && choice.affordable)
+                                                    rewardReview = ReviewedRewardRedemption(
+                                                        orderId = review.orderId,
+                                                        checkoutVersion = review.checkoutVersion,
+                                                        key = choice.key,
+                                                        label = choice.label,
+                                                        description = choice.description,
+                                                        pointsCost = choice.pointsCost,
+                                                        valueMinor = choice.valueMinor,
+                                                        programRevision = requireNotNull(revision),
+                                                    )
+                                                },
+                                                intent = ActionIntent.Quiet,
+                                                enabled = online && !busy &&
+                                                    choice.eligible && choice.affordable,
+                                                modifier = Modifier.fillMaxWidth(),
+                                            )
+                                            choice.unavailableReason?.let { reason ->
+                                                Row(
+                                                    horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                ) {
+                                                    Icon(
+                                                        Icons.Filled.Lock,
+                                                        contentDescription = null,
+                                                        modifier = Modifier.size(14.dp),
+                                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    )
+                                                    Text(
+                                                        reason,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            } else {
+                                Column(
+                                    Modifier.fillMaxWidth().clip(Radius.shapeMd)
+                                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeMd)
+                                        .padding(Spacing.sm),
+                                    verticalArrangement = Arrangement.spacedBy(Spacing.xs),
+                                ) {
+                                    Text("Review ${selected.label}", fontWeight = FontWeight.SemiBold)
+                                    Text(selected.description, style = MaterialTheme.typography.bodySmall)
+                                    Text(
+                                        "${selected.pointsCost} points → ${selected.valueMinor.asRupees()} fixed bill credit · program revision ${selected.programRevision}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                    )
+                                    Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                                        ErpButton(
+                                            text = "Keep choosing",
+                                            onClick = { rewardReview = null },
+                                            intent = ActionIntent.Quiet,
+                                            modifier = Modifier.weight(1f),
+                                        )
+                                        ErpButton(
+                                            text = "Confirm reward",
+                                            onClick = { rewardReview = null; onApplyReward(selected) },
+                                            intent = ActionIntent.Primary,
+                                            enabled = online && !busy &&
+                                                loyaltyProgramRevision == selected.programRevision,
+                                            modifier = Modifier.weight(1f),
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -3317,7 +3503,7 @@ private fun DirectCheckoutReviewDialog(
                 if (!online) {
                     Text(
                         "Reconnect to publish and reserve this exact bill before payment.",
-                        color = Brand.Warning,
+                        color = MaterialTheme.colorScheme.operationalWarning,
                     )
                 }
             }
@@ -3427,7 +3613,7 @@ private fun PayDialog(
 
     AlertDialog(
         onDismissRequest = { if (!confirmationConsumed) onDismiss() },
-        containerColor = Brand.SurfaceOverlay,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = Radius.shapeLg,
         modifier = Modifier.posPaymentDialogInsets(),
         properties = posImeAwareDialogProperties,
@@ -3449,14 +3635,14 @@ private fun PayDialog(
                         "Live total verified and reserved for this checkout. Confirm only after " +
                             "receiving this exact amount.",
                         style = MaterialTheme.typography.labelSmall,
-                        color = Brand.Good,
+                        color = MaterialTheme.colorScheme.operationalGood,
                     )
                 }
                 if (totalMinor != null) {
                     Column(
                         Modifier.fillMaxWidth().clip(Radius.shapeMd)
-                            .background(Brand.SurfaceRaised)
-                            .border(1.dp, Brand.BorderSubtle, Radius.shapeMd)
+                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeMd)
                             .padding(Spacing.md),
                         verticalArrangement = Arrangement.spacedBy(Spacing.xs),
                     ) {
@@ -3466,10 +3652,10 @@ private fun PayDialog(
                         )
                             .coerceAtLeast(0L)
                         nonPointsDiscount.takeIf { it > 0L }?.let {
-                            PaymentAmountRow("Line / membership discounts", -it, Brand.Good)
+                            PaymentAmountRow("Line / membership discounts", -it, MaterialTheme.colorScheme.operationalGood)
                         }
                         manualDiscountMinor.takeIf { it > 0L }?.let {
-                            PaymentAmountRow("Manual discount", -it, Brand.Good)
+                            PaymentAmountRow("Manual discount", -it, MaterialTheme.colorScheme.operationalGood)
                         }
                         pointsRedeemedMinor.takeIf { it > 0L }?.let {
                             PaymentAmountRow(
@@ -3479,14 +3665,14 @@ private fun PayDialog(
                                     "Legacy customer credit"
                                 },
                                 -it,
-                                Brand.Good,
+                                MaterialTheme.colorScheme.operationalGood,
                             )
                         }
                         taxMinor?.takeIf { it != 0L }?.let { PaymentAmountRow("Tax", it) }
                         roundOffMinor?.takeIf { it != 0L }?.let { PaymentAmountRow("Round-off", it) }
                         tipMinor.takeIf { it != 0L }?.let { PaymentAmountRow("Tip", it) }
-                        HorizontalDivider(color = Brand.BorderSubtle)
-                        PaymentAmountRow("Total", totalMinor, Brand.Foreground, emphasized = true)
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                        PaymentAmountRow("Total", totalMinor, MaterialTheme.colorScheme.onSurface, emphasized = true)
                     }
                 }
                 if (splitAvailable) {
@@ -3502,8 +3688,8 @@ private fun PayDialog(
                             modifier = Modifier.weight(1f).heightIn(min = 48.dp),
                             shape = Radius.shapePill,
                             colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = Brand.InformationMuted,
-                                selectedLabelColor = Brand.Foreground,
+                                selectedContainerColor = MaterialTheme.colorScheme.operationalInformationContainer,
+                                selectedLabelColor = MaterialTheme.colorScheme.onSurface,
                             ),
                         )
                         FilterChip(
@@ -3514,8 +3700,8 @@ private fun PayDialog(
                             modifier = Modifier.weight(1f).heightIn(min = 48.dp),
                             shape = Radius.shapePill,
                             colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = Brand.InformationMuted,
-                                selectedLabelColor = Brand.Foreground,
+                                selectedContainerColor = MaterialTheme.colorScheme.operationalInformationContainer,
+                                selectedLabelColor = MaterialTheme.colorScheme.onSurface,
                             ),
                         )
                     }
@@ -3554,8 +3740,8 @@ private fun PayDialog(
                                 modifier = Modifier.weight(1f).heightIn(min = 48.dp),
                                 shape = Radius.shapePill,
                                 colors = FilterChipDefaults.filterChipColors(
-                                    selectedContainerColor = Brand.InformationMuted,
-                                    selectedLabelColor = Brand.Foreground,
+                                    selectedContainerColor = MaterialTheme.colorScheme.operationalInformationContainer,
+                                    selectedLabelColor = MaterialTheme.colorScheme.onSurface,
                                 ),
                             )
                         }
@@ -3564,8 +3750,8 @@ private fun PayDialog(
                 if (showCustomerBenefits && onApplyPoints != null) {
                     Column(
                         Modifier.fillMaxWidth().clip(Radius.shapeMd)
-                            .background(Brand.SurfaceRaised)
-                            .border(1.dp, Brand.BorderSubtle, Radius.shapeMd)
+                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeMd)
                             .padding(Spacing.md),
                         verticalArrangement = Arrangement.spacedBy(Spacing.sm),
                     ) {
@@ -3577,15 +3763,15 @@ private fun PayDialog(
                             Column(Modifier.weight(1f)) {
                                 Text(
                                     "Loyalty points",
-                                    color = Brand.Foreground,
+                                    color = MaterialTheme.colorScheme.onSurface,
                                     style = MaterialTheme.typography.titleSmall,
                                     fontWeight = FontWeight.SemiBold,
                                 )
                                 Text(
                                     loyaltyPointsBalance?.let {
-                                        "$it last synced · worth ${(it.toLong() * MINOR_PER_POINT).asRupees()}"
+                                        "$it last synced · server verifies the current point value"
                                     } ?: "Balance will be verified by the server",
-                                    color = Brand.ForegroundMuted,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     style = MaterialTheme.typography.labelSmall,
                                 )
                             }
@@ -3690,13 +3876,13 @@ private fun PayDialog(
                             Text(
                                 "Change due  ${changeMinor.asRupees()}",
                                 style = MaterialTheme.typography.headlineMedium,
-                                color = Brand.Good,
+                                color = MaterialTheme.colorScheme.operationalGood,
                             )
                         } else {
                             Text(
                                 "Short by  ${(-changeMinor).asRupees()}",
                                 style = MaterialTheme.typography.headlineMedium,
-                                color = Brand.Danger,
+                                color = MaterialTheme.colorScheme.operationalDanger,
                             )
                         }
                     }
@@ -3721,14 +3907,14 @@ private fun PayDialog(
                                 "another device, so an offline cached total is not safe to collect."
                         },
                         style = MaterialTheme.typography.labelSmall,
-                        color = Brand.Warning,
+                        color = MaterialTheme.colorScheme.operationalWarning,
                     )
                 }
                 if (confirmationConsumed) {
                     Text(
                         "This payment was submitted once. Keep the app open while the saved payment is confirmed; do not collect again.",
                         modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive },
-                        color = Brand.Information,
+                        color = MaterialTheme.colorScheme.operationalInformation,
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
@@ -3759,7 +3945,7 @@ private fun PayDialog(
             Row(horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
                 onVoid?.let {
                     TextButton(onClick = it, enabled = !confirmationConsumed) {
-                        Text("Void bill", color = Brand.Danger)
+                        Text("Void bill", color = MaterialTheme.colorScheme.operationalDanger)
                     }
                 }
                 TextButton(onClick = onDismiss, enabled = !confirmationConsumed) { Text("Cancel") }
@@ -3809,27 +3995,27 @@ private fun SplitTenderEditor(
 
     Column(
         Modifier.fillMaxWidth().clip(Radius.shapeMd)
-            .background(Brand.SurfaceRaised)
-            .border(1.dp, Brand.BorderSubtle, Radius.shapeMd)
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeMd)
             .padding(Spacing.md),
         verticalArrangement = Arrangement.spacedBy(Spacing.sm),
     ) {
         Text(
             "Split tender is one atomic bill payment. Choose 2–5 unique methods; " +
                 "the amounts must total ${dueMinor.asRupees()}.",
-            color = Brand.Information,
+            color = MaterialTheme.colorScheme.operationalInformation,
             style = MaterialTheme.typography.labelMedium,
         )
         Text(
             "Split mode settles the bill only. An additional tip cannot be added here.",
-            color = Brand.ForegroundMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.labelSmall,
         )
         if (confirmedAllocation.size >= 2) {
-            Text("Payment allocation", color = Brand.Foreground, style = MaterialTheme.typography.labelMedium)
+            Text("Payment allocation", color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.labelMedium)
             Row(
                 Modifier.fillMaxWidth().height(10.dp).clip(Radius.shapePill)
-                    .background(Brand.BorderSubtle)
+                    .background(MaterialTheme.colorScheme.outlineVariant)
                     .semantics {
                         contentDescription = confirmedAllocation.joinToString { (method, amountMinor) ->
                             "${SplitPaymentPolicy.methodLabel(method)} ${amountMinor.asRupees()}"
@@ -3838,10 +4024,10 @@ private fun SplitTenderEditor(
             ) {
                 confirmedAllocation.forEach { (method, amountMinor) ->
                     val color = when (method) {
-                        "cash" -> Brand.Good
-                        "upi" -> PosTeal
-                        "card" -> Brand.GoldBright
-                        else -> Brand.Warning
+                        "cash" -> MaterialTheme.colorScheme.operationalGood
+                        "upi" -> MaterialTheme.colorScheme.operationalInformation
+                        "card" -> MaterialTheme.colorScheme.onPrimaryContainer
+                        else -> MaterialTheme.colorScheme.operationalWarning
                     }
                     Box(
                         Modifier.weight((amountMinor.toDouble() / dueMinor.toDouble()).toFloat())
@@ -3852,14 +4038,14 @@ private fun SplitTenderEditor(
             LazyRow(horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
                 items(confirmedAllocation, key = { it.first }) { (method, amountMinor) ->
                     val accent = when (method) {
-                        "cash" -> Brand.Good
-                        "upi" -> PosTeal
-                        "card" -> Brand.GoldBright
-                        else -> Brand.Warning
+                        "cash" -> MaterialTheme.colorScheme.operationalGood
+                        "upi" -> MaterialTheme.colorScheme.operationalInformation
+                        "card" -> MaterialTheme.colorScheme.onPrimaryContainer
+                        else -> MaterialTheme.colorScheme.operationalWarning
                     }
                     Column(
                         Modifier.widthIn(min = 104.dp).clip(Radius.shapeSm)
-                            .background(Brand.SurfaceHover)
+                            .background(MaterialTheme.colorScheme.secondaryContainer)
                             .border(1.dp, accent.copy(alpha = 0.35f), Radius.shapeSm)
                             .padding(horizontal = Spacing.sm, vertical = Spacing.xs),
                     ) {
@@ -3870,7 +4056,7 @@ private fun SplitTenderEditor(
                         )
                         Text(
                             amountMinor.asRupees(),
-                            color = Brand.Foreground,
+                            color = MaterialTheme.colorScheme.onSurface,
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.SemiBold,
                         )
@@ -3881,10 +4067,10 @@ private fun SplitTenderEditor(
         LazyRow(horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
             items(orderedMethods, key = { it }) { splitMethod ->
                 val accent = when (splitMethod) {
-                    "cash" -> Brand.Good
-                    "upi" -> PosTeal
-                    "card" -> Brand.GoldBright
-                    else -> Brand.Information
+                    "cash" -> MaterialTheme.colorScheme.operationalGood
+                    "upi" -> MaterialTheme.colorScheme.operationalInformation
+                    "card" -> MaterialTheme.colorScheme.onPrimaryContainer
+                    else -> MaterialTheme.colorScheme.operationalInformation
                 }
                 FilterChip(
                     selected = splitMethod in selectedMethods,
@@ -3961,7 +4147,7 @@ private fun SplitTenderEditor(
                 Text(
                     if (change >= 0L) "Cash change due  ${change.asRupees()}"
                     else "Cash short by  ${(-change).asRupees()}",
-                    color = if (change >= 0L) Brand.Good else Brand.Danger,
+                    color = if (change >= 0L) MaterialTheme.colorScheme.operationalGood else MaterialTheme.colorScheme.operationalDanger,
                     style = MaterialTheme.typography.titleMedium,
                 )
             }
@@ -3974,7 +4160,7 @@ private fun SplitTenderEditor(
                     "Allocated too much by ${(-balanceMinor).asRupees()}"
                 else -> validationMessage
             },
-            color = if (validationMessage == null) Brand.Good else Brand.Warning,
+            color = if (validationMessage == null) MaterialTheme.colorScheme.operationalGood else MaterialTheme.colorScheme.operationalWarning,
             style = MaterialTheme.typography.labelMedium,
         )
     }
@@ -3984,7 +4170,7 @@ private fun SplitTenderEditor(
 private fun PaymentAmountRow(
     label: String,
     amountMinor: Long,
-    valueColor: androidx.compose.ui.graphics.Color = Brand.Foreground,
+    valueColor: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.onSurface,
     emphasized: Boolean = false,
 ) {
     Row(
@@ -3994,7 +4180,7 @@ private fun PaymentAmountRow(
     ) {
         Text(
             label,
-            color = if (emphasized) Brand.Foreground else Brand.ForegroundMuted,
+            color = if (emphasized) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
             style = if (emphasized) MaterialTheme.typography.titleSmall
             else MaterialTheme.typography.bodySmall,
             fontWeight = if (emphasized) FontWeight.SemiBold else FontWeight.Normal,
@@ -4024,7 +4210,7 @@ private fun DirectZeroTotalCompletionDialog(
     }
     AlertDialog(
         onDismissRequest = { if (!confirmationConsumed) onDismiss() },
-        containerColor = Brand.SurfaceOverlay,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = Radius.shapeLg,
         title = { Text("Complete bill · ₹0.00 due") },
         text = {
@@ -4035,14 +4221,14 @@ private fun DirectZeroTotalCompletionDialog(
                     } else {
                         "The server verified that recorded discounts or legacy credits cover this bill in full."
                     },
-                    color = Brand.Good,
+                    color = MaterialTheme.colorScheme.operationalGood,
                     style = MaterialTheme.typography.labelMedium,
                 )
                 PaymentAmountRow("Subtotal", checkout.subtotalMinor)
                 val nonPointsDiscount = (checkout.discountMinor - checkout.pointsRedeemedMinor)
                     .coerceAtLeast(0L)
                 if (nonPointsDiscount > 0L) {
-                    PaymentAmountRow("Other discounts", -nonPointsDiscount, Brand.Good)
+                    PaymentAmountRow("Other discounts", -nonPointsDiscount, MaterialTheme.colorScheme.operationalGood)
                 }
                 if (checkout.pointsRedeemedMinor > 0L) {
                     PaymentAmountRow(
@@ -4052,16 +4238,16 @@ private fun DirectZeroTotalCompletionDialog(
                             "Legacy customer credit"
                         },
                         -checkout.pointsRedeemedMinor,
-                        Brand.Good,
+                        MaterialTheme.colorScheme.operationalGood,
                     )
                 }
                 PaymentAmountRow("Total", checkout.totalMinor, emphasized = true)
                 Text(
                     "Collect no money. Completing issues the final receipt and consumes the benefit once.",
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 if (!online) {
-                    Text("Reconnect before completing this bill.", color = Brand.Warning)
+                    Text("Reconnect before completing this bill.", color = MaterialTheme.colorScheme.operationalWarning)
                 }
             }
         },
@@ -4080,7 +4266,7 @@ private fun DirectZeroTotalCompletionDialog(
             Row(horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
                 onVoid?.let {
                     TextButton(onClick = it, enabled = !confirmationConsumed) {
-                        Text("Void bill", color = Brand.Danger)
+                        Text("Void bill", color = MaterialTheme.colorScheme.operationalDanger)
                     }
                 }
                 TextButton(onClick = onDismiss, enabled = !confirmationConsumed) { Text("Cancel") }
@@ -4116,7 +4302,7 @@ private fun ZeroTotalCompletionDialog(
 
     AlertDialog(
         onDismissRequest = { if (!confirmationConsumed) onDismiss() },
-        containerColor = Brand.SurfaceOverlay,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = Radius.shapeLg,
         title = {
             Text(
@@ -4132,17 +4318,17 @@ private fun ZeroTotalCompletionDialog(
                 Text(
                     "Live member-benefit total verified and reserved for this checkout.",
                     style = MaterialTheme.typography.labelSmall,
-                    color = Brand.Good,
+                    color = MaterialTheme.colorScheme.operationalGood,
                 )
                 Text(
                     "Collect no money.",
                     fontWeight = FontWeight.Bold,
-                    color = Brand.Foreground,
+                    color = MaterialTheme.colorScheme.onSurface,
                 )
                 Column(
                     Modifier.fillMaxWidth().clip(Radius.shapeMd)
-                        .background(Brand.SurfaceRaised)
-                        .border(1.dp, Brand.BorderSubtle, Radius.shapeMd)
+                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeMd)
                         .padding(Spacing.md),
                     verticalArrangement = Arrangement.spacedBy(Spacing.xs),
                 ) {
@@ -4152,26 +4338,26 @@ private fun ZeroTotalCompletionDialog(
                             checkout.pointsRedeemedMinor
                     ).coerceAtLeast(0L)
                     otherDiscount.takeIf { it > 0L }?.let {
-                        PaymentAmountRow("Line / membership discounts", -it, Brand.Good)
+                        PaymentAmountRow("Line / membership discounts", -it, MaterialTheme.colorScheme.operationalGood)
                     }
                     checkout.manualDiscountMinor.takeIf { it > 0L }?.let {
-                        PaymentAmountRow("Manual discount", -it, Brand.Good)
+                        PaymentAmountRow("Manual discount", -it, MaterialTheme.colorScheme.operationalGood)
                     }
                     checkout.pointsRedeemedMinor.takeIf { it > 0L }?.let {
-                        PaymentAmountRow("Customer benefit", -it, Brand.Good)
+                        PaymentAmountRow("Customer benefit", -it, MaterialTheme.colorScheme.operationalGood)
                     }
                     checkout.taxMinor.takeIf { it != 0L }?.let { PaymentAmountRow("Tax", it) }
                     checkout.roundOffMinor.takeIf { it != 0L }?.let {
                         PaymentAmountRow("Round-off", it)
                     }
                     checkout.tipMinor.takeIf { it != 0L }?.let { PaymentAmountRow("Tip", it) }
-                    HorizontalDivider(color = Brand.BorderSubtle)
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                     PaymentAmountRow("Total", checkout.totalMinor, emphasized = true)
                 }
                 Text(
                     "Complete this exact bill to consume the reserved benefit and issue its " +
                         "final invoice. This action does not create a cash, UPI, or card payment.",
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Text(
                     if (online) {
@@ -4182,13 +4368,13 @@ private fun ZeroTotalCompletionDialog(
                             "queued or consumed until the server confirms it."
                     },
                     style = MaterialTheme.typography.labelSmall,
-                    color = if (online) Brand.ForegroundMuted else Brand.Warning,
+                    color = if (online) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.operationalWarning,
                 )
                 if (confirmationConsumed) {
                     Text(
                         "Completion was submitted once. Wait for server confirmation; do not repeat this action.",
                         modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive },
-                        color = Brand.Information,
+                        color = MaterialTheme.colorScheme.operationalInformation,
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
@@ -4211,7 +4397,7 @@ private fun ZeroTotalCompletionDialog(
             Row(horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
                 onVoid?.let {
                     TextButton(onClick = it, enabled = !confirmationConsumed) {
-                        Text("Void bill", color = Brand.Danger)
+                        Text("Void bill", color = MaterialTheme.colorScheme.operationalDanger)
                     }
                 }
                 TextButton(onClick = onDismiss, enabled = !confirmationConsumed) { Text("Cancel") }
@@ -4248,15 +4434,15 @@ private fun QtyButton(
     ) {
         Box(
             Modifier.size(32.dp).clip(Radius.shapeSm)
-                .background(if (pressed && enabled) Brand.Gold.copy(alpha = 0.18f) else PosInkRaised)
+                .background(if (pressed && enabled) MaterialTheme.colorScheme.primary.copy(alpha = 0.18f) else MaterialTheme.colorScheme.surfaceContainer)
                 .border(
                     1.dp,
-                    if (pressed && enabled) Brand.GoldBright else Brand.Gold.copy(alpha = 0.18f),
+                    if (pressed && enabled) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.primary.copy(alpha = 0.18f),
                     Radius.shapeSm,
                 ),
             contentAlignment = Alignment.Center,
         ) {
-            Text(label, color = Brand.GoldBright, fontWeight = FontWeight.Bold)
+            Text(label, color = MaterialTheme.colorScheme.onPrimaryContainer, fontWeight = FontWeight.Bold)
         }
     }
 }

@@ -28,6 +28,7 @@ from app.core.tenant import TenantContext
 from app.models import (
     Company,
     Customer,
+    CustomerGamingRankAward,
     GamingPlaytimeProgramSettings,
     GamingSession,
     Order,
@@ -50,12 +51,20 @@ from app.services.customers.playtime import (
     customer_playtime,
     leaderboard,
 )
-from app.services.pos.points import gaming_rank, rank_progress, rewards_available_to
+from app.services.customers.identity import find_unique_gaming_customer_by_phone
+from app.services.pos.loyalty_program import (
+    LoadedLoyaltyProgram,
+    load_loyalty_program,
+    points_to_minor,
+    project_rank,
+    rank_index,
+)
 
 router = APIRouter()
 
 
 class RewardRead(BaseModel):
+    program_revision: int
     key: str
     name: str
     description: str
@@ -81,6 +90,8 @@ class CustomerRead(BaseModel):
     next_gaming_rank: str | None
     next_gaming_rank_floor: int | None
     points_to_next_gaming_rank: int | None
+    loyalty_program_revision: int
+    loyalty_point_value_minor: int
     last_visit_at: datetime | None
     notes: str | None
 
@@ -204,20 +215,73 @@ class CustomerPlaytimeRead(BaseModel):
 
 
 # ---------------------------------------------------------------- helpers
-def _to_read(c: Customer) -> CustomerRead:
-    progress = rank_progress(c.lifetime_gaming_points_earned)
+def _to_read(
+    c: Customer,
+    *,
+    program: LoadedLoyaltyProgram,
+    awarded_keys: set[str],
+) -> CustomerRead:
+    progress = project_rank(
+        program.rules,
+        lifetime_points=c.lifetime_gaming_points_earned,
+        awarded_keys=awarded_keys,
+    )
     return CustomerRead(
         id=c.id, name=c.name, phone=c.phone, email=c.email,
         birthday=c.birthday, visit_count=c.visit_count,
         total_spent_minor=c.total_spent_minor, loyalty_points=c.loyalty_points,
         lifetime_gaming_points_earned=progress.lifetime_points,
-        gaming_rank=progress.rank,
+        gaming_rank=progress.label,
         gaming_rank_floor=progress.rank_floor,
-        next_gaming_rank=progress.next_rank,
-        next_gaming_rank_floor=progress.next_rank_floor,
-        points_to_next_gaming_rank=progress.points_to_next_rank,
+        next_gaming_rank=progress.next_label,
+        next_gaming_rank_floor=progress.next_floor,
+        points_to_next_gaming_rank=progress.points_to_next,
+        loyalty_program_revision=program.revision,
+        loyalty_point_value_minor=program.rules.minor_per_point,
         last_visit_at=c.last_visit_at, notes=c.notes,
     )
+
+
+async def _award_keys_by_customer(
+    session,
+    *,
+    company_id: UUID,
+    customer_ids: list[UUID],
+) -> dict[UUID, set[str]]:
+    if not customer_ids:
+        return {}
+    rows = (
+        await session.execute(
+            select(CustomerGamingRankAward.customer_id, CustomerGamingRankAward.rank_key)
+            .where(
+                CustomerGamingRankAward.company_id == company_id,
+                CustomerGamingRankAward.customer_id.in_(customer_ids),
+            )
+        )
+    ).all()
+    out: dict[UUID, set[str]] = {}
+    for customer_id, rank_key in rows:
+        out.setdefault(customer_id, set()).add(rank_key)
+    return out
+
+
+async def _customers_to_read(
+    session,
+    *,
+    company_id: UUID,
+    customers: list[Customer],
+    program: LoadedLoyaltyProgram | None = None,
+) -> list[CustomerRead]:
+    current = program or await load_loyalty_program(
+        session, company_id=company_id, company_lock="share"
+    )
+    award_keys = await _award_keys_by_customer(
+        session, company_id=company_id, customer_ids=[row.id for row in customers]
+    )
+    return [
+        _to_read(row, program=current, awarded_keys=award_keys.get(row.id, set()))
+        for row in customers
+    ]
 
 
 _DEFAULT_PLAYTIME_PROGRAM = PlaytimeProgram(600, 60)
@@ -264,6 +328,9 @@ async def list_customers(
     q: str | None = None,
     limit: int = 100,
 ) -> list[CustomerRead]:
+    program = await load_loyalty_program(
+        session, company_id=tenant.company_id, company_lock="share"
+    )
     revision = await read_customer_directory_revision(
         session, company_id=tenant.company_id
     )
@@ -279,7 +346,9 @@ async def list_customers(
         like = f"%{q}%"
         stmt = stmt.where(or_(Customer.phone.ilike(like), Customer.name.ilike(like)))
     rows = (await session.execute(stmt)).scalars().all()
-    return [_to_read(c) for c in rows]
+    return await _customers_to_read(
+        session, company_id=tenant.company_id, customers=list(rows), program=program
+    )
 
 
 @router.get("/playtime/program-draft", response_model=PlaytimeProgramRead)
@@ -406,6 +475,9 @@ async def get_by_phone(
 ) -> CustomerRead | None:
     """Quick POS lookup — returns the customer or null. Used during checkout
     to auto-fill a returning customer's name."""
+    program = await load_loyalty_program(
+        session, company_id=tenant.company_id, company_lock="share"
+    )
     directory_revision = await read_customer_directory_revision(
         session,
         company_id=tenant.company_id,
@@ -421,7 +493,41 @@ async def get_by_phone(
             )
         )
     ).scalar_one_or_none()
-    return _to_read(c) if c else None
+    if c is None:
+        return None
+    return (await _customers_to_read(
+        session, company_id=tenant.company_id, customers=[c], program=program
+    ))[0]
+
+
+@router.get("/gaming-by-phone/{phone}", response_model=CustomerRead | None)
+async def get_by_gaming_phone(
+    phone: str,
+    response: Response,
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("pos.read")),
+) -> CustomerRead | None:
+    """Read-only normalized gaming identity lookup; ambiguous matches conflict."""
+
+    program = await load_loyalty_program(
+        session, company_id=tenant.company_id, company_lock="share"
+    )
+    directory_revision = await read_customer_directory_revision(
+        session,
+        company_id=tenant.company_id,
+    )
+    response.headers[CUSTOMER_DIRECTORY_REVISION_HEADER] = str(directory_revision)
+    response.headers[CUSTOMER_DIRECTORY_COMPANY_HEADER] = str(tenant.company_id)
+    customer = await find_unique_gaming_customer_by_phone(
+        session,
+        company_id=tenant.company_id,
+        phone=phone,
+    )
+    if customer is None:
+        return None
+    return (await _customers_to_read(
+        session, company_id=tenant.company_id, customers=[customer], program=program
+    ))[0]
 
 
 @router.get("/by-phone/{phone}/rewards", response_model=list[RewardRead])
@@ -432,6 +538,9 @@ async def get_rewards_by_phone(
 ) -> list[RewardRead]:
     """Rewards this phone number's rank has unlocked, with an affordable flag
     against their current spendable balance — for the POS redemption menu."""
+    program = await load_loyalty_program(
+        session, company_id=tenant.company_id, company_lock="share"
+    )
     c = (
         await session.execute(
             select(Customer).where(
@@ -443,14 +552,26 @@ async def get_rewards_by_phone(
     ).scalar_one_or_none()
     if not c:
         return []
-    rank = gaming_rank(c.lifetime_gaming_points_earned)
+    awarded = (await _award_keys_by_customer(
+        session, company_id=tenant.company_id, customer_ids=[c.id]
+    )).get(c.id, set())
+    projection = project_rank(
+        program.rules,
+        lifetime_points=c.lifetime_gaming_points_earned,
+        awarded_keys=awarded,
+    )
     return [
         RewardRead(
-            key=r.key, name=r.name, description=r.description,
-            points_cost=r.points_cost, value_minor=r.value_minor, min_rank=r.min_rank,
+            program_revision=program.revision,
+            key=r.key, name=r.label, description=r.description,
+            points_cost=r.points_cost, value_minor=r.value_minor,
+            min_rank=next(
+                rank.label for rank in program.rules.ranks if rank.key == r.min_rank_key
+            ),
             affordable=c.loyalty_points >= r.points_cost,
         )
-        for r in rewards_available_to(rank)
+        for r in program.rules.rewards
+        if r.enabled and rank_index(projection.key) >= rank_index(r.min_rank_key)
     ]
 
 
@@ -460,10 +581,15 @@ async def get_customer(
     session: SessionDep,
     tenant: TenantContext = Depends(requires("pos.read")),
 ) -> CustomerRead:
+    program = await load_loyalty_program(
+        session, company_id=tenant.company_id, company_lock="share"
+    )
     c = await session.get(Customer, customer_id)
     if not c or c.company_id != tenant.company_id or c.deleted_at:
         raise NotFoundError("customer not found")
-    return _to_read(c)
+    return (await _customers_to_read(
+        session, company_id=tenant.company_id, customers=[c], program=program
+    ))[0]
 
 
 @router.get("/{customer_id}/history", response_model=list[CustomerOrderHistoryRead])
@@ -593,6 +719,9 @@ async def upsert_customer(
     """Upsert by phone — creates if new, returns existing if phone seen before.
     Lets POS just call this without worrying about whether the customer exists.
     """
+    program = await load_loyalty_program(
+        session, company_id=tenant.company_id, company_lock="share"
+    )
     _, fence = await lock_customer_directory(
         session,
         company_id=tenant.company_id,
@@ -618,7 +747,9 @@ async def upsert_customer(
         if payload.birthday and not existing.birthday:
             existing.birthday = payload.birthday
         await session.flush()
-        return _to_read(existing)
+        return (await _customers_to_read(
+            session, company_id=tenant.company_id, customers=[existing], program=program
+        ))[0]
 
     c = Customer(
         id=uuid4(),
@@ -659,8 +790,12 @@ async def upsert_customer(
             # the honest response to a real (if tiny) transient race, not a
             # crash.
             raise ConflictError("This phone number was just freed up by another request — try again.")
-        return _to_read(winner)
-    return _to_read(c)
+        return (await _customers_to_read(
+            session, company_id=tenant.company_id, customers=[winner], program=program
+        ))[0]
+    return (await _customers_to_read(
+        session, company_id=tenant.company_id, customers=[c], program=program
+    ))[0]
 
 
 @router.patch("/{customer_id}", response_model=CustomerRead)
@@ -670,6 +805,9 @@ async def update_customer(
     session: SessionDep,
     tenant: TenantContext = Depends(requires("pos.write")),
 ) -> CustomerRead:
+    program = await load_loyalty_program(
+        session, company_id=tenant.company_id, company_lock="share"
+    )
     await lock_customer_directory(
         session, company_id=tenant.company_id, captured_revision=None
     )
@@ -708,7 +846,9 @@ async def update_customer(
     for f, v in payload.model_dump(exclude_unset=True).items():
         setattr(c, f, v)
     await session.flush()
-    return _to_read(c)
+    return (await _customers_to_read(
+        session, company_id=tenant.company_id, customers=[c], program=program
+    ))[0]
 
 
 @router.delete("/{customer_id}", status_code=status.HTTP_204_NO_CONTENT)

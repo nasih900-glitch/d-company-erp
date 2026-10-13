@@ -1,5 +1,14 @@
 package cloud.dcompany.erp.ui.screens.settings
 
+import cloud.dcompany.erp.ui.theme.operationalDanger
+import cloud.dcompany.erp.ui.theme.operationalDangerContainer
+import cloud.dcompany.erp.ui.theme.operationalGood
+import cloud.dcompany.erp.ui.theme.operationalGoodContainer
+import cloud.dcompany.erp.ui.theme.operationalInformation
+import cloud.dcompany.erp.ui.theme.operationalInformationContainer
+import cloud.dcompany.erp.ui.theme.operationalWarning
+import cloud.dcompany.erp.ui.theme.operationalWarningContainer
+
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
@@ -111,7 +120,7 @@ internal fun BugReportDialog(
         onDismissRequest = { if (!state.saving) onDismiss() },
         modifier = Modifier.widthIn(max = 760.dp).fillMaxWidth(0.96f).imePadding(),
         properties = DialogProperties(usePlatformDefaultWidth = false),
-        containerColor = Brand.SurfaceOverlay,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = Radius.shapeLg,
         icon = {
             Icon(
@@ -121,7 +130,7 @@ internal fun BugReportDialog(
                     else -> Icons.Default.ReportProblem
                 },
                 contentDescription = null,
-                tint = if (submitted) Brand.Good else Brand.Gold,
+                tint = if (submitted) MaterialTheme.colorScheme.operationalGood else MaterialTheme.colorScheme.primary,
             )
         },
         title = {
@@ -131,7 +140,7 @@ internal fun BugReportDialog(
                     submitted -> "Help request saved"
                     else -> "Help & support"
                 },
-                color = Brand.Foreground,
+                color = MaterialTheme.colorScheme.onSurface,
             )
         },
         text = {
@@ -193,15 +202,15 @@ internal fun BugReportDialog(
         pendingDiscardIdentity?.let { identity ->
             AlertDialog(
             onDismissRequest = { pendingDiscardIdentity = null },
-            containerColor = Brand.SurfaceOverlay,
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
             shape = Radius.shapeLg,
-            title = { Text("Remove saved tablet copy?", color = Brand.Foreground) },
+            title = { Text("Remove saved tablet copy?", color = MaterialTheme.colorScheme.onSurface) },
             text = {
                 Text(
                     "First check the owner's web Support inbox in case this request already arrived. " +
                         "Removing stops future retries and erases any saved description or image from this tablet. " +
                         "It does not delete a report that the server already received.",
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             },
             confirmButton = {
@@ -211,7 +220,7 @@ internal fun BugReportDialog(
                         pendingDiscardIdentity = null
                     },
                 ) {
-                    Text("Remove saved copy", color = Brand.Danger)
+                    Text("Remove saved copy", color = MaterialTheme.colorScheme.operationalDanger)
                 }
             },
             dismissButton = {
@@ -273,7 +282,7 @@ private fun SubmissionReceipt(
         OperationalBanner(title = title, detail = detail, tone = tone, icon = icon)
         Text(
             "The issue time and screen were preserved. You can close this window and continue working.",
-            color = Brand.ForegroundMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.bodyMedium,
         )
     }
@@ -317,9 +326,9 @@ private fun BugReportForm(
     ) {
         if (state.recentRequests.isNotEmpty()) {
             Surface(
-                color = Brand.Surface,
+                color = MaterialTheme.colorScheme.surface,
                 shape = Radius.shapeMd,
-                border = BorderStroke(1.dp, Brand.BorderSubtle),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                 modifier = Modifier.fillMaxWidth().clickable(onClick = onOpenHistory),
             ) {
                 Row(
@@ -327,17 +336,17 @@ private fun BugReportForm(
                     horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Icon(Icons.Default.History, contentDescription = null, tint = Brand.ForegroundMuted)
+                    Icon(Icons.Default.History, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text(
                         "My help requests (${state.recentRequests.size})",
-                        color = Brand.Foreground,
+                        color = MaterialTheme.colorScheme.onSurface,
                         style = MaterialTheme.typography.labelLarge,
                         modifier = Modifier.weight(1f),
                     )
                     if (state.pendingCount > 0) {
                         Text(
                             "${state.pendingCount} waiting",
-                            color = Brand.Gold,
+                            color = MaterialTheme.colorScheme.primary,
                             style = MaterialTheme.typography.labelMedium,
                         )
                     }
@@ -368,7 +377,7 @@ private fun BugReportForm(
 
         Text(
             "What do you need help with?",
-            color = Brand.Foreground,
+            color = MaterialTheme.colorScheme.onSurface,
             style = MaterialTheme.typography.titleSmall,
             fontWeight = FontWeight.SemiBold,
         )
@@ -426,7 +435,7 @@ private fun BugReportForm(
 
         Text(
             "Can you continue working?",
-            color = Brand.Foreground,
+            color = MaterialTheme.colorScheme.onSurface,
             style = MaterialTheme.typography.titleSmall,
             fontWeight = FontWeight.SemiBold,
         )
@@ -456,15 +465,15 @@ private fun BugReportForm(
 
         Text(
             "Screenshot (optional)",
-            color = Brand.Foreground,
+            color = MaterialTheme.colorScheme.onSurface,
             style = MaterialTheme.typography.titleSmall,
             fontWeight = FontWeight.SemiBold,
         )
         if (state.attachment == null) {
             Surface(
-                color = Brand.Surface,
+                color = MaterialTheme.colorScheme.surface,
                 shape = Radius.shapeMd,
-                border = BorderStroke(1.dp, Brand.BorderSubtle),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                 modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp)
                     .clickable(enabled = !state.saving && !attachmentLoading) {
                         imagePicker.launch("image/*")
@@ -477,7 +486,7 @@ private fun BugReportForm(
                 ) {
                     if (attachmentLoading) {
                         CircularProgressIndicator(
-                            color = Brand.Gold,
+                            color = MaterialTheme.colorScheme.primary,
                             strokeWidth = 2.dp,
                             modifier = Modifier.size(22.dp),
                         )
@@ -485,19 +494,19 @@ private fun BugReportForm(
                         Icon(
                             Icons.Default.PhotoCamera,
                             contentDescription = null,
-                            tint = Brand.ForegroundMuted,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(22.dp),
                         )
                     }
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Text(
                             if (attachmentLoading) "Preparing safe preview…" else "Choose an image",
-                            color = Brand.Foreground,
+                            color = MaterialTheme.colorScheme.onSurface,
                             style = MaterialTheme.typography.labelLarge,
                         )
                         Text(
                             "PNG, JPEG or WebP · choose up to 12 MiB · compressed below 2 MiB",
-                            color = Brand.ForegroundFaint,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
@@ -519,9 +528,9 @@ private fun BugReportForm(
                 }
             }
             Surface(
-                color = Brand.Surface,
+                color = MaterialTheme.colorScheme.surface,
                 shape = Radius.shapeMd,
-                border = BorderStroke(1.dp, Brand.BorderSubtle),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Column(
@@ -536,7 +545,7 @@ private fun BugReportForm(
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 CircularProgressIndicator(
-                                    color = Brand.Gold,
+                                    color = MaterialTheme.colorScheme.primary,
                                     strokeWidth = 2.dp,
                                     modifier = Modifier.size(24.dp),
                                 )
@@ -557,7 +566,7 @@ private fun BugReportForm(
                             ) {
                                 Text(
                                     "Preview unavailable. Remove this image and choose it again; it cannot be sent until you can review it.",
-                                    color = Brand.Warning,
+                                    color = MaterialTheme.colorScheme.operationalWarning,
                                     style = MaterialTheme.typography.bodySmall,
                                 )
                             }
@@ -570,7 +579,7 @@ private fun BugReportForm(
                     ) {
                         Text(
                             "Safe preview · ${state.attachment.byteSize / 1024} KiB",
-                            color = Brand.ForegroundMuted,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.bodySmall,
                         )
                         TextButton(onClick = { onAttachmentChange(null) }, enabled = !state.saving) {
@@ -598,7 +607,7 @@ private fun BugReportForm(
                             } else {
                                 "Wait for the preview before confirming this image is safe."
                             },
-                            color = Brand.ForegroundMuted,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
@@ -616,7 +625,7 @@ private fun BugReportForm(
         Text(
             "Included: app/device version, current screen, safe action/error code, shop context and connectivity. " +
                 "Never included automatically: passwords, login tokens, customer/order content, payment details, logs or screen images.",
-            color = Brand.ForegroundFaint,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.bodySmall,
         )
     }
@@ -640,7 +649,7 @@ private fun SupportHistory(
         ) {
             Text(
                 "Your reports and owner replies",
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodyMedium,
             )
             TextButton(onClick = onRefresh, enabled = !state.refreshingHistory) {
@@ -670,9 +679,9 @@ private fun SupportHistory(
         } else {
             state.recentRequests.forEach { request ->
                 Surface(
-                    color = Brand.Surface,
+                    color = MaterialTheme.colorScheme.surface,
                     shape = Radius.shapeMd,
-                    border = BorderStroke(1.dp, Brand.BorderSubtle),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Column(
@@ -686,28 +695,28 @@ private fun SupportHistory(
                         ) {
                             Text(
                                 request.title,
-                                color = Brand.Foreground,
+                                color = MaterialTheme.colorScheme.onSurface,
                                 style = MaterialTheme.typography.labelLarge,
                                 fontWeight = FontWeight.SemiBold,
                                 modifier = Modifier.weight(1f),
                             )
                             Text(
                                 request.status.replace('_', ' '),
-                                color = if (request.actionRequired) Brand.Danger else Brand.ForegroundMuted,
+                                color = if (request.actionRequired) MaterialTheme.colorScheme.operationalDanger else MaterialTheme.colorScheme.onSurfaceVariant,
                                 style = MaterialTheme.typography.labelMedium,
                             )
                         }
                         if (request.isLocalOnly) {
                             Text(
                                 "Saved on this tablet · ${request.identity.take(8).uppercase()}",
-                                color = Brand.ForegroundFaint,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 style = MaterialTheme.typography.bodySmall,
                             )
                         }
                         request.latestReply?.let { reply ->
                             Text(
                                 "${request.latestReplyAuthor ?: "Owner"}: $reply",
-                                color = Brand.ForegroundMuted,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 style = MaterialTheme.typography.bodyMedium,
                             )
                         }
@@ -717,7 +726,7 @@ private fun SupportHistory(
                                     Text("Retry send")
                                 }
                                 TextButton(onClick = { onRequestDiscard(request.identity) }) {
-                                    Text("Remove saved copy", color = Brand.Danger)
+                                    Text("Remove saved copy", color = MaterialTheme.colorScheme.operationalDanger)
                                 }
                             }
                         }
@@ -727,7 +736,7 @@ private fun SupportHistory(
         }
         Text(
             "Replies are private to your signed-in account. Internal owner notes are never shown here.",
-            color = Brand.ForegroundFaint,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.bodySmall,
         )
     }
@@ -742,9 +751,9 @@ private fun ReasonChoice(
     onClick: () -> Unit,
 ) {
     Surface(
-        color = if (selected) Brand.Gold.copy(alpha = 0.10f) else Brand.Surface,
+        color = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.10f) else MaterialTheme.colorScheme.surface,
         shape = Radius.shapeMd,
-        border = BorderStroke(1.dp, if (selected) Brand.GoldMuted else Brand.BorderSubtle),
+        border = BorderStroke(1.dp, if (selected) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.outlineVariant),
         modifier = modifier.heightIn(min = 76.dp).selectable(
             selected = selected,
             enabled = enabled,
@@ -758,13 +767,13 @@ private fun ReasonChoice(
         ) {
             Text(
                 reason.label,
-                color = if (selected) Brand.Foreground else Brand.ForegroundMuted,
+                color = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.SemiBold,
             )
             Text(
                 reason.detail,
-                color = Brand.ForegroundFaint,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodySmall,
             )
         }
@@ -780,9 +789,9 @@ private fun ContinuationChoice(
     onClick: () -> Unit,
 ) {
     Surface(
-        color = if (selected) Brand.SurfaceHover else Color.Transparent,
+        color = if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
         shape = Radius.shapePill,
-        border = BorderStroke(1.dp, if (selected) Brand.ForegroundMuted else Brand.BorderSubtle),
+        border = BorderStroke(1.dp, if (selected) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.outlineVariant),
         modifier = modifier.heightIn(min = 48.dp).selectable(
             selected = selected,
             enabled = enabled,
@@ -797,7 +806,7 @@ private fun ContinuationChoice(
         ) {
             Text(
                 option.label,
-                color = if (selected) Brand.Foreground else Brand.ForegroundMuted,
+                color = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelLarge,
             )
         }

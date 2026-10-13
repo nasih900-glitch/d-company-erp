@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 import json
 from datetime import UTC, date, datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal
@@ -58,11 +59,14 @@ from app.models import (
     Branch,
     Company,
     Customer,
+    CustomerGamingRankAward,
     CustomerMembership,
     CustomerSpendReconciliation,
     Floor,
     GamingSession,
+    GamingSessionExtension,
     GamingSessionPackageAmendment,
+    GamingParticipantSettlement,
     MembershipPayment,
     MembershipPaymentRequest,
     MembershipPaymentRequestResolution,
@@ -119,14 +123,22 @@ from app.services.pos.membership_benefits import (
 )
 from app.services.pos.order_validation import require_operational_order
 from app.services.pos.points import (
+    award_eligible_gaming_ranks,
     apply_refund_loyalty_adjustment,
     consume_points_redemption,
-    minor_to_points,
     points_redeemed_for_order,
-    rank_up_bonus_points,
+    reprice_existing_points_redemption,
     record_order_loyalty_settlement,
     reserve_catalog_reward_redemption,
     reserve_points_redemption,
+)
+from app.services.pos.loyalty_program import (
+    LoadedLoyaltyProgram,
+    checked_points_add,
+    earned_gaming_points,
+    load_loyalty_program,
+    minor_to_points,
+    require_expected_revision,
 )
 from app.services.pos.pricing import (
     InvoiceNumberService,
@@ -591,6 +603,10 @@ class ReceiptGamingSessionHistoryRead(BaseModel):
     effective_package_variant_snapshot: str | None
     effective_package_station_type_snapshot: str | None
     effective_package_pricing_tier_snapshot: str | None
+    extension_package_minor: int | None
+    extension_controller_surcharge_minor: int | None
+    booked_controller_surcharge_minor: int | None
+    late_friend_charge_minor: int | None
     timer_minutes: int | None
     paused_minutes: int
     billable_minutes: int | None
@@ -615,6 +631,7 @@ class ReceiptHistoryRead(BaseModel):
     opened_by_name: str | None
     invoice_no: str
     fiscal_year: str
+    checkout_version: int
     status: str
     order_type: str
     table_id: UUID | None
@@ -632,6 +649,8 @@ class ReceiptHistoryRead(BaseModel):
     total_minor: int
     paid_minor: int
     refunded_minor: int
+    pending_refund_minor: int
+    refundable_minor: int
     net_collected_minor: int
     customer_name: str | None
     customer_phone: str | None
@@ -663,15 +682,44 @@ class ReceiptHistoryPage(BaseModel):
     has_more: bool
 
 
-def _encode_receipt_cursor(invoice_issued_at: datetime, order_id: UUID) -> str:
+def _normalized_receipt_query(query: str | None) -> str | None:
+    normalized = query.strip().casefold() if query is not None else ""
+    return normalized or None
+
+
+def _receipt_query_fingerprint(query: str) -> str:
+    return hashlib.sha256(query.encode("utf-8")).hexdigest()[:24]
+
+
+def _encode_receipt_cursor(
+    invoice_issued_at: datetime,
+    order_id: UUID,
+    *,
+    query: str | None = None,
+    company_id: UUID | None = None,
+    branch_id: UUID | None = None,
+) -> str:
+    values: list[str] = [invoice_issued_at.astimezone(UTC).isoformat(), str(order_id)]
+    if query is not None:
+        if company_id is None or branch_id is None:
+            raise ValueError("scoped receipt search cursor requires company and branch")
+        values.extend(
+            [_receipt_query_fingerprint(query), str(company_id), str(branch_id)]
+        )
     payload = json.dumps(
-        [invoice_issued_at.astimezone(UTC).isoformat(), str(order_id)],
+        values,
         separators=(",", ":"),
     ).encode("utf-8")
     return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
 
 
-def _decode_receipt_cursor(cursor: str) -> tuple[datetime, UUID]:
+def _decode_receipt_cursor(
+    cursor: str,
+    *,
+    query: str | None = None,
+    company_id: UUID | None = None,
+    branch_id: UUID | None = None,
+) -> tuple[datetime, UUID]:
     try:
         padded = cursor + "=" * (-len(cursor) % 4)
         decoded = base64.b64decode(
@@ -680,8 +728,16 @@ def _decode_receipt_cursor(cursor: str) -> tuple[datetime, UUID]:
             validate=True,
         )
         values = json.loads(decoded.decode("utf-8"))
-        if not isinstance(values, list) or len(values) != 2:
+        expected_size = 5 if query is not None else 2
+        if not isinstance(values, list) or len(values) != expected_size:
             raise ValueError("invalid cursor shape")
+        if query is not None:
+            if company_id is None or branch_id is None:
+                raise ValueError("cursor scope is missing")
+            if values[2] != _receipt_query_fingerprint(query):
+                raise ValueError("cursor query does not match")
+            if values[3] != str(company_id) or values[4] != str(branch_id):
+                raise ValueError("cursor scope does not match")
         issued_at = datetime.fromisoformat(str(values[0]).replace("Z", "+00:00"))
         if issued_at.tzinfo is None:
             raise ValueError("cursor timestamp has no timezone")
@@ -729,22 +785,56 @@ async def _receipt_history_reads(
         .scalars()
         .all()
     )
-    refund_rows = (
-        (
-            await session.execute(
-                select(Refund)
-                .where(Refund.order_id.in_(order_ids))
-                .order_by(
-                    Refund.order_id,
-                    Refund.settled_at.nulls_last(),
-                    Refund.created_at,
-                    Refund.id,
-                )
+    # A settlement moves money from an unresolved request into Refund. Reading
+    # those tables in separate READ COMMITTED statements can observe the row
+    # after it left the first projection but before it entered the second one,
+    # briefly overstating the refundable balance. Return settled rows and the
+    # correlated unresolved total in one PostgreSQL statement/snapshot.
+    reservation_refund = aliased(Refund)
+    pending_refund_minor = (
+        select(func.coalesce(func.sum(PosRefundRequest.amount_minor), 0))
+        .select_from(PosRefundRequest)
+        .outerjoin(
+            reservation_refund,
+            reservation_refund.request_id == PosRefundRequest.id,
+        )
+        .outerjoin(
+            PosRefundWithdrawal,
+            PosRefundWithdrawal.refund_request_id == PosRefundRequest.id,
+        )
+        .where(
+            PosRefundRequest.order_id == Order.id,
+            PosRefundRequest.company_id == company_id,
+            PosRefundRequest.branch_id == branch_id,
+            reservation_refund.id.is_(None),
+            PosRefundWithdrawal.id.is_(None),
+        )
+        .correlate(Order)
+        .scalar_subquery()
+    )
+    refund_projection_rows = (
+        await session.execute(
+            select(
+                Order.id,
+                Refund,
+                pending_refund_minor.label("pending_refund_minor"),
+            )
+            .outerjoin(Refund, Refund.order_id == Order.id)
+            .where(Order.id.in_(order_ids))
+            .order_by(
+                Order.id,
+                Refund.settled_at.nulls_last(),
+                Refund.created_at,
+                Refund.id,
             )
         )
-        .scalars()
-        .all()
-    )
+    ).all()
+    refund_rows: list[Refund] = []
+    reserved_by_order: dict[UUID, int] = {}
+    for order_id, refund, reserved_minor in refund_projection_rows:
+        reserved_by_order[order_id] = int(reserved_minor or 0)
+        if refund is not None:
+            refund_rows.append(refund)
     gaming_rows = (
         await session.execute(
             select(GamingSession, Station)
@@ -777,6 +867,36 @@ async def _receipt_history_reads(
     )
     amendments_by_session = {
         amendment.gaming_session_id: amendment for amendment in amendment_rows
+    }
+    extension_rows = (
+        (
+            await session.execute(
+                select(GamingSessionExtension).where(
+                    GamingSessionExtension.company_id == company_id,
+                    GamingSessionExtension.gaming_session_id.in_(gaming_session_ids),
+                )
+            )
+        ).scalars().all()
+        if gaming_session_ids
+        else []
+    )
+    extensions_by_session: dict[UUID, list[GamingSessionExtension]] = {}
+    for extension in extension_rows:
+        extensions_by_session.setdefault(extension.gaming_session_id, []).append(extension)
+    settlement_rows = (
+        (
+            await session.execute(
+                select(GamingParticipantSettlement).where(
+                    GamingParticipantSettlement.company_id == company_id,
+                    GamingParticipantSettlement.gaming_session_id.in_(gaming_session_ids),
+                )
+            )
+        ).scalars().all()
+        if gaming_session_ids
+        else []
+    )
+    settlements_by_session = {
+        settlement.gaming_session_id: settlement for settlement in settlement_rows
     }
     shift_ids = {order.shift_id for order in orders}
     shifts = (
@@ -844,6 +964,59 @@ async def _receipt_history_reads(
         station: Station,
     ) -> ReceiptGamingSessionHistoryRead:
         amendment = amendments_by_session.get(gaming_session.id)
+        extensions = extensions_by_session.get(gaming_session.id, [])
+        settlement = settlements_by_session.get(gaming_session.id)
+        effective_package_price = (
+            int(amendment.target_package_price_minor)
+            if amendment is not None
+            else (
+                int(gaming_session.package_price_minor_snapshot)
+                if gaming_session.package_price_minor_snapshot is not None
+                else None
+            )
+        )
+        effective_package_duration = (
+            int(amendment.target_package_duration_minutes)
+            if amendment is not None
+            else gaming_session.package_duration_minutes_snapshot
+        )
+        extension_package_minor = sum(int(row.package_price_minor) for row in extensions)
+        extension_controller_minor = sum(
+            int(row.controller_surcharge_minor) for row in extensions
+        )
+        booked_controller_minor: int | None = None
+        extensions_are_complete = bool(extensions) or (
+            effective_package_duration is not None
+            and gaming_session.timer_minutes == effective_package_duration
+        )
+        finalized_base_amount: int | None = None
+        if settlement is not None:
+            finalized_base_amount = int(settlement.base_amount_minor)
+        elif (
+            int(getattr(gaming_session, "participant_revision", 0) or 0) == 0
+            and gaming_session.status == "ended"
+            and gaming_session.amount_minor is not None
+            and int(gaming_session.extra_controllers or 0) > 0
+        ):
+            # A revision-zero session has no late-player ledger to add at Stop,
+            # so its finalized amount is the immutable package base. This
+            # covers ordinary three/four-controller bookings which correctly
+            # have no participant settlement row. Require the captured
+            # extra-controller count so opaque legacy residuals stay unknown.
+            finalized_base_amount = int(gaming_session.amount_minor)
+        if (
+            finalized_base_amount is not None
+            and effective_package_price is not None
+            and extensions_are_complete
+        ):
+            candidate = (
+                finalized_base_amount
+                - effective_package_price
+                - extension_package_minor
+                - extension_controller_minor
+            )
+            if candidate >= 0:
+                booked_controller_minor = candidate
         return ReceiptGamingSessionHistoryRead(
             id=gaming_session.id,
             station_id=gaming_session.station_id,
@@ -894,19 +1067,9 @@ async def _receipt_history_reads(
                 if amendment is not None
                 else gaming_session.package_id
             ),
-            effective_package_price_minor_snapshot=(
-                int(amendment.target_package_price_minor)
-                if amendment is not None
-                else (
-                    int(gaming_session.package_price_minor_snapshot)
-                    if gaming_session.package_price_minor_snapshot is not None
-                    else None
-                )
-            ),
+            effective_package_price_minor_snapshot=effective_package_price,
             effective_package_duration_minutes_snapshot=(
-                int(amendment.target_package_duration_minutes)
-                if amendment is not None
-                else gaming_session.package_duration_minutes_snapshot
+                effective_package_duration
             ),
             effective_package_variant_snapshot=(
                 amendment.target_package_variant
@@ -922,6 +1085,16 @@ async def _receipt_history_reads(
                 amendment.target_package_pricing_tier
                 if amendment is not None
                 else gaming_session.package_pricing_tier_snapshot
+            ),
+            extension_package_minor=(
+                extension_package_minor if extensions_are_complete else None
+            ),
+            extension_controller_surcharge_minor=(
+                extension_controller_minor if extensions_are_complete else None
+            ),
+            booked_controller_surcharge_minor=booked_controller_minor,
+            late_friend_charge_minor=(
+                int(settlement.guest_charge_minor) if settlement is not None else None
             ),
             timer_minutes=gaming_session.timer_minutes,
             paused_minutes=int(gaming_session.paused_minutes or 0),
@@ -954,6 +1127,7 @@ async def _receipt_history_reads(
         order_refunds = refunds_by_order.get(order.id, [])
         paid_minor = sum(int(payment.amount_minor) for payment in order_payments)
         refunded_minor = sum(int(refund.amount_minor) for refund in order_refunds)
+        pending_refund_minor = int(reserved_by_order.get(order.id, 0))
         results.append(
             ReceiptHistoryRead(
                 order_id=order.id,
@@ -969,6 +1143,7 @@ async def _receipt_history_reads(
                 opened_by_name=actor_names.get(order.opened_by),
                 invoice_no=order.invoice_no,
                 fiscal_year=order.fiscal_year,
+                checkout_version=max(1, int(order.checkout_version or 1)),
                 status=order.status,
                 order_type=order.type,
                 table_id=order.table_id,
@@ -986,6 +1161,8 @@ async def _receipt_history_reads(
                 total_minor=int(order.total_minor or 0),
                 paid_minor=paid_minor,
                 refunded_minor=refunded_minor,
+                pending_refund_minor=pending_refund_minor,
+                refundable_minor=max(0, paid_minor - refunded_minor - pending_refund_minor),
                 net_collected_minor=paid_minor - refunded_minor,
                 customer_name=order.customer_name,
                 customer_phone=order.customer_phone,
@@ -1225,6 +1402,7 @@ class OrderPointsRedemptionUpdate(BaseModel):
     # order (points belong to a specific phone number's balance).
     points: int = Field(ge=0)
     expected_checkout_version: int | None = Field(default=None, ge=1)
+    expected_program_revision: int | None = Field(default=None, ge=0, strict=True)
 
 
 class RefundCreate(BaseModel):
@@ -1649,8 +1827,9 @@ async def _compute_points_with_multiplier(
     *,
     order: Order,
     order_lines: list[OrderLine],
+    program: LoadedLoyaltyProgram,
     membership_multiplier: float = 1.0,
-) -> int:
+) -> tuple[int, bool]:
     """Loyalty point allocation — gaming only.
 
     Rules:
@@ -1673,7 +1852,7 @@ async def _compute_points_with_multiplier(
     """
     order_lines = [line for line in order_lines if getattr(line, "voided_at", None) is None]
     if not order_lines:
-        return 0  # no lines to attribute to gaming — nothing earned
+        return 0, False  # no lines to attribute to gaming — nothing earned
 
     # Pull each line's menu item type in one query
     item_ids = [ol.menu_item_id for ol in order_lines]
@@ -1682,13 +1861,11 @@ async def _compute_points_with_multiplier(
     )
     type_by_id = {i.id: i.type for i in items}
 
-    GAMING_POINTS_PER_10_RUPEES = 2.0
-    raw_points = 0.0
+    gaming_minor = 0
     for ol in order_lines:
         if type_by_id.get(ol.menu_item_id) != "gaming":
             continue
-        line_total = int(ol.line_total_minor or 0)
-        raw_points += (line_total / 1000) * GAMING_POINTS_PER_10_RUPEES
+        gaming_minor += max(0, int(ol.line_total_minor or 0))
 
     taxable_total_minor = int(order.total_minor or 0) - int(order.tip_minor or 0)
     pre_discount_total = (
@@ -1699,7 +1876,20 @@ async def _compute_points_with_multiplier(
     paid_ratio = (
         min(1.0, taxable_total_minor / pre_discount_total) if pre_discount_total > 0 else 0.0
     )
-    return int(raw_points * paid_ratio * membership_multiplier)
+    if gaming_minor <= 0 or paid_ratio <= 0:
+        return 0, False
+    rules = program.rules
+    points = earned_gaming_points(
+        gaming_minor=gaming_minor,
+        paid_numerator=(
+            int(rules.gaming_earn_points) * max(0, taxable_total_minor)
+        ),
+        paid_denominator=(
+            int(rules.gaming_earn_rupees) * 100 * pre_discount_total
+        ),
+        multiplier=Decimal(str(membership_multiplier)),
+    )
+    return points, True
 
 
 async def _upsert_and_attach_customer(
@@ -1711,6 +1901,7 @@ async def _upsert_and_attach_customer(
     order: Order,
     at: datetime,
     directory_fence: CustomerDirectoryFence,
+    program: LoadedLoyaltyProgram,
     order_lines: list[OrderLine] | None = None,
 ) -> tuple[Customer, int, int] | None:
     """Find or create customer by phone, bump visit_count + total_spent,
@@ -1780,34 +1971,44 @@ async def _upsert_and_attach_customer(
             if sub:
                 multiplier = float(sub.MembershipTier.point_multiplier or 1)
 
-        points_earned = await _compute_points_with_multiplier(
+        points_earned, qualifying_paid_gaming = await _compute_points_with_multiplier(
             session,
             order=order,
             order_lines=order_lines or [],
+            program=program,
             membership_multiplier=multiplier,
         )
 
     if existing:
         old_lifetime = int(existing.lifetime_gaming_points_earned or 0)
         new_lifetime = old_lifetime + int(points_earned)
-        bonus = rank_up_bonus_points(old_lifetime=old_lifetime, new_lifetime=new_lifetime)
+        if new_lifetime > 2_147_483_647:
+            raise BusinessRuleError("Lifetime gaming points exceed the supported storage limit.")
         existing.visit_count += 1
         existing.total_spent_minor += order.total_minor
         existing.last_visit_at = now
-        existing.loyalty_points += int(points_earned) + bonus
+        existing.lifetime_gaming_points_earned = new_lifetime
+        bonus = (
+            await award_eligible_gaming_ranks(
+                session, customer=existing, order=order, program=program, at=now
+            )
+            if qualifying_paid_gaming else 0
+        )
+        existing.loyalty_points = checked_points_add(
+            int(existing.loyalty_points), int(points_earned) + bonus,
+            label="Customer loyalty balance",
+        )
         # Points are gaming-only now (see _compute_points_with_multiplier),
         # so every point earned is a gaming point — this counter just never
         # goes back down when loyalty_points is spent (see points.py rank_progress).
         # The rank-up bonus is credited to loyalty_points ONLY, never here —
         # crediting it here would let a bonus cascade into unlocking the next
         # rank too.
-        existing.lifetime_gaming_points_earned = new_lifetime
         if name and not existing.name and directory_fence.allows_identity_mutation:
             existing.name = name
         order.customer_id = existing.id
         return existing, int(points_earned), bonus
     else:
-        bonus = rank_up_bonus_points(old_lifetime=0, new_lifetime=int(points_earned))
         customer = Customer(
             id=uuid4(),
             company_id=company_id,
@@ -1817,11 +2018,20 @@ async def _upsert_and_attach_customer(
             total_spent_minor=order.total_minor,
             first_visit_at=now,
             last_visit_at=now,
-            loyalty_points=int(points_earned) + bonus,
+            loyalty_points=0,
             lifetime_gaming_points_earned=int(points_earned),
         )
         session.add(customer)
         order.customer_id = customer.id
+        bonus = (
+            await award_eligible_gaming_ranks(
+                session, customer=customer, order=order, program=program, at=now
+            )
+            if qualifying_paid_gaming else 0
+        )
+        customer.loyalty_points = checked_points_add(
+            0, int(points_earned) + bonus, label="Customer loyalty balance"
+        )
         return customer, int(points_earned), bonus
 
 
@@ -2631,29 +2841,16 @@ async def _reprice_unpaid_order_for_customer(
     # existing redemption, it doesn't grow it. Only preserve if the order's
     # customer is still the same one the points were reserved against —
     # attaching a different customer must never silently spend their points.
-    previously_redeemed_points = 0
-    existing_redemption = (
-        await session.execute(select(PointsRedemption).where(PointsRedemption.order_id == order.id))
-    ).scalar_one_or_none()
-    if existing_redemption is not None:
-        current_customer = await resolve_order_customer(
-            session,
-            order=order,
-            company_id=company_id,
-        )
-        if current_customer is not None and current_customer.id == existing_redemption.customer_id:
-            previously_redeemed_points = existing_redemption.points_spent
     order.manual_discount_minor, discount_after_manual, total_after_manual = apply_manual_discount(
         line_discount_total_minor=line_discount_total,
         manual_discount_minor=int(order.manual_discount_minor or 0),
         rounded_total_minor=rounded_total,
     )
-    points_result = await reserve_points_redemption(
+    points_result = await reprice_existing_points_redemption(
         session,
         order=order,
         company_id=company_id,
-        requested_points=min(previously_redeemed_points, minor_to_points(total_after_manual)),
-        at=datetime.now(timezone.utc),
+        remaining_minor=total_after_manual,
     )
     order.points_redeemed_minor, order.discount_minor, order.total_minor = apply_points_redemption(
         discount_so_far_minor=discount_after_manual,
@@ -2938,7 +3135,6 @@ async def _reaggregate_active_order_lines(
     order.tax_minor = order.cgst_minor + order.sgst_minor + order.igst_minor + order.cess_minor
     order.round_off_minor = round_off
 
-    previously_redeemed_points = await points_redeemed_for_order(session, order=order)
     (
         order.manual_discount_minor,
         discount_after_manual,
@@ -2948,15 +3144,11 @@ async def _reaggregate_active_order_lines(
         manual_discount_minor=int(order.manual_discount_minor or 0),
         rounded_total_minor=rounded,
     )
-    points_result = await reserve_points_redemption(
+    points_result = await reprice_existing_points_redemption(
         session,
         order=order,
         company_id=company_id,
-        requested_points=min(
-            previously_redeemed_points,
-            minor_to_points(total_after_manual),
-        ),
-        at=datetime.now(timezone.utc),
+        remaining_minor=total_after_manual,
     )
     (
         order.points_redeemed_minor,
@@ -3180,6 +3372,7 @@ async def _finalize_order(
     payment_method: str = "unknown",
     payment_breakdown_minor: dict[str, int] | None = None,
     final_payment_bundle: list[Payment] | None = None,
+    loyalty_program: LoadedLoyaltyProgram,
 ) -> None:
     """Issue the invoice and run every sale-finalization side effect once.
 
@@ -3285,6 +3478,7 @@ async def _finalize_order(
             order_lines=list(order_lines),
             at=at,
             directory_fence=directory_fence,
+            program=loyalty_program,
         )
     if final_payment_bundle is not None:
         # The payment insert guard needs the issued order row first, while the
@@ -3302,6 +3496,7 @@ async def _finalize_order(
             points_earned=points_earned,
             rank_bonus_points_awarded=rank_bonus_points,
             at=at,
+            program=loyalty_program,
         )
     await _enqueue_paid_order_mirror(
         session,
@@ -3365,6 +3560,7 @@ async def list_receipt_history(
     tenant: TenantContext = Depends(requires("pos.read")),  # noqa: B008
     cursor: Annotated[str | None, Query(max_length=512)] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    q: Annotated[str | None, Query(max_length=200)] = None,
 ) -> ReceiptHistoryPage:
     """Return newest-first finalized receipts with a stable opaque cursor.
 
@@ -3379,6 +3575,7 @@ async def list_receipt_history(
             "This account has no branch assigned. Assign one before viewing receipts."
         )
 
+    normalized_query = _normalized_receipt_query(q)
     stmt = select(Order).where(
         Order.company_id == tenant.company_id,
         Order.branch_id == tenant.branch_id,
@@ -3388,8 +3585,46 @@ async def list_receipt_history(
         Order.invoice_issued_at.is_not(None),
         Order.closed_at.is_not(None),
     )
+    if normalized_query is not None:
+        escaped_invoice = (
+            normalized_query.replace("\\", "\\\\")
+            .replace("%", "\\%")
+            .replace("_", "\\_")
+        )
+        search_filters = [Order.invoice_no.ilike(escaped_invoice, escape="\\")]
+        if normalized_query.isdigit():
+            search_filters.append(
+                func.substring(Order.invoice_no, r"([0-9]+)$") == normalized_query
+            )
+        try:
+            query_uuid = UUID(normalized_query)
+        except ValueError:
+            query_uuid = None
+        if query_uuid is not None:
+            search_filters.extend(
+                [
+                    Order.id == query_uuid,
+                    Order.id.in_(
+                        select(GamingSession.order_id)
+                        .join(Station, Station.id == GamingSession.station_id)
+                        .where(
+                            GamingSession.id == query_uuid,
+                            GamingSession.company_id == tenant.company_id,
+                            Station.company_id == tenant.company_id,
+                            Station.branch_id == tenant.branch_id,
+                            GamingSession.order_id.is_not(None),
+                        )
+                    ),
+                ]
+            )
+        stmt = stmt.where(or_(*search_filters))
     if cursor is not None:
-        cursor_issued_at, cursor_order_id = _decode_receipt_cursor(cursor)
+        cursor_issued_at, cursor_order_id = _decode_receipt_cursor(
+            cursor,
+            query=normalized_query,
+            company_id=tenant.company_id,
+            branch_id=tenant.branch_id,
+        )
         stmt = stmt.where(
             or_(
                 Order.invoice_issued_at < cursor_issued_at,
@@ -3420,6 +3655,9 @@ async def list_receipt_history(
         next_cursor = _encode_receipt_cursor(
             last_order.invoice_issued_at,
             last_order.id,
+            query=normalized_query,
+            company_id=tenant.company_id,
+            branch_id=tenant.branch_id,
         )
     return ReceiptHistoryPage(
         items=items,
@@ -4077,13 +4315,11 @@ async def apply_order_discount(
     # A points redemption already on this bill must be re-clamped against
     # whatever room the new discount leaves — it can shrink, never grow,
     # from what was previously reserved.
-    previously_redeemed_points = await points_redeemed_for_order(session, order=order)
-    points_result = await reserve_points_redemption(
+    points_result = await reprice_existing_points_redemption(
         session,
         order=order,
         company_id=tenant.company_id,
-        requested_points=min(previously_redeemed_points, minor_to_points(remaining_after_manual)),
-        at=datetime.now(timezone.utc),
+        remaining_minor=remaining_after_manual,
     )
     order.points_redeemed_minor = points_result.amount_minor
     order.discount_minor = line_discount_only + new_manual + points_result.amount_minor
@@ -4126,6 +4362,17 @@ async def redeem_points(
     )
     if existing_response:
         return OrderRead.model_validate(existing_response["body"])
+
+    # Company is always the first row lock for revision-aware loyalty writes.
+    # The idempotent response check above deliberately precedes this/current-
+    # revision validation so a response-loss retry can replay its exact result.
+    loyalty_program = await load_loyalty_program(
+        session, company_id=tenant.company_id, company_lock="share"
+    )
+    # Removing an already accepted reservation remains possible after a
+    # publication; applying/changing economic value requires an exact revision.
+    if payload.points > 0:
+        require_expected_revision(loyalty_program, payload.expected_program_revision)
 
     order = (
         await session.execute(select(Order).where(Order.id == order_id).with_for_update())
@@ -4174,7 +4421,9 @@ async def redeem_points(
     line_discount_only = int(order.discount_minor or 0) - previous_manual - previous_points_minor
     remaining_after_manual = int(order.total_minor or 0) + previous_points_minor
 
-    max_points_for_bill = minor_to_points(remaining_after_manual)
+    max_points_for_bill = minor_to_points(
+        remaining_after_manual, loyalty_program.rules
+    )
     if payload.points > max_points_for_bill:
         raise BusinessRuleError(
             f"This bill can only absorb {max_points_for_bill} points "
@@ -4187,6 +4436,7 @@ async def redeem_points(
         company_id=tenant.company_id,
         requested_points=payload.points,
         at=datetime.now(timezone.utc),
+        program=loyalty_program,
     )
     if points_result.points_spent < payload.points:
         raise BusinessRuleError("Not enough points available on this customer's balance.")
@@ -4210,6 +4460,7 @@ async def redeem_points(
 class OrderRewardRedemptionUpdate(BaseModel):
     reward_key: str
     expected_checkout_version: int | None = Field(default=None, ge=1)
+    expected_program_revision: int | None = Field(default=None, ge=0, strict=True)
 
 
 @router.patch("/orders/{order_id}/reward", response_model=OrderRead)
@@ -4234,6 +4485,11 @@ async def redeem_reward(
     )
     if existing_response:
         return OrderRead.model_validate(existing_response["body"])
+
+    loyalty_program = await load_loyalty_program(
+        session, company_id=tenant.company_id, company_lock="share"
+    )
+    require_expected_revision(loyalty_program, payload.expected_program_revision)
 
     order = (
         await session.execute(select(Order).where(Order.id == order_id).with_for_update())
@@ -4287,12 +4543,36 @@ async def redeem_reward(
     # discount / generic points paths use, so set it to the post-manual-
     # discount remainder (pre-existing-points-redemption) before calling it.
     order.total_minor = remaining_after_manual
+    customer = await resolve_order_customer(
+        session, order=order, company_id=tenant.company_id, for_update=False
+    )
+    if customer is None:
+        raise BusinessRuleError("attach a customer to this order before redeeming a reward")
+    awarded_keys = set(
+        (
+            await session.execute(
+                select(CustomerGamingRankAward.rank_key).where(
+                    CustomerGamingRankAward.company_id == tenant.company_id,
+                    CustomerGamingRankAward.customer_id == customer.id,
+                )
+            )
+        ).scalars().all()
+    )
+    awarded_rank_key = next(
+        (
+            rank.key for rank in reversed(loyalty_program.rules.ranks)
+            if rank.key in awarded_keys
+        ),
+        "rookie",
+    )
     points_result = await reserve_catalog_reward_redemption(
         session,
         order=order,
         company_id=tenant.company_id,
         reward_key=payload.reward_key,
         at=datetime.now(timezone.utc),
+        program=loyalty_program,
+        awarded_rank_key=awarded_rank_key,
     )
 
     order.points_redeemed_minor = points_result.amount_minor
@@ -5733,6 +6013,10 @@ async def finalize_zero_total_order(
     if existing_response:
         return existing_response["body"]
 
+    loyalty_program = await load_loyalty_program(
+        session, company_id=tenant.company_id, company_lock="share"
+    )
+
     order = (
         await session.execute(select(Order).where(Order.id == order_id).with_for_update())
     ).scalar_one_or_none()
@@ -5803,6 +6087,7 @@ async def finalize_zero_total_order(
             at=now,
             payment_method="zero_total",
             payment_breakdown_minor=_empty_pos_payment_breakdown(),
+            loyalty_program=loyalty_program,
         )
 
     response = _zero_total_finalization_response(order)
@@ -5853,6 +6138,10 @@ async def record_payment(
             body=existing_response["body"],
             order_id=order_id,
         )
+
+    loyalty_program = await load_loyalty_program(
+        session, company_id=tenant.company_id, company_lock="share"
+    )
 
     order = (
         await session.execute(
@@ -5970,6 +6259,7 @@ async def record_payment(
             at=now,
             payment_method="split" if already_paid > 0 else payload.method,
             payment_breakdown_minor=payment_breakdown_minor,
+            loyalty_program=loyalty_program,
         )
     response = PaymentRead(
         id=payment.id,
@@ -6033,6 +6323,10 @@ async def record_payment_bundle(
     )
     if existing_response:
         return PaymentBundleRead.model_validate(existing_response["body"])
+
+    loyalty_program = await load_loyalty_program(
+        session, company_id=tenant.company_id, company_lock="share"
+    )
 
     order = (
         await session.execute(select(Order).where(Order.id == order_id).with_for_update())
@@ -6128,6 +6422,7 @@ async def record_payment_bundle(
         payment_method="split",
         payment_breakdown_minor=payment_breakdown_minor,
         final_payment_bundle=payments,
+        loyalty_program=loyalty_program,
     )
     response = PaymentBundleRead(
         order_id=order.id,

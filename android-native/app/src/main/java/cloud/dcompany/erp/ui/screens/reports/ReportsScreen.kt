@@ -1,5 +1,14 @@
 package cloud.dcompany.erp.ui.screens.reports
 
+import cloud.dcompany.erp.ui.theme.operationalDanger
+import cloud.dcompany.erp.ui.theme.operationalDangerContainer
+import cloud.dcompany.erp.ui.theme.operationalGood
+import cloud.dcompany.erp.ui.theme.operationalGoodContainer
+import cloud.dcompany.erp.ui.theme.operationalInformation
+import cloud.dcompany.erp.ui.theme.operationalInformationContainer
+import cloud.dcompany.erp.ui.theme.operationalWarning
+import cloud.dcompany.erp.ui.theme.operationalWarningContainer
+
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -94,7 +103,7 @@ fun ReportsScreen(
     Column(
         Modifier
             .fillMaxSize()
-            .background(Brand.Background)
+            .background(MaterialTheme.colorScheme.background)
     ) {
         PeriodTabs(state.period, vm::selectPeriod)
         PeriodSelector(
@@ -234,14 +243,14 @@ private fun PeriodSelector(
                         Text(
                             selectorLabel(state),
                             style = MaterialTheme.typography.titleLarge,
-                            color = Brand.Foreground,
+                            color = MaterialTheme.colorScheme.onSurface,
                             textAlign = TextAlign.Center,
                         )
                         if (state.period == ReportPeriod.DAILY || state.period == ReportPeriod.MONTHLY) {
                             Text(
                                 "Tap to pick",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = Brand.ForegroundMuted,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
                     }
@@ -276,9 +285,9 @@ private fun PeriodSelector(
                                         onClick = { onPickQuarter(quarter) },
                                         label = { Text(label, textAlign = TextAlign.Center) },
                                         colors = FilterChipDefaults.filterChipColors(
-                                            selectedContainerColor = Brand.SurfaceHover,
-                                            selectedLabelColor = Brand.Foreground,
-                                            labelColor = Brand.ForegroundMuted,
+                                            selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                            selectedLabelColor = MaterialTheme.colorScheme.onSurface,
+                                            labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
                                         ),
                                         modifier = Modifier.weight(1f),
                                     )
@@ -376,11 +385,11 @@ private fun CalendarDialog(
             ) { Text("Show report") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-        colors = DatePickerDefaults.colors(containerColor = Brand.Surface),
+        colors = DatePickerDefaults.colors(containerColor = MaterialTheme.colorScheme.surface),
     ) {
         DatePicker(
             state = pickerState,
-            colors = DatePickerDefaults.colors(containerColor = Brand.Surface),
+            colors = DatePickerDefaults.colors(containerColor = MaterialTheme.colorScheme.surface),
         )
     }
 }
@@ -406,9 +415,9 @@ private fun LoadingPanel() {
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            CircularProgressIndicator(color = Brand.Gold)
+            CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
             Spacer(Modifier.height(Spacing.md))
-            Text("Computing report…", color = Brand.ForegroundMuted)
+            Text("Computing report…", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
@@ -438,17 +447,17 @@ private fun StaleReportBanner(message: String, onRetry: () -> Unit) {
             .fillMaxWidth()
             .padding(horizontal = 20.dp, vertical = 6.dp)
             .clip(Radius.shapeMd)
-            .background(Brand.SurfaceRaised)
-            .border(BorderStroke(1.dp, Brand.Danger), Radius.shapeMd)
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .border(BorderStroke(1.dp, MaterialTheme.colorScheme.operationalDanger), Radius.shapeMd)
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Column(Modifier.weight(1f)) {
-            Text("Saved report — refresh failed", color = Brand.Danger, fontWeight = FontWeight.Bold)
+            Text("Saved report — refresh failed", color = MaterialTheme.colorScheme.operationalDanger, fontWeight = FontWeight.Bold)
             Text(
                 "$message The figures below may be out of date.",
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodySmall,
             )
         }
@@ -655,7 +664,7 @@ private fun ReportBody(
                         "grouped under legacy/other for owner reconciliation."
                 },
                 style = MaterialTheme.typography.labelSmall,
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -677,15 +686,15 @@ private fun ReportHeading(
             Text(
                 period.title,
                 style = MaterialTheme.typography.titleLarge,
-                color = Brand.Foreground,
+                color = MaterialTheme.colorScheme.onSurface,
             )
             Spacer(Modifier.size(10.dp))
-            Text(report.label, color = Brand.ForegroundMuted)
+            Text(report.label, color = MaterialTheme.colorScheme.onSurfaceVariant)
             if (refreshing) {
                 Spacer(Modifier.size(10.dp))
                 CircularProgressIndicator(
                     modifier = Modifier.size(14.dp),
-                    color = Brand.Gold,
+                    color = MaterialTheme.colorScheme.primary,
                     strokeWidth = 2.dp,
                 )
             }
@@ -693,7 +702,7 @@ private fun ReportHeading(
         Text(
             "${prettyDate(report.periodStart)} to ${prettyDate(report.periodEnd)} · FY ${report.fiscalYear}",
             style = MaterialTheme.typography.labelSmall,
-            color = Brand.ForegroundMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         // A cached figure must never pass for a fresh one — this is the one
         // line standing between "the tablet was offline" and an owner making
@@ -702,7 +711,7 @@ private fun ReportHeading(
             Text(
                 "As of ${relativeAge(fetchedAtMillis)}" + if (refreshing) " · refreshing…" else "",
                 style = MaterialTheme.typography.labelSmall,
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }
@@ -755,14 +764,14 @@ private fun KpiCard(tile: KpiTile, modifier: Modifier = Modifier) {
         Text(
             tile.label.uppercase(Locale.ENGLISH),
             style = MaterialTheme.typography.labelSmall,
-            color = Brand.ForegroundMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.height(4.dp))
         Text(
             tile.value,
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.Bold,
-            color = if (tile.negative) Brand.Danger else Brand.Foreground,
+            color = if (tile.negative) MaterialTheme.colorScheme.operationalDanger else MaterialTheme.colorScheme.onSurface,
         )
     }
 }
@@ -869,13 +878,13 @@ private fun ManualCollectionsNotice(
         Modifier
             .fillMaxWidth()
             .clip(Radius.shapeLg)
-            .background(Brand.SurfaceRaised)
-            .border(BorderStroke(1.dp, Brand.Warning), Radius.shapeLg)
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .border(BorderStroke(1.dp, MaterialTheme.colorScheme.operationalWarning), Radius.shapeLg)
             .padding(16.dp),
     ) {
         Text(
             "${amountMinor.asRupees()} is unitemized manual collection.",
-            color = Brand.Foreground,
+            color = MaterialTheme.colorScheme.onSurface,
             fontWeight = FontWeight.Bold,
         )
         Spacer(Modifier.height(4.dp))
@@ -888,7 +897,7 @@ private fun ManualCollectionsNotice(
                 } +
                 "references and void history live in Finance → Manual collections.",
             style = MaterialTheme.typography.bodyMedium,
-            color = Brand.ForegroundMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }
@@ -909,7 +918,7 @@ private fun RevenueCard(
                 "Legacy/other revenue remains included in every total. Review source invoices " +
                     "and audit history before posting any correction.",
                 style = MaterialTheme.typography.labelSmall,
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
         if (r.discountsAndPointsRedeemedMinor > 0) {
@@ -1013,7 +1022,7 @@ private fun TaxCard(
                     "preparation are deferred and are not provided by this Gaming Centre profile."
             },
             style = MaterialTheme.typography.labelSmall,
-            color = Brand.ForegroundMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }
@@ -1076,7 +1085,7 @@ private fun ExpensesCard(report: ReportData) {
             Text(
                 "No expenses recorded in this period.",
                 style = MaterialTheme.typography.bodyMedium,
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         } else {
             report.expenses.forEach { line ->
@@ -1108,7 +1117,7 @@ private fun BottomLine(report: ReportData) {
                     "Net revenue",
                     report.netRevenueMinor.asRupees(),
                     "what's really yours before any costs",
-                    Brand.Foreground,
+                    MaterialTheme.colorScheme.onSurface,
                 )
             },
             { modifier ->
@@ -1121,7 +1130,7 @@ private fun BottomLine(report: ReportData) {
                     } else {
                         "what you sold cost, plus what it took to run the place"
                     },
-                    Brand.Foreground,
+                    MaterialTheme.colorScheme.onSurface,
                 )
             },
             { modifier ->
@@ -1130,7 +1139,7 @@ private fun BottomLine(report: ReportData) {
                     "Net profit",
                     report.netProfitMinor.asRupees(),
                     "your real bottom line",
-                    if (report.netProfitMinor < 0) Brand.Danger else Brand.Foreground,
+                    if (report.netProfitMinor < 0) MaterialTheme.colorScheme.operationalDanger else MaterialTheme.colorScheme.onSurface,
                 )
             },
         )
@@ -1163,7 +1172,7 @@ private fun Summary(
         Text(
             label.uppercase(Locale.ENGLISH),
             style = MaterialTheme.typography.labelSmall,
-            color = Brand.ForegroundMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
         )
         Spacer(Modifier.height(6.dp))
@@ -1177,7 +1186,7 @@ private fun Summary(
         Text(
             note,
             style = MaterialTheme.typography.labelSmall,
-            color = Brand.ForegroundMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
         )
     }
@@ -1190,7 +1199,7 @@ private fun CardTitle(text: String) {
     Text(
         text,
         style = MaterialTheme.typography.titleLarge,
-        color = Brand.Foreground,
+        color = MaterialTheme.colorScheme.onSurface,
         modifier = Modifier.padding(bottom = 8.dp),
     )
 }
@@ -1219,13 +1228,13 @@ private fun MoneyRow(
                 style = if (bold) MaterialTheme.typography.bodyLarge
                 else MaterialTheme.typography.bodyMedium,
                 fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal,
-                color = Brand.Foreground,
+                color = MaterialTheme.colorScheme.onSurface,
             )
             if (sub != null) {
                 Text(
                     sub,
                     style = MaterialTheme.typography.labelSmall,
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }
@@ -1235,7 +1244,7 @@ private fun MoneyRow(
             style = if (bold) MaterialTheme.typography.bodyLarge
             else MaterialTheme.typography.bodyMedium,
             fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal,
-            color = if (valueMinor < 0) Brand.Danger else Brand.Foreground,
+            color = if (valueMinor < 0) MaterialTheme.colorScheme.operationalDanger else MaterialTheme.colorScheme.onSurface,
         )
     }
 }
@@ -1247,7 +1256,7 @@ private fun Divider() {
             .fillMaxWidth()
             .padding(vertical = 4.dp)
             .height(1.dp)
-            .background(Brand.Border)
+            .background(MaterialTheme.colorScheme.outline)
     )
 }
 
@@ -1257,14 +1266,14 @@ private fun StepButton(glyph: String, enabled: Boolean, onClick: () -> Unit) {
         Modifier
             .size(48.dp)
             .clip(Radius.shapeMd)
-            .background(if (enabled) Brand.SurfaceRaised else Brand.Surface)
+            .background(if (enabled) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surface)
             .clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         Text(
             glyph,
             style = MaterialTheme.typography.titleLarge,
-            color = if (enabled) Brand.Foreground else Brand.Border,
+            color = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outline,
         )
     }
 }

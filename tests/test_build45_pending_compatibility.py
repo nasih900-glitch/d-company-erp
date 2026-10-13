@@ -68,15 +68,9 @@ def _extract_git_archive(ref: str, destination: Path) -> bytes:
 
 
 def _candidate_snapshot(destination: Path) -> None:
+    # Build 45 is immutable at HEAD (ee025); current build-46 working-tree
+    # bytes are verified by the separate build-46 compatibility contract.
     _extract_git_archive("HEAD", destination)
-    for relative in (
-        "backend/tests/integration/test_google_sheets_daily_collection_settings.py",
-        "infra/scripts/install-on-vm.sh",
-        "infra/scripts/verify-build45-pending-state.sql",
-    ):
-        target = destination / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes((ROOT / relative).read_bytes())
 
 
 def test_exact_add_change_delete_pairs_are_content_bound(helper, tmp_path):

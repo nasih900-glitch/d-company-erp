@@ -42,6 +42,24 @@ from app.models import (
     Terminal,
     User,
 )
+from app.services.pos.loyalty_program import LEGACY_RULES, LoadedLoyaltyProgram
+
+
+def _legacy_program() -> LoadedLoyaltyProgram:
+    return LoadedLoyaltyProgram(
+        revision=0,
+        rules=LEGACY_RULES,
+        published_by=None,
+        published_at=datetime.now(UTC),
+    )
+
+
+@pytest.fixture(autouse=True)
+def _explicit_legacy_program(monkeypatch):
+    async def _load(*_args, **_kwargs):
+        return _legacy_program()
+
+    monkeypatch.setattr(pos_router, "load_loyalty_program", _load)
 
 
 class _Result:
@@ -1419,13 +1437,15 @@ async def test_gaming_points_ratio_excludes_tip_on_a_tipped_and_discounted_order
     )
     session = _Session(_Result(rows=[gaming_item]))
 
-    points_earned = await pos_router._compute_points_with_multiplier(
+    points_earned, has_gaming = await pos_router._compute_points_with_multiplier(
         session,
         order=order,
         order_lines=[order_line],
+        program=_legacy_program(),
         membership_multiplier=1.0,
     )
 
+    assert has_gaming is True
     assert points_earned == 120
     assert points_earned != 150  # the tip-inflated result the bug produced
 

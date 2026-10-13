@@ -27,6 +27,20 @@ from app.services.pos.checkout_claims import (
     requires_checkout_claim,
     validate_checkout_claim,
 )
+from app.services.pos.loyalty_program import LEGACY_RULES, LoadedLoyaltyProgram
+
+
+@pytest.fixture(autouse=True)
+def _explicit_legacy_program(monkeypatch):
+    async def _load(*_args, **_kwargs):
+        return LoadedLoyaltyProgram(
+            revision=0,
+            rules=LEGACY_RULES,
+            published_by=None,
+            published_at=datetime.now(UTC),
+        )
+
+    monkeypatch.setattr(pos_router, "load_loyalty_program", _load)
 
 
 class _Result:

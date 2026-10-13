@@ -30,6 +30,10 @@ data class CustomerCacheEntity(
     val visitCount: Int,
     val totalSpentMinor: Long,
     val loyaltyPoints: Int,
+    /** Null on Room 53 upgrades until an authoritative program-aware pull. */
+    val loyaltyProgramRevision: Long? = null,
+    /** Null means points value is unknown; never substitute revision-zero economics. */
+    val loyaltyPointValueMinor: Int? = null,
     val lifetimeGamingPointsEarned: Int,
     val gamingRank: String,
     val gamingRankFloor: Int,

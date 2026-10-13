@@ -390,7 +390,7 @@ export const PROFILE_NAVIGATION_GROUPS: readonly ProfileNavigationGroup[] = [
     items: [
       { id: 'gaming', label: 'Gaming', icon: 'gaming', feature: 'gaming', to: '/gaming', module: 'gaming' },
       { id: 'pos', label: 'POS', icon: 'pos', feature: 'pos', to: '/pos', module: 'pos' },
-      { id: 'shift', label: 'Shift', icon: 'shift', feature: 'shifts', to: '/operations', module: 'pos' },
+      { id: 'shift', label: 'Shift', icon: 'shift', feature: 'shifts', to: '/operations?tab=shifts', module: 'pos' },
       { id: 'customers', label: 'Customers', icon: 'customers', feature: 'customers', to: '/customers', module: 'pos' },
       { id: 'refunds', label: 'Refunds', icon: 'refunds', feature: 'refundsWorkspace', to: '/refunds', audience: 'refund' },
       { id: 'stock', label: 'Stock', icon: 'stock', feature: 'stock', to: '/inventory', module: 'inventory' },

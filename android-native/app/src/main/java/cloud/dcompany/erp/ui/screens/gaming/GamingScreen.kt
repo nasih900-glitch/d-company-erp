@@ -1,5 +1,14 @@
 package cloud.dcompany.erp.ui.screens.gaming
 
+import cloud.dcompany.erp.ui.theme.operationalDanger
+import cloud.dcompany.erp.ui.theme.operationalDangerContainer
+import cloud.dcompany.erp.ui.theme.operationalGood
+import cloud.dcompany.erp.ui.theme.operationalGoodContainer
+import cloud.dcompany.erp.ui.theme.operationalInformation
+import cloud.dcompany.erp.ui.theme.operationalInformationContainer
+import cloud.dcompany.erp.ui.theme.operationalWarning
+import cloud.dcompany.erp.ui.theme.operationalWarningContainer
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.BorderStroke
@@ -23,6 +32,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.absoluteOffset
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -105,6 +115,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.draw.clip
@@ -115,6 +127,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.painterResource
@@ -135,6 +148,8 @@ import androidx.compose.ui.unit.IntRect
 import kotlin.math.cos
 import kotlin.math.sin
 import androidx.compose.ui.window.DialogProperties
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.compose.ui.window.Dialog
 import kotlinx.coroutines.launch
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -178,9 +193,10 @@ import cloud.dcompany.erp.ui.components.VOID_REASON_OTHER_ID
 import cloud.dcompany.erp.ui.components.VoidReasonInput
 import cloud.dcompany.erp.ui.components.resolvedVoidReason
 import cloud.dcompany.erp.ui.screens.ProductConfigurationDialog
+import cloud.dcompany.erp.ui.screens.CartModifierSelection
+import cloud.dcompany.erp.ui.screens.configuredUnitPriceMinor
 import cloud.dcompany.erp.ui.screens.businessClockTime
 import cloud.dcompany.erp.ui.theme.Brand
-import cloud.dcompany.erp.ui.theme.controlDeckBackdrop
 import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.theme.Spacing
 import cloud.dcompany.erp.ui.remote.RemoteSensitiveContent
@@ -249,9 +265,25 @@ private data class AddonConfigurationRequest(
     val qty: Int = 1,
 )
 
+internal data class AddonReviewRequest(
+    val session: GameSession,
+    val stationName: String,
+    val item: MenuItemEntity,
+    val variant: cloud.dcompany.erp.core.db.MenuVariantEntity?,
+    val modifiers: List<CartModifierSelection>,
+    val note: String?,
+    val qty: Int,
+)
+
 private data class AddonVoidRequest(
     val session: GameSession,
     val addon: GamingSessionAddonUi,
+)
+
+private data class ParticipantJoinReview(
+    val customerId: String?,
+    val name: String?,
+    val phone: String?,
 )
 
 /**
@@ -393,6 +425,7 @@ fun GamingScreen(
     var discardingPackageExtension by remember { mutableStateOf<PackageExtensionDiscardRequest?>(null) }
     var choosingAddonFor by remember { mutableStateOf<GameSession?>(null) }
     var configuringAddon by remember { mutableStateOf<AddonConfigurationRequest?>(null) }
+    var reviewingAddon by remember { mutableStateOf<AddonReviewRequest?>(null) }
     var voidingAddon by remember { mutableStateOf<AddonVoidRequest?>(null) }
     var reviewingRejectedAddon by remember { mutableStateOf<SessionAddonActionUi?>(null) }
     var managingParticipants by remember { mutableStateOf<GameSession?>(null) }
@@ -916,8 +949,10 @@ fun GamingScreen(
                 onDismiss = { configuringAddon = null },
                 onAdd = { variant, modifiers, note ->
                     configuringAddon = null
-                    vm.addSessionAddon(
+                    reviewingAddon = AddonReviewRequest(
                         session = request.session,
+                        stationName = state.stations.firstOrNull { it.id == request.session.stationId }?.name
+                            ?: "Gaming station",
                         item = request.item,
                         variant = variant,
                         modifiers = modifiers,
@@ -927,6 +962,24 @@ fun GamingScreen(
                 },
             )
         }
+    }
+
+    reviewingAddon?.takeIf { access.canManageSessions }?.let { request ->
+        GamingAddonReviewDialog(
+            request = request,
+            onDismiss = { reviewingAddon = null },
+            onConfirm = {
+                reviewingAddon = null
+                vm.addSessionAddon(
+                    session = request.session,
+                    item = request.item,
+                    variant = request.variant,
+                    modifiers = request.modifiers,
+                    note = request.note,
+                    qty = request.qty,
+                )
+            },
+        )
     }
 
     voidingAddon?.takeIf { access.canManageSessions }?.let { request ->
@@ -984,7 +1037,7 @@ fun GamingScreen(
         val pendingBillSnapshotMinor = state.pendingBillSnapshotMinor(session)
         RemoteSensitiveContent {
             AlertDialog(
-                containerColor = Brand.SurfaceOverlay,
+                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
                 shape = Radius.shapeLg,
                 onDismissRequest = { sending = null },
                 title = { Text("Send to POS?") },
@@ -999,7 +1052,7 @@ fun GamingScreen(
                             } else {
                                 "It will stay on the current open shift."
                             },
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 },
                 confirmButton = {
@@ -1242,12 +1295,12 @@ fun GamingScreen(
 
     state.error?.let { message ->
         AlertDialog(
-            containerColor = Brand.SurfaceOverlay,
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
             shape = Radius.shapeLg,
             onDismissRequest = vm::dismissError,
             confirmButton = { TextButton(onClick = vm::dismissError) { Text("OK") } },
             title = { Text("Gaming action not completed") },
-            text = { Text(message, color = Brand.ForegroundMuted) },
+            text = { Text(message, color = MaterialTheme.colorScheme.onSurfaceVariant) },
         )
     }
 }
@@ -1266,7 +1319,7 @@ private fun PosTargetShiftDialog(
     }
     val selectedTarget = selection.targets.firstOrNull { it.shiftId == selectedShiftId }
     AlertDialog(
-        containerColor = Brand.SurfaceOverlay,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = Radius.shapeLg,
         onDismissRequest = { if (!busy) onDismiss() },
         title = { Text("Choose the receiving POS shift") },
@@ -1277,7 +1330,7 @@ private fun PosTargetShiftDialog(
                         "POS confirms the final total. " +
                         "The Gaming shift keeps the session history; the selected POS shift " +
                         "receives the unpaid order.",
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 LazyColumn(
@@ -1290,7 +1343,7 @@ private fun PosTargetShiftDialog(
                             onClick = { selectedShiftId = target.shiftId },
                             enabled = !busy,
                             colors = ButtonDefaults.outlinedButtonColors(
-                                contentColor = if (selected) Brand.Gold else Brand.Foreground,
+                                contentColor = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                             ),
                             contentPadding = PaddingValues(Spacing.md),
                             modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp),
@@ -1313,7 +1366,7 @@ private fun PosTargetShiftDialog(
                                     )
                                     Text(
                                         posTargetShiftSupportingText(target),
-                                        color = Brand.ForegroundMuted,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         style = MaterialTheme.typography.labelSmall,
                                         maxLines = 2,
                                         overflow = TextOverflow.Ellipsis,
@@ -1323,7 +1376,7 @@ private fun PosTargetShiftDialog(
                                     Icon(
                                         Icons.Filled.CheckCircle,
                                         contentDescription = "Selected receiving shift",
-                                        tint = Brand.Good,
+                                        tint = MaterialTheme.colorScheme.operationalGood,
                                     )
                                 }
                             }
@@ -1332,7 +1385,7 @@ private fun PosTargetShiftDialog(
                 }
                 Text(
                     "If the receiving POS shift is not listed, keep the bill pending and ask its cashier to open a shift.",
-                    color = Brand.ForegroundFaint,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.labelSmall,
                 )
             }
@@ -1378,9 +1431,9 @@ private fun GamingEmptyState(state: GamingUiState, onRefresh: () -> Unit) {
             if (state.initialLoading) {
                 Box(Modifier.fillMaxWidth().heightIn(min = 240.dp), Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
-                        CircularProgressIndicator(color = Brand.Gold, modifier = Modifier.size(30.dp))
-                        Text("Waiting for the first station sync", color = Brand.Foreground, style = MaterialTheme.typography.titleLarge)
-                        Text("The board will populate as soon as the ERP responds.", color = Brand.ForegroundMuted)
+                        CircularProgressIndicator(color = MaterialTheme.colorScheme.primary, modifier = Modifier.size(30.dp))
+                        Text("Waiting for the first station sync", color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.titleLarge)
+                        Text("The board will populate as soon as the ERP responds.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             } else if (state.initialLoadFailed) {
@@ -1483,7 +1536,10 @@ private fun GamingMetrics(state: GamingUiState) {
                 cards.forEach { card -> card(Modifier.weight(1f)) }
             }
         } else {
-            Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+            Column(
+                Modifier.fillMaxWidth().heightIn(max = 460.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+            ) {
                 cards.chunked(3).forEach { rowCards ->
                     Row(
                         Modifier.fillMaxWidth(),
@@ -1656,6 +1712,19 @@ internal fun GamingCommandWorkspace(
     }
 
     val controlPane: @Composable (Modifier) -> Unit = { paneModifier ->
+        val selectedHeroState = selectedSession?.let { current ->
+            stationPresentation(
+                station = selectedStation ?: return@let null,
+                session = current,
+                // Active and overtime both use the hero action. A stable value
+                // avoids making the whole control pane a per-second reader.
+                nowMillis = 0L,
+                hasActiveAddons = state.addonsFor(current).any {
+                    !it.voided && !it.isRejectedLocalAdd()
+                },
+            ).state
+        }
+        val heroOwnsStopAction = gamingHeroShowsStopAction(selectedSession, selectedHeroState)
         when {
             selectedStation == null -> DesignedEmptyState(
                 title = "Select a station", body = "Choose a station on the board.",
@@ -1698,6 +1767,17 @@ internal fun GamingCommandWorkspace(
                     session = selectedSession,
                     sessionAddons = selectedSession?.let(state::addonsFor).orEmpty(),
                     wallClock = wallClock,
+                    stopActionEnabled = selectedSession != null && gamingSessionActionsEnabled(
+                        canWrite = access.canManageSessions,
+                        actionInProgress = state.busyStationId != null,
+                        lastError = selectedSession.lastError,
+                    ) && selectedSession.resolvedStopShiftId(
+                        activeShiftId = state.activeShiftId,
+                        activeShiftServerConfirmed = state.activeShiftServerConfirmed,
+                        online = state.online,
+                    ) != null,
+                    stopBusy = state.busyStationId == selectedStation.id,
+                    onStop = { onStop(selectedStation, it) },
                 )
                 extensionPreview?.takeIf {
                     it.station.id == selectedStation.id && it.session.id == selectedSession?.id
@@ -1744,7 +1824,7 @@ internal fun GamingCommandWorkspace(
                 if (extensionPreview == null) extensionReviewError?.let { error ->
                     Text(
                         error,
-                        color = Brand.Danger,
+                        color = MaterialTheme.colorScheme.operationalDanger,
                         style = MaterialTheme.typography.labelMedium,
                         modifier = Modifier.testTag("gaming-extension-review-error"),
                     )
@@ -1792,6 +1872,7 @@ internal fun GamingCommandWorkspace(
         onReviewRejectedAddon = onReviewRejectedAddon,
         onManageParticipants = onManageParticipants,
         compactDetail = true,
+        showActiveStopAction = !heroOwnsStopAction,
         modifier = Modifier.fillMaxWidth(),
     )
             } }
@@ -1871,7 +1952,7 @@ internal fun GamingCommandWorkspace(
                     controlPane(
                         Modifier.weight(0.65f).fillMaxHeight()
                             .clip(Radius.shapeLg)
-                            .border(1.dp, Brand.Gold.copy(alpha = 0.28f), Radius.shapeLg)
+                            .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.28f), Radius.shapeLg)
                             .testTag("gaming-control-pane"),
                     )
                 }
@@ -1906,7 +1987,7 @@ internal fun GamingCommandWorkspace(
                         controlPane(
                             Modifier.fillMaxWidth().height(560.dp)
                                 .clip(Radius.shapeLg)
-                                .border(1.dp, Brand.Gold.copy(alpha = 0.28f), Radius.shapeLg)
+                                .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.28f), Radius.shapeLg)
                                 .testTag("gaming-control-pane"),
                         )
                     }
@@ -1919,7 +2000,7 @@ internal fun GamingCommandWorkspace(
 /** Static ambient light keeps the board legible and does not schedule idle redraws. */
 @Composable
 private fun GamingAmbientBackdrop() {
-    Box(Modifier.fillMaxSize().controlDeckBackdrop())
+    Box(Modifier.fillMaxSize())
 }
 
 @Composable
@@ -1980,17 +2061,17 @@ private fun GamingBoardHeadline(state: GamingUiState, onRefresh: () -> Unit) {
     ) {
         Icon(
             Icons.Filled.SportsEsports, contentDescription = null,
-            tint = Brand.GoldBright, modifier = Modifier.size(28.dp),
+            tint = MaterialTheme.colorScheme.onPrimaryContainer, modifier = Modifier.size(28.dp),
         )
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(0.dp)) {
             Text(
-                "GAMING", color = Brand.Foreground,
+                "GAMING", color = MaterialTheme.colorScheme.onSurface,
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold,
                 maxLines = 1,
             )
             Text(
-                "${state.stations.size} stations", color = Brand.Gold,
+                "${state.stations.size} stations", color = MaterialTheme.colorScheme.primary,
                 style = MaterialTheme.typography.labelSmall,
             )
         }
@@ -2002,7 +2083,7 @@ private fun GamingBoardHeadline(state: GamingUiState, onRefresh: () -> Unit) {
         ).forEach { (label, value) ->
             Column(horizontalAlignment = Alignment.Start) {
                 Text(
-                    label, color = Brand.ForegroundMuted,
+                    label, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.labelSmall,
                     maxLines = 1,
                 )
@@ -2010,7 +2091,7 @@ private fun GamingBoardHeadline(state: GamingUiState, onRefresh: () -> Unit) {
                     value,
                     color = if (label == "Payment due" && state.readyForPos.isNotEmpty() ||
                         label == "POS shift" && state.activeShiftId == null
-                    ) Brand.Warning else Brand.Foreground,
+                    ) MaterialTheme.colorScheme.operationalWarning else MaterialTheme.colorScheme.onSurface,
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
@@ -2038,12 +2119,12 @@ private fun GamingCommandPanel(
     val accent = statusColor(toneProvider())
     Column(
         modifier = modifier.clip(Radius.shapeLg)
-            .background(Brand.Surface)
-            .border(1.dp, Brand.Gold.copy(alpha = 0.38f), Radius.shapeLg),
+            .background(MaterialTheme.colorScheme.surface)
+            .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.38f), Radius.shapeLg),
     ) {
         Row(
             Modifier.fillMaxWidth()
-                .background(Brand.SurfaceOverlay.copy(alpha = 0.56f))
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.56f))
                 .padding(horizontal = Spacing.lg, vertical = Spacing.md),
             horizontalArrangement = Arrangement.spacedBy(Spacing.md),
             verticalAlignment = Alignment.CenterVertically,
@@ -2057,19 +2138,19 @@ private fun GamingCommandPanel(
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(
                     title.uppercase(),
-                    color = Brand.GoldBright,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
                     style = MaterialTheme.typography.titleMedium,
                 )
                 Text(
                     subtitle,
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodySmall,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
         }
-        HorizontalDivider(color = Brand.Gold.copy(alpha = 0.38f))
+        HorizontalDivider(color = MaterialTheme.colorScheme.primary.copy(alpha = 0.38f))
         Box(
             Modifier.fillMaxWidth().weight(1f).padding(contentPadding),
         ) {
@@ -2209,13 +2290,13 @@ internal fun GamingCommandAttentionBar(
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(
                 statusTitle,
-                color = Brand.Foreground,
+                color = MaterialTheme.colorScheme.onSurface,
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.SemiBold,
             )
             Text(
                 statusDetail,
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelSmall,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -2243,8 +2324,8 @@ internal fun GamingSavingOverlay(stationName: String) {
     Row(
         Modifier.widthIn(max = 560.dp)
             .clip(Radius.shapeLg)
-            .background(Brand.SurfaceOverlay)
-            .border(1.dp, Brand.Information.copy(alpha = 0.62f), Radius.shapeLg)
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .border(1.dp, MaterialTheme.colorScheme.operationalInformation.copy(alpha = 0.62f), Radius.shapeLg)
             .semantics {
                 liveRegion = LiveRegionMode.Polite
                 contentDescription = "Saving $stationName. Other station actions are temporarily paused."
@@ -2254,20 +2335,20 @@ internal fun GamingSavingOverlay(stationName: String) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         CircularProgressIndicator(
-            color = Brand.Information,
+            color = MaterialTheme.colorScheme.operationalInformation,
             strokeWidth = 2.dp,
             modifier = Modifier.size(22.dp),
         )
         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(
                 "Saving $stationName",
-                color = Brand.Foreground,
+                color = MaterialTheme.colorScheme.onSurface,
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.SemiBold,
             )
             Text(
                 "Other station actions are paused until this change is safely stored.",
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelSmall,
             )
         }
@@ -2280,7 +2361,11 @@ private fun GamingStationHero(
     session: GameSession?,
     sessionAddons: List<GamingSessionAddonUi>,
     wallClock: State<Long>,
+    stopActionEnabled: Boolean,
+    stopBusy: Boolean,
+    onStop: (GameSession) -> Unit,
 ) {
+    val compactWorkspace = LocalConfiguration.current.screenHeightDp < 700
     val ticking = session?.status in setOf("active", "starting")
     val frozenNow = remember(session?.id, session?.status) { System.currentTimeMillis() }
     val now = if (ticking) wallClock.value else frozenNow
@@ -2307,46 +2392,65 @@ private fun GamingStationHero(
         Math.addExact(it, gamingSessionAddonBillableTotalMinor(sessionAddons))
     }
     Surface(
-        modifier = Modifier.fillMaxWidth(),
-        color = Brand.Surface,
+        modifier = Modifier.fillMaxWidth().then(
+            if (showsElapsed && compactWorkspace) {
+                // This matches the compact draft editor's control-ring slot so
+                // starting a session changes the data, not the instrument's position.
+                Modifier.padding(top = 18.dp)
+            } else {
+                Modifier
+            },
+        ),
+        color = MaterialTheme.colorScheme.surface,
         shape = Radius.shapeLg,
         border = BorderStroke(
             1.dp,
-            if (showsBill) Brand.Gold.copy(alpha = 0.72f) else Brand.BorderSubtle,
+            if (showsBill) MaterialTheme.colorScheme.primary.copy(alpha = 0.72f) else MaterialTheme.colorScheme.outlineVariant,
         ),
     ) {
         Row(
-            Modifier.fillMaxWidth()
-                .background(
-                    Brush.horizontalGradient(
-                        listOf(
-                            Brand.Gold.copy(alpha = if (showsBill) 0.13f else 0.08f),
-                            Brand.Surface,
-                            Brand.Surface,
-                        ),
-                    ),
-                )
-                .padding(Spacing.md),
+            Modifier.fillMaxWidth().padding(Spacing.md),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(Spacing.md),
         ) {
-            GamingStationArtwork(station.type, Modifier.size(if (showsElapsed) 78.dp else 92.dp))
+            if (!showsElapsed) GamingStationArtwork(station.type, Modifier.size(92.dp))
             if (elapsedSession != null) {
+                val playedMillis = elapsedMillis(elapsedSession, now)
+                val bookedMillis = elapsedSession.timerMinutes
+                    ?.takeIf { it > 0 }
+                    ?.times(60_000L)
+                val remainingMillis = bookedMillis?.minus(playedMillis)
+                Box(
+                    Modifier.weight(0.62f)
+                        .then(if (compactWorkspace) Modifier.offset(x = (-3).dp) else Modifier),
+                    contentAlignment = Alignment.TopCenter,
+                ) {
                 GamingElapsedRing(
-                    elapsed = formatElapsed(elapsedMillis(elapsedSession, now)),
+                    clock = remainingMillis?.let { remaining ->
+                        if (remaining <= 0L) "+${formatElapsed(-remaining)}" else formatElapsed(remaining)
+                    } ?: formatElapsed(playedMillis),
+                    clockLabel = when {
+                        remainingMillis == null -> "ELAPSED"
+                        remainingMillis <= 0L -> "OVERTIME"
+                        else -> "REMAINING"
+                    },
+                    progress = bookedMillis?.let { booked ->
+                        (playedMillis.toFloat() / booked.toFloat()).coerceIn(0f, 1f)
+                    },
                     tint = if (presentation.state in setOf(
                             StationVisualState.Overtime, StationVisualState.StopFailed,
                         )
-                    ) Brand.Danger else Brand.GoldBright,
+                    ) MaterialTheme.colorScheme.operationalDanger else MaterialTheme.colorScheme.onPrimaryContainer,
                 )
+                }
             }
             Column(
-                Modifier.weight(1f),
+                Modifier.weight(if (showsElapsed) 0.38f else 1f),
                 verticalArrangement = Arrangement.spacedBy(Spacing.sm),
             ) {
                 Text(
                     station.name,
-                    color = Brand.Foreground,
+                    color = MaterialTheme.colorScheme.onSurface,
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold,
                 )
@@ -2360,15 +2464,25 @@ private fun GamingStationHero(
                         Text(
                             elapsedSession.startAt.businessClockTime()?.let { "Started $it" }
                                 ?: "Session in progress",
-                            color = Brand.ForegroundMuted,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.labelMedium,
                         )
+                        if (gamingHeroShowsStopAction(elapsedSession, presentation.state)) {
+                            GamingStopSessionAction(
+                                session = elapsedSession,
+                                presentationState = presentation.state,
+                                enabled = stopActionEnabled,
+                                busy = stopBusy,
+                                onStop = onStop,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
                     }
                     billedSession != null -> {
                         RemoteSensitiveContent {
                             Text(
                                 combinedBillMinor?.asRupees() ?: "Amount unavailable",
-                                color = if (combinedBillMinor == null) Brand.Warning else Brand.GoldBright,
+                                color = if (combinedBillMinor == null) MaterialTheme.colorScheme.operationalWarning else MaterialTheme.colorScheme.onPrimaryContainer,
                                 style = MaterialTheme.typography.headlineLarge,
                                 fontWeight = FontWeight.Bold,
                             )
@@ -2379,7 +2493,7 @@ private fun GamingStationHero(
                             } else {
                                 "Estimated combined bill · stopped ${billedSession.billableMinutes ?: 0} min"
                             },
-                            color = Brand.ForegroundMuted,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.labelMedium,
                         )
                         Text(
@@ -2388,13 +2502,13 @@ private fun GamingStationHero(
                             } else {
                                 presentation.statusLabel
                             },
-                            color = Brand.ForegroundMuted,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.labelSmall,
                         )
                     }
                     else -> Text(
                         "Actions and billing for this station",
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
@@ -2402,24 +2516,35 @@ private fun GamingStationHero(
     }
 }
 
-/** A full static ring frames elapsed time; it deliberately does not claim booking progress. */
+/** Displays authoritative play progress only when the session has a valid booked duration. */
 @Composable
-private fun GamingElapsedRing(elapsed: String, tint: Color) {
-    Box(Modifier.size(176.dp), contentAlignment = Alignment.Center) {
+private fun GamingElapsedRing(
+    clock: String,
+    clockLabel: String,
+    progress: Float?,
+    tint: Color,
+) {
+    val ringBorder = MaterialTheme.colorScheme.outlineVariant
+    val ringSize = gamingControlRingSize(LocalConfiguration.current.screenHeightDp)
+    Box(
+        Modifier.size(ringSize).testTag("gaming-control-ring"),
+        contentAlignment = Alignment.Center,
+    ) {
         Canvas(Modifier.fillMaxSize()) {
             val center = Offset(size.width / 2f, size.height / 2f)
             val radius = size.minDimension / 2f - 14.dp.toPx()
-            drawCircle(tint.copy(alpha = 0.07f), radius + 10.dp.toPx(), center)
-            drawCircle(Brand.BorderSubtle, radius, center, style = Stroke(8.dp.toPx()))
-            drawCircle(
-                brush = Brush.sweepGradient(
-                    listOf(tint.copy(alpha = 0.5f), tint, Brand.GoldBright, tint.copy(alpha = 0.5f)),
-                    center = center,
-                ),
-                radius = radius,
-                center = center,
-                style = Stroke(5.dp.toPx()),
-            )
+            drawCircle(ringBorder, radius, center, style = Stroke(2.dp.toPx()))
+            if (progress != null) {
+                drawArc(
+                    color = tint,
+                    startAngle = 135f,
+                    sweepAngle = 360f * progress,
+                    useCenter = false,
+                    topLeft = Offset(center.x - radius, center.y - radius),
+                    size = Size(radius * 2f, radius * 2f),
+                    style = Stroke(3.dp.toPx(), cap = StrokeCap.Round),
+                )
+            }
             drawCircle(tint.copy(alpha = 0.28f), radius - 11.dp.toPx(), center,
                 style = Stroke(1.dp.toPx()))
             repeat(48) { tick ->
@@ -2437,13 +2562,27 @@ private fun GamingElapsedRing(elapsed: String, tint: Color) {
             }
         }
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(elapsed, color = Brand.Foreground,
+            Text(clock, color = MaterialTheme.colorScheme.onSurface,
                 style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-            Text("ELAPSED", color = Brand.ForegroundMuted,
+            Text(clockLabel, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelSmall)
         }
     }
 }
+
+private fun gamingControlRingSize(screenHeightDp: Int) =
+    if (screenHeightDp < 700) 232.dp else 320.dp
+
+private fun gamingHeroShowsStopAction(
+    session: GameSession?,
+    presentationState: StationVisualState?,
+): Boolean = session != null &&
+    presentationState in setOf(
+        StationVisualState.Active,
+        StationVisualState.Overtime,
+        StationVisualState.Paused,
+        StationVisualState.StopFailed,
+    ) && (presentationState != StationVisualState.Paused || session.pausedAt != null)
 
 @Composable
 private fun GamingStationArtwork(type: String, modifier: Modifier = Modifier) {
@@ -2467,7 +2606,7 @@ private fun GamingStationArtwork(type: String, modifier: Modifier = Modifier) {
             Icon(
                 stationTypeIcon(type),
                 contentDescription = null,
-                tint = Brand.GoldBright,
+                tint = MaterialTheme.colorScheme.onPrimaryContainer,
                 modifier = Modifier.size(56.dp),
             )
         }
@@ -2506,11 +2645,11 @@ internal fun GamingStationTile(
     val presentation = stationPresentation(station, session, nowMillis, hasActiveAddons)
     val accent = statusColor(presentation.tone)
     val borderColor = when {
-        focused -> Brand.GoldBright
-        selected -> Brand.Gold
+        focused -> MaterialTheme.colorScheme.onPrimaryContainer
+        selected -> MaterialTheme.colorScheme.primary
         presentation.state in setOf(StationVisualState.Active, StationVisualState.Overtime) ->
-            Brand.Gold.copy(alpha = 0.48f)
-        else -> Brand.BorderSubtle
+            MaterialTheme.colorScheme.primary.copy(alpha = 0.48f)
+        else -> MaterialTheme.colorScheme.outlineVariant
     }
     val primaryValue = when (presentation.state) {
         StationVisualState.Starting,
@@ -2574,7 +2713,7 @@ internal fun GamingStationTile(
         }
         else -> presentation.statusLabel
     }
-    val tileStatusColor = if (missingTariff) Brand.Warning else accent
+    val tileStatusColor = if (missingTariff) MaterialTheme.colorScheme.operationalWarning else accent
 
 
     val highlighted = selected || focused
@@ -2588,8 +2727,13 @@ internal fun GamingStationTile(
             .background(
                 Brush.verticalGradient(
                     if (highlighted) listOf(
-                        Color(0xFF29261B), Color(0xFF172124), Color(0xFF091419),
-                    ) else listOf(Color(0xFF101D22), Color(0xFF071218)),
+                        MaterialTheme.colorScheme.surfaceContainerHighest,
+                        MaterialTheme.colorScheme.surfaceContainer,
+                        MaterialTheme.colorScheme.surface,
+                    ) else listOf(
+                        MaterialTheme.colorScheme.surfaceContainerLow,
+                        MaterialTheme.colorScheme.surface,
+                    ),
                 ),
             )
             .border(if (highlighted) 2.dp else 1.dp, borderColor, Radius.shapeLg)
@@ -2614,8 +2758,8 @@ internal fun GamingStationTile(
                 .background(
                     Brush.radialGradient(
                         if (highlighted) listOf(
-                            Brand.Gold.copy(alpha = 0.20f), Color.Transparent,
-                        ) else listOf(Brand.Gold.copy(alpha = 0.06f), Color.Transparent),
+                            MaterialTheme.colorScheme.primary.copy(alpha = 0.20f), Color.Transparent,
+                        ) else listOf(MaterialTheme.colorScheme.primary.copy(alpha = 0.06f), Color.Transparent),
                     ),
                 ),
             contentAlignment = Alignment.Center,
@@ -2624,7 +2768,7 @@ internal fun GamingStationTile(
         }
         Text(
             if (dense) compactStationTitle(station.name) else station.name,
-            color = Brand.Foreground,
+            color = MaterialTheme.colorScheme.onSurface,
             style = MaterialTheme.typography.titleSmall,
             fontWeight = FontWeight.SemiBold,
             maxLines = if (compact) 2 else 1,
@@ -2649,7 +2793,7 @@ internal fun GamingStationTile(
                 if (!missingTariff && !dense) Icon(
                     Icons.Filled.ChevronRight,
                     contentDescription = null,
-                    tint = if (selected || focused) Brand.GoldBright else Brand.ForegroundMuted,
+                    tint = if (selected || focused) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(18.dp),
                 )
             } else {
@@ -2662,7 +2806,7 @@ internal fun GamingStationTile(
                 Icon(
                     Icons.Filled.ChevronRight,
                     contentDescription = null,
-                    tint = if (selected || focused) Brand.GoldBright else Brand.ForegroundMuted,
+                    tint = if (selected || focused) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(22.dp),
                 )
             }
@@ -2681,7 +2825,7 @@ internal fun GamingStationTile(
         } else if (!compact) {
             Text(
                 supportingValue,
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelSmall,
                 maxLines = if (compact) 2 else 1,
                 overflow = TextOverflow.Ellipsis,
@@ -2710,7 +2854,7 @@ internal fun GamingCommandAttentionDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = Brand.SurfaceOverlay,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = Radius.shapeLg,
         modifier = Modifier.widthIn(max = 760.dp).fillMaxWidth(0.92f),
         properties = DialogProperties(usePlatformDefaultWidth = false),
@@ -2917,6 +3061,7 @@ internal fun GamingStationCard(
     onManageParticipants: (GameSession) -> Unit = {},
     onPauseResume: (GameSession) -> Unit = {},
     showActiveSessionActions: Boolean = true,
+    showActiveStopAction: Boolean = true,
     pinActiveSessionActions: Boolean = false,
     compactDetail: Boolean = false,
     modifier: Modifier = Modifier,
@@ -3043,10 +3188,11 @@ internal fun GamingStationCard(
                             onReviewRejectedAddon = onReviewRejectedAddon,
                             onPauseResume = onPauseResume,
                             showActiveSessionActions = false,
+                            showActiveStopAction = showActiveStopAction,
                         )
                     }
                 }
-                HorizontalDivider(color = Brand.BorderSubtle)
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 GamingActiveSessionActions(
                     session = session,
                     presentationState = presentation.state,
@@ -3066,6 +3212,7 @@ internal fun GamingStationCard(
                     onPauseResume = onPauseResume,
                     onStop = onStop,
                     onManageParticipants = onManageParticipants,
+                    showStopAction = showActiveStopAction,
                     modifier = Modifier.fillMaxWidth().padding(top = Spacing.sm),
                 )
             }
@@ -3141,22 +3288,22 @@ internal fun GamingStationCard(
             .clip(Radius.shapeLg)
             .background(
                 if (compactDetail) {
-                    Brush.verticalGradient(listOf(Brand.Surface, Brand.BackgroundSecondary))
+                    Brush.verticalGradient(listOf(MaterialTheme.colorScheme.surface, MaterialTheme.colorScheme.surfaceContainerLow))
                 } else {
-                    Brush.verticalGradient(listOf(Brand.Surface, Brand.Surface))
+                    Brush.verticalGradient(listOf(MaterialTheme.colorScheme.surface, MaterialTheme.colorScheme.surface))
                 },
             )
             .border(
                 if (focused) 2.dp else 1.dp,
                 when {
-                    focused -> Brand.Gold
+                    focused -> MaterialTheme.colorScheme.primary
                     compactDetail && presentation.state in setOf(
                         StationVisualState.PaymentDue,
                         StationVisualState.SendRejected,
-                    ) -> Brand.Gold.copy(alpha = 0.68f)
+                    ) -> MaterialTheme.colorScheme.primary.copy(alpha = 0.68f)
                     presentation.state in setOf(StationVisualState.Active, StationVisualState.Overtime) ->
-                        Brand.Gold.copy(alpha = 0.48f)
-                    else -> Brand.BorderSubtle
+                        MaterialTheme.colorScheme.primary.copy(alpha = 0.48f)
+                    else -> MaterialTheme.colorScheme.outlineVariant
                 },
                 Radius.shapeLg,
             )
@@ -3175,7 +3322,7 @@ internal fun GamingStationCard(
             ) {
                 Text(
                     station.name,
-                    color = Brand.Foreground,
+                    color = MaterialTheme.colorScheme.onSurface,
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.Bold,
                     maxLines = 2,
@@ -3195,9 +3342,9 @@ internal fun GamingStationCard(
         Text(
             "${stationTypeLabel(station.type)} · $pricingDescription",
             color = if (pricingDescription.contains("unavailable") || pricingDescription.contains("not synced")) {
-                Brand.Warning
+                MaterialTheme.colorScheme.operationalWarning
             } else {
-                Brand.ForegroundMuted
+                MaterialTheme.colorScheme.onSurfaceVariant
             },
             style = MaterialTheme.typography.labelSmall,
             maxLines = 2,
@@ -3254,7 +3401,7 @@ internal fun GamingStationCard(
             )
         }
 
-        HorizontalDivider(color = Brand.BorderSubtle)
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
         if (packageExtensionAction != null && session != null) {
             PackageExtensionBlockingActions(
@@ -3291,19 +3438,19 @@ internal fun GamingStationCard(
                     if (alreadySettledAtPos) {
                         Text(
                             "This session is already linked to a paid POS order. Extra paid time is locked; Stop still records the final play time without creating another bill.",
-                            color = Brand.Warning,
+                            color = MaterialTheme.colorScheme.operationalWarning,
                             style = MaterialTheme.typography.labelSmall,
                         )
                     } else if (packageBillingSnapshotMissing) {
                         Text(
                             "Locked package timer or total is unavailable. Refresh Gaming; if it remains missing, ask the protected owner to review billing before extending.",
-                            color = Brand.Warning,
+                            color = MaterialTheme.colorScheme.operationalWarning,
                             style = MaterialTheme.typography.labelSmall,
                         )
                     } else if (matchingPackageExtensionUnavailable) {
                         Text(
                             "No active extension matches this session's original package variant. Refresh Gaming or ask a manager to check the package catalogue.",
-                            color = Brand.Warning,
+                            color = MaterialTheme.colorScheme.operationalWarning,
                             style = MaterialTheme.typography.labelSmall,
                         )
                     }
@@ -3327,6 +3474,7 @@ internal fun GamingStationCard(
                             onPauseResume = onPauseResume,
                             onStop = onStop,
                             onManageParticipants = onManageParticipants,
+                            showStopAction = showActiveStopAction,
                         )
                     }
                 }
@@ -3365,7 +3513,7 @@ internal fun GamingStationCard(
                 cancellationAddonBlock?.let { reason ->
                     Text(
                         reason,
-                        color = Brand.Warning,
+                        color = MaterialTheme.colorScheme.operationalWarning,
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
@@ -3374,7 +3522,7 @@ internal fun GamingStationCard(
                 if (!ownsSession) {
                     Text(
                         CROSS_TERMINAL_PAYMENT_GUIDANCE,
-                        color = Brand.Warning,
+                        color = MaterialTheme.colorScheme.operationalWarning,
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
@@ -3384,7 +3532,7 @@ internal fun GamingStationCard(
                         enabled = actionsEnabled && session != null &&
                             cancellationAddonBlock == null &&
                             (ownsSession || canReconcileLegacy),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Brand.Danger),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.operationalDanger),
                         contentPadding = PaddingValues(horizontal = Spacing.sm),
                         modifier = Modifier.weight(0.8f).heightIn(min = 48.dp),
                     ) { Text("Void", maxLines = 1) }
@@ -3413,7 +3561,7 @@ internal fun GamingStationCard(
                 cancellationAddonBlock?.let { reason ->
                     Text(
                         reason,
-                        color = Brand.Warning,
+                        color = MaterialTheme.colorScheme.operationalWarning,
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
@@ -3517,6 +3665,7 @@ private fun GamingActiveSessionActions(
     onPauseResume: (GameSession) -> Unit,
     onStop: (GameSession) -> Unit,
     onManageParticipants: (GameSession) -> Unit,
+    showStopAction: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
@@ -3586,15 +3735,16 @@ private fun GamingActiveSessionActions(
                 )
             }
         }
-        ErpButton(
-            text = if (presentationState == StationVisualState.StopFailed) "Retry stop" else "Stop & calculate",
-            onClick = { onStop(session) },
-            enabled = actionsEnabled && canStopSession,
-            busy = busyHere,
-            intent = ActionIntent.Destructive,
-            leadingIcon = Icons.Filled.StopCircle,
-            modifier = Modifier.fillMaxWidth(),
-        )
+        if (showStopAction) {
+            GamingStopSessionAction(
+                session = session,
+                presentationState = presentationState,
+                enabled = actionsEnabled && canStopSession,
+                busy = busyHere,
+                onStop = onStop,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
         if (!online || session.pauseVersion == null ||
             (session.status != "paused" && !session.pauseAvailable)
         ) {
@@ -3602,11 +3752,31 @@ private fun GamingActiveSessionActions(
                 if (!online) "Reconnect to pause or resume safely across devices."
                 else if (session.pauseVersion == null) "Refresh Gaming after the server update to enable pause controls."
                 else "Pause is not enabled yet. The owner must update all tablets before enabling it.",
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelSmall,
             )
         }
     }
+}
+
+@Composable
+private fun GamingStopSessionAction(
+    session: GameSession,
+    presentationState: StationVisualState,
+    enabled: Boolean,
+    busy: Boolean,
+    onStop: (GameSession) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    ErpButton(
+        text = if (presentationState == StationVisualState.StopFailed) "Retry stop" else "Stop & calculate",
+        onClick = { onStop(session) },
+        enabled = enabled,
+        busy = busy,
+        intent = ActionIntent.Destructive,
+        leadingIcon = Icons.Filled.StopCircle,
+        modifier = modifier,
+    )
 }
 
 @Composable
@@ -3731,7 +3901,7 @@ private fun PackageExtensionBlockingActions(
                 else ->
                     "The paid extension is saved and waiting for server confirmation. Other session actions are temporarily blocked."
             },
-            color = if (rejected) Brand.Danger else Brand.Warning,
+            color = if (rejected) MaterialTheme.colorScheme.operationalDanger else MaterialTheme.colorScheme.operationalWarning,
             style = MaterialTheme.typography.labelSmall,
         )
         ErpButton(
@@ -3781,16 +3951,16 @@ private fun StationBody(
     val cleanupWorkflowMessage = gamingCleanupWorkflowMessageOrNull(session?.lastError)
     when (presentation.state) {
         StationVisualState.Available -> {
-            Text("Ready for a new session", color = Brand.Foreground, style = MaterialTheme.typography.bodyMedium)
+            Text("Ready for a new session", color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.bodyMedium)
             Text(
                 "Choose the customer and duration when you start.",
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelSmall,
             )
         }
         StationVisualState.Disabled -> {
-            Text("Station disabled", color = Brand.Foreground, style = MaterialTheme.typography.bodyMedium)
-            Text("Ask a manager to enable it before taking a booking.", color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelSmall)
+            Text("Station disabled", color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.bodyMedium)
+            Text("Ask a manager to enable it before taking a booking.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
         }
         StationVisualState.StartFailed -> {
             Text(
@@ -3799,7 +3969,7 @@ private fun StationBody(
                 } else {
                     "Start was not accepted"
                 },
-                color = Brand.Danger,
+                color = MaterialTheme.colorScheme.operationalDanger,
                 fontWeight = FontWeight.SemiBold,
             )
             Text(
@@ -3818,7 +3988,7 @@ private fun StationBody(
                     else ->
                         "No Stop was captured, but that does not prove no play. The protected owner must verify the outcome; an audit receipt is required before reuse."
                 },
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelSmall,
                 maxLines = 4,
                 overflow = TextOverflow.Ellipsis,
@@ -3835,7 +4005,7 @@ private fun StationBody(
                 if (presentation.state == StationVisualState.Paused && session?.pausedAt == null) {
                     Text(
                         "Timer paused",
-                        color = Brand.Warning,
+                        color = MaterialTheme.colorScheme.operationalWarning,
                         style = MaterialTheme.typography.headlineSmall,
                         fontWeight = FontWeight.Bold,
                     )
@@ -3844,11 +4014,11 @@ private fun StationBody(
                     NumericValue(
                         value = formatElapsed(elapsed),
                         color = if (presentation.state in setOf(StationVisualState.Overtime, StationVisualState.StopFailed)) {
-                            Brand.Danger
+                            MaterialTheme.colorScheme.operationalDanger
                         } else if (presentation.state in setOf(StationVisualState.Starting, StationVisualState.Paused)) {
-                            Brand.Warning
+                            MaterialTheme.colorScheme.operationalWarning
                         } else {
-                            Brand.Good
+                            MaterialTheme.colorScheme.operationalGood
                         },
                         style = MaterialTheme.typography.headlineMedium,
                     )
@@ -3856,7 +4026,7 @@ private fun StationBody(
             }
             Text(
                 startedLabel,
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelSmall,
             )
             Text(
@@ -3899,11 +4069,11 @@ private fun StationBody(
                     }
                 },
                 color = if (cleanupWorkflowMessage != null) {
-                    Brand.Warning
+                    MaterialTheme.colorScheme.operationalWarning
                 } else if (presentation.state in setOf(StationVisualState.Overtime, StationVisualState.StopFailed)) {
-                    Brand.Danger
+                    MaterialTheme.colorScheme.operationalDanger
                 } else {
-                    Brand.ForegroundFaint
+                    MaterialTheme.colorScheme.onSurfaceVariant
                 },
                 style = MaterialTheme.typography.labelSmall,
                 maxLines = if (
@@ -3916,7 +4086,7 @@ private fun StationBody(
                 RemoteSensitiveContent {
                     Text(
                         customer,
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.labelSmall,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -3932,7 +4102,7 @@ private fun StationBody(
                         } else {
                             "Estimated now · ${currentAmount.asRupees()}"
                         },
-                        color = Brand.Foreground,
+                        color = MaterialTheme.colorScheme.onSurface,
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.SemiBold,
                     )
@@ -3945,7 +4115,7 @@ private fun StationBody(
                 )?.let { ownership ->
                     Text(
                         ownership,
-                        color = Brand.Warning,
+                        color = MaterialTheme.colorScheme.operationalWarning,
                         style = MaterialTheme.typography.labelSmall,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
@@ -3962,7 +4132,7 @@ private fun StationBody(
                 if (showPrimaryValue) {
                     NumericValue(
                         value = (combinedBillSnapshotMinor ?: session?.amountMinor ?: 0L).asRupees(),
-                        color = if (presentation.state == StationVisualState.CancellationRequired) Brand.Danger else Brand.Foreground,
+                        color = if (presentation.state == StationVisualState.CancellationRequired) MaterialTheme.colorScheme.operationalDanger else MaterialTheme.colorScheme.onSurface,
                         style = MaterialTheme.typography.headlineMedium,
                     )
                 }
@@ -3973,14 +4143,14 @@ private fun StationBody(
                         } else {
                             "Estimated combined bill · stopped ${session?.billableMinutes ?: 0} min"
                         },
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.labelMedium,
                     )
                 }
                 sessionCustomerLabel(session)?.let { customer ->
                     Text(
                         customer,
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.labelSmall,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -3988,7 +4158,7 @@ private fun StationBody(
                 }
                 Text(
                     unbilledSessionDetail(presentation.state, session),
-                    color = if (presentation.state == StationVisualState.SendRejected) Brand.Danger else Brand.ForegroundMuted,
+                    color = if (presentation.state == StationVisualState.SendRejected) MaterialTheme.colorScheme.operationalDanger else MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.labelSmall,
                     maxLines = if (presentation.state == StationVisualState.SendRejected) 3 else 2,
                     overflow = TextOverflow.Ellipsis,
@@ -3997,7 +4167,7 @@ private fun StationBody(
                     sessionAuthorityMessage(ended, activeShiftId)?.let { ownership ->
                         Text(
                             ownership,
-                            color = Brand.Warning,
+                            color = MaterialTheme.colorScheme.operationalWarning,
                             style = MaterialTheme.typography.labelSmall,
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis,
@@ -4009,25 +4179,25 @@ private fun StationBody(
         StationVisualState.BillingMissing -> {
             Text(
                 "Billing data unavailable",
-                color = Brand.Danger,
+                color = MaterialTheme.colorScheme.operationalDanger,
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
             )
             Text(
                 "This stopped session has no authoritative amount. It cannot be sent or voided safely.",
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelSmall,
             )
             Text(
                 cleanupWorkflowMessage
                     ?: "Refresh Gaming. If the amount remains missing, ask the protected owner to repair the source record.",
-                color = Brand.Warning,
+                color = MaterialTheme.colorScheme.operationalWarning,
                 style = MaterialTheme.typography.labelSmall,
             )
         }
         StationVisualState.Unavailable -> {
-            Text("Action unavailable", color = Brand.Danger, fontWeight = FontWeight.SemiBold)
-            Text("Refresh Gaming or ask a manager to review this station.", color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelSmall)
+            Text("Action unavailable", color = MaterialTheme.colorScheme.operationalDanger, fontWeight = FontWeight.SemiBold)
+            Text("Refresh Gaming or ask a manager to review this station.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
         }
     }
 }
@@ -4168,16 +4338,16 @@ private fun GamingQueueDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = Brand.SurfaceOverlay,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = Radius.shapeLg,
         // Never impose a minimum wider than the available tablet content.
         // AlertDialog still uses its platform width on large screens while a
         // small tablet can safely contract the queue instead of clipping it.
         modifier = Modifier.widthIn(max = 720.dp).fillMaxWidth(),
-        title = { Text(title, color = Brand.Foreground) },
+        title = { Text(title, color = MaterialTheme.colorScheme.onSurface) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
-                Text(detail, color = Brand.ForegroundMuted, style = MaterialTheme.typography.bodyMedium)
+                Text(detail, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
                 LazyColumn(
                     Modifier.fillMaxWidth().heightIn(max = 460.dp),
                     verticalArrangement = Arrangement.spacedBy(Spacing.sm),
@@ -4185,8 +4355,8 @@ private fun GamingQueueDialog(
                     items(sessions, key = GameSession::id) { session ->
                         val station = stations.firstOrNull { it.id == session.stationId }
                         Row(
-                            Modifier.fillMaxWidth().clip(Radius.shapeMd).background(Brand.Surface)
-                                .border(1.dp, Brand.BorderSubtle, Radius.shapeMd)
+                            Modifier.fillMaxWidth().clip(Radius.shapeMd).background(MaterialTheme.colorScheme.surface)
+                                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeMd)
                                 .padding(Spacing.md),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(Spacing.md),
@@ -4194,19 +4364,19 @@ private fun GamingQueueDialog(
                             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                                 Text(
                                     station?.name ?: "Gaming session",
-                                    color = Brand.Foreground,
+                                    color = MaterialTheme.colorScheme.onSurface,
                                     style = MaterialTheme.typography.labelLarge,
                                 )
                                 Text(
                                     "${session.billableMinutes ?: 0} min · " +
                                         "${pendingBillSnapshotMinor(session).asRupees()} estimated combined",
-                                    color = Brand.ForegroundMuted,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     style = MaterialTheme.typography.labelSmall,
                                 )
                                 sessionCustomerLabel(session)?.let { customer ->
                                     Text(
                                         customer,
-                                        color = Brand.ForegroundMuted,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         style = MaterialTheme.typography.labelSmall,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
@@ -4215,7 +4385,7 @@ private fun GamingQueueDialog(
                                 sessionAuthorityMessage(session, activeShiftId)?.let { ownership ->
                                         Text(
                                             ownership,
-                                            color = Brand.Warning,
+                                            color = MaterialTheme.colorScheme.operationalWarning,
                                             style = MaterialTheme.typography.labelSmall,
                                         )
                                 }
@@ -4223,7 +4393,7 @@ private fun GamingQueueDialog(
                                     actionDisabledReason(session)?.let { reason ->
                                         Text(
                                             reason,
-                                            color = Brand.Warning,
+                                            color = MaterialTheme.colorScheme.operationalWarning,
                                             style = MaterialTheme.typography.labelSmall,
                                         )
                                     }
@@ -4256,7 +4426,7 @@ private fun GamingAddonPickerDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = Brand.SurfaceOverlay,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = Radius.shapeLg,
         title = { Text("Add session items") },
         text = {
@@ -4274,17 +4444,17 @@ private fun GamingAddonPickerDialog(
                     items(items, key = MenuItemEntity::id) { item ->
                         Row(
                             Modifier.fillMaxWidth().clip(Radius.shapeMd)
-                                .background(Brand.Surface)
-                                .border(1.dp, Brand.BorderSubtle, Radius.shapeMd)
+                                .background(MaterialTheme.colorScheme.surface)
+                                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeMd)
                                 .padding(Spacing.sm),
                             horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Column(Modifier.weight(1f)) {
-                                Text(item.name, color = Brand.Foreground, fontWeight = FontWeight.SemiBold)
+                                Text(item.name, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.SemiBold)
                                 Text(
                                     "${item.type.replaceFirstChar { it.titlecase(Locale.ROOT) }} · ${item.basePriceMinor.asRupees()}",
-                                    color = Brand.ForegroundMuted,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     style = MaterialTheme.typography.labelSmall,
                                 )
                             }
@@ -4304,6 +4474,58 @@ private fun GamingAddonPickerDialog(
 }
 
 @Composable
+internal fun GamingAddonReviewDialog(
+    request: AddonReviewRequest,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    val unitPriceMinor = configuredUnitPriceMinor(request.item, request.variant, request.modifiers)
+    val totalMinor = Math.multiplyExact(unitPriceMinor, request.qty.toLong())
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        shape = Radius.shapeLg,
+        title = { Text("Review item before adding") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                Text(
+                    "No bill line is created until Confirm add is pressed.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                SectionCard(
+                    title = request.item.name,
+                    subtitle = "${request.stationName} · session ${request.session.id.take(8)}",
+                ) {
+                    Text("Quantity · ${request.qty}")
+                    Text("Unit price · ${unitPriceMinor.asRupees()}")
+                    Text("Total · ${totalMinor.asRupees()}", fontWeight = FontWeight.Bold)
+                    Text(
+                        "Modifiers · ${request.modifiers.joinToString { "${it.modifier.name} × ${it.qty}" }.ifBlank { "None" }}",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    request.variant?.let {
+                        Text("Variant · ${it.name}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    request.note?.trim()?.takeIf(String::isNotEmpty)?.let {
+                        Text("Note · $it", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+                Text(
+                    "The immutable item ledger and Sync receipt prevent duplicate retry charges; the server rechecks current catalogue pricing.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            }
+        },
+        confirmButton = {
+            ErpButton(text = "Confirm add · ${totalMinor.asRupees()}", onClick = onConfirm)
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@Composable
 private fun GamingAddonReasonDialog(
     title: String,
     detail: String,
@@ -4316,7 +4538,7 @@ private fun GamingAddonReasonDialog(
     val reason = resolvedVoidReason(selectedReasonId, customReason)
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = Brand.SurfaceOverlay,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = Radius.shapeLg,
         modifier = Modifier.widthIn(max = 600.dp).fillMaxWidth(0.92f)
             .statusBarsPadding().navigationBarsPadding().imePadding(),
@@ -4327,7 +4549,7 @@ private fun GamingAddonReasonDialog(
                 Modifier.fillMaxWidth().heightIn(max = 440.dp).verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(Spacing.md),
             ) {
-                Text(detail, color = Brand.ForegroundMuted)
+                Text(detail, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 VoidReasonInput(
                     selectedId = selectedReasonId,
                     customReason = customReason,
@@ -4357,14 +4579,14 @@ private fun GamingSessionAddonSummary(
     onReviewRejected: (String) -> Unit,
 ) {
     Column(
-        Modifier.fillMaxWidth().clip(Radius.shapeMd).background(Brand.SurfaceRaised)
-            .border(1.dp, Brand.BorderSubtle, Radius.shapeMd).padding(Spacing.sm),
+        Modifier.fillMaxWidth().clip(Radius.shapeMd).background(MaterialTheme.colorScheme.surfaceVariant)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeMd).padding(Spacing.sm),
         verticalArrangement = Arrangement.spacedBy(Spacing.xs),
     ) {
         val activeTotal = gamingSessionAddonBillableTotalMinor(addons)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("Session items", color = Brand.Foreground, style = MaterialTheme.typography.labelLarge)
-            Text(activeTotal.asRupees(), color = Brand.Foreground, fontWeight = FontWeight.SemiBold)
+            Text("Session items", color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.labelLarge)
+            Text(activeTotal.asRupees(), color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.SemiBold)
         }
         addons.forEach { addon ->
             val status = when {
@@ -4389,7 +4611,7 @@ private fun GamingSessionAddonSummary(
                 Column(Modifier.weight(1f)) {
                     Text(
                         "${addon.menuItemName} ×${addon.qty}",
-                        color = if (addon.voided) Brand.ForegroundMuted else Brand.Foreground,
+                        color = if (addon.voided) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
                         style = MaterialTheme.typography.labelMedium,
                     )
                     Text(
@@ -4398,7 +4620,7 @@ private fun GamingSessionAddonSummary(
                         } else {
                             addon.lineTotalMinor.asRupees()
                         },
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
@@ -4416,7 +4638,7 @@ private fun GamingSessionAddonSummary(
                 }
             }
             addon.lastError?.takeIf(String::isNotBlank)?.let {
-                Text(it, color = Brand.Danger, style = MaterialTheme.typography.labelSmall)
+                Text(it, color = MaterialTheme.colorScheme.operationalDanger, style = MaterialTheme.typography.labelSmall)
             }
         }
     }
@@ -4430,7 +4652,7 @@ private fun StopSessionDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = Brand.SurfaceOverlay,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = Radius.shapeLg,
         title = { Text("Stop ${request.station.name}?") },
         text = {
@@ -4438,11 +4660,11 @@ private fun StopSessionDialog(
                 Text(
                     "This ends billable time. The server will calculate the final duration and amount, then the " +
                         "station will remain blocked until the session is sent to POS or voided.",
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Text(
                     "If the tablet is temporarily offline, the stop request is saved and shown as pending until sync completes.",
-                    color = Brand.ForegroundFaint,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.labelSmall,
                 )
             }
@@ -4496,7 +4718,7 @@ internal fun CancelUnbilledSessionDialog(
     val hasBillableAmount = amountMinor > 0L
 
     AlertDialog(
-        containerColor = Brand.SurfaceOverlay,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = Radius.shapeLg,
         onDismissRequest = onDismiss,
         // Use the available window instead of the platform's fixed dialog
@@ -4552,7 +4774,7 @@ internal fun CancelUnbilledSessionDialog(
                         } else {
                             "This session has no billable amount and cannot be sent to POS. Cancellation is still recorded in the audit trail."
                         },
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     VoidReasonInput(
                         selectedId = selectedReasonId,
@@ -4592,7 +4814,7 @@ private fun TransferSessionDialog(
     var selectedId by rememberSaveable(sourceName) { mutableStateOf<String?>(null) }
     val selected = targets.firstOrNull { it.id == selectedId }
     AlertDialog(
-        containerColor = Brand.SurfaceOverlay,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = Radius.shapeLg,
         onDismissRequest = onDismiss,
         modifier = Modifier.widthIn(max = 600.dp).fillMaxWidth(0.92f),
@@ -4602,7 +4824,7 @@ private fun TransferSessionDialog(
             Column(verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
                 Text(
                     "Choose an available station of the same type. The original rate, package, timer and shift stay unchanged.",
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 if (targets.isEmpty()) {
                     DesignedEmptyState(
@@ -4620,8 +4842,8 @@ private fun TransferSessionDialog(
                                 onClick = { selectedId = target.id },
                                 modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
                                 colors = ButtonDefaults.outlinedButtonColors(
-                                    containerColor = if (selectedId == target.id) Brand.SurfaceHover else Brand.Surface,
-                                    contentColor = Brand.Foreground,
+                                    containerColor = if (selectedId == target.id) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface,
+                                    contentColor = MaterialTheme.colorScheme.onSurface,
                                 ),
                             ) {
                                 Text(
@@ -4684,10 +4906,10 @@ private fun PackageExtensionInlineReview(
         )
     }
     Surface(
-        color = Brand.SurfaceOverlay,
-        contentColor = Brand.Foreground,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        contentColor = MaterialTheme.colorScheme.onSurface,
         shape = Radius.shapeLg,
-        border = BorderStroke(1.dp, Brand.Gold.copy(alpha = 0.35f)),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
         modifier = Modifier.fillMaxWidth().testTag("gaming-extension-preview"),
     ) {
         Column(
@@ -4695,7 +4917,7 @@ private fun PackageExtensionInlineReview(
             verticalArrangement = Arrangement.spacedBy(Spacing.sm),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Text("ADD PAID TIME", color = Brand.GoldBright, style = MaterialTheme.typography.labelSmall)
+            Text("ADD PAID TIME", color = MaterialTheme.colorScheme.onPrimaryContainer, style = MaterialTheme.typography.labelSmall)
             Text("Review extension", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             GamingDurationDial(
                 choices = choices,
@@ -4710,27 +4932,27 @@ private fun PackageExtensionInlineReview(
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 Column {
-                    Text("Added time", color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelSmall)
+                    Text("Added time", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
                     Text("+${selected.durationMinutes} min", fontWeight = FontWeight.Bold)
                 }
                 Column(horizontalAlignment = Alignment.End) {
-                    Text("Incremental charge", color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelSmall)
+                    Text("Incremental charge", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
                     Text(incrementalTotal?.asRupees() ?: "Unavailable", fontWeight = FontWeight.Bold)
                 }
             }
             Text(
                 "Resulting booked total · ${resultingTotal?.asRupees() ?: "Unavailable"}",
-                color = Brand.GoldBright,
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
             )
             Text(
                 "Selecting a duration only updates this review. No time or charge is added until Confirm extension.",
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelSmall,
             )
             error?.let {
-                Text(it, color = Brand.Danger, style = MaterialTheme.typography.labelMedium)
+                Text(it, color = MaterialTheme.colorScheme.operationalDanger, style = MaterialTheme.typography.labelMedium)
             }
             Row(
                 Modifier.fillMaxWidth(),
@@ -4775,7 +4997,7 @@ private fun PackageExtensionDialog(
     } ?: 0L
     val selectedTotal = selected?.let { it.priceMinor + selectedSurcharge }
     AlertDialog(
-        containerColor = Brand.SurfaceOverlay,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = Radius.shapeLg,
         onDismissRequest = onDismiss,
         modifier = Modifier.widthIn(max = 600.dp).fillMaxWidth(0.92f),
@@ -4785,7 +5007,7 @@ private fun PackageExtensionDialog(
             Column(verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
                 Text(
                     "This adds a priced extension to the package total. It does not replace the existing package.",
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 LazyColumn(
                     Modifier.fillMaxWidth().heightIn(max = 360.dp),
@@ -4796,8 +5018,8 @@ private fun PackageExtensionDialog(
                             onClick = { selectedId = extension.id },
                             modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
                             colors = ButtonDefaults.outlinedButtonColors(
-                                containerColor = if (selectedId == extension.id) Brand.SurfaceHover else Brand.Surface,
-                                contentColor = Brand.Foreground,
+                                containerColor = if (selectedId == extension.id) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface,
+                                contentColor = MaterialTheme.colorScheme.onSurface,
                             ),
                         ) {
                             val surcharge = extraControllerExtensionSurchargeMinor(
@@ -4818,7 +5040,7 @@ private fun PackageExtensionDialog(
                             "${selectedSurcharge.asRupees()} controller surcharge. " +
                             "The controller charge shown is only the increase needed for the " +
                                 "session's new total duration; already-paid time is not charged again.",
-                        color = Brand.Warning,
+                        color = MaterialTheme.colorScheme.operationalWarning,
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
@@ -4840,6 +5062,7 @@ private fun PackageExtensionDialog(
 @OptIn(ExperimentalLayoutApi::class)
 private fun LegacyRecoveryDialogFrame(
     onDismissRequest: () -> Unit,
+    title: String = "Resolve rejected gaming start",
     text: @Composable () -> Unit,
     confirmButton: @Composable () -> Unit,
     dismissButton: @Composable () -> Unit,
@@ -4899,9 +5122,9 @@ private fun LegacyRecoveryDialogFrame(
                 ) {
                     Surface(
                         modifier = Modifier.widthIn(max = 640.dp).fillMaxWidth()
-                            .semantics { paneTitle = "Resolve rejected gaming start" },
-                        color = Brand.SurfaceOverlay,
-                        contentColor = Brand.Foreground,
+                            .semantics { paneTitle = title },
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        contentColor = MaterialTheme.colorScheme.onSurface,
                         shape = Radius.shapeLg,
                     ) {
                         Column(
@@ -4909,7 +5132,7 @@ private fun LegacyRecoveryDialogFrame(
                             verticalArrangement = Arrangement.spacedBy(Spacing.lg),
                         ) {
                             Text(
-                                "Resolve rejected gaming start",
+                                title,
                                 style = MaterialTheme.typography.headlineSmall,
                             )
                             Box(Modifier.weight(1f, fill = false)) { text() }
@@ -4993,7 +5216,7 @@ internal fun LegacyPackageResolutionDialog(
                             } else {
                                 ""
                             },
-                        color = Brand.Warning,
+                        color = MaterialTheme.colorScheme.operationalWarning,
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
@@ -5050,14 +5273,14 @@ internal fun LegacyPackageResolutionDialog(
                 session.legacyResolutionError?.takeIf(String::isNotBlank)?.let { failure ->
                     Text(
                         "Previous attempt: $failure",
-                        color = Brand.Danger,
+                        color = MaterialTheme.colorScheme.operationalDanger,
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
                 Text(
                     "Choose one audited recovery path",
                     style = MaterialTheme.typography.labelLarge,
-                    color = Brand.Foreground,
+                    color = MaterialTheme.colorScheme.onSurface,
                 )
                 Column(
                     modifier = Modifier.fillMaxWidth(),
@@ -5104,7 +5327,7 @@ internal fun LegacyPackageResolutionDialog(
                         else ->
                             "Select the path that matches the retained evidence."
                     },
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodySmall,
                 )
                 if (resolution == GamingLegacyResolution.MANUAL_BILL_RECORDED) {
@@ -5182,7 +5405,7 @@ private fun RepairSessionBillingDialog(
     val amountMinor = parseRupeesToMinor(amountInput)
     val normalizedReason = reason.trim()
     AlertDialog(
-        containerColor = Brand.SurfaceOverlay,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = Radius.shapeLg,
         onDismissRequest = onDismiss,
         modifier = Modifier
@@ -5246,7 +5469,7 @@ private fun DiscardRejectedExtensionDialog(
     var reason by rememberSaveable { mutableStateOf("") }
     val normalizedReason = reason.trim()
     AlertDialog(
-        containerColor = Brand.SurfaceOverlay,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = Radius.shapeLg,
         onDismissRequest = onDismiss,
         modifier = Modifier
@@ -5262,10 +5485,10 @@ private fun DiscardRejectedExtensionDialog(
                 Text(
                     "The app will first replay the exact original request with the same transaction ID. " +
                         "If the server confirms a charge, it is kept and cannot be discarded. Only a definitive refusal plus an exact session check releases this blocker, with your reason retained.",
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 errorDetail?.takeIf(String::isNotBlank)?.let {
-                    Text("Server reason: $it", color = Brand.Danger, style = MaterialTheme.typography.labelSmall)
+                    Text("Server reason: $it", color = MaterialTheme.colorScheme.operationalDanger, style = MaterialTheme.typography.labelSmall)
                 }
                 OutlinedTextField(
                     value = reason,
@@ -5388,7 +5611,7 @@ private fun ExpectedSessionFinishPreview(durationMinutes: Int) {
     }
     Text(
         "Est. finish · $finish",
-        color = Brand.GoldBright,
+        color = MaterialTheme.colorScheme.onPrimaryContainer,
         style = MaterialTheme.typography.labelMedium,
         modifier = Modifier.semantics {
             contentDescription = "Expected finish if started now, about $finish"
@@ -5406,7 +5629,7 @@ private fun ReconcileSessionDialog(
     var reason by rememberSaveable(stationName) { mutableStateOf("") }
     val normalized = reason.trim()
     AlertDialog(
-        containerColor = Brand.SurfaceOverlay,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = Radius.shapeLg,
         onDismissRequest = onDismiss,
         modifier = Modifier
@@ -5423,7 +5646,7 @@ private fun ReconcileSessionDialog(
                     "$stationName · estimated combined bill ${pendingBillSnapshotMinor.asRupees()}. " +
                         "POS confirms the final total. The original closed shift remains unchanged; " +
                         "a traceable unpaid POS order is created on the current shift.",
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 OutlinedTextField(
                     value = reason,
@@ -5556,16 +5779,16 @@ internal fun StartSessionEditor(
     // One form owns the package, customer and start payload in either presentation.
     val optionsContent: @Composable () -> Unit = {
         if (!prominentDurationDial) Row(
-            Modifier.fillMaxWidth().clip(Radius.shapeMd).background(Brand.Surface)
-                .border(1.dp, Brand.BorderSubtle, Radius.shapeMd).padding(Spacing.md),
+            Modifier.fillMaxWidth().clip(Radius.shapeMd).background(MaterialTheme.colorScheme.surface)
+                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeMd).padding(Spacing.md),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             Column {
-                Text(stationTypeLabel(station.type), color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelSmall)
+                Text(stationTypeLabel(station.type), color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
                 Text(
                     if (fixedTariffRequired) "Fixed-price tariff" else "Hourly rate",
-                    color = Brand.ForegroundFaint,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.labelSmall,
                 )
             }
@@ -5577,11 +5800,11 @@ internal fun StartSessionEditor(
                     else -> "${station.ratePerHourMinor.asRupees()}/hour"
                 },
                 style = MaterialTheme.typography.titleLarge,
-                color = Brand.Foreground,
+                color = MaterialTheme.colorScheme.onSurface,
             )
         }
         if (!prominentDurationDial) Text(
-            "Billing option", color = Brand.Foreground,
+            "Billing option", color = MaterialTheme.colorScheme.onSurface,
             style = MaterialTheme.typography.labelLarge,
         )
         if (fixedTariffUnavailable) {
@@ -5590,12 +5813,12 @@ internal fun StartSessionEditor(
                     "server and refresh Gaming before starting this station; the old " +
                     "hourly fallback is intentionally disabled so the customer is not " +
                     "charged the wrong amount.",
-                color = Brand.Danger,
+                color = MaterialTheme.colorScheme.operationalDanger,
                 style = MaterialTheme.typography.bodyMedium,
             )
         } else if (hasFixedTariff) {
             if (stationFilterId(station.type) in setOf("racing", "vr") && availableVariants.size > 1) {
-                Text("Mode", color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelMedium)
+                Text("Mode", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelMedium)
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
                     items(availableVariants) { variant ->
                         FilterChip(
@@ -5609,7 +5832,7 @@ internal fun StartSessionEditor(
                 }
             }
             if (!prominentDurationDial) Text(
-                "Duration", color = Brand.ForegroundMuted,
+                "Duration", color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelMedium,
             )
             if (!prominentDurationDial && durationChoices.size in 2..4 &&
@@ -5635,7 +5858,7 @@ internal fun StartSessionEditor(
                 }
             }
         } else {
-            Text("Booked time", color = Brand.Foreground, style = MaterialTheme.typography.labelLarge)
+            Text("Booked time", color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.labelLarge)
             LazyRow(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
                 items(listOf<Int?>(30, 60, 90, 120, null)) { option ->
                 FilterChip(
@@ -5661,7 +5884,7 @@ internal fun StartSessionEditor(
                             "$playerCount players · ${extraControllers.asControllerCount()} · " +
                                 "${selectedControllerSurchargeMinor.asRupees()} surcharge."
                         },
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
@@ -5670,7 +5893,7 @@ internal fun StartSessionEditor(
         val previewMinutes = selectedPackage?.durationMinutes ?: minutes
         if (previewMinutes != null) ExpectedSessionFinishPreview(previewMinutes)
         if (supportsPlayerModes) {
-            if (!embedded) Text("Mode", color = Brand.ForegroundMuted,
+            if (!embedded) Text("Mode", color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelMedium)
             val compactEmbeddedPlayers = embedded &&
                 LocalConfiguration.current.screenHeightDp < 700
@@ -5710,9 +5933,9 @@ internal fun StartSessionEditor(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(Spacing.md),
             ) {
-                Text("Players", color = Brand.ForegroundMuted,
+                Text("Players", color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.labelMedium)
-                Text(playerCount.toString(), color = Brand.Foreground,
+                Text(playerCount.toString(), color = MaterialTheme.colorScheme.onSurface,
                     style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier.weight(1f))
                 TextButton(
@@ -5736,17 +5959,17 @@ internal fun StartSessionEditor(
                 Text(
                     "${extraControllers.asControllerCount()} · " +
                         "${selectedControllerSurchargeMinor.asRupees()} surcharge",
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.labelSmall,
                 )
             }
             if (playerCount > 1) Text(
                 "Only the selected customer is linked at start. Add each friend's saved customer in the live session to track individual play time.",
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelSmall,
             )
         }
-        if (!embedded) Text("Customer", color = Brand.Foreground,
+        if (!embedded) Text("Customer", color = MaterialTheme.colorScheme.onSurface,
             style = MaterialTheme.typography.labelLarge)
         selectedCustomer?.let { selected ->
             SectionCard(
@@ -5754,22 +5977,26 @@ internal fun StartSessionEditor(
                 subtitle = selected.phone + if (selected.pending) " · waiting to sync" else "",
             ) {
                 Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                    TextButton(onClick = {
-                        selectedCustomer = null
-                        customerMode = "search"
-                        customerQuery = ""
-                        onSearchCustomer("")
-                        name = ""
-                        phone = ""
-                    }) { Text("Change") }
-                    TextButton(onClick = {
-                        selectedCustomer = null
-                        customerMode = "search"
-                        customerQuery = ""
-                        onSearchCustomer("")
-                        name = ""
-                        phone = ""
-                    }) { Text("Clear") }
+                    TextButton(
+                        onClick = {
+                            selectedCustomer = null
+                            customerMode = "search"
+                            customerQuery = ""
+                            onSearchCustomer("")
+                            name = ""
+                            phone = ""
+                        },
+                    ) { Text("Change") }
+                    TextButton(
+                        onClick = {
+                            selectedCustomer = null
+                            customerMode = "search"
+                            customerQuery = ""
+                            onSearchCustomer("")
+                            name = ""
+                            phone = ""
+                        },
+                    ) { Text("Clear") }
                 }
             }
         } ?: run {
@@ -5778,7 +6005,7 @@ internal fun StartSessionEditor(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-                Text("Customer", color = Brand.Foreground,
+                Text("Customer", color = MaterialTheme.colorScheme.onSurface,
                     style = MaterialTheme.typography.labelLarge)
                 TextButton(onClick = {
                     customerMode = if (customerMode == "search") "add" else "search"
@@ -5820,7 +6047,7 @@ internal fun StartSessionEditor(
                     },
                     placeholder = { Text(if (embedded) "Search customer" else "Search by name or phone") },
                     leadingIcon = if (embedded) {
-                        { Icon(Icons.Filled.Search, contentDescription = null, tint = Brand.Gold) }
+                        { Icon(Icons.Filled.Search, contentDescription = null, tint = MaterialTheme.colorScheme.primary) }
                     } else null,
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth().semantics {
@@ -5840,7 +6067,7 @@ internal fun StartSessionEditor(
                             Text(option.name?.takeIf(String::isNotBlank) ?: "— no name —")
                             Text(
                                 option.phone + if (option.pending) " · waiting to sync" else "",
-                                color = Brand.ForegroundMuted,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 style = MaterialTheme.typography.labelSmall,
                             )
                         }
@@ -5853,7 +6080,7 @@ internal fun StartSessionEditor(
                         } else {
                             "No match in this tablet's latest saved customer cache (up to 500). Connect to search beyond it, or choose Add new."
                         },
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.labelSmall,
                     )
                 } else if (!embedded || !online || customerQuery.isNotBlank()) {
@@ -5863,7 +6090,7 @@ internal fun StartSessionEditor(
                         } else {
                             "Offline search uses this workspace's latest cached customers (up to 500)."
                         },
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
@@ -5893,7 +6120,7 @@ internal fun StartSessionEditor(
             }
         }
         startBlockMessage?.let { message ->
-            Text(message, color = Brand.Warning, style = MaterialTheme.typography.labelMedium)
+            Text(message, color = MaterialTheme.colorScheme.operationalWarning, style = MaterialTheme.typography.labelMedium)
         }
         if (!embedded) Text(
             if (selectedPackage != null) {
@@ -5906,14 +6133,66 @@ internal fun StartSessionEditor(
                 "The timer and alarm begin at this tap. If the connection drops, the saved start syncs automatically."
             },
             style = MaterialTheme.typography.labelSmall,
-            color = Brand.ForegroundMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 
+    val startActionText = selectedPackageTotalMinor?.let {
+        "Start ${selectedPackage?.durationMinutes} min · ${it.asRupees()}"
+    } ?: "Start session"
+    val startActionEnabled = startEnabled && !fixedTariffUnavailable &&
+        (!hasFixedTariff || selectedPackage != null)
+    val startAction: @Composable (Modifier) -> Unit = { actionModifier ->
+        Button(
+            onClick = {
+                val selected = selectedCustomer
+                val snapshotName = when {
+                    selected?.customerId != null -> null
+                    selected != null -> selected.name?.takeIf(String::isNotBlank)
+                    customerMode == "add" -> name.takeIf(String::isNotBlank)
+                    else -> null
+                }
+                val snapshotPhone = when {
+                    selected?.customerId != null -> null
+                    selected != null -> selected.phone.takeIf(String::isNotBlank)
+                    customerMode == "add" -> phone.takeIf(String::isNotBlank)
+                    else -> null
+                }
+                onConfirm(
+                    selected?.customerId,
+                    snapshotName,
+                    snapshotPhone,
+                    if (selectedPackage == null) minutes else null,
+                    selectedPackage?.id,
+                    extraControllers,
+                )
+            },
+            enabled = startActionEnabled,
+            shape = Radius.shapeMd,
+            colors = ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary,
+                disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+            ),
+            border = BorderStroke(
+                1.dp,
+                if (startActionEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+            ),
+            modifier = actionModifier.heightIn(min = 48.dp),
+        ) {
+            Icon(Icons.Filled.PlayArrow, contentDescription = null, modifier = Modifier.size(19.dp))
+            Spacer(Modifier.width(Spacing.sm))
+            Text(startActionText, style = MaterialTheme.typography.labelLarge, maxLines = 1)
+        }
+    }
+    val wideEmbeddedWorkspace = embedded && prominentDurationDial &&
+        LocalConfiguration.current.screenWidthDp >= 700
+
     val formContent: @Composable (Boolean, Modifier) -> Unit = { compactIme, formModifier ->
         Surface(
-            color = if (embedded) Color.Transparent else Brand.Background,
-            contentColor = Brand.Foreground,
+            color = if (embedded) Color.Transparent else MaterialTheme.colorScheme.background,
+            contentColor = MaterialTheme.colorScheme.onSurface,
             modifier = formModifier,
         ) {
             Column(
@@ -5921,9 +6200,9 @@ internal fun StartSessionEditor(
                     .then(if (embedded) Modifier.background(
                         Brush.verticalGradient(
                             colors = listOf(
-                                Brand.Gold.copy(alpha = 0.055f),
+                                MaterialTheme.colorScheme.primary.copy(alpha = 0.055f),
                                 Color.Transparent,
-                                Brand.Gold.copy(alpha = 0.012f),
+                                MaterialTheme.colorScheme.primary.copy(alpha = 0.012f),
                             ),
                             endY = 800f,
                         ),
@@ -5947,26 +6226,26 @@ internal fun StartSessionEditor(
                     Column(Modifier.weight(1f), horizontalAlignment = if (embedded) Alignment.Start else Alignment.CenterHorizontally) {
                         if (embedded && !compactEmbeddedHeader) Text(
                             "START SESSION",
-                            color = Brand.GoldBright,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.SemiBold,
                         )
                         Text(
                             if (embedded) station.name else "START SESSION",
-                            color = Brand.Foreground,
+                            color = MaterialTheme.colorScheme.onSurface,
                             style = if (compactEmbeddedHeader) MaterialTheme.typography.titleMedium
                                 else if (embedded) MaterialTheme.typography.titleLarge
                                 else MaterialTheme.typography.headlineSmall,
                             fontWeight = FontWeight.Bold,
                         )
-                        if (!compactIme && !embedded) Text(station.name, color = Brand.ForegroundMuted)
+                        if (!compactIme && !embedded) Text(station.name, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         if (embedded && !compactEmbeddedHeader) Text("Available · select a published duration",
                             color = statusColor(UiTone.Success), style = MaterialTheme.typography.labelMedium)
                     }
                     if (supportsPlayerModes && !embedded) {
                         Text(
                             if (playerCount == 1) "Single mode" else "$playerCount players",
-                            color = Brand.GoldBright,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
                             style = MaterialTheme.typography.labelLarge,
                         )
                     }
@@ -5975,119 +6254,79 @@ internal fun StartSessionEditor(
                     Modifier.fillMaxWidth().weight(1f),
                     contentAlignment = Alignment.TopCenter,
                 ) {
-                val availableFormWidth = maxWidth
-                val availableFormHeight = maxHeight
-                Column(
-                    Modifier.widthIn(max = 760.dp).fillMaxWidth()
-                        .verticalScroll(rememberScrollState())
-                        .padding(vertical = if (embedded) Spacing.xs else Spacing.md),
-                    verticalArrangement = Arrangement.spacedBy(if (embedded) Spacing.xs else Spacing.md),
-                ) {
-                // Keep the dial and customer/player controls alongside each
-                // other on the 960dp tablet as well as the wider layout.
-                val wideEmbeddedDial = embedded && prominentDurationDial && availableFormWidth >= 420.dp
-                if (wideEmbeddedDial) {
-                    val dialColumnWidth = (availableFormWidth - Spacing.md) * 0.62f
-                    val dialSize = minOf(
-                        if (LocalConfiguration.current.screenHeightDp < 700) 232.dp else 344.dp,
-                        dialColumnWidth,
-                        (availableFormHeight - Spacing.sm * 2).coerceAtLeast(160.dp),
-                    )
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(Spacing.md),
-                        verticalAlignment = Alignment.Top,
+                    val availableFormWidth = maxWidth
+                    val availableFormHeight = maxHeight
+                    Column(
+                        Modifier.widthIn(max = 760.dp).fillMaxWidth()
+                            .verticalScroll(rememberScrollState())
+                            .padding(vertical = if (embedded) Spacing.xs else Spacing.md),
+                        verticalArrangement = Arrangement.spacedBy(if (embedded) Spacing.xs else Spacing.md),
                     ) {
-                        GamingDurationDial(
-                            choices = durationChoices,
-                            selectedPackageId = selectedPackageId,
-                            onSelect = { selectedPackageId = it },
-                            modifier = Modifier.weight(0.62f),
-                            dialSize = dialSize,
-                            showChoiceChips = durationChoices.size > 2,
-                            gestureContextKey = station,
-                        )
-                        Column(
-                            Modifier.weight(0.38f),
-                            verticalArrangement = Arrangement.spacedBy(Spacing.xs),
-                        ) {
+                        // On tablets the primary action belongs beside the ring. Keeping it
+                        // out of a separate footer gives the ring and authoritative timer the
+                        // same measured slot while leaving customer controls visible.
+                        val wideEmbeddedDial = wideEmbeddedWorkspace && availableFormWidth >= 420.dp
+                        if (wideEmbeddedDial) {
+                            val dialColumnWidth = (availableFormWidth - Spacing.md) * 0.62f
+                            val dialSize = minOf(
+                                gamingControlRingSize(LocalConfiguration.current.screenHeightDp),
+                                dialColumnWidth,
+                                (availableFormHeight - Spacing.xs * 2).coerceAtLeast(160.dp),
+                            )
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+                                verticalAlignment = Alignment.Top,
+                            ) {
+                                GamingDurationDial(
+                                    choices = durationChoices,
+                                    selectedPackageId = selectedPackageId,
+                                    onSelect = { selectedPackageId = it },
+                                    modifier = Modifier.weight(0.62f),
+                                    dialSize = dialSize,
+                                    showChoiceChips = durationChoices.size > 2,
+                                    gestureContextKey = station,
+                                )
+                                Column(
+                                    Modifier.weight(0.38f),
+                                    verticalArrangement = Arrangement.spacedBy(Spacing.xs),
+                                ) {
+                                    optionsContent()
+                                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                                    startAction(Modifier.fillMaxWidth())
+                                }
+                            }
+                        } else {
+                            if (prominentDurationDial) {
+                                GamingDurationDial(
+                                    choices = durationChoices,
+                                    selectedPackageId = selectedPackageId,
+                                    onSelect = { selectedPackageId = it },
+                                    dialSize = when {
+                                        embedded && LocalConfiguration.current.screenHeightDp < 700 -> 170.dp
+                                        embedded || LocalConfiguration.current.screenHeightDp < 700 -> 220.dp
+                                        else -> 320.dp
+                                    },
+                                    showChoiceChips = durationChoices.size > 2,
+                                    gestureContextKey = station,
+                                )
+                            }
                             optionsContent()
                         }
                     }
-                } else {
-                    if (prominentDurationDial) {
-                        GamingDurationDial(
-                            choices = durationChoices,
-                            selectedPackageId = selectedPackageId,
-                            onSelect = { selectedPackageId = it },
-                            dialSize = when {
-                                embedded && LocalConfiguration.current.screenHeightDp < 700 -> 170.dp
-                                embedded || LocalConfiguration.current.screenHeightDp < 700 -> 220.dp
-                                else -> 280.dp
-                            },
-                            showChoiceChips = durationChoices.size > 2,
-                            gestureContextKey = station,
+                }
+                if (!wideEmbeddedWorkspace) {
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        startAction(
+                            Modifier.widthIn(max = 760.dp)
+                                .fillMaxWidth(if (embedded) 1f else 0.9f),
                         )
                     }
-                    optionsContent()
-                }
-            }
-                }
-                HorizontalDivider(color = Brand.BorderSubtle)
-                Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                val startActionText = selectedPackageTotalMinor?.let {
-                    "Start ${selectedPackage?.durationMinutes} min · ${it.asRupees()}"
-                } ?: "Start session"
-                val startActionEnabled = startEnabled && !fixedTariffUnavailable &&
-                    (!hasFixedTariff || selectedPackage != null)
-                Button(
-                onClick = {
-                    val selected = selectedCustomer
-                    val snapshotName = when {
-                        selected?.customerId != null -> null
-                        selected != null -> selected.name?.takeIf(String::isNotBlank)
-                        customerMode == "add" -> name.takeIf(String::isNotBlank)
-                        else -> null
-                    }
-                    val snapshotPhone = when {
-                        selected?.customerId != null -> null
-                        selected != null -> selected.phone.takeIf(String::isNotBlank)
-                        customerMode == "add" -> phone.takeIf(String::isNotBlank)
-                        else -> null
-                    }
-                    onConfirm(
-                        selected?.customerId,
-                        snapshotName,
-                        snapshotPhone,
-                        if (selectedPackage == null) minutes else null,
-                        selectedPackage?.id,
-                        extraControllers,
-                    )
-                },
-                enabled = startActionEnabled,
-                shape = Radius.shapeMd,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFFFFD56B),
-                    contentColor = Brand.Background,
-                    disabledContainerColor = Brand.SurfaceRaised,
-                    disabledContentColor = Brand.Disabled,
-                ),
-                border = BorderStroke(
-                    1.dp,
-                    if (startActionEnabled) Color(0xFFFFE69B) else Brand.BorderSubtle,
-                ),
-                modifier = Modifier.widthIn(max = 760.dp)
-                    .fillMaxWidth(if (embedded) 1f else 0.9f)
-                    .heightIn(min = 48.dp),
-            ) {
-                Icon(Icons.Filled.PlayArrow, contentDescription = null, modifier = Modifier.size(19.dp))
-                Spacer(Modifier.width(Spacing.sm))
-                Text(startActionText, style = MaterialTheme.typography.labelLarge, maxLines = 1)
-            }
                 }
                 if (!compactIme && !embedded) Text(
                     "No payment yet. Bill after the session ends.",
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.labelMedium,
                     modifier = Modifier.align(Alignment.CenterHorizontally),
                 )
@@ -6124,7 +6363,7 @@ internal fun StartSessionEditor(
                     if (observer.isAlive) observer.removeOnPreDrawListener(listener)
                 }
             }
-            Box(Modifier.fillMaxSize().background(Brand.Background).testTag("gaming-start-dialog")) {
+            Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).testTag("gaming-start-dialog")) {
                 boundsState.visibleBounds?.let { bounds ->
                     formContent(
                         bounds.height < view.height * 0.75f,
@@ -6159,10 +6398,10 @@ internal fun StartSessionDialog(
 
 @Composable
 internal fun gamingPackageChipColors() = FilterChipDefaults.filterChipColors(
-    containerColor = Brand.Surface,
-    labelColor = Brand.ForegroundMuted,
-    selectedContainerColor = Brand.Gold,
-    selectedLabelColor = Brand.Background,
+    containerColor = MaterialTheme.colorScheme.surface,
+    labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+    selectedContainerColor = MaterialTheme.colorScheme.primary,
+    selectedLabelColor = MaterialTheme.colorScheme.background,
 )
 
 @Composable
@@ -6180,35 +6419,102 @@ internal fun GamingParticipantsDialog(
     onDiscardRejected: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
     var customerMode by rememberSaveable(session.id) { mutableStateOf("search") }
     var query by rememberSaveable(session.id) { mutableStateOf("") }
     var selected by remember(session.id) { mutableStateOf<GamingCustomerOption?>(null) }
     var name by rememberSaveable(session.id) { mutableStateOf("") }
     var phone by rememberSaveable(session.id) { mutableStateOf("") }
+    var pendingJoin by remember(session.id) { mutableStateOf<ParticipantJoinReview?>(null) }
+    var pendingLeave by remember(session.id) { mutableStateOf<GamingParticipantUi?>(null) }
     val matches = remember(customers, query) { filterGamingCustomerOptions(customers, query).take(8) }
     val active = participants.filter(GamingParticipantUi::active)
     val basePlayers = (if ((session.effectivePackageVariant ?: session.packageVariantSnapshot) == "dual") 2 else 1) +
         session.extraControllers
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Players & booking") },
+    val includedPlayers = if ((session.effectivePackageVariant ?: session.packageVariantSnapshot) == "dual") 2 else 1
+    val playElapsedMs = sessionPlayElapsedMillis(session, System.currentTimeMillis()) ?: 0L
+    val friendControllerMinor = estimatedGamingFriendControllerMinor(participants, playElapsedMs)
+    val bookedControllerMinor = extraControllerSurchargeMinor(
+        session.extraControllers,
+        session.timerMinutes ?: session.effectivePackageDurationMinutes
+            ?: session.packageDurationMinutesSnapshot ?: 0,
+    )
+    LegacyRecoveryDialogFrame(
+        onDismissRequest = {
+            when {
+                pendingJoin != null -> pendingJoin = null
+                pendingLeave != null -> pendingLeave = null
+                else -> onDismiss()
+            }
+        },
+        title = when {
+            pendingJoin != null -> "Review friend join"
+            pendingLeave != null -> "Confirm friend leave"
+            else -> "Players & booking"
+        },
         text = {
-            LazyColumn(
-                modifier = Modifier.fillMaxWidth().heightIn(max = 520.dp),
+            val review = pendingJoin
+            val leaving = pendingLeave
+            when {
+                review != null -> {
+                    val afterJoinFriendMinor = estimatedGamingFriendControllerMinorAfterJoin(
+                        participants = participants,
+                        currentPlayElapsedMs = playElapsedMs,
+                        customerId = review.customerId,
+                        phone = review.phone,
+                    )
+                    Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                        Text(
+                            review.name?.takeIf(String::isNotBlank)
+                                ?: review.phone?.takeIf(String::isNotBlank)
+                                ?: "Saved customer",
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text("$basePlayers booked and fixed · ${active.size} late active · ${basePlayers + active.size}/4 now")
+                        Text("₹30 per started cumulative hour · ₹30 minimum · paused time excluded")
+                        Text(
+                            "Player-controller fees after join · ${(bookedControllerMinor + afterJoinFriendMinor).asRupees()} estimated",
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Text(
+                            "No attendance interval or charge is saved until Confirm join is pressed.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
+                }
+                leaving != null -> Text(
+                    "${leaving.name?.takeIf(String::isNotBlank) ?: "This friend"} will be marked left at the current actual play-time. Saved intervals remain in the audit history; a later rejoin continues the same cumulative ₹30-per-started-hour charge.",
+                )
+                else -> LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 520.dp)
+                    .testTag("gaming-players-list"),
                 verticalArrangement = Arrangement.spacedBy(Spacing.sm),
             ) {
                 item {
-                    Text(
-                        "Booked players stay fixed. Added friends are ₹30 per started hour each; Leave stops that friend's meter.",
-                        color = Brand.ForegroundMuted,
-                        style = MaterialTheme.typography.bodySmall,
-                    )
+                    SectionCard(
+                        title = "$basePlayers booked and fixed · ${active.size} late active · ${basePlayers + active.size}/4 total",
+                        subtitle = "$includedPlayers included in the package · capacity four",
+                    ) {
+                        Text(
+                            "Added friends are ₹30 per started cumulative hour each, minimum ₹30 per friend. Paused time is excluded.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        Text(
+                            "Player-controller fees now · ${(bookedControllerMinor + friendControllerMinor).asRupees()} estimated",
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
                 }
                 if (session.isLocallyPendingStart()) {
                     item {
                         Text(
                             "Start and player changes are saved on this tablet. They will sync in order; the final charge is confirmed when the session stops.",
-                            color = Brand.Warning,
+                            color = MaterialTheme.colorScheme.operationalWarning,
                             style = MaterialTheme.typography.labelSmall,
                         )
                     }
@@ -6257,7 +6563,7 @@ internal fun GamingParticipantsDialog(
                 }
                 if (participants.isEmpty()) {
                     item {
-                        Text("No late friends are recorded.", color = Brand.ForegroundMuted)
+                        Text("No late friends are recorded.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 } else {
                     items(participants, key = GamingParticipantUi::reference) { participant ->
@@ -6274,8 +6580,21 @@ internal fun GamingParticipantsDialog(
                                 },
                             ).joinToString(" · "),
                         ) {
+                            val joinedLabel = participant.joinedAtMillis?.let {
+                                Instant.ofEpochMilli(it).toString().businessClockTime()
+                            } ?: "time pending"
+                            val leftLabel = participant.leftAtMillis?.let {
+                                Instant.ofEpochMilli(it).toString().businessClockTime()
+                            }
+                            val playedMs = ((participant.leftPlayElapsedMs ?: playElapsedMs) -
+                                (participant.joinedPlayElapsedMs ?: playElapsedMs)).coerceAtLeast(0L)
+                            Text(
+                                "Joined $joinedLabel · ${leftLabel?.let { "Left $it" } ?: "Playing now"} · ${playedMs / 60_000L} min played",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.labelSmall,
+                            )
                             if (participant.active) {
-                                TextButton(onClick = { onLeave(participant.reference) }) {
+                                TextButton(onClick = { pendingLeave = participant }) {
                                     Text(if (session.status == "paused") "Leave at paused time" else "Leave now")
                                 }
                             }
@@ -6286,7 +6605,7 @@ internal fun GamingParticipantsDialog(
                     item {
                         Text(
                             "Friends may leave while paused. Resume before adding another friend.",
-                            color = Brand.Warning,
+                            color = MaterialTheme.colorScheme.operationalWarning,
                             style = MaterialTheme.typography.labelSmall,
                         )
                     }
@@ -6334,7 +6653,7 @@ internal fun GamingParticipantsDialog(
                             OutlinedTextField(
                                 value = name,
                                 onValueChange = { name = it.take(200) },
-                                label = { Text("Friend name") },
+                                label = { Text("Friend name (optional)") },
                                 singleLine = true,
                                 modifier = Modifier.fillMaxWidth(),
                             )
@@ -6343,7 +6662,7 @@ internal fun GamingParticipantsDialog(
                             OutlinedTextField(
                                 value = phone,
                                 onValueChange = { phone = it.take(20) },
-                                label = { Text("Friend phone") },
+                                label = { Text("Friend phone (required)") },
                                 singleLine = true,
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
                                 modifier = Modifier.fillMaxWidth(),
@@ -6352,32 +6671,134 @@ internal fun GamingParticipantsDialog(
                     }
                     item {
                         ErpButton(
-                            text = "Add friend",
+                            text = "Add player",
                             onClick = {
+                                focusManager.clearFocus(force = true)
+                                keyboardController?.hide()
                                 if (customerMode == "search") {
-                                    selected?.let { onJoin(it.customerId, null, null) }
+                                    selected?.let {
+                                        pendingJoin = ParticipantJoinReview(it.customerId, it.name, it.phone)
+                                    }
                                 } else {
-                                    onJoin(null, name, phone)
+                                    pendingJoin = ParticipantJoinReview(
+                                        customerId = null,
+                                        name = name.trim().takeIf(String::isNotEmpty),
+                                        phone = phone.trim(),
+                                    )
                                 }
                             },
                             enabled = if (customerMode == "search") {
                                 selected?.customerId != null
                             } else {
-                                name.isNotBlank() && phone.isNotBlank()
+                                phone.isNotBlank()
                             },
                             leadingIcon = Icons.Filled.People,
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("gaming-add-player"),
                         )
                         Text(
                             if (online) "Saved actions upload in session order." else "Offline: Join/Leave/Stop remain queued in this exact session order.",
-                            color = Brand.ForegroundMuted,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
+                } else {
+                    item {
+                        Text(
+                            "Capacity full: this PS5 session already has four players.",
+                            color = MaterialTheme.colorScheme.operationalWarning,
+                            fontWeight = FontWeight.SemiBold,
                         )
                     }
                 }
             }
+            }
         },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } },
+        confirmButton = {
+            val review = pendingJoin
+            val leaving = pendingLeave
+            when {
+                review != null -> {
+                    ErpButton(
+                        text = "Confirm join",
+                        onClick = {
+                            pendingJoin = null
+                            if (review.customerId != null) {
+                                onJoin(review.customerId, null, null)
+                            } else {
+                                onJoin(null, review.name, review.phone)
+                            }
+                        },
+                    )
+                }
+                leaving != null -> {
+                ErpButton(
+                    text = if (session.status == "paused") "Confirm leave at paused time" else "Confirm leave now",
+                    onClick = {
+                        pendingLeave = null
+                        onLeave(leaving.reference)
+                    },
+                )
+                }
+                else -> TextButton(onClick = onDismiss) { Text("Done") }
+            }
+        },
+        dismissButton = {
+            when {
+                pendingJoin != null -> TextButton(onClick = { pendingJoin = null }) { Text("Edit") }
+                pendingLeave != null -> TextButton(onClick = { pendingLeave = null }) { Text("Keep playing") }
+                else -> Unit
+            }
+        },
+    )
+}
+
+internal fun estimatedGamingFriendControllerMinor(
+    participants: List<GamingParticipantUi>,
+    currentPlayElapsedMs: Long,
+): Long {
+    val cumulativeByCustomer = mutableMapOf<String, Long>()
+    participants.filterNot {
+        it.pending && !it.active && it.leftPlayElapsedMs == null && it.leftAtMillis == null
+    }.forEach { participant ->
+        val joined = participant.joinedPlayElapsedMs ?: return@forEach
+        val ended = participant.leftPlayElapsedMs ?: currentPlayElapsedMs
+        val identity = participant.customerId ?: participant.phone?.filter(Char::isDigit)
+            ?: participant.reference
+        cumulativeByCustomer[identity] = (cumulativeByCustomer[identity] ?: 0L) +
+            (ended - joined).coerceAtLeast(0L)
+    }
+    return cumulativeByCustomer.values.sumOf { duration ->
+        maxOf(1L, (duration + 3_599_999L) / 3_600_000L) * 3_000L
+    }
+}
+
+internal fun estimatedGamingFriendControllerMinorAfterJoin(
+    participants: List<GamingParticipantUi>,
+    currentPlayElapsedMs: Long,
+    customerId: String?,
+    phone: String?,
+): Long {
+    val normalizedPhone = phone?.filter(Char::isDigit)?.takeLast(10)?.takeIf(String::isNotEmpty)
+    val resolvedCustomerId = customerId ?: normalizedPhone?.let { candidate ->
+        participants.mapNotNull { participant ->
+            participant.customerId?.takeIf {
+                participant.phone?.filter(Char::isDigit)?.takeLast(10) == candidate
+            }
+        }.distinct().singleOrNull()
+    }
+    return estimatedGamingFriendControllerMinor(
+        participants + GamingParticipantUi(
+            reference = "join-review",
+            customerId = resolvedCustomerId,
+            name = null,
+            phone = normalizedPhone,
+            active = true,
+            pending = true,
+            joinedPlayElapsedMs = currentPlayElapsedMs,
+        ),
+        currentPlayElapsedMs,
     )
 }
 
@@ -6496,22 +6917,24 @@ private fun stationTypeIcon(type: String): ImageVector = when (stationFilterId(t
     else -> Icons.Filled.SportsEsports
 }
 
+@Composable
 private fun statusColor(tone: UiTone): Color = when (tone) {
-    UiTone.Success -> Brand.Good
-    UiTone.Warning -> Brand.Warning
-    UiTone.Danger -> Brand.Danger
-    UiTone.Information -> Brand.Information
-    UiTone.Brand -> Brand.Gold
-    UiTone.Neutral -> Brand.ForegroundMuted
+    UiTone.Success -> MaterialTheme.colorScheme.operationalGood
+    UiTone.Warning -> MaterialTheme.colorScheme.operationalWarning
+    UiTone.Danger -> MaterialTheme.colorScheme.operationalDanger
+    UiTone.Information -> MaterialTheme.colorScheme.operationalInformation
+    UiTone.Brand -> MaterialTheme.colorScheme.primary
+    UiTone.Neutral -> MaterialTheme.colorScheme.onSurfaceVariant
 }
 
+@Composable
 private fun statusIconBackground(tone: UiTone): Color = when (tone) {
-    UiTone.Success -> Brand.GoodMuted
-    UiTone.Warning -> Brand.WarningMuted
-    UiTone.Danger -> Brand.DangerMuted
-    UiTone.Information -> Brand.InformationMuted
-    UiTone.Brand -> Brand.Gold.copy(alpha = 0.12f)
-    UiTone.Neutral -> Brand.SurfaceHover
+    UiTone.Success -> MaterialTheme.colorScheme.operationalGoodContainer
+    UiTone.Warning -> MaterialTheme.colorScheme.operationalWarningContainer
+    UiTone.Danger -> MaterialTheme.colorScheme.operationalDangerContainer
+    UiTone.Information -> MaterialTheme.colorScheme.operationalInformationContainer
+    UiTone.Brand -> MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+    UiTone.Neutral -> MaterialTheme.colorScheme.secondaryContainer
 }
 
 internal fun hasTickingGamingSession(sessions: List<GameSession>): Boolean =

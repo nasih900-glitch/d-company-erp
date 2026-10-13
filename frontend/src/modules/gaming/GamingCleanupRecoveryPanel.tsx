@@ -252,6 +252,10 @@ export default function GamingCleanupRecoveryPanel({
     }
   }
 
+  if (panelMode === 'empty') {
+    return null;
+  }
+
   return (
     <section className="card mb-4 border-accent/30" aria-labelledby="gaming-cleanup-title">
       <div className="flex items-start justify-between gap-3">
@@ -260,9 +264,7 @@ export default function GamingCleanupRecoveryPanel({
           <div>
             <h3 id="gaming-cleanup-title" className="font-semibold">Tablet Gaming cleanup recovery</h3>
             <p className="mt-1 text-sm text-fg-muted">
-              {panelMode === 'empty'
-                ? 'No tablet cleanup needs review.'
-                : panelMode === 'history'
+              {panelMode === 'history'
                   ? `${rows.length} completed or superseded cleanup record${rows.length === 1 ? '' : 's'}.`
                   : 'Only candidates reported by the exact tablet and verified against the immutable production cleanup receipt appear here. Approval retires that one local overlay after the tablet refreshes.'}
             </p>

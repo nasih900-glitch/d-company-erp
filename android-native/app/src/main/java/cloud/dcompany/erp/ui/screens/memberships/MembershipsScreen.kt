@@ -1,5 +1,14 @@
 package cloud.dcompany.erp.ui.screens.memberships
 
+import cloud.dcompany.erp.ui.theme.operationalDanger
+import cloud.dcompany.erp.ui.theme.operationalDangerContainer
+import cloud.dcompany.erp.ui.theme.operationalGood
+import cloud.dcompany.erp.ui.theme.operationalGoodContainer
+import cloud.dcompany.erp.ui.theme.operationalInformation
+import cloud.dcompany.erp.ui.theme.operationalInformationContainer
+import cloud.dcompany.erp.ui.theme.operationalWarning
+import cloud.dcompany.erp.ui.theme.operationalWarningContainer
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -102,7 +111,7 @@ private fun MembershipsContent(
 ) {
     val canManage = access.canManageMoney
     Column(
-        Modifier.fillMaxSize().background(Brand.Background).padding(Spacing.lg),
+        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(Spacing.lg),
         verticalArrangement = Arrangement.spacedBy(Spacing.md),
     ) {
         if (!canManage) {
@@ -304,7 +313,7 @@ private fun CustomerSearchPanel(state: MembershipsUiState, vm: MembershipsViewMo
         } else {
             Text(
                 "Search to review a customer's current plan, payment evidence, renewal status, and receipt history.",
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodyMedium,
             )
         }
@@ -315,7 +324,7 @@ private fun CustomerSearchPanel(state: MembershipsUiState, vm: MembershipsViewMo
 private fun CustomerResultRow(customer: CustomerCacheEntity, vm: MembershipsViewModel) {
     Row(
         Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(Radius.shapeSm)
-            .background(Brand.SurfaceRaised)
+            .background(MaterialTheme.colorScheme.surfaceVariant)
             .clickable { vm.selectCustomer(customer) }
             .padding(horizontal = 12.dp, vertical = 10.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -323,11 +332,11 @@ private fun CustomerResultRow(customer: CustomerCacheEntity, vm: MembershipsView
     ) {
         Text(
             customer.name.orEmpty().ifBlank { "(no name)" },
-            color = Brand.Foreground, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f, fill = false),
         )
         Spacer(Modifier.width(8.dp))
-        Text(customer.phone, color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelSmall)
+        Text(customer.phone, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
     }
 }
 
@@ -355,8 +364,8 @@ private fun SelectedCustomerPanel(
     ) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text(customer.name.orEmpty().ifBlank { "(no name)" }, style = MaterialTheme.typography.titleLarge, color = Brand.Foreground)
-                Text(customer.phone, style = MaterialTheme.typography.labelSmall, color = Brand.ForegroundMuted)
+                Text(customer.name.orEmpty().ifBlank { "(no name)" }, style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
+                Text(customer.phone, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             OperationalStatusBadge(
                 label = when {
@@ -379,7 +388,7 @@ private fun SelectedCustomerPanel(
                 Text(
                     task?.let { membershipRefundStageMessage(it.status) }
                         ?: "A membership refund is unresolved. Refresh before moving any money.",
-                    color = Brand.GoldMuted,
+                    color = MaterialTheme.colorScheme.secondary,
                     style = MaterialTheme.typography.bodyMedium,
                 )
             }
@@ -388,15 +397,15 @@ private fun SelectedCustomerPanel(
                 Text(
                     task?.let { membershipPaymentStageMessage(it.status) }
                         ?: "A membership payment is unresolved. Refresh before taking any money.",
-                    color = Brand.GoldMuted,
+                    color = MaterialTheme.colorScheme.secondary,
                     style = MaterialTheme.typography.bodyMedium,
                 )
             }
             membership?.pendingSubscribeLocalId != null -> {
-                Text("Subscription queued — not synced yet.", color = Brand.GoldMuted, style = MaterialTheme.typography.bodyMedium)
+                Text("Subscription queued — not synced yet.", color = MaterialTheme.colorScheme.secondary, style = MaterialTheme.typography.bodyMedium)
             }
             membership?.pendingCancelLocalId != null -> {
-                Text("Cancellation queued — not synced yet.", color = Brand.GoldMuted, style = MaterialTheme.typography.bodyMedium)
+                Text("Cancellation queued — not synced yet.", color = MaterialTheme.colorScheme.secondary, style = MaterialTheme.typography.bodyMedium)
             }
             membership?.pendingRefundLocalId != null -> {
                 val pending = state.pendingRefunds.firstOrNull {
@@ -408,7 +417,7 @@ private fun SelectedCustomerPanel(
                     } else {
                         "Refund queued — this shift cannot close until it is resolved."
                     },
-                    color = Brand.GoldMuted,
+                    color = MaterialTheme.colorScheme.secondary,
                     style = MaterialTheme.typography.bodyMedium,
                 )
             }
@@ -417,7 +426,7 @@ private fun SelectedCustomerPanel(
                 val alreadyCancelled = sub.cancelledAt != null
                 Text(
                     "${sub.tierName} · ${billingCycleLabel(sub.billingCycle)}",
-                    style = MaterialTheme.typography.bodyLarge, color = Brand.Foreground,
+                    style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface,
                 )
                 Text(
                     if (alreadyCancelled) {
@@ -426,48 +435,48 @@ private fun SelectedCustomerPanel(
                         "Expires ${sub.expiresAt.take(10)}"
                     },
                     style = MaterialTheme.typography.labelSmall,
-                    color = if (alreadyCancelled) Brand.GoldMuted else Brand.ForegroundMuted,
+                    color = if (alreadyCancelled) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 sub.paymentMethod?.let { method ->
                     Text(
                         "Paid ${sub.amountPaidMinor.asRupees()} via ${method.uppercase()}" +
                             (sub.paymentReceiptNo?.let { " · Receipt $it" } ?: ""),
                         style = MaterialTheme.typography.labelSmall,
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 if (sub.paymentEvidenceTimeUntrusted) {
                     Text(
                         "Payment time needs owner reconciliation; use the receipt and independent evidence before relying on the timestamp.",
-                        color = Brand.GoldMuted,
+                        color = MaterialTheme.colorScheme.secondary,
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
                 if (!sub.paymentProviderEvidenceReconciled) {
                     Text(
                         "Provider evidence is not reconciled. Verify the provider record before refunding or reporting this payment as confirmed.",
-                        color = Brand.GoldMuted,
+                        color = MaterialTheme.colorScheme.secondary,
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
                 if (sub.refundEvidenceTimeUntrusted) {
                     Text(
                         "Refund time needs owner reconciliation before relying on this record.",
-                        color = Brand.GoldMuted,
+                        color = MaterialTheme.colorScheme.secondary,
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
                 if (!sub.refundProviderEvidenceReconciled || !sub.refundCustomerSpendReconciled) {
                     Text(
                         "Refund provider/LTV reconciliation is incomplete. Do not repeat the payout; open the recovery task.",
-                        color = Brand.GoldMuted,
+                        color = MaterialTheme.colorScheme.secondary,
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
                 if (canManage && sub.autoRenew && !alreadyCancelled) {
                     Spacer(Modifier.height(10.dp))
                     OutlinedButton(onClick = { vm.openConfirmCancel(customer, membership) }) {
-                        Text("Stop renewal", color = Brand.Danger)
+                        Text("Stop renewal", color = MaterialTheme.colorScheme.operationalDanger)
                     }
                 }
                 if (
@@ -476,13 +485,13 @@ private fun SelectedCustomerPanel(
                 ) {
                     Spacer(Modifier.height(8.dp))
                     OutlinedButton(onClick = { vm.openRefundForm(customer, membership) }) {
-                        Text("Refund & end membership", color = Brand.Danger)
+                        Text("Refund & end membership", color = MaterialTheme.colorScheme.operationalDanger)
                     }
                 } else if (canManage && sub.paymentId == null) {
                     Spacer(Modifier.height(8.dp))
                     Text(
                         "Payment not verified in the ERP. Reconcile independent evidence before refunding.",
-                        color = Brand.GoldMuted,
+                        color = MaterialTheme.colorScheme.secondary,
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
@@ -498,13 +507,13 @@ private fun SelectedCustomerPanel(
                         }
                     }
                         ?: "No active membership.",
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 if (ended != null) {
                     Text(
                         "Renewal creates a new paid term. The server rechecks the current plan price before any collection is authorised.",
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
@@ -521,52 +530,52 @@ private fun SelectedCustomerPanel(
         }
         if (state.membershipHistory.isNotEmpty()) {
             Spacer(Modifier.height(14.dp))
-            Text("Receipt history", style = MaterialTheme.typography.labelLarge, color = Brand.Foreground)
+            Text("Receipt history", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurface)
             state.membershipHistory.forEach { history ->
                 Spacer(Modifier.height(6.dp))
                 Column(
                     Modifier.fillMaxWidth().clip(Radius.shapeSm)
-                        .background(Brand.SurfaceRaised).padding(8.dp),
+                        .background(MaterialTheme.colorScheme.surfaceVariant).padding(8.dp),
                 ) {
                     Text(
                         "${history.tierName} · ${history.amountPaidMinor.asRupees()}",
-                        color = Brand.Foreground,
+                        color = MaterialTheme.colorScheme.onSurface,
                         style = MaterialTheme.typography.bodyMedium,
                     )
                     Text(
                         history.paymentReceiptNo?.let { "Receipt $it · ${history.paymentMethod?.uppercase().orEmpty()}" }
                             ?: "Legacy entitlement — no verified payment receipt",
-                        color = if (history.paymentReceiptNo == null) Brand.GoldMuted else Brand.ForegroundMuted,
+                        color = if (history.paymentReceiptNo == null) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.labelSmall,
                     )
                     when (history.refundStatus) {
                         "settled" -> Text(
                             "Refund settled${history.refundReceiptNo?.let { " · Receipt $it" }.orEmpty()}",
-                            color = Brand.Danger,
+                            color = MaterialTheme.colorScheme.operationalDanger,
                             style = MaterialTheme.typography.labelSmall,
                         )
                         "accepted_cash_due" -> Text(
                             "Cash refund accepted — handover still due",
-                            color = Brand.GoldMuted,
+                            color = MaterialTheme.colorScheme.secondary,
                             style = MaterialTheme.typography.labelSmall,
                         )
                         "withdrawn" -> Text(
                             "Refund withdrawn — no cash handed over",
-                            color = Brand.ForegroundMuted,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.labelSmall,
                         )
                     }
                     if (history.paymentEvidenceTimeUntrusted) {
                         Text(
                             "Payment time unverified",
-                            color = Brand.GoldMuted,
+                            color = MaterialTheme.colorScheme.secondary,
                             style = MaterialTheme.typography.labelSmall,
                         )
                     }
                     if (!history.paymentProviderEvidenceReconciled) {
                         Text(
                             "Provider evidence pending reconciliation",
-                            color = Brand.GoldMuted,
+                            color = MaterialTheme.colorScheme.secondary,
                             style = MaterialTheme.typography.labelSmall,
                         )
                     }
@@ -577,7 +586,7 @@ private fun SelectedCustomerPanel(
                     ) {
                         Text(
                             "Refund evidence or customer-spend reconciliation needs owner review",
-                            color = Brand.GoldMuted,
+                            color = MaterialTheme.colorScheme.secondary,
                             style = MaterialTheme.typography.labelSmall,
                         )
                     }
@@ -595,15 +604,15 @@ private fun TierCard(tier: MembershipTier) {
     SectionCard(elevated = true) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Column(Modifier.weight(1f).padding(end = 12.dp)) {
-                Text(tier.name, style = MaterialTheme.typography.titleLarge, color = Brand.Foreground)
+                Text(tier.name, style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
                 tier.description?.let {
-                    Text(it, style = MaterialTheme.typography.labelSmall, color = Brand.ForegroundMuted)
+                    Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
             Column(horizontalAlignment = Alignment.End) {
-                Text(tier.monthlyPriceMinor.asRupees() + " /mo", style = MaterialTheme.typography.bodyLarge, color = Brand.Foreground)
+                Text(tier.monthlyPriceMinor.asRupees() + " /mo", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
                 tier.annualPriceMinor?.let {
-                    Text(it.asRupees() + " /yr", style = MaterialTheme.typography.labelSmall, color = Brand.ForegroundMuted)
+                    Text(it.asRupees() + " /yr", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }
@@ -618,7 +627,7 @@ private fun TierCard(tier: MembershipTier) {
             if (tier.priorityBooking) add("Priority booking")
         }
         if (perks.isNotEmpty()) {
-            Text(perks.joinToString(" · "), style = MaterialTheme.typography.labelSmall, color = Brand.ForegroundMuted)
+            Text(perks.joinToString(" · "), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
@@ -689,20 +698,20 @@ private fun SubscribeFormDialog(customer: CustomerCacheEntity, state: Membership
         ) { billingCycle = it }
         Text(
             "Annual plans are disabled until revenue can be recognized over the full service term.",
-            color = Brand.ForegroundMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.labelSmall,
         )
         Text(
             "This first step only reserves the customer, tier, amount, rail, shift, and terminal. " +
                 "It does not post a membership or authorise money movement. After preparation, " +
                 "open the task and start its collection step.",
-            color = Brand.GoldMuted,
+            color = MaterialTheme.colorScheme.secondary,
             style = MaterialTheme.typography.labelSmall,
         )
         Text(
             "If the tablet is offline, only this zero-value preparation is queued. " +
                 "Reconnect and wait for the server to confirm the live price before collecting anything.",
-            color = Brand.ForegroundMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.labelSmall,
         )
         PickerField(
@@ -714,7 +723,7 @@ private fun SubscribeFormDialog(customer: CustomerCacheEntity, state: Membership
             price?.let {
                 Text(
                     "Amount: ${it.asRupees()}",
-                    style = MaterialTheme.typography.bodyMedium, color = Brand.Foreground,
+                    style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface,
                 )
             }
         }
@@ -753,7 +762,7 @@ private fun CompleteMembershipPaymentDialog(
     ) {
         Text(
             "${task.customerName ?: task.customerPhone} · ${task.tierName} · ${task.amountMinor.asRupees()}",
-            color = Brand.Foreground,
+            color = MaterialTheme.colorScheme.onSurface,
             style = MaterialTheme.typography.bodyMedium,
         )
         Text(
@@ -762,7 +771,7 @@ private fun CompleteMembershipPaymentDialog(
             } else {
                 "Complete the provider action once, verify its success, then enter the provider reference below."
             },
-            color = Brand.ForegroundMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.labelSmall,
         )
         if (!isCash) {
@@ -778,14 +787,14 @@ private fun CompleteMembershipPaymentDialog(
             Checkbox(checked = confirmed, onCheckedChange = { confirmed = it })
             Text(
                 "I confirm the customer payment was received exactly once.",
-                color = Brand.Foreground,
+                color = MaterialTheme.colorScheme.onSurface,
                 style = MaterialTheme.typography.bodyMedium,
             )
         }
         task.actionStartedByName?.let { starter ->
             Text(
                 "Collection was started by $starter. If that was another account, explain why you are taking over this physical-money action.",
-                color = Brand.GoldMuted,
+                color = MaterialTheme.colorScheme.secondary,
                 style = MaterialTheme.typography.labelSmall,
             )
             OutlinedTextField(
@@ -802,7 +811,7 @@ private fun CompleteMembershipPaymentDialog(
         ) {
             Text(
                 "If the connection drops after money moves, this confirmation is saved locally and blocks shift close until the same action reconciles.",
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelSmall,
             )
         }
@@ -861,7 +870,7 @@ private fun WithdrawMembershipPaymentDialog(
     ) {
         Text(
             "${task.customerName ?: task.customerPhone} · ${task.amountMinor.asRupees()} via ${task.paidVia.uppercase()}",
-            color = Brand.Foreground,
+            color = MaterialTheme.colorScheme.onSurface,
             style = MaterialTheme.typography.bodyMedium,
         )
         Text(
@@ -870,7 +879,7 @@ private fun WithdrawMembershipPaymentDialog(
             } else {
                 "Do not guess. Verify the drawer and customer, or the provider terminal/account, before resolving this task. Unknown state must remain open."
             },
-            color = Brand.GoldMuted,
+            color = MaterialTheme.colorScheme.secondary,
             style = MaterialTheme.typography.labelSmall,
         )
         PickerField(
@@ -912,14 +921,14 @@ private fun WithdrawMembershipPaymentDialog(
                     "provider_not_completed" -> "I verified the provider action never completed."
                     else -> "I verified no collection action or money movement occurred."
                 },
-                color = Brand.Foreground,
+                color = MaterialTheme.colorScheme.onSurface,
                 style = MaterialTheme.typography.bodyMedium,
             )
         }
         task.actionStartedByName?.let { starter ->
             Text(
                 "Action started by $starter. If that was another account, record the takeover reason.",
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelSmall,
             )
             OutlinedTextField(
@@ -972,14 +981,14 @@ private fun RefundFormDialog(
     ) {
         Text(
             "Full refund: ${sub.amountPaidMinor.asRupees()}. Benefits end after sync; the original term and payment remain in the audit trail.",
-            color = Brand.Foreground,
+            color = MaterialTheme.colorScheme.onSurface,
             style = MaterialTheme.typography.bodyMedium,
         )
         Text(
             "This acceptance step reserves the refund and pauses benefits. It does not hand over cash, " +
                 "start a provider refund, change the drawer, or post accounting. Start the separate payout " +
                 "step only after the server confirms acceptance.",
-            color = Brand.ForegroundMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.labelSmall,
         )
         PickerField(
@@ -989,7 +998,7 @@ private fun RefundFormDialog(
         ) { method = it }
         Text(
             "Do not hand over cash or start the provider reversal from this dialog.",
-            color = Brand.GoldMuted,
+            color = MaterialTheme.colorScheme.secondary,
             style = MaterialTheme.typography.labelSmall,
         )
         OutlinedTextField(
@@ -1034,7 +1043,7 @@ private fun CompleteMembershipRefundDialog(
     ) {
         Text(
             "${task.customerName ?: task.customerPhone ?: "Customer"} · ${task.amountMinor.asRupees()} via ${task.method.uppercase()}",
-            color = Brand.Foreground,
+            color = MaterialTheme.colorScheme.onSurface,
             style = MaterialTheme.typography.bodyMedium,
         )
         Text(
@@ -1043,7 +1052,7 @@ private fun CompleteMembershipRefundDialog(
             } else {
                 "Complete the authorised provider refund once, verify success, and retain its unique reference."
             },
-            color = Brand.ForegroundMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.labelSmall,
         )
         if (!cash) {
@@ -1063,14 +1072,14 @@ private fun CompleteMembershipRefundDialog(
                 } else {
                     "I confirm the provider refund completed exactly once."
                 },
-                color = Brand.Foreground,
+                color = MaterialTheme.colorScheme.onSurface,
                 style = MaterialTheme.typography.bodyMedium,
             )
         }
         task.actionStartedByName?.let { starter ->
             Text(
                 "Payout was started by $starter. If that was another account, explain why you are taking over.",
-                color = Brand.GoldMuted,
+                color = MaterialTheme.colorScheme.secondary,
                 style = MaterialTheme.typography.labelSmall,
             )
             OutlinedTextField(
@@ -1083,7 +1092,7 @@ private fun CompleteMembershipRefundDialog(
         }
         Text(
             "If the connection drops after payout, this evidence remains on the tablet and blocks shift close. Never pay again to clear a pending task.",
-            color = Brand.ForegroundMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.labelSmall,
         )
     }
@@ -1143,7 +1152,7 @@ private fun ResolveMembershipRefundDialog(
             } else {
                 "Unknown state must remain unresolved. Check the drawer and customer or the provider account before selecting an outcome."
             },
-            color = Brand.GoldMuted,
+            color = MaterialTheme.colorScheme.secondary,
             style = MaterialTheme.typography.bodyMedium,
         )
         PickerField(
@@ -1176,14 +1185,14 @@ private fun ResolveMembershipRefundDialog(
                     "provider_reversed" -> "I verified the provider refund reversal completed."
                     else -> "I verified the provider refund never completed."
                 },
-                color = Brand.Foreground,
+                color = MaterialTheme.colorScheme.onSurface,
                 style = MaterialTheme.typography.bodyMedium,
             )
         }
         task.actionStartedByName?.let { starter ->
             Text(
                 "Payout action started by $starter. If that was another account, record the takeover reason.",
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelSmall,
             )
             OutlinedTextField(
@@ -1242,12 +1251,12 @@ private fun ResolveLegacyMembershipRefundDialog(
     ) {
         Text(
             "This task came from an older app that could move value before the server reserved it. Never repeat a payout to make it disappear.",
-            color = Brand.Danger,
+            color = MaterialTheme.colorScheme.operationalDanger,
             style = MaterialTheme.typography.bodyMedium,
         )
         Text(
             "${attempt.expectedAmountMinor.asRupees()} via ${attempt.paidVia.uppercase()} · captured ${if (attempt.capturedTimeUntrusted) "at an untrusted device time" else "with saved time evidence"}",
-            color = Brand.ForegroundMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.labelSmall,
         )
         PickerField("Verified outcome", options.first { it.first == outcome }.second, options) {
@@ -1273,14 +1282,14 @@ private fun ResolveLegacyMembershipRefundDialog(
             Checkbox(checked = confirmed, onCheckedChange = { confirmed = it })
             Text(
                 "I verified this outcome from the drawer/customer or provider record.",
-                color = Brand.Foreground,
+                color = MaterialTheme.colorScheme.onSurface,
                 style = MaterialTheme.typography.bodyMedium,
             )
         }
         if (outcome in setOf("cash_handed_over", "provider_completed")) {
             Text(
                 "A currently open shift on this same terminal will be used as the reconciliation shift for the historical payout.",
-                color = Brand.GoldMuted,
+                color = MaterialTheme.colorScheme.secondary,
                 style = MaterialTheme.typography.labelSmall,
             )
         }
@@ -1311,7 +1320,7 @@ private fun WithdrawCashRefundDialog(
     ) {
         Text(
             "Use this only if the customer received no cash. The ERP will retain an audit record, release the shift, and restore unexpired benefits when no newer term overlaps.",
-            color = Brand.GoldMuted,
+            color = MaterialTheme.colorScheme.secondary,
             style = MaterialTheme.typography.bodyMedium,
         )
         OutlinedTextField(
@@ -1331,19 +1340,19 @@ private fun WithdrawCashRefundDialog(
 private fun MembershipAuditControlEscalation(recordCount: Int) {
     Column(
         modifier = Modifier.fillMaxWidth().clip(Radius.shapeSm)
-            .background(Brand.SurfaceRaised).padding(10.dp),
+            .background(MaterialTheme.colorScheme.surfaceVariant).padding(10.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Text(
             "Audit Control review required",
-            color = Brand.GoldMuted,
+            color = MaterialTheme.colorScheme.secondary,
             style = MaterialTheme.typography.bodyMedium,
         )
         Text(
             "$recordCount older-app recovery ${if (recordCount == 1) "record is" else "records are"} " +
                 "preserved but read only for this account. Ask the Audit Control owner to " +
                 "verify the original drawer/provider evidence. Do not repeat a collection or payout.",
-            color = Brand.ForegroundMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.labelSmall,
         )
     }
@@ -1383,7 +1392,7 @@ private fun PendingMembershipChangesPanel(
         if (!expanded) {
             Text(
                 "Recovery records remain saved. Expand this panel before moving membership money or closing the shift.",
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodySmall,
             )
             return@SectionCard
@@ -1416,17 +1425,17 @@ private fun PendingMembershipChangesPanel(
             .forEach { attempt ->
             Column(
                 Modifier.fillMaxWidth().clip(Radius.shapeSm)
-                    .background(Brand.SurfaceRaised).padding(10.dp),
+                    .background(MaterialTheme.colorScheme.surfaceVariant).padding(10.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 Text(
                     "Older-app refund recovery · ${attempt.expectedAmountMinor.asRupees()} via ${attempt.paidVia.uppercase()}",
-                    color = Brand.Danger,
+                    color = MaterialTheme.colorScheme.operationalDanger,
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Text(
                     "Do not repeat this payout. Verify the original drawer/customer or provider evidence.",
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.labelSmall,
                 )
                 Button(onClick = { vm.openLegacyRefundResolution(attempt) }) {
@@ -1538,16 +1547,16 @@ private fun PendingMembershipChangesPanel(
             if (row.syncState == "accepted_cash_due") {
                 Column(
                     Modifier.fillMaxWidth().clip(Radius.shapeSm)
-                        .background(Brand.SurfaceRaised).padding(8.dp),
+                        .background(MaterialTheme.colorScheme.surfaceVariant).padding(8.dp),
                 ) {
                     Text(
                         "Cash refund accepted: ${row.customerName} — ${row.amountMinor.asRupees()}",
-                        color = Brand.Foreground,
+                        color = MaterialTheme.colorScheme.onSurface,
                         style = MaterialTheme.typography.bodyMedium,
                     )
                     Text(
                         "No accounting entry has posted yet. Choose exactly what happened next.",
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.labelSmall,
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1589,10 +1598,10 @@ private fun MembershipPendingRow(
     pendingText: String = "Not synced yet",
 ) {
     Column(
-        Modifier.fillMaxWidth().clip(Radius.shapeSm).background(Brand.SurfaceRaised).padding(8.dp),
+        Modifier.fillMaxWidth().clip(Radius.shapeSm).background(MaterialTheme.colorScheme.surfaceVariant).padding(8.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(text, color = Brand.Foreground, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+            Text(text, color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
             if (rejected && retryEnabled) TextButton(onClick = onRetry) { Text("Retry") }
             if (secondaryLabel != null && onSecondary != null) {
                 TextButton(onClick = onSecondary) { Text(secondaryLabel) }
@@ -1600,7 +1609,7 @@ private fun MembershipPendingRow(
         }
         Text(
             if (rejected) "Could not sync: ${error ?: "unknown error"}" else pendingText,
-            color = if (rejected) Brand.Danger else Brand.ForegroundMuted,
+            color = if (rejected) MaterialTheme.colorScheme.operationalDanger else MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.labelSmall,
         )
     }
@@ -1612,22 +1621,22 @@ private fun MembershipPaymentTaskCard(
     vm: MembershipsViewModel,
 ) {
     Column(
-        Modifier.fillMaxWidth().clip(Radius.shapeSm).background(Brand.SurfaceRaised).padding(10.dp),
+        Modifier.fillMaxWidth().clip(Radius.shapeSm).background(MaterialTheme.colorScheme.surfaceVariant).padding(10.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Text(
             "${task.customerName ?: task.customerPhone} · ${task.tierName}",
-            color = Brand.Foreground,
+            color = MaterialTheme.colorScheme.onSurface,
             style = MaterialTheme.typography.bodyMedium,
         )
         Text(
             "${task.amountMinor.asRupees()} via ${task.paidVia.uppercase()} · prepared by ${task.preparedByName ?: "owner"}",
-            color = Brand.ForegroundMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.labelSmall,
         )
         Text(
             membershipPaymentStageMessage(task.status),
-            color = Brand.ForegroundMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.labelSmall,
         )
         when (task.status) {
@@ -1653,7 +1662,7 @@ private fun MembershipPaymentTaskCard(
             }
             MembershipPaymentTaskStatus.PAYMENT_COMPLETED_PENDING_POSTING -> Text(
                 "Receipt posting is automatic. Keep this task open and do not collect again.",
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelSmall,
             )
         }
@@ -1667,40 +1676,40 @@ private fun MembershipRefundTaskCard(
     legacyRecoveryMessage: String?,
 ) {
     Column(
-        Modifier.fillMaxWidth().clip(Radius.shapeSm).background(Brand.SurfaceRaised).padding(10.dp),
+        Modifier.fillMaxWidth().clip(Radius.shapeSm).background(MaterialTheme.colorScheme.surfaceVariant).padding(10.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Text(
             "${task.customerName ?: task.customerPhone ?: "Customer"} · ${task.tierName ?: "Membership"}",
-            color = Brand.Foreground,
+            color = MaterialTheme.colorScheme.onSurface,
             style = MaterialTheme.typography.bodyMedium,
         )
         Text(
             "${task.amountMinor.asRupees()} via ${task.method.uppercase()} · accepted by ${task.acceptedByName ?: "owner"}",
-            color = Brand.ForegroundMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.labelSmall,
         )
         Text(
             membershipRefundStageMessage(task.status),
-            color = Brand.ForegroundMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.labelSmall,
         )
         if (!task.customerSpendReconciled || !task.providerEvidenceReconciled || task.evidenceTimeUntrusted) {
             Text(
                 "Evidence/LTV reconciliation is incomplete. Keep this task open; never repeat a payout.",
-                color = Brand.Danger,
+                color = MaterialTheme.colorScheme.operationalDanger,
                 style = MaterialTheme.typography.labelSmall,
             )
         }
         if (legacyRecoveryMessage != null) {
             Text(
                 legacyRecoveryMessage,
-                color = Brand.Danger,
+                color = MaterialTheme.colorScheme.operationalDanger,
                 style = MaterialTheme.typography.labelSmall,
             )
             Text(
                 "Normal payout controls are locked until a protected owner verifies the original drawer/provider evidence.",
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelSmall,
             )
             return@Column
@@ -1728,7 +1737,7 @@ private fun MembershipRefundTaskCard(
             }
             MembershipRefundTaskStatus.PAYOUT_COMPLETED_PENDING_POSTING -> Text(
                 "Receipt posting is automatic. Keep this task open and do not pay again.",
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelSmall,
             )
         }
@@ -1738,11 +1747,11 @@ private fun MembershipRefundTaskCard(
 @Composable
 private fun NoticeBanner(message: String, onDismiss: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().clip(Radius.shapeSm).background(Brand.SurfaceRaised)
+        Modifier.fillMaxWidth().clip(Radius.shapeSm).background(MaterialTheme.colorScheme.surfaceVariant)
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(message, color = Brand.Foreground, modifier = Modifier.weight(1f))
+        Text(message, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
         TextButton(onClick = onDismiss) { Text("Dismiss") }
     }
 }

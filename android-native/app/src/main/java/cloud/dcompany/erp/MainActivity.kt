@@ -1,5 +1,14 @@
 package cloud.dcompany.erp
 
+import cloud.dcompany.erp.ui.theme.operationalDanger
+import cloud.dcompany.erp.ui.theme.operationalDangerContainer
+import cloud.dcompany.erp.ui.theme.operationalGood
+import cloud.dcompany.erp.ui.theme.operationalGoodContainer
+import cloud.dcompany.erp.ui.theme.operationalInformation
+import cloud.dcompany.erp.ui.theme.operationalInformationContainer
+import cloud.dcompany.erp.ui.theme.operationalWarning
+import cloud.dcompany.erp.ui.theme.operationalWarningContainer
+
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
@@ -88,6 +97,8 @@ import cloud.dcompany.erp.ui.screens.PosScreen
 import cloud.dcompany.erp.ui.screens.PosViewModel
 import cloud.dcompany.erp.ui.screens.TerminalSelectionScreen
 import cloud.dcompany.erp.ui.theme.Brand
+import cloud.dcompany.erp.ui.theme.AppearancePreference
+import cloud.dcompany.erp.ui.theme.AppearanceStore
 import cloud.dcompany.erp.ui.theme.DCompanyTheme
 import cloud.dcompany.erp.core.net.ClientCompatibilityState
 import cloud.dcompany.erp.core.net.ClientUpdateNotice
@@ -130,18 +141,20 @@ class MainActivity : ComponentActivity() {
         // (and, on some OEM builds, double-inset) tablet geometry.
         WindowCompat.setDecorFitsSystemWindows(window, false)
         setContent {
+            val appearanceStore = remember { AppearanceStore(applicationContext) }
+            var appearance by remember { mutableStateOf(appearanceStore.load()) }
             CompositionLocalProvider(
                 LocalRemoteCapturePrivacyController provides
                     DCompanyApp.instance.remoteAssistance.privacy,
             ) {
-                DCompanyTheme {
+                DCompanyTheme(preference = appearance) {
                     Surface(
                         // Android 15 enforces edge-to-edge for targetSdk 35 even
-                        // when decor fitting is requested. Paint Brand.Background
+                        // when decor fitting is requested. Paint MaterialTheme.colorScheme.background
                         // across the complete window, including the system-bar
                         // regions, then inset only the interactive workspace.
                         Modifier.fillMaxSize(),
-                        color = Brand.Background,
+                        color = MaterialTheme.colorScheme.background,
                     ) {
                         Box(
                             Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing),
@@ -150,6 +163,11 @@ class MainActivity : ComponentActivity() {
                                 onOpenUpdateLink = ::openSecureUpdate,
                                 onInstallVerifiedUpdate = ::requestVerifiedUpdateInstall,
                                 onStartHealthRecording = { AppHealthRecorder.start(window) },
+                                appearancePreference = appearance,
+                                onAppearancePreferenceChanged = { next ->
+                                    appearanceStore.save(next)
+                                    appearance = next
+                                },
                             )
                         }
                     }
@@ -262,6 +280,8 @@ private fun AppRoot(
     onOpenUpdateLink: (String) -> Unit,
     onInstallVerifiedUpdate: (File) -> InstallerLaunchResult,
     onStartHealthRecording: () -> Boolean,
+    appearancePreference: AppearancePreference,
+    onAppearancePreferenceChanged: (AppearancePreference) -> Unit,
     session: SessionViewModel = viewModel(),
     appUpdate: AppUpdateViewModel = viewModel(),
 ) {
@@ -332,7 +352,7 @@ private fun AppRoot(
 
     when (val s = state) {
         is AuthState.Loading -> Box(Modifier.fillMaxSize(), Alignment.Center) {
-            CircularProgressIndicator(color = Brand.Gold)
+            CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
         }
 
         is AuthState.VerifyingCached -> Box(Modifier.fillMaxSize(), Alignment.Center) {
@@ -341,15 +361,15 @@ private fun AppRoot(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 modifier = Modifier.padding(24.dp),
             ) {
-                CircularProgressIndicator(color = Brand.Gold)
+                CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
                 Text("Checking access", style = MaterialTheme.typography.titleLarge)
                 Text(
                     "Restoring ${s.me.name}'s workspace safely…",
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Text(
                     "If the server is unavailable, the last verified offline workspace will open automatically.",
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }
@@ -359,8 +379,8 @@ private fun AppRoot(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                CircularProgressIndicator(color = Brand.Gold)
-                Text("Signing out safely…", color = Brand.ForegroundMuted)
+                CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                Text("Signing out safely…", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
 
@@ -371,11 +391,11 @@ private fun AppRoot(
                 modifier = Modifier.padding(24.dp),
             ) {
                 Text("Couldn't finish sign-out", style = MaterialTheme.typography.titleLarge)
-                Text(s.message, color = Brand.ForegroundMuted)
+                Text(s.message, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Button(onClick = session::signOut) { Text("Retry sign-out") }
                 Text(
                     "If retry still fails, keep this tablet with a manager and contact support.",
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }
@@ -477,7 +497,7 @@ private fun AppRoot(
                 modifier = Modifier.padding(24.dp),
             ) {
                 Text("Can't reach the server", style = MaterialTheme.typography.titleLarge)
-                Text(s.message, color = Brand.ForegroundMuted)
+                Text(s.message, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Button(onClick = session::restore) { Text("Retry") }
                 TextButton(onClick = session::signOut) { Text("Sign in as someone else") }
             }
@@ -490,7 +510,7 @@ private fun AppRoot(
                 modifier = Modifier.padding(24.dp),
             ) {
                 Text("Cannot open this workspace", style = MaterialTheme.typography.titleLarge)
-                Text(s.message, color = Brand.ForegroundMuted)
+                Text(s.message, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Button(onClick = session::restore) { Text("Verify again") }
                 TextButton(onClick = session::signOut) { Text("Sign in as someone else") }
             }
@@ -529,6 +549,9 @@ private fun AppRoot(
                 }
                 var operationalFocus by remember(s.me.userId) {
                     mutableStateOf<OperationalNotificationTarget?>(null)
+                }
+                var exactRefundReceiptOrderId by remember(s.me.userId) {
+                    mutableStateOf<String?>(null)
                 }
                 LaunchedEffect(pendingNotificationTarget, destinations, s.me.userId) {
                     val target = pendingNotificationTarget ?: return@LaunchedEffect
@@ -677,6 +700,8 @@ private fun AppRoot(
                     remoteSupportPrivacyProtected = remoteAssistanceState.privacyProtected,
                     remoteSupportLastCommandLabel = remoteAssistanceState.lastCommandLabel,
                     canChangeTill = s.me.protectedAccess && requiresTill && advancedTerminalWorkflow,
+                    appearancePreference = appearancePreference,
+                    onAppearancePreferenceChanged = onAppearancePreferenceChanged,
                     onOpenSupport = ::openSupport,
                     onChangeTill = session::requestTerminalReassignment,
                     onSignOut = { confirmSignOut = true },
@@ -717,6 +742,9 @@ private fun AppRoot(
                                     pos.receiptHistoryLoading.collectAsStateWithLifecycle()
                                 val receiptHistoryError by
                                     pos.receiptHistoryError.collectAsStateWithLifecycle()
+                                val receiptSearch by pos.receiptSearch.collectAsStateWithLifecycle()
+                                val eligibleRewardCatalog by
+                                    pos.eligibleRewardCatalog.collectAsStateWithLifecycle()
                                 val unacknowledgedPosReceipt by pos.unacknowledgedReceipt.collectAsStateWithLifecycle()
                                 val heldFocus = operationalFocus
                                     as? OperationalNotificationTarget.HeldOrder
@@ -730,6 +758,8 @@ private fun AppRoot(
                                     receiptHistoryHasMore = receiptHistorySyncState?.hasMore == true,
                                     receiptHistoryLoading = receiptHistoryLoading,
                                     receiptHistoryError = receiptHistoryError,
+                                    receiptSearch = receiptSearch,
+                                    eligibleRewardCatalog = eligibleRewardCatalog,
                                     unacknowledgedReceipt = unacknowledgedPosReceipt,
                                     access = permissions.posAccess(),
                                     onAccessChanged = pos::updateAccess,
@@ -747,6 +777,8 @@ private fun AppRoot(
                                     onDismissDirectCheckout = pos::dismissDirectCheckout,
                                     onConfirmDirectZero = pos::confirmDirectZero,
                                     onRedeemDirectPoints = pos::redeemDirectPoints,
+                                    onRedeemDirectReward = pos::redeemDirectReward,
+                                    onRefreshEligibleRewards = pos::refreshEligibleRewards,
                                     onCapture = pos::captureSale,
                                     onCaptureSplit = pos::captureSplitSale,
                                     onRetryRejectedSale = pos::retryRejectedSale,
@@ -765,6 +797,14 @@ private fun AppRoot(
                                     onRefreshReceiptHistory = pos::refreshReceiptHistory,
                                     onLoadMoreReceiptHistory = pos::loadMoreReceiptHistory,
                                     onOpenCanonicalReceipt = pos::refreshReceiptHistoryDetail,
+                                    onSearchReceiptHistory = pos::searchReceiptHistory,
+                                    onLoadMoreReceiptSearch = pos::loadMoreReceiptSearch,
+                                    onRefundCanonicalReceipt = if (Destination.Refunds in destinations) {
+                                        { receipt ->
+                                            exactRefundReceiptOrderId = receipt.orderId
+                                            currentDestination = Destination.Refunds
+                                        }
+                                    } else null,
                                     onFocusOldestOverdue = pos::focusOldestOverdueOrder,
                                     onSnoozeOverdue = pos::snoozeOverdueBanner,
                                     onUnmuteOverdue = pos::unmuteOverdueBanner,
@@ -827,7 +867,10 @@ private fun AppRoot(
                             Destination.Memberships -> MembershipsScreen(
                                 access = permissions.membershipAccess(s.me),
                             )
-                            Destination.Refunds -> RefundsScreen()
+                            Destination.Refunds -> RefundsScreen(
+                                exactReceiptOrderId = exactRefundReceiptOrderId,
+                                onExactReceiptConsumed = { exactRefundReceiptOrderId = null },
+                            )
                             Destination.AuditLog -> AuditLogScreen()
                             Destination.AccessControl -> AccessControlScreen()
                             Destination.Settings -> SettingsScreen(
@@ -974,7 +1017,7 @@ private fun AppRoot(
                                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                CircularProgressIndicator(color = Brand.Gold)
+                                CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
                                 Text("Verifying the current till, Shift, Gaming and saved Sync work…")
                             }
                         },
@@ -1063,7 +1106,7 @@ private fun CompatibilityCheckOverlay() {
         contentAlignment = Alignment.TopCenter,
     ) {
         Surface(
-            color = Brand.SurfaceRaised,
+            color = MaterialTheme.colorScheme.surfaceVariant,
             shape = cloud.dcompany.erp.ui.theme.Radius.shapePill,
             shadowElevation = 4.dp,
         ) {
@@ -1073,13 +1116,13 @@ private fun CompatibilityCheckOverlay() {
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 CircularProgressIndicator(
-                    color = Brand.Gold,
+                    color = MaterialTheme.colorScheme.primary,
                     strokeWidth = 2.dp,
                     modifier = Modifier.size(18.dp),
                 )
                 Text(
                     "Checking for app updates · cached work remains available",
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
@@ -1093,7 +1136,7 @@ private fun PendingNotificationSignInBanner(target: OperationalNotificationTarge
         Modifier.fillMaxSize().padding(16.dp),
         contentAlignment = Alignment.TopCenter,
     ) {
-        Surface(color = Brand.SurfaceRaised, shape = cloud.dcompany.erp.ui.theme.Radius.shapeMd) {
+        Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = cloud.dcompany.erp.ui.theme.Radius.shapeMd) {
             Text(
                 text = when (target) {
                     is OperationalNotificationTarget.HeldOrder ->
@@ -1102,7 +1145,7 @@ private fun PendingNotificationSignInBanner(target: OperationalNotificationTarge
                         "Sign in to open this gaming-session alert. Nothing will be stopped automatically."
                 },
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
-                color = Brand.Foreground,
+                color = MaterialTheme.colorScheme.onSurface,
                 style = MaterialTheme.typography.bodySmall,
             )
         }
@@ -1157,7 +1200,7 @@ private fun OptionalUpdateBanner(
         modifier = Modifier.fillMaxSize().padding(16.dp),
         contentAlignment = Alignment.TopCenter,
     ) {
-        Surface(color = Brand.SurfaceRaised, shape = cloud.dcompany.erp.ui.theme.Radius.shapeMd) {
+        Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = cloud.dcompany.erp.ui.theme.Radius.shapeMd) {
             Column(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -1167,8 +1210,8 @@ private fun OptionalUpdateBanner(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(Modifier.weight(1f)) {
-                    Text("App update available", color = Brand.Foreground, style = MaterialTheme.typography.titleSmall)
-                    Text(notice.message, color = Brand.ForegroundMuted, style = MaterialTheme.typography.bodySmall)
+                    Text("App update available", color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.titleSmall)
+                    Text(notice.message, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
                         UpdateVersionAndNotes(notice, compact = true)
                     }
                     TextButton(onClick = onDismiss) { Text("Later") }
@@ -1203,7 +1246,7 @@ private fun RequiredUpdateScreen(
 ) {
     Box(Modifier.fillMaxSize().padding(24.dp), Alignment.Center) {
         Surface(
-            color = Brand.SurfaceRaised,
+            color = MaterialTheme.colorScheme.surfaceVariant,
             shape = cloud.dcompany.erp.ui.theme.Radius.shapeLg,
         ) {
             Column(
@@ -1211,20 +1254,20 @@ private fun RequiredUpdateScreen(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
-                Text("App update required", style = MaterialTheme.typography.headlineSmall, color = Brand.Foreground)
-                Text(notice.message, color = Brand.ForegroundMuted)
+                Text("App update required", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onSurface)
+                Text(notice.message, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 if (notice.minimumSupportedVersionCode != null) {
                     Text(
                         "Installed build ${notice.currentVersionCode ?: BuildConfig.VERSION_CODE} · " +
                             "minimum supported ${notice.minimumSupportedVersionCode}",
-                        color = Brand.ForegroundMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.labelMedium,
                     )
                 }
                 UpdateVersionAndNotes(notice, compact = false)
                 Text(
                     "This is an in-place update. Your signed-in account, local database, and saved offline work stay on this device. Never uninstall or clear app data to update.",
-                    color = Brand.Foreground,
+                    color = MaterialTheme.colorScheme.onSurface,
                 )
                 UpdateActionArea(
                     notice = notice,
@@ -1248,14 +1291,14 @@ private fun UpdateVersionAndNotes(notice: ClientUpdateNotice, compact: Boolean) 
     if (version != null) {
         Text(
             "Release $version · build ${notice.latestVersionCode ?: "unknown"}",
-            color = Brand.ForegroundMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.labelMedium,
         )
     }
     if (notes != null) {
         Text(
             if (compact) notes.lineSequence().first().take(180) else "What's new\n$notes",
-            color = Brand.ForegroundMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.bodySmall,
         )
     }
@@ -1295,14 +1338,14 @@ private fun UpdateActionArea(
 
     if (!outboxWorkStatus.isClear) {
         Surface(
-            color = Brand.WarningMuted,
+            color = MaterialTheme.colorScheme.operationalWarningContainer,
             shape = cloud.dcompany.erp.ui.theme.Radius.shapeSm,
         ) {
             Text(
                 "Keep this app installed: ${outboxWorkStatus.totalCount} saved or pending " +
                     "item${if (outboxWorkStatus.totalCount == 1) "" else "s"} will be preserved and resumed after the in-place update.",
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-                color = Brand.Warning,
+                color = MaterialTheme.colorScheme.operationalWarning,
                 style = MaterialTheme.typography.bodySmall,
             )
         }
@@ -1314,14 +1357,14 @@ private fun UpdateActionArea(
                 Button(onClick = onDownload) { Text("Download verified update") }
                 Text(
                     "The APK will be checked for exact size, checksum, package, version and signing lineage before Android can open it.",
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodySmall,
                 )
             } else if (safeUrl != null) {
                 if (BuildConfig.DIRECT_UPDATES_ENABLED) {
                     Text(
                         "Verified in-app download details are not available for this release. Use the HTTPS update link.",
-                        color = Brand.Warning,
+                        color = MaterialTheme.colorScheme.operationalWarning,
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
@@ -1329,7 +1372,7 @@ private fun UpdateActionArea(
             } else {
                 Text(
                     "No safe HTTPS update link was supplied. Ask an owner for the current D Company ERP release.",
-                    color = Brand.Danger,
+                    color = MaterialTheme.colorScheme.operationalDanger,
                 )
             }
         }
@@ -1340,12 +1383,12 @@ private fun UpdateActionArea(
             LinearProgressIndicator(
                 progress = { progress.coerceIn(0f, 1f) },
                 modifier = Modifier.fillMaxWidth(),
-                color = Brand.Information,
-                trackColor = Brand.Surface,
+                color = MaterialTheme.colorScheme.operationalInformation,
+                trackColor = MaterialTheme.colorScheme.surface,
             )
             Text(
                 "Downloading ${(progress * 100).toInt()}% · do not close the app",
-                color = Brand.Foreground,
+                color = MaterialTheme.colorScheme.onSurface,
                 style = MaterialTheme.typography.bodySmall,
             )
             TextButton(onClick = onCancelDownload) { Text("Cancel download") }
@@ -1354,24 +1397,24 @@ private fun UpdateActionArea(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            CircularProgressIndicator(color = Brand.Gold, modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-            Text("Verifying package, version and signature…", color = Brand.Foreground)
+            CircularProgressIndicator(color = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+            Text("Verifying package, version and signature…", color = MaterialTheme.colorScheme.onSurface)
         }
         is AppUpdateUiState.Ready -> {
             Text(
                 "Verified. Android Package Installer will show the app identity and require your confirmation.",
-                color = Brand.Good,
+                color = MaterialTheme.colorScheme.operationalGood,
                 style = MaterialTheme.typography.bodySmall,
             )
             Button(onClick = onInstall) { Text("Install update") }
             Text(
                 "If Android asks for install permission, allow it, return here, and tap Install update again.",
-                color = Brand.ForegroundMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodySmall,
             )
         }
         is AppUpdateUiState.Failed -> {
-            Text(stateForNotice.message, color = Brand.Danger, style = MaterialTheme.typography.bodySmall)
+            Text(stateForNotice.message, color = MaterialTheme.colorScheme.operationalDanger, style = MaterialTheme.typography.bodySmall)
             if (directAvailable) Button(onClick = onDownload) { Text("Try download again") }
             if (safeUrl != null) {
                 TextButton(onClick = { onOpenUpdateLink(safeUrl) }) { Text("Open HTTPS update link") }
@@ -1382,7 +1425,7 @@ private fun UpdateActionArea(
     if (!compact && !BuildConfig.DIRECT_UPDATES_ENABLED && safeUrl != null) {
         Text(
             "Android will handle the download/install flow and ask for confirmation. This app does not install updates silently.",
-            color = Brand.ForegroundMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.bodySmall,
         )
     }

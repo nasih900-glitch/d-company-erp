@@ -7,6 +7,7 @@ import {
   groupShiftsByBusinessDay,
   shiftBusinessDate,
 } from './shift-business-days';
+import { formatDateTime } from './OrdersAndShiftsScreen';
 
 function shift(overrides: Partial<ShiftDTO>): ShiftDTO {
   return {
@@ -81,6 +82,7 @@ describe('shift business-day presentation', () => {
     expect(shiftBusinessDate('2026-09-20T20:00:00Z')).toBe('2026-09-21');
     expect(formatShiftBusinessTime('2026-09-21T06:36:18Z')).toContain('12:06');
     expect(formatShiftBusinessDateTime('2026-09-21T21:06:59Z')).toContain('22 Sept 2026');
+    expect(formatDateTime('2026-10-13T08:35:00Z')).toContain('2:05 pm IST');
 
     const grouped = groupShiftsByBusinessDay([
       shift({ id: 'after-ist-midnight', opened_at: '2026-09-20T20:00:00Z' }),

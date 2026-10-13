@@ -6,6 +6,38 @@ import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Transaction
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.sync.Mutex
+
+/** Serializes every server customer projection request through commit. A
+ * program revision orders rules, not two balance responses within one
+ * revision, so request overlap must be prevented rather than timestamp-guessed. */
+object CustomerProjectionRefreshGate {
+    val mutex = Mutex()
+}
+
+internal fun mergeCustomerProjection(
+    existing: CustomerCacheEntity?,
+    incoming: CustomerCacheEntity,
+): CustomerCacheEntity {
+    val incomingRevision = incoming.loyaltyProgramRevision
+    val existingRevision = existing?.loyaltyProgramRevision
+    return if (
+        existing != null && existingRevision != null &&
+        (incomingRevision == null || incomingRevision < existingRevision)
+    ) {
+        incoming.copy(
+            loyaltyPoints = existing.loyaltyPoints,
+            loyaltyProgramRevision = existingRevision,
+            loyaltyPointValueMinor = existing.loyaltyPointValueMinor,
+            lifetimeGamingPointsEarned = existing.lifetimeGamingPointsEarned,
+            gamingRank = existing.gamingRank,
+            gamingRankFloor = existing.gamingRankFloor,
+            nextGamingRank = existing.nextGamingRank,
+            nextGamingRankFloor = existing.nextGamingRankFloor,
+            pointsToNextGamingRank = existing.pointsToNextGamingRank,
+        )
+    } else incoming
+}
 
 @Dao
 interface CustomerDao {
@@ -24,7 +56,15 @@ interface CustomerDao {
     suspend fun getCache(id: String): CustomerCacheEntity?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun upsertCache(rows: List<CustomerCacheEntity>)
+    suspend fun replaceCacheRows(rows: List<CustomerCacheEntity>)
+
+    /** Unknown/older clients may refresh identity fields, but cannot erase or
+     * downgrade a newer revision's point economics. Same-revision requests are
+     * ordered by [CustomerProjectionRefreshGate]. */
+    @Transaction
+    suspend fun upsertCache(rows: List<CustomerCacheEntity>) {
+        replaceCacheRows(rows.map { incoming -> mergeCustomerProjection(getCache(incoming.id), incoming) })
+    }
 
     @Query("DELETE FROM customer_cache WHERE id NOT IN (:keepIds)")
     suspend fun deleteCacheNotIn(keepIds: List<String>)

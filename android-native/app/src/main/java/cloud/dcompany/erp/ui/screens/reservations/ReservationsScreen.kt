@@ -1,5 +1,14 @@
 package cloud.dcompany.erp.ui.screens.reservations
 
+import cloud.dcompany.erp.ui.theme.operationalDanger
+import cloud.dcompany.erp.ui.theme.operationalDangerContainer
+import cloud.dcompany.erp.ui.theme.operationalGood
+import cloud.dcompany.erp.ui.theme.operationalGoodContainer
+import cloud.dcompany.erp.ui.theme.operationalInformation
+import cloud.dcompany.erp.ui.theme.operationalInformationContainer
+import cloud.dcompany.erp.ui.theme.operationalWarning
+import cloud.dcompany.erp.ui.theme.operationalWarningContainer
+
 import android.app.DatePickerDialog
 import android.app.TimePickerDialog
 import android.content.Context
@@ -95,7 +104,7 @@ private fun ReservationsContent(
     vm: ReservationsViewModel,
 ) {
     Column(
-        Modifier.fillMaxSize().background(Brand.Background).padding(Spacing.lg),
+        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(Spacing.lg),
         verticalArrangement = Arrangement.spacedBy(Spacing.md),
     ) {
         ReservationControls(state, access, vm)
@@ -193,13 +202,13 @@ private fun ReservationControls(
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(
                     "Upcoming reservations",
-                    color = Brand.Foreground,
+                    color = MaterialTheme.colorScheme.onSurface,
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold,
                 )
                 Text(
                     "Live table and gaming bookings for this shop",
-                    color = Brand.ForegroundMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
@@ -298,8 +307,8 @@ private fun LoadingReservationsPanel(modifier: Modifier = Modifier) {
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(Spacing.md),
             ) {
-                CircularProgressIndicator(color = Brand.Information)
-                Text("Loading reservations…", color = Brand.ForegroundMuted)
+                CircularProgressIndicator(color = MaterialTheme.colorScheme.operationalInformation)
+                Text("Loading reservations…", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }
@@ -488,8 +497,8 @@ private fun ReservationRowSurface(
     actions: @Composable () -> Unit,
 ) {
     Column(
-        Modifier.fillMaxWidth().clip(Radius.shapeMd).background(Brand.SurfaceRaised)
-            .border(1.dp, Brand.BorderSubtle, Radius.shapeMd).padding(Spacing.md),
+        Modifier.fillMaxWidth().clip(Radius.shapeMd).background(MaterialTheme.colorScheme.surfaceVariant)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeMd).padding(Spacing.md),
         verticalArrangement = Arrangement.spacedBy(Spacing.sm),
     ) {
         Row(
@@ -500,13 +509,13 @@ private fun ReservationRowSurface(
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(
                     resource,
-                    color = Brand.Foreground,
+                    color = MaterialTheme.colorScheme.onSurface,
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                 )
                 Text(
                     "$guestName · $partySize guest${if (partySize == 1) "" else "s"}",
-                    color = Brand.Foreground,
+                    color = MaterialTheme.colorScheme.onSurface,
                     style = MaterialTheme.typography.bodyMedium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -519,14 +528,14 @@ private fun ReservationRowSurface(
         }
         Text(
             "${formatReservationDateTime(startsAt)} — ${formatReservationDateTime(endsAt)}",
-            color = Brand.ForegroundMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.bodySmall,
         )
         contact?.takeIf(String::isNotBlank)?.let {
-            Text("Contact · $it", color = Brand.ForegroundMuted, style = MaterialTheme.typography.bodySmall)
+            Text("Contact · $it", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
         }
         detail?.takeIf(String::isNotBlank)?.let {
-            Text(it, color = Brand.ForegroundMuted, style = MaterialTheme.typography.bodySmall)
+            Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
         }
         actions()
     }
@@ -646,7 +655,7 @@ private fun NewTableReservationDialog(state: ReservationsUiState, vm: Reservatio
         },
     ) {
         if (state.tables.isEmpty()) {
-            Text("No tables are available in this shop. Add a table on the web setup screen first.", color = Brand.Warning)
+            Text("No tables are available in this shop. Add a table on the web setup screen first.", color = MaterialTheme.colorScheme.operationalWarning)
         } else {
             PickerField(
                 label = "Table",
@@ -730,7 +739,7 @@ private fun NewGamingBookingDialog(state: ReservationsUiState, vm: ReservationsV
         },
     ) {
         if (state.stations.isEmpty()) {
-            Text("No active gaming stations are available in this shop.", color = Brand.Warning)
+            Text("No active gaming stations are available in this shop.", color = MaterialTheme.colorScheme.operationalWarning)
         } else {
             PickerField(
                 label = "Gaming station",
@@ -802,15 +811,15 @@ private fun DateTimeTouchField(
 ) {
     val context = LocalContext.current
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
-        Text(label, color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelSmall)
+        Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
         OutlinedButton(
             onClick = { showReservationDateTimePicker(context, value, onValue) },
             modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
             shape = Radius.shapeMd,
         ) {
-            Icon(Icons.Default.CalendarMonth, contentDescription = null, tint = Brand.Gold)
+            Icon(Icons.Default.CalendarMonth, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
             Spacer(Modifier.width(Spacing.sm))
-            Text(value.format(LOCAL_BOOKING_TIME), color = Brand.Foreground)
+            Text(value.format(LOCAL_BOOKING_TIME), color = MaterialTheme.colorScheme.onSurface)
         }
     }
 }
@@ -819,7 +828,7 @@ private fun DateTimeTouchField(
 private fun OnlineOnlyFormNote() {
     Text(
         "This booking is saved directly to the live shop. If the connection drops, it is not queued or retried automatically.",
-        color = Brand.ForegroundMuted,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
         style = MaterialTheme.typography.labelSmall,
     )
 }

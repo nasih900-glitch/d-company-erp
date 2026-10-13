@@ -582,8 +582,10 @@ interface SyncMetaDao {
         CanonicalReceiptSyncStateEntity::class,
         LocalBugReportEntity::class,
         LocalBugReportAttachmentEntity::class,
+        LoyaltyProgramCacheEntity::class,
+        LocalPointsRedemptionActionEntity::class,
     ],
-    version = 53,
+    version = 54,
     exportSchema = true,
 )
 @TypeConverters(
@@ -621,4 +623,5 @@ abstract class ErpDatabase : RoomDatabase() {
     abstract fun shiftCloseSafetyDao(): ShiftCloseSafetyDao
     abstract fun cacheIsolationDao(): CacheIsolationDao
     abstract fun bugReportDao(): BugReportDao
+    abstract fun loyaltyDao(): LoyaltyDao
 }
