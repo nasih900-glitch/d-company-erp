@@ -1266,10 +1266,10 @@ export default function LivePOSScreen() {
     return () => clearInterval(id);
   }, [heldOrders, heldAlarmMuted]);
 
-  async function resumeOrder(
+  const resumeOrder = useCallback(async (
     row: OrderListItemDTO,
     expectedIncoming?: GamingPosNavigationIntent,
-  ): Promise<boolean> {
+  ): Promise<boolean> => {
     if (localWorkNeedsReconciliation) {
       setHeldError(
         'This POS tab has a locked saved bill. Reload and reconcile it before opening another incoming order.',
@@ -1374,7 +1374,17 @@ export default function LivePOSScreen() {
     } finally {
       leaveSynchronousPosFlow(checkoutFlowInFlightRef);
     }
-  }
+  }, [
+    cart.length,
+    deliveryStateCode,
+    deliveryVia,
+    draftKey,
+    loadHeldOrders,
+    localWorkNeedsReconciliation,
+    orderType,
+    resumingOrder,
+    shiftError,
+  ]);
 
   useEffect(() => {
     if (!incomingNavigation) return;
@@ -1448,6 +1458,7 @@ export default function LivePOSScreen() {
     heldOrders,
     incomingNavigation,
     navigate,
+    resumeOrder,
     resumingOrder,
     shiftId,
     terminalId,

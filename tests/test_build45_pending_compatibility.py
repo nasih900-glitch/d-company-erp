@@ -18,6 +18,7 @@ HELPER = ROOT / "infra/scripts/verify-build45-pending-compatibility.py"
 STATE_SQL = ROOT / "infra/scripts/verify-build45-pending-state.sql"
 INSTALLER = ROOT / "infra/scripts/install-on-vm.sh"
 HISTORICAL_TEST = ROOT / "tests/test_code30_2_post_cleanup_installer_guard.py"
+BUILD45_REVISION = "ee025b5b78dff7397e16612cad80aebd1a4904d3"
 
 
 def _load(path: Path, name: str):
@@ -68,9 +69,8 @@ def _extract_git_archive(ref: str, destination: Path) -> bytes:
 
 
 def _candidate_snapshot(destination: Path) -> None:
-    # Build 45 is immutable at HEAD (ee025); current build-46 working-tree
-    # bytes are verified by the separate build-46 compatibility contract.
-    _extract_git_archive("HEAD", destination)
+    # Build 45 stays bound to its immutable release object after later releases.
+    _extract_git_archive(BUILD45_REVISION, destination)
 
 
 def test_exact_add_change_delete_pairs_are_content_bound(helper, tmp_path):
@@ -672,5 +672,7 @@ def test_historical_verifier_query_helper_and_build42_policy_bytes_are_unchanged
     # The one narrow test edit only teaches the old three-path harness about
     # the new false-by-default fourth flag. Historical proof bytes stay exact.
     for relative in protected[:3]:
-        expected = subprocess.check_output(["git", "show", f"HEAD:{relative}"], cwd=ROOT)
+        expected = subprocess.check_output(
+            ["git", "show", f"{BUILD45_REVISION}:{relative}"], cwd=ROOT
+        )
         assert (ROOT / relative).read_bytes() == expected

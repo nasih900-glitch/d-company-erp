@@ -2279,7 +2279,7 @@ export default function GamingScreen() {
     friendSavingRef.current = true;
     setFriendSaving(true);
     try {
-      let customer = selectedFriend;
+      const customer = selectedFriend;
       let joinIdentity: { customer_id?: string; customer_name?: string; customer_phone?: string };
       if (customer) {
         joinIdentity = { customer_id: customer.id };

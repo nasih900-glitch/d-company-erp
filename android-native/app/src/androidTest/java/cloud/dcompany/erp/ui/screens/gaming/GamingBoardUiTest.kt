@@ -1200,6 +1200,7 @@ class GamingBoardUiTest {
     @Test
     fun simultaneousWarningsKeepCompactBoardDialAndRecoveryActionReachable() {
         val station = Station("ps5-1", "PS5-1", "PS5 Station 1", "ps5", 12_000)
+        var startRequests = 0
         compose.setContent {
             DCompanyTheme {
                 Box(Modifier.width(960.dp).height(470.dp).testTag("warning-workspace")) {
@@ -1238,7 +1239,7 @@ class GamingBoardUiTest {
                         attentionCount = 1,
                         onSelectFilter = {}, onSelectStation = {}, onBackToBoard = {},
                         onOpenAttention = {}, onRefresh = {}, onStart = {},
-                        onConfirmStart = { _, _, _, _, _, _, _ -> },
+                        onConfirmStart = { _, _, _, _, _, _, _ -> startRequests++ },
                         onStop = { _, _ -> }, onSend = {}, onCancelUnbilled = {},
                         onExtendTimer = {}, onExtendPackage = { _, _ -> },
                         onTransfer = {}, onPauseResume = {}, onReconcile = {},
@@ -1260,7 +1261,9 @@ class GamingBoardUiTest {
         compose.onNodeWithContentDescription("Session duration dial")
             .performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("Retry acknowledgement").performScrollTo().assertIsDisplayed()
-        compose.onNodeWithText("Start 30 min · ₹80.00").assertIsDisplayed()
+        compose.onNodeWithText("Start 30 min · ₹80.00")
+            .performScrollTo().assertIsDisplayed().performClick()
+        compose.runOnIdle { assertEquals(1, startRequests) }
     }
 
     private fun capture(filename: String, rootTag: String = "gaming-fixture-root") {

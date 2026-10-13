@@ -185,6 +185,7 @@ export default function AppShell({ children }: { children?: ReactNode }) {
     if (!drawerOpen) return undefined;
 
     const previousOverflow = document.body.style.overflow;
+    const drawerTrigger = drawerTriggerRef.current;
     const background = [mobileHeaderRef.current, mainRef.current]
       .filter((node): node is HTMLElement => node !== null);
     background.forEach((node) => { node.inert = true; });
@@ -220,7 +221,7 @@ export default function AppShell({ children }: { children?: ReactNode }) {
       document.body.style.overflow = previousOverflow;
       window.removeEventListener('keydown', onKeyDown);
       background.forEach((node) => { node.inert = false; });
-      drawerTriggerRef.current?.focus();
+      drawerTrigger?.focus();
     };
   }, [drawerOpen]);
 

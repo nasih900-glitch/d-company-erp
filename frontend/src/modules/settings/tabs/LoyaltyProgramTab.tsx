@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, CheckCircle2, Loader2, RefreshCw } from 'lucide-react';
 
 import {
@@ -103,7 +103,7 @@ export default function LoyaltyProgramTab() {
   const [notice, setNotice] = useState<string | null>(null);
   const generation = useRef(0);
 
-  const load = () => {
+  const load = useCallback(() => {
     const requested = ++generation.current;
     const requestedCompanyId = me?.company_id;
     const controller = new AbortController();
@@ -125,7 +125,7 @@ export default function LoyaltyProgramTab() {
         if (requested === generation.current) setLoading(false);
       });
     return controller;
-  };
+  }, [me?.company_id]);
 
   useEffect(() => {
     setCurrent(null);
@@ -138,7 +138,7 @@ export default function LoyaltyProgramTab() {
       generation.current += 1;
       controller.abort();
     };
-  }, [me?.company_id]);
+  }, [load]);
 
   const nextValue100 = useMemo(
     () => (draft ? draft.minor_per_point * 100 : 0),
