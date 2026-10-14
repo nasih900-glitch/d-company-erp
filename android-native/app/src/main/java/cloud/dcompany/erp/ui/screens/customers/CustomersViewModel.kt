@@ -33,6 +33,9 @@ internal fun LocalCustomerEntity.rearmedForRetry(): LocalCustomerEntity = copy(
     lastError = null,
 )
 
+internal fun canOpenCustomerEditor(saving: Boolean, editorOpen: Boolean): Boolean =
+    !saving && !editorOpen
+
 /** Draft of the add/edit form. `id == null` means "new customer". */
 data class CustomerEditor(
     val id: String? = null,
@@ -333,6 +336,7 @@ class CustomersViewModel : ViewModel() {
 
     fun startCreate() {
         if (!requireWrite()) return
+        if (!canOpenCustomerEditor(saving.value, editor.value != null)) return
         editor.value = CustomerEditor(
             // A search for a phone number that found nothing is almost
             // always about to become that customer, so seed the form.
@@ -344,6 +348,7 @@ class CustomersViewModel : ViewModel() {
 
     fun startEdit(customer: Customer) {
         if (!requireWrite()) return
+        if (!canOpenCustomerEditor(saving.value, editor.value != null)) return
         editor.value = CustomerEditor(
             id = customer.id,
             originalPhone = customer.phone,

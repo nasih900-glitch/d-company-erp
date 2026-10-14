@@ -261,11 +261,11 @@ private fun PosFullShellFixture() {
         onUpdateDraftDetails = { _, _, _, _ -> }, onRefresh = {},
         onPrepareDirectCheckout = {}, onContinueDirectCheckout = {},
         onDismissDirectCheckout = {}, onConfirmDirectZero = {},
-        onRedeemDirectPoints = {}, onRedeemDirectReward = {}, onCapture = { _, _, _ -> },
-        onCaptureSplit = { _, _ -> }, onRetryRejectedSale = {},
+        onRedeemDirectPoints = {}, onRedeemDirectReward = {}, onCapture = { _, _, _ -> true },
+        onCaptureSplit = { _, _ -> true }, onRetryRejectedSale = {},
         onRetryHeldPayment = {}, onPrepareHeldOrder = {},
         onUpdateHeldOrderDiscount = { _, _ -> }, onContinueHeldOrder = {},
-        onConfirmHeldOrder = { _, _, _ -> }, onConfirmHeldOrderSplit = { _, _ -> },
+        onConfirmHeldOrder = { _, _, _ -> true }, onConfirmHeldOrderSplit = { _, _ -> true },
         onConfirmHeldOrderZero = {}, onVoidOrder = { _, _ -> },
         onDismissHeldOrderReview = {}, onDismissHeldOrder = {},
         onDismissNotice = {}, onAcknowledgeReceipt = {},
@@ -297,7 +297,12 @@ private fun ShiftFullShellFixture() {
     )
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
         ShiftDashboardOverview(
-            state = ShiftUiState(open = shift, online = true, expectedMinor = 10_000),
+            state = ShiftUiState(
+                open = shift,
+                currentShiftLoaded = true,
+                online = true,
+                expectedMinor = 10_000,
+            ),
             onRefresh = {}, onReview = {},
         )
     }

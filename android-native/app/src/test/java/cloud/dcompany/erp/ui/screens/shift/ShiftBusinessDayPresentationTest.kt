@@ -98,6 +98,7 @@ class ShiftBusinessDayPresentationTest {
 
         val day = ShiftUiState(
             open = openEvening,
+            currentShiftLoaded = true,
             history = listOf(closedMorning),
         ).businessDayHistory.single()
 

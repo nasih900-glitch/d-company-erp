@@ -150,6 +150,7 @@ export function SessionAddonPickerModal({
   attempt,
   busy,
   requestError,
+  embedded = false,
   onSubmit,
   onClose,
 }: {
@@ -159,6 +160,7 @@ export function SessionAddonPickerModal({
   attempt: GamingAddonCreateAttempt | null;
   busy: boolean;
   requestError: string | null;
+  embedded?: boolean;
   onSubmit: (draft: GamingAddonDraft) => void;
   onClose: () => void;
 }) {
@@ -261,8 +263,7 @@ export function SessionAddonPickerModal({
     setReviewDraft(draft);
   }
 
-  return (
-    <Modal open onClose={() => { if (!busy) onClose(); }} title={`Add to ${stationName}`} size="lg">
+  const form = (
       <form onSubmit={submit} className="space-y-4">
         {frozen && (
           <div className="flex items-start gap-2 rounded-lg border border-accent-gold/40 bg-accent-gold/10 p-3 text-xs text-accent-gold">
@@ -425,6 +426,24 @@ export function SessionAddonPickerModal({
           </button>
         </div>
       </form>
+  );
+  if (embedded) {
+    return (
+      <section className="mb-3 rounded-lg border border-accent/35 bg-bg-surface p-3" data-testid="gaming-drinks-inline">
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <div>
+            <div className="text-xs font-semibold">Add drinks & snacks</div>
+            <div className="text-[11px] text-fg-muted">{stationName} · the session timer stays visible</div>
+          </div>
+          <button type="button" className="btn btn-ghost !py-1 text-xs" disabled={busy} onClick={onClose}>Close</button>
+        </div>
+        {form}
+      </section>
+    );
+  }
+  return (
+    <Modal open onClose={() => { if (!busy) onClose(); }} title={`Add to ${stationName}`} size="lg">
+      {form}
     </Modal>
   );
 }

@@ -1,7 +1,6 @@
 package cloud.dcompany.erp.ui.screens
 
 import android.graphics.Bitmap
-import android.view.accessibility.AccessibilityNodeInfo
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -15,6 +14,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
@@ -48,10 +48,8 @@ import cloud.dcompany.erp.ui.screens.settings.LoyaltyProgramRulesDto
 import cloud.dcompany.erp.ui.screens.settings.LoyaltyRankRuleDto
 import cloud.dcompany.erp.ui.screens.settings.LoyaltyRewardRuleDto
 import cloud.dcompany.erp.ui.theme.DCompanyTheme
-import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Rule
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -105,9 +103,102 @@ class PosEmptyCatalogueUiTest {
         compose.onNodeWithText("The menu is empty").assertIsDisplayed()
         compose.onNodeWithText("Current order").assertIsDisplayed()
         compose.onNodeWithText("PS5 Station 1 · Standard · 3 players").assertIsDisplayed()
-        compose.onNodeWithText("Split payment").assertIsDisplayed()
+        compose.onNodeWithText("Split").assertIsDisplayed()
         compose.onNodeWithText("TAKE PAYMENT").assertIsDisplayed().assertIsEnabled().performClick()
         compose.runOnIdle { assertEquals(1, checkoutPreparations) }
+    }
+
+    @Test
+    fun inlineCashEntryNormalisesCommaRejectsMalformedEditAndResetsForNextBill() {
+        val cola = menuItem("cola", "Audit Cola", 10_000L)
+        val state = mutableStateOf(
+            PosUiState(
+                items = listOf(cola),
+                operationalItems = listOf(cola),
+                cart = listOf(CartLine("cola-line-a", cola, qty = 1, unitPriceMinor = 10_000L)),
+                online = true,
+                activeShiftId = "shift-1",
+                canCollectPayment = true,
+                draftState = SyncState.DRAFT,
+                draftLocalId = "draft-a",
+                draftRevision = 1L,
+            ),
+        )
+        renderDynamic(state)
+
+        val cashEntry = compose.onNodeWithTag("pos-inline-cash-received")
+        cashEntry.assertIsDisplayed().performTextReplacement("100,50")
+        cashEntry.assert(
+            SemanticsMatcher.expectValue(
+                SemanticsProperties.EditableText,
+                AnnotatedString("100.50"),
+            ),
+        )
+
+        // Invalid input remains visible as the last valid amount. It must not
+        // be stripped into a different amount that staff never entered.
+        cashEntry.performTextReplacement("100x50")
+        cashEntry.assert(
+            SemanticsMatcher.expectValue(
+                SemanticsProperties.EditableText,
+                AnnotatedString("100.50"),
+            ),
+        )
+
+        compose.runOnIdle {
+            state.value = state.value.copy(
+                cart = listOf(CartLine("cola-line-b", cola, qty = 1, unitPriceMinor = 10_000L)),
+                draftLocalId = "draft-b",
+                draftRevision = 1L,
+            )
+        }
+        compose.waitForIdle()
+        compose.onNodeWithTag("pos-inline-cash-received").assert(
+            SemanticsMatcher.expectValue(
+                SemanticsProperties.EditableText,
+                AnnotatedString(""),
+            ),
+        )
+    }
+
+    @Test
+    fun onlineSplitSelectionFallsBackToPayableCashWhenConnectionDrops() {
+        val cola = menuItem("cola", "Audit Cola", 5_000L)
+        val state = mutableStateOf(
+            PosUiState(
+                items = listOf(cola),
+                operationalItems = listOf(cola),
+                cart = listOf(CartLine("cola-line", cola, qty = 1, unitPriceMinor = 5_000L)),
+                online = true,
+                activeShiftId = "shift-1",
+                canCollectPayment = true,
+                draftState = SyncState.DRAFT,
+                draftLocalId = "draft-offline",
+                draftRevision = 3L,
+            ),
+        )
+        val captures = mutableListOf<Pair<String, Long>>()
+        renderDynamic(
+            state = state,
+            onCapture = { method, tendered, _ ->
+                captures += method to tendered
+                true
+            },
+        )
+
+        compose.onNodeWithText("Split").assertIsDisplayed().assertIsEnabled().performClick()
+        compose.runOnIdle { state.value = state.value.copy(online = false) }
+        compose.waitForIdle()
+
+        compose.onNodeWithTag("pos-inline-cash-received").assertIsDisplayed().assertIsEnabled()
+        compose.onNodeWithTag("pos-take-payment").assertIsDisplayed().assertIsEnabled().performClick()
+        compose.onNodeWithText("Split tender").assertDoesNotExist()
+        compose.onNodeWithText("Cash received (₹)").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Digit 5").performScrollTo().performClick()
+        compose.onNodeWithContentDescription("Digit 0").performScrollTo().performClick()
+        compose.onNodeWithText("CONFIRM CASH · ₹50.00")
+            .assertIsDisplayed().assertIsEnabled().performClick()
+        compose.runOnIdle { assertEquals(listOf("cash" to 5_000L), captures) }
     }
 
     @Test
@@ -156,13 +247,14 @@ class PosEmptyCatalogueUiTest {
             assertTrue("Catalog and cart must remain side by side at $size", catalog.right <= cart.left)
             assertTrue("Cart must fit within the content viewport at $size", cart.right <= root.right)
             assertTrue("Cart must fit vertically at $size", cart.bottom <= root.bottom)
-            compose.onNodeWithText("Split payment").assertIsDisplayed()
+            compose.onNodeWithText("Split").assertIsDisplayed()
             compose.onNodeWithTag("pos-take-payment").assertIsDisplayed().assertIsEnabled()
             writeLayoutScreenshot(filename)
         }
 
         compose.onNodeWithTag("pos-product-crisps").performClick()
-        compose.onNodeWithContentDescription("Increase Audit Cola quantity from 1").performClick()
+        compose.onNodeWithContentDescription("Increase Audit Cola quantity from 1")
+            .assertIsDisplayed().assertIsEnabled().performClick()
         compose.onNodeWithText("Clear").performClick()
         compose.onNodeWithTag("pos-take-payment").performClick()
         compose.runOnIdle {
@@ -349,6 +441,66 @@ class PosEmptyCatalogueUiTest {
     }
 
     @Test
+    fun expiredDirectClaimRefreshGetsOneFreshConfirmationWithoutDoubleCapture() {
+        fun prepared(claimToken: String) = PreparedDirectCheckout(
+            localId = "direct-1",
+            revision = 1,
+            orderId = "server-direct-1",
+            shiftIdAtClaim = "shift-1",
+            subtotalMinor = 12_000,
+            discountMinor = 0,
+            pointsRedeemedMinor = 0,
+            pointsRedeemed = 0,
+            taxMinor = 0,
+            roundOffMinor = 0,
+            totalMinor = 12_000,
+            dueMinor = 12_000,
+            claimToken = claimToken,
+            claimExpiresAtMillis = Long.MAX_VALUE,
+            claimOrderVersion = 8,
+        )
+        val state = mutableStateOf(
+            PosUiState(
+                online = true,
+                activeShiftId = "shift-1",
+                canCollectPayment = true,
+                preparedDirectCheckout = prepared("claim-a"),
+            ),
+        )
+        var attempts = 0
+        renderDynamic(
+            state = state,
+            onCapture = { _, _, _ ->
+                attempts += 1
+                if (attempts == 1) {
+                    // The ViewModel rejected the expired claim before Room and
+                    // persisted a refreshed claim for the same order/version.
+                    state.value = state.value.copy(
+                        preparedDirectCheckout = prepared("claim-b"),
+                    )
+                    false
+                } else {
+                    true
+                }
+            },
+        )
+
+        compose.onNodeWithText("UPI").assertIsEnabled().performClick()
+        compose.onNodeWithText("CONFIRM UPI · ₹120.00").assertIsEnabled().performClick()
+        compose.waitForIdle()
+        compose.runOnIdle { assertEquals(1, attempts) }
+        compose.onNodeWithText("Payment submitted once").assertDoesNotExist()
+
+        compose.onNodeWithText("UPI").assertIsEnabled().performClick()
+        compose.onNodeWithText("CONFIRM UPI · ₹120.00").assertIsEnabled().performClick()
+        compose.waitForIdle()
+        compose.runOnIdle { assertEquals(2, attempts) }
+        compose.onNodeWithText("Payment submitted once").assertIsDisplayed().assertIsNotEnabled()
+        compose.onNodeWithText("Payment submitted once").performClick()
+        compose.runOnIdle { assertEquals(2, attempts) }
+    }
+
+    @Test
     fun namedRewardRequiresReviewAndDispatchesItsStableKeyOnce() {
         val dispatched = mutableListOf<String>()
         render(
@@ -456,6 +608,7 @@ class PosEmptyCatalogueUiTest {
         onUpdateHeldOrderDiscount: (String, Long) -> Unit = { _, _ -> },
         onDismissNotice: () -> Unit = {},
         onPrepareDirectCheckout: () -> Unit = {},
+        onCapture: (String, Long, DirectPaymentConfirmation) -> Boolean = { _, _, _ -> true },
         onRedeemDirectReward: (ReviewedRewardRedemption) -> Unit = {},
         eligibleRewardCatalog: EligibleRewardCatalogState = EligibleRewardCatalogState(),
         onAddItem: (MenuItemEntity) -> Unit = {},
@@ -503,15 +656,15 @@ class PosEmptyCatalogueUiTest {
                             onConfirmDirectZero = {},
                             onRedeemDirectPoints = {},
                             onRedeemDirectReward = onRedeemDirectReward,
-                            onCapture = { _, _, _ -> },
-                            onCaptureSplit = { _, _ -> },
+                            onCapture = onCapture,
+                            onCaptureSplit = { _, _ -> true },
                             onRetryRejectedSale = {},
                             onRetryHeldPayment = {},
                             onPrepareHeldOrder = {},
                             onUpdateHeldOrderDiscount = onUpdateHeldOrderDiscount,
                             onContinueHeldOrder = {},
-                            onConfirmHeldOrder = { _, _, _ -> },
-                            onConfirmHeldOrderSplit = { _, _ -> },
+                            onConfirmHeldOrder = { _, _, _ -> true },
+                            onConfirmHeldOrderSplit = { _, _ -> true },
                             onConfirmHeldOrderZero = {},
                             onVoidOrder = { _, _ -> },
                             onDismissHeldOrderReview = {},
@@ -586,21 +739,31 @@ class PosEmptyCatalogueUiTest {
 
         if (noticeBeforeRefresh) {
             compose.runOnIdle { state.value = state.value.copy(notice = notice) }
-            awaitActiveWindowNode(notice, actionable = false)
+            compose.onNodeWithTag("pos-inline-notice").assertIsDisplayed()
+            compose.onNodeWithText(notice).assertIsDisplayed()
             compose.runOnIdle { state.value = state.value.copy(heldOrderReview = refreshedReview) }
         } else {
             compose.runOnIdle { state.value = state.value.copy(heldOrderReview = refreshedReview) }
-            settleActiveWindow()
+            compose.waitForIdle()
             compose.runOnIdle { state.value = state.value.copy(notice = notice) }
         }
 
-        val noticeNode = awaitActiveWindowNode(notice, actionable = false)
-        assertEquals(notice, noticeNode.text?.toString())
-        val ok = awaitActiveWindowNode("OK", actionable = true)
-        assertTrue("The active-window OK action must dismiss the notice", ok.performAction(AccessibilityNodeInfo.ACTION_CLICK))
-        settleActiveWindow()
+        compose.onNodeWithTag("pos-inline-notice")
+            .assertIsDisplayed()
+            .assert(
+                SemanticsMatcher.expectValue(
+                    SemanticsProperties.LiveRegion,
+                    LiveRegionMode.Polite,
+                ),
+            )
+        compose.onNodeWithTag("pos-held-review-inline").assertIsDisplayed()
+        compose.onNodeWithText(notice).assertIsDisplayed()
+        compose.onNodeWithText("Dismiss").assertIsDisplayed().performClick()
+        compose.waitForIdle()
 
         compose.onNodeWithText(notice).assertDoesNotExist()
+        compose.onNodeWithTag("pos-inline-notice").assertDoesNotExist()
+        compose.onNodeWithTag("pos-held-review-inline").assertIsDisplayed()
         compose.onNodeWithText("Review PS5 Station 3").assertIsDisplayed()
         compose.onNode(hasSetTextAction()).assert(
             SemanticsMatcher.expectValue(
@@ -656,42 +819,4 @@ class PosEmptyCatalogueUiTest {
         ),
     )
 
-    private fun awaitActiveWindowNode(
-        exactText: String,
-        actionable: Boolean,
-    ): AccessibilityNodeInfo {
-        var matched: AccessibilityNodeInfo? = null
-        settleActiveWindow()
-        compose.waitUntil(timeoutMillis = 5_000L) {
-            matched = InstrumentationRegistry.getInstrumentation().uiAutomation.rootInActiveWindow
-                ?.findExactText(exactText, actionable)
-            matched != null
-        }
-        assertNotNull("Active window did not expose exact text: $exactText", matched)
-        return checkNotNull(matched)
-    }
-
-    private fun settleActiveWindow() {
-        compose.waitForIdle()
-        InstrumentationRegistry.getInstrumentation().uiAutomation.waitForIdle(250L, 5_000L)
-        compose.waitForIdle()
-    }
-
-    private fun AccessibilityNodeInfo.findExactText(
-        exactText: String,
-        actionable: Boolean,
-    ): AccessibilityNodeInfo? {
-        if (text?.toString() == exactText) {
-            if (!actionable) return this
-            var actionTarget: AccessibilityNodeInfo? = this
-            while (actionTarget != null) {
-                if (actionTarget.isClickable && actionTarget.isEnabled) return actionTarget
-                actionTarget = actionTarget.parent
-            }
-        }
-        for (index in 0 until childCount) {
-            getChild(index)?.findExactText(exactText, actionable)?.let { return it }
-        }
-        return null
-    }
 }

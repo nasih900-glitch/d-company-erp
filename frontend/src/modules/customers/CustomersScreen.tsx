@@ -51,6 +51,16 @@ export default function CustomersScreen() {
   const [edit, setEdit] = useState<CustomerDTO | null>(null);
   const [deleteCustomer, setDeleteCustomer] = useState<CustomerDTO | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
+  const [wideWorkspace, setWideWorkspace] = useState(() =>
+    typeof window !== 'undefined' && window.matchMedia('(min-width: 1024px)').matches);
+
+  useEffect(() => {
+    const media = window.matchMedia('(min-width: 1024px)');
+    const update = () => setWideWorkspace(media.matches);
+    update();
+    media.addEventListener('change', update);
+    return () => media.removeEventListener('change', update);
+  }, []);
 
   const load = useCallback(async (search = '') => {
     setLoading(true); setErr(null);
@@ -86,6 +96,7 @@ export default function CustomersScreen() {
     visits: rows.reduce((s, c) => s + c.visit_count, 0),
     points: rows.reduce((s, c) => s + c.loyalty_points, 0),
   };
+  const editorOpen = addOpen || edit !== null;
 
   return (
     <div>
@@ -99,7 +110,8 @@ export default function CustomersScreen() {
         <div className="flex w-full gap-2 sm:w-auto">
           <button className="btn btn-ghost shrink-0" onClick={() => load(q)}><RefreshCw size={14}/></button>
           {canWrite && (
-            <button className="btn btn-primary flex-1 sm:flex-none" onClick={() => setAddOpen(true)}>
+            <button className="btn btn-primary flex-1 sm:flex-none" disabled={editorOpen}
+              onClick={() => setAddOpen(true)}>
               <UserPlus size={14}/> Add customer
             </button>
           )}
@@ -129,6 +141,10 @@ export default function CustomersScreen() {
         </div>
       )}
 
+      <div className={wideWorkspace && (addOpen || edit)
+        ? 'grid grid-cols-[minmax(0,1fr)_minmax(340px,420px)] items-start gap-4'
+        : ''}>
+      <div className="min-w-0">
       {loading ? (
         <SkeletonCard />
       ) : !rows.length ? (
@@ -166,12 +182,14 @@ export default function CustomersScreen() {
                   </td>
                   <td className="p-3 text-right">
                     {canWrite && <>
-                    <button className="text-fg-muted hover:text-accent" onClick={() => setEdit(c)}>
+                    <button className="text-fg-muted hover:text-accent disabled:opacity-40"
+                      disabled={editorOpen} onClick={() => setEdit(c)}>
                       <Edit2 size={14}/>
                     </button>
                     <button
                       aria-label={`Delete ${c.name || c.phone}`}
                       className="text-fg-muted hover:text-accent-bad ml-2"
+                      disabled={editorOpen}
                       onClick={() => setDeleteCustomer(c)}
                     >
                       <Trash2 size={14}/>
@@ -198,6 +216,7 @@ export default function CustomersScreen() {
                     <button
                       aria-label={`Edit ${c.name || c.phone}`}
                       className="btn btn-ghost !min-h-[32px] !min-w-[32px] !px-2 !py-1"
+                      disabled={editorOpen}
                       onClick={() => setEdit(c)}
                     >
                       <Edit2 size={14}/>
@@ -205,6 +224,7 @@ export default function CustomersScreen() {
                     <button
                       aria-label={`Delete ${c.name || c.phone}`}
                       className="btn btn-ghost !min-h-[32px] !min-w-[32px] !px-2 !py-1 text-accent-bad"
+                      disabled={editorOpen}
                       onClick={() => setDeleteCustomer(c)}
                     >
                       <Trash2 size={14}/>
@@ -238,21 +258,28 @@ export default function CustomersScreen() {
           </div>
         </div>
       )}
+      </div>
 
-      {canWrite && addOpen && (
-        <CustomerForm onClose={() => setAddOpen(false)} onSuccess={() => {
-          setAddOpen(false);
-          void load();
-          notifications.success('The customer was added.', { title: 'Customer saved' });
-        }}/>
+      {canWrite && editorOpen && (
+        <CustomerForm
+          inline={wideWorkspace}
+          customer={edit ?? undefined}
+          onClose={() => {
+            if (edit) setEdit(null);
+            else setAddOpen(false);
+          }}
+          onSuccess={() => {
+            if (edit) setEdit(null);
+            else setAddOpen(false);
+            void load();
+            notifications.success(
+              edit ? 'The customer details were updated.' : 'The customer was added.',
+              { title: edit ? 'Changes saved' : 'Customer saved' },
+            );
+          }}
+        />
       )}
-      {canWrite && edit && (
-        <CustomerForm customer={edit} onClose={() => setEdit(null)} onSuccess={() => {
-          setEdit(null);
-          void load();
-          notifications.success('The customer details were updated.', { title: 'Changes saved' });
-        }}/>
-      )}
+      </div>
       {canWrite && deleteCustomer && (
         <ConfirmModal
           title="Delete customer"
@@ -273,8 +300,8 @@ export default function CustomersScreen() {
 }
 
 function CustomerForm({
-  customer, onClose, onSuccess,
-}: { customer?: CustomerDTO; onClose: () => void; onSuccess: () => void }) {
+  customer, onClose, onSuccess, inline = false,
+}: { customer?: CustomerDTO; onClose: () => void; onSuccess: () => void; inline?: boolean }) {
   const isEdit = !!customer;
   const [form, setForm] = useState({
     phone: customer?.phone ?? '',
@@ -310,9 +337,9 @@ function CustomerForm({
     finally { setBusy(false); }
   }
 
-  return (
-    <Modal open onClose={onClose} title={isEdit ? `Edit ${customer!.name || customer!.phone}` : 'New customer'}>
-      <form onSubmit={submit} className="space-y-3">
+  const title = isEdit ? `Edit ${customer!.name || customer!.phone}` : 'New customer';
+  const formContent = (
+      <form onSubmit={submit} className="space-y-3" data-testid="customer-editor-form">
         <Field label="Phone (10+ digits, +country if needed)">
           <div className="flex gap-2">
             <input className="input font-mono flex-1" required disabled={isEdit && !phoneUnlocked} autoFocus={!isEdit}
@@ -408,8 +435,22 @@ function CustomerForm({
           </button>
         </div>
       </form>
-    </Modal>
   );
+  if (inline) {
+    return (
+      <section className="card sticky top-4 max-h-[calc(100vh-7rem)] overflow-y-auto" data-testid="customer-editor-inline">
+        <div className="mb-4 flex items-start justify-between gap-3 border-b border-bg-border pb-3">
+          <div>
+            <h3 className="text-lg font-bold">{title}</h3>
+            <p className="text-xs text-fg-muted">Edit details without leaving the directory.</p>
+          </div>
+          <button type="button" className="btn btn-ghost !min-h-[40px]" onClick={onClose}>Close</button>
+        </div>
+        {formContent}
+      </section>
+    );
+  }
+  return <Modal open onClose={onClose} title={title}>{formContent}</Modal>;
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {

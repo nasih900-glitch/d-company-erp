@@ -9,12 +9,11 @@ import cloud.dcompany.erp.ui.theme.operationalInformationContainer
 import cloud.dcompany.erp.ui.theme.operationalWarning
 import cloud.dcompany.erp.ui.theme.operationalWarningContainer
 
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -86,10 +85,7 @@ import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
@@ -118,7 +114,6 @@ import cloud.dcompany.erp.ui.theme.AppearancePreference
 import cloud.dcompany.erp.ui.theme.next
 import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.theme.Spacing
-import cloud.dcompany.erp.ui.theme.Motion
 import cloud.dcompany.erp.ui.remote.RemoteAssistanceActiveBanner
 import cloud.dcompany.erp.ui.remote.RemoteAssistanceRequestWaitingBanner
 
@@ -189,34 +184,12 @@ fun WorkspaceScaffold(
         if (currentDestination != current) onDestinationChanged(current)
     }
 
-    var commandOpen by remember { mutableStateOf(false) }
+    var commandMode by remember { mutableStateOf<String?>(null) }
     val destinationStateHolder = rememberSaveableStateHolder()
-    var routeVisible by remember(current) { mutableStateOf(false) }
-    LaunchedEffect(current) { routeVisible = true }
-    val routeProgress by animateFloatAsState(
-        targetValue = if (routeVisible) 1f else 0f,
-        animationSpec = tween(Motion.fast, easing = Motion.emphasized),
-        label = "Incoming workspace",
-    )
-
     BoxWithConstraints(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-        // The Redmi-class target is 1280 x 800 logical pixels. Secondary
-        // modules use a compact rail at this width; daily control-deck pages
-        // receive the full-width board and bottom navigation instead.
+        // Every module shares the same header and bottom dock. Module state is
+        // retained by the saveable-state holder while route changes are instant.
         val compact = maxWidth <= 1_280.dp
-        val narrow = maxWidth < 760.dp
-        val controlDeck = current in setOf(
-            Destination.Gaming,
-            Destination.Pos,
-            Destination.Shift,
-            Destination.Customers,
-        )
-        val railWidth = when {
-            narrow -> 76.dp
-            compact -> 88.dp
-            else -> 176.dp
-        }
-
         val contentPane: @Composable (Modifier) -> Unit = { modifier ->
             Column(modifier) {
                 WorkspaceHeader(
@@ -231,7 +204,7 @@ fun WorkspaceScaffold(
                     canChangeTill = canChangeTill,
                     appearancePreference = appearancePreference,
                     onAppearancePreferenceChanged = onAppearancePreferenceChanged,
-                    onOpenCommand = { commandOpen = true },
+                    onOpenCommand = { commandMode = "search" },
                     onOpenSupport = onOpenSupport,
                     onChangeTill = onChangeTill,
                     onSignOut = onSignOut,
@@ -248,57 +221,32 @@ fun WorkspaceScaffold(
                     onStop = onStopRemoteSupport,
                 )
                 Box(Modifier.fillMaxSize()) {
-                    // The prior route is removed immediately. Only the incoming
-                    // surface moves, so navigation stays interruptible without
-                    // rendering two heavy operational trees at once.
-                    Box(
-                        Modifier.fillMaxSize().graphicsLayer {
-                            alpha = routeProgress
-                            translationX = size.width * 0.025f * (1f - routeProgress)
-                        },
-                    ) {
-                        destinationStateHolder.SaveableStateProvider(current.name) {
-                            content(current) { target ->
-                                if (target in destinations) onDestinationChanged(target)
-                            }
+                    destinationStateHolder.SaveableStateProvider(current.name) {
+                        content(current) { target ->
+                            if (target in destinations) onDestinationChanged(target)
                         }
                     }
                 }
             }
         }
-        if (controlDeck) {
-            Column(Modifier.fillMaxSize()) {
-                contentPane(Modifier.weight(1f).fillMaxWidth())
-                ControlDeckBottomNavigation(
-                    destinations = destinations,
-                    current = current,
-                    onSelect = onDestinationChanged,
-                    onOpenMore = { commandOpen = true },
-                )
-            }
-        } else {
-            Row(Modifier.fillMaxSize()) {
-                WorkspaceSidebar(
-                    destinations = destinations,
-                    current = current,
-                    expanded = !compact,
-                    narrow = narrow,
-                    employeeName = employeeName,
-                    locationLabel = locationLabel,
-                    modifier = Modifier.width(railWidth).fillMaxHeight(),
-                    onSelect = onDestinationChanged,
-                )
-                contentPane(Modifier.weight(1f).fillMaxHeight())
-            }
+        Column(Modifier.fillMaxSize()) {
+            contentPane(Modifier.weight(1f).fillMaxWidth())
+            ControlDeckBottomNavigation(
+                destinations = destinations,
+                current = current,
+                onSelect = onDestinationChanged,
+                onOpenMore = { commandMode = "more" },
+            )
         }
     }
 
-    if (commandOpen) {
+    commandMode?.let { mode ->
         DestinationCommandDialog(
             destinations = destinations,
-            onDismiss = { commandOpen = false },
+            searchEnabled = mode == "search",
+            onDismiss = { commandMode = null },
             onSelect = {
-                commandOpen = false
+                commandMode = null
                 onDestinationChanged(it)
             },
         )
@@ -319,48 +267,85 @@ private fun ControlDeckBottomNavigation(
         Destination.Shift,
         Destination.Customers,
     ).filter(destinations::contains)
+    val moreSelected = current !in primary
     Row(
         Modifier.fillMaxWidth().height(68.dp).background(MaterialTheme.colorScheme.surfaceContainerLow)
-            .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.28f)),
+            .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.28f))
+            .testTag("workspace-bottom-dock"),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         primary.forEach { destination ->
             val selected = destination == current
-            Column(
+            Row(
                 Modifier.weight(1f).fillMaxHeight()
                     .selectable(selected = selected, role = Role.Tab) { onSelect(destination) }
                     .semantics {
                         contentDescription = "${destination.label}. ${destination.description}"
                         this.selected = selected
                     }
-                    .padding(vertical = Spacing.sm),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
+                    .padding(horizontal = Spacing.sm, vertical = 8.dp)
+                    .clip(Radius.shapePill)
+                    .background(
+                        if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+                        else Color.Transparent,
+                    )
+                    .padding(horizontal = Spacing.md),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 Icon(
                     destination.icon,
                     contentDescription = null,
                     tint = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(24.dp),
+                    modifier = Modifier.size(22.dp),
                 )
+                Spacer(Modifier.width(Spacing.sm))
                 Text(
                     destination.label,
                     color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.labelSmall,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
                     maxLines = 1,
                 )
             }
         }
-        Column(
+        Row(
             Modifier.weight(1f).fillMaxHeight()
-                .clickable(role = Role.Button, onClick = onOpenMore)
-                .semantics { contentDescription = "More modules" }
-                .padding(vertical = Spacing.sm),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center,
+                .selectable(selected = moreSelected, role = Role.Tab, onClick = onOpenMore)
+                .testTag("workspace-more-modules")
+                .semantics {
+                    contentDescription = if (moreSelected) {
+                        "More modules. ${current.label} selected"
+                    } else {
+                        "More modules"
+                    }
+                    this.selected = moreSelected
+                }
+                .padding(horizontal = Spacing.sm, vertical = 8.dp)
+                .clip(Radius.shapePill)
+                .background(
+                    if (moreSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+                    else Color.Transparent,
+                )
+                .padding(horizontal = Spacing.md),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(Icons.Filled.MoreVert, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(24.dp))
-            Text("More", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
+            Icon(
+                Icons.Filled.MoreVert,
+                contentDescription = null,
+                tint = if (moreSelected) MaterialTheme.colorScheme.onPrimaryContainer
+                else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(22.dp),
+            )
+            Spacer(Modifier.width(Spacing.sm))
+            Text(
+                "More",
+                color = if (moreSelected) MaterialTheme.colorScheme.onPrimaryContainer
+                else MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = if (moreSelected) FontWeight.Bold else FontWeight.Medium,
+            )
         }
     }
 }
@@ -604,6 +589,8 @@ private fun WorkspaceHeader(
     onSignOut: () -> Unit,
 ) {
     var accountMenuOpen by remember { mutableStateOf(false) }
+    val resolvedNight = appearancePreference == AppearancePreference.Night ||
+        (appearancePreference == AppearancePreference.System && isSystemInDarkTheme())
     val controlDeckDestination = destination in setOf(
         Destination.Gaming,
         Destination.Pos,
@@ -613,9 +600,10 @@ private fun WorkspaceHeader(
 
     Row(
         Modifier.fillMaxWidth()
-            .height(if (controlDeckDestination) 56.dp else 68.dp)
+            .height(56.dp)
             .background(MaterialTheme.colorScheme.surfaceContainerLow)
             .border(width = 1.dp, color = MaterialTheme.colorScheme.outlineVariant)
+            .testTag("workspace-header")
             .padding(horizontal = if (compact) Spacing.md else Spacing.lg),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Spacing.md),
@@ -685,6 +673,38 @@ private fun WorkspaceHeader(
             syncing = syncing,
             showDetail = !compact,
         )
+
+        Surface(
+            color = MaterialTheme.colorScheme.surface,
+            shape = Radius.shapePill,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+            modifier = Modifier.heightIn(min = 42.dp)
+                .testTag("workspace-day-night-toggle")
+                .clickable {
+                    onAppearancePreferenceChanged(
+                        if (resolvedNight) AppearancePreference.Day
+                        else AppearancePreference.Night,
+                    )
+                }
+                .semantics {
+                    role = Role.Switch
+                    stateDescription = if (resolvedNight) "Night" else "Day"
+                    contentDescription = "Day and night appearance"
+                },
+        ) {
+            Row(
+                Modifier.padding(horizontal = Spacing.md),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
+            ) {
+                Icon(Icons.Filled.Brightness6, contentDescription = null, modifier = Modifier.size(18.dp))
+                Text(
+                    if (resolvedNight) "Night mode" else "Day mode",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+        }
 
         val supportDescription = if (pendingSupportCount > 0) {
             "Help and support. $pendingSupportCount saved request${if (pendingSupportCount == 1) "" else "s"} waiting"
@@ -1030,11 +1050,11 @@ private fun OutboxWorkStatusPill(
 @Composable
 private fun DestinationCommandDialog(
     destinations: List<Destination>,
+    searchEnabled: Boolean,
     onDismiss: () -> Unit,
     onSelect: (Destination) -> Unit,
 ) {
     var query by remember { mutableStateOf("") }
-    val focusRequester = remember { FocusRequester() }
     val normalized = query.trim()
     val matches = remember(destinations, normalized) {
         if (normalized.isEmpty()) destinations
@@ -1046,23 +1066,30 @@ private fun DestinationCommandDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        modifier = Modifier.widthIn(max = 560.dp).fillMaxWidth(0.92f).imePadding(),
+        modifier = Modifier.widthIn(max = 560.dp).fillMaxWidth(0.92f).imePadding()
+            .testTag(if (searchEnabled) "workspace-module-search" else "workspace-more-panel"),
         properties = DialogProperties(usePlatformDefaultWidth = false),
         containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = Radius.shapeLg,
-        title = { Text("Go to a module", color = MaterialTheme.colorScheme.onSurface) },
+        title = {
+            Text(
+                if (searchEnabled) "Find a module" else "More modules",
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+        },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
-                OutlinedTextField(
-                    value = query,
-                    onValueChange = { query = it },
-                    leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
-                    label = { Text("Search accessible modules") },
-                    singleLine = true,
-                    colors = fieldColors(),
-                    modifier = Modifier.fillMaxWidth().focusRequester(focusRequester),
-                )
-                LaunchedEffect(focusRequester) { focusRequester.requestFocus() }
+                if (searchEnabled) {
+                    OutlinedTextField(
+                        value = query,
+                        onValueChange = { query = it },
+                        leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+                        label = { Text("Search accessible modules") },
+                        singleLine = true,
+                        colors = fieldColors(),
+                        modifier = Modifier.fillMaxWidth().testTag("workspace-module-search-input"),
+                    )
+                }
                 if (matches.isEmpty()) {
                     Text(
                         "No accessible module matches \"$normalized\".",
@@ -1079,6 +1106,7 @@ private fun DestinationCommandDialog(
                             Row(
                                 Modifier.fillMaxWidth().heightIn(min = 52.dp)
                                     .clip(Radius.shapeMd).clickable { onSelect(destination) }
+                                    .testTag("workspace-destination-${destination.name}")
                                     .padding(horizontal = Spacing.md, vertical = Spacing.sm),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(Spacing.md),

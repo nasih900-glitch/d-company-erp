@@ -93,6 +93,7 @@ export default function AppShell({ children }: { children?: ReactNode }) {
   const mainRef = useRef<HTMLElement>(null);
   const mobileHeaderRef = useRef<HTMLElement>(null);
   const [appearance, setAppearance] = useState<AppearancePreference>(() => readAppearancePreference());
+  const [systemNight, setSystemNight] = useState(() => globalThis.matchMedia?.('(prefers-color-scheme: dark)').matches ?? false);
   // protected_access (co_owner or super_owner) bypasses per-module Access
   // Control gating below. audit_access (super_owner only) additionally
   // gates the Audit Log nav item — a co_owner must not see a tab that the
@@ -146,9 +147,22 @@ export default function AppShell({ children }: { children?: ReactNode }) {
   );
 
   useEffect(() => applyAppearancePreference(appearance), [appearance]);
+  useEffect(() => {
+    const query = globalThis.matchMedia?.('(prefers-color-scheme: dark)');
+    if (!query) return undefined;
+    const update = () => setSystemNight(query.matches);
+    query.addEventListener('change', update);
+    return () => query.removeEventListener('change', update);
+  }, []);
+  const resolvedNight = appearance === 'night' || (appearance === 'system' && systemNight);
 
   const cycleAppearance = () => {
     const next = nextAppearancePreference(appearance);
+    saveAppearancePreference(next);
+    setAppearance(next);
+  };
+  const toggleDayNight = () => {
+    const next: AppearancePreference = resolvedNight ? 'day' : 'night';
     saveAppearancePreference(next);
     setAppearance(next);
   };
@@ -253,7 +267,7 @@ export default function AppShell({ children }: { children?: ReactNode }) {
           </div>
         </div>
         <div className="flex items-center gap-1">
-          <button type="button" onClick={cycleAppearance}
+          <button type="button" onClick={toggleDayNight}
             className="tap-target grid place-items-center rounded-full text-fg-muted hover:bg-bg-raised hover:text-fg"
             aria-label={`Appearance: ${appearance}. Change appearance`} title={`Appearance: ${appearance}`}>
             <AppearanceIcon preference={appearance}/>
@@ -410,17 +424,28 @@ export default function AppShell({ children }: { children?: ReactNode }) {
           onClick={() => setDrawerOpen(false)}
           aria-hidden
           className="lg:hidden fixed inset-0 z-40 bg-bg/80 backdrop-blur-sm"
-          style={{ animation: 'modal-backdrop-in var(--motion-fast) ease-out both' }}
         />
       )}
 
       {/* ===================== MAIN CONTENT ===================== */}
       <main
         ref={mainRef}
-        key={`${loc.pathname}${loc.search}`}
         className="app-scroll route-frame px-3 py-4 md:p-6 min-w-0"
         style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom))' }}
       >
+        <div className="hidden h-12 items-start justify-end lg:flex">
+        <button
+          type="button"
+          onClick={toggleDayNight}
+          className="flex min-h-11 items-center gap-2 rounded-full border border-bg-border bg-bg-surface px-4 text-xs font-bold tracking-wide hover:bg-bg-raised"
+          aria-label={`Appearance: ${appearance}. Change between day and night`}
+          title={`Appearance: ${appearance}`}
+          data-testid="workspace-day-night-toggle"
+        >
+          <AppearanceIcon preference={appearance}/>
+          {resolvedNight ? 'Night mode' : 'Day mode'}
+        </button>
+        </div>
         <ConnectivityBanner />
         {!terminalReady && terminalIssue && (
           <div className="card mb-4 border-accent-gold/40 bg-accent-gold/10 text-sm">

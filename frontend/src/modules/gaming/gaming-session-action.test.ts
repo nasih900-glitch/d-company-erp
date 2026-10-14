@@ -75,6 +75,50 @@ const phoneOnlyJoin: GamingSessionActionAttempt = {
   },
 };
 
+const legacySavedJoinWithoutDirectoryEvidence: GamingSessionActionAttempt = {
+  ...scope,
+  version: 1,
+  idempotencyKey: 'gaming-session-action:legacy-saved',
+  kind: 'join',
+  payload: {
+    customer_id: 'customer-1',
+    expected_participant_revision: 0,
+  },
+};
+
+const legacyRegistrationWithoutDirectoryEvidence: GamingSessionActionAttempt = {
+  ...scope,
+  version: 1,
+  idempotencyKey: 'gaming-session-action:legacy-registration',
+  kind: 'join',
+  payload: {
+    customer_name: 'Legacy friend',
+    customer_phone: '9876543210',
+    expected_participant_revision: 0,
+  },
+};
+
+const anonymousJoin: GamingSessionActionAttempt = {
+  ...scope,
+  version: 1,
+  idempotencyKey: 'gaming-session-action:guest',
+  kind: 'join',
+  payload: {
+    expected_participant_revision: 0,
+    guest_name: 'Walk-in guest',
+  },
+};
+
+const unnamedAnonymousJoin: GamingSessionActionAttempt = {
+  ...scope,
+  version: 1,
+  idempotencyKey: 'gaming-session-action:unnamed-guest',
+  kind: 'join',
+  payload: {
+    expected_participant_revision: 0,
+  },
+};
+
 const leave: GamingSessionActionAttempt = {
   ...scope,
   version: 1,
@@ -94,9 +138,23 @@ const stop: GamingSessionActionAttempt = {
 
 describe('Gaming session action recovery receipts', () => {
   it('accepts exact amendment, Join, Leave and Stop snapshots and rejects incomplete revisions', () => {
-    for (const attempt of [amendment, join, phoneOnlyJoin, leave, stop]) {
+    for (const attempt of [
+      amendment, join, phoneOnlyJoin, legacySavedJoinWithoutDirectoryEvidence,
+      legacyRegistrationWithoutDirectoryEvidence, anonymousJoin, unnamedAnonymousJoin, leave, stop,
+    ]) {
       expect(parseGamingSessionActionAttempt(attempt)).toEqual(attempt);
     }
+    expect(parseGamingSessionActionAttempt({
+      ...anonymousJoin,
+      payload: { ...anonymousJoin.payload, customer_id: 'customer-1' },
+    })).toBeNull();
+    expect(parseGamingSessionActionAttempt({
+      ...legacySavedJoinWithoutDirectoryEvidence,
+      payload: {
+        ...legacySavedJoinWithoutDirectoryEvidence.payload,
+        customer_directory_revision: 0,
+      },
+    })).toBeNull();
     expect(parseGamingSessionActionAttempt({
       ...amendment,
       payload: { ...amendment.payload, expected_billing_revision: -1 },

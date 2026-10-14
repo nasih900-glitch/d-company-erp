@@ -114,6 +114,13 @@ class ForbiddenError(AppError):
     code = "forbidden"
 
 
+class ClientUpgradeRequiredError(AppError):
+    """The requested representation is unsafe for this client contract."""
+
+    status_code = 426
+    code = "anonymous_participant_client_update_required"
+
+
 class RemotePairingCodeMismatchError(ForbiddenError):
     """Physical-tablet pairing code did not match the pending public key."""
 

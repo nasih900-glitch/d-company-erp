@@ -75,6 +75,17 @@ internal data class GamingDurationChoice(
     val totalMinor: Long,
 )
 
+/**
+ * Text shown inside the permanent gaming control dial after a session starts.
+ * The dial face, selected package arc and marker remain unchanged; session state
+ * is communicated only through this centre readout.
+ */
+internal data class GamingDurationDialReadout(
+    val primary: String,
+    val label: String,
+    val detail: String? = null,
+)
+
 /** A touch dial selects a published package; it never calculates a new tariff. */
 @Composable
 internal fun GamingDurationDial(
@@ -86,6 +97,7 @@ internal fun GamingDurationDial(
     showChoiceChips: Boolean = true,
     segmentTick: (() -> Unit)? = null,
     gestureContextKey: Any? = null,
+    readout: GamingDurationDialReadout? = null,
 ) {
     if (choices.isEmpty()) return
     val options = choices.sortedWith(compareBy(GamingDurationChoice::minutes, GamingDurationChoice::packageId))
@@ -123,6 +135,7 @@ internal fun GamingDurationDial(
     val currentRequestedSelection by rememberUpdatedState(selectedPackageId)
     val currentDisplayedSelection by rememberUpdatedState(selected.packageId)
     val currentOnSelect by rememberUpdatedState(onSelect)
+    val currentReadout by rememberUpdatedState(readout)
     val view = LocalView.current
     val platformSegmentTick: () -> Unit = remember(view) {
         { ViewCompat.performHapticFeedback(view, HapticFeedbackConstantsCompat.SEGMENT_TICK) }
@@ -131,12 +144,16 @@ internal fun GamingDurationDial(
     val dialAccent = MaterialTheme.colorScheme.onSurface
     val dialAccentSoft = MaterialTheme.colorScheme.onSurfaceVariant
     val dialCentre = MaterialTheme.colorScheme.surface
-    val dialTrack = MaterialTheme.colorScheme.outline
+    // Use the theme ink rather than a pale border token for the primary track.
+    // The track remains muted, while the selected duration stays unmistakably
+    // black in Day mode and white in Night mode.
+    val dialTrack = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.24f)
     val focusRing = MaterialTheme.colorScheme.primary
     fun publishUserSelection(
         packageId: String,
         repeatSameSelection: Boolean,
     ) {
+        if (currentReadout != null) return
         val changed = packageId != lastPublishedSelection
         if (changed) {
             lastPublishedSelection = packageId
@@ -150,113 +167,123 @@ internal fun GamingDurationDial(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(Spacing.sm),
     ) {
+        val dialSemantics = if (readout == null) {
+            Modifier.semantics {
+                contentDescription = "Session duration dial"
+                stateDescription = "${selected.minutes} minutes, ${selected.totalMinor.asRupees()} total. Fixed geometry version 1"
+                progressBarRangeInfo = ProgressBarRangeInfo(
+                    current = selectedIndex.toFloat(),
+                    range = 0f..options.lastIndex.toFloat(),
+                    steps = (options.size - 2).coerceAtLeast(0),
+                )
+                setProgress { requested ->
+                    val index = requested.roundToInt().coerceIn(options.indices)
+                    publishUserSelection(options[index].packageId, repeatSameSelection = true)
+                    true
+                }
+                customActions = listOf(
+                    CustomAccessibilityAction("Previous duration") {
+                        val previous = (selectedIndex - 1).coerceAtLeast(0)
+                        if (previous == selectedIndex) false else {
+                            publishUserSelection(options[previous].packageId, repeatSameSelection = true)
+                            true
+                        }
+                    },
+                    CustomAccessibilityAction("Next duration") {
+                        val next = (selectedIndex + 1).coerceAtMost(options.lastIndex)
+                        if (next == selectedIndex) false else {
+                            publishUserSelection(options[next].packageId, repeatSameSelection = true)
+                            true
+                        }
+                    },
+                )
+            }.pointerInput(options, gestureContextKey) {
+                fun selectAt(progress: Float, dragging: Boolean, allowNormalization: Boolean = false) {
+                    val previous = options.indexOfFirst { it.packageId == lastPublishedSelection }
+                    val index = durationDialIndexAtProgress(
+                        progress, options.size,
+                        previousIndex = previous.takeIf { dragging && it >= 0 },
+                    )
+                    val id = options[index].packageId
+                    val needsSelectionNormalization =
+                        allowNormalization &&
+                        currentRequestedSelection != currentDisplayedSelection &&
+                            id == currentDisplayedSelection
+                    publishUserSelection(
+                        packageId = id,
+                        repeatSameSelection = needsSelectionNormalization,
+                    )
+                }
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    val downAngle = durationDialAngleOnRing(down.position, size)
+                    if (downAngle == null) return@awaitEachGesture
+                    val startedAtRevision = gestureRevision
+                    var dragging = false
+                    val currentIndex = options.indexOfFirst { it.packageId == currentDisplayedSelection }
+                        .coerceAtLeast(0)
+                    var progress = durationDialProgressAtAngle(
+                        downAngle,
+                        durationDialStopAngles(options.size)[currentIndex] - DURATION_DIAL_START,
+                    )
+                    var previousAngle: Float = downAngle
+                    liveDragAngle = DURATION_DIAL_START + progress
+                    try {
+                        while (true) {
+                            if (startedAtRevision != gestureRevision) break
+                            val change = awaitPointerEvent().changes.firstOrNull { it.id == down.id }
+                                ?: break
+                            if (startedAtRevision != gestureRevision) break
+                            if (change.isConsumed && !dragging) break
+                            val dx = change.position.x - down.position.x
+                            val dy = change.position.y - down.position.y
+                            val moved = hypot(dx, dy)
+                            val angle = durationDialAngle(change.position, size)
+                            if (!change.pressed) {
+                                if (angle != null && (dragging || moved < viewConfiguration.touchSlop)) {
+                                    progress = if (dragging) {
+                                        durationDialDragProgress(progress, previousAngle, angle)
+                                    } else durationDialProgressAtAngle(angle, progress)
+                                    liveDragAngle = DURATION_DIAL_START + progress
+                                    selectAt(progress, dragging, allowNormalization = !dragging)
+                                }
+                                break
+                            }
+                            if (!dragging && moved >= viewConfiguration.touchSlop) dragging = true
+                            if (dragging && angle != null) {
+                                progress = durationDialDragProgress(progress, previousAngle, angle)
+                                previousAngle = angle
+                                liveDragAngle = DURATION_DIAL_START + progress
+                                selectAt(progress, dragging = true)
+                                change.consume()
+                            }
+                        }
+                    } finally {
+                        liveDragAngle = null
+                    }
+                }
+            }
+        } else {
+            Modifier.semantics {
+                contentDescription = listOfNotNull(readout.label, readout.primary, readout.detail).joinToString(". ")
+                stateDescription = listOfNotNull(readout.label, readout.primary, readout.detail)
+                    .plus("Fixed geometry version 1").joinToString(". ")
+            }
+        }
         Box(
             modifier = Modifier
                 .size(dialSize)
                 .testTag("gaming-control-ring")
-                .semantics {
-                    contentDescription = "Session duration dial"
-                    stateDescription = "${selected.minutes} minutes, ${selected.totalMinor.asRupees()} total"
-                    progressBarRangeInfo = ProgressBarRangeInfo(
-                        current = selectedIndex.toFloat(),
-                        range = 0f..options.lastIndex.toFloat(),
-                        steps = (options.size - 2).coerceAtLeast(0),
-                    )
-                    setProgress { requested ->
-                        val index = requested.roundToInt().coerceIn(options.indices)
-                        publishUserSelection(options[index].packageId, repeatSameSelection = true)
-                        true
-                    }
-                    customActions = listOf(
-                        CustomAccessibilityAction("Previous duration") {
-                            val previous = (selectedIndex - 1).coerceAtLeast(0)
-                            if (previous == selectedIndex) false else {
-                                publishUserSelection(options[previous].packageId, repeatSameSelection = true)
-                                true
-                            }
-                        },
-                        CustomAccessibilityAction("Next duration") {
-                            val next = (selectedIndex + 1).coerceAtMost(options.lastIndex)
-                            if (next == selectedIndex) false else {
-                                publishUserSelection(options[next].packageId, repeatSameSelection = true)
-                                true
-                            }
-                        },
-                    )
-                }
-                .pointerInput(options, gestureContextKey) {
-                    fun selectAt(progress: Float, dragging: Boolean, allowNormalization: Boolean = false) {
-                        val previous = options.indexOfFirst { it.packageId == lastPublishedSelection }
-                        val index = durationDialIndexAtProgress(
-                            progress, options.size,
-                            previousIndex = previous.takeIf { dragging && it >= 0 },
-                        )
-                        val id = options[index].packageId
-                        val needsSelectionNormalization =
-                            allowNormalization &&
-                            currentRequestedSelection != currentDisplayedSelection &&
-                                id == currentDisplayedSelection
-                        publishUserSelection(
-                            packageId = id,
-                            repeatSameSelection = needsSelectionNormalization,
-                        )
-                    }
-                    awaitEachGesture {
-                        val down = awaitFirstDown(requireUnconsumed = false)
-                        val downAngle = durationDialAngleOnRing(down.position, size)
-                        if (downAngle == null) {
-                            return@awaitEachGesture
-                        }
-                        val startedAtRevision = gestureRevision
-                        var dragging = false
-                        val currentIndex = options.indexOfFirst { it.packageId == currentDisplayedSelection }
-                            .coerceAtLeast(0)
-                        var progress = durationDialProgressAtAngle(
-                            downAngle,
-                            durationDialStopAngles(options.size)[currentIndex] - DURATION_DIAL_START,
-                        )
-                        var previousAngle: Float = downAngle
-                        liveDragAngle = DURATION_DIAL_START + progress
-                        try {
-                            while (true) {
-                                if (startedAtRevision != gestureRevision) break
-                                val change = awaitPointerEvent().changes.firstOrNull { it.id == down.id }
-                                    ?: break
-                                if (startedAtRevision != gestureRevision) break
-                                if (change.isConsumed && !dragging) break
-                                val dx = change.position.x - down.position.x
-                                val dy = change.position.y - down.position.y
-                                val moved = hypot(dx, dy)
-                                val angle = durationDialAngle(change.position, size)
-                                if (!change.pressed) {
-                                    if (angle != null && (dragging || moved < viewConfiguration.touchSlop)) {
-                                        progress = if (dragging) {
-                                            durationDialDragProgress(progress, previousAngle, angle)
-                                        } else durationDialProgressAtAngle(angle, progress)
-                                        liveDragAngle = DURATION_DIAL_START + progress
-                                        selectAt(progress, dragging, allowNormalization = !dragging)
-                                    }
-                                    break
-                                }
-                                if (!dragging && moved >= viewConfiguration.touchSlop) {
-                                    dragging = true
-                                }
-                                if (dragging && angle != null) {
-                                    progress = durationDialDragProgress(progress, previousAngle, angle)
-                                    previousAngle = angle
-                                    liveDragAngle = DURATION_DIAL_START + progress
-                                    selectAt(progress, dragging = true)
-                                    change.consume()
-                                }
-                            }
-                        } finally {
-                            liveDragAngle = null
-                        }
-                    }
-                },
+                .then(dialSemantics),
             contentAlignment = Alignment.Center,
         ) {
-            Canvas(modifier = Modifier.size(dialSize)) {
+            Canvas(
+                modifier = Modifier.size(dialSize)
+                    .testTag("gaming-control-ring-geometry")
+                    .semantics {
+                        contentDescription = "Fixed gaming dial geometry. Radius 40 percent. 96 ticks. 2 dp ring. 3 dp selected arc. 8 dp marker."
+                    },
+            ) {
                 val vividGold = dialAccent
                 val paleGold = dialAccentSoft
                 val radius = size.minDimension * 0.40f
@@ -297,10 +324,17 @@ internal fun GamingDurationDial(
                     center = center,
                     style = Stroke(2.dp.toPx()),
                 )
-                val selectedSweep = durationDialSweep(displayedAngle)
+                // The first published package is a real duration, not zero
+                // progress. Draw its proportional share of the full ring while
+                // retaining the existing, well-tested interaction endpoints.
+                // The arc always ends at the selection marker, and the same
+                // selected package is frozen after Start.
+                val maximumMinutes = options.maxOf { it.minutes }.coerceAtLeast(1)
+                val selectedSweep = (360f * selected.minutes / maximumMinutes.toFloat())
+                    .coerceIn(1f, 360f)
                 drawArc(
                     color = vividGold,
-                    startAngle = DURATION_DIAL_START,
+                    startAngle = displayedAngle - selectedSweep,
                     sweepAngle = selectedSweep,
                     useCenter = false,
                     topLeft = topLeft,
@@ -347,9 +381,8 @@ internal fun GamingDurationDial(
                                     maxWidth = if (compactMarkers) 48.dp else 64.dp,
                                     minHeight = 48.dp,
                                 )
-                                    .hoverable(interactionSource = interaction)
                                     .drawBehind {
-                                        if (hovered || focused || pressed) {
+                                        if (readout == null && (hovered || focused || pressed)) {
                                             drawLine(
                                                 color = dialAccent,
                                                 start = Offset(0f, size.height - 2.dp.toPx()),
@@ -364,20 +397,23 @@ internal fun GamingDurationDial(
                                             )
                                         }
                                     }
-                                    .clickable(
-                                        interactionSource = interaction,
-                                        indication = null,
-                                        role = Role.Button,
-                                    ) {
-                                        publishUserSelection(
-                                            option.packageId,
-                                            repeatSameSelection = true,
-                                        )
-                                    }
-                                    .semantics {
-                                        contentDescription = "Choose ${option.minutes} minutes, ${option.totalMinor.asRupees()}"
-                                        this.selected = option.packageId == selected.packageId
-                                    },
+                                    .then(if (readout == null) {
+                                        Modifier.hoverable(interactionSource = interaction)
+                                            .clickable(
+                                                interactionSource = interaction,
+                                                indication = null,
+                                                role = Role.Button,
+                                            ) {
+                                                publishUserSelection(
+                                                    option.packageId,
+                                                    repeatSameSelection = true,
+                                                )
+                                            }
+                                            .semantics {
+                                                contentDescription = "Choose ${option.minutes} minutes, ${option.totalMinor.asRupees()}"
+                                                this.selected = option.packageId == selected.packageId
+                                            }
+                                    } else Modifier),
                                 color = if (option.packageId == selected.packageId) {
                                     MaterialTheme.colorScheme.onSurface
                                 } else MaterialTheme.colorScheme.onSurfaceVariant,
@@ -395,30 +431,33 @@ internal fun GamingDurationDial(
                 verticalArrangement = Arrangement.spacedBy(Spacing.xs),
             ) {
                 Text(
-                    "${selected.minutes} min",
+                    readout?.label ?: "DURATION",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                )
+                Text(
+                    readout?.primary ?: "${selected.minutes} min",
                     color = MaterialTheme.colorScheme.onSurface,
                     style = if (compactCentre) MaterialTheme.typography.headlineLarge
-                        else MaterialTheme.typography.displayLarge,
+                        else MaterialTheme.typography.displaySmall,
                     fontWeight = FontWeight.Bold,
+                    maxLines = 1,
                 )
                 HorizontalDivider(
                     modifier = Modifier.width(dialSize * 0.42f),
-                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.35f),
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.28f),
                 )
                 Text(
-                    "Session price",
+                    readout?.detail ?: selected.totalMinor.asRupees(),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.labelMedium,
-                )
-                Text(
-                    selected.totalMinor.asRupees(),
-                    color = MaterialTheme.colorScheme.onSurface,
-                    style = if (compactCentre) MaterialTheme.typography.headlineMedium
-                        else MaterialTheme.typography.headlineLarge,
+                    style = MaterialTheme.typography.labelLarge,
+                    maxLines = 1,
                 )
             }
         }
-        if (showChoiceChips) {
+        if (showChoiceChips && readout == null) {
             Column(
                 Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(Spacing.xs),

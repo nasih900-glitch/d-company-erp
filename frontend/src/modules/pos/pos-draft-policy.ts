@@ -71,6 +71,15 @@ export function leaveSynchronousPosFlow(gate: SynchronousPosFlowGate): void {
   gate.current = false;
 }
 
+/** Keep tender typed for the cart when that same cart receives its first checkout key. */
+export function shouldResetCashTenderedInput(
+  previousCheckoutKey: string | null,
+  nextCheckoutKey: string | null,
+): boolean {
+  return nextCheckoutKey === null
+    || (previousCheckoutKey !== null && previousCheckoutKey !== nextCheckoutKey);
+}
+
 /**
  * A canonical server cancellation does not make a stale browser recovery copy
  * safe to forget. Release the visible checkout only after its owned recovery

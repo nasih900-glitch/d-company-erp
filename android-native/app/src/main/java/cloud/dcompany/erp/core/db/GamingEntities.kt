@@ -84,15 +84,17 @@ data class GamingSessionCacheEntity(
     val orderId: String? = null,
 )
 
-/** Server-authoritative late-friend presence. Names and phones stay in the customer directory. */
+/** Server-authoritative late-player presence. Customer identity is optional. */
 @Entity(
     tableName = "gaming_session_participant_cache",
-    indices = [Index("gamingSessionId"), Index("customerId")],
+    indices = [Index("gamingSessionId"), Index("participantIdentityId"), Index("customerId")],
 )
 data class GamingSessionParticipantCacheEntity(
     @PrimaryKey val id: String,
     val gamingSessionId: String,
-    val customerId: String,
+    val participantIdentityId: String = id,
+    val customerId: String? = null,
+    val guestName: String? = null,
     val joinedAtMillis: Long,
     val joinedPlayElapsedMs: Long,
     val leftAtMillis: Long? = null,
@@ -542,6 +544,8 @@ data class LocalGamingSessionActionEntity(
     val expectedPauseVersion: Int? = null,
     val expectedParticipantRevision: Int? = null,
     val expectedBillingRevision: Int? = null,
+    /** Stable across leave/rejoin intervals; unrelated to optional customer identity. */
+    val participantIdentityId: String? = null,
     val customerId: String? = null,
     val customerName: String? = null,
     val customerPhone: String? = null,

@@ -66,7 +66,7 @@ def test_physical_audit_runner_and_analyzer_accept_frozen_build44_android_identi
     live_code = re.search(r"^\s*versionCode\s*=\s*(\d+)", live_gradle, re.MULTILINE)
     live_name = re.search(r'^\s*versionName\s*=\s*"([^"]+)"', live_gradle, re.MULTILINE)
     assert live_code is not None and live_name is not None
-    assert (live_code.group(1), live_name.group(1)) == ("46", "3.1.38")
+    assert (live_code.group(1), live_name.group(1)) == ("47", "3.1.39")
     assert _ANALYZER._source_errors(
         {"clean": True, "version_code": int(live_code.group(1)),
          "version_name": live_name.group(1), "commit": "a" * 40,

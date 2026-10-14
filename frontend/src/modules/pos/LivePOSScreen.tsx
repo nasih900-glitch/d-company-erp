@@ -150,6 +150,7 @@ import {
   mayClaimCheckoutDuringHydration,
   posDraftNeedsReconciliation,
   posVisibleBillQuantity,
+  shouldResetCashTenderedInput,
 } from './pos-draft-policy';
 import { Skeleton } from '@/components/ui/Skeleton';
 import {
@@ -327,6 +328,7 @@ export default function LivePOSScreen() {
   const [customerBusy, setCustomerBusy] = useState(false);
   const [showCart, setShowCart] = useState(false);
   const [showPay, setShowPay] = useState(false);
+  const [inlinePaymentMethod, setInlinePaymentMethod] = useState<PayMethod | 'split'>('cash');
   const [paying, setPaying] = useState(false);
   const [receipt, setReceipt] = useState<PrintableReceipt | null>(null);
   const [receiptBusiness, setReceiptBusiness] = useState<ReceiptBusinessDetails | null>(null);
@@ -535,9 +537,12 @@ export default function LivePOSScreen() {
   // produce a misleading change figure for a different bill.
   useEffect(() => {
     const recoveryKey = checkoutRetry?.key ?? null;
-    if (splitInputsHydratedKeyRef.current === recoveryKey) return;
+    const previousRecoveryKey = splitInputsHydratedKeyRef.current;
+    if (previousRecoveryKey === recoveryKey) return;
     splitInputsHydratedKeyRef.current = recoveryKey;
-    setCashTenderedInput('');
+    if (shouldResetCashTenderedInput(previousRecoveryKey, recoveryKey)) {
+      setCashTenderedInput('');
+    }
     const splitLegs = checkoutRetry?.splitPaymentLegs ?? [];
     setSplitAmountInputs(Object.fromEntries(splitLegs.map((leg) => [
       leg.method,
@@ -3420,7 +3425,7 @@ export default function LivePOSScreen() {
   const shiftIssueCopy = posShiftIssueCopy(shiftIssueKind);
 
   return (
-    <div className="min-h-full pb-32 xl:grid xl:grid-cols-[minmax(0,1fr)_440px] xl:gap-6 xl:pb-0">
+    <div className="min-h-full pb-32 xl:grid xl:grid-cols-2 xl:gap-6 xl:pb-0">
       <section className="min-w-0">
         <header className="flex items-start justify-between mb-4 gap-4 flex-wrap">
           <div>
@@ -3474,6 +3479,71 @@ export default function LivePOSScreen() {
             ))}
           </div>
         </header>
+
+        {showHeldPicker && (
+          <section className="card mb-4" data-testid="pos-incoming-bills-inline">
+            <div className="mb-3 flex items-start justify-between gap-3">
+              <div>
+                <h3 className="font-bold">Incoming bills from Gaming</h3>
+                <p className="text-xs text-fg-muted">Choose a verified shared bill without leaving POS.</p>
+              </div>
+              <button type="button" className="btn btn-ghost !min-h-[40px]" onClick={() => setShowHeldPicker(false)}>
+                Close
+              </button>
+            </div>
+            <div className="relative mb-3">
+              <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-fg-muted"/>
+              <input
+                className="input !pl-9 !min-h-[42px] !py-2"
+                value={heldSearch}
+                onChange={(e) => setHeldSearch(e.target.value)}
+                placeholder="Search station or bill"
+              />
+            </div>
+            {heldError && <p className="text-accent-bad text-xs mb-2">{heldError}</p>}
+            {heldLoading ? (
+              <div className="space-y-2 py-2">
+                <Skeleton className="h-4 w-1/2" />
+                <Skeleton className="h-4 w-2/3" />
+              </div>
+            ) : (
+              <div className="space-y-2 max-h-72 overflow-y-auto">
+                {heldOrders.filter((order) => matchesHeldOrderSearch(order, heldSearch)).map((order) => {
+                  const heldSince = order.held_at ?? order.created_at;
+                  const ageMin = Math.floor((Date.now() - new Date(heldSince).getTime()) / 60_000);
+                  const overdue = ageMin >= HELD_ORDER_ALARM_MINUTES;
+                  return (
+                    <div key={order.id} className="card flex items-center gap-3">
+                      <button onClick={() => resumeOrder(order)} className="flex-1 min-w-0 text-left">
+                        <div className="font-semibold text-sm truncate">
+                          {order.source_label || `Order ${order.id.slice(0, 8)}`}
+                        </div>
+                        <div className={`text-xs ${overdue ? 'text-accent-bad' : 'text-fg-muted'}`}>
+                          {order.items_count} item{order.items_count === 1 ? '' : 's'}
+                          {order.customer_name ? ` · ${order.customer_name}` : ''}
+                          {' · '}{ageMin} min ago
+                        </div>
+                      </button>
+                      <div className="font-mono font-bold shrink-0">{inr(order.total_minor)}</div>
+                      <button
+                        className="btn btn-ghost !p-2 text-accent-bad shrink-0"
+                        disabled={voidingId === order.id || localWorkNeedsReconciliation}
+                        onClick={() => setVoidPromptRow(order)}
+                        title="Void this queued order with a reason">
+                        {voidingId === order.id ? <Loader2 className="animate-spin" size={14}/> : <Trash2 size={14}/>}
+                      </button>
+                    </div>
+                  );
+                })}
+                {!heldOrders.length && (
+                  <p className="text-fg-muted text-sm text-center py-6">
+                    Nothing waiting — Gaming and other shared bills appear here after they are sent to POS.
+                  </p>
+                )}
+              </div>
+            )}
+          </section>
+        )}
 
         {resumingOrder && (
           <div className="card !p-3 mb-4 max-w-3xl flex items-center justify-between gap-3 border-accent/40">
@@ -3737,7 +3807,7 @@ export default function LivePOSScreen() {
           ))}
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {!filtered.length && (
             <div className="card col-span-full text-sm text-fg-muted">
               {items.length > 0
@@ -3911,19 +3981,75 @@ export default function LivePOSScreen() {
           {discountError && <p className="text-xs text-accent-bad">{discountError}</p>}
         </div>}
 
-        <button onClick={() => setShowPay(true)}
-          disabled={
-            (!cart.length && !resumingOrder)
-            || !shiftId
-            || paying
-            || checkoutAdjustmentBusy
-            || !receiptBusiness
-            || !!receiptSettingsError
-            || localWorkNeedsReconciliation
-          }
-          className="btn btn-primary mt-3 disabled:opacity-40 disabled:cursor-not-allowed">
-          <ReceiptIcon size={16} /> Prepare bill · est. {inr(Math.max(0, estimatedPayable - pendingCartDiscountMinor - pendingCartPointsMinor))}
-        </button>
+        <div className="mt-3 space-y-3 border-t border-bg-border pt-3" data-testid="pos-inline-payment">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-sm font-semibold">Payment</div>
+              <div className="text-xs text-fg-muted">Choose here; the exact server balance is confirmed before collection.</div>
+            </div>
+            <div className="shrink-0 text-right">
+              <div className="text-[10px] uppercase tracking-wider text-fg-muted">Balance (est.)</div>
+              <div className="font-mono text-lg font-bold">
+                {inr(Math.max(0, estimatedPayable - pendingCartDiscountMinor - pendingCartPointsMinor))}
+              </div>
+            </div>
+          </div>
+          <div className="grid grid-cols-5 gap-1.5" role="radiogroup" aria-label="Payment method">
+            {([
+              ['cash', 'Cash'],
+              ['upi', 'UPI'],
+              ['card', 'Card'],
+              ['qr', 'QR'],
+              ['split', 'Split'],
+            ] as const).map(([method, label]) => (
+              <button
+                key={method}
+                type="button"
+                role="radio"
+                aria-checked={inlinePaymentMethod === method}
+                className={`rounded-lg border px-2 py-2 text-xs font-semibold transition ${
+                  inlinePaymentMethod === method
+                    ? 'border-accent bg-accent text-bg'
+                    : 'border-bg-border bg-bg-surface text-fg-muted hover:text-fg'
+                }`}
+                onClick={() => setInlinePaymentMethod(method)}
+                disabled={paying || checkoutAdjustmentBusy || localWorkNeedsReconciliation}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {inlinePaymentMethod === 'cash' && (
+            <PosMoneyInput
+              purpose="cashTendered"
+              min="0"
+              step="1"
+              inputMode="decimal"
+              placeholder="Cash received (optional until exact bill)"
+              value={cashTenderedInput}
+              onChange={(event) => setCashTenderedInput(event.target.value)}
+              disabled={paying || checkoutAdjustmentBusy || localWorkNeedsReconciliation}
+              className="input w-full"
+            />
+          )}
+          <button
+            onClick={() => inlinePaymentMethod === 'split'
+              ? prepareCheckout('cash', newSplitPaymentPlan())
+              : prepareCheckout(inlinePaymentMethod)}
+            disabled={
+              (!cart.length && !resumingOrder)
+              || !shiftId
+              || paying
+              || checkoutAdjustmentBusy
+              || !receiptBusiness
+              || !!receiptSettingsError
+              || localWorkNeedsReconciliation
+            }
+            className="btn btn-primary w-full disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <ReceiptIcon size={16} /> Prepare exact {inlinePaymentMethod === 'split' ? 'split' : inlinePaymentMethod.toUpperCase()} bill
+          </button>
+        </div>
         {error && <p className="text-accent-bad text-xs mt-2">{error}</p>}
       </aside>
 
@@ -4681,66 +4807,6 @@ export default function LivePOSScreen() {
         </Modal>
       )}
 
-      {showHeldPicker && (
-        <Modal title="Incoming bills from Gaming" onClose={() => setShowHeldPicker(false)} wide>
-          <div className="relative mb-3">
-            <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-fg-muted"/>
-            <input
-              className="input !pl-9 !min-h-[42px] !py-2"
-              value={heldSearch}
-              onChange={(e) => setHeldSearch(e.target.value)}
-              placeholder="Search station or bill"
-              autoFocus
-            />
-          </div>
-          {heldError && <p className="text-accent-bad text-xs mb-2">{heldError}</p>}
-          {heldLoading ? (
-            <div className="space-y-2 py-2">
-              <Skeleton className="h-4 w-1/2" />
-              <Skeleton className="h-4 w-2/3" />
-            </div>
-          ) : (
-            <div className="space-y-2 max-h-[50vh] overflow-y-auto">
-              {heldOrders
-                .filter((o) => {
-                  return matchesHeldOrderSearch(o, heldSearch);
-                })
-                .map((o) => {
-                  const heldSince = o.held_at ?? o.created_at;
-                  const ageMin = Math.floor((Date.now() - new Date(heldSince).getTime()) / 60_000);
-                  const overdue = ageMin >= HELD_ORDER_ALARM_MINUTES;
-                  return (
-                    <div key={o.id} className="card flex items-center gap-3">
-                      <button onClick={() => resumeOrder(o)} className="flex-1 min-w-0 text-left">
-                        <div className="font-semibold text-sm truncate">
-                          {o.source_label || `Order ${o.id.slice(0, 8)}`}
-                        </div>
-                        <div className={`text-xs ${overdue ? 'text-accent-bad' : 'text-fg-muted'}`}>
-                          {o.items_count} item{o.items_count === 1 ? '' : 's'}
-                          {o.customer_name ? ` · ${o.customer_name}` : ''}
-                          {' · '}{ageMin} min ago
-                        </div>
-                      </button>
-                      <div className="font-mono font-bold shrink-0">{inr(o.total_minor)}</div>
-                      <button
-                        className="btn btn-ghost !p-2 text-accent-bad shrink-0"
-                        disabled={voidingId === o.id || localWorkNeedsReconciliation}
-                        onClick={() => setVoidPromptRow(o)}
-                        title="Void this queued order with a reason">
-                        {voidingId === o.id ? <Loader2 className="animate-spin" size={14}/> : <Trash2 size={14}/>}
-                      </button>
-                    </div>
-                  );
-                })}
-              {!heldOrders.length && (
-                <p className="text-fg-muted text-sm text-center py-6">
-                  Nothing waiting — Gaming and other shared bills appear here after they are sent to POS.
-                </p>
-              )}
-            </div>
-          )}
-        </Modal>
-      )}
       {voidPromptRow && (
         <PromptModal
           title="Void queued order"

@@ -25,6 +25,7 @@ from app.core.config import get_settings
 from app.core.db import SessionDep
 from app.core.errors import (
     BusinessRuleError,
+    ClientUpgradeRequiredError,
     ConflictError,
     ForbiddenError,
     GamingBillingRepairRequiredError,
@@ -77,6 +78,7 @@ from app.services.customers.deletion_fence import (
     require_current_customer_directory,
 )
 from app.services.customers.identity import (
+    find_unique_gaming_customer_by_phone,
     get_selected_gaming_customer,
     resolve_gaming_customer,
 )
@@ -278,7 +280,12 @@ class SessionStop(BaseModel):
 class SessionParticipantJoin(BaseModel):
     model_config = ConfigDict(extra="forbid")
     expected_participant_revision: int = Field(ge=0)
+    participant_identity_id: UUID | None = None
     customer_id: UUID | None = None
+    guest_name: str | None = Field(default=None, min_length=1, max_length=200)
+    # Kept for old queued clients. Name + phone is the legacy deliberate
+    # "Add new friend" contract and may create a saved customer. Guest-only
+    # joins use guest_name without a phone and never create loyalty identity.
     customer_name: str | None = Field(default=None, min_length=1, max_length=200)
     customer_phone: str | None = Field(default=None, min_length=1, max_length=20)
     customer_directory_revision: int | None = Field(default=None, ge=0, le=MAX_DIRECTORY_REVISION, strict=True)
@@ -291,12 +298,14 @@ class SessionParticipantJoin(BaseModel):
     def validate_identity_and_capture(self) -> Self:
         if self.customer_name is not None:
             self.customer_name = self.customer_name.strip() or None
+        if self.guest_name is not None:
+            self.guest_name = self.guest_name.strip() or None
         if self.customer_phone is not None:
             self.customer_phone = self.customer_phone.strip() or None
         if self.customer_id is not None and (self.customer_name or self.customer_phone):
             raise ValueError("select a saved customer or enter a phone, not both")
-        if self.customer_id is None and not self.customer_phone:
-            raise ValueError("a saved customer or phone is required")
+        if self.customer_id is not None and self.guest_name:
+            raise ValueError("a saved customer and guest name cannot both be supplied")
         captured = self.occurred_at is not None
         if captured != (self.play_elapsed_ms is not None) or captured != (self.expected_pause_version is not None):
             raise ValueError("captured time, play meter, and pause version must be supplied together")
@@ -320,7 +329,11 @@ class SessionParticipantLeave(BaseModel):
 
 class SessionParticipantRead(BaseModel):
     id: UUID
-    customer_id: UUID
+    # Old idempotency receipts may predate the stable identity field. Fresh
+    # responses always include it; clients fall back to row id while replaying.
+    participant_identity_id: UUID | None = None
+    customer_id: UUID | None = None
+    guest_name: str | None = None
     joined_at: datetime
     joined_play_elapsed_ms: int
     left_at: datetime | None = None
@@ -4557,7 +4570,9 @@ def _participant_state(gs: GamingSession, rows: list[GamingSessionParticipant]) 
         participants=[
             SessionParticipantRead(
                 id=row.id,
+                participant_identity_id=row.participant_identity_id,
                 customer_id=row.customer_id,
+                guest_name=row.guest_name,
                 joined_at=row.joined_at,
                 joined_play_elapsed_ms=int(row.joined_play_elapsed_ms),
                 left_at=row.left_at,
@@ -4568,6 +4583,23 @@ def _participant_state(gs: GamingSession, rows: list[GamingSessionParticipant]) 
             for row in rows
         ],
     )
+
+
+def _anonymous_participant_client_guard(
+    request: Request,
+    state: SessionParticipantStateRead,
+) -> None:
+    client_platform = request.headers.get("X-Client-Platform", "").strip().lower()
+    client_version = parse_client_version_code(request.headers.get("X-Client-Version-Code"))
+    if (
+        client_platform == "android"
+        and (client_version is None or client_version < 47)
+        and any(participant.customer_id is None for participant in state.participants)
+    ):
+        raise ClientUpgradeRequiredError(
+            "Update this tablet before loading an anonymous gaming player.",
+            details={"minimum_supported_version_code": 47},
+        )
 
 
 async def _lock_participant_context(session, *, session_id: UUID, tenant: TenantContext, operation: str):
@@ -4645,6 +4677,7 @@ def _require_monotonic_participant_meter(rows: list[GamingSessionParticipant], m
 async def get_session_participants(
     session_id: UUID,
     session: SessionDep,
+    request: Request,
     tenant: TenantContext = Depends(requires("gaming.read")),
 ) -> SessionParticipantStateRead:
     gs = await session.get(GamingSession, session_id)
@@ -4653,7 +4686,10 @@ async def get_session_participants(
     station = await session.get(Station, gs.station_id)
     if station is None or station.branch_id != tenant.branch_id:
         raise NotFoundError("session not found")
-    return _participant_state(gs, await _participant_rows(session, gs))
+    rows = await _participant_rows(session, gs)
+    state = _participant_state(gs, rows)
+    _anonymous_participant_client_guard(request, state)
+    return state
 
 
 @router.post("/sessions/{session_id}/participants/join", response_model=SessionParticipantStateRead)
@@ -4667,7 +4703,9 @@ async def join_session_participant(
     key, request_hash = _require_idempotency(request)
     cached = await check_or_reserve(session, key=key, request_hash=request_hash, user_id=tenant.user_id, terminal_id=tenant.terminal_id)
     if cached:
-        return SessionParticipantStateRead.model_validate(cached["body"])
+        response = SessionParticipantStateRead.model_validate(cached["body"])
+        _anonymous_participant_client_guard(request, response)
+        return response
     durable = (
         await session.execute(select(GamingSessionParticipant).where(GamingSessionParticipant.company_id == tenant.company_id, GamingSessionParticipant.join_idempotency_key == key).with_for_update())
     ).scalar_one_or_none()
@@ -4675,6 +4713,7 @@ async def join_session_participant(
         if durable.gaming_session_id != session_id or durable.join_request_hash != request_hash or durable.joined_by != tenant.user_id or durable.joined_terminal_id != tenant.terminal_id:
             raise ConflictError("Idempotency key was already used for a different participant action.")
         response = SessionParticipantStateRead.model_validate(durable.join_response)
+        _anonymous_participant_client_guard(request, response)
         await store_response(
             session,
             key=key,
@@ -4691,25 +4730,92 @@ async def join_session_participant(
         raise BusinessRuleError("This session is already linked to POS.")
     _require_participant_revision(gs, payload.expected_participant_revision)
     rows = await _participant_rows(session, gs, lock=True)
+    current_state = _participant_state(gs, rows)
+    _anonymous_participant_client_guard(request, current_state)
     base_count = _participant_base_player_count(gs)
     active_count = sum(row.left_at is None for row in rows)
     if base_count + active_count >= 4:
         raise BusinessRuleError("This PS5 session already has the maximum four players.")
-    _, fence = await lock_customer_directory(
-        session,
-        company_id=tenant.company_id,
-        captured_revision=payload.customer_directory_revision,
-        captured_company_id=payload.customer_directory_company_id,
-    )
-    require_current_customer_directory(fence)
+    customer = None
+    if payload.customer_id is not None or payload.customer_phone:
+        _, fence = await lock_customer_directory(
+            session,
+            company_id=tenant.company_id,
+            captured_revision=payload.customer_directory_revision,
+            captured_company_id=payload.customer_directory_company_id,
+        )
+        require_current_customer_directory(fence)
     if payload.customer_id is not None:
         customer = await get_selected_gaming_customer(session, company_id=tenant.company_id, customer_id=payload.customer_id)
-    else:
-        customer = await resolve_gaming_customer(session, company_id=tenant.company_id, phone=payload.customer_phone, name=payload.customer_name)
-    if customer is None:
-        raise NotFoundError("customer not found or phone cannot identify one saved customer")
-    if customer.id == gs.customer_id or any(row.customer_id == customer.id and row.left_at is None for row in rows):
+        if customer is None:
+            raise NotFoundError("saved customer not found")
+    elif payload.customer_phone:
+        # A pre-identity client represented the deliberate "Add new friend"
+        # flow as name + phone. Preserve that queued-wire contract. Anonymous
+        # guests use guest_name and never reach customer resolution/creation.
+        customer = await find_unique_gaming_customer_by_phone(
+            session, company_id=tenant.company_id, phone=payload.customer_phone
+        )
+        if (
+            customer is None
+            and payload.participant_identity_id is None
+            and payload.customer_name
+            and payload.guest_name is None
+        ):
+            customer = await resolve_gaming_customer(
+                session,
+                company_id=tenant.company_id,
+                phone=payload.customer_phone,
+                name=payload.customer_name,
+            )
+        if customer is None:
+            raise NotFoundError("phone does not identify one saved customer; join as a guest instead")
+        customer = await get_selected_gaming_customer(
+            session, company_id=tenant.company_id, customer_id=customer.id
+        )
+        if customer is None:
+            raise NotFoundError("saved customer no longer exists")
+    if customer is not None and (
+        customer.id == gs.customer_id
+        or any(row.customer_id == customer.id and row.left_at is None for row in rows)
+    ):
         raise BusinessRuleError("This customer is already playing in the session.")
+    if customer is not None:
+        # Customer-backed attendance has one canonical identity for its whole
+        # lifetime. This matches the 0088 backfill and prevents a caller from
+        # splitting one player's minimum charge across arbitrary UUIDs.
+        if (
+            payload.participant_identity_id is not None
+            and payload.participant_identity_id != customer.id
+        ):
+            raise ConflictError("A saved customer must use its canonical participant identity.")
+        participant_identity_id = customer.id
+    else:
+        participant_identity_id = payload.participant_identity_id or uuid4()
+        # A guest must not squat a real customer UUID. Otherwise a later
+        # customer-backed join could become unreconcilable at settlement.
+        colliding_customer_id = (
+            await session.execute(
+                select(Customer.id)
+                .where(
+                    Customer.company_id == tenant.company_id,
+                    Customer.id == participant_identity_id,
+                )
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if colliding_customer_id is not None:
+            raise ConflictError("A guest participant identity cannot use a saved customer id.")
+    prior_identity_rows = [
+        row for row in rows
+        if row.participant_identity_id == participant_identity_id
+    ]
+    if prior_identity_rows:
+        if any(row.left_at is None for row in prior_identity_rows):
+            raise BusinessRuleError("This player is already active in the session.")
+        prior_customer_ids = {row.customer_id for row in prior_identity_rows}
+        if prior_customer_ids != {customer.id if customer is not None else None}:
+            raise ConflictError("A rejoin cannot change the player's saved-customer link.")
     occurred_at, meter, source = _participant_action_clock(request, payload, gs, label="participant join")
     if amendment is not None and occurred_at <= amendment.occurred_at:
         raise ConflictError(
@@ -4720,7 +4826,10 @@ async def join_session_participant(
     gs.participant_revision = int(gs.participant_revision or 0) + 1
     row = GamingSessionParticipant(
         id=uuid4(), company_id=tenant.company_id, gaming_session_id=gs.id,
-        customer_id=customer.id, joined_at=occurred_at, joined_play_elapsed_ms=meter,
+        participant_identity_id=participant_identity_id,
+        customer_id=customer.id if customer is not None else None,
+        guest_name=(payload.guest_name or payload.customer_name) if customer is None else None,
+        joined_at=occurred_at, joined_play_elapsed_ms=meter,
         join_timing_source=source, joined_by=tenant.user_id,
         joined_terminal_id=tenant.terminal_id, join_revision=gs.participant_revision,
         join_idempotency_key=key, join_request_hash=request_hash, join_response={},
@@ -4730,11 +4839,12 @@ async def join_session_participant(
         actor_user_id=tenant.user_id, company_id=tenant.company_id,
         action="gaming_participant_joined", entity_type="GamingSessionParticipant",
         entity_id=str(row.id), before=None,
-        after={"gaming_session_id": str(gs.id), "customer_id": str(customer.id), "play_elapsed_ms": meter, "participant_revision": int(gs.participant_revision)},
+        after={"gaming_session_id": str(gs.id), "participant_identity_id": str(participant_identity_id), "customer_id": str(customer.id) if customer is not None else None, "play_elapsed_ms": meter, "participant_revision": int(gs.participant_revision)},
         terminal_id=tenant.terminal_id,
     ))
     rows.append(row)
     response = _participant_state(gs, rows)
+    _anonymous_participant_client_guard(request, response)
     row.join_response = response.model_dump(mode="json")
     await session.flush()
     await store_response(session, key=key, status_code=status.HTTP_200_OK, body=row.join_response)
@@ -4753,7 +4863,9 @@ async def leave_session_participant(
     key, request_hash = _require_idempotency(request)
     cached = await check_or_reserve(session, key=key, request_hash=request_hash, user_id=tenant.user_id, terminal_id=tenant.terminal_id)
     if cached:
-        return SessionParticipantStateRead.model_validate(cached["body"])
+        response = SessionParticipantStateRead.model_validate(cached["body"])
+        _anonymous_participant_client_guard(request, response)
+        return response
     durable = (
         await session.execute(select(GamingSessionParticipant).where(GamingSessionParticipant.company_id == tenant.company_id, GamingSessionParticipant.leave_idempotency_key == key).with_for_update())
     ).scalar_one_or_none()
@@ -4761,6 +4873,7 @@ async def leave_session_participant(
         if durable.gaming_session_id != session_id or durable.id != participant_id or durable.leave_request_hash != request_hash or durable.left_by != tenant.user_id or durable.left_terminal_id != tenant.terminal_id:
             raise ConflictError("Idempotency key was already used for a different participant action.")
         response = SessionParticipantStateRead.model_validate(durable.leave_response)
+        _anonymous_participant_client_guard(request, response)
         await store_response(
             session,
             key=key,
@@ -4773,6 +4886,7 @@ async def leave_session_participant(
         raise BusinessRuleError("Friends can leave only while the session is running and unbilled.")
     _require_participant_revision(gs, payload.expected_participant_revision)
     rows = await _participant_rows(session, gs, lock=True)
+    _anonymous_participant_client_guard(request, _participant_state(gs, rows))
     row = next((candidate for candidate in rows if candidate.id == participant_id), None)
     if row is None:
         raise NotFoundError("participant not found")
@@ -4811,14 +4925,18 @@ async def leave_session_participant(
     return response
 
 
-def _participant_totals(rows: list[GamingSessionParticipant]) -> dict[UUID, tuple[int, int]]:
+def _participant_totals(rows: list[GamingSessionParticipant]) -> dict[UUID, tuple[int, int, UUID | None]]:
     totals: dict[UUID, tuple[int, int]] = {}
     for row in rows:
         if row.left_play_elapsed_ms is None:
             raise GamingBillingRepairRequiredError("Participant presence is still open; billing cannot be verified.")
         elapsed = int(row.left_play_elapsed_ms) - int(row.joined_play_elapsed_ms)
-        prior_ms, prior_count = totals.get(row.customer_id, (0, 0))
-        totals[row.customer_id] = (prior_ms + elapsed, prior_count + 1)
+        prior_ms, prior_count, prior_customer_id = totals.get(
+            row.participant_identity_id, (0, 0, row.customer_id)
+        )
+        if prior_customer_id != row.customer_id:
+            raise GamingBillingRepairRequiredError("Participant identity changed its customer link.")
+        totals[row.participant_identity_id] = (prior_ms + elapsed, prior_count + 1, row.customer_id)
     return totals
 
 
@@ -4860,16 +4978,17 @@ async def _assert_participant_settlement_consistent(session, gs: GamingSession) 
         (int(row.leave_revision or row.join_revision) for row in rows),
         default=0,
     )
-    by_customer = {line.customer_id: line for line in lines}
-    if set(by_customer) != set(totals):
+    by_identity = {line.participant_identity_id: line for line in lines}
+    if set(by_identity) != set(totals):
         raise GamingBillingRepairRequiredError("Participant settlement lines do not match presence evidence.")
     expected_charge = 0
-    for customer_id, (elapsed_ms, interval_count) in totals.items():
-        line = by_customer[customer_id]
+    for identity_id, (elapsed_ms, interval_count, customer_id) in totals.items():
+        line = by_identity[identity_id]
         hours = max(1, ceil(elapsed_ms / 3_600_000))
         minutes = ceil(elapsed_ms / 60_000) if elapsed_ms else 0
         if (
             int(line.play_elapsed_ms) != elapsed_ms
+            or line.customer_id != customer_id
             or int(line.played_minutes) != minutes
             or int(line.started_hours) != hours
             or int(line.charge_minor) != hours * 3000
@@ -4940,13 +5059,14 @@ async def _settle_participants(
     settlement_id = uuid4()
     base_amount = int(gs.amount_minor or 0)
     charge = 0
-    for customer_id, (elapsed_ms, interval_count) in totals.items():
+    for identity_id, (elapsed_ms, interval_count, customer_id) in totals.items():
         hours = max(1, ceil(elapsed_ms / 3_600_000))
         line_charge = hours * 3000
         charge += line_charge
         session.add(GamingParticipantSettlementLine(
             id=uuid4(), company_id=gs.company_id, settlement_id=settlement_id,
-            gaming_session_id=gs.id, customer_id=customer_id,
+            gaming_session_id=gs.id, participant_identity_id=identity_id,
+            customer_id=customer_id,
             play_elapsed_ms=elapsed_ms,
             played_minutes=(ceil(elapsed_ms / 60_000) if elapsed_ms else 0),
             started_hours=hours, charge_minor=line_charge, interval_count=interval_count,

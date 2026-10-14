@@ -485,7 +485,12 @@ def _guard_gaming_package_amendment_delete(_mapper, _connection, _row) -> None:
 
 
 class GamingSessionParticipant(Base, TenantMixin):
-    """One immutable-presence interval for a saved customer joining after Start."""
+    """One immutable presence interval for a late player joining after Start.
+
+    ``participant_identity_id`` groups leave/rejoin intervals for one person.
+    ``customer_id`` is optional: anonymous players are billable but never earn
+    customer playtime or loyalty credit.
+    """
 
     __tablename__ = "gaming_session_participants"
     __table_args__ = (
@@ -530,6 +535,13 @@ class GamingSessionParticipant(Base, TenantMixin):
             "gaming_session_id",
             "customer_id",
             unique=True,
+            postgresql_where=text("left_at IS NULL AND customer_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_gaming_participant_open_identity",
+            "gaming_session_id",
+            "participant_identity_id",
+            unique=True,
             postgresql_where=text("left_at IS NULL"),
         ),
         Index("ix_gaming_participant_session", "company_id", "gaming_session_id"),
@@ -537,7 +549,9 @@ class GamingSessionParticipant(Base, TenantMixin):
 
     id: Mapped[UUID] = _uuid_pk()
     gaming_session_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("gaming_sessions.id", ondelete="RESTRICT"), nullable=False)
-    customer_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("customers.id", ondelete="RESTRICT"), nullable=False, index=True)
+    participant_identity_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    customer_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("customers.id", ondelete="RESTRICT"), nullable=True, index=True)
+    guest_name: Mapped[str | None] = mapped_column(String(200))
     joined_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     joined_play_elapsed_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
     join_timing_source: Mapped[str] = mapped_column(String(20), nullable=False)
@@ -562,7 +576,7 @@ class GamingSessionParticipant(Base, TenantMixin):
 def _guard_gaming_session_participant_update(_mapper, _connection, row) -> None:
     state = inspect(row)
     immutable = (
-        "company_id", "gaming_session_id", "customer_id", "joined_at",
+        "company_id", "gaming_session_id", "participant_identity_id", "customer_id", "guest_name", "joined_at",
         "joined_play_elapsed_ms", "join_timing_source", "joined_by",
         "joined_terminal_id", "join_revision", "join_idempotency_key",
         "join_request_hash", "join_response",
@@ -622,7 +636,7 @@ class GamingParticipantSettlement(Base, TenantMixin):
 class GamingParticipantSettlementLine(Base, TenantMixin):
     __tablename__ = "gaming_participant_settlement_lines"
     __table_args__ = (
-        UniqueConstraint("settlement_id", "customer_id", name="uq_gaming_participant_settlement_customer"),
+        UniqueConstraint("settlement_id", "participant_identity_id", name="uq_gaming_participant_settlement_identity"),
         CheckConstraint(
             "play_elapsed_ms >= 0 AND interval_count >= 1 "
             "AND played_minutes = CASE WHEN play_elapsed_ms = 0 THEN 0 "
@@ -635,7 +649,8 @@ class GamingParticipantSettlementLine(Base, TenantMixin):
     id: Mapped[UUID] = _uuid_pk()
     settlement_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("gaming_participant_settlements.id", ondelete="RESTRICT"), nullable=False, index=True)
     gaming_session_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("gaming_sessions.id", ondelete="RESTRICT"), nullable=False, index=True)
-    customer_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("customers.id", ondelete="RESTRICT"), nullable=False, index=True)
+    participant_identity_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    customer_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("customers.id", ondelete="RESTRICT"), nullable=True, index=True)
     play_elapsed_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
     played_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
     started_hours: Mapped[int] = mapped_column(Integer, nullable=False)

@@ -218,6 +218,7 @@ fun SectionCard(
     elevated: Boolean = false,
     contentPadding: androidx.compose.foundation.layout.PaddingValues =
         androidx.compose.foundation.layout.PaddingValues(Spacing.lg),
+    contentFillsAvailableHeight: Boolean = false,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val accent = when (tone) {
@@ -281,7 +282,9 @@ fun SectionCard(
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         }
         Column(
-            modifier = Modifier.fillMaxWidth().padding(contentPadding),
+            modifier = Modifier.fillMaxWidth()
+                .then(if (contentFillsAvailableHeight) Modifier.weight(1f) else Modifier)
+                .padding(contentPadding),
             verticalArrangement = Arrangement.spacedBy(Spacing.md),
             content = content,
         )

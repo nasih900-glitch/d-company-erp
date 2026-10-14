@@ -12,8 +12,10 @@ import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.testTag
@@ -23,7 +25,9 @@ import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -45,6 +49,21 @@ import org.junit.Test
 
 class ShiftOverviewUiTest {
     @get:Rule val compose = createComposeRule()
+
+    @Test
+    fun unresolvedCurrentShiftDoesNotExposeOpenAction() {
+        compose.setContent {
+            DCompanyTheme {
+                Box(Modifier.width(900.dp).height(620.dp)) {
+                    ShiftLoadingWorkspace()
+                }
+            }
+        }
+
+        compose.onNodeWithTag("shift-loading-workspace").assertIsDisplayed()
+        compose.onNodeWithText("Checking shift").assertIsDisplayed()
+        compose.onAllNodesWithText("Open shift", substring = true).assertCountEquals(0)
+    }
 
     @Test
     fun overviewAt1280ShowsServerAmountsAndReviewAction() {
@@ -150,6 +169,67 @@ class ShiftOverviewUiTest {
         compose.onNodeWithText("Close shift").assertIsDisplayed().assertIsEnabled()
     }
 
+    @OptIn(ExperimentalFoundationApi::class)
+    @Test
+    fun unfinishedDrawerCountSurvivesNavigationAndSavedStateRecreation() {
+        val restoration = StateRestorationTester(compose)
+        val state = shiftFixtureState()
+        val showShift = mutableStateOf(true)
+
+        restoration.setContent {
+            DCompanyTheme {
+                val stateHolder = rememberSaveableStateHolder()
+                Box(Modifier.width(900.dp).height(620.dp)) {
+                    if (showShift.value) {
+                        stateHolder.SaveableStateProvider("shift-route") {
+                            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+                                CloseShiftCard(
+                                    state = state,
+                                    canClosePermission = true,
+                                    canOpenPermission = true,
+                                    compactLayout = true,
+                                    presentation = WorkspaceFeatureProfiles.Active.presentationPolicy(),
+                                    reviewAnchor = remember { BringIntoViewRequester() },
+                                    callbacks = ShiftCloseCallbacks(
+                                        onRetryRejectedOpen = {},
+                                        onVerifyAndClearRejectedOpen = {},
+                                        onContinueShift = {},
+                                        onRetryClose = {},
+                                        onRefresh = {},
+                                        currentShiftIdentity = {
+                                            state.open?.let(::shiftCloseUiIdentity)
+                                        },
+                                        onCloseShift = {},
+                                    ),
+                                )
+                            }
+                        }
+                    } else {
+                        Column { androidx.compose.material3.Text("Gaming workspace") }
+                    }
+                }
+            }
+        }
+
+        compose.onNodeWithText("Count cash").performScrollTo().performClick()
+        repeat(2) {
+            compose.onNodeWithContentDescription("Increase Count of ₹500 notes by one")
+                .performScrollTo().assertIsDisplayed().performClick()
+        }
+        compose.onNodeWithText("Use drawer count").performScrollTo().performClick()
+        compose.onNodeWithText("₹1,000.00").performScrollTo().assertIsDisplayed()
+
+        compose.runOnIdle { showShift.value = false }
+        compose.onNodeWithText("Gaming workspace").assertIsDisplayed()
+        compose.runOnIdle { showShift.value = true }
+        compose.onNodeWithText("Edit cash count").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("₹1,000.00").performScrollTo().assertIsDisplayed()
+
+        restoration.emulateSavedInstanceStateRestore()
+        compose.onNodeWithText("Edit cash count").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("₹1,000.00").performScrollTo().assertIsDisplayed()
+    }
+
     private fun screenshot(filename: String) {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val output = File(requireNotNull(context.getExternalFilesDir(null)), filename)
@@ -172,6 +252,27 @@ private fun ShiftFixture(
     onReview: () -> Unit,
     afterOverview: @Composable (ShiftUiState) -> Unit = {},
 ) {
+    val state = shiftFixtureState(accountingAvailable, rejectedOpen, canClose)
+    DCompanyTheme {
+        Box(Modifier.width(width.dp).height(height.dp).testTag("shift-overview-fixture")) {
+            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+                ShiftDashboardOverview(
+                    state = state,
+                    canClose = canClose,
+                    onRefresh = {},
+                    onReview = onReview,
+                )
+                afterOverview(state)
+            }
+        }
+    }
+}
+
+private fun shiftFixtureState(
+    accountingAvailable: Boolean = true,
+    rejectedOpen: Boolean = false,
+    canClose: Boolean = true,
+): ShiftUiState {
     val local = LocalShiftEntity(
         localId = "test-shift",
         serverShiftId = "confirmed-shift",
@@ -201,8 +302,9 @@ private fun ShiftFixture(
         openedByName = "Admin",
         openedByEmail = null,
     )
-    val state = ShiftUiState(
+    return ShiftUiState(
         open = shift,
+        currentShiftLoaded = true,
         online = true,
         expectedMinor = if (accountingAvailable) 10_000 else null,
         canClose = canClose,
@@ -213,17 +315,4 @@ private fun ShiftFixture(
             lastError = "Duplicate open attempt needs review",
         ).takeIf { rejectedOpen },
     )
-    DCompanyTheme {
-        Box(Modifier.width(width.dp).height(height.dp).testTag("shift-overview-fixture")) {
-            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-                ShiftDashboardOverview(
-                    state = state,
-                    canClose = canClose,
-                    onRefresh = {},
-                    onReview = onReview,
-                )
-                afterOverview(state)
-            }
-        }
-    }
 }

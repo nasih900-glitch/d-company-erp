@@ -61,24 +61,23 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -180,13 +179,18 @@ fun ShiftScreen(
     val state by vm.state.collectAsStateWithLifecycle()
     SideEffect { vm.updateAccess(access) }
 
-    val shiftIdentity = state.open?.let(::shiftCloseUiIdentity) ?: "closed"
+    val openShift = state.open
+    val shiftIdentity = when {
+        !state.currentShiftLoaded -> "loading"
+        openShift != null -> shiftCloseUiIdentity(openShift)
+        else -> "closed"
+    }
     key(shiftIdentity) {
         val closeReview = remember { BringIntoViewRequester() }
         val scope = rememberCoroutineScope()
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
             Column(
-                Modifier.widthIn(max = 860.dp).fillMaxSize()
+                Modifier.widthIn(max = 1180.dp).fillMaxSize()
                     .verticalScroll(rememberScrollState())
                     .padding(horizontal = Spacing.lgPlus, vertical = Spacing.lg),
                 verticalArrangement = Arrangement.spacedBy(Spacing.md),
@@ -205,28 +209,36 @@ fun ShiftScreen(
                             style = MaterialTheme.typography.labelMedium)
                     }
                 }
-                val canActOnCurrentShift = if (state.open == null) access.canOpen else access.canClose
-                if (!canActOnCurrentShift) {
-                    ViewOnlyNotice(
-                        if (state.open == null) {
-                            "Shift opening is view only for this account. Ask an authorised cashier or manager."
-                        } else {
-                            "Shift closing is view only for this account. Ask a staff member with Shift close access."
-                        },
-                    )
-                }
-                if (state.open == null) {
+                if (!state.currentShiftLoaded) {
+                    ShiftLoadingWorkspace()
+                } else if (state.open == null) {
+                    if (!access.canOpen) {
+                        ViewOnlyNotice(
+                            "Shift opening is view only for this account. Ask an authorised cashier or manager.",
+                        )
+                    }
                     ShiftSummaryRow(state)
                     OpenShiftCard(state, vm, access.canOpen)
                 } else {
-                    ShiftDashboardOverview(
-                        state = state,
-                        canClose = access.canClose,
-                        onRefresh = vm::load,
-                        onReview = { scope.launch { closeReview.bringIntoView() } },
-                    )
-                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
-                        Box(Modifier.widthIn(max = 700.dp).fillMaxWidth()) {
+                    if (!access.canClose) {
+                        ViewOnlyNotice(
+                            "Shift closing is view only for this account. Ask a staff member with Shift close access.",
+                        )
+                    }
+                    Row(
+                        Modifier.fillMaxWidth().testTag("shift-open-workspace"),
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+                        verticalAlignment = Alignment.Top,
+                    ) {
+                        Box(Modifier.weight(1f)) {
+                            ShiftDashboardOverview(
+                                state = state,
+                                canClose = access.canClose,
+                                onRefresh = vm::load,
+                                onReview = { scope.launch { closeReview.bringIntoView() } },
+                            )
+                        }
+                        Box(Modifier.weight(1f).testTag("shift-reconciliation-panel")) {
                             CloseShiftCard(
                                 state,
                                 access.canClose,
@@ -250,7 +262,7 @@ fun ShiftScreen(
                     }
                 }
                 Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
-                    PastShiftsPanel(state, Modifier.widthIn(max = 700.dp).fillMaxWidth().height(320.dp))
+                    PastShiftsPanel(state, Modifier.fillMaxWidth().height(280.dp))
                 }
             }
         }
@@ -444,13 +456,8 @@ internal fun ShiftDashboardOverview(
 
             Column(
                 Modifier.fillMaxWidth().clip(Radius.shapeLg)
-                    .background(
-                        Brush.verticalGradient(
-                            listOf(MaterialTheme.colorScheme.surface, MaterialTheme.colorScheme.surfaceContainerLow, MaterialTheme.colorScheme.surfaceContainerLow),
-                        ),
-                    )
-                    .shiftCollectionAtmosphere()
-                    .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.34f), Radius.shapeLg)
+                    .background(MaterialTheme.colorScheme.surface)
+                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeLg)
                     .padding(Spacing.lg),
                 verticalArrangement = Arrangement.spacedBy(Spacing.md),
             ) {
@@ -460,7 +467,7 @@ internal fun ShiftDashboardOverview(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column {
-                        Text("Live collections", color = MaterialTheme.colorScheme.onSurface,
+                        Text("Daily collections", color = MaterialTheme.colorScheme.onSurface,
                             style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                         Text("Current shift · server accounting", color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.labelSmall)
@@ -477,6 +484,33 @@ internal fun ShiftDashboardOverview(
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
+                Column(
+                    Modifier.fillMaxWidth().clip(Radius.shapeMd)
+                        .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeMd)
+                        .padding(horizontal = Spacing.lg, vertical = Spacing.md),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    Text(
+                        "Net collections",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                    Text(
+                        accounting?.netCollectionsMinor?.asRupees() ?: "Unavailable",
+                        color = MaterialTheme.colorScheme.onSurface,
+                        style = MaterialTheme.typography.headlineMedium,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    if (accounting != null) {
+                        Text(
+                            "Gross ${accounting.grossCollectionsMinor.asRupees()} · " +
+                                "Refunds ${accounting.totalRefundsMinor.asRupees()}",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
+                }
                 Row(
                     Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
@@ -485,61 +519,14 @@ internal fun ShiftDashboardOverview(
                         label = "Cash",
                         value = accounting?.cashCollectionsMinor?.asRupees() ?: "—",
                         icon = Icons.Filled.Payments,
-                        tint = MaterialTheme.colorScheme.operationalGood,
                         modifier = Modifier.weight(1f),
                     )
                     ShiftOverviewMoneyCard(
                         label = "UPI",
                         value = accounting?.upiCollectionsMinor?.asRupees() ?: "—",
                         icon = Icons.Filled.QrCode,
-                        tint = MaterialTheme.colorScheme.operationalInformation,
                         modifier = Modifier.weight(1f),
                     )
-                }
-                Box(
-                    Modifier.fillMaxWidth().padding(vertical = Spacing.xs),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Row(
-                        Modifier.widthIn(max = 340.dp).fillMaxWidth().clip(Radius.shapeMd)
-                            .background(
-                                Brush.verticalGradient(
-                                    listOf(
-                                        MaterialTheme.colorScheme.primary.copy(alpha = 0.23f),
-                                        MaterialTheme.colorScheme.primary.copy(alpha = 0.07f),
-                                    ),
-                                ),
-                            )
-                            .border(1.dp, MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.70f), Radius.shapeMd)
-                            .padding(vertical = Spacing.sm, horizontal = Spacing.lg),
-                        horizontalArrangement = Arrangement.spacedBy(Spacing.md),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Box(
-                            Modifier.size(42.dp).clip(CircleShape)
-                                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Icon(Icons.Filled.Payments, contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onPrimaryContainer, modifier = Modifier.size(26.dp))
-                        }
-                        Column(horizontalAlignment = Alignment.Start) {
-                            Text("Net collections", color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                style = MaterialTheme.typography.labelMedium)
-                            Text(accounting?.netCollectionsMinor?.asRupees() ?: "Unavailable",
-                                color = if (accounting == null) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onPrimaryContainer,
-                                style = MaterialTheme.typography.headlineMedium,
-                                fontWeight = FontWeight.Bold)
-                            if (accounting != null) {
-                                Text(
-                                    "Gross ${accounting.grossCollectionsMinor.asRupees()} · " +
-                                        "Refunds ${accounting.totalRefundsMinor.asRupees()}",
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    style = MaterialTheme.typography.labelSmall,
-                                )
-                            }
-                        }
-                    }
                 }
                 if (accounting != null &&
                     (accounting.cardCollectionsMinor != 0L || accounting.otherCollectionsMinor != 0L)
@@ -604,69 +591,30 @@ internal fun ShiftDashboardOverview(
     }
 }
 
-/** Cached ambient light and connecting traces from the reference's shift collection deck. */
-@Composable
-private fun Modifier.shiftCollectionAtmosphere(): Modifier {
-    val trace = MaterialTheme.colorScheme.onSurfaceVariant
-    val information = MaterialTheme.colorScheme.operationalInformation
-    return drawWithCache {
-    val gold = trace
-    val center = Offset(size.width * 0.5f, size.height * 0.55f)
-    val glow = Brush.radialGradient(
-        listOf(gold.copy(alpha = 0.13f), Color.Transparent),
-        center = center,
-        radius = size.width * 0.49f,
-    )
-    val left = Path().apply {
-        moveTo(size.width * 0.13f, size.height * 0.37f)
-        cubicTo(size.width * 0.28f, size.height * 0.41f,
-            size.width * 0.30f, size.height * 0.55f,
-            size.width * 0.49f, size.height * 0.57f)
-    }
-    val right = Path().apply {
-        moveTo(size.width * 0.87f, size.height * 0.37f)
-        cubicTo(size.width * 0.72f, size.height * 0.41f,
-            size.width * 0.70f, size.height * 0.55f,
-            size.width * 0.51f, size.height * 0.57f)
-    }
-    val goldTrace = Brush.horizontalGradient(
-        listOf(Color.Transparent, gold.copy(alpha = 0.48f), Color.Transparent),
-    )
-    val blueTrace = Brush.horizontalGradient(
-        listOf(Color.Transparent, information.copy(alpha = 0.38f), Color.Transparent),
-    )
-    val stroke = Stroke(width = 1.dp.toPx(), cap = StrokeCap.Round)
-    onDrawBehind {
-        drawRect(glow)
-        drawPath(left, goldTrace, style = stroke)
-        drawPath(right, blueTrace, style = stroke)
-    }
-}
-}
-
 @Composable
 private fun ShiftOverviewMoneyCard(
     label: String,
     value: String,
     icon: ImageVector,
-    tint: Color,
+    tint: Color? = null,
     modifier: Modifier = Modifier,
 ) {
+    val accent = tint ?: MaterialTheme.colorScheme.onSurfaceVariant
     Row(
         modifier.heightIn(min = 68.dp).clip(Radius.shapeMd)
-            .background(
-                Brush.verticalGradient(
-                    listOf(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.95f), MaterialTheme.colorScheme.surface.copy(alpha = 0.96f)),
-                ),
+            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .border(
+                1.dp,
+                tint?.copy(alpha = 0.47f) ?: MaterialTheme.colorScheme.outlineVariant,
+                Radius.shapeMd,
             )
-            .border(1.dp, tint.copy(alpha = 0.47f), Radius.shapeMd)
             .padding(horizontal = Spacing.md, vertical = Spacing.sm),
         horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(Modifier.size(36.dp).clip(Radius.shapeSm)
-            .background(tint.copy(alpha = 0.10f)), contentAlignment = Alignment.Center) {
-            Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(23.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant), contentAlignment = Alignment.Center) {
+            Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(23.dp))
         }
         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
@@ -795,6 +743,37 @@ private fun PastShiftsPanel(state: ShiftUiState, modifier: Modifier = Modifier) 
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.labelSmall,
         )
+    }
+}
+
+/**
+ * Startup placeholder for the current till's Room query. It deliberately has
+ * no shift action: a null `open` value is not authoritative until the scoped
+ * local query has emitted at least once.
+ */
+@Composable
+internal fun ShiftLoadingWorkspace() {
+    SectionCard(
+        title = "Checking shift",
+        subtitle = "Loading the saved shift state for this till.",
+        icon = Icons.Filled.LockClock,
+        modifier = Modifier.fillMaxWidth().testTag("shift-loading-workspace"),
+    ) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(22.dp),
+                strokeWidth = 2.dp,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            Text(
+                "Checking this device before shift actions become available.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
     }
 }
 
@@ -969,6 +948,27 @@ internal class ShiftCloseCallbacks(
     val onCloseShift: (Long) -> Unit,
 )
 
+private val DrawerCountDraftSaver = listSaver<SnapshotStateMap<Long, String>, String>(
+    save = { counts ->
+        DENOMINATIONS.flatMap { note ->
+            counts[note]?.takeIf(String::isNotBlank)?.let { count ->
+                listOf(note.toString(), count)
+            }.orEmpty()
+        }
+    },
+    restore = { saved ->
+        mutableStateMapOf<Long, String>().apply {
+            saved.chunked(2).forEach { entry ->
+                val note = entry.getOrNull(0)?.toLongOrNull()
+                val count = entry.getOrNull(1)
+                if (note in DENOMINATIONS && count?.toLongOrNull() != null) {
+                    put(requireNotNull(note), count)
+                }
+            }
+        }
+    },
+)
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun CloseShiftCard(
@@ -991,7 +991,11 @@ internal fun CloseShiftCard(
     // The exact shift identity and close-intent phase are keys. A newly opened
     // shift must never inherit another shift's drawer count or confirmation;
     // continuing a rejected shift must also start a fresh recount.
-    val counts = remember(shiftIdentity, closeBlocked) { mutableStateMapOf<Long, String>() }
+    val counts = rememberSaveable(
+        shiftIdentity,
+        closeBlocked,
+        saver = DrawerCountDraftSaver,
+    ) { mutableStateMapOf<Long, String>() }
     val draftCountedMinor = drawerCountedMinor(counts)
     val closePresentation = shiftClosePresentation(
         localState = shift.local?.state,

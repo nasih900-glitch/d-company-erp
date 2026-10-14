@@ -104,6 +104,116 @@ class MigrationTest {
     }
 
     @Test
+    fun migrate54To55PreservesCustomerParticipantsAndExactQueuedJoinEvidence() {
+        helper.createDatabase(dbName, 54).apply {
+            execSQL(
+                "INSERT INTO gaming_session_participant_cache " +
+                    "(id, gamingSessionId, customerId, joinedAtMillis, joinedPlayElapsedMs, " +
+                    "leftAtMillis, leftPlayElapsedMs, joinRevision, leaveRevision) VALUES " +
+                    "('participant-1', 'session-1', 'customer-1', 1010, 20, 2020, 900, 7, 8)",
+            )
+            execSQL(
+                "INSERT INTO local_gaming_session_actions " +
+                    "(actionId, sessionKey, sequence, actionType, ownerCompanyId, ownerUserId, " +
+                    "branchId, terminalId, serverSessionId, localSessionId, shiftId, occurredAtMillis, " +
+                    "playElapsedMs, expectedPauseVersion, expectedParticipantRevision, " +
+                    "expectedBillingRevision, customerId, customerName, customerPhone, " +
+                    "customerDirectoryRevision, customerDirectoryCompanyId, participantReference, " +
+                    "resultParticipantId, state, lastError, resolvedAtMillis) VALUES " +
+                    "('join-action-1', 'session-1', 3, 'participant_join', " +
+                    "'company-1', 'user-1', 'branch-1', 'terminal-1', 'session-1', NULL, " +
+                    "'shift-1', 3030, 321, 4, 7, 9, 'customer-1', " +
+                    "' Amina / VIP ', '+91 98765 43210', 41, 'company-1', " +
+                    "'local-participant-ref', 'server-participant-1', 'ambiguous', " +
+                    "'retry exactly', NULL)",
+            )
+            close()
+        }
+
+        val migrated = helper.runMigrationsAndValidate(dbName, 55, true, MIGRATION_54_55)
+        migrated.query(
+            "SELECT id, gamingSessionId, participantIdentityId, customerId, guestName, " +
+                "joinedAtMillis, joinedPlayElapsedMs, leftAtMillis, leftPlayElapsedMs, " +
+                "joinRevision, leaveRevision FROM gaming_session_participant_cache " +
+                "WHERE id = 'participant-1'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("participant-1", cursor.getString(0))
+            assertEquals("session-1", cursor.getString(1))
+            assertEquals("customer-1", cursor.getString(2))
+            assertEquals("customer-1", cursor.getString(3))
+            assertTrue(cursor.isNull(4))
+            assertEquals(1010L, cursor.getLong(5))
+            assertEquals(20L, cursor.getLong(6))
+            assertEquals(2020L, cursor.getLong(7))
+            assertEquals(900L, cursor.getLong(8))
+            assertEquals(7, cursor.getInt(9))
+            assertEquals(8, cursor.getInt(10))
+        }
+        migrated.query(
+            "SELECT actionId, sessionKey, sequence, actionType, ownerCompanyId, ownerUserId, " +
+                "branchId, terminalId, serverSessionId, localSessionId, shiftId, occurredAtMillis, " +
+                "playElapsedMs, expectedPauseVersion, expectedParticipantRevision, " +
+                "expectedBillingRevision, participantIdentityId, customerId, " +
+                "hex(customerName), hex(customerPhone), customerDirectoryRevision, " +
+                "customerDirectoryCompanyId, participantReference, resultParticipantId, state, " +
+                "lastError, resolvedAtMillis FROM local_gaming_session_actions " +
+                "WHERE actionId = 'join-action-1'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("join-action-1", cursor.getString(0))
+            assertEquals("session-1", cursor.getString(1))
+            assertEquals(3L, cursor.getLong(2))
+            assertEquals("participant_join", cursor.getString(3))
+            assertEquals("company-1", cursor.getString(4))
+            assertEquals("user-1", cursor.getString(5))
+            assertEquals("branch-1", cursor.getString(6))
+            assertEquals("terminal-1", cursor.getString(7))
+            assertEquals("session-1", cursor.getString(8))
+            assertTrue(cursor.isNull(9))
+            assertEquals("shift-1", cursor.getString(10))
+            assertEquals(3030L, cursor.getLong(11))
+            assertEquals(321L, cursor.getLong(12))
+            assertEquals(4, cursor.getInt(13))
+            assertEquals(7, cursor.getInt(14))
+            assertEquals(9, cursor.getInt(15))
+            // The added identity remains null for a legacy queued Join. Sync must replay
+            // the exact pre-upgrade wire shape and let the server canonicalize identity.
+            assertTrue(cursor.isNull(16))
+            assertEquals("customer-1", cursor.getString(17))
+            assertEquals("20416D696E61202F2056495020", cursor.getString(18))
+            assertEquals("2B3931203938373635203433323130", cursor.getString(19))
+            assertEquals(41L, cursor.getLong(20))
+            assertEquals("company-1", cursor.getString(21))
+            assertEquals("local-participant-ref", cursor.getString(22))
+            assertEquals("server-participant-1", cursor.getString(23))
+            assertEquals("ambiguous", cursor.getString(24))
+            assertEquals("retry exactly", cursor.getString(25))
+            assertTrue(cursor.isNull(26))
+        }
+
+        // Version 55 can represent a guest without inventing a Customer, while its
+        // immutable participant identity remains mandatory for interval grouping.
+        migrated.execSQL(
+            "INSERT INTO gaming_session_participant_cache " +
+                "(id, gamingSessionId, participantIdentityId, customerId, guestName, " +
+                "joinedAtMillis, joinedPlayElapsedMs, joinRevision) VALUES " +
+                "('guest-row-1', 'session-1', 'guest-identity-1', NULL, 'Walk-in guest', " +
+                "4040, 1000, 10)",
+        )
+        migrated.query(
+            "SELECT participantIdentityId, customerId, guestName FROM " +
+                "gaming_session_participant_cache WHERE id = 'guest-row-1'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("guest-identity-1", cursor.getString(0))
+            assertTrue(cursor.isNull(1))
+            assertEquals("Walk-in guest", cursor.getString(2))
+        }
+        migrated.close()
+    }
+
+    @Test
     fun migrate46To47PreservesQueuedStartAndAddsStableCustomerIdentity() {
         helper.createDatabase(dbName, 46).apply {
             execSQL(

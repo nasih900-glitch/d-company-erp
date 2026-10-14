@@ -69,16 +69,32 @@ function validAction(value: Record<string, unknown>): boolean {
     const customerId = typeof payload.customer_id === 'string' && payload.customer_id.length > 0;
     const customerPhone = typeof payload.customer_phone === 'string' && payload.customer_phone.trim().length > 0;
     const customerName = payload.customer_name;
-    return customerId !== customerPhone
-      && (customerName === undefined || (!customerId && typeof customerName === 'string' && customerName.trim().length > 0))
+    const guestName = payload.guest_name;
+    const participantIdentity = payload.participant_identity_id;
+    const directoryEvidence = (
+      evidence === undefined && payload.customer_directory_company_id === undefined
+    ) || (
+      revision(evidence)
+      && typeof payload.customer_directory_company_id === 'string'
+      && payload.customer_directory_company_id.length > 0
+    );
+    const savedCustomerShape = customerId && !customerPhone && guestName === undefined
+      && customerName === undefined && directoryEvidence;
+    const legacyPhoneShape = !customerId && customerPhone && guestName === undefined
+      && participantIdentity === undefined && directoryEvidence;
+    const anonymousShape = !customerId && !customerPhone && customerName === undefined
+      && evidence === undefined && payload.customer_directory_company_id === undefined;
+    return (savedCustomerShape || legacyPhoneShape || anonymousShape)
+      && (customerName === undefined || (!customerId && customerPhone
+        && typeof customerName === 'string' && customerName.trim().length > 0))
+      && (guestName === undefined || (!customerId && !customerPhone
+        && typeof guestName === 'string' && guestName.trim().length > 0))
+      && (participantIdentity === undefined
+        || (typeof participantIdentity === 'string' && participantIdentity.trim().length > 0))
       && revision(payload.expected_participant_revision)
-      && (evidence === undefined || revision(evidence))
-      && (evidence === undefined
-        ? payload.customer_directory_company_id === undefined
-        : typeof payload.customer_directory_company_id === 'string'
-          && payload.customer_directory_company_id.length > 0)
       && Object.keys(payload).every((field) => [
-        'customer_id', 'customer_name', 'customer_phone', 'expected_participant_revision',
+        'participant_identity_id', 'customer_id', 'guest_name', 'customer_name',
+        'customer_phone', 'expected_participant_revision',
         'customer_directory_revision', 'customer_directory_company_id',
       ].includes(field));
   }
