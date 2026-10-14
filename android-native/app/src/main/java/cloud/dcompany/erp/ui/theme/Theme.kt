@@ -64,7 +64,7 @@ data class BrandPalette(
 )
 
 internal val NightPalette = BrandPalette(
-    Background = Color(0xFF050505), BackgroundSecondary = Color(0xFF101010),
+    Background = Color(0xFF050505), BackgroundSecondary = Color(0xFF0B0B0B),
     Surface = Color(0xFF101010), SurfaceRaised = Color(0xFF191919),
     SurfaceHover = Color(0xFF242424), SurfaceOverlay = Color(0xFF303030),
     Gold = Color(0xFFF5F5F5), GoldBright = Color(0xFFFFFFFF), GoldMuted = Color(0xFFC7C7C0),

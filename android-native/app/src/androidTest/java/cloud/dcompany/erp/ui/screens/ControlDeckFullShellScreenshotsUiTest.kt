@@ -113,7 +113,7 @@ class ControlDeckFullShellScreenshotsUiTest {
         capture("control-deck-pos-full-1280x800.png")
 
         compose.runOnIdle { current.value = Destination.Shift }
-        compose.onNodeWithText("Live collections").assertIsDisplayed()
+        compose.onNodeWithText("Daily collections").assertIsDisplayed()
         compose.onNodeWithText("D COMPANY").assertIsDisplayed()
         compose.onNodeWithText("Review & close shift").assertIsDisplayed()
         compose.onNodeWithContentDescription("More modules").assertIsDisplayed()

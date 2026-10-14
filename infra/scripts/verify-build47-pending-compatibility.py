@@ -31,7 +31,7 @@ PRIOR_SOURCE_ARCHIVE_SHA256 = "6b9bbd2b6613873663e6b23d212317041338b1f5916a39c1b
 PRIOR_BACKEND_MANIFEST_SHA256 = "8deacbab0ad0daee1809070e10906b29e36b841e05b5b653daa48e05a19e86a0"
 CANDIDATE_BACKEND_MANIFEST_SHA256 = "a2820d72635a637074d423a5b2817b85cd8a588f4790b9094f9926e1ff8d6665"
 PRIOR_SOURCE_SHA256 = "bed9500f9321f881104080f8104d7d4e752a87851152dcaccd830c7fbce85392"
-CANDIDATE_SOURCE_SHA256 = "5a2a7e9b0e1f58d81c4c39127ac5b799feb45179383c4c06cb4d321017c96f16"
+CANDIDATE_SOURCE_SHA256 = "facc7220d4c9647b7da46b79225fa44c5368b900a46d660797ccb1786638d6cb"
 
 HISTORICAL_HELPER = "infra/scripts/verify-build46-pending-compatibility.py"
 HISTORICAL_HELPER_SHA256 = "bbeedb3e26f72aac290588ecef5c2ae69a559f81774220bf91dcc1d567b5adf4"
@@ -117,7 +117,7 @@ REVIEWED_CHANGES: dict[str, tuple[str | None, str | None]] = {
     'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/finance/FinanceScreen.kt': ('7e35db04d4076fec0fd1ae04a92eaab24d7c735fad10b24c3ca5c60111c0ad6e', 'a904b8c306fb1de63c17c8ced074def7d243f29cb25b710937046b0ab4e9659d'),
     'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingApi.kt': ('9545bf611bc68d768f6477e4331fcad44b6f624dd5dd39c7851dd5c1dae4c818', '84ba28522fceaf2153938e787c02faaa95ec28152f5b7760cadbf2c6eadc3bbb'),
     'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingDurationDial.kt': ('e5da9406b6b3c03b9910e00a09acaaf2961991b0cc90bd64296982fb02ceef84', '97e41a79366e41bd2b33d2e50cdbf548a7e7ce479fdad082ec2e313cf51d587e'),
-    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingScreen.kt': ('622b2d772dc18da7c1c5ecf306c361f92bf9d287d7e7e7166a539127b578c6c7', '19de5a5cc004c8589dea84fed4b7ca801369ee3ffcec4ca06b560cf6a628cbda'),
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingScreen.kt': ('622b2d772dc18da7c1c5ecf306c361f92bf9d287d7e7e7166a539127b578c6c7', 'd506db0a9e5da4a4545f12ee343196be32f2af282c8da55cd491ca6b2d2e6430'),
     'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingViewModel.kt': ('3899fa3a2e92643ba3f8c16eff83db1dab4df3b23841c3ac03456d50f668ac2f', 'ab5aae07576ef0b990c91e3926c0ab1a560fb600beb334c59db90d3864c8bef2'),
     'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/PauseSessionDialog.kt': ('f2e9c743b0716317c7745f8770c1cf5f1f0e863783f1cd4d8b6980cfaa88ee4f', '0cbc6e06cb696e23694387a8866816822e84787519a48894fd521a954f1eb0ea'),
     'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/inventory/InventoryScreen.kt': ('ef0b0be225b11243a918cf503a4ef0df59fd5504150cdbf65f64bad67c03c79e', '293dfa15cac61236e23a670137f5f012186ad74797da2619744bd3de172b2586'),
@@ -140,7 +140,7 @@ REVIEWED_CHANGES: dict[str, tuple[str | None, str | None]] = {
     'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/StaffScreen.kt': ('f3e7e2c3738af0554a7709738fd104975ff0b0dd457df4f9d55ddff02ca1d865', 'a18418cf4b8ef01d1f78962e00a3af0a48a1d992301a0bbcab41c93f611fadd7'),
     'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/tables/TablesScreen.kt': ('57cd0e90490e5adb5652338b38df5e31f5bf3c9e94a73b4705fc25942ac849cf', 'd136e69b2b0a857f9401c613b9931dfc74405e5f0d11d5e52a11d0b361966ba6'),
     'android-native/app/src/main/java/cloud/dcompany/erp/ui/theme/AppearanceStore.kt': (None, 'fbea0d06d70b304da0efe4514e74e82b78e84d335ea6e09462062a86aa321444'),
-    'android-native/app/src/main/java/cloud/dcompany/erp/ui/theme/Theme.kt': ('af8ae871add96e618922389178925c1136c0782a46865ab9f5ab210bbf0a35ce', '0d0ff386d60e4e0a085f5c851e6b9736527445ef8833380006f66480405d459a'),
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/theme/Theme.kt': ('af8ae871add96e618922389178925c1136c0782a46865ab9f5ab210bbf0a35ce', '17a3fd5c2945275ba833b05c505fd5dcc830c51aeda277c2abded75d3357690f'),
     'backend/alembic/versions/0087_versioned_loyalty_program.py': (None, '68c77313226ad21166c9e0c5ad4fa7346bc53298bdf00a507df9fc77c66d0182'),
     'backend/alembic/versions/0088_anonymous_gaming_participants.py': (None, '706caac623cda77097ed60c94e3296b2ec4369640ece09188f17dbec3ad8a063'),
     'backend/app/__init__.py': ('2c72f9e68ac9e6c8c08e2c42fd7cd3ddd0875d091d0c5b478b1acdef95e88d64', '0179a24d9ffac910922004640232557a581a1c2cc5267129de4c190cb9a12638'),

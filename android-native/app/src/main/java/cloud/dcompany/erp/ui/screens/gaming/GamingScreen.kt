@@ -146,6 +146,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntRect
 import kotlin.math.cos
@@ -1644,6 +1645,74 @@ internal fun rejectedSessionReviewStationId(
 }
 
 @Composable
+private fun GamingPermanentSessionDial(
+    session: GameSession?,
+    wallClock: State<Long>,
+    choices: List<GamingDurationChoice>,
+    selectedPackageId: String?,
+    onSelect: (String) -> Unit,
+    dialSize: Dp,
+    gestureContextKey: Any,
+    tariffUnavailable: Boolean,
+) {
+    // The one-second clock is owned by the permanent dial child. Keeping the
+    // read below this composition boundary prevents the station workspace,
+    // editors and fixed action footer from recomposing every second.
+    val ticking = session?.status in setOf("active", "starting")
+    val frozenNow = remember(session?.id, session?.status) { System.currentTimeMillis() }
+    val dialNow = if (ticking) wallClock.value else frozenNow
+    val sessionReadout = session?.let { current ->
+        val playedMillis = sessionPlayElapsedMillis(current, dialNow)
+        val bookedMillis = current.timerMinutes?.takeIf { it > 0 }?.times(60_000L)
+        when {
+            current.status == "start_failed" -> GamingDurationDialReadout(
+                primary = "--:--:--",
+                label = "START FAILED",
+                detail = "Review saved start",
+            )
+            playedMillis == null -> GamingDurationDialReadout(
+                primary = "--:--:--",
+                label = "TIME UNAVAILABLE",
+                detail = "Review session timing",
+            )
+            else -> {
+                val remainingMillis = bookedMillis?.minus(playedMillis)
+                GamingDurationDialReadout(
+                    primary = formatElapsed(playedMillis),
+                    label = when {
+                        current.status == "paused" -> "PAUSED"
+                        current.status == "stopping" -> "STOPPING"
+                        current.status in setOf("ended", "stopped", "completed") ||
+                            current.endAt != null -> "STOPPED"
+                        current.status == "starting" -> "STARTING"
+                        else -> "ELAPSED TIME"
+                    },
+                    detail = remainingMillis?.let { remaining ->
+                        if (remaining <= 0L) "+${formatElapsed(-remaining)} overtime"
+                        else "${formatElapsed(remaining)} remaining"
+                    } ?: "Open-ended session",
+                )
+            }
+        }
+    }
+    GamingDurationDial(
+        choices = choices,
+        selectedPackageId = selectedPackageId,
+        onSelect = onSelect,
+        dialSize = dialSize,
+        showChoiceChips = false,
+        gestureContextKey = gestureContextKey,
+        readout = sessionReadout ?: if (tariffUnavailable) {
+            GamingDurationDialReadout(
+                primary = "--",
+                label = "TARIFF UNAVAILABLE",
+                detail = "Refresh Gaming",
+            )
+        } else null,
+    )
+}
+
+@Composable
 internal fun GamingCommandWorkspace(
     state: GamingUiState,
     access: GamingAccess,
@@ -1814,45 +1883,6 @@ internal fun GamingCommandWorkspace(
                     val bookedPackageId = selectedSession?.effectivePackageId ?: selectedSession?.packageId
                     if (bookedPackageId != null) startSelection.selectedPackageId.value = bookedPackageId
                 }
-                val ticking = selectedSession?.status in setOf("active", "starting")
-                val dialNow = if (ticking) wallClock.value else remember(
-                    selectedSession?.id,
-                    selectedSession?.status,
-                ) { System.currentTimeMillis() }
-                val dialReadout = selectedSession?.let { session ->
-                    val playedMillis = sessionPlayElapsedMillis(session, dialNow)
-                    val bookedMillis = session.timerMinutes?.takeIf { it > 0 }?.times(60_000L)
-                    when {
-                        session.status == "start_failed" -> GamingDurationDialReadout(
-                            primary = "--:--:--",
-                            label = "START FAILED",
-                            detail = "Review saved start",
-                        )
-                        playedMillis == null -> GamingDurationDialReadout(
-                            primary = "--:--:--",
-                            label = "TIME UNAVAILABLE",
-                            detail = "Review session timing",
-                        )
-                        else -> {
-                            val remainingMillis = bookedMillis?.minus(playedMillis)
-                            GamingDurationDialReadout(
-                                primary = formatElapsed(playedMillis),
-                                label = when {
-                                    session.status == "paused" -> "PAUSED"
-                                    session.status == "stopping" -> "STOPPING"
-                                    session.status in setOf("ended", "stopped", "completed") ||
-                                        session.endAt != null -> "STOPPED"
-                                    session.status == "starting" -> "STARTING"
-                                    else -> "ELAPSED TIME"
-                                },
-                                detail = remainingMillis?.let { remaining ->
-                                    if (remaining <= 0L) "+${formatElapsed(-remaining)} overtime"
-                                    else "${formatElapsed(remaining)} remaining"
-                                } ?: "Open-ended session",
-                            )
-                        }
-                    }
-                }
                 val fixedTabletWorkspace = LocalConfiguration.current.screenWidthDp >= 900
                 Column(
                 paneModifier.then(
@@ -1919,20 +1949,15 @@ internal fun GamingCommandWorkspace(
                                 ),
                             )
                         }
-                        GamingDurationDial(
+                        GamingPermanentSessionDial(
+                            session = selectedSession,
+                            wallClock = wallClock,
                             choices = fixedChoices,
                             selectedPackageId = startSelection.selectedPackageId.value,
                             onSelect = { startSelection.selectedPackageId.value = it },
                             dialSize = gamingControlRingSize(LocalConfiguration.current.screenHeightDp),
-                            showChoiceChips = false,
                             gestureContextKey = selectedStation.id,
-                            readout = dialReadout ?: if (durationChoices.isEmpty()) {
-                                GamingDurationDialReadout(
-                                    primary = "--",
-                                    label = "TARIFF UNAVAILABLE",
-                                    detail = "Refresh Gaming",
-                                )
-                            } else null,
+                            tariffUnavailable = durationChoices.isEmpty(),
                         )
                     } else if (selectedSession != null) {
                         GamingStationHero(
