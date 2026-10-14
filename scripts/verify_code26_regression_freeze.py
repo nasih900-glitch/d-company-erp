@@ -1247,11 +1247,12 @@ REVIEWED_CODE30_4_BUILD48_SHA256 = {
     'infra/docker/frontend.Dockerfile': 'e7ff195698694d7bd026042d4306cd94c156f52ae22ed97598e88fb3a0efa89a',
     'infra/nginx/frontend.conf': '1e935a53ce1fa472187018781000a9b3c079d5141a273ad376fbb0f02ca9fabb',
     'infra/scripts/install-on-vm.sh': 'd86d1210e213668bd370fcde9607de45f705b40c9c2c3762b4fbee3e1a25260c',
-    'infra/scripts/verify-build48-pending-compatibility.py': '276499fd86792dd279b1ca784ad83f9a6905d2888790f10a8d2888321278b6dd',
+    'infra/scripts/verify-build48-pending-compatibility.py': '54aac713f88da7084e243004570357bbb96785fc1d5e29cf50d79d38308f6e0f',
     'infra/scripts/verify-production-runtime-images.sh': 'af3496868680e15fb52ec012d9314a2693111e500a7cd84b7eae521e64445dde',
     'ops/verify_web_public_assets.py': 'cd5f2d5978f438b54d019075535ac670cf4d34ad9c94d56ee33c0d78d6661b69',
     'tests/test_build47_pending_compatibility.py': 'faf2838474253d7046b987c022f091d7f75249bbf71ab70e01c4367774053b88',
     'tests/test_build48_pending_compatibility.py': '3212599b1da850dbff4b1f5b09d5d221a1e770e9b5ee08e5cc5fd9ab3ba97c6f',
+    'tests/test_caddy_dependency_security.py': '9628ffb3e33e6b332da719219362c9c8a738ab69108a7751c88afe10dd3d642a',
     'tests/test_code26_physical_audit_lane.py': 'bb151192dad3193bd4abdb55f1565aa6ee3d7af0cb170b505a0feb4e3ce4bcab',
     'tests/test_web_public_assets.py': '0441694c90094fb7920dd580f6450a34c3d76841cb5b28715520d530bb3faf13',
 }

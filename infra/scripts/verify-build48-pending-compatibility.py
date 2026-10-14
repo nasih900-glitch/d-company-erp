@@ -27,8 +27,8 @@ CANDIDATE_DATABASE_HEAD = "0088"
 PRIOR_SOURCE_ARCHIVE_SHA256 = "55272f149cb72fd0ba84bbdff1eab96e58fac279043f2fa72c45b5b0f7adb1a8"
 PRIOR_BACKEND_MANIFEST_SHA256 = "a2820d72635a637074d423a5b2817b85cd8a588f4790b9094f9926e1ff8d6665"
 CANDIDATE_BACKEND_MANIFEST_SHA256 = "866d75b03a6aaa170081ef5a34c4785d624e72a3fec85c80657a421f8ef9d2da"
-PRIOR_SOURCE_SHA256 = "58b4b266a34f61c20def39c0c9d9d655f0bc05b28c790ac409cfb54d02916882"
-CANDIDATE_SOURCE_SHA256 = "854736d1e40f8a36dbda4f7026fdaf3a12e59a4f7bc154c2420d850184cf31b6"
+PRIOR_SOURCE_SHA256 = "df544fab596be93306bac817aee1e5baa74bad5cde77e3aa89bbd95ae546fc19"
+CANDIDATE_SOURCE_SHA256 = "bdc51a2535e1602c2017d95813d8f112c212706bb7f4bf9a4f4eeb91afc6cad6"
 
 HISTORICAL_HELPER = "infra/scripts/verify-build47-pending-compatibility.py"
 HISTORICAL_HELPER_SHA256 = "bdadff290dccda6fb6c2fbdbc0a6a4ce47746f27650e72f859bf8dd5d40a9e1f"
@@ -67,6 +67,7 @@ PROTECTED_SCOPES = (
     "ops/runtime_release_parity.py",
     "ops/verify_web_public_assets.py",
     "infra/scripts/verify-production-runtime-images.sh",
+    "tests/test_caddy_dependency_security.py",
     "frontend/src",
     "frontend/public",
     "frontend/scripts",
@@ -101,6 +102,7 @@ REVIEWED_CHANGES: dict[str, tuple[str | None, str | None]] = {
     'infra/scripts/install-on-vm.sh': ('0fac1424b01246881ce1ba9c0c1feb88d2afeed0537907ef75f12c1044cd9b60', 'd86d1210e213668bd370fcde9607de45f705b40c9c2c3762b4fbee3e1a25260c'),
     'infra/scripts/verify-production-runtime-images.sh': ('9602119873f07a0fa0a163eb32b3ad58806281e14dea92d2c9c5ab45a204261c', 'af3496868680e15fb52ec012d9314a2693111e500a7cd84b7eae521e64445dde'),
     'ops/verify_web_public_assets.py': (None, 'cd5f2d5978f438b54d019075535ac670cf4d34ad9c94d56ee33c0d78d6661b69'),
+    'tests/test_caddy_dependency_security.py': ('b1452951bac634182dc532d7af2a4133834b882e593c70a44adfc9cc9da98305', '9628ffb3e33e6b332da719219362c9c8a738ab69108a7751c88afe10dd3d642a'),
 }
 
 
