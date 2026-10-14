@@ -1,4 +1,5 @@
 import { access, readFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import process from 'node:process';
 
@@ -23,6 +24,22 @@ for (const reference of assetReferences) {
 
   const assetPath = path.join(distRoot, reference.slice(1));
   await access(assetPath);
+}
+
+for (const relative of [
+  'brand/dcompany-app-mark.png',
+  'brand/den-emblem-gold.png',
+  'favicon-32.png',
+  'icon-192.png',
+  'manifest.webmanifest',
+  'service-worker.js',
+]) {
+  const original = await readFile(path.join('public', relative));
+  const built = await readFile(path.join(distRoot, relative));
+  const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
+  if (!built.length || sha256(built) !== sha256(original)) {
+    throw new Error(`Public asset ${relative} is missing, empty or changed in the build.`);
+  }
 }
 
 process.stdout.write(

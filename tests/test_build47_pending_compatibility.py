@@ -43,27 +43,8 @@ def _extract(ref: str, destination: Path) -> bytes:
 
 
 def _candidate_snapshot(destination: Path) -> None:
-    _extract("HEAD", destination)
-    paths = set(
-        subprocess.check_output(
-            ["git", "diff", "--name-only", "HEAD"], cwd=ROOT, text=True
-        ).splitlines()
-    )
-    paths.update(
-        subprocess.check_output(
-            ["git", "ls-files", "--others", "--exclude-standard"],
-            cwd=ROOT,
-            text=True,
-        ).splitlines()
-    )
-    for relative in paths:
-        source = ROOT / relative
-        target = destination / relative
-        if source.is_file() and not source.is_symlink():
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(source, target)
-        elif not source.exists() and target.exists():
-            target.unlink()
+    # Published build47 is immutable history, not the current build48 workspace.
+    _extract("986584a4e24dc6ab777ab89afe4f6fec374229c6", destination)
 
 
 def test_historical_verifier_is_immutable_and_build47_source_delta_is_exact(

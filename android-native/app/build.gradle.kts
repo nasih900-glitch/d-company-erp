@@ -84,8 +84,8 @@ android {
         // Build 46 is immutable signed history. This release advances Room 55
         // under a direct version code so CI, signing and upgrade checks cannot
         // produce different identities from a local Gradle property.
-        versionCode = 47
-        versionName = "3.1.39"
+        versionCode = 48
+        versionName = "3.1.40"
         buildConfigField("boolean", "DIRECT_UPDATES_ENABLED", "false")
         buildConfigField("String", "DISTRIBUTION_CHANNEL", buildConfigString("play"))
 

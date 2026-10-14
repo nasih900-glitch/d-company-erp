@@ -148,6 +148,7 @@ import {
   clearStartedStationCustomer,
   GamingCustomerPicker,
 } from './GamingCustomerPicker';
+import { gamingStationStatus } from './gaming-station-presentation';
 
 async function loadGamingCentreAddonCatalog(): Promise<MenuItemDTO[]> {
   const [items, categories] = await Promise.all([menuApi.items(), menuApi.categories()]);
@@ -3733,11 +3734,12 @@ export default function GamingScreen() {
       ) : (
         <GamingSecondPulse>
           {(now) => (
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 md:gap-4 xl:grid-cols-3">
+          <div data-gaming-station-grid className="grid grid-cols-1 items-start gap-3 md:grid-cols-2 md:gap-4 xl:grid-cols-3">
           {stations.map((st) => {
             const session = sessions[st.id];
             const billingMissing = session?.status === 'ended'
               && session.ended_amount_minor == null;
+            const stationStatus = gamingStationStatus(st.is_active, session?.status, billingMissing);
             const legacyPauseTimingGap = hasLegacyPausedTimingGap(session);
             const ownerCanResolveLegacyPause = canResolveLegacyPausedSession(
               session,
@@ -3859,19 +3861,18 @@ export default function GamingScreen() {
                 : (shiftContextError ?? 'There is no verified open shift, so existing sessions are view-only.');
 
             return (
-              <div key={st.id} data-gaming-station-workspace className={`card ${session ? 'border-fg/30' : ''}`}>
-                <div className="flex items-start gap-3 mb-3">
-                  <div className="p-3 rounded-xl bg-bg-raised text-accent">{ICON[st.type]}</div>
+              <div key={st.id} data-gaming-station-workspace className={`card !p-4 ${session ? 'border-fg/30' : ''}`}>
+                <div className="flex items-start gap-2.5 mb-3">
+                  <div className="p-2.5 rounded-xl bg-bg-raised text-accent">{ICON[st.type]}</div>
                   <div className="flex-1 min-w-0">
-                    <div className="font-bold truncate">{st.name}</div>
-                    <div className="text-xs text-fg-muted truncate">
+                    <div className="font-semibold leading-snug">{st.name}</div>
+                    <div className="mt-1 text-xs leading-relaxed text-fg-muted">
                       {st.code} · {TYPE_LABEL[st.type]} · {stationPricingDescription}
                     </div>
-                    {!st.is_active && (
-                      <span className="chip text-[10px] border-accent-bad/40 text-accent-bad mt-1">
-                        Inactive
-                      </span>
-                    )}
+                    <span data-gaming-station-status className="mt-2 inline-flex items-center gap-1.5 text-xs font-medium text-fg">
+                      <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${stationStatus.dotClassName}`} />
+                      {stationStatus.label}
+                    </span>
                   </div>
                   {canManageStations && manageMode && (
                     <div className="flex flex-col gap-1">
@@ -4512,6 +4513,7 @@ export default function GamingScreen() {
                     <div className="space-y-2">
                       <div>
                       <GamingCustomerPicker
+                        compact
                         stationId={st.id}
                         disabled={!canManageStations || !canStartOnSelectedTerminal}
                         selected={selectedCustomers[st.id]}
@@ -4574,7 +4576,8 @@ export default function GamingScreen() {
                             <GamingMutationButton
                               canManageSessions={canManageStations}
                               key={tariff.id}
-                              className="btn btn-ghost !justify-between !py-1.5 text-xs"
+                              className="btn btn-ghost min-h-12 w-full !justify-between !px-3 !py-2 text-sm"
+                              aria-label={`Start ${tariff.duration_minutes} minutes at ${st.name} for ${inr(total)}`}
                               onClick={() => startSession(st, customerName, {
                                 packageId: tariff.id,
                                 extraControllers,
@@ -4591,7 +4594,8 @@ export default function GamingScreen() {
                                 : 'Package sessions require verified paid-extension recovery storage on this device'}>
                               <span className="flex items-center gap-1.5">
                                 {startingSession === st.id && <Loader2 size={13} className="animate-spin"/>}
-                                {startingSession === st.id ? 'Starting…' : `${tariff.duration_minutes} minutes`}
+                                {startingSession !== st.id && <Play size={14} />}
+                                {startingSession === st.id ? 'Starting…' : `Start ${tariff.duration_minutes} min`}
                               </span>
                               <span className="font-mono font-bold">{inr(total)}</span>
                             </GamingMutationButton>
@@ -4620,6 +4624,7 @@ export default function GamingScreen() {
                 ) : (
                   <>
                     <GamingCustomerPicker
+                      compact
                       stationId={st.id}
                       disabled={!canManageStations || !canStartOnSelectedTerminal}
                       selected={selectedCustomers[st.id]}

@@ -21,6 +21,7 @@ from scripts.verify_code26_regression_freeze import (
     CODE30_4_BUILD44_BASE,
     CODE30_4_BUILD45_BASE,
     CODE30_4_BUILD46_BASE,
+    CODE30_4_BUILD47_BASE,
     CODE30_4_FREEZE_CONTROL_PATHS,
     REVIEWED_CODE30_2_PRODUCTION_PATHS,
     REVIEWED_CODE30_2_SHA256,
@@ -35,6 +36,7 @@ from scripts.verify_code26_regression_freeze import (
     REVIEWED_CODE30_4_BUILD45_SHA256,
     REVIEWED_CODE30_4_BUILD46_SHA256,
     REVIEWED_CODE30_4_BUILD47_SHA256,
+    REVIEWED_CODE30_4_BUILD48_SHA256,
     REVIEWED_CODE30_4_SHA256,
     REVIEWED_POST_CODE30_3_MAINTENANCE_SHA256,
 )
@@ -567,7 +569,7 @@ def _assert_sha256(path: str, content: bytes, expected: str) -> None:
 
 
 def _current_reviewed_sha256(path: str, fallback: str) -> str:
-    return REVIEWED_CODE30_4_BUILD47_SHA256.get(path) or REVIEWED_CODE30_4_BUILD46_SHA256.get(path) or REVIEWED_CODE30_4_BUILD45_SHA256.get(path) or REVIEWED_CODE30_4_BUILD44_SHA256.get(path) or REVIEWED_CODE30_4_BUILD43_SHA256.get(path) or REVIEWED_CODE30_4_BUILD42_SHA256.get(
+    return REVIEWED_CODE30_4_BUILD48_SHA256.get(path) or REVIEWED_CODE30_4_BUILD47_SHA256.get(path) or REVIEWED_CODE30_4_BUILD46_SHA256.get(path) or REVIEWED_CODE30_4_BUILD45_SHA256.get(path) or REVIEWED_CODE30_4_BUILD44_SHA256.get(path) or REVIEWED_CODE30_4_BUILD43_SHA256.get(path) or REVIEWED_CODE30_4_BUILD42_SHA256.get(
         path,
         REVIEWED_CODE30_4_BUILD41_SHA256.get(
             path,
@@ -585,6 +587,8 @@ def _current_reviewed_sha256(path: str, fallback: str) -> str:
 
 
 def _reviewed_sha256(path: str, historical: dict[str, str]) -> str:
+    if path in REVIEWED_CODE30_4_BUILD48_SHA256:
+        return REVIEWED_CODE30_4_BUILD48_SHA256[path]
     if path in REVIEWED_CODE30_4_BUILD47_SHA256:
         return REVIEWED_CODE30_4_BUILD47_SHA256[path]
     if path in REVIEWED_CODE30_4_BUILD46_SHA256:
@@ -705,6 +709,7 @@ def test_live_delta_is_exactly_the_reviewed_code29_correction() -> None:
         | set(REVIEWED_CODE30_4_BUILD45_SHA256)
         | set(REVIEWED_CODE30_4_BUILD46_SHA256)
         | set(REVIEWED_CODE30_4_BUILD47_SHA256)
+        | set(REVIEWED_CODE30_4_BUILD48_SHA256)
     )
     protected_application_changes = {
         path
@@ -751,7 +756,7 @@ def test_live_delta_is_exactly_the_reviewed_code29_correction() -> None:
     ) | set(REVIEWED_CODE30_4_PRODUCTION_PATHS)
 
 
-def test_live_coordinated_identity_is_version_name_3_1_37_with_build_45() -> None:
+def test_live_coordinated_identity_is_version_name_3_1_40_with_build_48() -> None:
     for path in (
         "android-native/app/build.gradle.kts",
         "backend/pyproject.toml",
@@ -775,8 +780,8 @@ def test_live_coordinated_identity_is_version_name_3_1_37_with_build_45() -> Non
             _assert_exact_text(path, _current(path), _identity_expected(path))
 
     build = _current("android-native/app/build.gradle.kts")
-    assert build.count("versionCode = 47") == 1
-    assert build.count('versionName = "3.1.39"') == 1
+    assert build.count("versionCode = 48") == 1
+    assert build.count('versionName = "3.1.40"') == 1
 
     historical_build44 = _historical_bytes(
         CODE30_4_BUILD44_BASE, "android-native/app/build.gradle.kts"
@@ -812,7 +817,7 @@ def test_live_coordinated_identity_is_version_name_3_1_37_with_build_45() -> Non
             REVIEWED_CODE30_2_SHA256[".env.production.example"],
         ),
     )
-    assert "APP_VERSION=3.1.39" in actual_env
+    assert "APP_VERSION=3.1.40" in actual_env
     assert "ANDROID_MIN_SUPPORTED_VERSION_CODE=8" in actual_env
     assert "ANDROID_LATEST_VERSION_CODE=8" in actual_env
     assert "CLIENT_COMPATIBILITY_POLICY_REVISION=1" in actual_env
@@ -2615,6 +2620,8 @@ def test_reviewed_code30_point4_delta_files_are_exact() -> None:
     for path, expected_sha256 in REVIEWED_CODE30_4_BUILD46_SHA256.items():
         _assert_sha256(path, _historical_bytes(CODE30_4_BUILD46_BASE, path), expected_sha256)
     for path, expected_sha256 in REVIEWED_CODE30_4_BUILD47_SHA256.items():
+        _assert_sha256(path, _historical_bytes(CODE30_4_BUILD47_BASE, path), expected_sha256)
+    for path, expected_sha256 in REVIEWED_CODE30_4_BUILD48_SHA256.items():
         _assert_sha256(path, (ROOT / path).read_bytes(), expected_sha256)
 
 
