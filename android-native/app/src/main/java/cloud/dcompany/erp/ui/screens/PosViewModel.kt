@@ -1573,6 +1573,17 @@ class PosViewModel : ViewModel() {
                     notice.value = "This saved cart belongs to a different shift. Ask a manager to review it before billing."
                     return@withLock
                 }
+                // These mutable flows are the authoritative in-memory workflow
+                // state. Reading the combined UI projection here can race a
+                // just-loaded held review before StateFlow publishes it.
+                if (heldOrderReview.value != null || preparedHeldCheckout.value != null) {
+                    notice.value = "Finish or cancel the open held bill before editing the counter cart."
+                    return@withLock
+                }
+                if (directReviewOrderId.value != null) {
+                    notice.value = "Finish or cancel the open bill review before editing the counter cart."
+                    return@withLock
+                }
                 val currentState = state.value
                 val itemsById = currentState.items.associateBy { it.id }
                 val variantsById = currentState.variants.associateBy { it.id }
@@ -2210,7 +2221,9 @@ class PosViewModel : ViewModel() {
             )
         }
         directReviewOrderId.value = null
-        notice.value = "Live bill published and reserved. Review it, then choose the payment method."
+        // The prepared checkout is already the inline, authoritative review.
+        // Do not cover its payment fields with a second acknowledgement modal.
+        notice.value = null
     }
 
     fun dismissDirectCheckout() {
@@ -2820,24 +2833,23 @@ class PosViewModel : ViewModel() {
         method: String,
         tenderedMinor: Long,
         confirmation: DirectPaymentConfirmation,
-    ) {
-        if (!requireWrite()) return
+    ): Boolean {
+        if (!requireWrite()) return false
         if (!app.connectivity.online.value) {
-            captureOfflineSale(method, tenderedMinor, confirmation)
-            return
+            return captureOfflineSale(method, tenderedMinor, confirmation)
         }
-        captureVerifiedDirectSettlement(method, tenderedMinor, confirmation)
+        return captureVerifiedDirectSettlement(method, tenderedMinor, confirmation)
     }
 
     /** Split tender is available only after the server bill and claim are durable. */
     fun captureSplitSale(
         plan: SplitPaymentPlan,
         confirmation: DirectPaymentConfirmation,
-    ) {
-        if (!requireWrite()) return
+    ): Boolean {
+        if (!requireWrite()) return false
         if (!app.connectivity.online.value) {
             notice.value = "Reconnect before taking a split payment. No money was saved."
-            return
+            return false
         }
         val storedMethod = runCatching {
             SplitPaymentPolicy.encode(
@@ -2845,21 +2857,21 @@ class PosViewModel : ViewModel() {
             )
         }.getOrElse { failure ->
             notice.value = failure.message ?: "Review the split amounts before confirming."
-            return
+            return false
         }
-        captureVerifiedDirectSettlement(storedMethod, 0L, confirmation)
+        return captureVerifiedDirectSettlement(storedMethod, 0L, confirmation)
     }
 
     private fun captureVerifiedDirectSettlement(
         storedMethod: String,
         tenderedMinor: Long,
         confirmation: DirectPaymentConfirmation,
-    ) {
+    ): Boolean {
         val prepared = state.value.preparedDirectCheckout
         if (prepared == null) {
             notice.value = "The live bill has not been verified yet. Wait for the exact server total before collecting."
             prepareDirectCheckout()
-            return
+            return false
         }
         if (
             prepared.localId != confirmation.localId ||
@@ -2868,14 +2880,14 @@ class PosViewModel : ViewModel() {
         ) {
             notice.value = "The bill changed after the payment screen opened. Review the refreshed total before collecting."
             prepareDirectCheckout()
-            return
+            return false
         }
-        if (checkoutBusy.value) return
-        val currentShiftId = authorisedShiftId() ?: return
+        if (checkoutBusy.value) return false
+        val currentShiftId = authorisedShiftId() ?: return false
         if (currentShiftId != prepared.shiftIdAtClaim) {
             notice.value = "The open shift changed after this total was verified. Review the bill again."
             dismissDirectCheckout()
-            return
+            return false
         }
         if (!HeldOrderClaimPolicy.hasConfirmationWindow(
                 prepared.claimExpiresAtMillis,
@@ -2884,39 +2896,39 @@ class PosViewModel : ViewModel() {
         ) {
             notice.value = "The verified total expired. Refreshing it now; review before collecting."
             prepareDirectCheckout()
-            return
+            return false
         }
         val splitPlan = runCatching {
             SplitPaymentPolicy.decodeStoredMethod(storedMethod)
         }.getOrElse { failure ->
             notice.value = failure.message ?: "The split-payment plan could not be verified."
-            return
+            return false
         }
         if (splitPlan == null) {
             if (storedMethod !in setOf("cash", "upi", "card")) {
                 notice.value = "Choose Cash, UPI, or Card."
-                return
+                return false
             }
             if (
                 prepared.dueMinor <= 0L ||
                 (storedMethod == "cash" && tenderedMinor < prepared.dueMinor)
             ) {
                 notice.value = "Enter enough cash to cover the verified total."
-                return
+                return false
             }
         } else if (prepared.dueMinor <= 0L || splitPlan.totalMinor != prepared.dueMinor) {
             notice.value = "Split amounts must equal the current verified bill total."
-            return
+            return false
         }
         val terminalId = app.terminalStore.confirmedTerminalId()
         if (terminalId == null) {
             notice.value = "This tablet's workspace is not verified. Sign in online before collecting."
-            return
+            return false
         }
         val scopeLease = app.cacheIsolation.currentLease()
         if (scopeLease == null) {
             notice.value = POS_PAYMENT_WORKSPACE_UNAVAILABLE_MESSAGE
-            return
+            return false
         }
         checkoutBusy.value = true
         startHeldSelectionTapGuard()
@@ -2974,18 +2986,19 @@ class PosViewModel : ViewModel() {
                 checkoutBusy.value = false
             }
         }
+        return true
     }
 
     private fun captureOfflineSale(
         method: String,
         tenderedMinor: Long,
         confirmation: DirectPaymentConfirmation,
-    ) {
-        if (checkoutBusy.value) return
-        val shiftId = authorisedShiftId() ?: return
+    ): Boolean {
+        if (checkoutBusy.value) return false
+        val shiftId = authorisedShiftId() ?: return false
         if (method !in setOf("cash", "upi", "card")) {
             notice.value = "Choose Cash, UPI, or Card."
-            return
+            return false
         }
         if (
             confirmation.localId.isBlank() ||
@@ -2994,12 +3007,12 @@ class PosViewModel : ViewModel() {
             (method == "cash" && tenderedMinor < confirmation.dueMinor)
         ) {
             notice.value = "Review the cart and enter enough cash before saving this offline payment."
-            return
+            return false
         }
         val scopeLease = app.cacheIsolation.currentLease()
         if (scopeLease == null) {
             notice.value = POS_PAYMENT_WORKSPACE_UNAVAILABLE_MESSAGE
-            return
+            return false
         }
         checkoutBusy.value = true
         viewModelScope.launch {
@@ -3074,6 +3087,7 @@ class PosViewModel : ViewModel() {
                 checkoutBusy.value = false
             }
         }
+        return true
     }
 
     /**
@@ -3486,38 +3500,38 @@ class PosViewModel : ViewModel() {
      * this point the order stays hidden even if sync is ambiguous or rejected;
      * retries replay one stable idempotency key and never ask for money again.
      */
-    fun confirmHeldOrderPayment(orderId: String, method: String, tenderedMinor: Long) {
-        confirmHeldOrderSettlement(orderId, method, tenderedMinor)
+    fun confirmHeldOrderPayment(orderId: String, method: String, tenderedMinor: Long): Boolean {
+        return confirmHeldOrderSettlement(orderId, method, tenderedMinor)
     }
 
-    fun confirmHeldOrderSplitPayment(orderId: String, plan: SplitPaymentPlan) {
-        if (!requireWrite()) return
+    fun confirmHeldOrderSplitPayment(orderId: String, plan: SplitPaymentPlan): Boolean {
+        if (!requireWrite()) return false
         if (!app.connectivity.online.value) {
             notice.value = "Reconnect before taking a split payment. No money was saved."
-            return
+            return false
         }
         val prepared = preparedHeldCheckout.value
         if (prepared == null || prepared.orderId != orderId) {
             notice.value = "The selected bill changed before split payment. Review it again."
-            return
+            return false
         }
         val storedMethod = runCatching {
             SplitPaymentPolicy.encode(SplitPaymentPolicy.create(prepared.dueMinor, plan.legs))
         }.getOrElse { failure ->
             notice.value = failure.message ?: "Review the split amounts before confirming."
-            return
+            return false
         }
-        confirmHeldOrderSettlement(orderId, storedMethod, 0L)
+        return confirmHeldOrderSettlement(orderId, storedMethod, 0L)
     }
 
     private fun confirmHeldOrderSettlement(
         orderId: String,
         storedMethod: String,
         tenderedMinor: Long,
-    ) {
-        if (!requireWrite()) return
-        val prepared = preparedHeldCheckout.value ?: return
-        if (checkoutBusy.value) return
+    ): Boolean {
+        if (!requireWrite()) return false
+        val prepared = preparedHeldCheckout.value ?: return false
+        if (checkoutBusy.value) return false
         if (!HeldCheckoutInteractionPolicy.confirmationTargetsPreparedOrder(orderId, prepared.orderId)) {
             if (preparedHeldCheckout.compareAndSet(prepared, null)) {
                 viewModelScope.launch {
@@ -3526,7 +3540,7 @@ class PosViewModel : ViewModel() {
             }
             notice.value = "The selected bill changed before confirmation. The dialog was closed " +
                 "without saving payment; choose the intended order again."
-            return
+            return false
         }
         val currentShiftId = authorisedShiftId()
         if (currentShiftId == null || currentShiftId != prepared.shiftIdAtClaim) {
@@ -3538,7 +3552,7 @@ class PosViewModel : ViewModel() {
                 notice.value =
                     "The drawer shift changed after this bill was checked. Review it again before collecting."
             }
-            return
+            return false
         }
         val terminalIdAtConfirmation = app.terminalStore.confirmedTerminalId()
         if (terminalIdAtConfirmation == null) {
@@ -3548,7 +3562,7 @@ class PosViewModel : ViewModel() {
             }
             notice.value = "This tablet's workspace is no longer verified. Nothing was saved; " +
                 "sign in online and review the bill again before collecting."
-            return
+            return false
         }
         if (!app.connectivity.online.value) {
             // The dialog's atomic one-shot gate has already been consumed.
@@ -3556,7 +3570,7 @@ class PosViewModel : ViewModel() {
             // undismissable payment dialog on screen.
             preparedHeldCheckout.compareAndSet(prepared, null)
             notice.value = "Connection was lost before confirmation. Do not collect yet; reconnect first."
-            return
+            return false
         }
         if (!HeldOrderClaimPolicy.hasConfirmationWindow(
                 prepared.claimExpiresAtMillis,
@@ -3568,34 +3582,34 @@ class PosViewModel : ViewModel() {
                 "review the amount again before collecting."
             val current = state.value.heldOrders.firstOrNull { it.id == prepared.orderId }
             if (current != null) prepareHeldOrderReview(current) else refresh()
-            return
+            return false
         }
         val splitPlan = runCatching {
             SplitPaymentPolicy.decodeStoredMethod(storedMethod)
         }.getOrElse { failure ->
             notice.value = failure.message ?: "The split-payment plan could not be verified."
-            return
+            return false
         }
         if (splitPlan == null) {
             if (storedMethod !in setOf("cash", "upi", "card")) {
                 notice.value = "Choose a supported payment method."
-                return
+                return false
             }
             if (
                 prepared.dueMinor <= 0L ||
                 (storedMethod == "cash" && tenderedMinor < prepared.dueMinor)
             ) {
                 notice.value = "The payment amount is invalid. Review the live total before confirming."
-                return
+                return false
             }
         } else if (prepared.dueMinor <= 0L || splitPlan.totalMinor != prepared.dueMinor) {
             notice.value = "Split amounts must equal the current verified bill total."
-            return
+            return false
         }
         val scopeLease = app.cacheIsolation.currentLease()
         if (scopeLease == null) {
             notice.value = POS_PAYMENT_WORKSPACE_UNAVAILABLE_MESSAGE
-            return
+            return false
         }
         // These writes are synchronous and precede the coroutine launch: a
         // second callback cannot bind itself to another order, and the second
@@ -3663,6 +3677,7 @@ class PosViewModel : ViewModel() {
                 checkoutBusy.value = false
             }
         }
+        return true
     }
 
     /**

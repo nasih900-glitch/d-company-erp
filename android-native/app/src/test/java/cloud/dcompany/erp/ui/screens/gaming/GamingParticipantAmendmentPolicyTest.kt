@@ -16,11 +16,38 @@ class GamingParticipantAmendmentPolicyTest {
     private val startedAt = Instant.parse("2026-09-24T12:00:00Z").toEpochMilli()
 
     @Test
+    fun `inline editor and stop leave the workspace when session lifecycle advances`() {
+        listOf(
+            StationVisualState.Starting,
+            StationVisualState.Active,
+            StationVisualState.Overtime,
+            StationVisualState.Paused,
+            StationVisualState.StopFailed,
+        ).forEach { state ->
+            assertTrue(gamingInlineEditorAvailable(state))
+            assertTrue(gamingInlineStopVisible(state, canRequestStop = true))
+        }
+
+        listOf(
+            StationVisualState.Stopping,
+            StationVisualState.PaymentDue,
+            StationVisualState.SendPending,
+            StationVisualState.SendRejected,
+            StationVisualState.CancellationRequired,
+            StationVisualState.Available,
+        ).forEach { state ->
+            assertFalse(gamingInlineEditorAvailable(state))
+            assertFalse(gamingInlineStopVisible(state, canRequestStop = true))
+        }
+        assertFalse(gamingInlineStopVisible(StationVisualState.Active, canRequestStop = false))
+    }
+
+    @Test
     fun `phone identifies a new friend while name stays optional`() {
         assertEquals(null, gamingParticipantJoinIdentityError(null, null, "9876543210"))
         assertEquals(null, gamingParticipantJoinIdentityError(null, "Optional name", "9876543210"))
         assertEquals(null, gamingParticipantJoinIdentityError("saved-customer", null, null))
-        assertTrue(gamingParticipantJoinIdentityError(null, "Name only", null)!!.contains("phone"))
+        assertEquals(null, gamingParticipantJoinIdentityError(null, "Name only", null))
         assertTrue(gamingParticipantJoinIdentityError("saved-customer", null, "9876543210")!!.contains("not both"))
     }
 
@@ -28,15 +55,18 @@ class GamingParticipantAmendmentPolicyTest {
     fun `rejoin intervals use one cumulative started-hour minimum per customer`() {
         val rows = listOf(
             GamingParticipantUi(
-                reference = "visit-1", customerId = "friend-1", name = "Friend", phone = "9876543210",
+                reference = "visit-1", participantIdentityId = "friend-1",
+                customerId = "friend-1", name = "Friend", phone = "9876543210",
                 active = false, pending = false, joinedPlayElapsedMs = 0L, leftPlayElapsedMs = 1_800_000L,
             ),
             GamingParticipantUi(
-                reference = "visit-2", customerId = "friend-1", name = "Friend", phone = "9876543210",
+                reference = "visit-2", participantIdentityId = "friend-1",
+                customerId = "friend-1", name = "Friend", phone = "9876543210",
                 active = true, pending = false, joinedPlayElapsedMs = 2_000_000L,
             ),
             GamingParticipantUi(
-                reference = "visit-3", customerId = "friend-2", name = null, phone = "9876543211",
+                reference = "visit-3", participantIdentityId = "friend-2",
+                customerId = "friend-2", name = null, phone = "9876543211",
                 active = true, pending = false, joinedPlayElapsedMs = 3_000_000L,
             ),
         )
@@ -61,6 +91,72 @@ class GamingParticipantAmendmentPolicyTest {
                 phone = "9876543299",
             ),
         )
+    }
+
+    @Test
+    fun `inline roster keeps one current action per identity without losing distinct people`() {
+        val rows = listOf(
+            GamingParticipantUi(
+                reference = "friend-a-first", participantIdentityId = "friend-a",
+                customerId = null, name = "Friend A", phone = null,
+                active = false, pending = false,
+                joinedAtMillis = startedAt, leftAtMillis = startedAt + 60_000L,
+            ),
+            GamingParticipantUi(
+                reference = "friend-a-latest", participantIdentityId = "friend-a",
+                customerId = null, name = "Friend A", phone = null,
+                active = false, pending = true,
+                joinedAtMillis = startedAt + 120_000L,
+                leftAtMillis = startedAt + 180_000L,
+            ),
+            GamingParticipantUi(
+                reference = "friend-b-old", participantIdentityId = "friend-b",
+                customerId = null, name = "Friend B", phone = null,
+                active = false, pending = false,
+                joinedAtMillis = startedAt + 30_000L,
+                leftAtMillis = startedAt + 90_000L,
+            ),
+            GamingParticipantUi(
+                reference = "friend-b-active", participantIdentityId = "friend-b",
+                customerId = null, name = "Friend B", phone = null,
+                active = true, pending = false,
+                joinedAtMillis = startedAt + 100_000L,
+            ),
+        )
+
+        val current = currentGamingParticipantRows(rows)
+
+        assertEquals(listOf("friend-a", "friend-b"), current.map { it.participantIdentityId })
+        assertEquals("friend-a-latest", current[0].reference)
+        assertEquals("Waiting to sync Leave", gamingParticipantStateLabel(current[0]))
+        assertEquals("friend-b-active", current[1].reference)
+        assertEquals("Playing now", gamingParticipantStateLabel(current[1]))
+    }
+
+    @Test
+    fun `late joins fill the remaining station places up to four`() {
+        val single = session().copy(
+            packageVariantSnapshot = "single",
+            effectivePackageVariant = "single",
+            extraControllers = 0,
+        )
+        assertEquals(1, gamingBookedPlayerCount(single))
+        assertTrue(gamingLateJoinHasCapacity(single, activeLatePlayers = 2))
+        assertFalse(gamingLateJoinHasCapacity(single, activeLatePlayers = 3))
+
+        val dual = session().copy(
+            packageVariantSnapshot = "dual",
+            effectivePackageVariant = "dual",
+            extraControllers = 0,
+        )
+        assertEquals(2, gamingBookedPlayerCount(dual))
+        assertTrue(gamingLateJoinHasCapacity(dual, activeLatePlayers = 1))
+        assertFalse(gamingLateJoinHasCapacity(dual, activeLatePlayers = 2))
+
+        val dualWithBookedExtra = dual.copy(extraControllers = 1)
+        assertEquals(3, gamingBookedPlayerCount(dualWithBookedExtra))
+        assertTrue(gamingLateJoinHasCapacity(dualWithBookedExtra, activeLatePlayers = 0))
+        assertFalse(gamingLateJoinHasCapacity(dualWithBookedExtra, activeLatePlayers = 1))
     }
 
     @Test

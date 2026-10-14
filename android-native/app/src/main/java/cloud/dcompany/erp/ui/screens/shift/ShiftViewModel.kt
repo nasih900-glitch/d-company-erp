@@ -36,6 +36,14 @@ val DENOMINATIONS = listOf(500L, 200L, 100L, 50L, 20L, 10L, 5L, 2L, 1L)
 
 data class ShiftUiState(
     val open: ResolvedOpenShift? = null,
+    /**
+     * False until Room has resolved the current shift for the active validated
+     * terminal. This prevents the StateFlow seed from briefly presenting a
+     * destructive "No open shift" workflow during process/activity startup.
+     * Room still resolves immediately while offline, so a cached local shift
+     * keeps the existing offline-first behavior.
+     */
+    val currentShiftLoaded: Boolean = false,
     val history: List<ShiftHistoryRow> = emptyList(),
     val historyLastSyncMillis: Long? = null,
     val historyMessage: String? = null,
@@ -148,9 +156,19 @@ class ShiftViewModel : ViewModel() {
     private val confirmedTerminalId = app.terminalStore.activeValidatedTerminal
         .map { it?.terminalId }
         .distinctUntilChanged()
-    private val resolvedShift = db.shiftDao().observeShiftForManagement(
-        confirmedTerminalId,
+    private data class ResolvedShiftState(
+        val terminalId: String?,
+        val open: ResolvedOpenShift?,
     )
+    private val resolvedShift = confirmedTerminalId.flatMapLatest { terminalId ->
+        if (terminalId == null) {
+            flowOf(ResolvedShiftState(null, null))
+        } else {
+            db.shiftDao().observeShiftForManagement(terminalId).map { current ->
+                ResolvedShiftState(terminalId, current)
+            }
+        }
+    }
     private data class HistoryState(
         val rows: List<ShiftHistoryRow>,
         val latestLocalClosed: LocalShiftEntity?,
@@ -160,6 +178,7 @@ class ShiftViewModel : ViewModel() {
         val online: Boolean,
         val syncing: Boolean,
         val profile: MeResponse?,
+        val terminalId: String?,
         val terminalName: String?,
         val offlineGamingSupported: Boolean,
         val historyRefreshing: Boolean,
@@ -229,6 +248,7 @@ class ShiftViewModel : ViewModel() {
                 online,
                 syncing,
                 scope.first,
+                scope.second?.terminalId,
                 scope.second?.terminalName,
                 scope.second?.offlineShiftCaptureSupported == true,
                 historySync.first,
@@ -249,7 +269,15 @@ class ShiftViewModel : ViewModel() {
         val online = session.online
         val syncing = session.syncing
         val profile = session.profile
-        val closeOrigin = current?.let {
+        // Both flows derive from the same validated-terminal source, but they
+        // can emit on adjacent frames during recreation or till changes. Never
+        // present another terminal's prior result, or a closed workflow before
+        // Room has emitted for the active terminal.
+        val scopedCurrent = current.takeIf {
+            session.terminalId != null && it.terminalId == session.terminalId
+        }
+        val currentOpen = scopedCurrent?.open
+        val closeOrigin = currentOpen?.let {
             shiftCloseOriginDecision(it, app.updateTelemetry.installation.installationId())
         }
         val justClosed = historyState.latestLocalClosed?.takeIf {
@@ -260,7 +288,8 @@ class ShiftViewModel : ViewModel() {
             )
         }
         ShiftUiState(
-            open = current,
+            open = currentOpen,
+            currentShiftLoaded = scopedCurrent != null,
             history = historyState.rows,
             historyLastSyncMillis = historyState.lastSyncMillis,
             historyMessage = shiftHistoryStatusMessage(
@@ -281,12 +310,12 @@ class ShiftViewModel : ViewModel() {
             // new server shift on the same terminal. Its durable result still
             // needs acknowledgement instead of being hidden by `current`.
             closedResult = justClosed,
-            expectedMinor = current?.expectedMinor,
+            expectedMinor = currentOpen?.expectedMinor,
             workspaceLabel = shiftWorkspaceLabel(profile?.branchName, session.terminalName),
             currentUserId = profile?.userId,
             // Shift-close authority comes from the authenticated permission.
             // The opener remains attribution, not an extra ownership lock.
-            canClose = current != null && interaction.access.canClose && closeOrigin?.allowed == true,
+            canClose = currentOpen != null && interaction.access.canClose && closeOrigin?.allowed == true,
             closeOriginMessage = closeOrigin?.message,
             rejectedShift = latestRejected,
         )

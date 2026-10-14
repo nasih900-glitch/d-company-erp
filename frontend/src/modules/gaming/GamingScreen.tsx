@@ -498,7 +498,8 @@ export function estimatedFriendControllerMinor(
   state.participants.forEach((friend) => {
     const end = friend.left_play_elapsed_ms ?? currentPlayMs;
     const duration = Math.max(0, end - friend.joined_play_elapsed_ms);
-    totals.set(friend.customer_id, (totals.get(friend.customer_id) ?? 0) + duration);
+    const identity = friend.participant_identity_id ?? friend.customer_id ?? friend.id;
+    totals.set(identity, (totals.get(identity) ?? 0) + duration);
   });
   return Array.from(totals.values()).reduce((sum, duration) =>
     sum + Math.max(1, Math.ceil(duration / 3_600_000)) * 3_000, 0);
@@ -513,6 +514,7 @@ export function estimatedFriendControllerMinorAfterJoin(
     ...state,
     participants: [...state.participants, {
       id: 'join-review',
+      participant_identity_id: customerId ?? 'anonymous-join-review',
       customer_id: customerId ?? 'new-phone-identity',
       joined_at: new Date().toISOString(),
       joined_play_elapsed_ms: currentPlayMs,
@@ -530,6 +532,34 @@ function participantIntervalLabel(participant: GamingParticipantDTO, currentPlay
   const hours = Math.floor(totalMinutes / 60);
   const minutes = totalMinutes % 60;
   return `${hours > 0 ? `${hours}h ` : ''}${minutes}m played`;
+}
+
+/**
+ * The API keeps every attendance interval for billing and audit. The live
+ * roster presents one actionable row per stable person: the active interval
+ * when present, otherwise the most recent completed interval.
+ */
+export function currentGamingParticipantRows(
+  participants: GamingParticipantDTO[],
+): GamingParticipantDTO[] {
+  const byIdentity = new Map<string, GamingParticipantDTO>();
+  participants.forEach((participant) => {
+    const identity = participant.participant_identity_id ?? participant.customer_id ?? participant.id;
+    const current = byIdentity.get(identity);
+    const participantActive = participant.left_at === null;
+    const currentActive = current?.left_at === null;
+    const participantRecency = current == null ? 1
+      : participant.joined_at.localeCompare(current.joined_at)
+        || (participant.left_at ?? '').localeCompare(current.left_at ?? '')
+        || participant.id.localeCompare(current.id);
+    if (!current
+      || (participantActive && !currentActive)
+      || (participantActive === currentActive && participantRecency > 0)) {
+      byIdentity.set(identity, participant);
+    }
+  });
+  return Array.from(byIdentity.values()).sort((left, right) =>
+    left.joined_at.localeCompare(right.joined_at));
 }
 
 export function eligiblePs5ShortenTarget(
@@ -711,12 +741,6 @@ export default function GamingScreen() {
   const [newFriendName, setNewFriendName] = useState('');
   const [newFriendPhone, setNewFriendPhone] = useState('');
   const [pendingFriendJoin, setPendingFriendJoin] = useState<StationDTO | null>(null);
-  const [friendPhonePreview, setFriendPhonePreview] = useState<{
-    phone: string;
-    status: 'idle' | 'checking' | 'existing' | 'new' | 'unavailable';
-    customerId?: string;
-  }>({ phone: '', status: 'idle' });
-  const friendPhonePreviewGeneration = useRef(0);
   const [friendSaving, setFriendSaving] = useState(false);
   const friendSavingRef = useRef(false);
   const [pendingFriendLeave, setPendingFriendLeave] = useState<{
@@ -751,35 +775,6 @@ export default function GamingScreen() {
   const mutedRef = useRef(mutedStations);
   useEffect(() => { mutedRef.current = mutedStations; }, [mutedStations]);
   const lastAlarmAtRef = useRef<Record<string, number>>({});
-
-  useEffect(() => {
-    const generation = ++friendPhonePreviewGeneration.current;
-    const rawPhone = newFriendPhone.trim();
-    const normalizedPhone = normalizedGamingPhoneIdentity(rawPhone);
-    if (!LIVE_MODE || !pendingFriendJoin || selectedFriend || !normalizedPhone) {
-      setFriendPhonePreview({ phone: rawPhone, status: 'idle' });
-      return;
-    }
-    setFriendPhonePreview({ phone: rawPhone, status: 'checking' });
-    const timer = window.setTimeout(() => {
-      void customers.byGamingPhone(normalizedPhone).then((customer) => {
-        if (generation !== friendPhonePreviewGeneration.current) return;
-        if (!customer) {
-          setFriendPhonePreview({ phone: rawPhone, status: 'new' });
-          return;
-        }
-        const customerId = exactGamingCustomerIdForPhone(customer, rawPhone);
-        setFriendPhonePreview(customerId
-          ? { phone: rawPhone, status: 'existing', customerId }
-          : { phone: rawPhone, status: 'unavailable' });
-      }).catch(() => {
-        if (generation === friendPhonePreviewGeneration.current) {
-          setFriendPhonePreview({ phone: rawPhone, status: 'unavailable' });
-        }
-      });
-    }, 250);
-    return () => window.clearTimeout(timer);
-  }, [newFriendPhone, pendingFriendJoin, selectedFriend]);
 
   const [addOpen, setAddOpen] = useState(false);
   const [edit, setEdit] = useState<StationDTO | null>(null);
@@ -1151,7 +1146,8 @@ export default function GamingScreen() {
           }
         });
         const friendIds = Array.from(new Set(Object.values(loadedParticipants)
-          .flatMap((state) => state.participants.map((participant) => participant.customer_id))));
+          .flatMap((state) => state.participants.map((participant) => participant.customer_id)
+            .filter((id): id is string => id !== null))));
         const friendLookups = await Promise.allSettled(friendIds.map((id) => customers.get(id)));
         if (!refresh.isCurrent()) return;
         const loadedFriendNames: Record<string, string> = {};
@@ -2280,26 +2276,15 @@ export default function GamingScreen() {
     setFriendSaving(true);
     try {
       const customer = selectedFriend;
-      let joinIdentity: { customer_id?: string; customer_name?: string; customer_phone?: string };
+      let joinIdentity: { customer_id?: string; guest_name?: string };
       if (customer) {
         joinIdentity = { customer_id: customer.id };
       } else {
         const name = newFriendName.trim();
-        const phone = newFriendPhone.trim();
-        if (!phone) {
-          notifications.error('Select a saved customer or enter the friend phone number.');
-          return;
-        }
-        await customers.list(phone);
-        joinIdentity = {
-          customer_phone: phone,
-          customer_name: name || undefined,
-        };
+        joinIdentity = { guest_name: name || undefined };
       }
-      // Capture the deletion revision after the latest directory read. The
-      // backend resolves or creates the phone identity in the same Join write.
       if (customer) await customers.list(customer.phone);
-      const evidence = captureCustomerDirectoryEvidence();
+      const evidence = customer ? captureCustomerDirectoryEvidence() : {};
       const attempt = newGamingAction(session, {
         kind: 'join',
         payload: {
@@ -2330,6 +2315,30 @@ export default function GamingScreen() {
     const attempt = newGamingAction(session, {
       kind: 'leave', participantId: participant.id,
       payload: { expected_participant_revision: roster.participant_revision },
+    });
+    if (attempt) await submitGamingAction(attempt);
+  }
+
+  async function rejoinFriend(station: StationDTO, participant: GamingParticipantDTO) {
+    const session = sessions[station.id];
+    if (!session?.backend_session_id || session.status !== 'active'
+      || !requireCurrentShiftOwnership(session, 'rejoin a player')) return;
+    const roster = participantsBySession[session.backend_session_id];
+    if (!roster || roster.participant_revision !== session.participant_revision
+      || roster.current_player_count >= roster.max_player_count
+      || !participant.left_at) {
+      notifications.error('Player attendance changed or all four player places are assigned. Refresh Gaming.');
+      return;
+    }
+    const attempt = newGamingAction(session, {
+      kind: 'join',
+      payload: {
+        participant_identity_id: participant.participant_identity_id ?? participant.customer_id ?? participant.id,
+        customer_id: participant.customer_id ?? undefined,
+        guest_name: participant.customer_id ? undefined : participant.guest_name ?? undefined,
+        expected_participant_revision: roster.participant_revision,
+        ...(participant.customer_id ? captureCustomerDirectoryEvidence() : {}),
+      },
     });
     if (attempt) await submitGamingAction(attempt);
   }
@@ -4058,7 +4067,12 @@ export default function GamingScreen() {
                             transform="rotate(135 168 168)" />
                         </svg>
                         <div className="relative text-center">
-                          <div className="font-mono text-5xl font-semibold tabular-nums">{authoritativeClock}</div>
+                          <div
+                            className="whitespace-nowrap font-mono text-[clamp(1.75rem,2.8vw,2.25rem)] leading-none font-semibold tracking-tight tabular-nums"
+                            data-gaming-authoritative-clock
+                          >
+                            {authoritativeClock}
+                          </div>
                           <div className="mt-2 text-[11px] font-semibold uppercase tracking-[0.22em] text-fg-muted">
                             {authoritativeRemainingMs == null
                               ? 'elapsed'
@@ -4093,6 +4107,25 @@ export default function GamingScreen() {
                         busy={addonMutationBusy}
                         onAdd={() => openAddonPicker(st, backendSessionId)}
                         onVoid={(addon) => openAddonVoid(st, backendSessionId, addon)}
+                      />
+                    )}
+                    {addonModalTarget?.station.id === st.id && backendSessionId && (
+                      <SessionAddonPickerModal
+                        key={`${addonModalTarget.sessionId}:${addonCreateAttempt?.idempotencyKey ?? 'new'}`}
+                        embedded
+                        stationName={st.name}
+                        sessionId={backendSessionId}
+                        items={addonCatalog}
+                        attempt={addonCreateAttempt?.sessionId === backendSessionId ? addonCreateAttempt : null}
+                        busy={addingAddonTo === backendSessionId}
+                        requestError={addonCreateError}
+                        onSubmit={(draft) => { void submitSessionAddon(draft); }}
+                        onClose={() => {
+                          if (!addingAddonTo) {
+                            setAddonModalTarget(null);
+                            setAddonCreateError(null);
+                          }
+                        }}
                       />
                     )}
                     <div className="bg-bg-raised rounded-lg p-3 mb-3">
@@ -4287,17 +4320,26 @@ export default function GamingScreen() {
                               <div>{(session.package_variant_snapshot === 'dual' ? 2 : 1) + (session.extra_controllers ?? 0)} booked and fixed · {session.package_variant_snapshot === 'dual' ? 2 : 1} included · {participantState.active_friend_count} late friend{participantState.active_friend_count === 1 ? '' : 's'} active</div>
                               <div className="mt-1">Capacity {participantState.current_player_count}/{participantState.max_player_count}. Booked players cannot be replaced by late friends.</div>
                             </div>
-                            {participantState.participants.map((friend) => (
+                            {currentGamingParticipantRows(participantState.participants).map((friend) => {
+                              const stableIdentity = friend.participant_identity_id ?? friend.customer_id ?? friend.id;
+                              const sameIdentityActive = participantState.participants.some((candidate) =>
+                                candidate.id !== friend.id
+                                && !candidate.left_at
+                                && (candidate.participant_identity_id ?? candidate.customer_id ?? candidate.id) === stableIdentity,
+                              );
+                              return (
                               <div key={friend.id} className="flex items-start justify-between gap-2 rounded-md border border-bg-border px-2.5 py-2">
                                 <span className="min-w-0">
-                                  <span className="block truncate font-medium">{friendNames[friend.customer_id] ?? `Saved customer ${friend.customer_id.slice(0, 8)}`}</span>
+                                  <span className="block truncate font-medium">{friend.customer_id
+                                    ? (friendNames[friend.customer_id] ?? `Saved customer ${friend.customer_id.slice(0, 8)}`)
+                                    : (friend.guest_name?.trim() || `Guest player ${stableIdentity.slice(0, 4)}`)}</span>
                                   <span className="block text-[10px] text-fg-muted">
                                     Joined {formatShiftBusinessTime(friend.joined_at)}
                                     {friend.left_at ? ` · Left ${formatShiftBusinessTime(friend.left_at)}` : ' · Playing now'}
                                     {' · '}{participantIntervalLabel(friend, elapsedMs)}
                                   </span>
                                 </span>
-                                {!friend.left_at && (
+                                {!friend.left_at ? (
                                   <GamingMutationButton
                                     canManageSessions={canManageStations}
                                     className="btn btn-ghost !py-1 text-xs"
@@ -4305,9 +4347,20 @@ export default function GamingScreen() {
                                       || paidExtensionLifecycleBlocked || addonMutationPending}
                                     onClick={() => setPendingFriendLeave({ station: st, participant: friend })}
                                   >Mark left</GamingMutationButton>
-                                )}
+                                ) : session.status === 'active'
+                                  && !sameIdentityActive
+                                  && participantState.current_player_count < participantState.max_player_count ? (
+                                  <GamingMutationButton
+                                    canManageSessions={canManageStations}
+                                    className="btn btn-ghost !py-1 text-xs"
+                                    disabled={!sessionOwned || actionPending || gamingActionBusy !== null
+                                      || paidExtensionLifecycleBlocked || addonMutationPending}
+                                    onClick={() => { void rejoinFriend(st, friend); }}
+                                  >Rejoin</GamingMutationButton>
+                                ) : null}
                               </div>
-                            ))}
+                              );
+                            })}
                             {friendEstimate !== null && participantState.participants.length > 0 && (
                               <p className="text-accent-gold">
                                 Late-friend controller fee: {inr(friendEstimate)} at ₹30 per started cumulative hour, minimum ₹30 per friend · estimated combined session total: {amount === null ? 'unavailable' : inr(amount + friendEstimate)}. Paused play is excluded; End session confirms the final bill.
@@ -4330,6 +4383,40 @@ export default function GamingScreen() {
                                   setPendingFriendJoin(st);
                                 }}
                               >Add player</GamingMutationButton>
+                            )}
+                            {pendingFriendJoin?.id === st.id && (
+                              <div className="space-y-2 rounded-lg border border-bg-border bg-bg-surface p-3"
+                                data-testid="gaming-player-inline">
+                                <div className="flex items-start justify-between gap-2">
+                                  <div>
+                                    <div className="text-xs font-semibold">Add player</div>
+                                    <div className="text-[11px] text-fg-muted">Anonymous by default · no points without a saved customer</div>
+                                  </div>
+                                  <button type="button" className="btn btn-ghost !py-1 text-xs"
+                                    disabled={friendSaving || gamingActionBusy !== null}
+                                    onClick={() => setPendingFriendJoin(null)}>Cancel</button>
+                                </div>
+                                <GamingCustomerPicker
+                                  stationId={`friend-inline-${st.id}`}
+                                  disabled={friendSaving || gamingActionBusy !== null}
+                                  selected={selectedFriend}
+                                  name={newFriendName}
+                                  phone={newFriendPhone}
+                                  onSelect={setSelectedFriend}
+                                  onNameChange={setNewFriendName}
+                                  onPhoneChange={setNewFriendPhone}
+                                  saveContext="join"
+                                />
+                                <div className="flex items-center justify-between gap-2 text-[11px] text-fg-muted">
+                                  <span>₹30 / started cumulative hour · ₹30 minimum</span>
+                                  <GamingMutationButton canManageSessions={canManageStations}
+                                    className="btn btn-primary !py-1.5"
+                                    disabled={friendSaving || gamingActionBusy !== null}
+                                    onClick={() => { void joinSavedFriend(st); }}>
+                                    {friendSaving ? <Loader2 size={14} className="animate-spin"/> : <Plus size={14}/>} Confirm join
+                                  </GamingMutationButton>
+                                </div>
+                              </div>
                             )}
                           </>
                         )}
@@ -4594,26 +4681,6 @@ export default function GamingScreen() {
       )}
 
       <GamingWriteOnly allowed={canManageStations}>
-        {addonModalTarget && (
-          <SessionAddonPickerModal
-            key={`${addonModalTarget.sessionId}:${addonCreateAttempt?.idempotencyKey ?? 'new'}`}
-            stationName={addonModalTarget.station.name}
-            sessionId={addonModalTarget.sessionId}
-            items={addonCatalog}
-            attempt={addonCreateAttempt?.sessionId === addonModalTarget.sessionId
-              ? addonCreateAttempt
-              : null}
-            busy={addingAddonTo === addonModalTarget.sessionId}
-            requestError={addonCreateError}
-            onSubmit={(draft) => { void submitSessionAddon(draft); }}
-            onClose={() => {
-              if (!addingAddonTo) {
-                setAddonModalTarget(null);
-                setAddonCreateError(null);
-              }
-            }}
-          />
-        )}
         {addonVoidTarget && (
           <SessionAddonVoidModal
             key={`${addonVoidTarget.addon.id}:${addonVoidAttempt?.idempotencyKey ?? 'new'}`}
@@ -4749,70 +4816,6 @@ export default function GamingScreen() {
             }}
           </GamingSecondPulse>
         )}
-        {pendingFriendJoin && (() => {
-          const joinSession = sessions[pendingFriendJoin.id];
-          const joinRoster = joinSession?.backend_session_id
-            ? participantsBySession[joinSession.backend_session_id]
-            : undefined;
-          const joinPlayMs = joinSession ? playedSessionMilliseconds(joinSession, Date.now()) : 0;
-          const bookedPlayers = joinSession
-            ? (joinSession.package_variant_snapshot === 'dual' ? 2 : 1) + (joinSession.extra_controllers ?? 0)
-            : 0;
-          const upfrontControllerMinor = joinSession
-            ? bookedControllerSurchargeMinor(joinSession)
-            : 0;
-          const currentFriendMinor = joinRoster
-            ? estimatedFriendControllerMinor(joinRoster, joinPlayMs) ?? 0
-            : 0;
-          const inlinePreviewReady = selectedFriend
-            || friendPhonePreview.status === 'existing'
-            || friendPhonePreview.status === 'new';
-          const previewCustomerId = selectedFriend?.id ?? friendPhonePreview.customerId;
-          const afterJoinFriendMinor = joinRoster && inlinePreviewReady
-            ? estimatedFriendControllerMinorAfterJoin(joinRoster, joinPlayMs, previewCustomerId)
-            : null;
-          return <Modal open onClose={() => { if (!friendSaving && !gamingActionBusy) setPendingFriendJoin(null); }}
-            title={`Add a friend to ${pendingFriendJoin.name}`}>
-            <div className="space-y-3 p-1">
-              <p className="text-sm text-fg-muted">Select a saved customer, or enter a required phone and optional name. Each joined friend adds ₹30 per started hour of their cumulative actual playtime, minimum ₹30. Paused time is excluded and the final amount is confirmed when the session ends.</p>
-              <div className="grid gap-2 rounded-lg border border-bg-border bg-bg-raised p-3 text-xs sm:grid-cols-2">
-                <div><span className="text-fg-muted">Players</span><div className="font-semibold">{bookedPlayers} booked and fixed · {joinRoster?.active_friend_count ?? 0} late active · {joinRoster?.current_player_count ?? bookedPlayers}/4 total</div></div>
-                <div><span className="text-fg-muted">Late-friend rate</span><div className="font-semibold">₹30 / started cumulative hour · ₹30 minimum</div></div>
-                <div><span className="text-fg-muted">Current player-controller fees</span><div className="font-mono font-semibold">{inr(upfrontControllerMinor + currentFriendMinor)}</div></div>
-                <div><span className="text-fg-muted">After this join</span><div className="font-mono font-semibold">
-                  {afterJoinFriendMinor === null
-                    ? (friendPhonePreview.status === 'checking'
-                      ? 'Checking saved phone identity…'
-                      : friendPhonePreview.status === 'unavailable'
-                        ? 'Phone identity is unavailable · choose the saved customer'
-                        : 'Select or verify the phone for an exact estimate')
-                    : `${inr(upfrontControllerMinor + afterJoinFriendMinor)} estimated`}
-                </div></div>
-              </div>
-              <GamingCustomerPicker
-                stationId={`friend-${pendingFriendJoin.id}`}
-                disabled={friendSaving || gamingActionBusy !== null}
-                selected={selectedFriend}
-                name={newFriendName}
-                phone={newFriendPhone}
-                onSelect={setSelectedFriend}
-                onNameChange={setNewFriendName}
-                onPhoneChange={setNewFriendPhone}
-                saveContext="join"
-              />
-              <div className="flex justify-end gap-2">
-                <button type="button" className="btn btn-ghost" disabled={friendSaving || gamingActionBusy !== null}
-                  onClick={() => setPendingFriendJoin(null)}>Cancel</button>
-                <GamingMutationButton canManageSessions={canManageStations} className="btn btn-primary"
-                  disabled={friendSaving || gamingActionBusy !== null || (!selectedFriend &&
-                    friendPhonePreview.status !== 'existing' && friendPhonePreview.status !== 'new')}
-                  onClick={() => { void joinSavedFriend(pendingFriendJoin); }}>
-                  {friendSaving ? <Loader2 size={14} className="animate-spin"/> : <Plus size={14}/>} Add player
-                </GamingMutationButton>
-              </div>
-            </div>
-          </Modal>;
-        })()}
         {pendingFriendLeave && (
           <ConfirmModal
             title={`Mark friend as left?`}

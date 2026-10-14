@@ -81,6 +81,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.contentDescription
@@ -134,6 +136,7 @@ fun CustomersScreen(access: CustomersAccess = CustomersAccess()) {
     val playtimeVm: CustomerPlaytimeViewModel = viewModel()
     val playtime by playtimeVm.state.collectAsStateWithLifecycle()
     val focusManager = LocalFocusManager.current
+    val tabletWorkspace = LocalConfiguration.current.screenWidthDp >= 900
     var listFilter by rememberSaveable { mutableStateOf(CustomerListFilter.All) }
     val scopedPlaytime = playtimeVm.stateForCurrentScope(playtime)
     val viewSelection = rememberCustomerViewMode(
@@ -177,7 +180,8 @@ fun CustomersScreen(access: CustomersAccess = CustomersAccess()) {
         if (viewMode == CustomerViewMode.Directory) {
             CustomerActionRow(
                 state = state,
-                canWrite = access.canManageCustomers,
+                canWrite = access.canManageCustomers &&
+                    canOpenCustomerEditor(state.saving, state.editor != null),
                 onQueryChange = vm::search,
                 onClearSearch = vm::clearSearch,
                 onRefresh = vm::retry,
@@ -217,6 +221,64 @@ fun CustomersScreen(access: CustomersAccess = CustomersAccess()) {
                     onLoadMore = playtimeVm::loadMore,
                     modifier = Modifier.fillMaxSize(),
                 )
+
+                tabletWorkspace && !state.loading && !state.couldNotLoad &&
+                    (state.rows.isNotEmpty() || state.editor != null) -> Row(
+                    Modifier.fillMaxSize().testTag("customers-master-detail"),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+                ) {
+                    CustomerResultsPanel(
+                        state = state,
+                        onSelect = vm::select,
+                        filter = listFilter,
+                        modifier = Modifier.weight(0.44f).fillMaxHeight(),
+                    )
+                    when (val editor = state.editor?.takeIf { access.canManageCustomers }) {
+                        null -> if (selected != null) {
+                            DetailPane(
+                                customer = selected,
+                                canWrite = access.canManageCustomers,
+                                onEdit = { vm.startEdit(selected) },
+                                onBack = vm::clearSelection,
+                                onRetrySync = { vm.retrySync(selected) },
+                                history = state.history.takeIf {
+                                    state.historyCustomerId == selected.id
+                                }.orEmpty(),
+                                historyLoading = state.historyLoading && state.historyCustomerId == selected.id,
+                                historyError = state.historyError.takeIf {
+                                    state.historyCustomerId == selected.id
+                                },
+                                onRetryHistory = vm::retryHistory,
+                                modifier = Modifier.weight(0.56f).fillMaxHeight(),
+                            )
+                        } else {
+                            SectionCard(
+                                modifier = Modifier.weight(0.56f).fillMaxHeight(),
+                                title = "Customer workspace",
+                                subtitle = "Select a customer to review loyalty and purchase history",
+                                icon = Icons.Default.People,
+                            ) {
+                                DesignedEmptyState(
+                                    title = "Choose a customer",
+                                    body = "Search or filter the directory on the left. Add customer opens here without covering the list.",
+                                    icon = Icons.Default.People,
+                                    primaryLabel = "Add customer".takeIf { access.canManageCustomers },
+                                    onPrimary = (vm::startCreate).takeIf { access.canManageCustomers },
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+                        }
+                        else -> CustomerEditorInlinePanel(
+                            editor = editor,
+                            saving = state.saving,
+                            error = state.saveError,
+                            onChange = vm::editorChanged,
+                            onCancel = vm::cancelEdit,
+                            onSave = vm::save,
+                            modifier = Modifier.weight(0.56f).fillMaxHeight(),
+                        )
+                    }
+                }
 
                 state.loading -> SectionCard(Modifier.fillMaxSize()) {
                     LoadingSkeleton(lines = 7)
@@ -292,7 +354,7 @@ fun CustomersScreen(access: CustomersAccess = CustomersAccess()) {
         }
     }
 
-    state.editor?.takeIf { access.canManageCustomers }?.let { editor ->
+    state.editor?.takeIf { access.canManageCustomers && !tabletWorkspace }?.let { editor ->
         EditorDialog(
             editor = editor,
             saving = state.saving,
@@ -1007,9 +1069,10 @@ private fun DetailPane(
     historyLoading: Boolean,
     historyError: String?,
     onRetryHistory: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     Column(
-        Modifier
+        modifier
             .fillMaxSize()
             .clip(Radius.shapeLg)
             .background(MaterialTheme.colorScheme.surfaceContainerLow)
@@ -1330,6 +1393,183 @@ private fun RankCard(customer: Customer) {
 // ------------------------------------------------------------------ editor
 
 @Composable
+private fun CustomerEditorFields(
+    editor: CustomerEditor,
+    error: String?,
+    onChange: (CustomerEditor) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var pickingDate by remember { mutableStateOf(false) }
+    Column(
+        modifier.verticalScroll(rememberScrollState()).imePadding(),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedTextField(
+                value = editor.phone,
+                onValueChange = { onChange(editor.copy(phone = it.trim())) },
+                label = { Text("Phone (4–20 characters)") },
+                singleLine = true,
+                enabled = editor.isUnsyncedDraft || editor.phoneUnlocked,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                modifier = Modifier.weight(1f),
+            )
+            if (!editor.isUnsyncedDraft && !editor.phoneUnlocked) {
+                OutlinedButton(
+                    onClick = { onChange(editor.copy(phoneUnlocked = true)) },
+                    modifier = Modifier.heightIn(min = 48.dp),
+                ) { Text("Fix typo") }
+            }
+        }
+        if (!editor.isUnsyncedDraft && editor.phoneUnlocked) {
+            Text(
+                "This number is the customer's loyalty identity. Changing it moves " +
+                    "their points and visit history to the new number — it does not create a second customer.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.operationalInformation,
+            )
+        }
+        OutlinedTextField(
+            value = editor.name,
+            onValueChange = { onChange(editor.copy(name = it)) },
+            label = { Text("Name") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = editor.email,
+            onValueChange = { onChange(editor.copy(email = it)) },
+            label = { Text("Email (optional)") },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "Birthday (optional)",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    editor.birthday?.asDayLabel() ?: "Not set",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+            }
+            OutlinedButton(
+                onClick = { pickingDate = true },
+                modifier = Modifier.heightIn(min = 48.dp),
+            ) { Text("Pick") }
+            if (editor.birthday != null) {
+                TextButton(
+                    onClick = { onChange(editor.copy(birthday = null)) },
+                    modifier = Modifier.heightIn(min = 48.dp),
+                ) { Text("Clear") }
+            }
+        }
+        OutlinedTextField(
+            value = editor.notes,
+            onValueChange = { onChange(editor.copy(notes = it)) },
+            label = { Text("Notes") },
+            minLines = 2,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        if (!editor.phoneValid && editor.phone.isNotBlank()) {
+            Text(
+                "A phone number must be 4 to 20 characters.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.operationalDanger,
+            )
+        }
+        if (editor.isUnsyncedDraft) {
+            Text(
+                "If this number is already on file, the existing customer is opened — " +
+                    "their points are never split across two records.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        error?.let {
+            Text(it, color = MaterialTheme.colorScheme.operationalDanger, style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+    if (pickingDate) {
+        BirthdayPicker(
+            initial = editor.birthday,
+            onDismiss = { pickingDate = false },
+            onPick = {
+                pickingDate = false
+                onChange(editor.copy(birthday = it))
+            },
+        )
+    }
+}
+
+@Composable
+private fun CustomerEditorInlinePanel(
+    editor: CustomerEditor,
+    saving: Boolean,
+    error: String?,
+    onChange: (CustomerEditor) -> Unit,
+    onCancel: () -> Unit,
+    onSave: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    SectionCard(
+        modifier = modifier.testTag("customer-editor-inline"),
+        title = if (editor.isUnsyncedDraft) "New customer"
+            else "Edit ${editor.name.ifBlank { editor.originalPhone }}",
+        subtitle = "Customer details stay beside the directory",
+        icon = if (editor.isUnsyncedDraft) Icons.Default.PersonAdd else Icons.Default.Edit,
+        action = {
+            TextButton(
+                onClick = onCancel,
+                enabled = !saving,
+                modifier = Modifier.heightIn(min = 48.dp).testTag("customer-editor-inline-close"),
+            ) { Text("Close") }
+        },
+    ) {
+        CustomerEditorFields(
+            editor = editor,
+            error = error,
+            onChange = onChange,
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+        )
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+        ) {
+            ErpButton(
+                text = "Cancel",
+                onClick = onCancel,
+                enabled = !saving,
+                intent = ActionIntent.Quiet,
+                modifier = Modifier.weight(1f),
+            )
+            ErpButton(
+                text = when {
+                    saving -> "Saving…"
+                    editor.isNew -> "Create"
+                    else -> "Save"
+                },
+                onClick = onSave,
+                enabled = !saving && editor.phoneValid,
+                busy = saving,
+                modifier = Modifier.weight(1f).testTag("customer-editor-inline-save"),
+            )
+        }
+    }
+}
+
+@Composable
 private fun EditorDialog(
     editor: CustomerEditor,
     saving: Boolean,
@@ -1338,8 +1578,6 @@ private fun EditorDialog(
     onCancel: () -> Unit,
     onSave: () -> Unit,
 ) {
-    var pickingDate by remember { mutableStateOf(false) }
-
     AlertDialog(
         onDismissRequest = { if (!saving) onCancel() },
         title = {
@@ -1349,116 +1587,12 @@ private fun EditorDialog(
             )
         },
         text = {
-            Column(
-                Modifier.verticalScroll(rememberScrollState()).imePadding(),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    OutlinedTextField(
-                        value = editor.phone,
-                        onValueChange = { onChange(editor.copy(phone = it.trim())) },
-                        label = { Text("Phone (4–20 characters)") },
-                        singleLine = true,
-                        enabled = editor.isUnsyncedDraft || editor.phoneUnlocked,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
-                        modifier = Modifier.weight(1f),
-                    )
-                    if (!editor.isUnsyncedDraft && !editor.phoneUnlocked) {
-                        OutlinedButton(
-                            onClick = { onChange(editor.copy(phoneUnlocked = true)) },
-                            modifier = Modifier.heightIn(min = 48.dp),
-                        ) {
-                            Text("Fix typo")
-                        }
-                    }
-                }
-                if (!editor.isUnsyncedDraft && editor.phoneUnlocked) {
-                    Text(
-                        "This number is the customer's loyalty identity. Changing it moves " +
-                            "their points and visit history to the new number — it does not " +
-                            "create a second customer.",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.operationalInformation,
-                    )
-                }
-
-                OutlinedTextField(
-                    value = editor.name,
-                    onValueChange = { onChange(editor.copy(name = it)) },
-                    label = { Text("Name") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                OutlinedTextField(
-                    value = editor.email,
-                    onValueChange = { onChange(editor.copy(email = it)) },
-                    label = { Text("Email (optional)") },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
-                    modifier = Modifier.fillMaxWidth(),
-                )
-
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            "Birthday (optional)",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Text(
-                            editor.birthday?.asDayLabel() ?: "Not set",
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurface,
-                        )
-                    }
-                    OutlinedButton(
-                        onClick = { pickingDate = true },
-                        modifier = Modifier.heightIn(min = 48.dp),
-                    ) { Text("Pick") }
-                    if (editor.birthday != null) {
-                        TextButton(
-                            onClick = { onChange(editor.copy(birthday = null)) },
-                            modifier = Modifier.heightIn(min = 48.dp),
-                        ) {
-                            Text("Clear")
-                        }
-                    }
-                }
-
-                OutlinedTextField(
-                    value = editor.notes,
-                    onValueChange = { onChange(editor.copy(notes = it)) },
-                    label = { Text("Notes") },
-                    minLines = 2,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-
-                if (!editor.phoneValid && editor.phone.isNotBlank()) {
-                    Text(
-                        "A phone number must be 4 to 20 characters.",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.operationalDanger,
-                    )
-                }
-                if (editor.isUnsyncedDraft) {
-                    Text(
-                        "If this number is already on file, the existing customer is opened — " +
-                            "their points are never split across two records.",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                if (error != null) {
-                    Text(error, color = MaterialTheme.colorScheme.operationalDanger, style = MaterialTheme.typography.bodyMedium)
-                }
-            }
+            CustomerEditorFields(
+                editor = editor,
+                error = error,
+                onChange = onChange,
+                modifier = Modifier.heightIn(max = 520.dp),
+            )
         },
         confirmButton = {
             ErpButton(
@@ -1484,17 +1618,6 @@ private fun EditorDialog(
         titleContentColor = MaterialTheme.colorScheme.onSurface,
         textContentColor = MaterialTheme.colorScheme.onSurface,
     )
-
-    if (pickingDate) {
-        BirthdayPicker(
-            initial = editor.birthday,
-            onDismiss = { pickingDate = false },
-            onPick = {
-                pickingDate = false
-                onChange(editor.copy(birthday = it))
-            },
-        )
-    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

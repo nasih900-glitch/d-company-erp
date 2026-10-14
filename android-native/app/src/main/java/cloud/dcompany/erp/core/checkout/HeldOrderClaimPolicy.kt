@@ -216,11 +216,18 @@ object HeldCheckoutInteractionPolicy {
  * the correctness boundary if two checkout callbacks were already queued in
  * one frame. It is shared by money payments and exact-zero finalization.
  */
-class OneShotHeldPaymentConfirmation(private val orderId: String) {
+class OneShotHeldPaymentConfirmation(private val confirmationIdentity: String) {
     private val consumed = AtomicBoolean(false)
 
     val isConsumed: Boolean get() = consumed.get()
 
-    fun tryConsume(callbackOrderId: String): Boolean =
-        callbackOrderId == orderId && consumed.compareAndSet(false, true)
+    fun tryConsume(callbackIdentity: String): Boolean =
+        callbackIdentity == confirmationIdentity && consumed.compareAndSet(false, true)
+
+    /**
+     * Rolls back only the caller's synchronous reservation when the ViewModel
+     * rejects the attempt before it enters the durable Room-save path.
+     */
+    fun releaseRejected(callbackIdentity: String): Boolean =
+        callbackIdentity == confirmationIdentity && consumed.compareAndSet(true, false)
 }

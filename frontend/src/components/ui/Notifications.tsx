@@ -156,7 +156,7 @@ export function NotificationViewport({
   return (
     <section
       aria-label="Notifications"
-      className="pointer-events-none fixed inset-x-3 top-3 z-[200] flex flex-col items-end gap-2 sm:inset-x-auto sm:right-4 sm:top-4 sm:w-[min(26rem,calc(100vw-2rem))]"
+      className="pointer-events-none fixed inset-x-3 top-[4.25rem] z-[200] flex flex-col items-end gap-2 sm:inset-x-auto sm:right-4 sm:w-[min(26rem,calc(100vw-2rem))]"
       style={{ paddingTop: 'env(safe-area-inset-top)' }}
     >
       {notifications.map((notification) => (

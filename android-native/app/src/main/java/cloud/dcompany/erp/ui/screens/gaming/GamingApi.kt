@@ -197,7 +197,9 @@ data class SessionPackageAmendBody(
 @Serializable
 data class SessionParticipantJoinBody(
     @SerialName("expected_participant_revision") val expectedParticipantRevision: Int,
+    @SerialName("participant_identity_id") val participantIdentityId: String? = null,
     @SerialName("customer_id") val customerId: String? = null,
+    @SerialName("guest_name") val guestName: String? = null,
     @SerialName("customer_name") val customerName: String? = null,
     @SerialName("customer_phone") val customerPhone: String? = null,
     @SerialName("customer_directory_revision") val customerDirectoryRevision: Long? = null,
@@ -218,7 +220,9 @@ data class SessionParticipantLeaveBody(
 @Serializable
 data class SessionParticipant(
     val id: String,
-    @SerialName("customer_id") val customerId: String,
+    @SerialName("participant_identity_id") val participantIdentityId: String? = null,
+    @SerialName("customer_id") val customerId: String? = null,
+    @SerialName("guest_name") val guestName: String? = null,
     @SerialName("joined_at") val joinedAt: String,
     @SerialName("joined_play_elapsed_ms") val joinedPlayElapsedMs: Long,
     @SerialName("left_at") val leftAt: String? = null,
@@ -241,7 +245,9 @@ internal fun SessionParticipant.toCacheEntity(sessionId: String) =
     GamingSessionParticipantCacheEntity(
         id = id,
         gamingSessionId = sessionId,
+        participantIdentityId = participantIdentityId ?: customerId ?: id,
         customerId = customerId,
+        guestName = guestName,
         joinedAtMillis = Instant.parse(joinedAt).toEpochMilli(),
         joinedPlayElapsedMs = joinedPlayElapsedMs,
         leftAtMillis = leftAt?.let { Instant.parse(it).toEpochMilli() },

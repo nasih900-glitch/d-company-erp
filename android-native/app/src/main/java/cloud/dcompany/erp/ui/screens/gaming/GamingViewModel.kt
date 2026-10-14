@@ -197,6 +197,8 @@ data class GamingUiState(
 
 data class GamingParticipantUi(
     val reference: String,
+    val participantIdentityId: String = reference,
+    val identityResolved: Boolean = true,
     val customerId: String?,
     val name: String?,
     val phone: String?,
@@ -220,8 +222,6 @@ internal fun gamingParticipantJoinIdentityError(
     return when {
         hasSavedCustomer && (hasName || hasPhone) ->
             "Choose one saved customer, or enter a phone number, not both."
-        !hasSavedCustomer && !hasPhone ->
-            "Choose a saved customer or enter the friend phone number. Name is optional."
         else -> null
     }
 }
@@ -257,8 +257,9 @@ internal fun mergeGamingParticipants(
         val pendingLeave = pendingLeaveByRef[row.id]
         GamingParticipantUi(
             reference = row.id,
+            participantIdentityId = row.participantIdentityId,
             customerId = row.customerId,
-            name = customer?.name,
+            name = customer?.name ?: row.guestName,
             phone = customer?.phone,
             active = row.leftAtMillis == null && row.id !in pendingLeaveRefs,
             pending = row.id in pendingLeaveRefs || rejectedLeave != null,
@@ -285,8 +286,11 @@ internal fun mergeGamingParticipants(
                 } == true &&
                 it.state !in setOf(GamingSessionActionState.REJECTED, GamingSessionActionState.DISCARDED)
         }
+        val resolvedIdentity = action.participantIdentityId ?: action.customerId ?: customer?.customerId
         GamingParticipantUi(
             reference = action.actionId,
+            participantIdentityId = resolvedIdentity ?: action.actionId,
+            identityResolved = resolvedIdentity != null,
             customerId = action.customerId ?: customer?.customerId,
             name = customer?.name ?: action.customerName,
             phone = customer?.phone ?: action.customerPhone,
@@ -3165,6 +3169,7 @@ class GamingViewModel : ViewModel() {
         customerId: String?,
         name: String?,
         phone: String?,
+        participantIdentityId: String? = null,
     ) {
         if (!requireWrite() || !requireIdle()) return
         val station = state.value.stations.firstOrNull { it.id == session.stationId }
@@ -3187,6 +3192,13 @@ class GamingViewModel : ViewModel() {
             return
         }
         val currentParticipants = state.value.participantsFor(session)
+        if (participantIdentityId != null && currentParticipants.any {
+                it.participantIdentityId == participantIdentityId && !it.identityResolved
+            }
+        ) {
+            error.value = "Wait for the original player join to sync before rejoining."
+            return
+        }
         val normalizedIdentityPhone = normalizedPhone?.filter(Char::isDigit)?.takeLast(10)
         if (currentParticipants.any { participant ->
                 participant.active && (
@@ -3200,9 +3212,7 @@ class GamingViewModel : ViewModel() {
             return
         }
         val currentFriends = currentParticipants.count(GamingParticipantUi::active)
-        val basePlayers = (if (session.effectivePackageVariant == "dual" || session.packageVariantSnapshot == "dual") 2 else 1) +
-            session.extraControllers
-        if (basePlayers + currentFriends >= 4) {
+        if (!gamingLateJoinHasCapacity(session, currentFriends)) {
             error.value = "This PS5 session already has the maximum four players."
             return
         }
@@ -3210,6 +3220,7 @@ class GamingViewModel : ViewModel() {
             session = session,
             actionType = GamingSessionActionType.PARTICIPANT_JOIN,
             participantReference = null,
+            participantIdentityId = participantIdentityId ?: customerId,
             customerId = customerId,
             customerName = normalizedName,
             customerPhone = normalizedPhone,
@@ -3242,6 +3253,7 @@ class GamingViewModel : ViewModel() {
         session: GameSession,
         actionType: String,
         participantReference: String?,
+        participantIdentityId: String? = null,
         customerId: String? = null,
         customerName: String? = null,
         customerPhone: String? = null,
@@ -3325,6 +3337,10 @@ class GamingViewModel : ViewModel() {
                                     expectedPauseVersion = requireNotNull(session.pauseVersion),
                                     expectedParticipantRevision = projected.participantRevision,
                                     expectedBillingRevision = projected.billingRevision,
+                                    participantIdentityId = participantIdentityId ?: if (
+                                        actionType == GamingSessionActionType.PARTICIPANT_JOIN &&
+                                        customerPhone == null
+                                    ) UUID.randomUUID().toString() else null,
                                     customerId = customerId,
                                     customerName = customerName,
                                     customerPhone = customerPhone,
@@ -4204,6 +4220,16 @@ internal fun GamingSessionCacheEntity.toGameSession() = GameSession(
     customerPhone = customerPhone,
     orderId = orderId,
 )
+
+/** Booked package players are immutable; late attendance fills the remaining places up to four. */
+internal fun gamingBookedPlayerCount(session: GameSession): Int =
+    (if ((session.effectivePackageVariant ?: session.packageVariantSnapshot) == "dual") 2 else 1) +
+        session.extraControllers
+
+internal fun gamingLateJoinHasCapacity(session: GameSession, activeLatePlayers: Int): Boolean {
+    require(activeLatePlayers >= 0) { "Active late-player count cannot be negative" }
+    return gamingBookedPlayerCount(session) + activeLatePlayers < 4
+}
 
 internal fun GameSession.toCacheEntity() = GamingSessionCacheEntity(
     id = id,

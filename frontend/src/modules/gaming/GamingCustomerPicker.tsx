@@ -64,11 +64,13 @@ export function GamingCustomerPicker({
   onPhoneChange,
   saveContext = 'start',
 }: Props) {
-  const [mode, setMode] = useState<'search' | 'add'>('search');
+  const [mode, setMode] = useState<'search' | 'add' | 'create'>('search');
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<CustomerDTO[]>([]);
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
   const generation = useRef(0);
 
   useEffect(() => {
@@ -128,7 +130,15 @@ export function GamingCustomerPicker({
             setMode('search'); setQuery(''); setResults([]); onNameChange(''); onPhoneChange('');
           }}>Saved customer</button>
         <button type="button" role="tab" aria-selected={mode === 'add'} className={`chip text-xs ${mode === 'add' ? '!border-accent !text-accent' : ''}`}
-          disabled={disabled} onClick={() => { setMode('add'); setQuery(''); setResults([]); }}>Add new</button>
+          disabled={disabled} onClick={() => { setMode('add'); setQuery(''); setResults([]); }}>
+          {saveContext === 'join' ? 'Guest player' : 'Add new'}
+        </button>
+        {saveContext === 'join' && (
+          <button type="button" role="tab" aria-selected={mode === 'create'} className={`chip text-xs ${mode === 'create' ? '!border-accent !text-accent' : ''}`}
+            disabled={disabled || creating} onClick={() => { setMode('create'); setQuery(''); setResults([]); setCreateError(null); }}>
+            Save new customer
+          </button>
+        )}
       </div>
       {mode === 'search' ? (
         <>
@@ -157,16 +167,40 @@ export function GamingCustomerPicker({
             </div>
           )}
         </>
-      ) : (
-        <>
+      ) : mode === 'create' ? (
+        <div className="space-y-2 rounded-lg border border-bg-border p-2">
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
             <input type="text" placeholder="Customer name (optional)" className="input !py-1.5 text-xs w-full"
+              disabled={disabled || creating} value={name} onChange={(event) => onNameChange(event.target.value)}/>
+            <input type="tel" placeholder="Phone (required)" className="input !py-1.5 text-xs w-full"
+              disabled={disabled || creating} value={phone} maxLength={20} onChange={(event) => onPhoneChange(event.target.value)}/>
+          </div>
+          {createError && <p className="text-[11px] text-accent-bad">{createError}</p>}
+          <button type="button" className="btn btn-ghost w-full !py-1.5 text-xs"
+            disabled={disabled || creating || phone.trim().length < 4}
+            onClick={() => {
+              setCreating(true);
+              setCreateError(null);
+              void customers.upsert({ phone: phone.trim(), name: name.trim() || undefined })
+                .then((saved) => { onSelect(saved); setMode('search'); })
+                .catch((cause: unknown) => setCreateError(cause instanceof Error ? cause.message : 'Customer could not be saved.'))
+                .finally(() => setCreating(false));
+            }}>
+            {creating ? 'Saving customer…' : 'Save customer and link player'}
+          </button>
+          <p className="text-[11px] text-fg-muted">Saving is deliberate. The linked player can receive profile history; anonymous guests receive no points.</p>
+        </div>
+      ) : (
+        <>
+          <div className={`grid grid-cols-1 gap-2 ${saveContext === 'join' ? '' : 'sm:grid-cols-2'}`}>
+            <input type="text" placeholder={saveContext === 'join' ? 'Guest name (optional)' : 'Customer name (optional)'} className="input !py-1.5 text-xs w-full"
               disabled={disabled} value={name} onChange={(event) => onNameChange(event.target.value)}/>
-            <input type="tel" placeholder={saveContext === 'join' ? 'Customer phone (required)' : 'Customer phone (optional)'} className="input !py-1.5 text-xs w-full"
+            {saveContext !== 'join' && <input type="tel" placeholder="Customer phone (optional)" className="input !py-1.5 text-xs w-full"
               disabled={disabled} value={phone} maxLength={20} onChange={(event) => onPhoneChange(event.target.value)}/>
+            }
           </div>
           <p className="text-[11px] text-fg-muted">{saveContext === 'join'
-            ? 'Phone identifies the friend and is required. Name is optional; a blank name never replaces a saved name.'
+            ? 'No personal details are required. Link a saved customer only when the player wants profile history; anonymous play earns no points.'
             : 'A valid new phone is saved through session start for next time. A name alone stays an untracked receipt note.'}</p>
         </>
       )}

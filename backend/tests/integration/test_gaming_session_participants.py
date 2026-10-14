@@ -142,6 +142,29 @@ async def _participant_action(client, seed_owner, token, *, path, key, payload, 
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_anonymous_friend_can_join_without_name_phone_or_customer(
+    client, session, seed_owner,
+) -> None:
+    token, shift_id, station, _friends, packages = await _setup(client, session, seed_owner)
+    started = await _start(
+        client, seed_owner, token, shift_id, station,
+        packages["standard-dual-session-30m"],
+        player_count=2,
+    )
+    joined = await client.post(
+        f"/api/v1/gaming/sessions/{started['id']}/participants/join",
+        json={"expected_participant_revision": 0},
+        headers=_headers(seed_owner, token, f"join:{uuid4()}"),
+    )
+    assert joined.status_code == 200, joined.text
+    anonymous = joined.json()["participants"][0]
+    assert anonymous["customer_id"] is None
+    assert anonymous["guest_name"] is None
+    assert UUID(anonymous["participant_identity_id"])
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_phone_only_join_resolves_identity_without_overwriting_saved_name(
     client, session, seed_owner,
 ) -> None:
@@ -157,13 +180,6 @@ async def test_phone_only_join_resolves_identity_without_overwriting_saved_name(
         "customer_directory_company_id": str(seed_owner["company"].id),
     }
 
-    missing_identity = await client.post(
-        f"/api/v1/gaming/sessions/{session_id}/participants/join",
-        json={"expected_participant_revision": 0, **directory},
-        headers=_headers(seed_owner, token, f"join:{uuid4()}"),
-    )
-    assert missing_identity.status_code == 422
-
     existing = friends[0]
     joined = await client.post(
         f"/api/v1/gaming/sessions/{session_id}/participants/join",
@@ -176,7 +192,7 @@ async def test_phone_only_join_resolves_identity_without_overwriting_saved_name(
         headers=_headers(seed_owner, token, f"join:{uuid4()}"),
     )
     assert joined.status_code == 200, joined.text
-    assert joined.json()["participants"][0]["customer_id"] == str(existing.id)
+    assert joined.json()["participants"][-1]["customer_id"] == str(existing.id)
     await session.refresh(existing)
     assert existing.name == "Friend 1"
 
@@ -191,24 +207,6 @@ async def test_phone_only_join_resolves_identity_without_overwriting_saved_name(
     )
     assert duplicate.status_code == 422
     assert "already playing" in duplicate.text
-
-    new_phone = "9876543208"
-    created = await client.post(
-        f"/api/v1/gaming/sessions/{session_id}/participants/join",
-        json={
-            "expected_participant_revision": 1,
-            "customer_phone": new_phone,
-            **directory,
-        },
-        headers=_headers(seed_owner, token, f"join:{uuid4()}"),
-    )
-    assert created.status_code == 200, created.text
-    created_id = UUID(created.json()["participants"][-1]["customer_id"])
-    created_customer = await session.get(Customer, created_id)
-    assert created_customer is not None
-    assert created_customer.phone == new_phone
-    assert created_customer.name is None
-
 
 @pytest.mark.integration
 @pytest.mark.asyncio
@@ -580,6 +578,7 @@ async def test_capacity_revision_replay_cross_user_and_zero_duration_minimum(
     states = [state]
     winner_id = UUID(state["participants"][0]["customer_id"])
     remaining = [friend for friend in friends if friend.id != winner_id]
+    # A single booking has one fixed player and can add three late friends.
     for revision, friend in enumerate(remaining[:2], start=1):
         response = await client.post(
             f"/api/v1/gaming/sessions/{session_id}/participants/join",
@@ -649,7 +648,7 @@ async def test_capacity_revision_replay_cross_user_and_zero_duration_minimum(
         headers=_headers(seed_owner, token, stop_key),
     )
     assert stopped.status_code == 200, stopped.text
-    # Three friends each incur the ₹30 minimum, including the zero-duration leave.
+    # Three late friends each incur the ₹30 minimum, including the zero-duration leave.
     assert stopped.json()["amount_minor"] == 17000
 
     second_station = Station(
@@ -704,6 +703,79 @@ async def test_capacity_revision_replay_cross_user_and_zero_duration_minimum(
     assert settled.status_code == 200, settled.text
     # ₹130 includes the original upfront controller once; only the late friend adds ₹30.
     assert settled.json()["amount_minor"] == 16000
+
+    dual_station = Station(
+        id=uuid4(),
+        company_id=seed_owner["company"].id,
+        branch_id=seed_owner["branch"].id,
+        code=f"P-{uuid4().hex[:8]}",
+        name="Dual late-player capacity",
+        type="ps5",
+        rate_per_hour_minor=15000,
+        is_active=True,
+        tax_rate=0.18,
+        sac_code="999692",
+        rate_includes_tax=True,
+    )
+    session.add(dual_station)
+    await session.commit()
+    dual = await _start(
+        client,
+        seed_owner,
+        token,
+        shift_id,
+        dual_station,
+        packages["standard-dual-session-30m"],
+        player_count=2,
+    )
+    for revision, friend in enumerate(friends[:2]):
+        joined_dual = await client.post(
+            f"/api/v1/gaming/sessions/{dual['id']}/participants/join",
+            json={"expected_participant_revision": revision, "customer_id": str(friend.id), **payload_base},
+            headers=_headers(seed_owner, token, f"join:{uuid4()}"),
+        )
+        assert joined_dual.status_code == 200, joined_dual.text
+    assert joined_dual.json()["current_player_count"] == 4
+    dual_full = await client.post(
+        f"/api/v1/gaming/sessions/{dual['id']}/participants/join",
+        json={"expected_participant_revision": 2, "customer_id": str(friends[2].id), **payload_base},
+        headers=_headers(seed_owner, token, f"join:{uuid4()}"),
+    )
+    assert dual_full.status_code == 422
+    assert "maximum four players" in dual_full.text
+
+    full_upfront_station = Station(
+        id=uuid4(),
+        company_id=seed_owner["company"].id,
+        branch_id=seed_owner["branch"].id,
+        code=f"P-{uuid4().hex[:8]}",
+        name="Two upfront controller capacity",
+        type="ps5",
+        rate_per_hour_minor=15000,
+        is_active=True,
+        tax_rate=0.18,
+        sac_code="999692",
+        rate_includes_tax=True,
+    )
+    session.add(full_upfront_station)
+    await session.commit()
+    two_upfront = await _start(
+        client,
+        seed_owner,
+        token,
+        shift_id,
+        full_upfront_station,
+        packages["standard-dual-session-30m"],
+        player_count=4,
+    )
+    assert two_upfront["extra_controllers"] == 2
+    blocked_after_two_upfront = await client.post(
+        f"/api/v1/gaming/sessions/{two_upfront['id']}/participants/join",
+        json={"expected_participant_revision": 0, "customer_id": str(friends[0].id), **payload_base},
+        headers=_headers(seed_owner, token, f"join:{uuid4()}"),
+    )
+    assert blocked_after_two_upfront.status_code == 422
+    assert "maximum four players" in blocked_after_two_upfront.text
     auto_closed = (await session.execute(select(GamingSessionParticipant).where(
         GamingSessionParticipant.gaming_session_id == UUID(upfront["id"]),
     ))).scalar_one()

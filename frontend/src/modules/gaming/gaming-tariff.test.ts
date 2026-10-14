@@ -12,10 +12,34 @@ import {
   estimatedFriendControllerMinorAfterJoin,
   gamingModeLabel,
   gamingPackageSelectionLabel,
+  currentGamingParticipantRows,
   requiresFixedGamingTariff,
 } from './GamingScreen';
 
 describe('gaming tariff controller charges', () => {
+  it('presents one current roster row per stable participant identity', () => {
+    const interval = (id: string, identity: string, joinedAt: string, leftAt: string | null) => ({
+      id,
+      participant_identity_id: identity,
+      customer_id: null,
+      joined_at: joinedAt,
+      joined_play_elapsed_ms: 0,
+      left_at: leftAt,
+      left_play_elapsed_ms: leftAt == null ? null : 1_000,
+      join_revision: 1,
+      leave_revision: leftAt == null ? null : 2,
+    });
+    const rows = currentGamingParticipantRows([
+      interval('old-a', 'guest-a', '2026-10-14T08:00:00Z', '2026-10-14T08:10:00Z'),
+      interval('new-a', 'guest-a', '2026-10-14T08:20:00Z', '2026-10-14T08:30:00Z'),
+      interval('active-a', 'guest-a', '2026-10-14T08:40:00Z', null),
+      interval('guest-b', 'guest-b', '2026-10-14T08:15:00Z', '2026-10-14T08:25:00Z'),
+    ]);
+
+    expect(rows.map((row) => row.id)).toEqual(['guest-b', 'active-a']);
+    expect(rows.filter((row) => row.participant_identity_id === 'guest-a')).toHaveLength(1);
+  });
+
   it('charges per started hour with one-hour minimum', () => {
     expect(extraControllerSurchargeMinor(1, 30)).toBe(3_000);
     expect(extraControllerSurchargeMinor(1, 60)).toBe(3_000);

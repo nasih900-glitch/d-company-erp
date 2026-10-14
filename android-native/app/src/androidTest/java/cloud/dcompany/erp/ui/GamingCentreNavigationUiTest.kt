@@ -11,17 +11,15 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.hasSetTextAction
-import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performTextInput
 import cloud.dcompany.erp.core.sync.OutboxWorkStatus
 import cloud.dcompany.erp.ui.components.SyncAvailabilityProblem
 import cloud.dcompany.erp.ui.theme.DCompanyTheme
+import cloud.dcompany.erp.ui.theme.AppearancePreference
 import org.junit.Rule
 import org.junit.Test
 import org.junit.Assert.assertEquals
@@ -29,6 +27,46 @@ import org.junit.Assert.assertEquals
 class GamingCentreNavigationUiTest {
     @get:Rule
     val compose = createComposeRule()
+
+    @Test
+    fun topRightDayNightTogglePersistsAcrossControlDeckModules() {
+        val current = mutableStateOf(Destination.Gaming)
+        val appearance = mutableStateOf(AppearancePreference.Day)
+        compose.setContent {
+            DCompanyTheme(preference = appearance.value) {
+                WorkspaceScaffold(
+                    destinations = listOf(
+                        Destination.Gaming, Destination.Pos, Destination.Shift,
+                        Destination.Customers,
+                    ),
+                    currentDestination = current.value,
+                    employeeName = "Rafi",
+                    locationLabel = "Gaming Centre",
+                    connectivityProblem = SyncAvailabilityProblem.NONE,
+                    outboxWorkStatus = OutboxWorkStatus(),
+                    syncing = false,
+                    canChangeTill = false,
+                    appearancePreference = appearance.value,
+                    onAppearancePreferenceChanged = { appearance.value = it },
+                    onOpenSupport = {}, onChangeTill = {}, onSignOut = {},
+                    onDestinationChanged = { current.value = it },
+                ) { destination, _ -> Text("Current: ${destination.label}") }
+            }
+        }
+
+        compose.onNodeWithTag("workspace-day-night-toggle").assertIsDisplayed()
+        compose.onNodeWithText("Day mode").assertIsDisplayed()
+        compose.onNodeWithTag("workspace-day-night-toggle").performClick()
+        compose.runOnIdle { assertEquals(AppearancePreference.Night, appearance.value) }
+        compose.onNodeWithContentDescription(
+            "${Destination.Pos.label}. ${Destination.Pos.description}",
+            useUnmergedTree = true,
+        ).performClick()
+        compose.onNodeWithText("Current: POS").assertIsDisplayed()
+        compose.onNodeWithText("Night mode").assertIsDisplayed()
+        compose.onNodeWithTag("workspace-day-night-toggle").performClick()
+        compose.runOnIdle { assertEquals(AppearancePreference.Day, appearance.value) }
+    }
 
     @Test
     fun controlDeckTabsNavigateAndMoreKeepsPermittedModulesReachable() {
@@ -69,8 +107,9 @@ class GamingCentreNavigationUiTest {
             compose.onNodeWithText("Current: ${target.label}").assertIsDisplayed()
         }
         compose.onNodeWithContentDescription("More modules").performClick()
-        compose.onNode(hasSetTextAction()).performTextInput("Stock")
-        compose.onNode(hasText("Stock") and !hasSetTextAction()).performClick()
+        compose.onNodeWithTag("workspace-more-panel").assertIsDisplayed()
+        compose.onNodeWithTag("workspace-module-search-input").assertDoesNotExist()
+        compose.onNodeWithTag("workspace-destination-Inventory").performClick()
         compose.onNodeWithText("Current: Stock").assertIsDisplayed()
     }
 

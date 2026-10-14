@@ -3471,7 +3471,9 @@ export interface GameSessionDTO {
 
 export interface GamingParticipantDTO {
   id: string;
-  customer_id: string;
+  participant_identity_id?: string | null;
+  customer_id: string | null;
+  guest_name?: string | null;
   joined_at: string;
   joined_play_elapsed_ms: number;
   left_at: string | null;
@@ -3491,7 +3493,9 @@ export interface GamingParticipantStateDTO {
 
 export type GamingParticipantJoinBody = {
   expected_participant_revision: number;
+  participant_identity_id?: string;
   customer_id?: string;
+  guest_name?: string;
   customer_name?: string;
   customer_phone?: string;
   customer_directory_revision?: number;

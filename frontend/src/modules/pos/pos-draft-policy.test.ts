@@ -11,6 +11,7 @@ import {
   mayClaimCheckoutDuringHydration,
   posDraftNeedsReconciliation,
   posVisibleBillQuantity,
+  shouldResetCashTenderedInput,
 } from './pos-draft-policy';
 
 const safeState = {
@@ -63,6 +64,13 @@ describe('POS draft safety policy', () => {
     expect(enterSynchronousPosFlow(gate)).toBe(false);
     leaveSynchronousPosFlow(gate);
     expect(enterSynchronousPosFlow(gate)).toBe(true);
+  });
+
+  it('keeps same-cart cash through first prepare and clears it at bill boundaries', () => {
+    expect(shouldResetCashTenderedInput(null, 'checkout-a')).toBe(false);
+    expect(shouldResetCashTenderedInput('checkout-a', 'checkout-a')).toBe(false);
+    expect(shouldResetCashTenderedInput('checkout-a', 'checkout-b')).toBe(true);
+    expect(shouldResetCashTenderedInput('checkout-a', null)).toBe(true);
   });
 
   it('keeps a server-cancelled checkout locked when its recovery draft was not cleared', () => {

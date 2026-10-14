@@ -55,6 +55,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ReceiptLong
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Lock
@@ -97,6 +98,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -143,6 +145,7 @@ import cloud.dcompany.erp.ui.components.OperationalStatusBadge
 import cloud.dcompany.erp.ui.components.PanelDivider
 import cloud.dcompany.erp.ui.components.PrimaryButton
 import cloud.dcompany.erp.ui.components.SearchInput
+import cloud.dcompany.erp.ui.components.SectionCard
 import cloud.dcompany.erp.ui.components.TouchMoneyEntry
 import cloud.dcompany.erp.ui.components.UiTone
 import cloud.dcompany.erp.ui.components.ViewOnlyNotice
@@ -205,15 +208,15 @@ fun PosScreen(
     onConfirmDirectZero: () -> Unit,
     onRedeemDirectPoints: (ReviewedPointsRedemption) -> Unit,
     onRedeemDirectReward: (ReviewedRewardRedemption) -> Unit,
-    onCapture: (String, Long, DirectPaymentConfirmation) -> Unit,
-    onCaptureSplit: (SplitPaymentPlan, DirectPaymentConfirmation) -> Unit,
+    onCapture: (String, Long, DirectPaymentConfirmation) -> Boolean,
+    onCaptureSplit: (SplitPaymentPlan, DirectPaymentConfirmation) -> Boolean,
     onRetryRejectedSale: (String) -> Unit,
     onRetryHeldPayment: (String) -> Unit,
     onPrepareHeldOrder: (HeldOrderCacheEntity) -> Unit,
     onUpdateHeldOrderDiscount: (String, Long) -> Unit,
     onContinueHeldOrder: (String) -> Unit,
-    onConfirmHeldOrder: (String, String, Long) -> Unit,
-    onConfirmHeldOrderSplit: (String, SplitPaymentPlan) -> Unit,
+    onConfirmHeldOrder: (String, String, Long) -> Boolean,
+    onConfirmHeldOrderSplit: (String, SplitPaymentPlan) -> Boolean,
     onConfirmHeldOrderZero: (String) -> Unit,
     onVoidOrder: (String, String) -> Unit,
     onDismissHeldOrderReview: () -> Unit,
@@ -244,6 +247,13 @@ fun PosScreen(
     var hiddenAutomaticReceiptId by rememberSaveable { mutableStateOf<String?>(null) }
     var showReceiptHistory by rememberSaveable { mutableStateOf(false) }
     var menuQuery by rememberSaveable { mutableStateOf("") }
+    val tabletInlineWorkflows = LocalConfiguration.current.screenWidthDp >= 720
+    // Payment entry belongs to one durable draft. A completed bill must never
+    // seed the next customer's tender or split choice after Room assigns the
+    // replacement draft a new identity. The same draft still survives route
+    // changes and Activity recreation through rememberSaveable.
+    var inlinePaymentMethod by rememberSaveable(state.draftLocalId) { mutableStateOf("cash") }
+    var inlineCashTendered by rememberSaveable(state.draftLocalId) { mutableStateOf("") }
     val latestDismissHeldOrderReview by rememberUpdatedState(onDismissHeldOrderReview)
     val latestDismissHeldOrder by rememberUpdatedState(onDismissHeldOrder)
     val categoryItems = remember(state.operationalItems, state.selectedCategoryId) {
@@ -270,10 +280,32 @@ fun PosScreen(
             ?.takeUnless { it.receiptId == hiddenAutomaticReceiptId }
             ?: selectedReceiptId?.let { id -> recentReceipts.firstOrNull { it.receiptId == id } }
     }
+    val cartEditingEnabled = posCatalogueEditingEnabled(
+        canCreateAndCollect = access.canCreateAndCollect,
+        checkoutBusy = state.checkoutBusy,
+        heldOrderReviewOpen = state.heldOrderReview != null,
+        preparedHeldCheckoutOpen = state.preparedHeldCheckout != null,
+        directCheckoutReviewOpen = state.directCheckoutReview != null,
+        preparedDirectCheckoutOpen = state.preparedDirectCheckout != null,
+        receiptVisible = visibleReceipt != null,
+    )
+    val contextualWorkflowOwnsCheckout = !cartEditingEnabled &&
+        (state.heldOrderReview != null || state.preparedHeldCheckout != null ||
+            state.directCheckoutReview != null || state.preparedDirectCheckout != null ||
+            visibleReceipt != null)
     val addOrConfigure: (MenuItemEntity) -> Unit = { item ->
-        val configurable = state.variants.any { it.menuItemId == item.id && it.isActive } ||
-            state.modifierGroups.any { it.menuItemId == item.id && it.isActive }
-        if (configurable) configuringItemId = item.id else onAdd(item)
+        if (cartEditingEnabled) {
+            val configurable = state.variants.any { it.menuItemId == item.id && it.isActive } ||
+                state.modifierGroups.any { it.menuItemId == item.id && it.isActive }
+            if (configurable) configuringItemId = item.id else onAdd(item)
+        }
+    }
+
+    LaunchedEffect(contextualWorkflowOwnsCheckout) {
+        if (contextualWorkflowOwnsCheckout) {
+            configuringItemId = null
+            showOrderDetails = false
+        }
     }
 
     LaunchedEffect(access) { onAccessChanged(access) }
@@ -291,7 +323,14 @@ fun PosScreen(
     }
 
     LaunchedEffect(state.online) {
-        if (state.online) offlinePaymentConfirmation = null
+        if (state.online) {
+            offlinePaymentConfirmation = null
+        } else if (inlinePaymentMethod == "split") {
+            // Split settlement requires a live verified bill. Do not leave a
+            // visibly selected option that the offline payment sheet cannot
+            // execute.
+            inlinePaymentMethod = "cash"
+        }
     }
 
     LaunchedEffect(
@@ -363,6 +402,25 @@ fun PosScreen(
             receiptCount = canonicalReceipts.size,
             onOpenReceipts = { showReceiptHistory = true },
         )
+        state.notice?.takeIf { visibleReceipt == null && !showReceiptHistory }?.let { message ->
+            Row(
+                Modifier.fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                    .padding(horizontal = Spacing.lg, vertical = Spacing.xs)
+                    .semantics { liveRegion = LiveRegionMode.Polite }
+                    .testTag("pos-inline-notice"),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    message,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = onDismissNotice) { Text("Dismiss") }
+            }
+        }
 
         BoxWithConstraints(
             Modifier.weight(1f).fillMaxWidth().padding(Spacing.md),
@@ -371,7 +429,7 @@ fun PosScreen(
                 posWorkspaceMetrics(maxWidth = maxWidth, horizontalGap = Spacing.md)
             }
             val compactWorkspace = maxHeight < 480.dp
-            val cartHeight = maxHeight.coerceAtMost(500.dp)
+            val cartHeight = maxHeight
             val cataloguePane: @Composable (Modifier) -> Unit = { modifier ->
                 val paneModifier = modifier.testTag("pos-catalog")
                 if (state.menuEmpty) {
@@ -389,7 +447,7 @@ fun PosScreen(
                         selectedCategoryId = state.selectedCategoryId,
                         visibleItems = searchedItems,
                         query = menuQuery,
-                        canWrite = access.canCreateAndCollect,
+                        canWrite = cartEditingEnabled,
                         onQueryChange = { menuQuery = it },
                         onClearSearch = { menuQuery = "" },
                         onSelectCategory = onSelectCategory,
@@ -398,13 +456,81 @@ fun PosScreen(
                     )
                 }
             }
-            if (workspace.sideBySide) {
-                Row(
-                    Modifier.fillMaxSize(),
-                    horizontalArrangement = Arrangement.spacedBy(Spacing.md),
-                ) {
-                    cataloguePane(Modifier.weight(1f).fillMaxHeight())
-                    CartPanel(
+            val cartOrContextPane: @Composable (Modifier) -> Unit = { paneModifier ->
+                when {
+                    tabletInlineWorkflows && visibleReceipt != null -> PosReceiptDialog(
+                        receipt = visibleReceipt,
+                        onDismiss = {
+                            hiddenAutomaticReceiptId = visibleReceipt.receiptId
+                            selectedReceiptId = null
+                            onAcknowledgeReceipt(visibleReceipt.receiptId)
+                        },
+                        inline = true,
+                        modifier = paneModifier,
+                    )
+                    tabletInlineWorkflows && showHeldOrders && state.heldOrders.isNotEmpty() -> SectionCard(
+                        modifier = paneModifier.testTag("pos-held-orders-inline"),
+                        title = if (state.focusedHeldOrderId != null) {
+                            "Highlighted held order"
+                        } else {
+                            "Held orders awaiting payment"
+                        },
+                        subtitle = "Select a bill to verify it without leaving the register",
+                        icon = Icons.AutoMirrored.Filled.ReceiptLong,
+                        action = {
+                            TextButton(onClick = { showHeldOrders = false }) { Text("Close") }
+                        },
+                    ) {
+                        HeldOrdersStrip(
+                            orders = state.heldOrders,
+                            overdueOrderIds = overdueOrderIds,
+                            focusedOrderId = state.focusedHeldOrderId,
+                            preparingOrderId = state.preparingHeldOrderId,
+                            enabled = heldOrderBlockReason == null,
+                            blockedReason = heldOrderBlockReason,
+                            onSelect = { order ->
+                                showHeldOrders = false
+                                onPrepareHeldOrder(order)
+                            },
+                            onDismissFocus = onDismissHeldFocus,
+                        )
+                    }
+                    tabletInlineWorkflows && state.heldOrderReview != null &&
+                        access.canCreateAndCollect && voidTarget == null -> HeldOrderReviewDialog(
+                        review = state.heldOrderReview,
+                        online = state.online,
+                        busy = state.checkoutBusy,
+                        canCollectPayment = state.canCollectPayment,
+                        canApplyDiscount = access.canApplyDiscount,
+                        showCustomerBenefits = presentation.showsCustomers,
+                        onUpdateDiscount = { amount ->
+                            onUpdateHeldOrderDiscount(state.heldOrderReview.orderId, amount)
+                        },
+                        onContinue = { onContinueHeldOrder(state.heldOrderReview.orderId) },
+                        onDismiss = onDismissHeldOrderReview,
+                        inline = true,
+                        modifier = paneModifier,
+                    )
+                    tabletInlineWorkflows && state.directCheckoutReview != null &&
+                        access.canCreateAndCollect && voidTarget == null -> DirectCheckoutReviewDialog(
+                        review = state.directCheckoutReview,
+                        online = state.online,
+                        busy = state.checkoutBusy,
+                        loyaltyPointsBalance = state.customerLoyaltyPoints,
+                        customerPhone = state.customerPhone,
+                        loyaltyProgramRevision = state.loyaltyProgramRevision,
+                        loyaltyProgramRules = state.loyaltyProgramRules,
+                        eligibleRewardCatalog = eligibleRewardCatalog,
+                        showCustomerBenefits = presentation.showsCustomers,
+                        onApplyPoints = onRedeemDirectPoints,
+                        onApplyReward = onRedeemDirectReward,
+                        onRefreshEligibleRewards = onRefreshEligibleRewards,
+                        onDismiss = onDismissDirectCheckout,
+                        onContinue = onContinueDirectCheckout,
+                        inline = true,
+                        modifier = paneModifier,
+                    )
+                    else -> CartPanel(
                         state = state,
                         compact = compactWorkspace,
                         canWrite = access.canCreateAndCollect,
@@ -413,11 +539,23 @@ fun PosScreen(
                         onDecrementLine = onDecrementLine,
                         onClear = onClearCart,
                         onEditDetails = { showOrderDetails = true },
-                        // A bounded order card reads like a deliberate counter
-                        // surface on a tall tablet; the line list still scrolls.
-                        modifier = Modifier.width(requireNotNull(workspace.cartWidth))
-                            .height(cartHeight).testTag("pos-cart"),
+                        paymentMethod = inlinePaymentMethod,
+                        cashTendered = inlineCashTendered,
+                        onPaymentMethodChanged = { inlinePaymentMethod = it },
+                        onCashTenderedChanged = { inlineCashTendered = it },
+                        modifier = paneModifier.testTag("pos-cart"),
                     ) { requestDirectPayment() }
+                }
+            }
+            if (workspace.sideBySide) {
+                Row(
+                    Modifier.fillMaxSize(),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+                ) {
+                    cataloguePane(Modifier.weight(1f).fillMaxHeight())
+                    cartOrContextPane(
+                        Modifier.width(requireNotNull(workspace.cartWidth)).height(cartHeight),
+                    )
                 }
             } else {
                 Column(
@@ -425,17 +563,7 @@ fun PosScreen(
                     verticalArrangement = Arrangement.spacedBy(Spacing.md),
                 ) {
                     cataloguePane(Modifier.weight(1.05f).fillMaxWidth())
-                    CartPanel(
-                        state = state,
-                        compact = compactWorkspace,
-                        canWrite = access.canCreateAndCollect,
-                        canDiscount = access.canApplyDiscount,
-                        onIncrementLine = onIncrementLine,
-                        onDecrementLine = onDecrementLine,
-                        onClear = onClearCart,
-                        onEditDetails = { showOrderDetails = true },
-                        modifier = Modifier.weight(0.95f).fillMaxWidth().testTag("pos-cart"),
-                    ) { requestDirectPayment() }
+                    cartOrContextPane(Modifier.weight(0.95f).fillMaxWidth())
                 }
             }
         }
@@ -514,7 +642,7 @@ fun PosScreen(
         )
     }
 
-    if (showHeldOrders && state.heldOrders.isNotEmpty()) {
+    if (!tabletInlineWorkflows && showHeldOrders && state.heldOrders.isNotEmpty()) {
         AlertDialog(
             onDismissRequest = { showHeldOrders = false },
             containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
@@ -557,7 +685,7 @@ fun PosScreen(
     }
 
     state.heldOrderReview
-        ?.takeIf { access.canCreateAndCollect && voidTarget == null }
+        ?.takeIf { !tabletInlineWorkflows && access.canCreateAndCollect && voidTarget == null }
         ?.let { review ->
             key(review.orderId) {
                 HeldOrderReviewDialog(
@@ -583,6 +711,9 @@ fun PosScreen(
             offlineAllowed = true,
             confirmEnabled = state.canCollectPayment && !state.checkoutBusy,
             confirmationIdentity = "${quote.localId}:${quote.revision}:${quote.dueMinor}",
+            initialMethod = inlinePaymentMethod,
+            initialTendered = inlineCashTendered,
+            initialSplit = false,
             showCustomerBenefits = presentation.showsCustomers,
             onDismiss = { offlinePaymentConfirmation = null },
             onConfirm = { method, tendered ->
@@ -593,7 +724,7 @@ fun PosScreen(
     }
 
     state.directCheckoutReview
-        ?.takeIf { access.canCreateAndCollect && voidTarget == null }
+        ?.takeIf { !tabletInlineWorkflows && access.canCreateAndCollect && voidTarget == null }
         ?.let { review ->
             key(review.orderId, review.checkoutVersion) {
                 DirectCheckoutReviewDialog(
@@ -618,7 +749,7 @@ fun PosScreen(
     state.preparedDirectCheckout
         ?.takeIf { access.canCreateAndCollect && voidTarget == null }
         ?.let { checkout ->
-        key(checkout.orderId, checkout.claimOrderVersion) {
+        key(checkout.orderId, checkout.claimOrderVersion, checkout.claimToken) {
             if (checkout.dueMinor == 0L && checkout.totalMinor == 0L) {
                 DirectZeroTotalCompletionDialog(
                     checkout = checkout,
@@ -644,7 +775,13 @@ fun PosScreen(
                     confirmEnabled = state.canCollectPayment && !state.checkoutBusy,
                     verifiedSharedOrder = true,
                     paymentSubject = "Direct POS bill",
-                    confirmationIdentity = checkout.orderId,
+                    // A renewed claim for the same order/version is a new
+                    // confirmation attempt. The opaque bearer is never shown;
+                    // it only prevents stale UI one-shot state crossing claims.
+                    confirmationIdentity = checkout.claimToken,
+                    initialMethod = inlinePaymentMethod,
+                    initialTendered = inlineCashTendered,
+                    initialSplit = inlinePaymentMethod == "split",
                     subtotalMinor = checkout.subtotalMinor,
                     discountMinor = checkout.discountMinor,
                     taxMinor = checkout.taxMinor,
@@ -694,7 +831,7 @@ fun PosScreen(
         // Version is part of the immutable confirmation identity. A changed
         // bill can never inherit tender or payment method state from an older
         // checkout of the same order.
-        key(checkout.orderId, checkout.claimOrderVersion) {
+        key(checkout.orderId, checkout.claimOrderVersion, checkout.claimToken) {
             if (
                 HeldOrderClaimPolicy.isExactZeroTotal(
                     totalMinor = checkout.totalMinor,
@@ -725,7 +862,7 @@ fun PosScreen(
                     confirmEnabled = state.canCollectPayment && !state.checkoutBusy,
                     verifiedSharedOrder = true,
                     paymentSubject = checkout.sourceLabel,
-                    confirmationIdentity = "${checkout.orderId}:${checkout.claimOrderVersion}:${checkout.dueMinor}",
+                    confirmationIdentity = checkout.claimToken,
                     subtotalMinor = checkout.subtotalMinor,
                     discountMinor = checkout.discountMinor,
                     manualDiscountMinor = checkout.manualDiscountMinor,
@@ -788,7 +925,7 @@ fun PosScreen(
         )
     }
 
-    visibleReceipt?.let { receipt ->
+    visibleReceipt?.takeIf { !tabletInlineWorkflows }?.let { receipt ->
         PosReceiptDialog(
             receipt = receipt,
             onDismiss = {
@@ -799,16 +936,6 @@ fun PosScreen(
         )
     }
 
-    state.notice?.takeIf { visibleReceipt == null && !showReceiptHistory }?.let { message ->
-        AlertDialog(
-            onDismissRequest = onDismissNotice,
-            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-            shape = Radius.shapeLg,
-            confirmButton = { TextButton(onClick = onDismissNotice) { Text("OK") } },
-            title = { Text("POS update") },
-            text = { Text(message) },
-        )
-    }
 }
 
 private data class PosVoidTarget(val orderId: String, val label: String)
@@ -832,28 +959,16 @@ internal fun shouldDismissPosVoidTarget(
 private fun PosReceiptDialog(
     receipt: PosReceiptEntity,
     onDismiss: () -> Unit,
+    inline: Boolean = false,
+    modifier: Modifier = Modifier,
 ) {
     val lines = remember(receipt.linesJson) { receipt.decodedLines() }
     val context = androidx.compose.ui.platform.LocalContext.current
     var printLaunching by remember(receipt.receiptId) { mutableStateOf(false) }
     var printError by remember(receipt.receiptId) { mutableStateOf<String?>(null) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-        shape = Radius.shapeLg,
-        title = {
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(receipt.invoiceNo?.let { "Receipt · $it" } ?: "Payment receipt")
-                Text(
-                    receipt.sourceLabel ?: "POS order ${receipt.orderId.take(8)}",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.labelMedium,
-                )
-            }
-        },
-        text = {
+    val receiptContent: @Composable (Modifier) -> Unit = { contentModifier ->
             LazyColumn(
-                Modifier.fillMaxWidth().heightIn(max = 470.dp),
+                contentModifier,
                 verticalArrangement = Arrangement.spacedBy(Spacing.sm),
             ) {
                 item {
@@ -967,23 +1082,80 @@ private fun PosReceiptDialog(
                     }
                 }
             }
+    }
+    if (inline) {
+        SectionCard(
+            modifier = modifier.testTag("pos-receipt-inline"),
+            title = receipt.invoiceNo?.let { "Receipt · $it" } ?: "Payment receipt",
+            subtitle = receipt.sourceLabel ?: "POS order ${receipt.orderId.take(8)}",
+            icon = Icons.AutoMirrored.Filled.ReceiptLong,
+        ) {
+            receiptContent(Modifier.weight(1f).fillMaxWidth())
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+            ) {
+                ErpButton(
+                    text = if (printLaunching) "Opening…" else "Print / save",
+                    enabled = !printLaunching,
+                    onClick = {
+                        if (!printLaunching) {
+                            printLaunching = true
+                            printError = null
+                            launchPosReceiptPrint(
+                                context = context,
+                                receipt = receipt,
+                                onLaunched = { printLaunching = false },
+                                onFailure = { message ->
+                                    printLaunching = false
+                                    printError = message
+                                },
+                            )
+                        }
+                    },
+                    intent = ActionIntent.Secondary,
+                    modifier = Modifier.weight(1f),
+                )
+                ErpButton(
+                    text = "Done",
+                    onClick = onDismiss,
+                    modifier = Modifier.weight(1f).testTag("pos-receipt-inline-done"),
+                )
+            }
+        }
+        return
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        shape = Radius.shapeLg,
+        title = {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(receipt.invoiceNo?.let { "Receipt · $it" } ?: "Payment receipt")
+                Text(
+                    receipt.sourceLabel ?: "POS order ${receipt.orderId.take(8)}",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.labelMedium,
+                )
+            }
         },
+        text = { receiptContent(Modifier.fillMaxWidth().heightIn(max = 470.dp)) },
         dismissButton = {
             TextButton(
                 enabled = !printLaunching,
                 onClick = {
-                    if (printLaunching) return@TextButton
-                    printLaunching = true
-                    printError = null
-                    launchPosReceiptPrint(
-                        context = context,
-                        receipt = receipt,
-                        onLaunched = { printLaunching = false },
-                        onFailure = { message ->
-                            printLaunching = false
-                            printError = message
-                        },
-                    )
+                if (printLaunching) return@TextButton
+                printLaunching = true
+                printError = null
+                launchPosReceiptPrint(
+                    context = context,
+                    receipt = receipt,
+                    onLaunched = { printLaunching = false },
+                    onFailure = { message ->
+                        printLaunching = false
+                        printError = message
+                    },
+                )
                 },
             ) {
                 Text(if (printLaunching) "OPENING…" else "PRINT / SAVE")
@@ -1061,10 +1233,8 @@ internal data class PosWorkspaceMetrics(
 )
 
 /**
- * Keep the checkout close to 36% of the operational workspace. The bounds stop
- * the receipt becoming too narrow at the 960x600 target or too dominant on a
- * larger tablet, while the returned product width makes the grid policy
- * deterministic and JVM-testable.
+ * The approved tablet workspace gives catalogue and checkout equal weight so
+ * quantity, totals and collection actions remain readable at the register.
  */
 internal fun posWorkspaceMetrics(
     maxWidth: androidx.compose.ui.unit.Dp,
@@ -1077,7 +1247,7 @@ internal fun posWorkspaceMetrics(
             cartWidth = null,
         )
     }
-    val cartWidth = (maxWidth * 0.36f).coerceIn(300.dp, 400.dp)
+    val cartWidth = ((maxWidth - horizontalGap) / 2f).coerceAtLeast(300.dp)
     return PosWorkspaceMetrics(
         sideBySide = true,
         productWidth = (maxWidth - cartWidth - horizontalGap).coerceAtLeast(0.dp),
@@ -1103,6 +1273,23 @@ internal fun shouldRevealHeldOrderQueue(
     focusedOrderId: String?,
     visibleOrderIds: Set<String>,
 ): Boolean = focusedOrderId != null && focusedOrderId in visibleOrderIds
+
+/**
+ * A held/direct review, prepared checkout, or receipt owns the checkout pane.
+ * Keep catalogue taps from mutating a different hidden counter draft while
+ * staff are acting on that visible workflow.
+ */
+internal fun posCatalogueEditingEnabled(
+    canCreateAndCollect: Boolean,
+    checkoutBusy: Boolean,
+    heldOrderReviewOpen: Boolean,
+    preparedHeldCheckoutOpen: Boolean,
+    directCheckoutReviewOpen: Boolean,
+    preparedDirectCheckoutOpen: Boolean,
+    receiptVisible: Boolean,
+): Boolean = canCreateAndCollect && !checkoutBusy &&
+    !heldOrderReviewOpen && !preparedHeldCheckoutOpen &&
+    !directCheckoutReviewOpen && !preparedDirectCheckoutOpen && !receiptVisible
 
 internal fun hasPosOperationalAlerts(state: PosUiState): Boolean =
     !state.online || state.pendingCount > 0 || state.rejectedCount > 0 ||
@@ -2545,9 +2732,48 @@ private fun CartPanel(
     onDecrementLine: (String) -> Unit,
     onClear: () -> Unit,
     onEditDetails: () -> Unit,
+    paymentMethod: String,
+    cashTendered: String,
+    onPaymentMethodChanged: (String) -> Unit,
+    onCashTenderedChanged: (String) -> Unit,
     modifier: Modifier = Modifier,
     onPay: () -> Unit,
 ) {
+    val paymentMethodSelector: @Composable () -> Unit = {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
+        ) {
+            listOf("cash" to "Cash", "upi" to "UPI", "split" to "Split").forEach { (value, label) ->
+                FilterChip(
+                    selected = paymentMethod == value,
+                    onClick = { onPaymentMethodChanged(value) },
+                    enabled = state.online || value == "cash",
+                    label = { Text(label) },
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+    }
+    val paymentDetail: @Composable (Modifier) -> Unit = { detailModifier ->
+        if (paymentMethod == "cash") OutlinedTextField(
+            value = cashTendered,
+            onValueChange = { entered ->
+                normalizeRupeeInput(entered)?.let(onCashTenderedChanged)
+            },
+            label = { Text("Cash received") },
+            prefix = { Text("₹") },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            modifier = detailModifier.testTag("pos-inline-cash-received"),
+        ) else Text(
+            if (paymentMethod == "split") "Split amounts follow the verified bill."
+            else "UPI uses the verified total.",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.labelSmall,
+            modifier = detailModifier,
+        )
+    }
     Column(
         modifier = modifier.clip(Radius.shapeLg)
             .background(
@@ -2706,10 +2932,13 @@ private fun CartPanel(
 
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         Column(
-            Modifier.fillMaxWidth().padding(Spacing.md),
+            Modifier.fillMaxWidth().padding(
+                horizontal = Spacing.md,
+                vertical = if (compact) Spacing.xs else Spacing.md,
+            ),
             verticalArrangement = Arrangement.spacedBy(Spacing.xs),
         ) {
-            PaymentAmountRow("Subtotal estimate", state.estimateMinor)
+            if (!compact) PaymentAmountRow("Subtotal estimate", state.estimateMinor)
             if (state.manualDiscountMinor > 0L) {
                 PaymentAmountRow("Manual discount", -state.manualDiscountMinor, MaterialTheme.colorScheme.operationalGood)
             } else if (!canDiscount && state.cart.isNotEmpty()) {
@@ -2760,48 +2989,30 @@ private fun CartPanel(
                 )
             }
             if (state.cart.isNotEmpty()) {
-                Box(
-                    Modifier.fillMaxWidth().clip(Radius.shapeMd)
-                        .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeMd)
-                        .padding(horizontal = Spacing.sm, vertical = Spacing.xs),
-                ) {
-                    if (compact) {
-                        Row(
-                            Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(
-                                "Split payment",
-                                modifier = Modifier.weight(1f),
-                                color = MaterialTheme.colorScheme.onSurface,
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.SemiBold,
-                            )
-                            Text(
-                                if (state.online) "CASH  +  UPI" else "Reconnect first",
-                                color = if (state.online) MaterialTheme.colorScheme.operationalInformation else MaterialTheme.colorScheme.onSurfaceVariant,
-                                style = MaterialTheme.typography.labelSmall,
-                                maxLines = 1,
-                            )
-                        }
-                    } else {
-                        Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
-                            Text(
-                                "Split payment",
-                                color = MaterialTheme.colorScheme.onSurface,
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.SemiBold,
-                            )
-                            Text(
-                                if (state.online) "Cash + UPI, or other methods, after bill verification."
-                                else "Reconnect to verify the bill before splitting payment.",
-                                color = if (state.online) MaterialTheme.colorScheme.operationalInformation else MaterialTheme.colorScheme.onSurfaceVariant,
-                                style = MaterialTheme.typography.labelSmall,
-                                maxLines = 2,
-                            )
-                        }
+                if (compact) {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(Modifier.weight(0.58f)) { paymentMethodSelector() }
+                        paymentDetail(Modifier.weight(0.42f))
+                    }
+                } else {
+                    Column(
+                        Modifier.fillMaxWidth().clip(Radius.shapeMd)
+                            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeMd)
+                            .padding(horizontal = Spacing.sm, vertical = Spacing.xs),
+                        verticalArrangement = Arrangement.spacedBy(Spacing.xs),
+                    ) {
+                        Text(
+                            "Payment method",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        paymentMethodSelector()
+                        paymentDetail(Modifier.fillMaxWidth())
                     }
                 }
             }
@@ -2927,6 +3138,8 @@ private fun HeldOrderReviewDialog(
     onUpdateDiscount: (Long) -> Unit,
     onContinue: () -> Unit,
     onDismiss: () -> Unit,
+    inline: Boolean = false,
+    modifier: Modifier = Modifier,
 ) {
     var discountText by rememberSaveable(review.orderId, review.checkoutVersion) {
         mutableStateOf(minorToRupeesInput(review.manualDiscountMinor))
@@ -2940,22 +3153,9 @@ private fun HeldOrderReviewDialog(
     val canContinue = online && canCollectPayment && !busy &&
         discountError == null && !hasUnsavedDiscount
 
-    AlertDialog(
-        onDismissRequest = { if (!busy) onDismiss() },
-        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-        shape = Radius.shapeLg,
-        modifier = Modifier.posPaymentDialogInsets(),
-        properties = posImeAwareDialogProperties,
-        title = {
-            Text(
-                review.sourceLabel?.let { "Review $it" }
-                    ?: "Review held bill",
-            )
-        },
-        text = {
+    val reviewContent: @Composable (Modifier) -> Unit = { contentModifier ->
             Column(
-                Modifier.fillMaxWidth().heightIn(max = 540.dp)
-                    .verticalScroll(rememberScrollState()),
+                contentModifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(Spacing.md),
             ) {
                 Text(
@@ -3137,12 +3337,43 @@ private fun HeldOrderReviewDialog(
                     )
                 }
             }
-        },
-        confirmButton = {
+    }
+    if (inline) {
+        SectionCard(
+            modifier = modifier.testTag("pos-held-review-inline"),
+            title = review.sourceLabel?.let { "Review $it" } ?: "Review held bill",
+            subtitle = "Live server bill · payment has not started",
+            icon = Icons.AutoMirrored.Filled.ReceiptLong,
+            action = {
+                TextButton(onClick = onDismiss, enabled = !busy) { Text("Close") }
+            },
+        ) {
+            reviewContent(Modifier.weight(1f).fillMaxWidth())
             PrimaryButton(
                 enabled = canContinue,
                 onClick = onContinue,
+                modifier = Modifier.fillMaxWidth().testTag("pos-held-review-continue"),
             ) {
+                Text(
+                    if (busy) "VERIFYING LATEST BILL"
+                    else "CONTINUE TO PAYMENT · ${review.dueMinor.asRupees()}",
+                )
+            }
+        }
+        return
+    }
+    AlertDialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        shape = Radius.shapeLg,
+        modifier = Modifier.posPaymentDialogInsets(),
+        properties = posImeAwareDialogProperties,
+        title = {
+            Text(review.sourceLabel?.let { "Review $it" } ?: "Review held bill")
+        },
+        text = { reviewContent(Modifier.fillMaxWidth().heightIn(max = 540.dp)) },
+        confirmButton = {
+            PrimaryButton(enabled = canContinue, onClick = onContinue) {
                 Text(
                     if (busy) "VERIFYING LATEST BILL"
                     else "CONTINUE TO PAYMENT · ${review.dueMinor.asRupees()}",
@@ -3185,6 +3416,8 @@ private fun DirectCheckoutReviewDialog(
     onRefreshEligibleRewards: () -> Unit,
     onDismiss: () -> Unit,
     onContinue: () -> Unit,
+    inline: Boolean = false,
+    modifier: Modifier = Modifier,
 ) {
     var editingPoints by rememberSaveable(review.orderId, review.checkoutVersion) {
         mutableStateOf(false)
@@ -3201,16 +3434,9 @@ private fun DirectCheckoutReviewDialog(
     var rewardReview by remember(review.orderId, review.checkoutVersion) {
         mutableStateOf<ReviewedRewardRedemption?>(null)
     }
-    AlertDialog(
-        onDismissRequest = { if (!busy) onDismiss() },
-        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-        shape = Radius.shapeLg,
-        modifier = Modifier.posPaymentDialogInsets(),
-        properties = posImeAwareDialogProperties,
-        title = { Text("Review live bill · ${review.totalMinor.asRupees()}") },
-        text = {
+    val reviewContent: @Composable (Modifier) -> Unit = { contentModifier ->
             Column(
-                Modifier.heightIn(max = 540.dp).verticalScroll(rememberScrollState()),
+                contentModifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(Spacing.md),
             ) {
                 Text(
@@ -3507,7 +3733,36 @@ private fun DirectCheckoutReviewDialog(
                     )
                 }
             }
-        },
+    }
+    if (inline) {
+        SectionCard(
+            modifier = modifier.testTag("pos-direct-review-inline"),
+            title = "Review live bill · ${review.totalMinor.asRupees()}",
+            subtitle = "Verified pricing stays beside the catalogue",
+            icon = Icons.AutoMirrored.Filled.ReceiptLong,
+            action = {
+                TextButton(onClick = onDismiss, enabled = !busy) { Text("Close") }
+            },
+        ) {
+            reviewContent(Modifier.weight(1f).fillMaxWidth())
+            PrimaryButton(
+                enabled = online && !busy,
+                onClick = onContinue,
+                modifier = Modifier.fillMaxWidth().testTag("pos-direct-review-continue"),
+            ) {
+                Text(if (busy) "RESERVING…" else "CONTINUE TO PAYMENT")
+            }
+        }
+        return
+    }
+    AlertDialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        shape = Radius.shapeLg,
+        modifier = Modifier.posPaymentDialogInsets(),
+        properties = posImeAwareDialogProperties,
+        title = { Text("Review live bill · ${review.totalMinor.asRupees()}") },
+        text = { reviewContent(Modifier.heightIn(max = 540.dp)) },
         confirmButton = {
             PrimaryButton(enabled = online && !busy, onClick = onContinue) {
                 Text(if (busy) "RESERVING…" else "CONTINUE TO PAYMENT")
@@ -3528,6 +3783,9 @@ private fun PayDialog(
     verifiedSharedOrder: Boolean = false,
     paymentSubject: String? = null,
     confirmationIdentity: String? = null,
+    initialMethod: String = "cash",
+    initialTendered: String = "",
+    initialSplit: Boolean = false,
     subtotalMinor: Long? = null,
     discountMinor: Long? = null,
     manualDiscountMinor: Long = 0L,
@@ -3542,13 +3800,17 @@ private fun PayDialog(
     onApplyPoints: ((Int) -> Unit)? = null,
     onDismiss: () -> Unit,
     onVoid: (() -> Unit)? = null,
-    onConfirm: (String, Long) -> Unit,
-    onConfirmSplit: ((SplitPaymentPlan) -> Unit)? = null,
+    onConfirm: (String, Long) -> Boolean,
+    onConfirmSplit: ((SplitPaymentPlan) -> Boolean)? = null,
 ) {
-    var method by rememberSaveable(confirmationIdentity) { mutableStateOf("cash") }
-    var tendered by rememberSaveable(confirmationIdentity) { mutableStateOf("") }
+    var method by rememberSaveable(confirmationIdentity) {
+        mutableStateOf(initialMethod.takeUnless { it == "split" } ?: "cash")
+    }
+    var tendered by rememberSaveable(confirmationIdentity) { mutableStateOf(initialTendered) }
     val splitAvailable = verifiedSharedOrder && onConfirmSplit != null
-    var splitMode by rememberSaveable(confirmationIdentity) { mutableStateOf(false) }
+    var splitMode by rememberSaveable(confirmationIdentity) {
+        mutableStateOf(initialSplit && splitAvailable && online)
+    }
     var splitMethods by remember(confirmationIdentity) {
         mutableStateOf(setOf("cash", "upi"))
     }
@@ -3560,6 +3822,9 @@ private fun PayDialog(
     var editingPoints by rememberSaveable(confirmationIdentity) { mutableStateOf(false) }
     var pointsText by rememberSaveable(confirmationIdentity) {
         mutableStateOf(pointsRedeemed.takeIf { it > 0 }?.toString().orEmpty())
+    }
+    LaunchedEffect(splitAvailable, online) {
+        if (!splitAvailable || !online) splitMode = false
     }
     val oneShotConfirmation = remember(confirmationIdentity) {
         confirmationIdentity?.let(::OneShotHeldPaymentConfirmation)
@@ -3688,8 +3953,8 @@ private fun PayDialog(
                             modifier = Modifier.weight(1f).heightIn(min = 48.dp),
                             shape = Radius.shapePill,
                             colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = MaterialTheme.colorScheme.operationalInformationContainer,
-                                selectedLabelColor = MaterialTheme.colorScheme.onSurface,
+                                selectedContainerColor = MaterialTheme.colorScheme.primary,
+                                selectedLabelColor = MaterialTheme.colorScheme.onPrimary,
                             ),
                         )
                         FilterChip(
@@ -3700,8 +3965,8 @@ private fun PayDialog(
                             modifier = Modifier.weight(1f).heightIn(min = 48.dp),
                             shape = Radius.shapePill,
                             colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = MaterialTheme.colorScheme.operationalInformationContainer,
-                                selectedLabelColor = MaterialTheme.colorScheme.onSurface,
+                                selectedContainerColor = MaterialTheme.colorScheme.primary,
+                                selectedLabelColor = MaterialTheme.colorScheme.onPrimary,
                             ),
                         )
                     }
@@ -3740,8 +4005,8 @@ private fun PayDialog(
                                 modifier = Modifier.weight(1f).heightIn(min = 48.dp),
                                 shape = Radius.shapePill,
                                 colors = FilterChipDefaults.filterChipColors(
-                                    selectedContainerColor = MaterialTheme.colorScheme.operationalInformationContainer,
-                                    selectedLabelColor = MaterialTheme.colorScheme.onSurface,
+                                    selectedContainerColor = MaterialTheme.colorScheme.primary,
+                                    selectedLabelColor = MaterialTheme.colorScheme.onPrimary,
                                 ),
                             )
                         }
@@ -3929,13 +4194,24 @@ private fun PayDialog(
                     val consumed = oneShotConfirmation?.tryConsume(requireNotNull(confirmationIdentity))
                         ?: !confirmationConsumed
                     if (consumed) {
-                        // Immediate local state disables the button before the
-                        // ViewModel/Room round trip can trigger recomposition.
-                        confirmationConsumed = true
-                        if (splitMode) {
+                        val accepted = if (splitMode) {
                             onConfirmSplit?.invoke(requireNotNull(splitPlan))
+                                ?: false
                         } else {
                             onConfirm(method, if (method == "cash") tenderedMinor else dueMinor)
+                        }
+                        if (accepted) {
+                            // The ViewModel synchronously entered the guarded
+                            // Room-save path. Keep this claim disabled while
+                            // that durable write completes.
+                            confirmationConsumed = true
+                        } else {
+                            // Preflight rejection (including an expired claim)
+                            // records no money. Let the refreshed claim own a
+                            // fresh one-shot instead of trapping this dialog.
+                            oneShotConfirmation?.releaseRejected(
+                                requireNotNull(confirmationIdentity),
+                            )
                         }
                     }
                 },
@@ -4066,12 +4342,6 @@ private fun SplitTenderEditor(
         }
         LazyRow(horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
             items(orderedMethods, key = { it }) { splitMethod ->
-                val accent = when (splitMethod) {
-                    "cash" -> MaterialTheme.colorScheme.operationalGood
-                    "upi" -> MaterialTheme.colorScheme.operationalInformation
-                    "card" -> MaterialTheme.colorScheme.onPrimaryContainer
-                    else -> MaterialTheme.colorScheme.operationalInformation
-                }
                 FilterChip(
                     selected = splitMethod in selectedMethods,
                     enabled = enabled,
@@ -4079,8 +4349,8 @@ private fun SplitTenderEditor(
                     label = { Text(SplitPaymentPolicy.methodLabel(splitMethod)) },
                     shape = Radius.shapePill,
                     colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = accent.copy(alpha = 0.2f),
-                        selectedLabelColor = accent,
+                        selectedContainerColor = MaterialTheme.colorScheme.primary,
+                        selectedLabelColor = MaterialTheme.colorScheme.onPrimary,
                     ),
                 )
             }

@@ -15,6 +15,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -98,6 +99,8 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableIntState
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.derivedStateOf
@@ -143,6 +146,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntRect
 import kotlin.math.cos
@@ -232,6 +236,41 @@ internal data class StationPresentation(
 
 internal data class StationFilter(val id: String, val label: String)
 
+private val GAMING_INLINE_EDITOR_STATES = setOf(
+    StationVisualState.Starting,
+    StationVisualState.Active,
+    StationVisualState.Overtime,
+    StationVisualState.Paused,
+    StationVisualState.StopFailed,
+)
+
+internal fun gamingInlineEditorAvailable(state: StationVisualState?): Boolean =
+    state in GAMING_INLINE_EDITOR_STATES
+
+internal fun gamingInlineStopVisible(
+    state: StationVisualState?,
+    canRequestStop: Boolean,
+): Boolean = canRequestStop && gamingInlineEditorAvailable(state)
+
+private val GamingPrimaryActionSupportHeight = 36.dp
+
+/**
+ * Reserves the same space below Start/Stop in every selected-station state.
+ * Guidance may occupy it, but opening an inline editor or gaining pause
+ * capability must not move the primary action under the operator's finger.
+ */
+@Composable
+private fun GamingPrimaryActionSupportArea(
+    content: (@Composable () -> Unit)? = null,
+) {
+    Box(
+        Modifier.fillMaxWidth().height(GamingPrimaryActionSupportHeight),
+        contentAlignment = Alignment.TopStart,
+    ) {
+        content?.invoke()
+    }
+}
+
 private data class StopRequest(val station: Station, val session: GameSession)
 private data class PackageExtensionRequest(
     val session: GameSession,
@@ -284,6 +323,7 @@ private data class ParticipantJoinReview(
     val customerId: String?,
     val name: String?,
     val phone: String?,
+    val participantIdentityId: String? = null,
 )
 
 /**
@@ -575,6 +615,19 @@ fun GamingScreen(
                         discardingPackageExtension = PackageExtensionDiscardRequest(action)
                     },
                     onAddItems = { choosingAddonFor = it },
+                    onQuickAddItem = { session, item, qty ->
+                        vm.addSessionAddon(
+                            session = session,
+                            item = item,
+                            variant = null,
+                            modifiers = emptyList(),
+                            note = null,
+                            qty = qty,
+                        )
+                    },
+                    onConfigureItem = { session, item ->
+                        configuringAddon = AddonConfigurationRequest(session, item)
+                    },
                     onVoidAddon = { session, addon ->
                         voidingAddon = AddonVoidRequest(session, addon)
                     },
@@ -584,10 +637,12 @@ fun GamingScreen(
                         }
                     },
                     onManageParticipants = {
-                        android.util.Log.d("Code304Trial", "manage-click-workspace")
                         vm.refreshCustomersForStart()
-                        managingParticipants = it
                     },
+                    onJoinParticipant = { session, customerId, name, phone, identityId ->
+                        vm.joinParticipant(session, customerId, name, phone, identityId)
+                    },
+                    onLeaveParticipant = vm::leaveParticipant,
                 )
                 return@BoxWithConstraints
             }
@@ -859,7 +914,9 @@ fun GamingScreen(
             online = state.online,
             amendTarget = target30,
             onSearchCustomer = vm::searchCustomersForStart,
-            onJoin = { customerId, name, phone -> vm.joinParticipant(current, customerId, name, phone) },
+            onJoin = { customerId, name, phone, identityId ->
+                vm.joinParticipant(current, customerId, name, phone, identityId)
+            },
             onLeave = { reference -> vm.leaveParticipant(current, reference) },
             onAmend = { target -> vm.amendPackage(current, target) },
             onDiscardRejected = { actionId -> vm.discardRejectedSessionAction(current, actionId) },
@@ -1588,6 +1645,74 @@ internal fun rejectedSessionReviewStationId(
 }
 
 @Composable
+private fun GamingPermanentSessionDial(
+    session: GameSession?,
+    wallClock: State<Long>,
+    choices: List<GamingDurationChoice>,
+    selectedPackageId: String?,
+    onSelect: (String) -> Unit,
+    dialSize: Dp,
+    gestureContextKey: Any,
+    tariffUnavailable: Boolean,
+) {
+    // The one-second clock is owned by the permanent dial child. Keeping the
+    // read below this composition boundary prevents the station workspace,
+    // editors and fixed action footer from recomposing every second.
+    val ticking = session?.status in setOf("active", "starting")
+    val frozenNow = remember(session?.id, session?.status) { System.currentTimeMillis() }
+    val dialNow = if (ticking) wallClock.value else frozenNow
+    val sessionReadout = session?.let { current ->
+        val playedMillis = sessionPlayElapsedMillis(current, dialNow)
+        val bookedMillis = current.timerMinutes?.takeIf { it > 0 }?.times(60_000L)
+        when {
+            current.status == "start_failed" -> GamingDurationDialReadout(
+                primary = "--:--:--",
+                label = "START FAILED",
+                detail = "Review saved start",
+            )
+            playedMillis == null -> GamingDurationDialReadout(
+                primary = "--:--:--",
+                label = "TIME UNAVAILABLE",
+                detail = "Review session timing",
+            )
+            else -> {
+                val remainingMillis = bookedMillis?.minus(playedMillis)
+                GamingDurationDialReadout(
+                    primary = formatElapsed(playedMillis),
+                    label = when {
+                        current.status == "paused" -> "PAUSED"
+                        current.status == "stopping" -> "STOPPING"
+                        current.status in setOf("ended", "stopped", "completed") ||
+                            current.endAt != null -> "STOPPED"
+                        current.status == "starting" -> "STARTING"
+                        else -> "ELAPSED TIME"
+                    },
+                    detail = remainingMillis?.let { remaining ->
+                        if (remaining <= 0L) "+${formatElapsed(-remaining)} overtime"
+                        else "${formatElapsed(remaining)} remaining"
+                    } ?: "Open-ended session",
+                )
+            }
+        }
+    }
+    GamingDurationDial(
+        choices = choices,
+        selectedPackageId = selectedPackageId,
+        onSelect = onSelect,
+        dialSize = dialSize,
+        showChoiceChips = false,
+        gestureContextKey = gestureContextKey,
+        readout = sessionReadout ?: if (tariffUnavailable) {
+            GamingDurationDialReadout(
+                primary = "--",
+                label = "TARIFF UNAVAILABLE",
+                detail = "Refresh Gaming",
+            )
+        } else null,
+    )
+}
+
+@Composable
 internal fun GamingCommandWorkspace(
     state: GamingUiState,
     access: GamingAccess,
@@ -1622,9 +1747,13 @@ internal fun GamingCommandWorkspace(
     onResolveLegacyStart: (GameSession) -> Unit,
     onDiscardPackageExtension: (PackageExtensionActionUi) -> Unit,
     onAddItems: (GameSession) -> Unit,
+    onQuickAddItem: (GameSession, MenuItemEntity, Int) -> Unit = { _, _, _ -> },
+    onConfigureItem: (GameSession, MenuItemEntity) -> Unit = { _, _ -> },
     onVoidAddon: (GameSession, GamingSessionAddonUi) -> Unit,
     onReviewRejectedAddon: (String) -> Unit,
     onManageParticipants: (GameSession) -> Unit,
+    onJoinParticipant: (GameSession, String?, String?, String?, String?) -> Unit = { _, _, _, _, _ -> },
+    onLeaveParticipant: (GameSession, String) -> Unit = { _, _ -> },
     onConfirmExtension: ((PackageExtensionReview) -> String?)? = null,
 ) {
     // Selection changes the control pane; it never removes the station board.
@@ -1639,6 +1768,7 @@ internal fun GamingCommandWorkspace(
     var extensionReviewError by remember { mutableStateOf<String?>(null) }
     var extensionConfirming by remember { mutableStateOf(false) }
     var customerCacheRequested by remember { mutableStateOf(false) }
+    var inlinePanel by rememberSaveable(selectedStationId) { mutableStateOf<String?>(null) }
     LaunchedEffect(selectedStation != null && selectedSession == null, access.canManageSessions) {
         if (selectedStation != null && selectedSession == null &&
             access.canManageSessions && !customerCacheRequested
@@ -1724,20 +1854,150 @@ internal fun GamingCommandWorkspace(
                 },
             ).state
         }
-        val heroOwnsStopAction = gamingHeroShowsStopAction(selectedSession, selectedHeroState)
         when {
             selectedStation == null -> DesignedEmptyState(
                 title = "Select a station", body = "Choose a station on the board.",
                 icon = Icons.Filled.SportsEsports, modifier = paneModifier,
             )
-            selectedSession == null && selectedStation.isActive -> {
-                androidx.compose.runtime.key(selectedStation.id) {
+            else -> androidx.compose.runtime.key(selectedStation.id) {
+                LaunchedEffect(selectedSession?.id, selectedHeroState) {
+                    if (inlinePanel != null && !gamingInlineEditorAvailable(selectedHeroState)) {
+                        inlinePanel = null
+                    }
+                }
+                val stationPackages = state.packages.filter {
+                    it.stationType == selectedStation.type && it.kind == "base"
+                }
+                val startSelection = rememberGamingStartSelectionState(selectedStation, stationPackages)
+                val durationChoices = gamingDurationChoices(selectedStation, stationPackages, startSelection)
+                LaunchedEffect(selectedSession?.id, selectedSession?.effectivePackageId, selectedSession?.packageId) {
+                    val bookedVariant = selectedSession?.effectivePackageVariant
+                        ?: selectedSession?.packageVariantSnapshot
+                    if (bookedVariant != null) startSelection.selectedVariant.value = bookedVariant
+                    if (bookedVariant == "dual") {
+                        startSelection.playerCount.intValue = (2 + (selectedSession?.extraControllers ?: 0))
+                            .coerceAtMost(4)
+                    } else if (bookedVariant == "single") {
+                        startSelection.playerCount.intValue = 1
+                    }
+                    val bookedPackageId = selectedSession?.effectivePackageId ?: selectedSession?.packageId
+                    if (bookedPackageId != null) startSelection.selectedPackageId.value = bookedPackageId
+                }
+                val fixedTabletWorkspace = LocalConfiguration.current.screenWidthDp >= 900
+                Column(
+                paneModifier.then(
+                    if (fixedTabletWorkspace) Modifier else Modifier.verticalScroll(
+                        remember(selectedStation.id, inlinePanel) { ScrollState(0) },
+                    ),
+                ).padding(
+                    horizontal = Spacing.md,
+                    vertical = Spacing.sm,
+                ),
+                // Match the draft editor's fixed header-to-instrument gap so a
+                // state update never makes the permanent ring jump vertically.
+                verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+            ) {
+                val compactWorkspaceHeader = LocalConfiguration.current.screenHeightDp < 700
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    if (!compactWorkspaceHeader) Text(
+                        if (selectedSession == null) "START SESSION" else "SESSION STATUS",
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        selectedStation.name,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        style = if (compactWorkspaceHeader) MaterialTheme.typography.titleMedium
+                            else MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    if (!compactWorkspaceHeader) Text(
+                        if (selectedSession == null) {
+                            "Available · select a published duration"
+                        } else {
+                            selectedHeroState?.name?.replace('_', ' ')
+                                ?.lowercase()?.replaceFirstChar(Char::titlecase)
+                                ?: selectedSession.status.replaceFirstChar(Char::titlecase)
+                        },
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                }
+                Row(
+                    // The draft editor constrains this same instrument/detail
+                    // row to 760dp. Reuse that measured scaffold for starting,
+                    // running, paused and stopped states.
+                    Modifier.widthIn(max = 760.dp).fillMaxWidth()
+                        .then(if (fixedTabletWorkspace) Modifier.weight(1f) else Modifier)
+                        .align(Alignment.CenterHorizontally),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+                    verticalAlignment = Alignment.Top,
+                ) {
+                Box(
+                    Modifier.weight(0.62f).testTag("gaming-ring-host"),
+                    contentAlignment = Alignment.TopCenter,
+                ) {
+                    if (requiresCanonicalGamingTariff(selectedStation.type)) {
+                        val fixedChoices = durationChoices.ifEmpty {
+                            listOf(
+                                GamingDurationChoice(
+                                    packageId = selectedSession?.effectivePackageId
+                                        ?: selectedSession?.packageId ?: "${selectedStation.id}:unavailable",
+                                    minutes = selectedSession?.timerMinutes ?: 0,
+                                    totalMinor = selectedSession?.amountMinor ?: 0L,
+                                ),
+                            )
+                        }
+                        GamingPermanentSessionDial(
+                            session = selectedSession,
+                            wallClock = wallClock,
+                            choices = fixedChoices,
+                            selectedPackageId = startSelection.selectedPackageId.value,
+                            onSelect = { startSelection.selectedPackageId.value = it },
+                            dialSize = gamingControlRingSize(LocalConfiguration.current.screenHeightDp),
+                            gestureContextKey = selectedStation.id,
+                            tariffUnavailable = durationChoices.isEmpty(),
+                        )
+                    } else if (selectedSession != null) {
+                        GamingStationHero(
+                            station = selectedStation,
+                            session = selectedSession,
+                            sessionAddons = state.addonsFor(selectedSession),
+                            wallClock = wallClock,
+                            stopActionEnabled = gamingSessionActionsEnabled(
+                                canWrite = access.canManageSessions,
+                                actionInProgress = state.busyStationId != null,
+                                lastError = selectedSession.lastError,
+                            ) && selectedSession.resolvedStopShiftId(
+                                activeShiftId = state.activeShiftId,
+                                activeShiftServerConfirmed = state.activeShiftServerConfirmed,
+                                online = state.online,
+                            ) != null,
+                            stopBusy = state.busyStationId == selectedStation.id,
+                            onStop = { onStop(selectedStation, it) },
+                            ringOnly = true,
+                        )
+                    } else {
+                        GamingStationArtwork(selectedStation.type, Modifier.size(180.dp))
+                    }
+                }
+                Column(
+                    Modifier.weight(0.38f)
+                        .then(if (fixedTabletWorkspace) Modifier.fillMaxHeight() else Modifier)
+                        .then(
+                            if (fixedTabletWorkspace) Modifier
+                            else Modifier.verticalScroll(
+                                remember(selectedStation.id, inlinePanel) { ScrollState(0) },
+                            ),
+                        ),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+                ) {
+                if (selectedSession == null && selectedStation.isActive) {
                     RemoteSensitiveContent {
                         StartSessionEditor(
                             station = selectedStation,
-                            packages = state.packages.filter {
-                                it.stationType == selectedStation.type && it.kind == "base"
-                            },
+                            packages = stationPackages,
                             customers = state.customers,
                             online = state.online,
                             onSearchCustomer = onSearchCustomer,
@@ -1753,32 +2013,11 @@ internal fun GamingCommandWorkspace(
                             embedded = true,
                             startEnabled = startBlockMessage == null,
                             startBlockMessage = startBlockMessage,
-                            modifier = paneModifier,
+                            selectionState = startSelection,
+                            externallyHostedDial = true,
                         )
                     }
-                }
-            }
-            else -> androidx.compose.runtime.key(selectedStation.id) { Column(
-                paneModifier.verticalScroll(rememberScrollState()).padding(Spacing.sm),
-                verticalArrangement = Arrangement.spacedBy(Spacing.md),
-            ) {
-                GamingStationHero(
-                    station = selectedStation,
-                    session = selectedSession,
-                    sessionAddons = selectedSession?.let(state::addonsFor).orEmpty(),
-                    wallClock = wallClock,
-                    stopActionEnabled = selectedSession != null && gamingSessionActionsEnabled(
-                        canWrite = access.canManageSessions,
-                        actionInProgress = state.busyStationId != null,
-                        lastError = selectedSession.lastError,
-                    ) && selectedSession.resolvedStopShiftId(
-                        activeShiftId = state.activeShiftId,
-                        activeShiftServerConfirmed = state.activeShiftServerConfirmed,
-                        online = state.online,
-                    ) != null,
-                    stopBusy = state.busyStationId == selectedStation.id,
-                    onStop = { onStop(selectedStation, it) },
-                )
+                } else {
                 extensionPreview?.takeIf {
                     it.station.id == selectedStation.id && it.session.id == selectedSession?.id
                 }?.let { preview ->
@@ -1829,9 +2068,52 @@ internal fun GamingCommandWorkspace(
                         modifier = Modifier.testTag("gaming-extension-review-error"),
                     )
                 }
-                // The existing card continues to own authority, recovery,
-                // billing and all active/payment actions in this side pane.
-    GamingStationCard(
+                when (inlinePanel) {
+                    "players" -> if (selectedSession != null) {
+                        GamingInlineParticipantEditor(
+                            session = selectedSession,
+                            participants = state.participantsFor(selectedSession),
+                            customers = state.customers,
+                            busy = state.busyStationId != null,
+                            onJoin = { customerId, name, phone, identityId ->
+                                onJoinParticipant(selectedSession, customerId, name, phone, identityId)
+                            },
+                            onLeave = { reference -> onLeaveParticipant(selectedSession, reference) },
+                            onClose = { inlinePanel = null },
+                            modifier = Modifier.fillMaxWidth().then(
+                                if (fixedTabletWorkspace) Modifier.weight(1f) else Modifier,
+                            ),
+                            pinConfirmAction = fixedTabletWorkspace,
+                        )
+                    }
+                    "drinks" -> if (selectedSession != null) {
+                        GamingInlineDrinkEditor(
+                            session = selectedSession,
+                            items = state.addonCatalog,
+                            configurableItemIds = remember(
+                                state.addonVariants,
+                                state.addonModifierGroups,
+                            ) {
+                                (state.addonVariants.map { it.menuItemId } +
+                                    state.addonModifierGroups.map { it.menuItemId }).toSet()
+                            },
+                            busy = state.busyStationId != null,
+                            onConfirm = { item, qty -> onQuickAddItem(selectedSession, item, qty) },
+                            onConfigure = { item -> onConfigureItem(selectedSession, item) },
+                            onMore = { onAddItems(selectedSession) },
+                            onClose = { inlinePanel = null },
+                            modifier = Modifier.fillMaxWidth().then(
+                                if (fixedTabletWorkspace) Modifier.weight(1f) else Modifier,
+                            ),
+                        )
+                    }
+                    else -> {
+                        // The existing card continues to own authority,
+                        // recovery, billing and all active/payment actions in
+                        // this side pane. A routine inline editor temporarily
+                        // replaces it so the form starts beside the ring,
+                        // rather than below the viewport.
+                        GamingStationCard(
         station = selectedStation,
         session = selectedSession,
         packageExtensionAction = selectedSession?.let {
@@ -1867,14 +2149,53 @@ internal fun GamingCommandWorkspace(
         onRepairBilling = onRepairBilling,
         onResolveLegacyStart = onResolveLegacyStart,
         onDiscardPackageExtension = onDiscardPackageExtension,
-        onAddItems = onAddItems,
+        onAddItems = {
+            inlinePanel = if (inlinePanel == "drinks") null else "drinks"
+        },
         onVoidAddon = onVoidAddon,
         onReviewRejectedAddon = onReviewRejectedAddon,
-        onManageParticipants = onManageParticipants,
+        onManageParticipants = {
+            inlinePanel = if (inlinePanel == "players") null else "players"
+            onManageParticipants(it)
+        },
         compactDetail = true,
-        showActiveStopAction = !heroOwnsStopAction,
-        modifier = Modifier.fillMaxWidth(),
+        // The compact detail pane owns all live actions when the hero is a
+        // ring-only instrument. Keep Stop visible in the same workspace.
+        showActiveStopAction = true,
+        pinActiveSessionActions = fixedTabletWorkspace,
+        modifier = if (fixedTabletWorkspace) Modifier.fillMaxSize() else Modifier.fillMaxWidth(),
     )
+                    }
+                }
+                if (
+                    inlinePanel != null && selectedSession != null && selectedHeroState != null &&
+                    gamingInlineStopVisible(selectedHeroState, selectedSession.canRequestStop())
+                ) {
+                    val canStopFromInlineEditor = selectedSession.resolvedStopShiftId(
+                        activeShiftId = state.activeShiftId,
+                        activeShiftServerConfirmed = state.activeShiftServerConfirmed,
+                        online = state.online,
+                    ) != null
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    Column(Modifier.fillMaxWidth()) {
+                        GamingStopSessionAction(
+                            session = selectedSession,
+                            presentationState = selectedHeroState,
+                            enabled = gamingSessionActionsEnabled(
+                                canWrite = access.canManageSessions,
+                                actionInProgress = state.busyStationId != null,
+                                lastError = selectedSession.lastError,
+                            ) && canStopFromInlineEditor,
+                            busy = state.busyStationId == selectedStation.id,
+                            onStop = { onStop(selectedStation, it) },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        GamingPrimaryActionSupportArea()
+                    }
+                }
+                }
+                }
+                }
             } }
         }
     }
@@ -1884,10 +2205,13 @@ internal fun GamingCommandWorkspace(
         // The 960dp tablet must keep its station board and duration dial in
         // the same viewport; narrower screens retain the scroll fallback.
         val sideBySide = maxWidth >= 900.dp
-        val denseGrid = maxWidth < 1_100.dp
+        // The approved tablet board is always two columns when it shares the
+        // viewport with the command workspace. Four rows must remain visible
+        // even on a 1280x800 tablet with the required operational notice rail.
+        val denseGrid = sideBySide
         val noticeRailMaxHeight = minOf(144.dp, maxHeight * 0.19f)
         val columns = when {
-            sideBySide -> 4
+            sideBySide -> 2
             maxWidth >= 680.dp -> 4
             maxWidth >= 490.dp -> 3
             else -> 2
@@ -1946,11 +2270,11 @@ internal fun GamingCommandWorkspace(
                         wallClock = wallClock, columns = columns,
                         dense = denseGrid,
                         onSelectStation = onSelectStation,
-                        modifier = Modifier.weight(0.35f).fillMaxHeight()
+                        modifier = Modifier.weight(0.29f).fillMaxHeight()
                             .verticalScroll(rememberScrollState()),
                     )
                     controlPane(
-                        Modifier.weight(0.65f).fillMaxHeight()
+                        Modifier.weight(0.71f).fillMaxHeight()
                             .clip(Radius.shapeLg)
                             .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.28f), Radius.shapeLg)
                             .testTag("gaming-control-pane"),
@@ -2364,6 +2688,8 @@ private fun GamingStationHero(
     stopActionEnabled: Boolean,
     stopBusy: Boolean,
     onStop: (GameSession) -> Unit,
+    ringOnly: Boolean = false,
+    modifier: Modifier = Modifier,
 ) {
     val compactWorkspace = LocalConfiguration.current.screenHeightDp < 700
     val ticking = session?.status in setOf("active", "starting")
@@ -2376,7 +2702,7 @@ private fun GamingStationHero(
             StationVisualState.Active,
             StationVisualState.Overtime,
             StationVisualState.StopFailed,
-        ) || (current.status == "paused" && current.pausedAt != null)
+        ) || (current.status == "paused" && current.pausedAt != null) || current.endAt != null
     }
     val billedSession = session?.takeIf {
         presentation.state in setOf(
@@ -2391,8 +2717,37 @@ private fun GamingStationHero(
     val combinedBillMinor = billedSession?.amountMinor?.let {
         Math.addExact(it, gamingSessionAddonBillableTotalMinor(sessionAddons))
     }
+    if (ringOnly && elapsedSession != null) {
+        val playedMillis = elapsedMillis(elapsedSession, now)
+        val bookedMillis = elapsedSession.timerMinutes
+            ?.takeIf { it > 0 }
+            ?.times(60_000L)
+        val remainingMillis = bookedMillis?.minus(playedMillis)
+        Box(
+            modifier.fillMaxWidth(),
+            contentAlignment = Alignment.TopCenter,
+        ) {
+            GamingElapsedRing(
+                clock = formatElapsed(playedMillis),
+                clockLabel = "ELAPSED TIME",
+                detail = remainingMillis?.let { remaining ->
+                    if (remaining <= 0L) "+${formatElapsed(-remaining)} overtime"
+                    else "${formatElapsed(remaining)} remaining"
+                },
+                progress = bookedMillis?.let { booked ->
+                    (playedMillis.toFloat() / booked.toFloat()).coerceIn(0f, 1f)
+                },
+                tint = if (presentation.state in setOf(
+                        StationVisualState.Overtime, StationVisualState.StopFailed,
+                    )
+                ) MaterialTheme.colorScheme.operationalDanger
+                else MaterialTheme.colorScheme.onPrimaryContainer,
+            )
+        }
+        return
+    }
     Surface(
-        modifier = Modifier.fillMaxWidth().then(
+        modifier = modifier.fillMaxWidth().then(
             if (showsElapsed && compactWorkspace) {
                 // This matches the compact draft editor's control-ring slot so
                 // starting a session changes the data, not the instrument's position.
@@ -2426,13 +2781,11 @@ private fun GamingStationHero(
                     contentAlignment = Alignment.TopCenter,
                 ) {
                 GamingElapsedRing(
-                    clock = remainingMillis?.let { remaining ->
-                        if (remaining <= 0L) "+${formatElapsed(-remaining)}" else formatElapsed(remaining)
-                    } ?: formatElapsed(playedMillis),
-                    clockLabel = when {
-                        remainingMillis == null -> "ELAPSED"
-                        remainingMillis <= 0L -> "OVERTIME"
-                        else -> "REMAINING"
+                    clock = formatElapsed(playedMillis),
+                    clockLabel = "ELAPSED TIME",
+                    detail = remainingMillis?.let { remaining ->
+                        if (remaining <= 0L) "+${formatElapsed(-remaining)} overtime"
+                        else "${formatElapsed(remaining)} remaining"
                     },
                     progress = bookedMillis?.let { booked ->
                         (playedMillis.toFloat() / booked.toFloat()).coerceIn(0f, 1f)
@@ -2444,7 +2797,7 @@ private fun GamingStationHero(
                 )
                 }
             }
-            Column(
+            if (!ringOnly) Column(
                 Modifier.weight(if (showsElapsed) 0.38f else 1f),
                 verticalArrangement = Arrangement.spacedBy(Spacing.sm),
             ) {
@@ -2521,13 +2874,16 @@ private fun GamingStationHero(
 private fun GamingElapsedRing(
     clock: String,
     clockLabel: String,
+    detail: String? = null,
     progress: Float?,
     tint: Color,
 ) {
     val ringBorder = MaterialTheme.colorScheme.outlineVariant
     val ringSize = gamingControlRingSize(LocalConfiguration.current.screenHeightDp)
     Box(
-        Modifier.size(ringSize).testTag("gaming-control-ring"),
+        Modifier.size(ringSize).testTag("gaming-control-ring").semantics {
+            contentDescription = listOfNotNull(clockLabel, clock, detail).joinToString(". ")
+        },
         contentAlignment = Alignment.Center,
     ) {
         Canvas(Modifier.fillMaxSize()) {
@@ -2566,6 +2922,10 @@ private fun GamingElapsedRing(
                 style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
             Text(clockLabel, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelSmall)
+            detail?.let {
+                Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.labelSmall)
+            }
         }
     }
 }
@@ -2719,7 +3079,7 @@ internal fun GamingStationTile(
     val highlighted = selected || focused
     Column(
         modifier.fillMaxWidth().heightIn(min = when {
-            dense -> 140.dp
+            dense -> 98.dp
             compact -> 154.dp
             else -> 178.dp
         })
@@ -2750,11 +3110,14 @@ internal fun GamingStationTile(
                     station.name + ". " + presentation.statusLabel + ". Select station controls"
                 }
             }
-            .padding(Spacing.sm),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
+            .padding(
+                horizontal = Spacing.sm,
+                vertical = if (dense) Spacing.xs else Spacing.sm,
+            ),
+        verticalArrangement = Arrangement.spacedBy(if (dense) 2.dp else 4.dp),
     ) {
         Box(
-            Modifier.fillMaxWidth().height(if (dense) 68.dp else if (compact) 76.dp else 96.dp)
+            Modifier.fillMaxWidth().height(if (dense) 32.dp else if (compact) 76.dp else 96.dp)
                 .background(
                     Brush.radialGradient(
                         if (highlighted) listOf(
@@ -3062,6 +3425,7 @@ internal fun GamingStationCard(
     onPauseResume: (GameSession) -> Unit = {},
     showActiveSessionActions: Boolean = true,
     showActiveStopAction: Boolean = true,
+    showStartingActions: Boolean = true,
     pinActiveSessionActions: Boolean = false,
     compactDetail: Boolean = false,
     modifier: Modifier = Modifier,
@@ -3142,6 +3506,7 @@ internal fun GamingStationCard(
     if (pinActiveSessionActions) {
         val hasPinnedActions = packageExtensionAction == null && session != null &&
             presentation.state in setOf(
+                StationVisualState.Starting,
                 StationVisualState.Active,
                 StationVisualState.Overtime,
                 StationVisualState.Paused,
@@ -3189,32 +3554,53 @@ internal fun GamingStationCard(
                             onPauseResume = onPauseResume,
                             showActiveSessionActions = false,
                             showActiveStopAction = showActiveStopAction,
+                            showStartingActions = false,
+                            // This recursive card renders the selected
+                            // workspace summary. Preserve the caller's compact
+                            // contract so the persistent dial remains the only
+                            // elapsed-time display.
+                            compactDetail = compactDetail,
                         )
                     }
                 }
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                GamingActiveSessionActions(
-                    session = session,
-                    presentationState = presentation.state,
-                    actionsEnabled = actionsEnabled,
-                    ownsSession = ownsSession,
-                    online = online,
-                    alreadySettledAtPos = alreadySettledAtPos,
-                    packageBillingSnapshotMissing = packageBillingSnapshotMissing,
-                    matchingExtensions = matchingExtensions,
-                    hasTransferTarget = hasTransferTarget,
-                    canStopSession = canStopSession,
-                    busyHere = busyHere,
-                    onAddItems = onAddItems,
-                    onExtendTimer = onExtendTimer,
-                    onExtendPackage = onExtendPackage,
-                    onTransfer = onTransfer,
-                    onPauseResume = onPauseResume,
-                    onStop = onStop,
-                    onManageParticipants = onManageParticipants,
-                    showStopAction = showActiveStopAction,
-                    modifier = Modifier.fillMaxWidth().padding(top = Spacing.sm),
-                )
+                if (presentation.state == StationVisualState.Starting) {
+                    GamingStartingSessionActions(
+                        station = station,
+                        session = session,
+                        actionsEnabled = actionsEnabled,
+                        ownsSession = ownsSession,
+                        canStopSession = canStopSession,
+                        busyHere = busyHere,
+                        onAddItems = onAddItems,
+                        onManageParticipants = onManageParticipants,
+                        onStop = onStop,
+                        modifier = Modifier.fillMaxWidth().padding(top = Spacing.sm),
+                    )
+                } else {
+                    GamingActiveSessionActions(
+                        session = session,
+                        presentationState = presentation.state,
+                        actionsEnabled = actionsEnabled,
+                        ownsSession = ownsSession,
+                        online = online,
+                        alreadySettledAtPos = alreadySettledAtPos,
+                        packageBillingSnapshotMissing = packageBillingSnapshotMissing,
+                        matchingExtensions = matchingExtensions,
+                        hasTransferTarget = hasTransferTarget,
+                        canStopSession = canStopSession,
+                        busyHere = busyHere,
+                        onAddItems = onAddItems,
+                        onExtendTimer = onExtendTimer,
+                        onExtendPackage = onExtendPackage,
+                        onTransfer = onTransfer,
+                        onPauseResume = onPauseResume,
+                        onStop = onStop,
+                        onManageParticipants = onManageParticipants,
+                        showStopAction = showActiveStopAction,
+                        modifier = Modifier.fillMaxWidth().padding(top = Spacing.sm),
+                    )
+                }
             }
         } else {
             LazyColumn(
@@ -3591,35 +3977,17 @@ internal fun GamingStationCard(
                 }
             }
 
-            StationVisualState.Starting -> Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                if (stationFilterId(station.type) == "ps5" &&
-                    session?.isLocallyPendingPs5PackageStart() == true
-                ) {
-                    ErpButton(
-                        text = "Players & booking",
-                        onClick = { onManageParticipants(session) },
-                        enabled = actionsEnabled && ownsSession && session.orderId == null,
-                        intent = ActionIntent.Secondary,
-                        leadingIcon = Icons.Filled.People,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-                ErpButton(
-                    text = "Add drinks & snacks",
-                    onClick = { session?.let(onAddItems) },
-                    enabled = actionsEnabled && ownsSession && session?.orderId == null,
-                    intent = ActionIntent.Secondary,
-                    leadingIcon = Icons.Filled.RestaurantMenu,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                ErpButton(
-                    text = "Stop & save end",
-                    onClick = { session?.let(onStop) },
-                    enabled = actionsEnabled && canStopSession && session?.canRequestStop() == true,
-                    busy = busyHere,
-                    intent = ActionIntent.Destructive,
-                    leadingIcon = Icons.Filled.StopCircle,
-                    modifier = Modifier.fillMaxWidth(),
+            StationVisualState.Starting -> if (showStartingActions && session != null) {
+                GamingStartingSessionActions(
+                    station = station,
+                    session = session,
+                    actionsEnabled = actionsEnabled,
+                    ownsSession = ownsSession,
+                    canStopSession = canStopSession,
+                    busyHere = busyHere,
+                    onAddItems = onAddItems,
+                    onManageParticipants = onManageParticipants,
+                    onStop = onStop,
                 )
             }
 
@@ -3642,6 +4010,53 @@ internal fun GamingStationCard(
             -> Unit
         }
 
+    }
+}
+
+@Composable
+private fun GamingStartingSessionActions(
+    station: Station,
+    session: GameSession,
+    actionsEnabled: Boolean,
+    ownsSession: Boolean,
+    canStopSession: Boolean,
+    busyHere: Boolean,
+    onAddItems: (GameSession) -> Unit,
+    onManageParticipants: (GameSession) -> Unit,
+    onStop: (GameSession) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+        if (stationFilterId(station.type) == "ps5" && session.isLocallyPendingPs5PackageStart()) {
+            ErpButton(
+                text = "Players",
+                onClick = { onManageParticipants(session) },
+                enabled = actionsEnabled && ownsSession && session.orderId == null,
+                intent = ActionIntent.Secondary,
+                leadingIcon = Icons.Filled.People,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        ErpButton(
+            text = "Add drinks & snacks",
+            onClick = { onAddItems(session) },
+            enabled = actionsEnabled && ownsSession && session.orderId == null,
+            intent = ActionIntent.Secondary,
+            leadingIcon = Icons.Filled.RestaurantMenu,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Column(Modifier.fillMaxWidth()) {
+            ErpButton(
+                text = "Stop & save end",
+                onClick = { onStop(session) },
+                enabled = actionsEnabled && canStopSession && session.canRequestStop(),
+                busy = busyHere,
+                intent = ActionIntent.Destructive,
+                leadingIcon = Icons.Filled.StopCircle,
+                modifier = Modifier.fillMaxWidth().testTag("gaming-primary-action-host"),
+            )
+            GamingPrimaryActionSupportArea()
+        }
     }
 }
 
@@ -3669,28 +4084,50 @@ private fun GamingActiveSessionActions(
     modifier: Modifier = Modifier,
 ) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-        if (
+        val pauseSupportMessage = when {
+            !online -> "Reconnect to pause or resume safely across devices."
+            session.pauseVersion == null ->
+                "Refresh Gaming after the server update to enable pause controls."
+            session.status != "paused" && !session.pauseAvailable ->
+                "Pause is not enabled yet. The owner must update all tablets before enabling it."
+            else -> null
+        }
+        val showsParticipantAction =
             session.status in setOf("active", "paused") &&
             (session.effectivePackageStationType ?: session.packageStationTypeSnapshot) == "ps5"
-        ) {
+        if (showsParticipantAction) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+            ) {
+                ErpButton(
+                    text = "Players",
+                    onClick = { onManageParticipants(session) },
+                    enabled = actionsEnabled && ownsSession && session.orderId == null,
+                    intent = ActionIntent.Secondary,
+                    contentPadding = PaddingValues(horizontal = Spacing.sm),
+                    modifier = Modifier.weight(1f),
+                )
+                ErpButton(
+                    text = "Add drinks",
+                    onClick = { onAddItems(session) },
+                    enabled = actionsEnabled && ownsSession && session.orderId == null,
+                    intent = ActionIntent.Secondary,
+                    contentPadding = PaddingValues(horizontal = Spacing.sm),
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        } else {
             ErpButton(
-                text = "Players & booking",
-                onClick = { onManageParticipants(session) },
-                enabled = actionsEnabled && ownsSession && session.orderId == null,
+                text = "Add drinks & snacks",
+                onClick = { onAddItems(session) },
+                enabled = actionsEnabled && ownsSession &&
+                    session.orderId == null && session.status in setOf("active", "paused"),
                 intent = ActionIntent.Secondary,
-                leadingIcon = Icons.Filled.People,
+                leadingIcon = Icons.Filled.RestaurantMenu,
                 modifier = Modifier.fillMaxWidth(),
             )
         }
-        ErpButton(
-            text = "Add drinks & snacks",
-            onClick = { onAddItems(session) },
-            enabled = actionsEnabled && ownsSession &&
-                session.orderId == null && session.status in setOf("active", "paused"),
-            intent = ActionIntent.Secondary,
-            leadingIcon = Icons.Filled.RestaurantMenu,
-            modifier = Modifier.fillMaxWidth(),
-        )
         BoxWithConstraints(Modifier.fillMaxWidth()) {
             // Three controls share one row. Narrow grid cards keep complete
             // words instead of spending their text width on decorative icons;
@@ -3736,22 +4173,31 @@ private fun GamingActiveSessionActions(
             }
         }
         if (showStopAction) {
-            GamingStopSessionAction(
-                session = session,
-                presentationState = presentationState,
-                enabled = actionsEnabled && canStopSession,
-                busy = busyHere,
-                onStop = onStop,
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
-        if (!online || session.pauseVersion == null ||
-            (session.status != "paused" && !session.pauseAvailable)
-        ) {
+            Column(Modifier.fillMaxWidth()) {
+                GamingStopSessionAction(
+                    session = session,
+                    presentationState = presentationState,
+                    enabled = actionsEnabled && canStopSession,
+                    busy = busyHere,
+                    onStop = onStop,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                GamingPrimaryActionSupportArea {
+                    pauseSupportMessage?.let { message ->
+                        Text(
+                            message,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.labelSmall,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(top = Spacing.sm),
+                        )
+                    }
+                }
+            }
+        } else if (pauseSupportMessage != null) {
             Text(
-                if (!online) "Reconnect to pause or resume safely across devices."
-                else if (session.pauseVersion == null) "Refresh Gaming after the server update to enable pause controls."
-                else "Pause is not enabled yet. The owner must update all tablets before enabling it.",
+                pauseSupportMessage,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelSmall,
             )
@@ -3775,7 +4221,7 @@ private fun GamingStopSessionAction(
         busy = busy,
         intent = ActionIntent.Destructive,
         leadingIcon = Icons.Filled.StopCircle,
-        modifier = modifier,
+        modifier = modifier.testTag("gaming-primary-action-host"),
     )
 }
 
@@ -4919,14 +5365,26 @@ private fun PackageExtensionInlineReview(
         ) {
             Text("ADD PAID TIME", color = MaterialTheme.colorScheme.onPrimaryContainer, style = MaterialTheme.typography.labelSmall)
             Text("Review extension", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-            GamingDurationDial(
-                choices = choices,
-                selectedPackageId = selected.id,
-                onSelect = onSelect,
-                dialSize = 210.dp,
-                showChoiceChips = choices.size > 2,
-                gestureContextKey = Triple(preview.station, preview.session, error),
-            )
+            // The elapsed ring is the session's permanent instrument. Paid
+            // extensions are explicit review choices beside it; drawing a
+            // second dial here made the timer look replaceable and duplicated
+            // the hero geometry during a money action.
+            Column(
+                Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(Spacing.xs),
+            ) {
+                choices.forEach { choice ->
+                    FilterChip(
+                        selected = choice.packageId == selected.id,
+                        onClick = { onSelect(choice.packageId) },
+                        label = {
+                            Text("Add ${choice.minutes} min · ${choice.totalMinor.asRupees()}")
+                        },
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                        colors = gamingPackageChipColors(),
+                    )
+                }
+            }
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -5674,6 +6132,74 @@ private fun ReconcileSessionDialog(
 }
 
 @Composable
+private fun rememberGamingStartSelectionState(
+    station: Station,
+    packages: List<GamingPackage>,
+): GamingStartSelectionState {
+    val basePackages = remember(packages) {
+        packages.filter {
+            it.kind == "base" && it.code.isNotBlank() && it.pricingTier == "standard"
+        }
+    }
+    val availableVariants = remember(basePackages) {
+        basePackages.map(GamingPackage::variant).distinct()
+    }
+    val initialVariant = availableVariants.firstOrNull { it == "simdrive" }
+        ?: availableVariants.firstOrNull()
+    val selectedVariant = rememberSaveable(station.id) { mutableStateOf(initialVariant) }
+    val playerCount = rememberSaveable(station.id) { mutableIntStateOf(1) }
+    val requiredVariant = if (
+        stationFilterId(station.type) == "ps5" &&
+        basePackages.any { it.variant in setOf("single", "dual") }
+    ) {
+        if (playerCount.intValue == 1) "single" else "dual"
+    } else {
+        selectedVariant.value
+    }
+    val initialPackageId = basePackages.firstOrNull {
+        requiredVariant == null || it.variant == requiredVariant
+    }?.id
+    val selectedPackageId = rememberSaveable(station.id) { mutableStateOf(initialPackageId) }
+    return remember(station.id, selectedVariant, playerCount, selectedPackageId) {
+        GamingStartSelectionState(selectedVariant, playerCount, selectedPackageId)
+    }
+}
+
+internal data class GamingStartSelectionState(
+    val selectedVariant: MutableState<String?>,
+    val playerCount: MutableIntState,
+    val selectedPackageId: MutableState<String?>,
+)
+
+private fun gamingDurationChoices(
+    station: Station,
+    packages: List<GamingPackage>,
+    selection: GamingStartSelectionState,
+): List<GamingDurationChoice> {
+    val basePackages = packages.filter {
+        it.kind == "base" && it.code.isNotBlank() && it.pricingTier == "standard"
+    }
+    val supportsPlayerModes = stationFilterId(station.type) == "ps5" &&
+        basePackages.any { it.variant in setOf("single", "dual") }
+    val requiredVariant = if (supportsPlayerModes) {
+        if (selection.playerCount.intValue == 1) "single" else "dual"
+    } else selection.selectedVariant.value
+    return basePackages.filter { requiredVariant == null || it.variant == requiredVariant }.map { option ->
+        val extraControllers = if (option.variant == "dual") {
+            (selection.playerCount.intValue - option.includedPlayers).coerceAtLeast(0)
+        } else 0
+        GamingDurationChoice(
+            packageId = option.id,
+            minutes = option.durationMinutes,
+            totalMinor = option.priceMinor + extraControllerSurchargeMinor(
+                extraControllers,
+                option.durationMinutes,
+            ),
+        )
+    }
+}
+
+@Composable
 internal fun StartSessionEditor(
     station: Station,
     packages: List<GamingPackage> = emptyList(),
@@ -5685,6 +6211,8 @@ internal fun StartSessionEditor(
     embedded: Boolean = false,
     startEnabled: Boolean = true,
     startBlockMessage: String? = null,
+    selectionState: GamingStartSelectionState? = null,
+    externallyHostedDial: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     var name by remember { mutableStateOf("") }
@@ -5701,15 +6229,12 @@ internal fun StartSessionEditor(
     val availableVariants = remember(basePackages) {
         basePackages.map(GamingPackage::variant).distinct()
     }
-    var selectedVariant by rememberSaveable(station.id) {
-        mutableStateOf(
-            availableVariants.firstOrNull { it == "simdrive" }
-                ?: availableVariants.firstOrNull(),
-        )
-    }
+    val localSelectionState = rememberGamingStartSelectionState(station, packages)
+    val effectiveSelectionState = selectionState ?: localSelectionState
+    var selectedVariant by effectiveSelectionState.selectedVariant
     val supportsPlayerModes = stationFilterId(station.type) == "ps5" &&
         basePackages.any { it.variant in setOf("single", "dual") }
-    var playerCount by rememberSaveable(station.id) { mutableIntStateOf(1) }
+    var playerCount by effectiveSelectionState.playerCount
     val maximumPlayers = remember(basePackages) {
         basePackages.maxOfOrNull(GamingPackage::maxPlayers)?.coerceIn(1, 8) ?: 1
     }
@@ -5721,9 +6246,7 @@ internal fun StartSessionEditor(
     val eligiblePackages = basePackages.filter {
         requiredVariant == null || it.variant == requiredVariant
     }
-    var selectedPackageId by rememberSaveable(station.id) {
-        mutableStateOf<String?>(eligiblePackages.firstOrNull()?.id)
-    }
+    var selectedPackageId by effectiveSelectionState.selectedPackageId
     LaunchedEffect(selectedVariant, playerCount, packages) {
         if (selectedVariant !in availableVariants) {
             selectedVariant = availableVariants.firstOrNull { it == "simdrive" }
@@ -6179,12 +6702,37 @@ internal fun StartSessionEditor(
                 1.dp,
                 if (startActionEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
             ),
-            modifier = actionModifier.heightIn(min = 48.dp),
+            modifier = actionModifier.heightIn(min = 48.dp).testTag("gaming-start-action"),
         ) {
             Icon(Icons.Filled.PlayArrow, contentDescription = null, modifier = Modifier.size(19.dp))
             Spacer(Modifier.width(Spacing.sm))
             Text(startActionText, style = MaterialTheme.typography.labelLarge, maxLines = 1)
         }
+    }
+    if (embedded && externallyHostedDial) {
+        Column(
+            modifier.fillMaxSize().testTag("gaming-start-inline")
+                // Match the shared starting/active footer baseline. A draft-
+                // only bottom inset moved Start four pixels above Stop even
+                // though both actions use the same reserved support region.
+                .padding(top = Spacing.xs),
+            verticalArrangement = Arrangement.spacedBy(Spacing.xs),
+        ) {
+            Column(
+                Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(Spacing.xs),
+            ) {
+                optionsContent()
+            }
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            Column(Modifier.fillMaxWidth()) {
+                Box(Modifier.fillMaxWidth().testTag("gaming-primary-action-host")) {
+                    startAction(Modifier.fillMaxWidth())
+                }
+                GamingPrimaryActionSupportArea()
+            }
+        }
+        return
     }
     val wideEmbeddedWorkspace = embedded && prominentDurationDial &&
         LocalConfiguration.current.screenWidthDp >= 700
@@ -6404,6 +6952,356 @@ internal fun gamingPackageChipColors() = FilterChipDefaults.filterChipColors(
     selectedLabelColor = MaterialTheme.colorScheme.background,
 )
 
+/** One operational action per stable person; attendance intervals remain intact for billing. */
+internal fun currentGamingParticipantRows(
+    participants: List<GamingParticipantUi>,
+): List<GamingParticipantUi> = participants
+    .groupBy(GamingParticipantUi::participantIdentityId)
+    .values
+    .mapNotNull { intervals ->
+        val activeIntervals = intervals.filter(GamingParticipantUi::active)
+        (activeIntervals.ifEmpty { intervals }).maxWithOrNull(
+            compareBy<GamingParticipantUi> { it.joinedAtMillis ?: Long.MIN_VALUE }
+                .thenBy { it.leftAtMillis ?: Long.MIN_VALUE }
+                .thenBy(GamingParticipantUi::reference),
+        )
+    }
+
+internal fun gamingParticipantStateLabel(participant: GamingParticipantUi): String = when {
+    participant.lastError != null -> "Needs review"
+    participant.pending && participant.active -> "Waiting to sync Join"
+    participant.pending -> "Waiting to sync Leave"
+    participant.active -> "Playing now"
+    else -> "Left · cumulative fee retained"
+}
+
+@Composable
+private fun GamingInlineParticipantEditor(
+    session: GameSession,
+    participants: List<GamingParticipantUi>,
+    customers: List<GamingCustomerOption>,
+    busy: Boolean,
+    onJoin: (String?, String?, String?, String?) -> Unit,
+    onLeave: (String) -> Unit,
+    onClose: () -> Unit,
+    modifier: Modifier = Modifier,
+    pinConfirmAction: Boolean = false,
+) {
+    var savedCustomerMode by rememberSaveable(session.id) { mutableStateOf(false) }
+    var registerCustomerMode by rememberSaveable(session.id) { mutableStateOf(false) }
+    var query by rememberSaveable(session.id) { mutableStateOf("") }
+    var guestName by rememberSaveable(session.id) { mutableStateOf("") }
+    var registrationPhone by rememberSaveable(session.id) { mutableStateOf("") }
+    var selected by remember(session.id) { mutableStateOf<GamingCustomerOption?>(null) }
+    val active = participants.filter(GamingParticipantUi::active)
+    val currentParticipants = remember(participants) { currentGamingParticipantRows(participants) }
+    val activeIdentityIds = active.map(GamingParticipantUi::participantIdentityId).toSet()
+    val basePlayers = gamingBookedPlayerCount(session)
+    val canAdd = session.status == "active" && gamingLateJoinHasCapacity(session, active.size)
+    val matches = remember(customers, query) {
+        filterGamingCustomerOptions(customers, query).take(5)
+    }
+    SectionCard(
+        title = "Players · ${basePlayers + active.size}/4",
+        subtitle = "${active.size} joined during session · capacity four",
+        modifier = modifier.testTag("gaming-player-inline"),
+        contentPadding = PaddingValues(horizontal = Spacing.md, vertical = Spacing.sm),
+        contentFillsAvailableHeight = pinConfirmAction,
+        action = {
+            TextButton(
+                onClick = onClose,
+                modifier = Modifier.testTag("gaming-player-inline-close"),
+            ) { Text("Close") }
+        },
+    ) {
+        val editorBody: @Composable () -> Unit = {
+        currentParticipants.forEach { participant ->
+            Row(
+                Modifier.fillMaxWidth().padding(vertical = Spacing.xs),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        participant.name?.takeIf(String::isNotBlank)
+                            ?: if (participant.customerId == null) {
+                                "Guest player ${participant.participantIdentityId.take(4)}"
+                            } else "Saved customer",
+                        style = MaterialTheme.typography.labelLarge,
+                    )
+                    Text(
+                        gamingParticipantStateLabel(participant),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                    val joinedLabel = participant.joinedAtMillis?.let {
+                        Instant.ofEpochMilli(it).toString().businessClockTime()
+                    } ?: "time pending"
+                    Text(
+                        "Joined $joinedLabel",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                    participant.lastError?.let { error ->
+                        Text(
+                            error,
+                            color = MaterialTheme.colorScheme.operationalDanger,
+                            style = MaterialTheme.typography.labelSmall,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                TextButton(
+                    enabled = !busy && (participant.active || (
+                        canAdd && participant.identityResolved &&
+                            participant.participantIdentityId !in activeIdentityIds
+                        )),
+                    modifier = Modifier.testTag(
+                        "gaming-participant-${participant.participantIdentityId}-" +
+                            if (participant.active) "leave" else "rejoin",
+                    ),
+                    onClick = {
+                        if (participant.active) onLeave(participant.reference)
+                        else onJoin(participant.customerId, participant.name, null, participant.participantIdentityId)
+                    },
+                ) { Text(if (participant.active) "Leave" else "Rejoin") }
+            }
+        }
+        if (canAdd) {
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                ) {
+                    FilterChip(
+                        selected = !savedCustomerMode && !registerCustomerMode,
+                        onClick = {
+                            savedCustomerMode = false
+                            registerCustomerMode = false
+                            selected = null
+                        },
+                        label = { Text("Guest") },
+                        colors = gamingPackageChipColors(),
+                        modifier = Modifier.weight(1f).heightIn(min = 48.dp),
+                    )
+                    FilterChip(
+                        selected = savedCustomerMode,
+                        onClick = { savedCustomerMode = true; registerCustomerMode = false },
+                        label = { Text("Saved customer") },
+                        colors = gamingPackageChipColors(),
+                        modifier = Modifier.weight(1f).heightIn(min = 48.dp),
+                    )
+                }
+                FilterChip(
+                    selected = registerCustomerMode,
+                    onClick = { savedCustomerMode = false; registerCustomerMode = true; selected = null },
+                    label = { Text("Save new customer") },
+                    colors = gamingPackageChipColors(),
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                )
+            }
+            if (savedCustomerMode) {
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it.take(200); selected = null },
+                    label = { Text("Search name or phone") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                matches.forEach { option ->
+                    TextButton(
+                        onClick = { selected = option },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            "${option.name?.takeIf(String::isNotBlank) ?: "Saved customer"} · ${option.phone}" +
+                                if (selected == option) " · selected" else "",
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                }
+            } else if (registerCustomerMode) {
+                OutlinedTextField(
+                    value = guestName,
+                    onValueChange = { guestName = it.take(200) },
+                    label = { Text("Customer name (optional)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = registrationPhone,
+                    onValueChange = { registrationPhone = it.take(20) },
+                    label = { Text("Phone (required)") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text(
+                    "This deliberately saves a customer profile before linking the player.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            } else {
+                OutlinedTextField(
+                    value = guestName,
+                    onValueChange = { guestName = it.take(200) },
+                    label = { Text("Guest name (optional · no points)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        } else {
+            Text(
+                if (session.status != "active") "Resume the session before adding a player."
+                else "All four player places are assigned. A player must leave before another can join.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.labelSmall,
+            )
+        }
+        }
+        val confirmAction: @Composable () -> Unit = {
+            if (canAdd) ErpButton(
+                text = "Confirm join · ₹30 minimum",
+                onClick = {
+                    onJoin(
+                        selected?.customerId,
+                        if (selected == null) guestName.trim().ifEmpty { null } else null,
+                        registrationPhone.trim().takeIf { registerCustomerMode && it.length >= 4 },
+                        null,
+                    )
+                },
+                enabled = !busy && when {
+                    savedCustomerMode -> selected?.customerId != null
+                    registerCustomerMode -> registrationPhone.trim().length in 4..20
+                    else -> true
+                },
+                leadingIcon = Icons.Filled.People,
+                modifier = Modifier.fillMaxWidth().testTag("gaming-player-inline-confirm"),
+            )
+        }
+        if (pinConfirmAction) {
+            Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+                Column(
+                    Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+                ) { editorBody() }
+                confirmAction()
+            }
+        } else {
+            editorBody()
+            confirmAction()
+        }
+    }
+}
+
+@Composable
+private fun GamingInlineDrinkEditor(
+    session: GameSession,
+    items: List<MenuItemEntity>,
+    configurableItemIds: Set<String>,
+    busy: Boolean,
+    onConfirm: (MenuItemEntity, Int) -> Unit,
+    onConfigure: (MenuItemEntity) -> Unit,
+    onMore: () -> Unit,
+    onClose: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var selectedId by rememberSaveable(session.id) { mutableStateOf<String?>(null) }
+    var quantity by rememberSaveable(session.id) { mutableIntStateOf(1) }
+    val selected = items.firstOrNull { it.id == selectedId }
+    SectionCard(
+        title = "Drinks & snacks",
+        subtitle = "Add to this session without leaving the timer.",
+        modifier = modifier.testTag("gaming-drinks-inline"),
+        contentPadding = PaddingValues(horizontal = Spacing.md, vertical = Spacing.sm),
+        action = {
+            TextButton(
+                onClick = onClose,
+                modifier = Modifier.testTag("gaming-drinks-inline-close"),
+            ) { Text("Close") }
+        },
+    ) {
+        if (items.isEmpty()) {
+            Text(
+                "No session items are available. Refresh the menu or enable products in Menu.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        } else {
+            items.take(5).forEach { item ->
+                Row(
+                    Modifier.fillMaxWidth().padding(vertical = Spacing.xs),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(item.name, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            item.basePriceMinor.asRupees(),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
+                    TextButton(
+                        enabled = !busy,
+                        onClick = {
+                            if (item.id in configurableItemIds) onConfigure(item)
+                            else {
+                                selectedId = item.id
+                                quantity = 1
+                            }
+                        },
+                    ) { Text(if (item.id in configurableItemIds) "Customise" else "Add") }
+                }
+            }
+        }
+        selected?.let { item ->
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Review ${item.name}", fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "No bill line is created until Confirm add.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
+                OutlinedButton(
+                    enabled = quantity > 1 && !busy,
+                    onClick = { quantity = (quantity - 1).coerceAtLeast(1) },
+                ) { Text("−") }
+                Text("$quantity", fontWeight = FontWeight.Bold)
+                OutlinedButton(
+                    enabled = quantity < 20 && !busy,
+                    onClick = { quantity = (quantity + 1).coerceAtMost(20) },
+                ) { Text("+") }
+            }
+            ErpButton(
+                text = "Confirm add · ${Math.multiplyExact(item.basePriceMinor, quantity.toLong()).asRupees()}",
+                enabled = !busy,
+                onClick = {
+                    onConfirm(item, quantity)
+                    selectedId = null
+                    quantity = 1
+                },
+                modifier = Modifier.fillMaxWidth().testTag("gaming-drinks-inline-confirm"),
+            )
+        }
+        if (items.size > 5) {
+            TextButton(
+                onClick = onMore,
+                enabled = !busy,
+                modifier = Modifier.align(Alignment.End),
+            ) { Text("More items") }
+        }
+    }
+}
+
 @Composable
 internal fun GamingParticipantsDialog(
     session: GameSession,
@@ -6413,7 +7311,7 @@ internal fun GamingParticipantsDialog(
     online: Boolean,
     amendTarget: GamingPackage?,
     onSearchCustomer: (String) -> Unit,
-    onJoin: (String?, String?, String?) -> Unit,
+    onJoin: (String?, String?, String?, String?) -> Unit,
     onLeave: (String) -> Unit,
     onAmend: (GamingPackage) -> Unit,
     onDiscardRejected: (String) -> Unit,
@@ -6428,8 +7326,7 @@ internal fun GamingParticipantsDialog(
     var pendingLeave by remember(session.id) { mutableStateOf<GamingParticipantUi?>(null) }
     val matches = remember(customers, query) { filterGamingCustomerOptions(customers, query).take(8) }
     val active = participants.filter(GamingParticipantUi::active)
-    val basePlayers = (if ((session.effectivePackageVariant ?: session.packageVariantSnapshot) == "dual") 2 else 1) +
-        session.extraControllers
+    val basePlayers = gamingBookedPlayerCount(session)
     val includedPlayers = if ((session.effectivePackageVariant ?: session.packageVariantSnapshot) == "dual") 2 else 1
     val playElapsedMs = sessionPlayElapsedMillis(session, System.currentTimeMillis()) ?: 0L
     val friendControllerMinor = estimatedGamingFriendControllerMinor(participants, playElapsedMs)
@@ -6568,7 +7465,9 @@ internal fun GamingParticipantsDialog(
                 } else {
                     items(participants, key = GamingParticipantUi::reference) { participant ->
                         SectionCard(
-                            title = participant.name?.takeIf(String::isNotBlank) ?: "Saved customer",
+                            title = participant.name?.takeIf(String::isNotBlank)
+                                ?: if (participant.customerId != null) "Saved customer"
+                                else "Guest player ${participant.participantIdentityId.take(4)}",
                             subtitle = listOfNotNull(
                                 participant.phone?.takeIf(String::isNotBlank),
                                 when {
@@ -6597,6 +7496,21 @@ internal fun GamingParticipantsDialog(
                                 TextButton(onClick = { pendingLeave = participant }) {
                                     Text(if (session.status == "paused") "Leave at paused time" else "Leave now")
                                 }
+                            } else if (session.status == "active" &&
+                                participant.identityResolved &&
+                                participant.participantIdentityId !in active.map(
+                                    GamingParticipantUi::participantIdentityId,
+                                ).toSet() &&
+                                basePlayers + active.size < 4
+                            ) {
+                                TextButton(onClick = {
+                                    pendingJoin = ParticipantJoinReview(
+                                        customerId = participant.customerId,
+                                        name = participant.name,
+                                        phone = null,
+                                        participantIdentityId = participant.participantIdentityId,
+                                    )
+                                }) { Text("Rejoin") }
                             }
                         }
                     }
@@ -6621,7 +7535,7 @@ internal fun GamingParticipantsDialog(
                             FilterChip(
                                 selected = customerMode == "add",
                                 onClick = { customerMode = "add"; selected = null },
-                                label = { Text("Add new") },
+                                label = { Text("Guest player") },
                                 colors = gamingPackageChipColors(),
                             )
                         }
@@ -6659,18 +7573,8 @@ internal fun GamingParticipantsDialog(
                             OutlinedTextField(
                                 value = name,
                                 onValueChange = { name = it.take(200) },
-                                label = { Text("Friend name (optional)") },
+                                label = { Text("Guest name (optional)") },
                                 singleLine = true,
-                                modifier = Modifier.fillMaxWidth(),
-                            )
-                        }
-                        item {
-                            OutlinedTextField(
-                                value = phone,
-                                onValueChange = { phone = it.take(20) },
-                                label = { Text("Friend phone (required)") },
-                                singleLine = true,
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
                                 modifier = Modifier.fillMaxWidth(),
                             )
                         }
@@ -6689,14 +7593,14 @@ internal fun GamingParticipantsDialog(
                                     pendingJoin = ParticipantJoinReview(
                                         customerId = null,
                                         name = name.trim().takeIf(String::isNotEmpty),
-                                        phone = phone.trim(),
+                                        phone = null,
                                     )
                                 }
                             },
                             enabled = if (customerMode == "search") {
                                 selected?.customerId != null
                             } else {
-                                phone.isNotBlank()
+                                true
                             },
                             leadingIcon = Icons.Filled.People,
                             modifier = Modifier
@@ -6731,9 +7635,9 @@ internal fun GamingParticipantsDialog(
                         onClick = {
                             pendingJoin = null
                             if (review.customerId != null) {
-                                onJoin(review.customerId, null, null)
+                                onJoin(review.customerId, null, null, review.participantIdentityId)
                             } else {
-                                onJoin(null, review.name, review.phone)
+                                onJoin(null, review.name, review.phone, review.participantIdentityId)
                             }
                         },
                     )
@@ -6770,8 +7674,7 @@ internal fun estimatedGamingFriendControllerMinor(
     }.forEach { participant ->
         val joined = participant.joinedPlayElapsedMs ?: return@forEach
         val ended = participant.leftPlayElapsedMs ?: currentPlayElapsedMs
-        val identity = participant.customerId ?: participant.phone?.filter(Char::isDigit)
-            ?: participant.reference
+        val identity = participant.participantIdentityId
         cumulativeByCustomer[identity] = (cumulativeByCustomer[identity] ?: 0L) +
             (ended - joined).coerceAtLeast(0L)
     }
@@ -6797,6 +7700,7 @@ internal fun estimatedGamingFriendControllerMinorAfterJoin(
     return estimatedGamingFriendControllerMinor(
         participants + GamingParticipantUi(
             reference = "join-review",
+            participantIdentityId = resolvedCustomerId ?: "join-review",
             customerId = resolvedCustomerId,
             name = null,
             phone = normalizedPhone,

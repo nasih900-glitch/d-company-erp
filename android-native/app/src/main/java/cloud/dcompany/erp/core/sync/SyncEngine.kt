@@ -3542,9 +3542,17 @@ class SyncEngine private constructor(
                             serverSessionId,
                             SessionParticipantJoinBody(
                                 expectedParticipantRevision = requireNotNull(action.expectedParticipantRevision),
+                                participantIdentityId = action.participantIdentityId,
                                 customerId = action.customerId,
-                                customerName = action.customerName,
-                                customerPhone = action.customerPhone,
+                                guestName = action.customerName.takeIf {
+                                    action.participantIdentityId != null && action.customerId == null
+                                },
+                                customerName = action.customerName.takeIf {
+                                    action.participantIdentityId == null
+                                },
+                                customerPhone = action.customerPhone.takeIf {
+                                    action.participantIdentityId == null
+                                },
                                 customerDirectoryRevision = action.customerDirectoryRevision,
                                 customerDirectoryCompanyId = action.customerDirectoryCompanyId,
                                 occurredAt = Instant.ofEpochMilli(action.occurredAtMillis).toString(),
@@ -3556,8 +3564,9 @@ class SyncEngine private constructor(
                         )
                         val participantId = response.participants.singleOrNull {
                             it.joinRevision == response.participantRevision &&
-                                (action.customerId == null || it.customerId == action.customerId)
-                        }?.id ?: error("Participant Join response did not identify the saved friend.")
+                                (action.participantIdentityId == null ||
+                                    (it.participantIdentityId ?: it.customerId ?: it.id) == action.participantIdentityId)
+                        }?.id ?: error("Participant Join response did not identify the player.")
                         if (!commitToCurrentScope(lease) {
                                 db.withTransaction {
                                     persistParticipantState(response)

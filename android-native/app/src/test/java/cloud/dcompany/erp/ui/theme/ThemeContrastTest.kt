@@ -12,12 +12,13 @@ import org.junit.Test
 class ThemeContrastTest {
     @Test
     fun `night and day palettes keep the approved monochrome foundation`() {
-        assertEquals(Color(0xFF080808), NightPalette.Background)
-        assertEquals(Color(0xFF111111), NightPalette.Surface)
-        assertEquals(Color(0xFFF7F7F4), NightPalette.Foreground)
-        assertEquals(Color(0xFFF6F6F4), DayPalette.Background)
-        assertEquals(Color(0xFF161615), DayPalette.Gold)
-        assertEquals(Color(0xFF111110), DayPalette.Foreground)
+        assertEquals(Color(0xFF050505), NightPalette.Background)
+        assertEquals(Color(0xFF0B0B0B), NightPalette.BackgroundSecondary)
+        assertEquals(Color(0xFF101010), NightPalette.Surface)
+        assertEquals(Color(0xFFF5F5F5), NightPalette.Foreground)
+        assertEquals(Color(0xFFFAFAFA), DayPalette.Background)
+        assertEquals(Color(0xFF111111), DayPalette.Gold)
+        assertEquals(Color(0xFF111111), DayPalette.Foreground)
     }
 
     @Test

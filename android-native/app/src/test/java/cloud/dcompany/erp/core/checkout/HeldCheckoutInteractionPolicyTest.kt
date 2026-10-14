@@ -96,4 +96,23 @@ class HeldCheckoutInteractionPolicyTest {
             pool.shutdownNow()
         }
     }
+
+    @Test
+    fun rejectedPreflightReleasesOnlyTheSameConfirmationIdentity() {
+        val staleClaim = OneShotHeldPaymentConfirmation("claim-a")
+        assertTrue(staleClaim.tryConsume("claim-a"))
+        assertFalse(staleClaim.releaseRejected("claim-b"))
+        assertTrue(staleClaim.isConsumed)
+
+        assertTrue(staleClaim.releaseRejected("claim-a"))
+        assertFalse(staleClaim.isConsumed)
+        assertTrue(staleClaim.tryConsume("claim-a"))
+        assertFalse(staleClaim.tryConsume("claim-a"))
+
+        // A renewed server claim always owns an independent one-shot even
+        // when the order ID and checkout version remain unchanged.
+        val renewedClaim = OneShotHeldPaymentConfirmation("claim-b")
+        assertTrue(renewedClaim.tryConsume("claim-b"))
+        assertFalse(renewedClaim.tryConsume("claim-b"))
+    }
 }

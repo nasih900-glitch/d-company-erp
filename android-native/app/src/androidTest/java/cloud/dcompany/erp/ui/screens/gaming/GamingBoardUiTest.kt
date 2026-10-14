@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -21,6 +22,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.ExperimentalTestApi
@@ -33,6 +35,7 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performMouseInput
 import androidx.compose.ui.test.performScrollTo
@@ -40,9 +43,12 @@ import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.printToLog
 import androidx.compose.ui.test.swipe
 import androidx.compose.ui.unit.dp
 import cloud.dcompany.erp.core.auth.GamingAccess
+import cloud.dcompany.erp.core.db.GamingSessionParticipantCacheEntity
+import cloud.dcompany.erp.core.db.GamingSessionState
 import cloud.dcompany.erp.core.sync.OutboxWorkStatus
 import cloud.dcompany.erp.ui.Destination
 import cloud.dcompany.erp.ui.WorkspaceScaffold
@@ -56,6 +62,7 @@ import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -613,13 +620,17 @@ class GamingBoardUiTest {
 
         val width = compose.activity.resources.configuration.screenWidthDp
         val first = compose.onNodeWithTag("gaming-station-ps5-1").fetchSemanticsNode().boundsInRoot
+        val second = compose.onNodeWithTag("gaming-station-ps5-2").fetchSemanticsNode().boundsInRoot
+        val third = compose.onNodeWithTag("gaming-station-ps5-3").fetchSemanticsNode().boundsInRoot
         val fourth = compose.onNodeWithTag("gaming-station-ps5-4").fetchSemanticsNode().boundsInRoot
         val eighth = compose.onNodeWithTag("gaming-station-streaming-1").fetchSemanticsNode().boundsInRoot
         val board = compose.onNodeWithTag("gaming-station-board").fetchSemanticsNode().boundsInRoot
         if (width >= 900) {
             val pane = compose.onNodeWithTag("gaming-control-pane").fetchSemanticsNode().boundsInRoot
-            assertEquals(first.top, fourth.top, 1f)
-            assertTrue("Fourth station must be alongside first", fourth.left > first.right)
+            assertEquals(first.top, second.top, 1f)
+            assertTrue("Second station must be alongside first", second.left > first.right)
+            assertEquals(third.top, fourth.top, 1f)
+            assertTrue("The second station row must follow the first", third.top > first.bottom)
             assertTrue("All eight stations should fit above the fold", eighth.bottom <= board.bottom + 1f)
             assertTrue("Board and slider should be side by side", board.right < pane.left)
             assertTrue("The dial pane must be wider than the station board",
@@ -719,8 +730,11 @@ class GamingBoardUiTest {
         }
         compose.onNodeWithTag("gaming-station-board").assertIsDisplayed()
         capture("gaming-same-screen-1280x800-active.png")
-        compose.onNodeWithText("ELAPSED").assertIsDisplayed()
-        compose.onNodeWithText("Stop & calculate").performScrollTo().assertIsDisplayed()
+        // Hourly/open-ended sessions still retain their truthful live timer;
+        // only the package-duration face uses the permanent published dial.
+        compose.onNodeWithText("ELAPSED TIME").assertIsDisplayed()
+        compose.onNodeWithText("Open-ended session").assertIsDisplayed()
+        compose.onNodeWithText("Stop & calculate").assertIsDisplayed()
         compose.onNodeWithTag("gaming-control-pane").assertIsDisplayed()
         compose.runOnIdle {
             state.value = state.value.copy(sessions = listOf(GameSession(
@@ -732,7 +746,8 @@ class GamingBoardUiTest {
         }
         compose.onNodeWithTag("gaming-station-board").assertIsDisplayed()
         capture("gaming-same-screen-1280x800-payment-due.png")
-        compose.onNodeWithText("Awaiting POS payment").assertIsDisplayed()
+        compose.onNodeWithText("Send to POS before the next session.")
+            .performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("Send to POS").performScrollTo().assertIsDisplayed()
     }
 
@@ -852,25 +867,27 @@ class GamingBoardUiTest {
             }
         }
 
-        compose.onNodeWithText("Extend").performScrollTo().performClick()
+        val runningRingBounds = compose.onNodeWithTag("gaming-control-ring")
+            .fetchSemanticsNode().boundsInRoot
+        compose.onNodeWithText("Extend").assertIsDisplayed().performClick()
         compose.onNodeWithTag("gaming-extension-preview").assertIsDisplayed()
-        compose.onNodeWithText("REMAINING").assertIsDisplayed()
-        compose.onNodeWithContentDescription("Session duration dial").performScrollTo().performTouchInput {
-            click(ringPoint(width, height, 125f))
-        }
+        compose.onNodeWithText("ELAPSED TIME").assertIsDisplayed()
+        assertEquals(
+            runningRingBounds,
+            compose.onNodeWithTag("gaming-control-ring").fetchSemanticsNode().boundsInRoot,
+        )
+        compose.onNodeWithText("Add 60 min · ₹100.00").assertIsDisplayed().performClick()
         compose.onNodeWithText("Resulting booked total · ₹220.00")
-            .performScrollTo().assertIsDisplayed()
+            .assertIsDisplayed()
         compose.runOnIdle {
             assertEquals(0, confirms)
             assertEquals(0, fallbackDialogs)
         }
-        compose.onNodeWithText("Cancel").performScrollTo().assertIsDisplayed().performClick()
+        compose.onNodeWithText("Cancel").assertIsDisplayed().performClick()
         compose.runOnIdle { assertEquals(0, confirms) }
 
-        compose.onNodeWithText("Extend").performScrollTo().performClick()
-        compose.onNodeWithContentDescription("Session duration dial").performScrollTo().performTouchInput {
-            click(ringPoint(width, height, 125f))
-        }
+        compose.onNodeWithText("Extend").assertIsDisplayed().performClick()
+        compose.onNodeWithText("Add 60 min · ₹100.00").assertIsDisplayed().performClick()
         compose.runOnIdle {
             state.value = state.value.copy(
                 packages = extensions.map {
@@ -880,17 +897,15 @@ class GamingBoardUiTest {
         }
         compose.onNodeWithText(
             "The extension price or duration changed. Reopen Extend and review the new total.",
-        ).performScrollTo().assertIsDisplayed()
+        ).assertIsDisplayed()
         compose.onNodeWithText("Confirm extension").assertIsNotEnabled()
         compose.runOnIdle { assertEquals(0, confirms) }
-        compose.onNodeWithText("Cancel").performScrollTo().performClick()
+        compose.onNodeWithText("Cancel").assertIsDisplayed().performClick()
         compose.runOnIdle { state.value = state.value.copy(packages = extensions) }
 
-        compose.onNodeWithText("Extend").performScrollTo().performClick()
-        compose.onNodeWithContentDescription("Session duration dial").performScrollTo().performTouchInput {
-            click(ringPoint(width, height, 125f))
-        }
-        compose.onNodeWithText("Confirm extension").performScrollTo().assertIsDisplayed().performClick()
+        compose.onNodeWithText("Extend").assertIsDisplayed().performClick()
+        compose.onNodeWithText("Add 60 min · ₹100.00").assertIsDisplayed().performClick()
+        compose.onNodeWithText("Confirm extension").assertIsDisplayed().performClick()
         compose.runOnIdle {
             assertEquals(1, confirms)
             assertEquals("extend-60", confirmedPackageId)
@@ -929,7 +944,17 @@ class GamingBoardUiTest {
         var submittedPackageId: String? = null
         compose.setContent {
             DCompanyTheme {
-                Box(Modifier.fillMaxSize().testTag("gaming-full-workspace")) {
+                val productionViewport = if (
+                    LocalConfiguration.current.screenWidthDp >= 1_100
+                ) {
+                    // The target 1280x800/160dpi tablet reserves 24dp for the
+                    // status bar and 32dp for system navigation. MainActivity
+                    // therefore gives the app a 744dp content viewport.
+                    Modifier.fillMaxWidth().height(744.dp)
+                } else {
+                    Modifier.fillMaxSize()
+                }
+                Box(productionViewport.testTag("gaming-full-workspace")) {
                     WorkspaceScaffold(
                         destinations = listOf(Destination.Gaming, Destination.Pos,
                             Destination.Shift, Destination.Customers),
@@ -986,12 +1011,140 @@ class GamingBoardUiTest {
             val pane = compose.onNodeWithTag("gaming-control-pane").getUnclippedBoundsInRoot()
             val lastStation = compose.onNodeWithTag("gaming-station-streaming-1")
                 .getUnclippedBoundsInRoot()
-            assertTrue("Station board fits in the full workspace", lastStation.bottom <= pane.bottom)
+            assertTrue(
+                "Station board fits in the full workspace: last=$lastStation pane=$pane",
+                lastStation.bottom <= pane.bottom,
+            )
             compose.onNodeWithContentDescription("Session duration dial").assertIsDisplayed()
             compose.onNodeWithContentDescription("Search saved customers by name or phone")
                 .assertIsDisplayed()
             compose.onNodeWithText("Start 30 min · ₹80.00").assertIsDisplayed()
+            val wideDraftRingBounds = compose.onNodeWithTag("gaming-control-ring")
+                .assertIsDisplayed().getUnclippedBoundsInRoot()
+            val wideDraftPrimaryBounds = compose.onNodeWithTag("gaming-primary-action-host")
+                .assertIsDisplayed().getUnclippedBoundsInRoot()
             capture("gaming-full-workspace-1280x800.png", "gaming-full-workspace")
+
+            compose.runOnIdle {
+                state.value = state.value.copy(sessions = listOf(GameSession(
+                    id = "wide-session", stationId = "ps5-1", shiftId = "fixture-shift",
+                    status = "starting", startAt = "2026-09-27T10:00:00Z",
+                    timerMinutes = 30, timerEndsAt = "2026-09-27T10:30:00Z",
+                    ratePerHourMinor = 12_000,
+                    packageId = "single-30", packagePriceMinorSnapshot = 8_000,
+                    packageDurationMinutesSnapshot = 30, packageVariantSnapshot = "single",
+                    packageStationTypeSnapshot = "ps5", localState = GamingSessionState.START_PENDING,
+                )))
+            }
+            val wideStartingRingBounds = compose.onNodeWithTag("gaming-control-ring")
+                .assertIsDisplayed().getUnclippedBoundsInRoot()
+            val wideStartingPrimaryBounds = compose.onNodeWithTag("gaming-primary-action-host")
+                .assertIsDisplayed().getUnclippedBoundsInRoot()
+            assertTrue(
+                "1280dp draft and pending-start dial must keep identical geometry: " +
+                    "draft=$wideDraftRingBounds starting=$wideStartingRingBounds",
+                abs(wideDraftRingBounds.left.value - wideStartingRingBounds.left.value) <= 1f &&
+                    abs(wideDraftRingBounds.top.value - wideStartingRingBounds.top.value) <= 1f &&
+                    abs((wideDraftRingBounds.right - wideDraftRingBounds.left).value -
+                        (wideStartingRingBounds.right - wideStartingRingBounds.left).value) <= 1f &&
+                    abs((wideDraftRingBounds.bottom - wideDraftRingBounds.top).value -
+                        (wideStartingRingBounds.bottom - wideStartingRingBounds.top).value) <= 1f,
+            )
+            assertEquals(
+                "Start and pending-start primary actions must keep identical bounds",
+                wideDraftPrimaryBounds,
+                wideStartingPrimaryBounds,
+            )
+            capture("gaming-full-workspace-1280x800-starting.png", "gaming-full-workspace")
+
+            compose.runOnIdle {
+                state.value = state.value.copy(sessions = listOf(GameSession(
+                    id = "wide-session", stationId = "ps5-1", shiftId = "fixture-shift",
+                    status = "active", startAt = "2026-09-27T10:00:00Z",
+                    timerMinutes = 30, timerEndsAt = "2026-09-27T10:30:00Z",
+                    ratePerHourMinor = 12_000,
+                    packageVariantSnapshot = "single", packageStationTypeSnapshot = "ps5",
+                )))
+            }
+            val wideActiveRingBounds = compose.onNodeWithTag("gaming-control-ring")
+                .assertIsDisplayed().getUnclippedBoundsInRoot()
+            val wideActivePrimaryBounds = compose.onNodeWithTag("gaming-primary-action-host")
+                .assertIsDisplayed().getUnclippedBoundsInRoot()
+            assertTrue(
+                "1280dp pending-start and active timer must keep identical geometry: " +
+                    "starting=$wideStartingRingBounds active=$wideActiveRingBounds",
+                abs(wideStartingRingBounds.left.value - wideActiveRingBounds.left.value) <= 1f &&
+                    abs(wideStartingRingBounds.top.value - wideActiveRingBounds.top.value) <= 1f &&
+                    abs((wideStartingRingBounds.right - wideStartingRingBounds.left).value -
+                        (wideActiveRingBounds.right - wideActiveRingBounds.left).value) <= 1f &&
+                    abs((wideStartingRingBounds.bottom - wideStartingRingBounds.top).value -
+                        (wideActiveRingBounds.bottom - wideActiveRingBounds.top).value) <= 1f,
+            )
+            assertEquals(
+                "Start and active Stop actions must keep identical bounds",
+                wideDraftPrimaryBounds,
+                wideActivePrimaryBounds,
+            )
+            compose.onNodeWithText("Stop & calculate").assertIsDisplayed()
+            compose.runOnIdle {
+                state.value = state.value.copy(
+                    participantCache = listOf(
+                        GamingSessionParticipantCacheEntity(
+                            id = "participant-one",
+                            gamingSessionId = "wide-session",
+                            participantIdentityId = "guest-one",
+                            guestName = "Guest one",
+                            joinedAtMillis = 1_779_989_200_000L,
+                            joinedPlayElapsedMs = 1_000L,
+                            joinRevision = 1,
+                        ),
+                        GamingSessionParticipantCacheEntity(
+                            id = "participant-two",
+                            gamingSessionId = "wide-session",
+                            participantIdentityId = "guest-two",
+                            guestName = "Guest two",
+                            joinedAtMillis = 1_779_989_201_000L,
+                            joinedPlayElapsedMs = 2_000L,
+                            joinRevision = 2,
+                        ),
+                    ),
+                )
+            }
+            compose.onNodeWithText("Players").assertIsDisplayed().performClick()
+            compose.onNodeWithTag("gaming-player-inline").assertIsDisplayed()
+            assertEquals(
+                "Opening Players must not move the primary Stop action",
+                wideActivePrimaryBounds,
+                compose.onNodeWithTag("gaming-primary-action-host")
+                    .assertIsDisplayed().getUnclippedBoundsInRoot(),
+            )
+            val pinnedConfirm = compose.onNodeWithTag("gaming-player-inline-confirm")
+                .assertIsDisplayed().getUnclippedBoundsInRoot()
+            val playerEditor = compose.onNodeWithTag("gaming-player-inline")
+                .getUnclippedBoundsInRoot()
+            assertTrue(
+                "The add-player confirmation must stay pinned after two participant rows: " +
+                    "confirm=$pinnedConfirm editor=$playerEditor",
+                pinnedConfirm.top >= playerEditor.top && pinnedConfirm.bottom <= playerEditor.bottom,
+            )
+            compose.onNodeWithTag("gaming-player-inline-close")
+                .assertIsDisplayed().performClick()
+            capture(
+                "gaming-full-workspace-1280x800-post-player-close.png",
+                "gaming-full-workspace",
+            )
+            compose.onRoot(useUnmergedTree = true).printToLog("GamingPostPlayerClose")
+            compose.onNodeWithText("Add drinks").assertIsDisplayed().performClick()
+            compose.onNodeWithTag("gaming-drinks-inline").assertIsDisplayed()
+            assertEquals(
+                "Opening Add drinks must not move the primary Stop action",
+                wideActivePrimaryBounds,
+                compose.onNodeWithTag("gaming-primary-action-host")
+                    .assertIsDisplayed().getUnclippedBoundsInRoot(),
+            )
+            capture("gaming-full-workspace-1280x800-active.png", "gaming-full-workspace")
+
+            compose.runOnIdle { state.value = state.value.copy(sessions = emptyList()) }
 
             val tenStations = stations + listOf(
                 Station("ps5-5", "PS5-5", "PS5 Station 5", "ps5", 12_000),
@@ -1001,11 +1154,17 @@ class GamingBoardUiTest {
                 visibleStations.value = tenStations
                 state.value = state.value.copy(stations = tenStations)
             }
+            compose.onNodeWithTag("gaming-station-ps5-6")
+                .performScrollTo().assertIsDisplayed()
             val tenth = compose.onNodeWithTag("gaming-station-ps5-6")
                 .getUnclippedBoundsInRoot()
             val expandedPane = compose.onNodeWithTag("gaming-control-pane")
                 .getUnclippedBoundsInRoot()
-            assertTrue("Ten stations fit in the full workspace", tenth.bottom <= expandedPane.bottom)
+            assertTrue(
+                "Stations beyond the approved 2x4 board remain reachable by scrolling: " +
+                    "tenth=$tenth pane=$expandedPane",
+                tenth.top >= expandedPane.top && tenth.bottom <= expandedPane.bottom,
+            )
             capture("gaming-full-workspace-10-stations-1280x800.png", "gaming-full-workspace")
         } else {
             val board = compose.onNodeWithTag("gaming-station-board")
@@ -1021,6 +1180,14 @@ class GamingBoardUiTest {
                 .assertIsDisplayed()
             val draftRingBounds = compose.onNodeWithTag("gaming-control-ring")
                 .getUnclippedBoundsInRoot()
+            val draftRingFace = bitmapPixels(
+                compose.onNodeWithTag("gaming-control-ring-geometry", useUnmergedTree = true)
+                    .captureToImage().asAndroidBitmap(),
+            )
+            compose.onNodeWithContentDescription(
+                "Fixed gaming dial geometry. Radius 40 percent. 96 ticks. " +
+                    "2 dp ring. 3 dp selected arc. 8 dp marker.",
+            ).assertExists()
             compose.onNodeWithText("₹80.00").assertIsDisplayed()
             compose.onNodeWithText("Start 30 min · ₹80.00").assertIsDisplayed()
             compose.onNodeWithText("Est. finish ·", substring = true).assertIsDisplayed()
@@ -1102,6 +1269,31 @@ class GamingBoardUiTest {
             compose.runOnIdle {
                 state.value = state.value.copy(sessions = listOf(GameSession(
                     id = "compact-session", stationId = "ps5-1", shiftId = "fixture-shift",
+                    status = "starting", startAt = "2026-09-27T10:00:00Z",
+                    timerMinutes = 30, timerEndsAt = "2026-09-27T10:30:00Z",
+                    ratePerHourMinor = 12_000,
+                    packageId = "single-30", packagePriceMinorSnapshot = 8_000,
+                    packageDurationMinutesSnapshot = 30, packageVariantSnapshot = "single",
+                    packageStationTypeSnapshot = "ps5", localState = GamingSessionState.START_PENDING,
+                )))
+            }
+            val startingRingBounds = compose.onNodeWithTag("gaming-control-ring")
+                .assertIsDisplayed().getUnclippedBoundsInRoot()
+            assertTrue(
+                "Draft and pending-start dial must keep identical geometry: " +
+                    "draft=$draftRingBounds starting=$startingRingBounds",
+                abs(draftRingBounds.left.value - startingRingBounds.left.value) <= 1f &&
+                    abs(draftRingBounds.top.value - startingRingBounds.top.value) <= 1f &&
+                    abs((draftRingBounds.right - draftRingBounds.left).value -
+                        (startingRingBounds.right - startingRingBounds.left).value) <= 1f &&
+                    abs((draftRingBounds.bottom - draftRingBounds.top).value -
+                        (startingRingBounds.bottom - startingRingBounds.top).value) <= 1f,
+            )
+            capture("gaming-full-workspace-960x600-starting.png", "gaming-full-workspace")
+
+            compose.runOnIdle {
+                state.value = state.value.copy(sessions = listOf(GameSession(
+                    id = "compact-session", stationId = "ps5-1", shiftId = "fixture-shift",
                     status = "active", startAt = "2026-09-27T10:00:00Z",
                     timerMinutes = 30, timerEndsAt = "2026-09-27T10:30:00Z",
                     ratePerHourMinor = 12_000,
@@ -1109,11 +1301,16 @@ class GamingBoardUiTest {
             }
             val activeRing = compose.onNodeWithTag("gaming-control-ring").assertIsDisplayed()
             val activeRingBounds = activeRing.getUnclippedBoundsInRoot()
+            assertFalse(
+                "Published duration markers become read-only after Start",
+                compose.onNodeWithText("60 min", useUnmergedTree = true)
+                    .fetchSemanticsNode().config.contains(SemanticsActions.OnClick),
+            )
             assertTrue(
                 "Draft dial and authoritative timer must keep identical geometry: " +
                     "draft=$draftRingBounds active=$activeRingBounds",
-                abs(draftRingBounds.left.value - activeRingBounds.left.value) <= 1f &&
-                    abs(draftRingBounds.top.value - activeRingBounds.top.value) <= 1f &&
+                abs(startingRingBounds.left.value - activeRingBounds.left.value) <= 1f &&
+                    abs(startingRingBounds.top.value - activeRingBounds.top.value) <= 1f &&
                     abs((draftRingBounds.right - draftRingBounds.left).value -
                         (activeRingBounds.right - activeRingBounds.left).value) <= 1f &&
                     abs((draftRingBounds.bottom - draftRingBounds.top).value -
@@ -1143,7 +1340,36 @@ class GamingBoardUiTest {
                     activeRingScreenBounds.bottom <= paneBounds.bottom &&
                     stopBounds.top >= paneBounds.top && stopBounds.bottom <= paneBounds.bottom,
             )
+            assertTrue(
+                "Starting a session may change only the centre readout; the ring, ticks, arc and marker must be pixel-identical",
+                draftRingFace.contentEquals(
+                    bitmapPixels(
+                        compose.onNodeWithTag("gaming-control-ring-geometry", useUnmergedTree = true)
+                            .captureToImage().asAndroidBitmap(),
+                    ),
+                ),
+            )
             capture("gaming-full-workspace-960x600-active-action.png", "gaming-full-workspace")
+            compose.runOnIdle {
+                state.value = state.value.copy(sessions = listOf(GameSession(
+                    id = "compact-session", stationId = "ps5-1", shiftId = "fixture-shift",
+                    status = "paused", startAt = "2026-09-27T10:00:00Z",
+                    pausedAt = "2026-09-27T10:10:00Z", timerMinutes = 30,
+                    ratePerHourMinor = 12_000, packageId = "single-30",
+                    packageVariantSnapshot = "single", packageStationTypeSnapshot = "ps5",
+                )))
+            }
+            val pausedRing = compose.onNodeWithTag("gaming-control-ring").assertIsDisplayed()
+            assertEquals(activeRingBounds, pausedRing.getUnclippedBoundsInRoot())
+            assertTrue(
+                "Pausing may change only the centre readout",
+                draftRingFace.contentEquals(
+                    bitmapPixels(
+                        compose.onNodeWithTag("gaming-control-ring-geometry", useUnmergedTree = true)
+                            .captureToImage().asAndroidBitmap(),
+                    ),
+                ),
+            )
             compose.runOnIdle {
                 state.value = state.value.copy(sessions = listOf(GameSession(
                     id = "compact-session", stationId = "ps5-1", shiftId = "fixture-shift",
@@ -1154,6 +1380,17 @@ class GamingBoardUiTest {
             }
             compose.onNodeWithText("Awaiting POS payment").performScrollTo().assertIsDisplayed()
             compose.onNodeWithText("Send to POS").performScrollTo().assertIsDisplayed()
+            val stoppedRing = compose.onNodeWithTag("gaming-control-ring").assertIsDisplayed()
+            assertEquals(activeRingBounds, stoppedRing.getUnclippedBoundsInRoot())
+            assertTrue(
+                "Stopping may change only the centre readout",
+                draftRingFace.contentEquals(
+                    bitmapPixels(
+                        compose.onNodeWithTag("gaming-control-ring-geometry", useUnmergedTree = true)
+                            .captureToImage().asAndroidBitmap(),
+                    ),
+                ),
+            )
             capture("gaming-full-workspace-960x600-payment-action.png", "gaming-full-workspace")
         }
     }
@@ -1258,11 +1495,10 @@ class GamingBoardUiTest {
         assertTrue("Warnings must use a bounded rail", rail.height <= root.height * 0.24f)
         assertTrue("The control pane must retain useful height", pane.height >= root.height * 0.35f)
         compose.onNodeWithTag("gaming-station-ps5-1").assertIsDisplayed()
-        compose.onNodeWithContentDescription("Session duration dial")
-            .performScrollTo().assertIsDisplayed()
+        compose.onNodeWithContentDescription("Session duration dial").assertIsDisplayed()
         compose.onNodeWithText("Retry acknowledgement").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("Start 30 min · ₹80.00")
-            .performScrollTo().assertIsDisplayed().performClick()
+            .assertIsDisplayed().performClick()
         compose.runOnIdle { assertEquals(1, startRequests) }
     }
 
@@ -1286,4 +1522,12 @@ private fun ringPoint(width: Int, height: Int, angleDegrees: Float): Offset {
         x = widthPx / 2f + radius * cos(radians).toFloat(),
         y = heightPx / 2f + radius * sin(radians).toFloat(),
     )
+}
+
+/** Captures the Canvas only; centre text is a separate sibling and may change by state. */
+private fun bitmapPixels(bitmap: Bitmap): IntArray {
+    val pixels = IntArray(bitmap.width * bitmap.height)
+    bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+    bitmap.recycle()
+    return pixels
 }

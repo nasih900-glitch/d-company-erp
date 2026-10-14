@@ -64,32 +64,32 @@ data class BrandPalette(
 )
 
 internal val NightPalette = BrandPalette(
-    Background = Color(0xFF080808), BackgroundSecondary = Color(0xFF0F0F0F),
-    Surface = Color(0xFF111111), SurfaceRaised = Color(0xFF1D1D1C),
-    SurfaceHover = Color(0xFF272725), SurfaceOverlay = Color(0xFF30302E),
-    Gold = Color(0xFFF5F5F1), GoldBright = Color(0xFFFFFFFF), GoldMuted = Color(0xFFC7C7C0),
-    Foreground = Color(0xFFF7F7F4), ForegroundMuted = Color(0xFFB0B0A8),
+    Background = Color(0xFF050505), BackgroundSecondary = Color(0xFF0B0B0B),
+    Surface = Color(0xFF101010), SurfaceRaised = Color(0xFF191919),
+    SurfaceHover = Color(0xFF242424), SurfaceOverlay = Color(0xFF303030),
+    Gold = Color(0xFFF5F5F5), GoldBright = Color(0xFFFFFFFF), GoldMuted = Color(0xFFC7C7C0),
+    Foreground = Color(0xFFF5F5F5), ForegroundMuted = Color(0xFFB0B0A8),
     ForegroundFaint = Color(0xFF909089), Disabled = Color(0xFF6F6F69),
     Good = Color(0xFF52C37E), GoodMuted = Color(0xFF153722),
     Warning = Color(0xFFF3A83B), WarningMuted = Color(0xFF3D2B12),
     Danger = Color(0xFFF4686E), DangerMuted = Color(0xFF471F25),
     Information = Color(0xFF86B9F4), InformationMuted = Color(0xFF172D45),
-    Border = Color(0xFF3D3D3A), BorderSubtle = Color(0xFF2B2B29),
+    Border = Color(0xFF303030), BorderSubtle = Color(0xFF303030),
     ControlBorder = Color(0xFF74746E), FocusRing = Color(0xFFF5F5F1),
 )
 
 internal val DayPalette = BrandPalette(
-    Background = Color(0xFFF6F6F4), BackgroundSecondary = Color(0xFFFFFFFF),
-    Surface = Color(0xFFFFFFFF), SurfaceRaised = Color(0xFFEBEBE8),
-    SurfaceHover = Color(0xFFE1E1DD), SurfaceOverlay = Color(0xFFFFFFFF),
-    Gold = Color(0xFF161615), GoldBright = Color(0xFF000000), GoldMuted = Color(0xFF4F4F4B),
-    Foreground = Color(0xFF111110), ForegroundMuted = Color(0xFF5B5B56),
+    Background = Color(0xFFFAFAFA), BackgroundSecondary = Color(0xFFFFFFFF),
+    Surface = Color(0xFFFFFFFF), SurfaceRaised = Color(0xFFF0F0F0),
+    SurfaceHover = Color(0xFFE8E8E8), SurfaceOverlay = Color(0xFFFFFFFF),
+    Gold = Color(0xFF111111), GoldBright = Color(0xFF000000), GoldMuted = Color(0xFF4F4F4B),
+    Foreground = Color(0xFF111111), ForegroundMuted = Color(0xFF5B5B56),
     ForegroundFaint = Color(0xFF74746E), Disabled = Color(0xFF9A9A94),
     Good = Color(0xFF1B7E4B), GoodMuted = Color(0xFFDCEFE4),
     Warning = Color(0xFF9A5900), WarningMuted = Color(0xFFFFE8C4),
     Danger = Color(0xFFBE3236), DangerMuted = Color(0xFFF9DFE0),
     Information = Color(0xFF2565A9), InformationMuted = Color(0xFFDCEAF8),
-    Border = Color(0xFFCACAC5), BorderSubtle = Color(0xFFDEDEDA),
+    Border = Color(0xFFDEDEDE), BorderSubtle = Color(0xFFDEDEDE),
     ControlBorder = Color(0xFF70706A), FocusRing = Color(0xFF111110),
 )
 

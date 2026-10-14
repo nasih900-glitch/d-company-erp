@@ -90,7 +90,8 @@ private fun rememberedWallClock(epochMillis: Long): MutableLongState =
 
 private const val PINNED_ACTION_VIEWPORT_TAG = "pinned-gaming-action-viewport"
 private val PINNED_ACTIVE_ACTION_LABELS = listOf(
-    "Add drinks & snacks",
+    "Players",
+    "Add drinks",
     "Extend",
     "Transfer",
     "Pause",
@@ -206,7 +207,7 @@ class GamingDialogUiTest {
                     online = true,
                     amendTarget = null,
                     onSearchCustomer = {},
-                    onJoin = { customerId, name, phone -> joins += Triple(customerId, name, phone) },
+                    onJoin = { customerId, name, phone, _ -> joins += Triple(customerId, name, phone) },
                     onLeave = {},
                     onAmend = {},
                     onDiscardRejected = {},
@@ -649,6 +650,7 @@ class GamingDialogUiTest {
                         onResolveLegacyStart = {},
                         onDiscardPackageExtension = {},
                         pinActiveSessionActions = true,
+                        compactDetail = true,
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
@@ -658,6 +660,8 @@ class GamingDialogUiTest {
         PINNED_ACTIVE_ACTION_LABELS.forEach { label ->
             assertPinnedActionInsideViewport(label, enabled = true)
         }
+        compose.onAllNodesWithText("00:05:00").assertCountEquals(0)
+        compose.onNodeWithTag("gaming-primary-action-host").assertIsDisplayed()
         compose.onAllNodesWithText("+30 min").assertCountEquals(0)
         compose.onNode(hasScrollAction()).assertExists()
         compose.onNodeWithText("Session items").performScrollTo().assertIsDisplayed()
@@ -910,7 +914,7 @@ class GamingDialogUiTest {
         compose.onNodeWithText("Package total · ₹180.00").assertIsDisplayed()
         compose.onAllNodesWithText("+30 min").assertCountEquals(0)
         compose.onAllNodesWithText("Transfer").assertCountEquals(0)
-        compose.onNodeWithText("Players & booking").assertIsDisplayed().performClick()
+        compose.onNodeWithText("Players").assertIsDisplayed().performClick()
         compose.runOnIdle { assertEquals(true, playersRequested) }
         compose.onNodeWithText("Stop & save end").assertIsDisplayed().performClick()
         compose.runOnIdle { assertEquals(true, stopRequested) }
@@ -979,7 +983,7 @@ class GamingDialogUiTest {
                         online = false,
                         amendTarget = null,
                         onSearchCustomer = {},
-                        onJoin = { _, _, _ -> },
+                        onJoin = { _, _, _, _ -> },
                         onLeave = {},
                         onAmend = {},
                         onDiscardRejected = {},
@@ -990,7 +994,7 @@ class GamingDialogUiTest {
         }
 
         compose.onAllNodesWithText(pendingStartMessage).assertCountEquals(0)
-        compose.onNodeWithText("Players & booking").performScrollTo().assertIsDisplayed().performClick()
+        compose.onNodeWithText("Players").assertIsDisplayed().performClick()
         compose.onNodeWithText(pendingStartMessage).assertIsDisplayed()
         compose.onNodeWithText("Done").performClick()
         compose.onAllNodesWithText(pendingStartMessage).assertCountEquals(0)

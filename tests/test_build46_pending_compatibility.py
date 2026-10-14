@@ -8,7 +8,6 @@ import json
 from pathlib import Path
 import subprocess
 import tarfile
-import shutil
 
 import pytest
 
@@ -17,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 HELPER = ROOT / "infra/scripts/verify-build46-pending-compatibility.py"
 OLD_HELPER = ROOT / "infra/scripts/verify-build45-pending-compatibility.py"
 INSTALLER = ROOT / "infra/scripts/install-on-vm.sh"
+IMMUTABLE_BUILD46_REVISION = "b743d7715d22c5ce92f79edc9a371df28930a6a1"
 
 
 def _load(path: Path, name: str):
@@ -43,17 +43,7 @@ def _extract(ref: str, destination: Path) -> bytes:
 
 
 def _candidate_snapshot(destination: Path) -> None:
-    _extract("HEAD", destination)
-    paths = set(subprocess.check_output(["git", "diff", "--name-only", "HEAD"], cwd=ROOT, text=True).splitlines())
-    paths.update(subprocess.check_output(["git", "ls-files", "--others", "--exclude-standard"], cwd=ROOT, text=True).splitlines())
-    for relative in paths:
-        source = ROOT / relative
-        target = destination / relative
-        if source.is_file() and not source.is_symlink():
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(source, target)
-        elif not source.exists() and target.exists():
-            target.unlink()
+    _extract(IMMUTABLE_BUILD46_REVISION, destination)
 
 
 def test_historical_verifier_is_immutable_and_build46_source_delta_is_exact(helper, tmp_path):
