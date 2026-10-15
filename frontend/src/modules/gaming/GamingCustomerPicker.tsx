@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { ChevronDown } from 'lucide-react';
 
 import { customers, type CustomerDTO } from '@/lib/erp-api';
 
@@ -51,9 +52,33 @@ type Props = {
   onNameChange: (name: string) => void;
   onPhoneChange: (phone: string) => void;
   saveContext?: 'start' | 'join';
+  compact?: boolean;
 };
 
-export function GamingCustomerPicker({
+export function GamingCustomerPicker({ compact = false, ...props }: Props) {
+  if (!compact) return <GamingCustomerPickerFields {...props} />;
+
+  const label = props.selected?.name?.trim() || props.selected?.phone
+    || props.name.trim() || props.phone.trim();
+  return (
+    <details className="group mb-3 rounded-xl border border-bg-border bg-bg-surface">
+      <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-2 px-3 py-2 text-sm [&::-webkit-details-marker]:hidden">
+        <span className="min-w-0 truncate text-fg-muted">
+          {label || 'Customer (optional)'}
+        </span>
+        <span className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-fg">
+          {label ? 'Details' : 'Add'}
+          <ChevronDown size={14} className="transition-transform group-open:rotate-180" />
+        </span>
+      </summary>
+      <div className="border-t border-bg-border px-3 pt-3">
+        <GamingCustomerPickerFields {...props} />
+      </div>
+    </details>
+  );
+}
+
+function GamingCustomerPickerFields({
   stationId,
   disabled,
   selected,
@@ -113,10 +138,6 @@ export function GamingCustomerPicker({
             onClick={() => { onSelect(undefined); onNameChange(''); onPhoneChange(''); setMode('search'); setQuery(''); }}>
             Change
           </button>
-          <button type="button" className="btn btn-ghost !py-1 text-xs" disabled={disabled}
-            onClick={() => { onSelect(undefined); onNameChange(''); onPhoneChange(''); setMode('search'); setQuery(''); }}>
-            Clear
-          </button>
         </div>
       </div>
     );
@@ -152,7 +173,9 @@ export function GamingCustomerPicker({
           {searching && <div className="text-[11px] text-fg-muted">Searching…</div>}
           {searchError && <div className="text-[11px] text-accent-bad">{searchError}</div>}
           {!searching && !searchError && query.trim().length >= 2 && results.length === 0 && (
-            <div className="text-[11px] text-fg-muted">No saved customer found. Choose Add new to save one {saveContext === 'join' ? 'when the friend joins.' : 'when the session starts.'}</div>
+            <div className="text-[11px] text-fg-muted">{saveContext === 'join'
+              ? 'No saved customer found. Choose Guest player to join without a profile, or Save new customer to create one.'
+              : 'No saved customer found. Choose Add new to save one when the session starts.'}</div>
           )}
           {results.length > 0 && (
             <div className="max-h-36 overflow-y-auto rounded-lg border border-bg-border" role="listbox" aria-label="Saved customer results">

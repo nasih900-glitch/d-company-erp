@@ -164,6 +164,7 @@ grep -Eq '"status"[[:space:]]*:[[:space:]]*"ready"' \
   "$ROUTED_READY"
 curl -fsS -H 'Host: ci-runtime.local' 'http://127.0.0.1/' \
   | grep -F '<div id="root"></div>' >/dev/null
+python3 ops/verify_web_public_assets.py --base-url http://127.0.0.1 --host ci-runtime.local
 
 python3 ops/runtime_release_parity.py running \
   --root "$ROOT" --env-file "$CANDIDATE_ENV" \

@@ -59,7 +59,9 @@ COPY infra/nginx/frontend.conf /etc/nginx/conf.d/default.conf
 COPY --from=builder /app/dist /usr/share/nginx/html
 COPY infra/docker/write-release-identity.sh /tmp/write-release-identity.sh
 RUN sh /tmp/write-release-identity.sh "$APP_VERSION" "$APP_REVISION" /usr/share/nginx/html/.well-known/erp-release.json \
-    && rm /tmp/write-release-identity.sh
+    && rm /tmp/write-release-identity.sh \
+    && find /usr/share/nginx/html -type d -exec chmod 0755 {} + \
+    && find /usr/share/nginx/html -type f -exec chmod 0644 {} +
 EXPOSE 80
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
   CMD wget -qO- http://127.0.0.1/ >/dev/null || exit 1

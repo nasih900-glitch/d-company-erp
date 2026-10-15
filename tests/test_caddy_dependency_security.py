@@ -464,6 +464,16 @@ def test_frontend_image_changes_only_reviewed_security_controls() -> None:
         "./vendor/dcompany-braces-depth-guard\n"
         "RUN npm ci --no-audit --no-fund\n",
     )
+    # Copied public files inherit private source modes from the installer.
+    # Permit only these exact public-root modes; retain the full-file equality
+    # check so broader paths, writable modes or unrelated image changes fail.
+    expected = _replace_once(
+        expected,
+        "    && rm /tmp/write-release-identity.sh\n",
+        "    && rm /tmp/write-release-identity.sh \\\n"
+        "    && find /usr/share/nginx/html -type d -exec chmod 0755 {} + \\\n"
+        "    && find /usr/share/nginx/html -type f -exec chmod 0644 {} +\n",
+    )
     assert FRONTEND_DOCKERFILE.read_text(encoding="utf-8") == expected
 
 
