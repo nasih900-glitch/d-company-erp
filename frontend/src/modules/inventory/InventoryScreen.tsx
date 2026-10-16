@@ -297,9 +297,11 @@ function IngredientsList({
         </thead>
         <tbody>
           {sorted.map((i) => {
-            const denom = i.reorder_threshold > 0 ? i.reorder_threshold * 4 : 1;
-            const pct = Math.min(100, (i.current_qty / denom) * 100);
-            const low = i.current_qty < i.reorder_threshold;
+            const thresholdConfigured = i.reorder_threshold > 0;
+            const pct = thresholdConfigured
+              ? Math.min(100, (i.current_qty / (i.reorder_threshold * 4)) * 100)
+              : null;
+            const low = thresholdConfigured && i.current_qty < i.reorder_threshold;
             return (
               <tr key={i.id} className="border-b border-bg-border/60 last:border-0">
                 <td className="p-3 font-mono text-xs text-fg-muted">{i.sku}</td>
@@ -308,13 +310,19 @@ function IngredientsList({
                   {i.current_qty.toLocaleString('en-IN')} {i.base_unit}
                 </td>
                 <td className="p-3 text-right text-fg-muted font-mono text-xs">
-                  {i.reorder_threshold.toLocaleString('en-IN')} {i.base_unit}
+                  {thresholdConfigured
+                    ? `${i.reorder_threshold.toLocaleString('en-IN')} ${i.base_unit}`
+                    : 'Not configured'}
                 </td>
                 <td className="p-3 w-40">
-                  <div className="h-2 rounded-full bg-bg-raised overflow-hidden">
-                    <div className={`h-full ${low ? 'bg-accent-bad' : pct < 40 ? 'bg-accent-gold' : 'bg-accent-good'}`}
-                      style={{ width: `${pct}%` }}/>
-                  </div>
+                  {pct === null ? (
+                    <span className="text-xs text-fg-muted">Reorder level not set</span>
+                  ) : (
+                    <div className="h-2 rounded-full bg-bg-raised overflow-hidden" aria-label={`${Math.round(pct)} percent of display range`}>
+                      <div className={`h-full ${low ? 'bg-accent-bad' : pct < 40 ? 'bg-accent-gold' : 'bg-accent-good'}`}
+                        style={{ width: `${pct}%` }}/>
+                    </div>
+                  )}
                 </td>
                 <td className="p-3 text-right font-mono">{inrShort(i.current_qty * i.avg_cost_minor)}</td>
                 <td className="p-3 text-right pr-4 flex gap-1 justify-end">
@@ -332,9 +340,11 @@ function IngredientsList({
       </table>
       <div className="mobile-card-list lg:hidden">
         {sorted.map((i) => {
-          const low = i.current_qty < i.reorder_threshold;
-          const denom = i.reorder_threshold > 0 ? i.reorder_threshold * 4 : 1;
-          const pct = Math.min(100, (i.current_qty / denom) * 100);
+          const thresholdConfigured = i.reorder_threshold > 0;
+          const low = thresholdConfigured && i.current_qty < i.reorder_threshold;
+          const pct = thresholdConfigured
+            ? Math.min(100, (i.current_qty / (i.reorder_threshold * 4)) * 100)
+            : null;
           return (
             <div key={i.id} className="mobile-record-card">
               <div className="flex justify-between gap-2">
@@ -351,15 +361,19 @@ function IngredientsList({
               </div>
               <div className="mt-3">
                 <div className="flex items-center justify-between text-[10px] text-fg-muted">
-                  <span>Reorder at {i.reorder_threshold.toLocaleString('en-IN')} {i.base_unit}</span>
+                  <span>{thresholdConfigured
+                    ? `Reorder at ${i.reorder_threshold.toLocaleString('en-IN')} ${i.base_unit}`
+                    : 'Reorder level not set'}</span>
                   {low && <span className="text-accent-bad">Low stock</span>}
                 </div>
-                <div className="mt-1 h-2 overflow-hidden rounded-full bg-bg-raised">
-                  <div
-                    className={`h-full ${low ? 'bg-accent-bad' : pct < 40 ? 'bg-accent-gold' : 'bg-accent-good'}`}
-                    style={{ width: `${pct}%` }}
-                  />
-                </div>
+                {pct !== null && (
+                  <div className="mt-1 h-2 overflow-hidden rounded-full bg-bg-raised" aria-label={`${Math.round(pct)} percent of display range`}>
+                    <div
+                      className={`h-full ${low ? 'bg-accent-bad' : pct < 40 ? 'bg-accent-gold' : 'bg-accent-good'}`}
+                      style={{ width: `${pct}%` }}
+                    />
+                  </div>
+                )}
               </div>
               <div className="mt-3 flex flex-wrap justify-end gap-1">
                 <button className="btn btn-ghost !min-h-[32px] !py-1 !px-2 text-xs" onClick={() => onAdjust(i)}>Adjust</button>

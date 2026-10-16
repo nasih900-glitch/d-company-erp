@@ -530,6 +530,137 @@ fun PosScreen(
                         inline = true,
                         modifier = paneModifier,
                     )
+                    tabletInlineWorkflows && state.preparedDirectCheckout != null &&
+                        access.canCreateAndCollect && voidTarget == null -> {
+                        val checkout = state.preparedDirectCheckout
+                        key(checkout.orderId, checkout.claimOrderVersion, checkout.claimToken) {
+                            if (checkout.dueMinor == 0L && checkout.totalMinor == 0L) {
+                                DirectZeroTotalCompletionDialog(
+                                    checkout = checkout,
+                                    online = state.online,
+                                    confirmEnabled = state.canCollectPayment && !state.checkoutBusy,
+                                    showCustomerBenefits = presentation.showsCustomers,
+                                    onDismiss = onDismissDirectCheckout,
+                                    onVoid = if (access.canVoid) ({
+                                        voidTarget = PosVoidTarget(
+                                            checkout.orderId,
+                                            "Direct POS bill ${checkout.orderId.take(8)}",
+                                        )
+                                    }) else null,
+                                    onConfirm = onConfirmDirectZero,
+                                    inline = true,
+                                    modifier = paneModifier,
+                                )
+                            } else {
+                                PayDialog(
+                                    dueMinor = checkout.dueMinor,
+                                    online = state.online,
+                                    offlineAllowed = false,
+                                    confirmEnabled = state.canCollectPayment && !state.checkoutBusy,
+                                    verifiedSharedOrder = true,
+                                    paymentSubject = "Direct POS bill",
+                                    confirmationIdentity = checkout.claimToken,
+                                    initialMethod = inlinePaymentMethod,
+                                    initialTendered = inlineCashTendered,
+                                    initialSplit = inlinePaymentMethod == "split",
+                                    subtotalMinor = checkout.subtotalMinor,
+                                    discountMinor = checkout.discountMinor,
+                                    taxMinor = checkout.taxMinor,
+                                    roundOffMinor = checkout.roundOffMinor,
+                                    totalMinor = checkout.totalMinor,
+                                    pointsRedeemed = checkout.pointsRedeemed,
+                                    pointsRedeemedMinor = checkout.pointsRedeemedMinor,
+                                    showCustomerBenefits = presentation.showsCustomers,
+                                    inline = true,
+                                    modifier = paneModifier,
+                                    onDismiss = onDismissDirectCheckout,
+                                    onVoid = if (access.canVoid) ({
+                                        voidTarget = PosVoidTarget(
+                                            checkout.orderId,
+                                            "Direct POS bill ${checkout.orderId.take(8)}",
+                                        )
+                                    }) else null,
+                                    onConfirm = { method, tendered ->
+                                        onCapture(method, tendered, DirectPaymentConfirmation(
+                                            localId = checkout.localId,
+                                            revision = checkout.revision,
+                                            dueMinor = checkout.dueMinor,
+                                        ))
+                                    },
+                                    onConfirmSplit = { plan ->
+                                        onCaptureSplit(plan, DirectPaymentConfirmation(
+                                            localId = checkout.localId,
+                                            revision = checkout.revision,
+                                            dueMinor = checkout.dueMinor,
+                                        ))
+                                    },
+                                )
+                            }
+                        }
+                    }
+                    tabletInlineWorkflows && state.preparedHeldCheckout != null &&
+                        access.canCreateAndCollect && voidTarget == null -> {
+                        val checkout = state.preparedHeldCheckout
+                        key(checkout.orderId, checkout.claimOrderVersion, checkout.claimToken) {
+                            if (HeldOrderClaimPolicy.isExactZeroTotal(
+                                    totalMinor = checkout.totalMinor,
+                                    paidMinor = checkout.paidMinor,
+                                    dueMinor = checkout.dueMinor,
+                                )
+                            ) {
+                                ZeroTotalCompletionDialog(
+                                    checkout = checkout,
+                                    online = state.online,
+                                    confirmEnabled = state.canCollectPayment && !state.checkoutBusy,
+                                    onDismiss = onDismissHeldOrder,
+                                    onVoid = if (access.canVoid) ({
+                                        voidTarget = PosVoidTarget(
+                                            checkout.orderId,
+                                            checkout.sourceLabel ?: "Held bill ${checkout.orderId.take(8)}",
+                                        )
+                                    }) else null,
+                                    onConfirm = { onConfirmHeldOrderZero(checkout.orderId) },
+                                    inline = true,
+                                    modifier = paneModifier,
+                                )
+                            } else {
+                                PayDialog(
+                                    dueMinor = checkout.dueMinor,
+                                    online = state.online,
+                                    offlineAllowed = false,
+                                    confirmEnabled = state.canCollectPayment && !state.checkoutBusy,
+                                    verifiedSharedOrder = true,
+                                    paymentSubject = checkout.sourceLabel,
+                                    confirmationIdentity = checkout.claimToken,
+                                    subtotalMinor = checkout.subtotalMinor,
+                                    discountMinor = checkout.discountMinor,
+                                    manualDiscountMinor = checkout.manualDiscountMinor,
+                                    taxMinor = checkout.taxMinor,
+                                    roundOffMinor = checkout.roundOffMinor,
+                                    tipMinor = checkout.tipMinor,
+                                    totalMinor = checkout.totalMinor,
+                                    pointsRedeemed = checkout.pointsRedeemed,
+                                    pointsRedeemedMinor = checkout.pointsRedeemedMinor,
+                                    showCustomerBenefits = presentation.showsCustomers,
+                                    inline = true,
+                                    modifier = paneModifier,
+                                    onDismiss = onDismissHeldOrder,
+                                    onVoid = if (access.canVoid) ({
+                                        voidTarget = PosVoidTarget(
+                                            checkout.orderId,
+                                            checkout.sourceLabel ?: "Held bill ${checkout.orderId.take(8)}",
+                                        )
+                                    }) else null,
+                                    onConfirm = { method, tendered ->
+                                        onConfirmHeldOrder(checkout.orderId, method, tendered)
+                                    },
+                                    onConfirmSplit = { plan ->
+                                        onConfirmHeldOrderSplit(checkout.orderId, plan)
+                                    },
+                                )
+                            }
+                        }
+                    }
                     else -> CartPanel(
                         state = state,
                         compact = compactWorkspace,
@@ -747,7 +878,7 @@ fun PosScreen(
         }
 
     state.preparedDirectCheckout
-        ?.takeIf { access.canCreateAndCollect && voidTarget == null }
+        ?.takeIf { !tabletInlineWorkflows && access.canCreateAndCollect && voidTarget == null }
         ?.let { checkout ->
         key(checkout.orderId, checkout.claimOrderVersion, checkout.claimToken) {
             if (checkout.dueMinor == 0L && checkout.totalMinor == 0L) {
@@ -826,7 +957,7 @@ fun PosScreen(
     }
 
     state.preparedHeldCheckout
-        ?.takeIf { access.canCreateAndCollect && voidTarget == null }
+        ?.takeIf { !tabletInlineWorkflows && access.canCreateAndCollect && voidTarget == null }
         ?.let { checkout ->
         // Version is part of the immutable confirmation identity. A changed
         // bill can never inherit tender or payment method state from an older
@@ -3159,7 +3290,7 @@ private fun HeldOrderReviewDialog(
                 verticalArrangement = Arrangement.spacedBy(Spacing.md),
             ) {
                 Text(
-                    "Live server bill · no checkout claim or payment has started yet.",
+                    "Live server bill · payment has not started yet.",
                     color = MaterialTheme.colorScheme.operationalInformation,
                     style = MaterialTheme.typography.labelMedium,
                 )
@@ -3798,6 +3929,8 @@ private fun PayDialog(
     pointsRedeemedMinor: Long = 0,
     showCustomerBenefits: Boolean = true,
     onApplyPoints: ((Int) -> Unit)? = null,
+    inline: Boolean = false,
+    modifier: Modifier = Modifier,
     onDismiss: () -> Unit,
     onVoid: (() -> Unit)? = null,
     onConfirm: (String, Long) -> Boolean,
@@ -3876,23 +4009,11 @@ private fun PayDialog(
         else -> "CONFIRM ${method.paymentMethodLabel().uppercase(Locale.getDefault())} · ${dueMinor.asRupees()}"
     }
 
-    AlertDialog(
-        onDismissRequest = { if (!confirmationConsumed) onDismiss() },
-        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-        shape = Radius.shapeLg,
-        modifier = Modifier.posPaymentDialogInsets(),
-        properties = posImeAwareDialogProperties,
-        title = {
-            Text(
-                paymentSubject?.let { "$it · ${dueMinor.asRupees()}" }
-                    ?: "Take payment · ${dueMinor.asRupees()}",
-            )
-        },
-        text = {
+    val title = paymentSubject?.let { "$it · ${dueMinor.asRupees()}" }
+        ?: "Take payment · ${dueMinor.asRupees()}"
+    val paymentBody: @Composable (Modifier) -> Unit = { bodyModifier ->
             Column(
-                modifier = Modifier
-                    .heightIn(max = 540.dp)
-                    .verticalScroll(rememberScrollState()),
+                modifier = bodyModifier,
                 verticalArrangement = Arrangement.spacedBy(Spacing.md),
             ) {
                 if (verifiedSharedOrder) {
@@ -4184,8 +4305,8 @@ private fun PayDialog(
                     )
                 }
             }
-        },
-        confirmButton = {
+    }
+    val confirmAction: @Composable () -> Unit = {
             PrimaryButton(
                 enabled = !confirmationConsumed && confirmEnabled && !cashInvalid &&
                     (!splitMode || splitPlan != null) &&
@@ -4216,8 +4337,8 @@ private fun PayDialog(
                     }
                 },
             ) { Text(confirmLabel) }
-        },
-        dismissButton = {
+    }
+    val dismissActions: @Composable () -> Unit = {
             Row(horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
                 onVoid?.let {
                     TextButton(onClick = it, enabled = !confirmationConsumed) {
@@ -4226,8 +4347,48 @@ private fun PayDialog(
                 }
                 TextButton(onClick = onDismiss, enabled = !confirmationConsumed) { Text("Cancel") }
             }
-        },
-    )
+    }
+    if (inline) {
+        SectionCard(
+            title = title,
+            subtitle = "Final payment confirmation",
+            modifier = modifier.testTag("pos-payment-confirmation-inline"),
+            contentFillsAvailableHeight = true,
+        ) {
+            Column(
+                Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+            ) {
+                paymentBody(
+                    Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()),
+                )
+                Row(
+                    Modifier.fillMaxWidth().testTag("pos-payment-confirmation-actions"),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.sm, Alignment.End),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    dismissActions()
+                    confirmAction()
+                }
+            }
+        }
+    } else {
+        AlertDialog(
+            onDismissRequest = { if (!confirmationConsumed) onDismiss() },
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+            shape = Radius.shapeLg,
+            modifier = Modifier.posPaymentDialogInsets(),
+            properties = posImeAwareDialogProperties,
+            title = { Text(title) },
+            text = {
+                paymentBody(
+                    Modifier.heightIn(max = 540.dp).verticalScroll(rememberScrollState()),
+                )
+            },
+            confirmButton = { confirmAction() },
+            dismissButton = { dismissActions() },
+        )
+    }
 }
 
 @Composable
@@ -4277,7 +4438,7 @@ private fun SplitTenderEditor(
         verticalArrangement = Arrangement.spacedBy(Spacing.sm),
     ) {
         Text(
-            "Split tender is one atomic bill payment. Choose 2–5 unique methods; " +
+            "Split tender settles the bill once. Choose 2–5 unique methods; " +
                 "the amounts must total ${dueMinor.asRupees()}.",
             color = MaterialTheme.colorScheme.operationalInformation,
             style = MaterialTheme.typography.labelMedium,
@@ -4473,10 +4634,81 @@ private fun DirectZeroTotalCompletionDialog(
     onDismiss: () -> Unit,
     onVoid: (() -> Unit)? = null,
     onConfirm: () -> Unit,
+    inline: Boolean = false,
+    modifier: Modifier = Modifier,
 ) {
     var confirmationConsumed by remember(checkout.orderId) { mutableStateOf(false) }
     val oneShot = remember(checkout.orderId) {
         OneShotHeldPaymentConfirmation(checkout.orderId)
+    }
+    if (inline) {
+        SectionCard(
+            title = "Complete bill · ₹0.00 due",
+            subtitle = "Final bill confirmation",
+            modifier = modifier.testTag("pos-zero-confirmation-inline"),
+            contentFillsAvailableHeight = true,
+        ) {
+            Column(
+                Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+            ) {
+                Column(
+                    Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.md),
+                ) {
+                    Text(
+                        if (showCustomerBenefits) {
+                            "The server verified that discounts or customer benefits cover this bill in full."
+                        } else {
+                            "The server verified that recorded discounts or legacy credits cover this bill in full."
+                        },
+                        color = MaterialTheme.colorScheme.operationalGood,
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                    PaymentAmountRow("Subtotal", checkout.subtotalMinor)
+                    val nonPointsDiscount = (checkout.discountMinor - checkout.pointsRedeemedMinor)
+                        .coerceAtLeast(0L)
+                    nonPointsDiscount.takeIf { it > 0L }?.let {
+                        PaymentAmountRow("Other discounts", -it, MaterialTheme.colorScheme.operationalGood)
+                    }
+                    checkout.pointsRedeemedMinor.takeIf { it > 0L }?.let {
+                        PaymentAmountRow(
+                            if (showCustomerBenefits) "Loyalty points (${checkout.pointsRedeemed})"
+                            else "Legacy customer credit",
+                            -it,
+                            MaterialTheme.colorScheme.operationalGood,
+                        )
+                    }
+                    PaymentAmountRow("Total", checkout.totalMinor, emphasized = true)
+                    Text("Collect no money. Completing issues the final receipt and uses the benefit once.")
+                    if (!online) Text(
+                        "Reconnect before completing this bill.",
+                        color = MaterialTheme.colorScheme.operationalWarning,
+                    )
+                }
+                Row(
+                    Modifier.fillMaxWidth().testTag("pos-zero-confirmation-actions"),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.sm, Alignment.End),
+                ) {
+                    onVoid?.let {
+                        TextButton(onClick = it, enabled = !confirmationConsumed) {
+                            Text("Void bill", color = MaterialTheme.colorScheme.operationalDanger)
+                        }
+                    }
+                    TextButton(onClick = onDismiss, enabled = !confirmationConsumed) { Text("Cancel") }
+                    PrimaryButton(
+                        enabled = online && confirmEnabled && !confirmationConsumed,
+                        onClick = {
+                            if (oneShot.tryConsume(checkout.orderId)) {
+                                confirmationConsumed = true
+                                onConfirm()
+                            }
+                        },
+                    ) { Text(if (confirmationConsumed) "Submitted once" else "COMPLETE · ₹0.00") }
+                }
+            }
+        }
+        return
     }
     AlertDialog(
         onDismissRequest = { if (!confirmationConsumed) onDismiss() },
@@ -4558,6 +4790,8 @@ private fun ZeroTotalCompletionDialog(
     onDismiss: () -> Unit,
     onVoid: (() -> Unit)? = null,
     onConfirm: () -> Unit,
+    inline: Boolean = false,
+    modifier: Modifier = Modifier,
 ) {
     var confirmationConsumed by remember(checkout.orderId) { mutableStateOf(false) }
     val oneShotConfirmation = remember(checkout.orderId) {
@@ -4568,6 +4802,77 @@ private fun ZeroTotalCompletionDialog(
         !online -> "Reconnect to complete"
         !confirmEnabled -> "Completion unavailable"
         else -> "COMPLETE BENEFIT · ₹0 DUE"
+    }
+
+    if (inline) {
+        SectionCard(
+            title = checkout.sourceLabel?.let { "$it · ₹0.00 due" }
+                ?: "Member benefit · ₹0.00 due",
+            subtitle = "Final bill confirmation",
+            modifier = modifier.testTag("pos-benefit-confirmation-inline"),
+            contentFillsAvailableHeight = true,
+        ) {
+            Column(
+                Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+            ) {
+                Column(
+                    Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.md),
+                ) {
+                    Text(
+                        "Live member-benefit total verified and reserved for this checkout.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.operationalGood,
+                    )
+                    Text("Collect no money.", fontWeight = FontWeight.Bold)
+                    PaymentAmountRow("Subtotal", checkout.subtotalMinor)
+                    val otherDiscount = (
+                        checkout.discountMinor - checkout.manualDiscountMinor -
+                            checkout.pointsRedeemedMinor
+                    ).coerceAtLeast(0L)
+                    otherDiscount.takeIf { it > 0L }?.let {
+                        PaymentAmountRow("Line / membership discounts", -it, MaterialTheme.colorScheme.operationalGood)
+                    }
+                    checkout.manualDiscountMinor.takeIf { it > 0L }?.let {
+                        PaymentAmountRow("Manual discount", -it, MaterialTheme.colorScheme.operationalGood)
+                    }
+                    checkout.pointsRedeemedMinor.takeIf { it > 0L }?.let {
+                        PaymentAmountRow("Customer benefit", -it, MaterialTheme.colorScheme.operationalGood)
+                    }
+                    checkout.taxMinor.takeIf { it != 0L }?.let { PaymentAmountRow("Tax", it) }
+                    checkout.roundOffMinor.takeIf { it != 0L }?.let { PaymentAmountRow("Round-off", it) }
+                    checkout.tipMinor.takeIf { it != 0L }?.let { PaymentAmountRow("Tip", it) }
+                    PaymentAmountRow("Total", checkout.totalMinor, emphasized = true)
+                    Text("Complete this exact bill to use the reserved benefit and issue its final invoice.")
+                    if (!online) Text(
+                        "Reconnect before completing this member benefit.",
+                        color = MaterialTheme.colorScheme.operationalWarning,
+                    )
+                }
+                Row(
+                    Modifier.fillMaxWidth().testTag("pos-benefit-confirmation-actions"),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.sm, Alignment.End),
+                ) {
+                    onVoid?.let {
+                        TextButton(onClick = it, enabled = !confirmationConsumed) {
+                            Text("Void bill", color = MaterialTheme.colorScheme.operationalDanger)
+                        }
+                    }
+                    TextButton(onClick = onDismiss, enabled = !confirmationConsumed) { Text("Cancel") }
+                    PrimaryButton(
+                        enabled = !confirmationConsumed && confirmEnabled && online,
+                        onClick = {
+                            if (oneShotConfirmation.tryConsume(checkout.orderId)) {
+                                confirmationConsumed = true
+                                onConfirm()
+                            }
+                        },
+                    ) { Text(confirmLabel) }
+                }
+            }
+        }
+        return
     }
 
     AlertDialog(

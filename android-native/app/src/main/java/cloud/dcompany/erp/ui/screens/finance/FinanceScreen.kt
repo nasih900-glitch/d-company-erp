@@ -2211,7 +2211,7 @@ private fun TipPayoutCreateDialog(state: FinanceUiState, vm: FinanceViewModel) {
                 },
                 enabled = formEnabled && cashShiftOptions.isNotEmpty(),
             ) { shiftId = it }
-            Note("This cash is deducted from the selected open shift drawer atomically.")
+            Note("This cash is deducted from the selected open shift drawer as one recorded action.")
         }
         DecimalField(amountRupees, { amountRupees = it }, "Amount (₹)", enabled = formEnabled)
         if (exceedsOwed) {

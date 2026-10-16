@@ -153,8 +153,12 @@ export default function CustomerPlaytimePanel() {
       )}
 
       {data && (
-        <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(280px,0.72fr)]">
-          <div className="rounded-lg border border-bg-border p-3">
+        <details className="mt-4 rounded-lg border border-bg-border bg-bg-raised/30">
+          <summary className="cursor-pointer select-none px-3 py-3 text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
+            Owner setup · draft reward and message preview
+          </summary>
+          <div className="grid gap-3 border-t border-bg-border p-3 lg:grid-cols-[minmax(0,1fr)_minmax(280px,0.72fr)]">
+          <div className="rounded-lg border border-bg-border bg-bg-surface p-3">
             <div className="grid gap-2 sm:grid-cols-3">
               <label className="text-xs text-fg-muted">
                 Paid minutes threshold
@@ -197,7 +201,8 @@ export default function CustomerPlaytimePanel() {
                 : 'Choose a tracked customer to preview a draft message. Nothing will be sent.'}
             </p>
           </div>
-        </div>
+          </div>
+        </details>
       )}
 
       <form className="mt-4 flex max-w-md gap-2" onSubmit={(event) => {
@@ -205,7 +210,7 @@ export default function CustomerPlaytimePanel() {
         setActiveQuery(query);
         setPage(1);
       }}>
-        <input className="input" value={query} placeholder="Search leaderboard…"
+        <input className="input" value={query} aria-label="Search playtime leaderboard" placeholder="Search leaderboard…"
           onChange={(event) => setQuery(event.target.value)}/>
         <button className="btn btn-ghost" type="submit"><Search size={14}/> Find</button>
       </form>

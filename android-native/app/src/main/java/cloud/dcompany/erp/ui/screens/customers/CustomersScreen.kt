@@ -223,7 +223,7 @@ fun CustomersScreen(access: CustomersAccess = CustomersAccess()) {
                 )
 
                 tabletWorkspace && !state.loading && !state.couldNotLoad &&
-                    (state.rows.isNotEmpty() || state.editor != null) -> Row(
+                    (selected != null || state.editor != null) -> Row(
                     Modifier.fillMaxSize().testTag("customers-master-detail"),
                     horizontalArrangement = Arrangement.spacedBy(Spacing.md),
                 ) {
@@ -251,23 +251,7 @@ fun CustomersScreen(access: CustomersAccess = CustomersAccess()) {
                                 onRetryHistory = vm::retryHistory,
                                 modifier = Modifier.weight(0.56f).fillMaxHeight(),
                             )
-                        } else {
-                            SectionCard(
-                                modifier = Modifier.weight(0.56f).fillMaxHeight(),
-                                title = "Customer workspace",
-                                subtitle = "Select a customer to review loyalty and purchase history",
-                                icon = Icons.Default.People,
-                            ) {
-                                DesignedEmptyState(
-                                    title = "Choose a customer",
-                                    body = "Search or filter the directory on the left. Add customer opens here without covering the list.",
-                                    icon = Icons.Default.People,
-                                    primaryLabel = "Add customer".takeIf { access.canManageCustomers },
-                                    onPrimary = (vm::startCreate).takeIf { access.canManageCustomers },
-                                    modifier = Modifier.weight(1f),
-                                )
-                            }
-                        }
+                        } else Unit
                         else -> CustomerEditorInlinePanel(
                             editor = editor,
                             saving = state.saving,
@@ -391,7 +375,7 @@ internal fun rememberCustomerViewMode(
     hasCachedCustomers: Boolean,
     refreshAttempted: Boolean,
 ): CustomerViewModeSelection {
-    var mode by rememberSaveable { mutableStateOf(CustomerViewMode.PlayHours) }
+    var mode by rememberSaveable { mutableStateOf(CustomerViewMode.Directory) }
     var userSelectedMode by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(mode, playtime.error, playtime.items.size, hasCachedCustomers,
         refreshAttempted, userSelectedMode) {

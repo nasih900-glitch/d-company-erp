@@ -37,6 +37,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import cloud.dcompany.erp.core.auth.PosAccess
+import cloud.dcompany.erp.core.checkout.SplitPaymentPlan
 import cloud.dcompany.erp.core.db.MenuCategoryEntity
 import cloud.dcompany.erp.core.db.MenuItemEntity
 import cloud.dcompany.erp.core.db.SyncState
@@ -434,6 +435,7 @@ class PosEmptyCatalogueUiTest {
             ),
         )
 
+        compose.onNodeWithTag("pos-payment-confirmation-inline").assertIsDisplayed()
         compose.onNodeWithText("Direct POS bill · ₹120.00").assertIsDisplayed()
         compose.onNodeWithText("Cash").assertIsDisplayed().assertIsEnabled()
         compose.onNodeWithText("Use points").assertDoesNotExist()
@@ -498,6 +500,102 @@ class PosEmptyCatalogueUiTest {
         compose.onNodeWithText("Payment submitted once").assertIsDisplayed().assertIsNotEnabled()
         compose.onNodeWithText("Payment submitted once").performClick()
         compose.runOnIdle { assertEquals(2, attempts) }
+    }
+
+    @Test
+    fun heldSplitCheckoutResetsForChangedClaimAndKeepsFinalActionReachable() {
+        val viewport = mutableStateOf(1_024 to 640)
+        val state = mutableStateOf(
+            PosUiState(
+                online = true,
+                activeShiftId = "shift-1",
+                canCollectPayment = true,
+                preparedHeldCheckout = preparedHeldCheckout("claim-a"),
+            ),
+        )
+        val submitted = mutableListOf<Pair<String, SplitPaymentPlan>>()
+        renderDynamic(
+            state = state,
+            viewportSize = viewport,
+            onConfirmHeldOrderSplit = { orderId, plan ->
+                submitted += orderId to plan
+                true
+            },
+        )
+
+        compose.onNodeWithTag("pos-payment-confirmation-inline").assertIsDisplayed()
+        compose.onNodeWithText("Split tender").assertIsEnabled().performClick()
+        compose.onNodeWithText("Cash amount (₹)").assertIsDisplayed()
+
+        compose.runOnIdle {
+            state.value = state.value.copy(
+                preparedHeldCheckout = preparedHeldCheckout("claim-b"),
+            )
+        }
+        compose.waitForIdle()
+        compose.onNodeWithText("Cash amount (₹)").assertDoesNotExist()
+        compose.onNodeWithText("Split tender").assertIsEnabled().performClick()
+        compose.onNodeWithText("Cash amount (₹)").performTextReplacement("60")
+        compose.onNodeWithText("UPI amount (₹)").performTextReplacement("60")
+        compose.onNodeWithText("Cash received (₹)").performTextReplacement("60")
+
+        val actions = compose.onNodeWithTag("pos-payment-confirmation-actions")
+            .assertIsDisplayed().getUnclippedBoundsInRoot()
+        val root = compose.onNodeWithTag("pos-layout-root").getUnclippedBoundsInRoot()
+        assertTrue("Payment actions must remain in the checkout pane: actions=$actions root=$root",
+            actions.top >= root.top && actions.bottom <= root.bottom)
+        compose.onNodeWithText("CONFIRM SPLIT · ₹120.00")
+            .assertIsDisplayed().assertIsEnabled().performClick()
+        compose.runOnIdle {
+            assertEquals(1, submitted.size)
+            assertEquals("held-1", submitted.single().first)
+            assertEquals(12_000L, submitted.single().second.totalMinor)
+            assertEquals(listOf("cash", "upi"), submitted.single().second.legs.map { it.method })
+        }
+        compose.onNodeWithText("Payment submitted once").assertIsNotEnabled().performClick()
+        compose.runOnIdle { assertEquals(1, submitted.size) }
+    }
+
+    @Test
+    fun heldZeroCompletionStaysInlineAndFailsClosedOfflineAndWhileBusy() {
+        val viewport = mutableStateOf(1_024 to 640)
+        val state = mutableStateOf(
+            PosUiState(
+                online = false,
+                activeShiftId = "shift-1",
+                canCollectPayment = true,
+                preparedHeldCheckout = preparedHeldCheckout(
+                    claimToken = "zero-claim",
+                    subtotalMinor = 12_000L,
+                    discountMinor = 12_000L,
+                    totalMinor = 0L,
+                    dueMinor = 0L,
+                ),
+            ),
+        )
+        var completions = 0
+        renderDynamic(
+            state = state,
+            viewportSize = viewport,
+            onConfirmHeldOrderZero = { completions += 1 },
+        )
+
+        compose.onNodeWithTag("pos-benefit-confirmation-inline").assertIsDisplayed()
+        compose.onNodeWithText("Reconnect to complete").assertIsNotEnabled()
+        compose.runOnIdle { state.value = state.value.copy(online = true, checkoutBusy = true) }
+        compose.onNodeWithText("Completion unavailable").assertIsNotEnabled()
+        compose.runOnIdle { state.value = state.value.copy(checkoutBusy = false) }
+
+        val actions = compose.onNodeWithTag("pos-benefit-confirmation-actions")
+            .assertIsDisplayed().getUnclippedBoundsInRoot()
+        val root = compose.onNodeWithTag("pos-layout-root").getUnclippedBoundsInRoot()
+        assertTrue("Zero-total completion must remain reachable: actions=$actions root=$root",
+            actions.top >= root.top && actions.bottom <= root.bottom)
+        compose.onNodeWithText("COMPLETE BENEFIT · ₹0 DUE")
+            .assertIsDisplayed().assertIsEnabled().performClick()
+        compose.runOnIdle { assertEquals(1, completions) }
+        compose.onNodeWithText("Completion submitted once").assertIsNotEnabled().performClick()
+        compose.runOnIdle { assertEquals(1, completions) }
     }
 
     @Test
@@ -609,6 +707,11 @@ class PosEmptyCatalogueUiTest {
         onDismissNotice: () -> Unit = {},
         onPrepareDirectCheckout: () -> Unit = {},
         onCapture: (String, Long, DirectPaymentConfirmation) -> Boolean = { _, _, _ -> true },
+        onCaptureSplit: (SplitPaymentPlan, DirectPaymentConfirmation) -> Boolean = { _, _ -> true },
+        onConfirmDirectZero: () -> Unit = {},
+        onConfirmHeldOrder: (String, String, Long) -> Boolean = { _, _, _ -> true },
+        onConfirmHeldOrderSplit: (String, SplitPaymentPlan) -> Boolean = { _, _ -> true },
+        onConfirmHeldOrderZero: (String) -> Unit = {},
         onRedeemDirectReward: (ReviewedRewardRedemption) -> Unit = {},
         eligibleRewardCatalog: EligibleRewardCatalogState = EligibleRewardCatalogState(),
         onAddItem: (MenuItemEntity) -> Unit = {},
@@ -653,19 +756,19 @@ class PosEmptyCatalogueUiTest {
                             onPrepareDirectCheckout = onPrepareDirectCheckout,
                             onContinueDirectCheckout = {},
                             onDismissDirectCheckout = {},
-                            onConfirmDirectZero = {},
+                            onConfirmDirectZero = onConfirmDirectZero,
                             onRedeemDirectPoints = {},
                             onRedeemDirectReward = onRedeemDirectReward,
                             onCapture = onCapture,
-                            onCaptureSplit = { _, _ -> true },
+                            onCaptureSplit = onCaptureSplit,
                             onRetryRejectedSale = {},
                             onRetryHeldPayment = {},
                             onPrepareHeldOrder = {},
                             onUpdateHeldOrderDiscount = onUpdateHeldOrderDiscount,
                             onContinueHeldOrder = {},
-                            onConfirmHeldOrder = { _, _, _ -> true },
-                            onConfirmHeldOrderSplit = { _, _ -> true },
-                            onConfirmHeldOrderZero = {},
+                            onConfirmHeldOrder = onConfirmHeldOrder,
+                            onConfirmHeldOrderSplit = onConfirmHeldOrderSplit,
+                            onConfirmHeldOrderZero = onConfirmHeldOrderZero,
                             onVoidOrder = { _, _ -> },
                             onDismissHeldOrderReview = {},
                             onDismissHeldOrder = {},
@@ -817,6 +920,32 @@ class PosEmptyCatalogueUiTest {
                 note = null,
             ),
         ),
+    )
+
+    private fun preparedHeldCheckout(
+        claimToken: String,
+        subtotalMinor: Long = 12_000L,
+        discountMinor: Long = 0L,
+        totalMinor: Long = 12_000L,
+        dueMinor: Long = 12_000L,
+    ) = PreparedHeldCheckout(
+        orderId = "held-1",
+        shiftIdAtClaim = "shift-1",
+        sourceLabel = "PS5 Station 1",
+        subtotalMinor = subtotalMinor,
+        discountMinor = discountMinor,
+        manualDiscountMinor = 0L,
+        pointsRedeemedMinor = 0L,
+        pointsRedeemed = 0,
+        taxMinor = 0L,
+        roundOffMinor = 0L,
+        tipMinor = 0L,
+        totalMinor = totalMinor,
+        paidMinor = 0L,
+        dueMinor = dueMinor,
+        claimToken = claimToken,
+        claimExpiresAtMillis = Long.MAX_VALUE,
+        claimOrderVersion = 8L,
     )
 
 }

@@ -128,16 +128,42 @@ internal object CrashNormalizer {
 }
 
 internal fun crashFingerprint(throwable: Throwable): String {
-    val frames = runCatching {
+    val appFrames = runCatching {
         throwable.stackTrace.asSequence()
             .filter { it.className.startsWith("cloud.dcompany.erp") }
             .take(12)
             .map { "${it.className}#${it.methodName}" }
             .toList()
     }.getOrDefault(emptyList())
+    val fallbackFrames = if (appFrames.isEmpty()) {
+        runCatching {
+            throwable.stackTrace.asSequence()
+                .filterNot { frame ->
+                    frame.className.startsWith("java.lang.reflect.") ||
+                        frame.className.startsWith("sun.reflect.") ||
+                        frame.className.startsWith("kotlin.coroutines.jvm.internal.")
+                }
+                .take(6)
+                .map { "${it.className}#${it.methodName}" }
+                .toList()
+        }.getOrDefault(emptyList())
+    } else {
+        emptyList()
+    }
     val safeBasis = buildList {
         add(throwable.javaClass.name)
-        addAll(frames)
+        addAll(appFrames)
+        if (appFrames.isEmpty()) {
+            addAll(fallbackFrames)
+            generateSequence(throwable.cause) { it.cause }
+                .take(3)
+                .forEach { cause ->
+                    add("cause:${cause.javaClass.name}")
+                    cause.stackTrace.firstOrNull()?.let { frame ->
+                        add("cause-frame:${frame.className}#${frame.methodName}")
+                    }
+                }
+        }
     }.joinToString("|")
     return sha256Hex(safeBasis)
 }

@@ -17,7 +17,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   Plus, Minus, Trash2, ShoppingCart, Receipt as ReceiptIcon,
-  Banknote, CreditCard, Smartphone, QrCode, X, Check, Loader2,
+  Banknote, CreditCard, Smartphone, QrCode, Check, Loader2,
   Search, UserRound, Crown, AlertCircle, Inbox, XCircle, BellOff, Bell,
 } from 'lucide-react';
 
@@ -111,6 +111,7 @@ import {
 import { useAuth } from '@/modules/auth/AuthContext';
 import { QRCodeSVG } from 'qrcode.react';
 import { ConfirmModal, PromptModal } from '@/components/ui/ConfirmDialog';
+import Modal from '@/components/ui/Modal';
 import { useNotifications } from '@/components/ui/Notifications';
 import { subscribeRealtime } from '@/lib/realtime';
 import {
@@ -350,6 +351,8 @@ export default function LivePOSScreen() {
   const [heldLoading, setHeldLoading] = useState(false);
   const [heldLoadedScope, setHeldLoadedScope] = useState<string | null>(null);
   const [heldError, setHeldError] = useState<string | null>(null);
+  const [heldVerifiedAt, setHeldVerifiedAt] = useState<number | null>(null);
+  const [heldRefreshError, setHeldRefreshError] = useState<string | null>(null);
   const [showHeldPicker, setShowHeldPicker] = useState(false);
   const [heldSearch, setHeldSearch] = useState('');
   const [resumingOrder, setResumingOrder] = useState<OrderDTO | null>(null);
@@ -632,6 +635,8 @@ export default function LivePOSScreen() {
     setUnresolvedResumingOrderId(null);
     setHeldOrders([]);
     setHeldError(null);
+    setHeldVerifiedAt(null);
+    setHeldRefreshError(null);
     setOrderType(DEFAULT_POS_ORDER_TYPE);
     setDeliveryVia('inhouse');
     setDeliveryStateCode('32');
@@ -1102,6 +1107,8 @@ export default function LivePOSScreen() {
       if (heldOrderScopeRef.current === requestScope) {
         setHeldOrders(queue);
         setHeldLoadedScope(requestScope);
+        setHeldVerifiedAt(Date.now());
+        setHeldRefreshError(null);
         if (result.length === UNBILLED_QUEUE_LIMIT) {
           setHeldError(
             'The unbilled queue reached its 500-order safety limit. Bill or void old orders and ask a protected owner to reconcile the backlog.',
@@ -1109,8 +1116,9 @@ export default function LivePOSScreen() {
         }
       }
     } catch (e) {
-      if (!silent && heldOrderScopeRef.current === requestScope) {
-        setHeldError((e as Error).message);
+      if (heldOrderScopeRef.current === requestScope) {
+        setHeldRefreshError((e as Error).message);
+        if (!silent) setHeldError((e as Error).message);
       }
     } finally {
       if (!silent && heldOrderScopeRef.current === requestScope) setHeldLoading(false);
@@ -1250,6 +1258,7 @@ export default function LivePOSScreen() {
     return Date.now() - new Date(heldSince).getTime() >= HELD_ORDER_ALARM_MINUTES * 60_000;
   });
   useEffect(() => {
+    if (!heldOrders.length) return undefined;
     const id = setInterval(() => {
       setAlarmTick((n) => n + 1);
       if (heldAlarmMuted) return;
@@ -3423,6 +3432,13 @@ export default function LivePOSScreen() {
     && !checkoutRetry
     && !draftWriteLeaseUnavailable;
   const shiftIssueCopy = posShiftIssueCopy(shiftIssueKind);
+  const queueVerificationLabel = !shiftId
+    ? 'queue unavailable'
+    : heldRefreshError
+      ? `queue stale${heldVerifiedAt ? ` · last verified ${new Date(heldVerifiedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}`
+      : heldVerifiedAt
+        ? `queue verified ${new Date(heldVerifiedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+        : 'queue checking';
 
   return (
     <div className="min-h-full pb-32 xl:grid xl:grid-cols-2 xl:gap-6 xl:pb-0">
@@ -3431,7 +3447,7 @@ export default function LivePOSScreen() {
           <div>
             <h2 className="text-2xl font-bold">POS · Live</h2>
             <p className="text-fg-muted text-sm">
-              {shiftId ? 'Shift open' : 'Shift unavailable'} · {items.length} items · backend live
+              {shiftId ? 'Shift open' : 'Shift unavailable'} · {items.length} items · {queueVerificationLabel}
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -3485,7 +3501,13 @@ export default function LivePOSScreen() {
             <div className="mb-3 flex items-start justify-between gap-3">
               <div>
                 <h3 className="font-bold">Incoming bills from Gaming</h3>
-                <p className="text-xs text-fg-muted">Choose a verified shared bill without leaving POS.</p>
+                <p className="text-xs text-fg-muted">
+                  {heldRefreshError
+                    ? `Queue refresh failed. ${heldVerifiedAt ? `Last verified ${new Date(heldVerifiedAt).toLocaleString()}.` : 'No verified queue is available yet.'}`
+                    : heldVerifiedAt
+                      ? `Verified ${new Date(heldVerifiedAt).toLocaleString()} from the shared server.`
+                      : 'Verifying the shared queue…'}
+                </p>
               </div>
               <button type="button" className="btn btn-ghost !min-h-[40px]" onClick={() => setShowHeldPicker(false)}>
                 Close
@@ -3500,7 +3522,13 @@ export default function LivePOSScreen() {
                 placeholder="Search station or bill"
               />
             </div>
-            {heldError && <p className="text-accent-bad text-xs mb-2">{heldError}</p>}
+            {(heldError || heldRefreshError) && (
+              <div className="mb-2 flex items-center justify-between gap-3 rounded-lg border border-accent-bad/30 bg-accent-bad/10 p-2 text-xs text-accent-bad">
+                <span>{heldError || heldRefreshError}</span>
+                <button type="button" className="btn btn-ghost !min-h-[36px] !py-1" disabled={heldLoading}
+                  onClick={() => { void loadHeldOrders(false); }}>Retry queue</button>
+              </div>
+            )}
             {heldLoading ? (
               <div className="space-y-2 py-2">
                 <Skeleton className="h-4 w-1/2" />
@@ -3839,7 +3867,7 @@ export default function LivePOSScreen() {
         </div>
       </section>
 
-      <aside className="hidden xl:flex card flex-col">
+      <aside className="hidden xl:flex card h-[calc(100dvh-7rem)] max-h-[calc(100dvh-7rem)] self-start overflow-hidden flex-col sticky top-0">
         <header className="flex items-center justify-between mb-3">
           <h3 className="text-lg font-semibold flex items-center gap-2"><ShoppingCart size={18} /> Bill · {visibleBillQty}</h3>
               {cart.length > 0 && !checkoutRetry && (
@@ -3854,7 +3882,7 @@ export default function LivePOSScreen() {
           )}
         </header>
 
-        <div className="flex-1 space-y-2 overflow-auto min-h-[120px]">
+        <div className="min-h-0 flex-1 space-y-2 overflow-auto">
           {resumingOrder && (
             <div className="mb-2 pb-2 border-b border-bg-border">
               <div className="text-xs text-fg-muted mb-1">Already sent</div>
@@ -3984,8 +4012,8 @@ export default function LivePOSScreen() {
         <div className="mt-3 space-y-3 border-t border-bg-border pt-3" data-testid="pos-inline-payment">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <div className="text-sm font-semibold">Payment</div>
-              <div className="text-xs text-fg-muted">Choose here; the exact server balance is confirmed before collection.</div>
+              <div className="text-sm font-semibold">Payment · confirmation required</div>
+              <div className="text-xs text-fg-muted">Choose tender here, then review the exact server balance before collecting money.</div>
             </div>
             <div className="shrink-0 text-right">
               <div className="text-[10px] uppercase tracking-wider text-fg-muted">Balance (est.)</div>
@@ -4045,9 +4073,9 @@ export default function LivePOSScreen() {
               || !!receiptSettingsError
               || localWorkNeedsReconciliation
             }
-            className="btn btn-primary w-full disabled:opacity-40 disabled:cursor-not-allowed"
+            className="btn btn-primary w-full disabled:opacity-40 disabled:cursor-not-allowed xl:w-[calc(100%-7rem)]"
           >
-            <ReceiptIcon size={16} /> Prepare exact {inlinePaymentMethod === 'split' ? 'split' : inlinePaymentMethod.toUpperCase()} bill
+            <ReceiptIcon size={16} /> Review exact {inlinePaymentMethod === 'split' ? 'split' : inlinePaymentMethod.toUpperCase()} bill
           </button>
         </div>
         {error && <p className="text-accent-bad text-xs mt-2">{error}</p>}
@@ -4072,8 +4100,9 @@ export default function LivePOSScreen() {
       )}
 
       {showCart && (
-        <Modal title={`Bill · ${visibleBillQty}`} onClose={() => setShowCart(false)}>
-          <div className="space-y-3">
+        <Modal open title={`Bill · ${visibleBillQty}`} onClose={() => setShowCart(false)} size="sm"
+          contentClassName="flex min-h-0 flex-col overflow-hidden">
+          <div className="min-h-[5rem] flex-1 space-y-3 overflow-y-auto overscroll-contain pr-1">
             {cart.map((line) => (
               <div key={line.item.id} className="border-b border-bg-border pb-3 last:border-0 last:pb-0">
                 <div className="flex items-start justify-between gap-3">
@@ -4212,7 +4241,7 @@ export default function LivePOSScreen() {
       )}
 
       {showPay && (
-        <Modal title="Choose payment method" onClose={() => { if (!paying) setShowPay(false); }}>
+        <Modal open title="Choose payment method" onClose={() => { if (!paying) setShowPay(false); }} size="sm">
           {estimatedMembershipDiscount > 0 && (
             <div className="mb-3 rounded-xl border border-accent-good/30 bg-accent-good/10 px-3 py-2 text-xs text-accent-good">
               Estimated {PREPAID_DISCOUNT_LABEL.toLocaleLowerCase('en-IN')}: {inr(estimatedMembershipDiscount)}.
@@ -4242,6 +4271,7 @@ export default function LivePOSScreen() {
 
       {checkoutRetry && (
         <Modal
+          open
           title={
             checkoutRetry.key === restoredRetryKey
               ? 'Recover checkout'
@@ -4794,7 +4824,7 @@ export default function LivePOSScreen() {
       )}
 
       {receipt && receiptBusiness && (
-        <Modal title="Receipt" onClose={() => setReceipt(null)} wide>
+        <Modal open title="Receipt" onClose={() => setReceipt(null)} size="md" printMode="receipt">
           <LiveReceipt
             order={receipt.order}
             business={receiptBusiness}
@@ -5017,47 +5047,4 @@ function PayButton({ icon, label, sub, onClick, disabled }: { icon: React.ReactN
 
 function RefreshCwIcon() {
   return <ReceiptIcon size={16}/>;
-}
-
-function Modal({
-  title,
-  children,
-  onClose,
-  wide,
-  locked = false,
-}: {
-  title: string;
-  children: React.ReactNode;
-  onClose: () => void;
-  wide?: boolean;
-  locked?: boolean;
-}) {
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-end md:items-center justify-center bg-bg/80 backdrop-blur-sm md:p-4 print:p-0 print:bg-white"
-      onClick={locked ? undefined : onClose}
-      role="dialog"
-      aria-modal="true"
-      aria-label={title}
-    >
-      <div
-        className={`bg-bg-surface border border-bg-border rounded-t-2xl md:rounded-2xl shadow-glow w-full ${wide ? 'md:max-w-md' : 'md:max-w-sm'} max-h-[calc(100dvh-1rem)] overflow-auto print:max-w-none print:w-auto print:bg-white print:text-black print:border-none print:shadow-none print:overflow-visible`}
-        onClick={(e) => e.stopPropagation()}
-        style={{ paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom))' }}
-      >
-        <div className="flex items-center justify-between p-4 border-b border-bg-border print:hidden sticky top-0 bg-bg-surface">
-          <h3 className="font-semibold">{title}</h3>
-          {locked ? null : (
-            <button
-              onClick={onClose}
-              className="text-fg-muted hover:text-fg p-1 -m-1"
-              aria-label={`Close ${title}`}
-              title="Close"
-            ><X size={20}/></button>
-          )}
-        </div>
-        <div className="p-4">{children}</div>
-      </div>
-    </div>
-  );
 }

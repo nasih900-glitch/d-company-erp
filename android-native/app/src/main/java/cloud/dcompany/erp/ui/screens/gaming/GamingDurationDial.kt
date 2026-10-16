@@ -98,6 +98,7 @@ internal fun GamingDurationDial(
     segmentTick: (() -> Unit)? = null,
     gestureContextKey: Any? = null,
     readout: GamingDurationDialReadout? = null,
+    remainingFraction: Float? = null,
 ) {
     if (choices.isEmpty()) return
     val options = choices.sortedWith(compareBy(GamingDurationChoice::minutes, GamingDurationChoice::packageId))
@@ -170,7 +171,7 @@ internal fun GamingDurationDial(
         val dialSemantics = if (readout == null) {
             Modifier.semantics {
                 contentDescription = "Session duration dial"
-                stateDescription = "${selected.minutes} minutes, ${selected.totalMinor.asRupees()} total. Fixed geometry version 1"
+                stateDescription = "${selected.minutes} minutes, ${selected.totalMinor.asRupees()} total"
                 progressBarRangeInfo = ProgressBarRangeInfo(
                     current = selectedIndex.toFloat(),
                     range = 0f..options.lastIndex.toFloat(),
@@ -267,7 +268,7 @@ internal fun GamingDurationDial(
             Modifier.semantics {
                 contentDescription = listOfNotNull(readout.label, readout.primary, readout.detail).joinToString(". ")
                 stateDescription = listOfNotNull(readout.label, readout.primary, readout.detail)
-                    .plus("Fixed geometry version 1").joinToString(". ")
+                    .joinToString(". ")
             }
         }
         Box(
@@ -281,7 +282,7 @@ internal fun GamingDurationDial(
                 modifier = Modifier.size(dialSize)
                     .testTag("gaming-control-ring-geometry")
                     .semantics {
-                        contentDescription = "Fixed gaming dial geometry. Radius 40 percent. 96 ticks. 2 dp ring. 3 dp selected arc. 8 dp marker."
+                        contentDescription = "Gaming duration ring. The booking marker stays fixed while the inner trace shows remaining time."
                     },
             ) {
                 val vividGold = dialAccent
@@ -352,6 +353,29 @@ internal fun GamingDurationDial(
                     vividGold, radius = 8.dp.toPx(), center = knob,
                     style = Stroke(1.5.dp.toPx()),
                 )
+            }
+            remainingFraction?.takeIf { it.isFinite() }?.coerceIn(0f, 1f)?.let { remaining ->
+                Canvas(
+                    modifier = Modifier.size(dialSize)
+                        .testTag("gaming-control-ring-remaining")
+                        .semantics {
+                            contentDescription = "Remaining booked time trace"
+                        },
+                ) {
+                    val radius = size.minDimension * 0.40f
+                    val center = Offset(size.width / 2f, size.height / 2f)
+                    val topLeft = Offset(center.x - radius, center.y - radius)
+                    val diameter = radius * 2f
+                    drawArc(
+                        color = dialAccentSoft.copy(alpha = 0.72f),
+                        startAngle = -90f,
+                        sweepAngle = 360f * remaining,
+                        useCenter = false,
+                        topLeft = Offset(topLeft.x + 12.dp.toPx(), topLeft.y + 12.dp.toPx()),
+                        size = Size(diameter - 24.dp.toPx(), diameter - 24.dp.toPx()),
+                        style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round),
+                    )
+                }
             }
             if (options.size == 2) {
                 Row(

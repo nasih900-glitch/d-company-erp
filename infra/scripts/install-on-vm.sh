@@ -200,6 +200,7 @@ BUILD45_PENDING_STATE_SQL="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-build45-pe
 BUILD46_PENDING_COMPATIBILITY_VERIFIER="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-build46-pending-compatibility.py"
 BUILD47_PENDING_COMPATIBILITY_VERIFIER="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-build47-pending-compatibility.py"
 BUILD48_PENDING_COMPATIBILITY_VERIFIER="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-build48-pending-compatibility.py"
+BUILD49_PENDING_COMPATIBILITY_VERIFIER="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-build49-pending-compatibility.py"
 WEB_PUBLIC_ASSET_VERIFIER="$CANDIDATE_BUILD_ROOT/ops/verify_web_public_assets.py"
 BUSINESS_QUIESCENCE_VERIFIER="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-production-business-quiescence.py"
 BUSINESS_QUIESCENCE_SQL="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-production-business-quiescence.sql"
@@ -213,7 +214,8 @@ for release_input in \
   "$BUILD45_PENDING_COMPATIBILITY_VERIFIER" "$BUILD45_PENDING_STATE_SQL" \
   "$BUILD46_PENDING_COMPATIBILITY_VERIFIER" \
   "$BUILD47_PENDING_COMPATIBILITY_VERIFIER" \
-  "$BUILD48_PENDING_COMPATIBILITY_VERIFIER" "$WEB_PUBLIC_ASSET_VERIFIER" \
+  "$BUILD48_PENDING_COMPATIBILITY_VERIFIER" \
+  "$BUILD49_PENDING_COMPATIBILITY_VERIFIER" "$WEB_PUBLIC_ASSET_VERIFIER" \
   "$BUSINESS_QUIESCENCE_VERIFIER" "$BUSINESS_QUIESCENCE_SQL"; do
   if [ ! -f "$release_input" ] || [ -L "$release_input" ]; then
     echo "Frozen production release snapshot is incomplete or linked." >&2
@@ -720,6 +722,7 @@ BUILD45_PENDING_CARRIED_UNRESOLVED=false
 BUILD46_PENDING_CARRIED_UNRESOLVED=false
 BUILD47_PENDING_CARRIED_UNRESOLVED=false
 BUILD48_PENDING_CARRIED_UNRESOLVED=false
+BUILD49_PENDING_CARRIED_UNRESOLVED=false
 CODE30_2_CLEANUP_WINDOW_ACTIVE=false
 CODE30_2_CLEANUP_SUCCEEDED=false
 handle_install_failure() {
@@ -1268,6 +1271,81 @@ if [ -n "$EXISTING_POSTGRES_CONTAINER" ]; then
       chmod 600 "$PENDING_COMPATIBILITY_REPORT"
       BUILD42_PENDING_CARRIED_UNRESOLVED=true
       echo "==> Exact build41-to-build44 server compatibility verified; reported tablet pending count $pending_outbox_count is carried UNRESOLVED."
+    elif [ "$CANDIDATE_APP_VERSION" = 3.1.41 ] && \
+         [ "$PRIOR_APP_VERSION" = 3.1.40 ] && \
+         [ "$PRIOR_REVISION" = 4058fb29e70789a9bb3fa62b2d580330b25db8a3 ] && \
+         [ "$PRIOR_DB_HEAD" = 0088 ]; then
+      # Preserve both reported counters through this exact server transition.
+      # Room-55/0088 business contracts are unchanged; both queues remain opaque.
+      # This path does not inspect either tablet queue or retire an installation.
+      # It is bound to the exact immutable build48 source and current fleet.
+      fleet_state_json=$(docker exec -i "$EXISTING_POSTGRES_CONTAINER" \
+        psql -X --no-psqlrc --quiet -U erp -d erp --tuples-only --no-align \
+        < "$BUILD45_PENDING_STATE_SQL")
+      RAW_BUILD49_FLEET_STATE="$UPGRADE_SNAPSHOT/build49-pending-fleet-raw.json"
+      (umask 077; printf '%s\n' "$fleet_state_json" > "$RAW_BUILD49_FLEET_STATE")
+      chmod 600 "$RAW_BUILD49_FLEET_STATE"
+
+      PENDING_COMPATIBILITY_REPORT="$UPGRADE_SNAPSHOT/build49-pending-compatibility.json"
+      PRIOR_RUNTIME_ENV="$UPGRADE_SNAPSHOT/build48-backend-environment.json"
+      CANDIDATE_IMAGE_ENV="$UPGRADE_SNAPSHOT/build49-backend-image-environment.json"
+      CANDIDATE_COMPOSE_CONFIG="$UPGRADE_SNAPSHOT/build49-compose-config.json"
+      CANDIDATE_BACKEND_MANIFEST="$UPGRADE_SNAPSHOT/build49-backend-source.sha256"
+      CANDIDATE_BACKEND_IMAGE_ID=$(python3 -c \
+        'import json,sys; print(json.loads(sys.argv[1])["services"]["backend"]["image_id"])' \
+        "$CANDIDATE_IMAGE_ATTESTATION")
+      if ! [[ "$CANDIDATE_BACKEND_IMAGE_ID" =~ ^sha256:[0-9a-f]{64}$ ]] || \
+         [ "$(docker image inspect --format '{{.Id}}' \
+           "d-company-erp-backend:$CURRENT_REVISION")" != "$CANDIDATE_BACKEND_IMAGE_ID" ]; then
+        echo "Candidate backend image no longer matches scanned identity." >&2
+        exit 1
+      fi
+      while IFS= read -r relative_path; do
+        source_hash=$(sha256sum "$CANDIDATE_BUILD_ROOT/backend/$relative_path" \
+          | awk '{print $1}')
+        printf '%s\t%s\n' "$source_hash" "$relative_path" \
+          >> "$CANDIDATE_BACKEND_MANIFEST"
+      done < <(find "$CANDIDATE_BUILD_ROOT/backend" -type f -printf '%P\n' \
+        | LC_ALL=C sort)
+      chmod 600 "$CANDIDATE_BACKEND_MANIFEST"
+      CANDIDATE_BACKEND_MANIFEST_SHA256=$(sha256sum "$CANDIDATE_BACKEND_MANIFEST" \
+        | awk '{print $1}')
+      (umask 077
+       docker inspect \
+         --format '{"image_id":{{json .Image}},"environment":{{json .Config.Env}}}' \
+         "$EXISTING_BACKEND_CONTAINER" > "$PRIOR_RUNTIME_ENV"
+       docker image inspect \
+         --format '{"image_id":{{json .Id}},"environment":{{json .Config.Env}}}' \
+         "$CANDIDATE_BACKEND_IMAGE_ID" > "$CANDIDATE_IMAGE_ENV"
+       "${candidate_compose[@]}" --env-file "$ENV_CANDIDATE" config --format json \
+         > "$CANDIDATE_COMPOSE_CONFIG")
+      chmod 600 "$PRIOR_RUNTIME_ENV" "$CANDIDATE_IMAGE_ENV" "$CANDIDATE_COMPOSE_CONFIG"
+      if ! (umask 077; python3 "$BUILD49_PENDING_COMPATIBILITY_VERIFIER" \
+        --prior-source-root "$PRIOR_SOURCE_ROOT" \
+        --candidate-source-root "$CANDIDATE_BUILD_ROOT" \
+        --prior-revision "$PRIOR_REVISION" --prior-version "$PRIOR_APP_VERSION" \
+        --prior-db-head "$PRIOR_DB_HEAD" --candidate-revision "$CURRENT_REVISION" \
+        --candidate-version "$CANDIDATE_APP_VERSION" --candidate-db-head 0088 \
+        --prior-image-id "$PRIOR_BACKEND_IMAGE" \
+        --candidate-image-id "$CANDIDATE_BACKEND_IMAGE_ID" \
+        --prior-backend-manifest-sha256 "$SOURCE_MANIFEST_DIGEST" \
+        --candidate-backend-manifest-sha256 "$CANDIDATE_BACKEND_MANIFEST_SHA256" \
+        --prior-source-archive-sha256 "$PRIOR_SOURCE_ARCHIVE_SHA256" \
+        --candidate-source-archive-sha256 "$CANDIDATE_SOURCE_ARCHIVE_SHA256" \
+        --prior-env "$UPGRADE_SNAPSHOT/.env" --live-env "$REPO_DIR/.env" \
+        --candidate-env "$ENV_CANDIDATE" \
+        --raw-historical-state "$RAW_PENDING_STATE" \
+        --raw-fleet-state "$RAW_BUILD49_FLEET_STATE" \
+        --prior-runtime-env "$PRIOR_RUNTIME_ENV" \
+        --candidate-image-env "$CANDIDATE_IMAGE_ENV" \
+        --candidate-compose-config "$CANDIDATE_COMPOSE_CONFIG" \
+        > "$PENDING_COMPATIBILITY_REPORT"); then
+        echo "Build49 compatibility proof failed; both tablet counters remain unresolved." >&2
+        exit 1
+      fi
+      chmod 600 "$PENDING_COMPATIBILITY_REPORT"
+      BUILD49_PENDING_CARRIED_UNRESOLVED=true
+      echo "==> Exact build48-to-build49 server compatibility verified; both reported tablet pending counters are carried UNRESOLVED."
     elif [ "$CANDIDATE_APP_VERSION" = 3.1.40 ] && \
          [ "$PRIOR_APP_VERSION" = 3.1.39 ] && \
          [ "$PRIOR_REVISION" = 986584a4e24dc6ab777ab89afe4f6fec374229c6 ] && \
@@ -1625,6 +1703,7 @@ if [ -n "$EXISTING_POSTGRES_CONTAINER" ]; then
      [ "${BUILD46_PENDING_CARRIED_UNRESOLVED:-false}" = false ] && \
      [ "${BUILD47_PENDING_CARRIED_UNRESOLVED:-false}" = false ] && \
      [ "${BUILD48_PENDING_CARRIED_UNRESOLVED:-false}" = false ] && \
+     [ "${BUILD49_PENDING_CARRIED_UNRESOLVED:-false}" = false ] && \
      [ "$CODE30_2_POST_CLEANUP_STALE_OUTBOX_ACCEPTED" = \
        "$CODE30_2_STALE_OUTBOX_BRIDGE_USED" ]; then
     echo "Retained tablet outbox was not accepted by exactly one guarded path." >&2
@@ -1636,7 +1715,8 @@ if [ -n "$EXISTING_POSTGRES_CONTAINER" ]; then
       "${BUILD45_PENDING_CARRIED_UNRESOLVED:-false}" \
       "${BUILD46_PENDING_CARRIED_UNRESOLVED:-false}" \
       "${BUILD47_PENDING_CARRIED_UNRESOLVED:-false}" \
-      "${BUILD48_PENDING_CARRIED_UNRESOLVED:-false}"; do
+      "${BUILD48_PENDING_CARRIED_UNRESOLVED:-false}" \
+      "${BUILD49_PENDING_CARRIED_UNRESOLVED:-false}"; do
     if [ "$accepted_path" = true ]; then
       accepted_pending_paths=$((accepted_pending_paths + 1))
     fi

@@ -6,7 +6,6 @@ import importlib.util
 import io
 import json
 from pathlib import Path
-import shutil
 import subprocess
 import tarfile
 
@@ -17,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 HELPER = ROOT / "infra/scripts/verify-build48-pending-compatibility.py"
 HISTORICAL_HELPER = ROOT / "infra/scripts/verify-build47-pending-compatibility.py"
 INSTALLER = ROOT / "infra/scripts/install-on-vm.sh"
+BUILD48_REVISION = "4058fb29e70789a9bb3fa62b2d580330b25db8a3"
 
 
 def _load(path: Path, name: str):
@@ -43,22 +43,9 @@ def _extract(ref: str, destination: Path) -> bytes:
 
 
 def _candidate_snapshot(destination: Path) -> None:
-    _extract("HEAD", destination)
-    paths = set(subprocess.check_output(
-        ["git", "diff", "--name-only", "HEAD"], cwd=ROOT, text=True
-    ).splitlines())
-    paths.update(subprocess.check_output(
-        ["git", "ls-files", "--others", "--exclude-standard"], cwd=ROOT, text=True
-    ).splitlines())
-    for relative in paths:
-        source, target = ROOT / relative, destination / relative
-        if source.is_symlink():
-            raise AssertionError("candidate contains an unreviewed symlink")
-        if source.is_file():
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(source, target)
-        elif not source.exists() and target.exists():
-            target.unlink()
+    # Build 48 is immutable history; build 49's dirty workspace must not be
+    # allowed to redefine the already-reviewed build47-to-build48 proof.
+    _extract(BUILD48_REVISION, destination)
 
 
 def test_historical_verifier_is_immutable_and_build48_source_delta_is_exact(
@@ -507,7 +494,9 @@ def test_business_and_schema_bytes_remain_published_build47(helper):
         before = subprocess.check_output(
             ["git", "show", f"{helper.PRIOR_REVISION}:{path}"], cwd=ROOT,
         ).decode()
-        after = (ROOT / path).read_text()
+        after = subprocess.check_output(
+            ["git", "show", f"{BUILD48_REVISION}:{path}"], cwd=ROOT,
+        ).decode()
         expected = before.replace("3.1.39", "3.1.40")
         if path == "android-native/app/build.gradle.kts":
             expected = expected.replace("versionCode = 47", "versionCode = 48")
@@ -540,7 +529,8 @@ def test_installer_verifies_public_assets_before_tariff_or_ingress():
     assert "'{{.Image}}'" in block
     assert '"$CANDIDATE_FRONTEND_IMAGE_ID"' in block
     assert 'WEB_PUBLIC_ASSET_VERIFIER="$CANDIDATE_BUILD_ROOT/ops/verify_web_public_assets.py"' in source
-    assert '"$BUILD48_PENDING_COMPATIBILITY_VERIFIER" "$WEB_PUBLIC_ASSET_VERIFIER"' in source
+    assert '"$BUILD48_PENDING_COMPATIBILITY_VERIFIER"' in source
+    assert '"$BUILD49_PENDING_COMPATIBILITY_VERIFIER" "$WEB_PUBLIC_ASSET_VERIFIER"' in source
 
 
 @pytest.mark.parametrize("case", ["accepted", "short_id", "multiple_ids", "wrong_image", "http_failure"])
