@@ -529,7 +529,8 @@ def test_installer_verifies_public_assets_before_tariff_or_ingress():
     assert "'{{.Image}}'" in block
     assert '"$CANDIDATE_FRONTEND_IMAGE_ID"' in block
     assert 'WEB_PUBLIC_ASSET_VERIFIER="$CANDIDATE_BUILD_ROOT/ops/verify_web_public_assets.py"' in source
-    assert '"$BUILD48_PENDING_COMPATIBILITY_VERIFIER" "$WEB_PUBLIC_ASSET_VERIFIER"' in source
+    assert '"$BUILD48_PENDING_COMPATIBILITY_VERIFIER"' in source
+    assert '"$BUILD49_PENDING_COMPATIBILITY_VERIFIER" "$WEB_PUBLIC_ASSET_VERIFIER"' in source
 
 
 @pytest.mark.parametrize("case", ["accepted", "short_id", "multiple_ids", "wrong_image", "http_failure"])

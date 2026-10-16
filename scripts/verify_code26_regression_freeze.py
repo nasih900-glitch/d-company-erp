@@ -1264,6 +1264,7 @@ REVIEWED_CODE30_4_BUILD48_SHA256 = {
 REVIEWED_CODE30_4_BUILD49_SHA256 = {
     '.env.production.example': '2413bffac46a6df2fb8773f62354f28151620fd44a4152c99423f63beac563cd',
     'android-native/app/build.gradle.kts': '62e88f925f7e00c66a92b595414d9de821d9780a2e04ad92dc88473123296024',
+    'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/ControlDeckFullShellScreenshotsUiTest.kt': 'a641a3658d710c91b4ea21e68abe2641c2f33d240f2d62627bd91a722bdf0a55',
     'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/PosEmptyCatalogueUiTest.kt': '794c25551cae42a3d5693a4e675b9da5858c3f14722262490bea02930d4ed994',
     'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/customers/CustomersTableUiTest.kt': '58f5f3a603c43de9059b48b71d9921ffd2fdf70183dc2bfe86d5f0d237766361',
     'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingBoardUiTest.kt': 'c9861778d8b27d82e56dc05a36d34bfc8b0c8d0108ec5280822e9833886876c7',
@@ -1283,7 +1284,7 @@ REVIEWED_CODE30_4_BUILD49_SHA256 = {
     'backend/tests/unit/test_release_contracts.py': '33f75898c646aab8ecf07e15cea2c22cec6f00a4e8919246e01799ee436051c7',
     'backend/tests/unit/test_remote_assistance_contract.py': '34ab23ad96ae2fc4ffcc8a3e045fd8593c26ceec7c7fc3e87be5280a27fc622d',
     'docker-compose.prod.yml': '7dfd9362177d89f1711de847c52c8aa6cda75c0207d4df2e16a878b2c8acb529',
-    'docs/V3_1_41_RELEASE_CANDIDATE.md': '9bd4f2e5992974db85a2bd7eb31aa9d8f8d26b6bb0d54b792da3b4209a4296ca',
+    'docs/V3_1_41_RELEASE_CANDIDATE.md': 'fda906597974f2333b4dbe8872af197d552d0bfb75e997c87a9050d4764e7320',
     'frontend/.env.example': 'a16192f5d67b9bea58512fbb39a028596107cd6d50e7613ddc78f516e4bd4372',
     'frontend/package-lock.json': '15c389c2600ea13f3f3dc19ee0ca37abe3685334f3054cf0aba526a4a02ed5dc',
     'frontend/package.json': '4d5e5dfe4b80ba7d79e5d00a6d97af8811c8eced6c31548cecdc1050deaf076a',
@@ -1305,7 +1306,10 @@ REVIEWED_CODE30_4_BUILD49_SHA256 = {
     'frontend/src/modules/reports/ReportsScreen.tsx': '86ad2c192baa8680df74810caf9bbd54282a78d461d9f0feb15a8bd1d92351f5',
     'frontend/src/modules/settings/SettingsScreen.tsx': '6ad155ec2c5871a39e0d078e5bbf39f431240819a4cf72b7b6d5be72f998b8d9',
     'frontend/src/styles/index.css': '39b653435769c46b606676b985ee7cd3b7e29f6bf52a5edd32ea3ab7232c158b',
-    'tests/test_build48_pending_compatibility.py': 'ffb86f5ccdaacbb3f3aa266c91a585a445a7fb5f9456dbf1bea0206d6b029a38',
+    'infra/scripts/install-on-vm.sh': '3ee444429f46b5ca9e397dce6b46a07307d2e8192a8662baa1be4c6652494db3',
+    'infra/scripts/verify-build49-pending-compatibility.py': 'ba2a1b8158efa667977910fd259b08a55fad0f950ac69ddf99f46c47a5b61f1c',
+    'tests/test_build48_pending_compatibility.py': '3bd40cd9ea64486ff66987b87e3d994ea03fd2dce31d87d08662150a52201f31',
+    'tests/test_build49_pending_compatibility.py': '091d1ec9f42cec1aacd8006a046509bac2b5f6a0de2110a8e089e576c0beff73',
     'tests/test_code26_physical_audit_lane.py': '79601a9f2f6685b4f6665978fe96d6392d4a55a21e2d3b8fd23494ab84452c5d',
 }
 

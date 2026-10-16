@@ -31,20 +31,22 @@ metadata and production examples must remain coordinated at `3.1.41` / 49.
 ## Pending-work compatibility boundary
 
 The build47-to-build48 compatibility helper and installer branch remain
-immutable historical controls. A build48-to-build49 normal-installer exception
-is not included in this source preparation because current production fleet,
-pending-counter, running-image, effective-environment, source-archive and
-backend-manifest evidence is unavailable. Reusing the prior snapshot would
-misrepresent current fleet state.
+immutable historical controls. Fresh read-only production evidence on
+2026-10-16 established the exact build-48 predecessor: source revision
+`4058fb29e70789a9bb3fa62b2d580330b25db8a3`, five running images reporting
+`3.1.40` with runtime parity, and Alembic `0088`. The fleet projection contained
+12 installations and two unchanged nonzero historic counters. Its all-row
+identity is `d741c0d407f2b29c687f7b41ec7276a93f19853e99fc279fb65d0f5aec03d030`;
+its nonzero identity is
+`5a1100a5695e997be523eb7a948d06db0fd79fed1a4f3a5f48c3286c86ea5128`.
 
-If production still reports pending tablet work, the installer must fail
-closed until a new exact helper is reviewed against fresh read-only evidence.
-That helper must bind the immutable build-48 source and archive to the exact
-build-49 source bytes and current fleet projection. It must not clear counters,
+The normal installer therefore has one exact build48-to-build49 server-only
+compatibility path. It binds that fleet, the immutable build-48 archive and
+backend manifest, the reviewed protected-source delta, distinct scanned image
+IDs, and equal effective environments. Both counters remain opaque unresolved
+work classified as `unknown_preserved_work`. The path cannot clear counters,
 retire installations, inspect or rewrite Room data, widen compatibility policy,
-or claim queue replay. If no pending work exists, the existing strict drained
-path may proceed only after the installer captures its normal fresh safety
-evidence.
+or claim queue replay.
 
 ## Remaining promotion gates
 
@@ -54,4 +56,7 @@ protected CI, a newly signed build-49 APK, artifact and certificate identity,
 retained-data upgrade verification, authenticated Sync and heartbeat, and the
 approved physical-tablet Gaming, POS and Shift workflow. Production deployment
 and activation must use the normal installer after fresh quiescence, backup,
-image and fleet gates pass.
+image and fleet gates pass. The same production read established three active
+games and one open shift. Those rows do not qualify for an exception: normal
+quiescence must be re-established before backup or deployment, and the existing
+restore-parity checks remain mandatory.

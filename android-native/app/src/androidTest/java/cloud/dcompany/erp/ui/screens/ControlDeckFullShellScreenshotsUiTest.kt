@@ -302,6 +302,7 @@ private fun ShiftFullShellFixture() {
                 currentShiftLoaded = true,
                 online = true,
                 expectedMinor = 10_000,
+                canClose = true,
             ),
             onRefresh = {}, onReview = {},
         )
