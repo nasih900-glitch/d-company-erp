@@ -1,5 +1,6 @@
 package cloud.dcompany.erp.ui.screens.gaming
 
+import android.content.res.Configuration
 import android.graphics.Bitmap
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.ScrollState
@@ -15,6 +16,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Surface
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -43,12 +45,15 @@ import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.printToLog
 import androidx.compose.ui.test.swipe
 import androidx.compose.ui.unit.dp
 import cloud.dcompany.erp.core.auth.GamingAccess
 import cloud.dcompany.erp.core.db.GamingSessionParticipantCacheEntity
 import cloud.dcompany.erp.core.db.GamingSessionState
+import cloud.dcompany.erp.core.db.MenuItemEntity
+import cloud.dcompany.erp.core.db.MenuVariantEntity
 import cloud.dcompany.erp.core.sync.OutboxWorkStatus
 import cloud.dcompany.erp.ui.Destination
 import cloud.dcompany.erp.ui.WorkspaceScaffold
@@ -69,6 +74,145 @@ import org.junit.Test
 
 class GamingBoardUiTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
+
+    @Test
+    fun inlineDrinksSearchCategoryQuantityAndCustomizationStayReachableAtTabletSizes() {
+        val viewport = mutableStateOf(1_024 to 640)
+        val added = mutableListOf<Pair<String, Int>>()
+        val configured = mutableListOf<String>()
+        val session = GameSession(
+            id = "drinks-session",
+            stationId = "ps5-1",
+            shiftId = "shift-1",
+            status = "active",
+            startAt = "2026-09-27T10:00:00Z",
+            timerMinutes = 60,
+            packageVariantSnapshot = "single",
+            packageStationTypeSnapshot = "ps5",
+        )
+        compose.setContent {
+            DCompanyTheme {
+                val size = viewport.value
+                val tabletConfiguration = Configuration(LocalConfiguration.current).apply {
+                    screenWidthDp = size.first
+                    screenHeightDp = size.second
+                }
+                CompositionLocalProvider(LocalConfiguration provides tabletConfiguration) {
+                    Box(
+                        Modifier.width(size.first.dp).height(size.second.dp)
+                            .testTag("drinks-viewport"),
+                    ) {
+                        GamingInlineDrinkEditor(
+                            session = session,
+                            items = gamingDrinkFixtureItems(),
+                            configurableItemIds = setOf("custom-shake"),
+                            busy = false,
+                            onConfirm = { item, quantity -> added += item.id to quantity },
+                            onConfigure = { configured += it.id },
+                            onClose = {},
+                            modifier = Modifier.fillMaxSize(),
+                            pinActions = LocalConfiguration.current.screenWidthDp >= 900,
+                        )
+                    }
+                }
+            }
+        }
+
+        compose.onNodeWithText("Snack").assertIsDisplayed().performClick()
+        compose.onNodeWithText("Nachos").assertIsDisplayed()
+        compose.onNodeWithText("All").performClick()
+        compose.onNodeWithTag("gaming-drinks-search").performTextInput("Mango")
+        compose.onNodeWithText("Mango drink").assertIsDisplayed()
+        compose.onNodeWithText("Select").assertIsDisplayed().performClick()
+        compose.onNodeWithText("+").assertIsDisplayed().performClick().performClick()
+        assertDrinksFooterInsideViewport()
+
+        compose.runOnIdle { viewport.value = 1_280 to 800 }
+        compose.waitForIdle()
+        assertDrinksFooterInsideViewport()
+        compose.onNodeWithText("Confirm add · ₹150.00").performClick()
+        compose.runOnIdle { assertEquals(listOf("mango" to 3), added) }
+
+        compose.onNodeWithTag("gaming-drinks-search").performTextReplacement("Custom")
+        compose.onNodeWithText("Custom shake").assertIsDisplayed()
+        compose.onNodeWithText("Customise").assertIsDisplayed().performClick()
+        compose.runOnIdle {
+            assertEquals(listOf("custom-shake"), configured)
+            assertEquals(listOf("mango" to 3), added)
+        }
+    }
+
+    @Test
+    fun guestJoinNeverForwardsPhoneIncludingAfterLeavingSaveCustomerMode() {
+        val joins = mutableListOf<List<String?>>()
+        val session = GameSession(
+            id = "participant-session",
+            stationId = "ps5-1",
+            shiftId = "shift-1",
+            status = "active",
+            startAt = "2026-09-27T10:00:00Z",
+            timerMinutes = 60,
+            packageVariantSnapshot = "single",
+            packageStationTypeSnapshot = "ps5",
+        )
+        compose.setContent {
+            DCompanyTheme {
+                GamingInlineParticipantEditor(
+                    session = session,
+                    participants = emptyList(),
+                    customers = emptyList(),
+                    wallClock = remember { mutableLongStateOf(1_779_989_200_000L) },
+                    busy = false,
+                    onJoin = { customerId, guestName, phone, participantReference ->
+                        joins += listOf(customerId, guestName, phone, participantReference)
+                    },
+                    onLeave = {},
+                    onClose = {},
+                    modifier = Modifier.width(720.dp),
+                )
+            }
+        }
+
+        compose.onNodeWithText("Phone (required)").assertDoesNotExist()
+        compose.onNodeWithTag("gaming-player-inline-confirm").performClick()
+        compose.onNodeWithText("Guest name (optional · no points)").performTextReplacement("Nora")
+        compose.onNodeWithTag("gaming-player-inline-confirm").performClick()
+        compose.onNodeWithText("Save new customer").performClick()
+        compose.onNodeWithText("Phone (required)").performTextReplacement("0501234567")
+        compose.onNodeWithText("Guest").performClick()
+        compose.onNodeWithText("Phone (required)").assertDoesNotExist()
+        compose.onNodeWithTag("gaming-player-inline-confirm").performClick()
+
+        compose.runOnIdle {
+            assertEquals(3, joins.size)
+            assertEquals(listOf(null, null, null, null), joins[0])
+            assertEquals(listOf(null, "Nora", null, null), joins[1])
+            assertEquals(listOf(null, "Nora", null, null), joins[2])
+        }
+    }
+
+    private fun assertDrinksFooterInsideViewport() {
+        val footer = compose.onNodeWithTag("gaming-drinks-inline-confirm")
+            .assertIsDisplayed().getUnclippedBoundsInRoot()
+        val viewport = compose.onNodeWithTag("drinks-viewport").getUnclippedBoundsInRoot()
+        assertTrue(
+            "Confirm add must remain inside the tablet viewport: footer=$footer viewport=$viewport",
+            footer.top >= viewport.top && footer.bottom <= viewport.bottom,
+        )
+    }
+
+    private fun assertIntegratedDrinksFooterInsideControlPane() {
+        val footer = compose.onNodeWithTag("gaming-drinks-inline-confirm")
+            .assertIsDisplayed().getUnclippedBoundsInRoot()
+        val editor = compose.onNodeWithTag("gaming-drinks-inline").getUnclippedBoundsInRoot()
+        val pane = compose.onNodeWithTag("gaming-control-pane").getUnclippedBoundsInRoot()
+        assertTrue(
+            "Confirm add must remain inside both the inline editor and control pane: " +
+                "footer=$footer editor=$editor pane=$pane",
+            footer.top >= editor.top && footer.bottom <= editor.bottom &&
+                footer.top >= pane.top && footer.bottom <= pane.bottom,
+        )
+    }
 
     @OptIn(ExperimentalTestApi::class)
     @Test
@@ -835,6 +979,12 @@ class GamingBoardUiTest {
         var fallbackDialogs = 0
         compose.setContent {
             DCompanyTheme {
+                val compactConfiguration = Configuration(LocalConfiguration.current).apply {
+                    screenWidthDp = 960
+                    screenHeightDp = 600
+                }
+                CompositionLocalProvider(LocalConfiguration provides compactConfiguration) {
+                Box(Modifier.width(960.dp).height(600.dp).testTag("extension-compact-viewport")) {
                 GamingCommandWorkspace(
                     state = state.value,
                     access = GamingAccess(canManageSessions = true),
@@ -864,6 +1014,8 @@ class GamingBoardUiTest {
                         null
                     },
                 )
+                }
+                }
             }
         }
 
@@ -879,6 +1031,16 @@ class GamingBoardUiTest {
         compose.onNodeWithText("Add 60 min · ₹100.00").assertIsDisplayed().performClick()
         compose.onNodeWithText("Resulting booked total · ₹220.00")
             .assertIsDisplayed()
+        val extensionActions = compose.onNodeWithTag("gaming-extension-actions")
+            .assertIsDisplayed().getUnclippedBoundsInRoot()
+        val extensionViewport = compose.onNodeWithTag("extension-compact-viewport")
+            .getUnclippedBoundsInRoot()
+        assertTrue(
+            "Extension confirmation actions must remain in the 960x600 workspace: " +
+                "actions=$extensionActions viewport=$extensionViewport",
+            extensionActions.top >= extensionViewport.top &&
+                extensionActions.bottom <= extensionViewport.bottom,
+        )
         compose.runOnIdle {
             assertEquals(0, confirms)
             assertEquals(0, fallbackDialogs)
@@ -925,6 +1087,17 @@ class GamingBoardUiTest {
         )
         val state = mutableStateOf(GamingUiState(
             stations = stations,
+            addonCatalog = gamingDrinkFixtureItems(),
+            addonVariants = listOf(
+                MenuVariantEntity(
+                    id = "custom-shake-large",
+                    menuItemId = "custom-shake",
+                    name = "Large",
+                    priceDeltaMinor = 2_000L,
+                    sortOrder = 1,
+                    isActive = true,
+                ),
+            ),
             packages = listOf(
                 GamingPackage(id = "single-30", code = "single-30", stationType = "ps5",
                     variant = "single", kind = "base", name = "Single 30",
@@ -941,7 +1114,9 @@ class GamingBoardUiTest {
             activeShiftServerConfirmed = true, online = true,
         ))
         val visibleStations = mutableStateOf(stations)
+        val attentionCount = mutableStateOf(0)
         var submittedPackageId: String? = null
+        val quickAdds = mutableListOf<Pair<String, Int>>()
         compose.setContent {
             DCompanyTheme {
                 val productionViewport = if (
@@ -977,7 +1152,8 @@ class GamingBoardUiTest {
                             showDetail = false, focusStationId = null, focusRequested = false,
                             startTerminalBlockMessage = null,
                             wallClock = remember { mutableLongStateOf(1_779_989_200_000L) },
-                            attentionCount = 0, onSelectFilter = {}, onSelectStation = {},
+                            attentionCount = attentionCount.value,
+                            onSelectFilter = {}, onSelectStation = {},
                             onBackToBoard = {}, onOpenAttention = {}, onRefresh = {},
                             onStart = {}, onConfirmStart = { _, _, _, _, _, packageId, _ ->
                                 submittedPackageId = packageId
@@ -987,6 +1163,9 @@ class GamingBoardUiTest {
                             onTransfer = {}, onPauseResume = {}, onReconcile = {},
                             onRepairBilling = {}, onResolveLegacyStart = {},
                             onDiscardPackageExtension = {}, onAddItems = {},
+                            onQuickAddItem = { _, item, quantity ->
+                                quickAdds += item.id to quantity
+                            },
                             onVoidAddon = { _, _ -> }, onReviewRejectedAddon = {},
                             onManageParticipants = {},
                         )
@@ -997,6 +1176,7 @@ class GamingBoardUiTest {
         compose.onNodeWithTag("gaming-filter-ps5").assertIsDisplayed()
         compose.onNodeWithTag("gaming-filter-racing").assertIsDisplayed()
         compose.onNodeWithTag("gaming-filter-vr").assertIsDisplayed()
+        compose.onNodeWithText("Gaming board ready").assertIsDisplayed()
         val firstTile = compose.onNodeWithTag("gaming-station-ps5-1")
             .getUnclippedBoundsInRoot()
         val racingTile = compose.onNodeWithTag("gaming-station-racing-1")
@@ -1136,15 +1316,52 @@ class GamingBoardUiTest {
             compose.onRoot(useUnmergedTree = true).printToLog("GamingPostPlayerClose")
             compose.onNodeWithText("Add drinks").assertIsDisplayed().performClick()
             compose.onNodeWithTag("gaming-drinks-inline").assertIsDisplayed()
+            compose.onNodeWithTag("gaming-drinks-search").assertIsDisplayed()
+            compose.onNodeWithTag("gaming-drinks-catalogue").assertIsDisplayed()
             assertEquals(
                 "Opening Add drinks must not move the primary Stop action",
                 wideActivePrimaryBounds,
                 compose.onNodeWithTag("gaming-primary-action-host")
                     .assertIsDisplayed().getUnclippedBoundsInRoot(),
             )
+            compose.onNodeWithTag("gaming-drinks-search").performTextInput("Mango")
+            compose.onNodeWithTag("gaming-drinks-catalogue").performScrollToIndex(2)
+            compose.onNodeWithText("Select").assertIsDisplayed().performClick()
+            assertIntegratedDrinksFooterInsideControlPane()
+            compose.onNodeWithTag("gaming-drinks-inline-confirm").performClick()
+            compose.runOnIdle { assertEquals(listOf("mango" to 1), quickAdds) }
             capture("gaming-full-workspace-1280x800-active.png", "gaming-full-workspace")
 
-            compose.runOnIdle { state.value = state.value.copy(sessions = emptyList()) }
+            compose.runOnIdle {
+                attentionCount.value = 1
+                state.value = state.value.copy(sessions = listOf(GameSession(
+                    id = "wide-session", stationId = "ps5-1", shiftId = "fixture-shift",
+                    status = "ended", startAt = "2026-09-27T10:00:00Z",
+                    endAt = "2026-09-27T11:00:00Z", amountMinor = 12_000,
+                    ratePerHourMinor = 12_000,
+                )))
+            }
+            compose.onNodeWithText("Action centre · 1 to review").assertIsDisplayed()
+            assertEquals(
+                "Payment attention must update the status rail without moving the dial",
+                wideActiveRingBounds,
+                compose.onNodeWithTag("gaming-control-ring")
+                    .assertIsDisplayed().getUnclippedBoundsInRoot(),
+            )
+            val paymentPane = compose.onNodeWithTag("gaming-control-pane")
+                .getUnclippedBoundsInRoot()
+            val paymentLastStation = compose.onNodeWithTag("gaming-station-streaming-1")
+                .getUnclippedBoundsInRoot()
+            assertTrue(
+                "Payment attention must keep every station visible: " +
+                    "last=$paymentLastStation pane=$paymentPane",
+                paymentLastStation.bottom <= paymentPane.bottom,
+            )
+
+            compose.runOnIdle {
+                attentionCount.value = 0
+                state.value = state.value.copy(sessions = emptyList())
+            }
 
             val tenStations = stations + listOf(
                 Station("ps5-5", "PS5-5", "PS5 Station 5", "ps5", 12_000),
@@ -1174,19 +1391,23 @@ class GamingBoardUiTest {
             val eighth = compose.onNodeWithTag("gaming-station-streaming-1")
                 .getUnclippedBoundsInRoot()
             assertTrue("960dp board and dial share the viewport", board.right < pane.left)
-            assertTrue("All eight cards remain above the bottom navigation", eighth.bottom <= pane.bottom)
+            assertTrue(
+                "All eight cards remain above the bottom navigation: eighth=$eighth pane=$pane",
+                eighth.bottom <= pane.bottom,
+            )
             compose.onNodeWithTag("gaming-station-streaming-1").assertIsDisplayed()
             val dial = compose.onNodeWithContentDescription("Session duration dial")
                 .assertIsDisplayed()
             val draftRingBounds = compose.onNodeWithTag("gaming-control-ring")
                 .getUnclippedBoundsInRoot()
-            val draftRingFace = bitmapPixels(
+            val draftRingFace = bitmapFixedRingPixels(
                 compose.onNodeWithTag("gaming-control-ring-geometry", useUnmergedTree = true)
                     .captureToImage().asAndroidBitmap(),
             )
+            compose.onNodeWithTag("gaming-control-ring-remaining", useUnmergedTree = true)
+                .assertDoesNotExist()
             compose.onNodeWithContentDescription(
-                "Fixed gaming dial geometry. Radius 40 percent. 96 ticks. " +
-                    "2 dp ring. 3 dp selected arc. 8 dp marker.",
+                "Gaming duration ring. The booking marker stays fixed while the inner trace shows remaining time.",
             ).assertExists()
             compose.onNodeWithText("₹80.00").assertIsDisplayed()
             compose.onNodeWithText("Start 30 min · ₹80.00").assertIsDisplayed()
@@ -1292,14 +1513,20 @@ class GamingBoardUiTest {
             capture("gaming-full-workspace-960x600-starting.png", "gaming-full-workspace")
 
             compose.runOnIdle {
-                state.value = state.value.copy(sessions = listOf(GameSession(
-                    id = "compact-session", stationId = "ps5-1", shiftId = "fixture-shift",
-                    status = "active", startAt = "2026-09-27T10:00:00Z",
-                    timerMinutes = 30, timerEndsAt = "2026-09-27T10:30:00Z",
-                    ratePerHourMinor = 12_000,
-                )))
+                // A server acknowledgement advances the same locked package
+                // session. Keep its billing and station snapshots so this
+                // compact integration path exercises the real PS5 actions
+                // rather than an impossible replacement session.
+                state.value = state.value.copy(sessions = listOf(
+                    state.value.sessions.single().copy(
+                        status = "active",
+                        localState = null,
+                    ),
+                ))
             }
             val activeRing = compose.onNodeWithTag("gaming-control-ring").assertIsDisplayed()
+            compose.onNodeWithTag("gaming-control-ring-remaining", useUnmergedTree = true)
+                .assertIsDisplayed()
             val activeRingBounds = activeRing.getUnclippedBoundsInRoot()
             assertFalse(
                 "Published duration markers become read-only after Start",
@@ -1341,51 +1568,73 @@ class GamingBoardUiTest {
                     stopBounds.top >= paneBounds.top && stopBounds.bottom <= paneBounds.bottom,
             )
             assertTrue(
-                "Starting a session may change only the centre readout; the ring, ticks, arc and marker must be pixel-identical",
+                "Starting must retain the outer booking ring, arc and marker geometry",
                 draftRingFace.contentEquals(
-                    bitmapPixels(
+                    bitmapFixedRingPixels(
                         compose.onNodeWithTag("gaming-control-ring-geometry", useUnmergedTree = true)
                             .captureToImage().asAndroidBitmap(),
                     ),
                 ),
             )
+            compose.onNodeWithText("Add drinks").assertIsDisplayed().performClick()
+            compose.onNodeWithTag("gaming-drinks-search").assertIsDisplayed()
+                .performTextInput("Mango")
+            compose.onNodeWithTag("gaming-drinks-catalogue").performScrollToIndex(2)
+            compose.onNodeWithText("Select").assertIsDisplayed().performClick()
+            assertIntegratedDrinksFooterInsideControlPane()
+            compose.onNodeWithTag("gaming-drinks-inline-confirm").performClick()
+            compose.runOnIdle { assertEquals(listOf("mango" to 1), quickAdds) }
             capture("gaming-full-workspace-960x600-active-action.png", "gaming-full-workspace")
             compose.runOnIdle {
-                state.value = state.value.copy(sessions = listOf(GameSession(
-                    id = "compact-session", stationId = "ps5-1", shiftId = "fixture-shift",
-                    status = "paused", startAt = "2026-09-27T10:00:00Z",
-                    pausedAt = "2026-09-27T10:10:00Z", timerMinutes = 30,
-                    ratePerHourMinor = 12_000, packageId = "single-30",
-                    packageVariantSnapshot = "single", packageStationTypeSnapshot = "ps5",
-                )))
+                state.value = state.value.copy(sessions = listOf(
+                    state.value.sessions.single().copy(
+                        status = "paused",
+                        pausedAt = "2026-09-27T10:10:00Z",
+                    ),
+                ))
             }
             val pausedRing = compose.onNodeWithTag("gaming-control-ring").assertIsDisplayed()
             assertEquals(activeRingBounds, pausedRing.getUnclippedBoundsInRoot())
             assertTrue(
-                "Pausing may change only the centre readout",
+                "Pausing must retain the outer booking ring, arc and marker geometry",
                 draftRingFace.contentEquals(
-                    bitmapPixels(
+                    bitmapFixedRingPixels(
                         compose.onNodeWithTag("gaming-control-ring-geometry", useUnmergedTree = true)
                             .captureToImage().asAndroidBitmap(),
                     ),
                 ),
             )
             compose.runOnIdle {
-                state.value = state.value.copy(sessions = listOf(GameSession(
-                    id = "compact-session", stationId = "ps5-1", shiftId = "fixture-shift",
-                    status = "ended", startAt = "2026-09-27T10:00:00Z",
-                    endAt = "2026-09-27T11:00:00Z", amountMinor = 12_000,
-                    ratePerHourMinor = 12_000,
-                )))
+                attentionCount.value = 1
+                state.value = state.value.copy(sessions = listOf(
+                    state.value.sessions.single().copy(
+                        status = "ended",
+                        endAt = "2026-09-27T11:00:00Z",
+                        pausedAt = null,
+                        billableMinutes = 60,
+                        amountMinor = 8_000,
+                    ),
+                ))
             }
-            compose.onNodeWithText("Awaiting POS payment").performScrollTo().assertIsDisplayed()
+            compose.onNodeWithText("Action centre · 1 to review").assertIsDisplayed()
+            compose.onNodeWithText("Send to POS before the next session.")
+                .performScrollTo().assertIsDisplayed()
             compose.onNodeWithText("Send to POS").performScrollTo().assertIsDisplayed()
             val stoppedRing = compose.onNodeWithTag("gaming-control-ring").assertIsDisplayed()
             assertEquals(activeRingBounds, stoppedRing.getUnclippedBoundsInRoot())
+            val attentionLastStation = compose.onNodeWithTag("gaming-station-streaming-1")
+                .getUnclippedBoundsInRoot()
+            val attentionPane = compose.onNodeWithTag("gaming-control-pane")
+                .getUnclippedBoundsInRoot()
             assertTrue(
-                "Stopping may change only the centre readout",
+                "Payment attention must keep all eight compact cards visible: " +
+                    "last=$attentionLastStation pane=$attentionPane",
+                attentionLastStation.bottom <= attentionPane.bottom,
+            )
+            assertTrue(
+                "Stopping must retain the outer booking ring, arc and marker geometry",
                 draftRingFace.contentEquals(
-                    bitmapPixels(
+                    bitmapFixedRingPixels(
                         compose.onNodeWithTag("gaming-control-ring-geometry", useUnmergedTree = true)
                             .captureToImage().asAndroidBitmap(),
                     ),
@@ -1513,6 +1762,16 @@ class GamingBoardUiTest {
     }
 }
 
+private fun gamingDrinkFixtureItems(): List<MenuItemEntity> = listOf(
+    MenuItemEntity("water", "drinks", "WATER", "Water", "drink", 2_000, 0.0, null, true, true, null),
+    MenuItemEntity("mango", "drinks", "MANGO", "Mango drink", "drink", 5_000, 0.0, null, true, true, null),
+    MenuItemEntity("lime", "drinks", "LIME", "Lime soda", "drink", 4_000, 0.0, null, true, true, null),
+    MenuItemEntity("coffee", "drinks", "COFFEE", "Cold coffee", "drink", 7_000, 0.0, null, true, true, null),
+    MenuItemEntity("nachos", "snacks", "NACHOS", "Nachos", "snack", 8_000, 0.0, null, true, true, null),
+    MenuItemEntity("fries", "snacks", "FRIES", "Fries", "snack", 6_000, 0.0, null, true, true, null),
+    MenuItemEntity("custom-shake", "drinks", "SHAKE", "Custom shake", "drink", 9_000, 0.0, null, true, true, null),
+)
+
 private fun ringPoint(width: Int, height: Int, angleDegrees: Float): Offset {
     val radians = Math.toRadians(angleDegrees.toDouble())
     val widthPx = width.toFloat()
@@ -1528,6 +1787,29 @@ private fun ringPoint(width: Int, height: Int, angleDegrees: Float): Offset {
 private fun bitmapPixels(bitmap: Bitmap): IntArray {
     val pixels = IntArray(bitmap.width * bitmap.height)
     bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+    bitmap.recycle()
+    return pixels
+}
+
+/**
+ * Samples the immutable booking track, selected arc and marker while excluding
+ * the centre readout and the deliberately dynamic inner remaining-time trace.
+ */
+private fun bitmapFixedRingPixels(bitmap: Bitmap): IntArray {
+    val width = bitmap.width
+    val height = bitmap.height
+    val pixels = IntArray(width * height)
+    bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
+    val centerX = (width - 1) / 2f
+    val centerY = (height - 1) / 2f
+    val minimumDimension = minOf(width, height).toFloat()
+    val bookingRingInner = minimumDimension * 0.38f
+    pixels.indices.forEach { index ->
+        val x = (index % width) - centerX
+        val y = (index / width) - centerY
+        val distance = kotlin.math.sqrt(x * x + y * y)
+        if (distance < bookingRingInner) pixels[index] = 0
+    }
     bitmap.recycle()
     return pixels
 }

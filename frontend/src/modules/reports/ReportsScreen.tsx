@@ -549,8 +549,10 @@ export default function ReportsScreen() {
               <Row label="Less: cost of goods sold" v={-report.cogs_minor}
                 sub="what the food/drinks/items you sold actually cost you"/>
               <Divider/>
-              <Row label="Gross profit" v={report.gross_profit_minor} bold
-                sub="what's left after replacing what you sold"/>
+              <Row label={costing?.is_complete === true ? 'Gross profit' : 'Provisional gross profit'} v={report.gross_profit_minor} bold
+                sub={costing?.is_complete === true
+                  ? "what's left after replacing what you sold"
+                  : 'may be overstated until every sold item has complete costing'}/>
             </section>
 
             {/* Statutory filing detail is deferred in the Gaming Centre profile.
@@ -661,7 +663,7 @@ export default function ReportsScreen() {
               </div>
               <div>
                 <div className="text-xs text-fg-muted print:text-black/60 uppercase tracking-wider">
-                  Net profit
+                  {costing?.is_complete === true ? 'Net profit' : 'Provisional net profit'}
                 </div>
                 <div className={`text-3xl font-bold mt-1 ${
                   report.net_profit_minor >= 0 ? 'text-accent-good print:text-black' : 'text-accent-bad print:text-black'
@@ -669,7 +671,9 @@ export default function ReportsScreen() {
                   {inr(report.net_profit_minor)}
                 </div>
                 <div className="text-[10px] text-fg-muted print:text-black/60 mt-1">
-                  your real bottom line
+                  {costing?.is_complete === true
+                    ? 'after all recorded costs'
+                    : 'not final until incomplete item costing is resolved'}
                 </div>
               </div>
             </div>

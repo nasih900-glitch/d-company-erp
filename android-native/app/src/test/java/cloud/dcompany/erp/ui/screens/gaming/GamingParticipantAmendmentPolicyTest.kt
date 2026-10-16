@@ -16,6 +16,14 @@ class GamingParticipantAmendmentPolicyTest {
     private val startedAt = Instant.parse("2026-09-24T12:00:00Z").toEpochMilli()
 
     @Test
+    fun `remaining trace is bounded without changing booked duration`() {
+        assertEquals(1f, requireNotNull(gamingDurationRemainingFraction(3_600_000L, 0L)), 0.001f)
+        assertEquals(0.5f, requireNotNull(gamingDurationRemainingFraction(3_600_000L, 1_800_000L)), 0.001f)
+        assertEquals(0f, requireNotNull(gamingDurationRemainingFraction(3_600_000L, 4_000_000L)), 0.001f)
+        assertEquals(null, gamingDurationRemainingFraction(0L, 0L))
+    }
+
+    @Test
     fun `inline editor and stop leave the workspace when session lifecycle advances`() {
         listOf(
             StationVisualState.Starting,
@@ -52,6 +60,14 @@ class GamingParticipantAmendmentPolicyTest {
     }
 
     @Test
+    fun `guest join never dispatches a stale save-new-customer phone`() {
+        assertEquals(null, gamingInlineJoinPhone(registerCustomerMode = false, rawPhone = "9876543210"))
+        assertEquals(null, gamingInlineJoinPhone(registerCustomerMode = false, rawPhone = ""))
+        assertEquals("9876543210", gamingInlineJoinPhone(registerCustomerMode = true, rawPhone = " 9876543210 "))
+        assertEquals(null, gamingInlineJoinPhone(registerCustomerMode = true, rawPhone = "123"))
+    }
+
+    @Test
     fun `rejoin intervals use one cumulative started-hour minimum per customer`() {
         val rows = listOf(
             GamingParticipantUi(
@@ -73,6 +89,15 @@ class GamingParticipantAmendmentPolicyTest {
 
         // Friend 1: 30 + 45 minutes -> two hours. Friend 2: 28 minutes -> one.
         assertEquals(9_000L, estimatedGamingFriendControllerMinor(rows, 4_700_000L))
+        assertEquals(
+            4_500_000L,
+            gamingParticipantCumulativePlayMillis(
+                rows.filter { it.participantIdentityId == "friend-1" },
+                4_700_000L,
+            ),
+        )
+        assertEquals("1h 15m", formatGamingParticipantDuration(4_500_000L))
+        assertEquals("0m", formatGamingParticipantDuration(-1L))
         assertEquals(
             9_000L,
             estimatedGamingFriendControllerMinorAfterJoin(

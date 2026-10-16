@@ -225,26 +225,25 @@ fun ShiftScreen(
                             "Shift closing is view only for this account. Ask a staff member with Shift close access.",
                         )
                     }
-                    Row(
-                        Modifier.fillMaxWidth().testTag("shift-open-workspace"),
-                        horizontalArrangement = Arrangement.spacedBy(Spacing.md),
-                        verticalAlignment = Alignment.Top,
-                    ) {
-                        Box(Modifier.weight(1f)) {
+                    BoxWithConstraints(Modifier.fillMaxWidth().testTag("shift-open-workspace")) {
+                        val overview: @Composable (Modifier) -> Unit = { modifier ->
+                            Box(modifier) {
                             ShiftDashboardOverview(
                                 state = state,
                                 canClose = access.canClose,
+                                presentation = presentation,
                                 onRefresh = vm::load,
                                 onReview = { scope.launch { closeReview.bringIntoView() } },
                             )
+                            }
                         }
-                        Box(Modifier.weight(1f).testTag("shift-reconciliation-panel")) {
+                        val reconciliation: @Composable (Modifier) -> Unit = { modifier ->
+                            Box(modifier.testTag("shift-reconciliation-panel")) {
                             CloseShiftCard(
                                 state,
                                 access.canClose,
                                 access.canOpen,
                                 compactLayout = true,
-                                presentation = presentation,
                                 reviewAnchor = closeReview,
                                 callbacks = ShiftCloseCallbacks(
                                     onRetryRejectedOpen = vm::retryRejectedOpen,
@@ -258,6 +257,25 @@ fun ShiftScreen(
                                     onCloseShift = vm::closeShift,
                                 ),
                             )
+                            }
+                        }
+                        if (maxWidth >= 1_000.dp) {
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+                                verticalAlignment = Alignment.Top,
+                            ) {
+                                overview(Modifier.weight(0.9f))
+                                reconciliation(Modifier.weight(1.1f))
+                            }
+                        } else {
+                            Column(
+                                Modifier.fillMaxWidth(),
+                                verticalArrangement = Arrangement.spacedBy(Spacing.md),
+                            ) {
+                                overview(Modifier.fillMaxWidth())
+                                reconciliation(Modifier.fillMaxWidth())
+                            }
                         }
                     }
                 }
@@ -375,11 +393,14 @@ internal fun CompactShiftPanels(
 internal fun ShiftDashboardOverview(
     state: ShiftUiState,
     canClose: Boolean = true,
+    presentation: WorkspacePresentationPolicy =
+        WorkspaceFeatureProfiles.Active.presentationPolicy(),
     onRefresh: () -> Unit,
     onReview: () -> Unit,
 ) {
     val shift = state.open ?: return
     val accounting = shift.accountingBreakdownOrNull()
+    var reconciliationExpanded by remember(shift.shiftId) { mutableStateOf(false) }
     val localState = shift.local?.state
     val confirmingOpen = shift.server == null && shift.local?.serverShiftId == null
     val status = shiftStatusCopy(
@@ -398,7 +419,11 @@ internal fun ShiftDashboardOverview(
         state.rejectedShift != null -> "Saved open needs review"
         localState == ShiftState.CLOSE_REJECTED -> "Close rejected"
         localState == ShiftState.CLOSE_PENDING -> "Close waiting for server"
-        else -> "Check before closing"
+        state.closeOriginMessage != null -> "Close from the opening app"
+        state.expectedMinor == null -> "Waiting for verified drawer total"
+        !canClose -> "Review only · close permission required"
+        !state.canClose -> "Close blocked · review requirements"
+        else -> "Ready to count cash and review"
     }
     val opener = shift.openedByName?.takeIf(String::isNotBlank)
         ?: shift.openedByEmail?.takeIf(String::isNotBlank)
@@ -511,22 +536,38 @@ internal fun ShiftDashboardOverview(
                         )
                     }
                 }
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
-                ) {
-                    ShiftOverviewMoneyCard(
-                        label = "Cash",
-                        value = accounting?.cashCollectionsMinor?.asRupees() ?: "—",
-                        icon = Icons.Filled.Payments,
-                        modifier = Modifier.weight(1f),
-                    )
-                    ShiftOverviewMoneyCard(
-                        label = "UPI",
-                        value = accounting?.upiCollectionsMinor?.asRupees() ?: "—",
-                        icon = Icons.Filled.QrCode,
-                        modifier = Modifier.weight(1f),
-                    )
+                BoxWithConstraints(Modifier.fillMaxWidth()) {
+                    if (maxWidth < 520.dp) {
+                        Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                            ShiftOverviewMoneyCard(
+                                label = "Cash",
+                                value = accounting?.cashCollectionsMinor?.asRupees() ?: "—",
+                                icon = Icons.Filled.Payments,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            ShiftOverviewMoneyCard(
+                                label = "UPI",
+                                value = accounting?.upiCollectionsMinor?.asRupees() ?: "—",
+                                icon = Icons.Filled.QrCode,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                    } else {
+                        Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                            ShiftOverviewMoneyCard(
+                                label = "Cash",
+                                value = accounting?.cashCollectionsMinor?.asRupees() ?: "—",
+                                icon = Icons.Filled.Payments,
+                                modifier = Modifier.weight(1f),
+                            )
+                            ShiftOverviewMoneyCard(
+                                label = "UPI",
+                                value = accounting?.upiCollectionsMinor?.asRupees() ?: "—",
+                                icon = Icons.Filled.QrCode,
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                    }
                 }
                 if (accounting != null &&
                     (accounting.cardCollectionsMinor != 0L || accounting.otherCollectionsMinor != 0L)
@@ -538,31 +579,108 @@ internal fun ShiftDashboardOverview(
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
-                ) {
-                    ShiftOverviewMoneyCard(
-                        label = "Expected cash in drawer",
-                        value = state.expectedMinor?.asRupees() ?: "Unavailable",
-                        icon = Icons.Filled.AccountBalanceWallet,
-                        tint = if (state.expectedMinor == null) MaterialTheme.colorScheme.operationalWarning else MaterialTheme.colorScheme.operationalGood,
-                        modifier = Modifier.weight(1f),
-                    )
-                    ShiftOverviewMoneyCard(
-                        label = "Close readiness",
-                        value = workStatus,
-                        icon = Icons.Filled.LockClock,
-                        tint = if (localState == ShiftState.CLOSE_REJECTED || state.rejectedShift != null)
-                            MaterialTheme.colorScheme.operationalDanger else MaterialTheme.colorScheme.operationalInformation,
-                        modifier = Modifier.weight(1f),
-                    )
+                if (accounting != null) {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                "Reconciliation details",
+                                color = MaterialTheme.colorScheme.onSurface,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Text(
+                                "Source totals and settled refund categories",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                        }
+                        TextButton(
+                            onClick = { reconciliationExpanded = !reconciliationExpanded },
+                            modifier = Modifier.testTag("shift-reconciliation-details-toggle"),
+                        ) {
+                            Text(if (reconciliationExpanded) "Hide details" else "View details")
+                        }
+                    }
+                    if (reconciliationExpanded) {
+                        Column(
+                            Modifier.fillMaxWidth().clip(Radius.shapeMd)
+                                .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeMd)
+                                .padding(Spacing.md)
+                                .testTag("shift-reconciliation-details"),
+                            verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+                        ) {
+                            ShiftReconciliationDetailRow(
+                                label = if (presentation.showsRestaurantOperations) {
+                                    "POS receipts (may include tips)"
+                                } else {
+                                    "POS and gaming receipts (may include tips)"
+                                },
+                                amountMinor = accounting.posCollectionsMinor,
+                            )
+                            shiftLegacyMoneyRows(accounting, presentation).forEach { row ->
+                                ShiftReconciliationDetailRow(
+                                    label = row.label,
+                                    amountMinor = row.amountMinor,
+                                    isRefund = row.isRefund,
+                                )
+                            }
+                            ShiftReconciliationDetailRow(
+                                label = "Settled POS refunds",
+                                amountMinor = accounting.settledPosRefundsMinor,
+                                isRefund = true,
+                            )
+                            if (!presentation.showsMemberships && accounting.hasLegacyPrepaidMoney()) {
+                                Text(
+                                    "Historical hidden-module money remains included in Gross, Refunds and Net. " +
+                                        "Owners should reconcile it against protected history; it has not been removed.",
+                                    color = MaterialTheme.colorScheme.operationalWarning,
+                                    style = MaterialTheme.typography.labelSmall,
+                                )
+                            }
+                        }
+                    }
+                }
+                BoxWithConstraints(Modifier.fillMaxWidth()) {
+                    val narrow = maxWidth < 520.dp
+                    val cards: @Composable (Modifier, Modifier) -> Unit = { expectedModifier, readinessModifier ->
+                        ShiftOverviewMoneyCard(
+                            label = "Expected cash in drawer",
+                            value = state.expectedMinor?.asRupees() ?: "Unavailable",
+                            icon = Icons.Filled.AccountBalanceWallet,
+                            tint = if (state.expectedMinor == null) MaterialTheme.colorScheme.operationalWarning else MaterialTheme.colorScheme.operationalGood,
+                            modifier = expectedModifier,
+                        )
+                        ShiftOverviewMoneyCard(
+                            label = "Close readiness",
+                            value = workStatus,
+                            icon = Icons.Filled.LockClock,
+                            tint = if (localState == ShiftState.CLOSE_REJECTED || state.rejectedShift != null)
+                                MaterialTheme.colorScheme.operationalDanger else MaterialTheme.colorScheme.operationalInformation,
+                            modifier = readinessModifier,
+                        )
+                    }
+                    if (narrow) {
+                        Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                            cards(Modifier.fillMaxWidth(), Modifier.fillMaxWidth())
+                        }
+                    } else {
+                        Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                            cards(Modifier.weight(0.9f), Modifier.weight(1.1f))
+                        }
+                    }
                 }
                 val reviewLabel = when {
                     state.rejectedShift != null -> "Review saved open"
                     localState == ShiftState.CLOSE_REJECTED -> "Review rejected close"
                     localState == ShiftState.CLOSE_PENDING -> "Review saved close"
-                    else -> if (canClose) "Review & close shift" else "Review shift"
+                    state.closeOriginMessage != null -> "Review closing device"
+                    !canClose -> "Review shift"
+                    !state.canClose -> "Review close requirements"
+                    else -> "Review & close shift"
                 }
                 Button(
                     onClick = onReview,
@@ -588,6 +706,25 @@ internal fun ShiftDashboardOverview(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun ShiftReconciliationDetailRow(
+    label: String,
+    amountMinor: Long,
+    isRefund: Boolean = false,
+) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(
+            amountMinor.asRupees(),
+            color = if (isRefund && amountMinor > 0L) {
+                MaterialTheme.colorScheme.operationalDanger
+            } else {
+                MaterialTheme.colorScheme.onSurface
+            },
+        )
     }
 }
 
@@ -976,7 +1113,6 @@ internal fun CloseShiftCard(
     canClosePermission: Boolean,
     canOpenPermission: Boolean,
     compactLayout: Boolean,
-    presentation: WorkspacePresentationPolicy,
     reviewAnchor: BringIntoViewRequester,
     callbacks: ShiftCloseCallbacks,
 ) {
@@ -1007,7 +1143,6 @@ internal fun CloseShiftCard(
         mutableStateOf<ShiftCloseConfirmation?>(null)
     }
     var confirmationGuardMessage by remember { mutableStateOf<String?>(null) }
-    var accountingExpanded by remember(shiftIdentity) { mutableStateOf(false) }
     var drawerCountOpen by remember(shiftIdentity, closeBlocked) { mutableStateOf(false) }
 
     val cardModifier = if (compactLayout) Modifier.fillMaxWidth() else Modifier.fillMaxSize()
@@ -1041,7 +1176,7 @@ internal fun CloseShiftCard(
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text("Close current shift", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
-                Text("Review collections, count the drawer, then confirm.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                Text("Count the drawer, review the variance, then confirm.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
             }
             OperationalStatusBadge(
                 label = when {
@@ -1079,118 +1214,11 @@ internal fun CloseShiftCard(
             value = state.expectedMinor?.asRupees() ?: "Not available offline",
             valueColor = if (state.expectedMinor == null) MaterialTheme.colorScheme.operationalWarning else MaterialTheme.colorScheme.onSurface,
         )
-        val accounting = shift.accountingBreakdownOrNull()
-        if (accounting != null) {
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    "Collections (excludes opening float)",
-                    color = MaterialTheme.colorScheme.onSurface,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                TextButton(onClick = { accountingExpanded = !accountingExpanded }) {
-                    Text(if (accountingExpanded) "Hide details" else "View details")
-                }
-            }
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(16.dp),
-            ) {
-                CollectionMetric(
-                    label = "Gross",
-                    value = accounting.grossCollectionsMinor.asRupees(),
-                    modifier = Modifier.weight(1f),
-                )
-                CollectionMetric(
-                    label = "Refunds",
-                    value = accounting.totalRefundsMinor.asRupees(),
-                    modifier = Modifier.weight(1f),
-                    valueColor = if (accounting.totalRefundsMinor > 0) MaterialTheme.colorScheme.operationalDanger else MaterialTheme.colorScheme.onSurface,
-                )
-                CollectionMetric(
-                    label = "Net",
-                    value = accounting.netCollectionsMinor.asRupees(),
-                    modifier = Modifier.weight(1f),
-                )
-            }
-            Text(
-                "Payment methods (gross collections)",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.labelSmall,
-            )
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(16.dp),
-            ) {
-                CollectionMetric(
-                    label = "Cash",
-                    value = accounting.cashCollectionsMinor.asRupees(),
-                    modifier = Modifier.weight(1f),
-                )
-                CollectionMetric(
-                    label = "Card",
-                    value = accounting.cardCollectionsMinor.asRupees(),
-                    modifier = Modifier.weight(1f),
-                )
-                CollectionMetric(
-                    label = "UPI",
-                    value = accounting.upiCollectionsMinor.asRupees(),
-                    modifier = Modifier.weight(1f),
-                )
-                CollectionMetric(
-                    label = "Other",
-                    value = accounting.otherCollectionsMinor.asRupees(),
-                    modifier = Modifier.weight(1f),
-                )
-            }
-            if (accountingExpanded) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text(
-                        if (presentation.showsRestaurantOperations) {
-                            "POS receipts (may include tips)"
-                        } else {
-                            "POS and gaming receipts (may include tips)"
-                        },
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Text(accounting.posCollectionsMinor.asRupees(), color = MaterialTheme.colorScheme.onSurface)
-                }
-                shiftLegacyMoneyRows(accounting, presentation).forEach { row ->
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text(row.label, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text(
-                            row.amountMinor.asRupees(),
-                            color = if (row.isRefund && row.amountMinor > 0) MaterialTheme.colorScheme.operationalDanger else MaterialTheme.colorScheme.onSurface,
-                        )
-                    }
-                }
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("Settled POS refunds", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text(
-                        accounting.settledPosRefundsMinor.asRupees(),
-                        color = if (accounting.settledPosRefundsMinor > 0) MaterialTheme.colorScheme.operationalDanger else MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                if (!presentation.showsMemberships && accounting.hasLegacyPrepaidMoney()) {
-                    Text(
-                        "Historical hidden-module money remains included in Gross, Refunds and Net. " +
-                            "Owners should reconcile it against protected history; it has not been removed.",
-                        color = MaterialTheme.colorScheme.operationalWarning,
-                        style = MaterialTheme.typography.labelSmall,
-                    )
-                }
-            }
-        } else if (shift.posCollectionsMinor != null) {
-            Text(
-                "Detailed collection and refund totals are not available from the server yet. " +
-                    "Use Expected in drawer for the cash count; POS receipts can include non-cash payments.",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.labelSmall,
-            )
-        }
+        Text(
+            "Daily collections are summarized once in the overview. Count only the physical drawer cash here.",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.labelSmall,
+        )
 
         if (closing) {
             Column(

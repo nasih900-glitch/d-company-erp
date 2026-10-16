@@ -177,6 +177,12 @@ textarea:focus-visible {
     min-width: 44px;
   }
 
+  @media print {
+    body:has(> [data-print-modal="receipt"]) > :not([data-print-modal="receipt"]) {
+      display: none !important;
+    }
+  }
+
   .text-balance {
     text-wrap: balance;
   }

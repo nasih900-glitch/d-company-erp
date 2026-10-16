@@ -61,6 +61,18 @@ describe('customer directory revision client contract', () => {
     });
   });
 
+  it('passes directory cancellation and an explicit bounded fetch size', async () => {
+    vi.mocked(api.get).mockResolvedValue({ data: [], headers: {} });
+    const controller = new AbortController();
+
+    await customers.list('amina', controller.signal, 500);
+
+    expect(api.get).toHaveBeenCalledWith('/customers', {
+      params: { q: 'amina', limit: 500 },
+      signal: controller.signal,
+    });
+  });
+
   it('uses caller-retained evidence for an idempotent checkout replay', async () => {
     vi.mocked(api.post).mockResolvedValue({ data: { id: 'order-1' } });
     const request = {

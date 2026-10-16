@@ -738,6 +738,7 @@ export default function GamingScreen() {
   const [participantsBySession, setParticipantsBySession] = useState<Record<string, GamingParticipantStateDTO>>({});
   const [participantLoadErrors, setParticipantLoadErrors] = useState<Record<string, string>>({});
   const [friendNames, setFriendNames] = useState<Record<string, string>>({});
+  const friendNamesRef = useRef<Record<string, string>>({});
   const [selectedFriend, setSelectedFriend] = useState<CustomerDTO | undefined>();
   const [newFriendName, setNewFriendName] = useState('');
   const [newFriendPhone, setNewFriendPhone] = useState('');
@@ -1114,14 +1115,16 @@ export default function GamingScreen() {
           endedSessions,
         );
         const visibleSessionIds = new Set(visibleSessions.map((sessionRow) => sessionRow.id));
-        const addonResults = await Promise.allSettled(
-          visibleSessions.map((sessionRow) => gaming.listSessionAddons(sessionRow.id)),
-        );
         const ps5Sessions = visibleSessions.filter((sessionRow) =>
           stationRows.some((station) => station.id === sessionRow.station_id && station.type === 'ps5'));
-        const participantResults = await Promise.allSettled(
-          ps5Sessions.map((sessionRow) => gaming.listSessionParticipants(sessionRow.id)),
-        );
+        const [addonResults, participantResults] = await Promise.all([
+          Promise.allSettled(
+            visibleSessions.map((sessionRow) => gaming.listSessionAddons(sessionRow.id)),
+          ),
+          Promise.allSettled(
+            ps5Sessions.map((sessionRow) => gaming.listSessionParticipants(sessionRow.id)),
+          ),
+        ]);
         if (!refresh.isCurrent()) return;
         const loadedAddons: Record<string, GamingSessionAddonDTO[]> = {};
         const loadErrors: Record<string, string> = {};
@@ -1149,12 +1152,17 @@ export default function GamingScreen() {
         const friendIds = Array.from(new Set(Object.values(loadedParticipants)
           .flatMap((state) => state.participants.map((participant) => participant.customer_id)
             .filter((id): id is string => id !== null))));
-        const friendLookups = await Promise.allSettled(friendIds.map((id) => customers.get(id)));
+        const missingFriendIds = friendIds.filter((id) => !friendNamesRef.current[id]);
+        const friendLookups = await Promise.allSettled(missingFriendIds.map((id) => customers.get(id)));
         if (!refresh.isCurrent()) return;
-        const loadedFriendNames: Record<string, string> = {};
+        const loadedFriendNames: Record<string, string> = Object.fromEntries(
+          friendIds.flatMap((id) => friendNamesRef.current[id]
+            ? [[id, friendNamesRef.current[id]] as const]
+            : []),
+        );
         friendLookups.forEach((result, index) => {
           if (result.status === 'fulfilled') {
-            loadedFriendNames[friendIds[index]] = result.value.name?.trim() || result.value.phone;
+            loadedFriendNames[missingFriendIds[index]] = result.value.name?.trim() || result.value.phone;
           }
         });
         const incompleteMessage = gamingBoardIncompleteMessage([
@@ -1175,6 +1183,7 @@ export default function GamingScreen() {
         setPackages(nextPackages);
         setParticipantsBySession(loadedParticipants);
         setParticipantLoadErrors(participantErrors);
+        friendNamesRef.current = loadedFriendNames;
         setFriendNames(loadedFriendNames);
         setAddonCatalog(catalogResult.items);
         setAddonCatalogError(catalogResult.error);
@@ -1316,6 +1325,8 @@ export default function GamingScreen() {
     setError(null);
     setStations([]);
     setSessions({});
+    friendNamesRef.current = {};
+    setFriendNames({});
     setLoading(true);
     void loadRef.current('foreground');
     return () => invalidateGamingRefresh(refreshGenerationRef);
@@ -3600,6 +3611,23 @@ export default function GamingScreen() {
         </div>
       )}
 
+      {LIVE_MODE && !loading && canManageStations && terminalReady
+        && canStartOnSelectedTerminal && !currentShiftId && (
+        <div className="card mb-4 border-accent-gold/40 bg-accent-gold/10 text-sm flex items-start gap-3" role="status">
+          <AlertCircle size={16} className="mt-0.5 shrink-0 text-accent-gold"/>
+          <div className="min-w-0 flex-1">
+            <div className="font-semibold text-fg">Open a shift before starting a session</div>
+            <div className="mt-1 text-fg-muted">
+              {shiftContextError ?? 'Gaming verified that this terminal has no open shift. Existing sessions remain visible, but new starts are unavailable.'}
+            </div>
+          </div>
+          <button type="button" className="btn btn-ghost shrink-0 !py-1.5 text-xs"
+            onClick={() => navigate('/operations?tab=shifts')}>
+            Go to Shifts
+          </button>
+        </div>
+      )}
+
       {LIVE_MODE
         && GAMING_CENTRE_TERMINAL_POLICY.allowCrossTerminalPosHandoff
         && currentTerminal?.purpose === 'cafe_pos' && (
@@ -3732,10 +3760,12 @@ export default function GamingScreen() {
             : 'No stations configured yet.'}
         </div>
       ) : (
-        <GamingSecondPulse>
-          {(now) => (
-          <div data-gaming-station-grid className="grid grid-cols-1 items-start gap-3 md:grid-cols-2 md:gap-4 xl:grid-cols-3">
+          <div data-gaming-station-grid className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,23rem),1fr))] items-start gap-3 md:gap-4">
           {stations.map((st) => {
+            const clockedSession = sessions[st.id];
+            return (
+            <GamingSecondPulse key={st.id} enabled={clockedSession?.status === 'active'}>
+            {(now) => {
             const session = sessions[st.id];
             const billingMissing = session?.status === 'ended'
               && session.ended_amount_minor == null;
@@ -3861,7 +3891,7 @@ export default function GamingScreen() {
                 : (shiftContextError ?? 'There is no verified open shift, so existing sessions are view-only.');
 
             return (
-              <div key={st.id} data-gaming-station-workspace className={`card !p-4 ${session ? 'border-fg/30' : ''}`}>
+              <div data-gaming-station-workspace className={`card !p-4 ${session ? 'border-fg/30' : ''}`}>
                 <div className="flex items-start gap-2.5 mb-3">
                   <div className="p-2.5 rounded-xl bg-bg-raised text-accent">{ICON[st.type]}</div>
                   <div className="flex-1 min-w-0">
@@ -4130,32 +4160,8 @@ export default function GamingScreen() {
                       />
                     )}
                     <div className="bg-bg-raised rounded-lg p-3 mb-3">
-                      <div className="flex justify-between items-baseline">
-                        <div>
-                          <div className="text-xs text-fg-muted">Elapsed</div>
-                          <div className="text-2xl font-bold font-mono">
-                            {Number.isFinite(elapsedMin)
-                              ? `${Math.floor(elapsedMin / 60)}:${String(elapsedMin % 60).padStart(2, '0')}`
-                              : 'Clock unavailable'}
-                          </div>
-                        </div>
-                        <div className="text-right">
-                          <div className="text-xs text-fg-muted">
-                            {session?.locked_amount_minor != null
-                              ? packageSelection ?? 'Fixed package total'
-                              : 'Running bill'}
-                          </div>
-                          <div className={`font-mono ${activeBillingUnavailable
-                            ? 'text-sm font-semibold text-accent-gold'
-                            : 'text-2xl font-bold text-accent'}`}>
-                            {legacyBillingAmbiguous
-                              ? 'Billing mode unverified'
-                              : activeBillingUnavailable || amount == null ? 'Billing unavailable' : inr(amount)}
-                          </div>
-                        </div>
-                      </div>
                       {session.status === 'paused' && (
-                        <div className="mt-2 text-xs text-accent-gold flex items-center gap-1">
+                        <div className="text-xs text-accent-gold flex items-center gap-1">
                           <Pause size={11}/> Paused
                         </div>
                       )}
@@ -4679,10 +4685,11 @@ export default function GamingScreen() {
                 )}
               </div>
             );
+            }}
+            </GamingSecondPulse>
+            );
           })}
           </div>
-          )}
-        </GamingSecondPulse>
       )}
 
       <GamingWriteOnly allowed={canManageStations}>

@@ -89,10 +89,48 @@ class DiagnosticNormalizationTest {
         )
         first.stackTrace = firstFrames
         second.stackTrace = secondFrames
+        first.initCause(IllegalArgumentException("first private cause"))
+        second.initCause(SecurityException("different private cause"))
 
         assertEquals(crashFingerprint(first), crashFingerprint(second))
         assertFalse(crashFingerprint(first).contains("9999999999"))
         assertEquals("illegal_state", CrashNormalizer.normalize(first, 5L)?.reasonCode)
+    }
+
+    @Test
+    fun `framework only crashes separate by bounded method and cause without retaining messages`() {
+        val first = IllegalStateException("customer 9999999999")
+        first.stackTrace = arrayOf(
+            StackTraceElement("android.app.ActivityThread", "performLaunchActivity", "/private/device/path/ActivityThread.java", 41),
+            StackTraceElement("java.lang.Thread", "run", "Thread.java", 1),
+        )
+        first.initCause(IllegalArgumentException("card 4111111111111111").also {
+            it.stackTrace = arrayOf(
+                StackTraceElement("android.view.ViewRootImpl", "performTraversals", "ViewRootImpl.java", 88),
+            )
+        })
+        val sameLocation = IllegalStateException("different private value")
+        sameLocation.stackTrace = arrayOf(
+            StackTraceElement("android.app.ActivityThread", "performLaunchActivity", "ActivityThread.java", 999),
+            StackTraceElement("java.lang.Thread", "run", "Thread.java", 2),
+        )
+        sameLocation.initCause(IllegalArgumentException("another secret").also {
+            it.stackTrace = arrayOf(
+                StackTraceElement("android.view.ViewRootImpl", "performTraversals", "ViewRootImpl.java", 999),
+            )
+        })
+        val differentLocation = IllegalStateException("customer 9999999999")
+        differentLocation.stackTrace = arrayOf(
+            StackTraceElement("android.app.ActivityThread", "handleResumeActivity", "ActivityThread.java", 41),
+        )
+
+        val fingerprint = crashFingerprint(first)
+        assertEquals(fingerprint, crashFingerprint(sameLocation))
+        assertNotEquals(fingerprint, crashFingerprint(differentLocation))
+        assertTrue(fingerprint.matches(Regex("^[0-9a-f]{64}$")))
+        assertFalse(fingerprint.contains("9999999999"))
+        assertFalse(fingerprint.contains("private/device/path"))
+        assertFalse(fingerprint.contains("4111111111111111"))
     }
 
     @Test

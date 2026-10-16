@@ -41,21 +41,23 @@ describe('Gaming add-on review', () => {
       />,
     ));
 
-    const review = Array.from(container.querySelectorAll('button'))
+    const dialog = document.body.querySelector('[role="dialog"]');
+    expect(dialog).not.toBeNull();
+    const review = Array.from(dialog!.querySelectorAll('button'))
       .find((button) => button.textContent?.includes('Review item'));
     expect(review).toBeDefined();
     expect(review?.disabled).toBe(true);
-    const itemChoice = Array.from(container.querySelectorAll('button'))
+    const itemChoice = Array.from(dialog!.querySelectorAll('button'))
       .find((button) => button.textContent?.includes('Cold can'));
     expect(itemChoice).toBeDefined();
     act(() => itemChoice?.click());
     expect(review?.disabled).toBe(false);
     act(() => review?.click());
     expect(onSubmit).not.toHaveBeenCalled();
-    expect(container.textContent).toContain('Review before adding');
-    expect(container.textContent).toContain('PS5 2');
-    expect(container.textContent).toContain('session-12345678');
-    expect(container.textContent).toContain('1 × ₹12.00 unit');
+    expect(dialog!.textContent).toContain('Review before adding');
+    expect(dialog!.textContent).toContain('PS5 2');
+    expect(dialog!.textContent).toContain('session-12345678');
+    expect(dialog!.textContent).toContain('1 × ₹12.00 unit');
 
     // A background catalogue refresh cannot silently re-rate the reviewed
     // immutable draft. The server will reject stale pricing and require a new review.
@@ -67,9 +69,9 @@ describe('Gaming add-on review', () => {
         onSubmit={onSubmit} onClose={() => undefined}
       />,
     ));
-    expect(container.textContent).toContain('1 × ₹12.00 unit');
+    expect(dialog!.textContent).toContain('1 × ₹12.00 unit');
 
-    const confirm = Array.from(container.querySelectorAll('button'))
+    const confirm = Array.from(dialog!.querySelectorAll('button'))
       .find((button) => button.textContent?.includes('Confirm add to session'));
     act(() => confirm?.click());
     expect(onSubmit).toHaveBeenCalledTimes(1);
@@ -100,9 +102,11 @@ describe('Gaming add-on review', () => {
         onSubmit={onSubmit} onClose={() => undefined}
       />,
     ));
-    expect(container.textContent).toContain('2 × ₹12.00 unit');
-    expect(container.textContent).toContain('₹24.00');
-    const retry = Array.from(container.querySelectorAll('button'))
+    const dialog = document.body.querySelector('[role="dialog"]');
+    expect(dialog).not.toBeNull();
+    expect(dialog!.textContent).toContain('2 × ₹12.00 unit');
+    expect(dialog!.textContent).toContain('₹24.00');
+    const retry = Array.from(dialog!.querySelectorAll('button'))
       .find((button) => button.textContent?.includes('Retry exact item'));
     act(() => retry?.click());
     expect(onSubmit).toHaveBeenCalledWith(body);

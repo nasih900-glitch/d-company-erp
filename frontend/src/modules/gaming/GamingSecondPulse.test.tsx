@@ -22,6 +22,16 @@ afterEach(() => {
 });
 
 describe('GamingSecondPulse', () => {
+  it('does not schedule a clock when the subtree has no live timer', () => {
+    vi.useFakeTimers();
+    const container = document.createElement('div');
+    document.body.append(container);
+    const root = createRoot(container);
+    act(() => root.render(<GamingSecondPulse enabled={false}>{(now) => <span>{now}</span>}</GamingSecondPulse>));
+    expect(vi.getTimerCount()).toBe(0);
+    act(() => root.unmount());
+  });
+
   it('updates its mounted clock without rendering its parent and cleans up the interval', () => {
     vi.useFakeTimers();
     const initialNow = new Date('2026-10-11T12:00:00.000Z').getTime();

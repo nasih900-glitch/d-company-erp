@@ -1695,6 +1695,11 @@ private fun GamingPermanentSessionDial(
             }
         }
     }
+    val remainingFraction = session?.let { current ->
+        val bookedMillis = current.timerMinutes?.takeIf { it > 0 }?.times(60_000L) ?: return@let null
+        val playedMillis = sessionPlayElapsedMillis(current, dialNow) ?: return@let null
+        gamingDurationRemainingFraction(bookedMillis, playedMillis)
+    }
     GamingDurationDial(
         choices = choices,
         selectedPackageId = selectedPackageId,
@@ -1709,7 +1714,14 @@ private fun GamingPermanentSessionDial(
                 detail = "Refresh Gaming",
             )
         } else null,
+        remainingFraction = remainingFraction,
     )
+}
+
+internal fun gamingDurationRemainingFraction(bookedMillis: Long, playedMillis: Long): Float? {
+    if (bookedMillis <= 0L || playedMillis < 0L) return null
+    return ((bookedMillis - playedMillis).coerceAtLeast(0L).toFloat() / bookedMillis.toFloat())
+        .coerceIn(0f, 1f)
 }
 
 @Composable
@@ -1959,6 +1971,18 @@ internal fun GamingCommandWorkspace(
                             gestureContextKey = selectedStation.id,
                             tariffUnavailable = durationChoices.isEmpty(),
                         )
+                        if (selectedSession == null) {
+                            durationChoices.firstOrNull {
+                                it.packageId == startSelection.selectedPackageId.value
+                            }?.let { selectedDuration ->
+                                Box(
+                                    Modifier.fillMaxSize(),
+                                    contentAlignment = Alignment.BottomCenter,
+                                ) {
+                                    ExpectedSessionFinishPreview(selectedDuration.minutes)
+                                }
+                            }
+                        }
                     } else if (selectedSession != null) {
                         GamingStationHero(
                             station = selectedStation,
@@ -2018,14 +2042,16 @@ internal fun GamingCommandWorkspace(
                         )
                     }
                 } else {
-                extensionPreview?.takeIf {
+                val visibleExtensionPreview = extensionPreview?.takeIf {
                     it.station.id == selectedStation.id && it.session.id == selectedSession?.id
-                }?.let { preview ->
+                }
+                visibleExtensionPreview?.let { preview ->
                     RemoteSensitiveContent {
                         PackageExtensionInlineReview(
                             preview = preview,
                             error = extensionReviewError,
                             confirming = extensionConfirming,
+                            pinActions = fixedTabletWorkspace,
                             onSelect = { packageId ->
                                 extensionPreview = preview.copy(selectedPackageId = packageId)
                                 extensionReviewError = preview.extensions.firstOrNull {
@@ -2068,12 +2094,14 @@ internal fun GamingCommandWorkspace(
                         modifier = Modifier.testTag("gaming-extension-review-error"),
                     )
                 }
-                when (inlinePanel) {
-                    "players" -> if (selectedSession != null) {
+                when {
+                    visibleExtensionPreview != null -> Unit
+                    inlinePanel == "players" -> if (selectedSession != null) {
                         GamingInlineParticipantEditor(
                             session = selectedSession,
                             participants = state.participantsFor(selectedSession),
                             customers = state.customers,
+                            wallClock = wallClock,
                             busy = state.busyStationId != null,
                             onJoin = { customerId, name, phone, identityId ->
                                 onJoinParticipant(selectedSession, customerId, name, phone, identityId)
@@ -2086,7 +2114,7 @@ internal fun GamingCommandWorkspace(
                             pinConfirmAction = fixedTabletWorkspace,
                         )
                     }
-                    "drinks" -> if (selectedSession != null) {
+                    inlinePanel == "drinks" -> if (selectedSession != null) {
                         GamingInlineDrinkEditor(
                             session = selectedSession,
                             items = state.addonCatalog,
@@ -2100,11 +2128,11 @@ internal fun GamingCommandWorkspace(
                             busy = state.busyStationId != null,
                             onConfirm = { item, qty -> onQuickAddItem(selectedSession, item, qty) },
                             onConfigure = { item -> onConfigureItem(selectedSession, item) },
-                            onMore = { onAddItems(selectedSession) },
                             onClose = { inlinePanel = null },
                             modifier = Modifier.fillMaxWidth().then(
                                 if (fixedTabletWorkspace) Modifier.weight(1f) else Modifier,
                             ),
+                            pinActions = fixedTabletWorkspace,
                         )
                     }
                     else -> {
@@ -2209,6 +2237,7 @@ internal fun GamingCommandWorkspace(
         // viewport with the command workspace. Four rows must remain visible
         // even on a 1280x800 tablet with the required operational notice rail.
         val denseGrid = sideBySide
+        val compactHeightGrid = sideBySide && maxHeight < 760.dp
         val noticeRailMaxHeight = minOf(144.dp, maxHeight * 0.19f)
         val columns = when {
             sideBySide -> 2
@@ -2236,22 +2265,31 @@ internal fun GamingCommandWorkspace(
                 if (state.cleanupAcknowledgementsPending.isNotEmpty()) {
                     GamingCleanupAcknowledgementBanner(state, onRefresh)
                 }
-                if (attentionCount > 0) {
-                    GamingCommandAttentionBar(
-                        state = state, access = access,
-                        terminalBlocked = startTerminalBlockMessage != null,
-                        focusRequested = focusRequested,
-                        orphanedExtensionCount = state.orphanedPackageExtensionActions().size,
-                        attentionCount = attentionCount, onOpen = onOpenAttention,
-                        onRefresh = onRefresh,
-                    )
-                }
+                // Keep one useful status row present in both healthy and attention states.
+                // Its content can change after Stop without moving the station board or dial.
+                GamingCommandAttentionBar(
+                    state = state, access = access,
+                    terminalBlocked = startTerminalBlockMessage != null,
+                    focusRequested = focusRequested,
+                    orphanedExtensionCount = state.orphanedPackageExtensionActions().size,
+                    attentionCount = attentionCount, onOpen = onOpenAttention,
+                    onRefresh = onRefresh,
+                )
             }
-            GamingBoardHeadline(state, onRefresh)
-            GamingFilterRow(
-                filters = filters, stations = state.stations,
-                selected = selectedFilter, onSelect = onSelectFilter,
-            )
+            if (compactHeightGrid) {
+                GamingCompactBoardHeader(
+                    state = state,
+                    filters = filters,
+                    selected = selectedFilter,
+                    onSelect = onSelectFilter,
+                )
+            } else {
+                GamingBoardHeadline(state, onRefresh)
+                GamingFilterRow(
+                    filters = filters, stations = state.stations,
+                    selected = selectedFilter, onSelect = onSelectFilter,
+                )
+            }
             if (visibleStations.isEmpty()) {
                 DesignedEmptyState(
                     title = "No stations in this filter",
@@ -2269,6 +2307,7 @@ internal fun GamingCommandWorkspace(
                         focusStationId = focusStationId,
                         wallClock = wallClock, columns = columns,
                         dense = denseGrid,
+                        compactHeight = compactHeightGrid,
                         onSelectStation = onSelectStation,
                         modifier = Modifier.weight(0.29f).fillMaxHeight()
                             .verticalScroll(rememberScrollState()),
@@ -2298,6 +2337,7 @@ internal fun GamingCommandWorkspace(
                             focusStationId = focusStationId,
                             wallClock = wallClock, columns = columns,
                             dense = denseGrid,
+                            compactHeight = compactHeightGrid,
                             onSelectStation = { stationId ->
                                 onSelectStation(stationId)
                                 compactScrollScope.launch {
@@ -2336,12 +2376,15 @@ private fun GamingStationSelectionGrid(
     wallClock: State<Long>,
     columns: Int,
     dense: Boolean,
+    compactHeight: Boolean,
     onSelectStation: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
         modifier.testTag("gaming-station-board"),
-        verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+        verticalArrangement = Arrangement.spacedBy(
+            if (compactHeight) 2.dp else Spacing.sm,
+        ),
     ) {
         stations.chunked(columns).forEach { rowStations ->
             Row(
@@ -2359,6 +2402,7 @@ private fun GamingStationSelectionGrid(
                         combinedBillSnapshotMinor = session?.let(state::pendingBillSnapshotMinor),
                         onSelect = { onSelectStation(station.id) },
                         compact = true, dense = dense,
+                        compactHeight = compactHeight,
                         modifier = Modifier.weight(1f),
                     )
                 }
@@ -2995,6 +3039,7 @@ internal fun GamingStationTile(
     onSelect: () -> Unit,
     compact: Boolean = false,
     dense: Boolean = false,
+    compactHeight: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val shouldTick = session?.status == "active" ||
@@ -3079,6 +3124,7 @@ internal fun GamingStationTile(
     val highlighted = selected || focused
     Column(
         modifier.fillMaxWidth().heightIn(min = when {
+            compactHeight -> 60.dp
             dense -> 98.dp
             compact -> 154.dp
             else -> 178.dp
@@ -3112,87 +3158,140 @@ internal fun GamingStationTile(
             }
             .padding(
                 horizontal = Spacing.sm,
-                vertical = if (dense) Spacing.xs else Spacing.sm,
+                vertical = if (dense || compactHeight) Spacing.xs else Spacing.sm,
             ),
         verticalArrangement = Arrangement.spacedBy(if (dense) 2.dp else 4.dp),
     ) {
-        Box(
-            Modifier.fillMaxWidth().height(if (dense) 32.dp else if (compact) 76.dp else 96.dp)
-                .background(
-                    Brush.radialGradient(
-                        if (highlighted) listOf(
-                            MaterialTheme.colorScheme.primary.copy(alpha = 0.20f), Color.Transparent,
-                        ) else listOf(MaterialTheme.colorScheme.primary.copy(alpha = 0.06f), Color.Transparent),
+        if (compactHeight) {
+            Row(
+                Modifier.fillMaxSize(),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                GamingStationArtwork(station.type, Modifier.size(28.dp))
+                Column(
+                    Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    Text(
+                        compactStationTitle(station.name),
+                        color = MaterialTheme.colorScheme.onSurface,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Canvas(Modifier.size(8.dp)) { drawCircle(tileStatusColor) }
+                        Text(
+                            tileStatusLabel,
+                            color = tileStatusColor,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        if (session != null) {
+                            Spacer(Modifier.weight(1f))
+                            RemoteSensitiveContent {
+                                Text(
+                                    primaryValue,
+                                    color = accent,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            Box(
+                Modifier.fillMaxWidth().height(
+                    if (dense) 32.dp else if (compact) 76.dp else 96.dp,
+                )
+                    .background(
+                        Brush.radialGradient(
+                            if (highlighted) listOf(
+                                MaterialTheme.colorScheme.primary.copy(alpha = 0.20f), Color.Transparent,
+                            ) else listOf(MaterialTheme.colorScheme.primary.copy(alpha = 0.06f), Color.Transparent),
+                        ),
                     ),
-                ),
-            contentAlignment = Alignment.Center,
-        ) {
-            GamingStationArtwork(station.type, Modifier.fillMaxSize())
-        }
-        Text(
-            if (dense) compactStationTitle(station.name) else station.name,
-            color = MaterialTheme.colorScheme.onSurface,
-            style = MaterialTheme.typography.titleSmall,
-            fontWeight = FontWeight.SemiBold,
-            maxLines = if (compact) 2 else 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        Row(
-            Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
-        ) {
-            if (compact) {
-                Canvas(Modifier.size(8.dp)) { drawCircle(tileStatusColor) }
-                Text(
-                    tileStatusLabel,
-                    color = tileStatusColor,
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Spacer(Modifier.weight(1f))
-                if (!missingTariff && !dense) Icon(
-                    Icons.Filled.ChevronRight,
-                    contentDescription = null,
-                    tint = if (selected || focused) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(18.dp),
-                )
-            } else {
-                OperationalStatusBadge(
-                    label = presentation.statusLabel,
-                    tone = presentation.tone,
-                    icon = presentation.statusIcon,
-                )
-                Spacer(Modifier.weight(1f))
-                Icon(
-                    Icons.Filled.ChevronRight,
-                    contentDescription = null,
-                    tint = if (selected || focused) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(22.dp),
-                )
+                contentAlignment = Alignment.Center,
+            ) {
+                GamingStationArtwork(station.type, Modifier.fillMaxSize())
             }
-        }
-        if (session != null) {
-            RemoteSensitiveContent {
-                Text(
-                    primaryValue,
-                    color = accent,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-        } else if (!compact) {
             Text(
-                supportingValue,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.labelSmall,
+                if (dense) compactStationTitle(station.name) else station.name,
+                color = MaterialTheme.colorScheme.onSurface,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
                 maxLines = if (compact) 2 else 1,
                 overflow = TextOverflow.Ellipsis,
             )
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
+            ) {
+                if (compact) {
+                    Canvas(Modifier.size(8.dp)) { drawCircle(tileStatusColor) }
+                    Text(
+                        tileStatusLabel,
+                        color = tileStatusColor,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Spacer(Modifier.weight(1f))
+                    if (!missingTariff && !dense) Icon(
+                        Icons.Filled.ChevronRight,
+                        contentDescription = null,
+                        tint = if (selected || focused) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp),
+                    )
+                } else {
+                    OperationalStatusBadge(
+                        label = presentation.statusLabel,
+                        tone = presentation.tone,
+                        icon = presentation.statusIcon,
+                    )
+                    Spacer(Modifier.weight(1f))
+                    Icon(
+                        Icons.Filled.ChevronRight,
+                        contentDescription = null,
+                        tint = if (selected || focused) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
+            }
+            if (session != null) {
+                RemoteSensitiveContent {
+                    Text(
+                        primaryValue,
+                        color = accent,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            } else if (!compact) {
+                Text(
+                    supportingValue,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
     }
 
@@ -3360,9 +3459,10 @@ private fun GamingFilterRow(
     stations: List<Station>,
     selected: String,
     onSelect: (String) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     LazyRow(
-        modifier = Modifier.fillMaxWidth().testTag("gaming-filter-chips"),
+        modifier = modifier.fillMaxWidth().testTag("gaming-filter-chips"),
         horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
     ) {
         items(filters, key = StationFilter::id) { filter ->
@@ -3385,6 +3485,47 @@ private fun GamingFilterRow(
                     .testTag("gaming-filter-${filter.id}"),
             )
         }
+    }
+}
+
+@Composable
+private fun GamingCompactBoardHeader(
+    state: GamingUiState,
+    filters: List<StationFilter>,
+    selected: String,
+    onSelect: (String) -> Unit,
+) {
+    val active = operationalActiveGamingSessionCount(state.sessions)
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 48.dp),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                Icons.Filled.SportsEsports,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                modifier = Modifier.size(22.dp),
+            )
+            Text(
+                "${state.stations.size} stations · $active active",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+            )
+        }
+        GamingFilterRow(
+            filters = filters,
+            stations = state.stations,
+            selected = selected,
+            onSelect = onSelect,
+            modifier = Modifier.weight(1f),
+        )
     }
 }
 
@@ -5319,6 +5460,7 @@ private fun PackageExtensionInlineReview(
     preview: InlinePackageExtensionPreview,
     error: String?,
     confirming: Boolean,
+    pinActions: Boolean,
     onSelect: (String) -> Unit,
     onConfirm: () -> Unit,
     onCancel: () -> Unit,
@@ -5351,86 +5493,125 @@ private fun PackageExtensionInlineReview(
                 .getOrDefault(extension.priceMinor),
         )
     }
+    val reviewBody: @Composable () -> Unit = {
+        Text("ADD PAID TIME", color = MaterialTheme.colorScheme.onPrimaryContainer, style = MaterialTheme.typography.labelSmall)
+        Text("Review extension", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+        // The elapsed ring is the session's permanent instrument. Paid
+        // extensions are explicit review choices beside it; drawing a
+        // second dial here made the timer look replaceable and duplicated
+        // the hero geometry during a money action.
+        Column(
+            Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(Spacing.xs),
+        ) {
+            choices.forEach { choice ->
+                FilterChip(
+                    selected = choice.packageId == selected.id,
+                    onClick = { onSelect(choice.packageId) },
+                    label = {
+                        Text("Add ${choice.minutes} min · ${choice.totalMinor.asRupees()}")
+                    },
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                    colors = gamingPackageChipColors(),
+                )
+            }
+        }
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Column {
+                Text("Added time", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
+                Text("+${selected.durationMinutes} min", fontWeight = FontWeight.Bold)
+            }
+            Column(horizontalAlignment = Alignment.End) {
+                Text("Incremental charge", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
+                Text(incrementalTotal?.asRupees() ?: "Unavailable", fontWeight = FontWeight.Bold)
+            }
+        }
+        Text(
+            "Resulting booked total · ${resultingTotal?.asRupees() ?: "Unavailable"}",
+            color = MaterialTheme.colorScheme.onPrimaryContainer,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+        )
+        Text(
+            "Selecting a duration only updates this review. No time or charge is added until Confirm extension.",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.labelSmall,
+        )
+    }
+    val reviewActions: @Composable () -> Unit = {
+        Row(
+            Modifier.fillMaxWidth().testTag("gaming-extension-actions"),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+        ) {
+            ErpButton(
+                text = "Cancel",
+                onClick = onCancel,
+                intent = ActionIntent.Secondary,
+                enabled = !confirming,
+                modifier = Modifier.weight(1f),
+            )
+            ErpButton(
+                text = "Confirm extension",
+                onClick = onConfirm,
+                enabled = error == null && resultingTotal != null && !confirming,
+                busy = confirming,
+                leadingIcon = Icons.Filled.Add,
+                modifier = Modifier.weight(1f),
+            )
+        }
+    }
+    val reviewFooter: @Composable () -> Unit = {
+        Column(
+            Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(Spacing.xs),
+        ) {
+            error?.let {
+                Text(
+                    it,
+                    color = MaterialTheme.colorScheme.operationalDanger,
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.testTag("gaming-extension-review-error"),
+                )
+            }
+            reviewActions()
+        }
+    }
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
         contentColor = MaterialTheme.colorScheme.onSurface,
         shape = Radius.shapeLg,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
-        modifier = Modifier.fillMaxWidth().testTag("gaming-extension-preview"),
+        modifier = Modifier.fillMaxWidth()
+            .then(if (pinActions) Modifier.fillMaxHeight() else Modifier)
+            .testTag("gaming-extension-preview"),
     ) {
-        Column(
-            Modifier.padding(Spacing.md),
-            verticalArrangement = Arrangement.spacedBy(Spacing.sm),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Text("ADD PAID TIME", color = MaterialTheme.colorScheme.onPrimaryContainer, style = MaterialTheme.typography.labelSmall)
-            Text("Review extension", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-            // The elapsed ring is the session's permanent instrument. Paid
-            // extensions are explicit review choices beside it; drawing a
-            // second dial here made the timer look replaceable and duplicated
-            // the hero geometry during a money action.
+        if (pinActions) {
             Column(
-                Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(Spacing.xs),
+                Modifier.fillMaxSize().padding(Spacing.md),
+                verticalArrangement = Arrangement.spacedBy(Spacing.sm),
             ) {
-                choices.forEach { choice ->
-                    FilterChip(
-                        selected = choice.packageId == selected.id,
-                        onClick = { onSelect(choice.packageId) },
-                        label = {
-                            Text("Add ${choice.minutes} min · ${choice.totalMinor.asRupees()}")
-                        },
-                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-                        colors = gamingPackageChipColors(),
-                    )
+                Column(
+                    Modifier.fillMaxWidth().then(
+                        if (pinActions) Modifier.weight(1f) else Modifier.heightIn(max = 180.dp),
+                    ).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    reviewBody()
                 }
+                reviewFooter()
             }
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
+        } else {
+            Column(
+                Modifier.padding(Spacing.md),
+                verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+                horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Column {
-                    Text("Added time", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
-                    Text("+${selected.durationMinutes} min", fontWeight = FontWeight.Bold)
-                }
-                Column(horizontalAlignment = Alignment.End) {
-                    Text("Incremental charge", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
-                    Text(incrementalTotal?.asRupees() ?: "Unavailable", fontWeight = FontWeight.Bold)
-                }
-            }
-            Text(
-                "Resulting booked total · ${resultingTotal?.asRupees() ?: "Unavailable"}",
-                color = MaterialTheme.colorScheme.onPrimaryContainer,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-            )
-            Text(
-                "Selecting a duration only updates this review. No time or charge is added until Confirm extension.",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.labelSmall,
-            )
-            error?.let {
-                Text(it, color = MaterialTheme.colorScheme.operationalDanger, style = MaterialTheme.typography.labelMedium)
-            }
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
-            ) {
-                ErpButton(
-                    text = "Cancel",
-                    onClick = onCancel,
-                    intent = ActionIntent.Secondary,
-                    enabled = !confirming,
-                    modifier = Modifier.weight(1f),
-                )
-                ErpButton(
-                    text = "Confirm extension",
-                    onClick = onConfirm,
-                    enabled = error == null && resultingTotal != null && !confirming,
-                    busy = confirming,
-                    leadingIcon = Icons.Filled.Add,
-                    modifier = Modifier.weight(1f),
-                )
+                reviewBody()
+                reviewFooter()
             }
         }
     }
@@ -6414,7 +6595,9 @@ internal fun StartSessionEditor(
             }
         }
         val previewMinutes = selectedPackage?.durationMinutes ?: minutes
-        if (previewMinutes != null) ExpectedSessionFinishPreview(previewMinutes)
+        if (previewMinutes != null && !externallyHostedDial) {
+            ExpectedSessionFinishPreview(previewMinutes)
+        }
         if (supportsPlayerModes) {
             if (!embedded) Text("Mode", color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelMedium)
@@ -6523,7 +6706,9 @@ internal fun StartSessionEditor(
                 }
             }
         } ?: run {
-            if (embedded) Row(
+            val compactEmbeddedCustomer = embedded && externallyHostedDial &&
+                LocalConfiguration.current.screenHeightDp < 700
+            if (embedded && !compactEmbeddedCustomer) Row(
                 Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -6569,8 +6754,21 @@ internal fun StartSessionEditor(
                         onSearchCustomer(customerQuery)
                     },
                     placeholder = { Text(if (embedded) "Search customer" else "Search by name or phone") },
-                    leadingIcon = if (embedded) {
+                    leadingIcon = if (embedded && !compactEmbeddedCustomer) {
                         { Icon(Icons.Filled.Search, contentDescription = null, tint = MaterialTheme.colorScheme.primary) }
+                    } else null,
+                    trailingIcon = if (compactEmbeddedCustomer) {
+                        {
+                            IconButton(onClick = {
+                                customerMode = "add"
+                                customerQuery = ""
+                                onSearchCustomer("")
+                                name = ""
+                                phone = ""
+                            }) {
+                                Icon(Icons.Filled.Add, contentDescription = "Add new customer")
+                            }
+                        }
                     } else null,
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth().semantics {
@@ -6622,6 +6820,19 @@ internal fun StartSessionEditor(
                     value = name,
                     onValueChange = { name = it.take(200) },
                     label = { Text("Customer name (optional)") },
+                    trailingIcon = if (compactEmbeddedCustomer) {
+                        {
+                            IconButton(onClick = {
+                                customerMode = "search"
+                                customerQuery = ""
+                                onSearchCustomer("")
+                                name = ""
+                                phone = ""
+                            }) {
+                                Icon(Icons.Filled.Search, contentDescription = "Search saved customer")
+                            }
+                        }
+                    } else null,
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth().semantics {
                         contentDescription = "Customer name (optional)"
@@ -6976,10 +7187,11 @@ internal fun gamingParticipantStateLabel(participant: GamingParticipantUi): Stri
 }
 
 @Composable
-private fun GamingInlineParticipantEditor(
+internal fun GamingInlineParticipantEditor(
     session: GameSession,
     participants: List<GamingParticipantUi>,
     customers: List<GamingCustomerOption>,
+    wallClock: State<Long>,
     busy: Boolean,
     onJoin: (String?, String?, String?, String?) -> Unit,
     onLeave: (String) -> Unit,
@@ -6998,6 +7210,9 @@ private fun GamingInlineParticipantEditor(
     val activeIdentityIds = active.map(GamingParticipantUi::participantIdentityId).toSet()
     val basePlayers = gamingBookedPlayerCount(session)
     val canAdd = session.status == "active" && gamingLateJoinHasCapacity(session, active.size)
+    val frozenNow = remember(session.id, session.status) { System.currentTimeMillis() }
+    val nowMillis = if (session.status in setOf("active", "starting")) wallClock.value else frozenNow
+    val playElapsedMs = sessionPlayElapsedMillis(session, nowMillis) ?: 0L
     val matches = remember(customers, query) {
         filterGamingCustomerOptions(customers, query).take(5)
     }
@@ -7042,6 +7257,29 @@ private fun GamingInlineParticipantEditor(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.labelSmall,
                     )
+                    val identityIntervals = participants.filter {
+                        it.participantIdentityId == participant.participantIdentityId
+                    }
+                    val cumulativeMillis = gamingParticipantCumulativePlayMillis(
+                        identityIntervals,
+                        playElapsedMs,
+                    )
+                    val estimatedFeeMinor = estimatedGamingFriendControllerMinor(
+                        identityIntervals,
+                        playElapsedMs,
+                    )
+                    Text(
+                        "${formatGamingParticipantDuration(cumulativeMillis)} cumulative play · " +
+                            "${estimatedFeeMinor.asRupees()} estimated",
+                        color = MaterialTheme.colorScheme.onSurface,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        "₹30 per started cumulative hour · paused time excluded",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
                     participant.lastError?.let { error ->
                         Text(
                             error,
@@ -7080,6 +7318,7 @@ private fun GamingInlineParticipantEditor(
                             savedCustomerMode = false
                             registerCustomerMode = false
                             selected = null
+                            registrationPhone = ""
                         },
                         label = { Text("Guest") },
                         colors = gamingPackageChipColors(),
@@ -7087,7 +7326,12 @@ private fun GamingInlineParticipantEditor(
                     )
                     FilterChip(
                         selected = savedCustomerMode,
-                        onClick = { savedCustomerMode = true; registerCustomerMode = false },
+                        onClick = {
+                            savedCustomerMode = true
+                            registerCustomerMode = false
+                            selected = null
+                            registrationPhone = ""
+                        },
                         label = { Text("Saved customer") },
                         colors = gamingPackageChipColors(),
                         modifier = Modifier.weight(1f).heightIn(min = 48.dp),
@@ -7095,7 +7339,12 @@ private fun GamingInlineParticipantEditor(
                 }
                 FilterChip(
                     selected = registerCustomerMode,
-                    onClick = { savedCustomerMode = false; registerCustomerMode = true; selected = null },
+                    onClick = {
+                        savedCustomerMode = false
+                        registerCustomerMode = true
+                        selected = null
+                        registrationPhone = ""
+                    },
                     label = { Text("Save new customer") },
                     colors = gamingPackageChipColors(),
                     modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
@@ -7162,12 +7411,12 @@ private fun GamingInlineParticipantEditor(
         }
         val confirmAction: @Composable () -> Unit = {
             if (canAdd) ErpButton(
-                text = "Confirm join · ₹30 minimum",
+                text = "Confirm join · ₹30 first hour",
                 onClick = {
                     onJoin(
                         selected?.customerId,
                         if (selected == null) guestName.trim().ifEmpty { null } else null,
-                        registrationPhone.trim().takeIf { registerCustomerMode && it.length >= 4 },
+                        gamingInlineJoinPhone(registerCustomerMode, registrationPhone),
                         null,
                     )
                 },
@@ -7195,26 +7444,41 @@ private fun GamingInlineParticipantEditor(
     }
 }
 
+internal fun gamingInlineJoinPhone(registerCustomerMode: Boolean, rawPhone: String): String? =
+    rawPhone.trim().takeIf { registerCustomerMode && it.length in 4..20 }
+
 @Composable
-private fun GamingInlineDrinkEditor(
+internal fun GamingInlineDrinkEditor(
     session: GameSession,
     items: List<MenuItemEntity>,
     configurableItemIds: Set<String>,
     busy: Boolean,
     onConfirm: (MenuItemEntity, Int) -> Unit,
     onConfigure: (MenuItemEntity) -> Unit,
-    onMore: () -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
+    pinActions: Boolean = false,
 ) {
     var selectedId by rememberSaveable(session.id) { mutableStateOf<String?>(null) }
     var quantity by rememberSaveable(session.id) { mutableIntStateOf(1) }
+    var query by rememberSaveable(session.id) { mutableStateOf("") }
+    var selectedType by rememberSaveable(session.id) { mutableStateOf<String?>(null) }
     val selected = items.firstOrNull { it.id == selectedId }
+    val types = remember(items) { items.map(MenuItemEntity::type).distinct().sorted() }
+    val visibleItems = remember(items, query, selectedType) {
+        val normalizedQuery = query.trim().lowercase(Locale.ROOT)
+        items.asSequence()
+            .filter { selectedType == null || it.type == selectedType }
+            .filter { normalizedQuery.isEmpty() || it.name.lowercase(Locale.ROOT).contains(normalizedQuery) }
+            .sortedBy(MenuItemEntity::name)
+            .toList()
+    }
     SectionCard(
         title = "Drinks & snacks",
         subtitle = "Add to this session without leaving the timer.",
         modifier = modifier.testTag("gaming-drinks-inline"),
         contentPadding = PaddingValues(horizontal = Spacing.md, vertical = Spacing.sm),
+        contentFillsAvailableHeight = pinActions,
         action = {
             TextButton(
                 onClick = onClose,
@@ -7228,76 +7492,143 @@ private fun GamingInlineDrinkEditor(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodySmall,
             )
-        } else {
-            items.take(5).forEach { item ->
-                Row(
-                    Modifier.fillMaxWidth().padding(vertical = Spacing.xs),
-                    horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
-                    verticalAlignment = Alignment.CenterVertically,
+        } else Column(
+            modifier = if (pinActions) Modifier.fillMaxSize() else Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(Spacing.xs),
+        ) {
+            if (selected == null) {
+                // The real tablet side pane is short once the permanent timer
+                // and action footer are accounted for. Search, categories and
+                // results therefore share one scroll owner instead of letting
+                // the headers consume the catalogue's entire measured height.
+                LazyColumn(
+                    Modifier.fillMaxWidth().then(
+                        if (pinActions) Modifier.weight(1f) else Modifier.heightIn(max = 360.dp),
+                    ).testTag("gaming-drinks-catalogue"),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.xs),
                 ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(item.name, fontWeight = FontWeight.SemiBold)
-                        Text(
-                            item.basePriceMinor.asRupees(),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            style = MaterialTheme.typography.labelSmall,
+                    item(key = "search") {
+                        OutlinedTextField(
+                            value = query,
+                            onValueChange = {
+                                query = it.take(100)
+                                selectedId = null
+                                quantity = 1
+                            },
+                            label = { Text("Search drinks & snacks") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth().testTag("gaming-drinks-search"),
                         )
                     }
-                    TextButton(
-                        enabled = !busy,
-                        onClick = {
-                            if (item.id in configurableItemIds) onConfigure(item)
-                            else {
-                                selectedId = item.id
-                                quantity = 1
+                    item(key = "categories") {
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+                            item {
+                                FilterChip(
+                                    selected = selectedType == null,
+                                    onClick = {
+                                        selectedType = null
+                                        selectedId = null
+                                        quantity = 1
+                                    },
+                                    label = { Text("All") },
+                                    colors = gamingPackageChipColors(),
+                                )
                             }
-                        },
-                    ) { Text(if (item.id in configurableItemIds) "Customise" else "Add") }
+                            items(types, key = { it }) { type ->
+                                FilterChip(
+                                    selected = selectedType == type,
+                                    onClick = {
+                                        selectedType = type
+                                        selectedId = null
+                                        quantity = 1
+                                    },
+                                    label = { Text(type.replaceFirstChar { it.titlecase(Locale.ROOT) }) },
+                                    colors = gamingPackageChipColors(),
+                                )
+                            }
+                        }
+                    }
+                    if (visibleItems.isEmpty()) {
+                        item(key = "empty") {
+                            Text(
+                                "No catalogue items match this search.",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                    } else {
+                        items(visibleItems, key = MenuItemEntity::id) { item ->
+                            Row(
+                                Modifier.fillMaxWidth().padding(vertical = Spacing.xs),
+                                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(item.name, fontWeight = FontWeight.SemiBold)
+                                    Text(
+                                        item.basePriceMinor.asRupees(),
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        style = MaterialTheme.typography.labelSmall,
+                                    )
+                                }
+                                TextButton(
+                                    enabled = !busy,
+                                    onClick = {
+                                        if (item.id in configurableItemIds) onConfigure(item)
+                                        else {
+                                            selectedId = item.id
+                                            quantity = 1
+                                        }
+                                    },
+                                ) { Text(if (item.id in configurableItemIds) "Customise" else "Select") }
+                            }
+                        }
+                    }
                 }
-            }
-        }
-        selected?.let { item ->
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text("Review ${item.name}", fontWeight = FontWeight.SemiBold)
-                    Text(
-                        "No bill line is created until Confirm add.",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        style = MaterialTheme.typography.labelSmall,
-                    )
+            } else {
+                Column(
+                    Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.xs),
+                ) {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Review ${selected.name}", fontWeight = FontWeight.SemiBold)
+                            Text(
+                                "No bill line is created until Confirm add.",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                        }
+                        OutlinedButton(
+                            enabled = quantity > 1 && !busy,
+                            onClick = { quantity = (quantity - 1).coerceAtLeast(1) },
+                        ) { Text("−") }
+                        Text("$quantity", fontWeight = FontWeight.Bold)
+                        OutlinedButton(
+                            enabled = quantity < 20 && !busy,
+                            onClick = { quantity = (quantity + 1).coerceAtMost(20) },
+                        ) { Text("+") }
+                    }
+                    TextButton(
+                        onClick = { selectedId = null; quantity = 1 },
+                        enabled = !busy,
+                    ) { Text("Choose another item") }
                 }
-                OutlinedButton(
-                    enabled = quantity > 1 && !busy,
-                    onClick = { quantity = (quantity - 1).coerceAtLeast(1) },
-                ) { Text("−") }
-                Text("$quantity", fontWeight = FontWeight.Bold)
-                OutlinedButton(
-                    enabled = quantity < 20 && !busy,
-                    onClick = { quantity = (quantity + 1).coerceAtMost(20) },
-                ) { Text("+") }
+                ErpButton(
+                    text = "Confirm add · ${Math.multiplyExact(selected.basePriceMinor, quantity.toLong()).asRupees()}",
+                    enabled = !busy,
+                    onClick = {
+                        onConfirm(selected, quantity)
+                        selectedId = null
+                        quantity = 1
+                    },
+                    modifier = Modifier.fillMaxWidth().testTag("gaming-drinks-inline-confirm"),
+                )
             }
-            ErpButton(
-                text = "Confirm add · ${Math.multiplyExact(item.basePriceMinor, quantity.toLong()).asRupees()}",
-                enabled = !busy,
-                onClick = {
-                    onConfirm(item, quantity)
-                    selectedId = null
-                    quantity = 1
-                },
-                modifier = Modifier.fillMaxWidth().testTag("gaming-drinks-inline-confirm"),
-            )
-        }
-        if (items.size > 5) {
-            TextButton(
-                onClick = onMore,
-                enabled = !busy,
-                modifier = Modifier.align(Alignment.End),
-            ) { Text("More items") }
         }
     }
 }
@@ -7487,8 +7818,26 @@ internal fun GamingParticipantsDialog(
                             }
                             val playedMs = ((participant.leftPlayElapsedMs ?: playElapsedMs) -
                                 (participant.joinedPlayElapsedMs ?: playElapsedMs)).coerceAtLeast(0L)
+                            val identityIntervals = participants.filter {
+                                it.participantIdentityId == participant.participantIdentityId
+                            }
+                            val cumulativeMillis = gamingParticipantCumulativePlayMillis(
+                                identityIntervals,
+                                playElapsedMs,
+                            )
+                            val estimatedFeeMinor = estimatedGamingFriendControllerMinor(
+                                identityIntervals,
+                                playElapsedMs,
+                            )
                             Text(
-                                "Joined $joinedLabel · ${leftLabel?.let { "Left $it" } ?: "Playing now"} · ${playedMs / 60_000L} min played",
+                                "Joined $joinedLabel · ${leftLabel?.let { "Left $it" } ?: "Playing now"} · " +
+                                    "${formatGamingParticipantDuration(playedMs)} this interval",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                            Text(
+                                "${formatGamingParticipantDuration(cumulativeMillis)} cumulative · " +
+                                    "${estimatedFeeMinor.asRupees()} estimated · ₹30 per started cumulative hour",
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 style = MaterialTheme.typography.labelSmall,
                             )
@@ -7681,6 +8030,24 @@ internal fun estimatedGamingFriendControllerMinor(
     return cumulativeByCustomer.values.sumOf { duration ->
         maxOf(1L, (duration + 3_599_999L) / 3_600_000L) * 3_000L
     }
+}
+
+internal fun gamingParticipantCumulativePlayMillis(
+    participantIntervals: List<GamingParticipantUi>,
+    currentPlayElapsedMs: Long,
+): Long = participantIntervals.filterNot {
+    it.pending && !it.active && it.leftPlayElapsedMs == null && it.leftAtMillis == null
+}.sumOf { participant ->
+    val joined = participant.joinedPlayElapsedMs ?: return@sumOf 0L
+    val ended = participant.leftPlayElapsedMs ?: currentPlayElapsedMs
+    (ended - joined).coerceAtLeast(0L)
+}
+
+internal fun formatGamingParticipantDuration(durationMillis: Long): String {
+    val totalMinutes = durationMillis.coerceAtLeast(0L) / 60_000L
+    val hours = totalMinutes / 60L
+    val minutes = totalMinutes % 60L
+    return if (hours > 0L) "${hours}h ${minutes}m" else "${minutes}m"
 }
 
 internal fun estimatedGamingFriendControllerMinorAfterJoin(

@@ -25,7 +25,8 @@ import { resolveOpenShift, shiftResolutionMessage } from '@/lib/operational-cont
 import { profileMembershipMoneyLabel } from '@/lib/product-profile';
 import {
   orders, receipts, shifts,
-  type OrderListItemDTO, type ReceiptGamingSessionHistoryDTO, type ReceiptHistoryDTO, type ShiftDTO,
+  type OrderListItemDTO, type ReceiptGamingSessionHistoryDTO, type ReceiptHistoryDTO,
+  type ShiftDTO,
   type ShiftRecoveryCandidateDTO, type ShiftRecoveryCloseDTO,
 } from '@/lib/erp-api';
 import Modal from '@/components/ui/Modal';
@@ -44,6 +45,12 @@ import {
   receiptPaymentActorLabel,
   receiptSourceLabel,
   sessionDurationLabel,
+  mergeReceiptWindow,
+  refreshKnownReceipts,
+  collectReceiptRefreshWindow,
+  receiptScopeMatches,
+  type ReceiptQueryScope,
+  type ReceiptRequestScope,
 } from './receipt-history';
 import {
   applyDirectOrderRecovery,
@@ -174,9 +181,15 @@ function OrdersTab() {
   const [receiptsLoading, setReceiptsLoading] = useState(true);
   const [operationalError, setOperationalError] = useState<string | null>(null);
   const [receiptsError, setReceiptsError] = useState<string | null>(null);
-  const [nextCursor, setNextCursor] = useState<string | null>(null);
-  const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+  const receiptScopeRef = useRef<ReceiptQueryScope>({ epoch: 0, query: '', loaded: false });
+  const [receiptPaging, setReceiptPaging] = useState<ReceiptRequestScope & {
+    nextCursor: string | null;
+    hasMore: boolean;
+  }>({ epoch: 0, query: '', nextCursor: null, hasMore: false });
+  const [pendingReceiptPage, setPendingReceiptPage] = useState<(ReceiptRequestScope & {
+    newItems: ReceiptHistoryDTO[];
+  }) | null>(null);
   const [receiptQueryInput, setReceiptQueryInput] = useState('');
   const [receiptQuery, setReceiptQuery] = useState('');
   const [operationalView, setOperationalView] = useState<OrderListItemDTO | null>(null);
@@ -187,6 +200,10 @@ function OrdersTab() {
   }));
   const operationalSequence = useRef(0);
   const receiptSequence = useRef(0);
+  const receiptRowsRef = useRef<ReceiptHistoryDTO[]>([]);
+  const { nextCursor, hasMore } = receiptPaging;
+
+  useEffect(() => { receiptRowsRef.current = receiptRows; }, [receiptRows]);
 
   const loadOperational = useCallback(async (showLoading: boolean) => {
     if (!LIVE_MODE) { setOperationalLoading(false); return; }
@@ -203,28 +220,91 @@ function OrdersTab() {
     }
   }, []);
 
-  const loadReceipts = useCallback(async (showLoading: boolean) => {
+  const loadReceipts = useCallback(async (
+    showLoading: boolean,
+    requestedMode: 'replace' | 'stage' = 'replace',
+  ) => {
     if (!LIVE_MODE) { setReceiptsLoading(false); return; }
+    const currentScope = receiptScopeRef.current;
+    const requestScope: ReceiptRequestScope = {
+      epoch: currentScope.epoch,
+      query: currentScope.query,
+    };
+    // A realtime refresh racing the first load for a new search scope must
+    // replace that scope. It cannot stage against rows/cursors from the prior query.
+    const mode = requestedMode === 'stage' && currentScope.loaded ? 'stage' : 'replace';
     const sequence = ++receiptSequence.current;
     // A first-page refresh supersedes any in-flight pagination request.
     setLoadingMore(false);
     if (showLoading) setReceiptsLoading(true);
     setReceiptsError(null);
     try {
-      const page = await receipts.list({ limit: 50, ...(receiptQuery ? { q: receiptQuery } : {}) });
-      if (sequence !== receiptSequence.current) return;
-      setReceiptRows(page.items);
-      setNextCursor(page.next_cursor);
-      setHasMore(page.has_more);
+      const page = await receipts.list({
+        limit: 50,
+        ...(requestScope.query ? { q: requestScope.query } : {}),
+      });
+      const requestIsCurrent = () => sequence === receiptSequence.current
+        && receiptScopeMatches(receiptScopeRef.current, requestScope);
+      if (!requestIsCurrent()) return;
+      if (mode === 'stage') {
+        const current = receiptRowsRef.current;
+        if (!current.length) {
+          setReceiptRows(page.items);
+          setReceiptPaging({
+            ...requestScope,
+            nextCursor: page.next_cursor,
+            hasMore: page.has_more,
+          });
+        } else {
+          const refreshedWindow = await collectReceiptRefreshWindow(
+            page,
+            current,
+            (cursor) => receipts.list({
+              cursor,
+              limit: 50,
+              ...(requestScope.query ? { q: requestScope.query } : {}),
+            }),
+            requestIsCurrent,
+          );
+          if (!refreshedWindow || !requestIsCurrent()) return;
+          if (!refreshedWindow.complete) {
+            setReceiptsError(
+              `Receipt history refresh was incomplete. ${refreshedWindow.missingKnownIds.length} loaded receipt${refreshedWindow.missingKnownIds.length === 1 ? '' : 's'} could not be reverified; the existing history was kept unchanged. Retry before relying on refund status.`,
+            );
+            return;
+          }
+          setReceiptRows((rows) => refreshKnownReceipts(rows, refreshedWindow.knownUpdates));
+          setPendingReceiptPage(refreshedWindow.unseenPrefix.length
+            ? { ...requestScope, newItems: refreshedWindow.unseenPrefix }
+            : null);
+        }
+      } else {
+        setPendingReceiptPage(null);
+        setReceiptRows(page.items);
+        setReceiptPaging({
+          ...requestScope,
+          nextCursor: page.next_cursor,
+          hasMore: page.has_more,
+        });
+      }
+      if (receiptScopeMatches(receiptScopeRef.current, requestScope)) {
+        receiptScopeRef.current.loaded = true;
+      }
     } catch (error) {
-      if (sequence === receiptSequence.current) setReceiptsError((error as Error).message);
+      if (
+        sequence === receiptSequence.current
+        && receiptScopeMatches(receiptScopeRef.current, requestScope)
+      ) setReceiptsError((error as Error).message);
     } finally {
-      if (sequence === receiptSequence.current) setReceiptsLoading(false);
+      if (
+        sequence === receiptSequence.current
+        && receiptScopeMatches(receiptScopeRef.current, requestScope)
+      ) setReceiptsLoading(false);
     }
-  }, [receiptQuery]);
+  }, []);
 
   const refreshAll = useCallback(async () => {
-    await Promise.all([loadOperational(false), loadReceipts(false)]);
+    await Promise.all([loadOperational(false), loadReceipts(false, 'stage')]);
   }, [loadOperational, loadReceipts]);
 
   useEffect(() => {
@@ -245,28 +325,92 @@ function OrdersTab() {
 
   const loadMore = useCallback(async () => {
     if (!nextCursor || loadingMore || receiptsLoading) return;
+    const currentScope = receiptScopeRef.current;
+    const requestScope: ReceiptRequestScope = {
+      epoch: currentScope.epoch,
+      query: currentScope.query,
+    };
+    if (
+      !currentScope.loaded
+      || !receiptScopeMatches(currentScope, receiptPaging)
+    ) return;
+    const cursor = nextCursor;
     const sequence = ++receiptSequence.current;
     setLoadingMore(true);
     setReceiptsError(null);
     try {
       const page = await receipts.list({
-        cursor: nextCursor,
+        cursor,
         limit: 50,
-        ...(receiptQuery ? { q: receiptQuery } : {}),
+        ...(requestScope.query ? { q: requestScope.query } : {}),
       });
-      if (sequence !== receiptSequence.current) return;
+      if (
+        sequence !== receiptSequence.current
+        || !receiptScopeMatches(receiptScopeRef.current, requestScope)
+      ) return;
       setReceiptRows((current) => {
         const known = new Set(current.map((receipt) => receipt.order_id));
         return [...current, ...page.items.filter((receipt) => !known.has(receipt.order_id))];
       });
-      setNextCursor(page.next_cursor);
-      setHasMore(page.has_more);
+      setReceiptPaging({
+        ...requestScope,
+        nextCursor: page.next_cursor,
+        hasMore: page.has_more,
+      });
     } catch (error) {
-      if (sequence === receiptSequence.current) setReceiptsError((error as Error).message);
+      if (
+        sequence === receiptSequence.current
+        && receiptScopeMatches(receiptScopeRef.current, requestScope)
+      ) setReceiptsError((error as Error).message);
     } finally {
-      if (sequence === receiptSequence.current) setLoadingMore(false);
+      if (
+        sequence === receiptSequence.current
+        && receiptScopeMatches(receiptScopeRef.current, requestScope)
+      ) setLoadingMore(false);
     }
-  }, [loadingMore, nextCursor, receiptQuery, receiptsLoading]);
+  }, [loadingMore, nextCursor, receiptPaging, receiptsLoading]);
+
+  const showPendingReceipts = useCallback(() => {
+    if (
+      !pendingReceiptPage
+      || !receiptScopeMatches(receiptScopeRef.current, pendingReceiptPage)
+    ) return;
+    setReceiptRows((current) => mergeReceiptWindow(current, pendingReceiptPage.newItems));
+    setPendingReceiptPage(null);
+  }, [pendingReceiptPage]);
+
+  const changeReceiptQuery = useCallback((query: string) => {
+    const normalized = query.trim();
+    const currentScope = receiptScopeRef.current;
+    if (normalized === currentScope.query) {
+      setPendingReceiptPage(null);
+      void loadReceipts(true, 'replace');
+      return;
+    }
+
+    // Invalidate every old-scope first-page and pagination response before
+    // React commits the new query state. Clear all scope-owned UI together.
+    receiptSequence.current += 1;
+    const nextScope: ReceiptQueryScope = {
+      epoch: currentScope.epoch + 1,
+      query: normalized,
+      loaded: false,
+    };
+    receiptScopeRef.current = nextScope;
+    receiptRowsRef.current = [];
+    setReceiptRows([]);
+    setPendingReceiptPage(null);
+    setReceiptPaging({
+      epoch: nextScope.epoch,
+      query: nextScope.query,
+      nextCursor: null,
+      hasMore: false,
+    });
+    setLoadingMore(false);
+    setReceiptsError(null);
+    setReceiptQuery(normalized);
+    void loadReceipts(true, 'replace');
+  }, [loadReceipts]);
 
   const beginRecovery = useCallback((order: OrderListItemDTO) => {
     if (!me?.protected_access || !isDirectOrderRecoveryEligible(order)) return;
@@ -326,7 +470,7 @@ function OrdersTab() {
         <button
           type="button"
           className="btn btn-ghost"
-          onClick={() => { void Promise.all([loadOperational(true), loadReceipts(true)]); }}
+          onClick={() => { void Promise.all([loadOperational(true), loadReceipts(true, 'stage')]); }}
           disabled={refreshing}
           aria-label="Refresh orders and receipt history"
         >
@@ -373,7 +517,7 @@ function OrdersTab() {
           className="flex flex-col gap-2 border-b border-bg-border px-4 py-3 sm:flex-row"
           onSubmit={(event) => {
             event.preventDefault();
-            setReceiptQuery(receiptQueryInput.trim());
+            changeReceiptQuery(receiptQueryInput);
           }}
         >
           <label className="relative min-w-0 flex-1">
@@ -394,13 +538,26 @@ function OrdersTab() {
             <button
               type="button"
               className="btn btn-ghost"
-              onClick={() => { setReceiptQueryInput(''); setReceiptQuery(''); }}
+              onClick={() => { setReceiptQueryInput(''); changeReceiptQuery(''); }}
             >
               <RotateCcw size={14}/> Clear
             </button>
           )}
         </form>
-        {receiptsError && <InlineLoadError message={receiptsError} onRetry={() => { void loadReceipts(true); }}/>}
+        {pendingReceiptPage && (
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-accent/30 bg-accent/10 px-4 py-3 text-sm" role="status">
+            <span>New receipts are available. Your loaded history stays in place until you choose to show them.</span>
+            <button type="button" className="btn btn-ghost !min-h-[40px] !py-1.5" onClick={showPendingReceipts}>
+              Show new receipts
+            </button>
+          </div>
+        )}
+        {receiptsError && (
+          <InlineLoadError
+            message={receiptsError}
+            onRetry={() => { void loadReceipts(true, 'stage'); }}
+          />
+        )}
         {receiptsLoading ? <div className="p-4"><SkeletonCard/></div> : !receiptRows.length && !receiptsError ? (
           <div className="px-4 py-10 text-center">
             <Receipt className="mx-auto mb-2 text-fg-muted" size={26}/>

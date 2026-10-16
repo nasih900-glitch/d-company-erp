@@ -2561,8 +2561,11 @@ export interface LoyaltyProgramDTO {
 }
 
 export const customers = {
-  list: (q?: string, signal?: AbortSignal) =>
-    api.get<CustomerDTO[]>('/customers', { params: q ? { q } : {}, signal }).then((r) => {
+  list: (q?: string, signal?: AbortSignal, limit = 100) =>
+    api.get<CustomerDTO[]>('/customers', {
+      params: { ...(q ? { q } : {}), limit },
+      signal,
+    }).then((r) => {
       captureCustomerDirectoryRevision(r.headers as Record<string, unknown>);
       return r.data;
     }),

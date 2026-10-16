@@ -9,10 +9,12 @@
  *   - Sheets      (existing Google Sheets integration wizard)
  *   - Devices     explicitly authorised tablet health and recorded update offers
  */
-import { lazy, Suspense, useEffect, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import {
   Building2,
   Crown,
+  ChevronLeft,
+  ChevronRight,
   Gift,
   HeartPulse,
   IndianRupee,
@@ -74,6 +76,16 @@ export default function SettingsScreen() {
     && (demo || me?.protected_access || effectivePermissions.has('memberships.manage')),
   );
   const [tab, setTab] = useState<Tab>('account');
+  const tabStripRef = useRef<HTMLDivElement>(null);
+  const [tabOverflow, setTabOverflow] = useState({ left: false, right: false });
+  const updateTabOverflow = useCallback(() => {
+    const strip = tabStripRef.current;
+    if (!strip) return;
+    setTabOverflow({
+      left: strip.scrollLeft > 2,
+      right: strip.scrollLeft + strip.clientWidth < strip.scrollWidth - 2,
+    });
+  }, []);
 
   useEffect(() => {
     const tabAllowed = (
@@ -97,6 +109,33 @@ export default function SettingsScreen() {
     hasAuditAccess,
   ]);
 
+  useEffect(() => {
+    const strip = tabStripRef.current;
+    if (!strip) return undefined;
+    const frame = window.requestAnimationFrame(updateTabOverflow);
+    const observer = typeof ResizeObserver === 'undefined'
+      ? null
+      : new ResizeObserver(updateTabOverflow);
+    observer?.observe(strip);
+    if (!observer) window.addEventListener('resize', updateTabOverflow);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      observer?.disconnect();
+      if (!observer) window.removeEventListener('resize', updateTabOverflow);
+    };
+  }, [
+    canManageDeviceUpdates,
+    canManageMemberships,
+    canManageSettings,
+    canViewSystemHealth,
+    hasAuditAccess,
+    updateTabOverflow,
+  ]);
+
+  const scrollTabs = (direction: -1 | 1) => {
+    tabStripRef.current?.scrollBy({ left: direction * 240, behavior: 'smooth' });
+  };
+
   return (
     <div>
       <header className="mb-6">
@@ -106,7 +145,10 @@ export default function SettingsScreen() {
         </p>
       </header>
 
-      <div className="scroll-strip flex gap-1 mb-6 border-b border-bg-border -mx-3 px-3 md:mx-0 md:px-0">
+      <div className="relative mb-6 -mx-3 md:mx-0">
+      <div ref={tabStripRef} onScroll={updateTabOverflow}
+        className="scroll-strip flex gap-1 border-b border-bg-border px-3 md:px-0"
+        role="navigation" aria-label="Settings sections">
         <TabBtn active={tab === 'account'}  onClick={() => setTab('account')}>
           <User size={14}/> Account
         </TabBtn>
@@ -149,6 +191,19 @@ export default function SettingsScreen() {
             <TabletSmartphone size={14}/> Devices &amp; Updates
           </TabBtn>
         )}
+      </div>
+      {tabOverflow.left && (
+        <button type="button" aria-label="Show earlier settings tabs" onClick={() => scrollTabs(-1)}
+          className="absolute left-1 top-1/2 -translate-y-1/2 rounded-full border border-bg-border bg-bg-surface/95 p-2 shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
+          <ChevronLeft size={16}/>
+        </button>
+      )}
+      {tabOverflow.right && (
+        <button type="button" aria-label="Show more settings tabs" onClick={() => scrollTabs(1)}
+          className="absolute right-1 top-1/2 -translate-y-1/2 rounded-full border border-bg-border bg-bg-surface/95 p-2 shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
+          <ChevronRight size={16}/>
+        </button>
+      )}
       </div>
 
       {tab === 'account'     && <AccountTab/>}

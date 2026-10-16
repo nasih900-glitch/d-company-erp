@@ -7,7 +7,7 @@
  *  - Edit name / email / birthday / notes
  *  - See visit count, total spent, loyalty points
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   UserPlus, Edit2, Search, Loader2, AlertCircle, RefreshCw,
   Phone, Award, ShoppingBag, Trophy, Trash2,
@@ -30,6 +30,7 @@ const RANK_STYLES: Record<string, string> = {
   Pro: 'text-accent-purple border-accent-purple/40',
   Legend: 'text-accent-gold border-accent-gold/50',
 };
+const DIRECTORY_PAGE_SIZE = 25;
 
 function RankBadge({ rank }: { rank: string }) {
   return (
@@ -45,12 +46,15 @@ export default function CustomersScreen() {
   const canWrite = canWriteCustomers(me, demo);
   const [rows, setRows] = useState<CustomerDTO[]>([]);
   const [q, setQ] = useState('');
+  const [activeQuery, setActiveQuery] = useState('');
+  const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [edit, setEdit] = useState<CustomerDTO | null>(null);
   const [deleteCustomer, setDeleteCustomer] = useState<CustomerDTO | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
+  const directoryRequest = useRef<AbortController | null>(null);
   const [wideWorkspace, setWideWorkspace] = useState(() =>
     typeof window !== 'undefined' && window.matchMedia('(min-width: 1024px)').matches);
 
@@ -62,15 +66,28 @@ export default function CustomersScreen() {
     return () => media.removeEventListener('change', update);
   }, []);
 
-  const load = useCallback(async (search = '') => {
+  const load = useCallback(async (search = '', resetPage = false) => {
+    directoryRequest.current?.abort();
+    const request = new AbortController();
+    directoryRequest.current = request;
     setLoading(true); setErr(null);
-    try { setRows(await customers.list(search.trim() || undefined)); }
-    catch (e) { setErr((e as Error).message); }
-    finally { setLoading(false); }
+    try {
+      const normalized = search.trim();
+      const result = await customers.list(normalized || undefined, request.signal, 500);
+      if (request.signal.aborted) return;
+      setRows(result);
+      setActiveQuery(normalized);
+      if (resetPage) setPage(1);
+    } catch (e) {
+      if (!request.signal.aborted) setErr((e as Error).message);
+    } finally {
+      if (directoryRequest.current === request) setLoading(false);
+    }
   }, []);
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => () => directoryRequest.current?.abort(), []);
 
-  const onSearch = (e: React.FormEvent) => { e.preventDefault(); void load(q); };
+  const onSearch = (e: React.FormEvent) => { e.preventDefault(); void load(q, true); };
 
   async function confirmDelete() {
     if (!deleteCustomer || deleteBusy) return;
@@ -79,7 +96,7 @@ export default function CustomersScreen() {
       await customers.remove(deleteCustomer.id);
       const customerName = deleteCustomer.name || deleteCustomer.phone;
       setDeleteCustomer(null);
-      await load(q);
+      await load(activeQuery);
       notifications.success(`${customerName} was removed from customer search.`, {
         title: 'Customer deleted',
       });
@@ -96,6 +113,10 @@ export default function CustomersScreen() {
     visits: rows.reduce((s, c) => s + c.visit_count, 0),
     points: rows.reduce((s, c) => s + c.loyalty_points, 0),
   };
+  const totalPages = Math.max(1, Math.ceil(rows.length / DIRECTORY_PAGE_SIZE));
+  const currentPage = Math.min(page, totalPages);
+  const firstVisibleIndex = (currentPage - 1) * DIRECTORY_PAGE_SIZE;
+  const visibleRows = rows.slice(firstVisibleIndex, firstVisibleIndex + DIRECTORY_PAGE_SIZE);
   const editorOpen = addOpen || edit !== null;
 
   return (
@@ -108,7 +129,7 @@ export default function CustomersScreen() {
           </p>
         </div>
         <div className="flex w-full gap-2 sm:w-auto">
-          <button className="btn btn-ghost shrink-0" onClick={() => load(q)}><RefreshCw size={14}/></button>
+          <button className="btn btn-ghost shrink-0" aria-label="Refresh customer directory" onClick={() => load(activeQuery)}><RefreshCw size={14}/></button>
           {canWrite && (
             <button className="btn btn-primary flex-1 sm:flex-none" disabled={editorOpen}
               onClick={() => setAddOpen(true)}>
@@ -118,18 +139,23 @@ export default function CustomersScreen() {
         </div>
       </header>
 
-      <CustomerPlaytimePanel />
-
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
-        <Stat label="Customers"    value={totals.customers.toString()}/>
-        <Stat label="Total visits" value={totals.visits.toString()}/>
-        <Stat label="Total spend"  value={inr(totals.spend)}/>
-        <Stat label="Points awarded" value={totals.points.toString()}/>
+        <Stat label={activeQuery ? 'Matching customers loaded' : 'Customers loaded'} value={totals.customers.toString()}/>
+        <Stat label={activeQuery ? 'Visits in matches loaded' : 'Visits in loaded rows'} value={totals.visits.toString()}/>
+        <Stat label={activeQuery ? 'Spend in matches loaded' : 'Spend in loaded rows'} value={inr(totals.spend)}/>
+        <Stat label="Points balance in loaded rows" value={totals.points.toString()}/>
       </div>
+
+      {rows.length === 500 && (
+        <div className="mb-4 rounded-xl border border-accent-gold/30 bg-accent-gold/10 px-3 py-2 text-xs text-fg-muted" role="status">
+          The directory view is capped at 500 loaded customers. Search by name or phone to find customers outside this loaded set.
+        </div>
+      )}
 
       <form onSubmit={onSearch} className="mb-4 grid grid-cols-[auto_minmax(0,1fr)] items-center gap-2 sm:max-w-md sm:grid-cols-[auto_minmax(0,1fr)_auto]">
         <Search size={16} className="text-fg-muted"/>
         <input value={q} onChange={(e) => setQ(e.target.value)}
+          aria-label="Search customer directory"
           placeholder="Search by phone or name…"
           className="input !min-h-[40px] !py-2 flex-1"/>
         <button type="submit" className="btn btn-ghost !min-h-[40px] col-span-2 sm:col-span-1">Find</button>
@@ -149,7 +175,9 @@ export default function CustomersScreen() {
         <SkeletonCard />
       ) : !rows.length ? (
         <div className="card text-fg-muted text-sm">
-          No customers yet. Once you start taking orders with a phone number, they'll appear here automatically.
+          {activeQuery
+            ? `No matches for “${activeQuery}”. Try another name or phone number.`
+            : 'No customers yet. Once you start taking orders with a phone number, they will appear here automatically.'}
         </div>
       ) : (
         <div className="card !p-0 overflow-hidden">
@@ -167,7 +195,7 @@ export default function CustomersScreen() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((c) => (
+              {visibleRows.map((c) => (
                 <tr key={c.id} className="border-b border-bg-border/60 last:border-0">
                   <td className="p-3 font-medium">{c.name || <span className="text-fg-muted italic">— no name —</span>}</td>
                   <td className="p-3 font-mono text-xs">{c.phone}</td>
@@ -183,6 +211,7 @@ export default function CustomersScreen() {
                   <td className="p-3 text-right">
                     {canWrite && <>
                     <button className="text-fg-muted hover:text-accent disabled:opacity-40"
+                      aria-label={`Edit ${c.name || c.phone}`}
                       disabled={editorOpen} onClick={() => setEdit(c)}>
                       <Edit2 size={14}/>
                     </button>
@@ -201,7 +230,7 @@ export default function CustomersScreen() {
             </tbody>
           </table>
           <div className="mobile-card-list md:hidden">
-            {rows.map((c) => (
+            {visibleRows.map((c) => (
               <div key={c.id} className="mobile-record-card">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
@@ -258,6 +287,20 @@ export default function CustomersScreen() {
           </div>
         </div>
       )}
+      {!loading && rows.length > 0 && (
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs">
+          <span className="text-fg-muted">
+            Showing {firstVisibleIndex + 1}–{Math.min(firstVisibleIndex + DIRECTORY_PAGE_SIZE, rows.length)} of {rows.length}{activeQuery ? ' matching' : ' loaded'} customers
+          </span>
+          <div className="flex items-center gap-2">
+            <button type="button" className="btn btn-ghost !min-h-[40px] !py-1.5" disabled={currentPage <= 1}
+              onClick={() => setPage((value) => Math.max(1, value - 1))}>Previous</button>
+            <span className="text-fg-muted">Page {currentPage} of {totalPages}</span>
+            <button type="button" className="btn btn-ghost !min-h-[40px] !py-1.5" disabled={currentPage >= totalPages}
+              onClick={() => setPage((value) => Math.min(totalPages, value + 1))}>Next</button>
+          </div>
+        </div>
+      )}
       </div>
 
       {canWrite && editorOpen && (
@@ -271,7 +314,7 @@ export default function CustomersScreen() {
           onSuccess={() => {
             if (edit) setEdit(null);
             else setAddOpen(false);
-            void load();
+            void load(activeQuery);
             notifications.success(
               edit ? 'The customer details were updated.' : 'The customer was added.',
               { title: edit ? 'Changes saved' : 'Customer saved' },
@@ -279,6 +322,9 @@ export default function CustomersScreen() {
           }}
         />
       )}
+      </div>
+      <div className="mt-6">
+        <CustomerPlaytimePanel />
       </div>
       {canWrite && deleteCustomer && (
         <ConfirmModal

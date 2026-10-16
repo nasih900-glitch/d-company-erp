@@ -36,18 +36,18 @@ class CustomersTableUiTest {
     @get:Rule val compose = createComposeRule()
 
     @Test
-    fun leaderboardLandingKeepsSavedDirectoryOneTapAway() {
+    fun directoryLandingKeepsLeaderboardOneTapAway() {
         compose.setContent { CustomerModesFixture() }
 
-        compose.onNodeWithContentDescription("Rank 1 by completed playtime").assertIsDisplayed()
-        screenshot("customers-leaderboard-landing.png")
-        compose.onNodeWithContentDescription("Open saved customer directory")
-            .assertIsDisplayed().performClick()
         compose.onNodeWithText("Saved customers").assertIsDisplayed()
         compose.onNodeWithText("Test Customer One").assertIsDisplayed()
         compose.onNodeWithContentDescription("Open playtime leaderboard")
             .assertIsDisplayed().performClick()
         compose.onNodeWithContentDescription("Rank 1 by completed playtime").assertIsDisplayed()
+        screenshot("customers-leaderboard.png")
+        compose.onNodeWithContentDescription("Open saved customer directory")
+            .assertIsDisplayed().performClick()
+        compose.onNodeWithText("Saved customers").assertIsDisplayed()
     }
 
     @Test
@@ -72,12 +72,12 @@ class CustomersTableUiTest {
         )
         compose.setContent { CustomerModesFixture(playtimeState, refreshAttempted = attempted) }
 
-        compose.onNodeWithContentDescription("Open saved customer directory").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Open playtime leaderboard").assertIsDisplayed()
         compose.runOnIdle {
             attempted = true
             playtimeState = CustomerPlaytimeUiState(loading = true)
         }
-        compose.onNodeWithContentDescription("Open saved customer directory").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Open playtime leaderboard").assertIsDisplayed()
         compose.runOnIdle {
             playtimeState = CustomerPlaytimeUiState(error = "Reconnect to load recorded play hours.")
         }

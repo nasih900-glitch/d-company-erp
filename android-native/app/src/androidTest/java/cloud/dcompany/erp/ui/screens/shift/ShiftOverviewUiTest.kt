@@ -99,6 +99,73 @@ class ShiftOverviewUiTest {
     }
 
     @Test
+    fun shiftOpenedOnAnotherAppShowsOriginBlockerInsteadOfReadyClose() {
+        compose.setContent {
+            ShiftFixture(
+                width = 872,
+                height = 400,
+                originMessage = "This shift was opened in Web. Close it from the opening app.",
+                onReview = {},
+            )
+        }
+
+        compose.onNodeWithText("Close from the opening app").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Review closing device").performScrollTo().assertIsDisplayed()
+        compose.onAllNodesWithText("Ready to count cash and review").assertCountEquals(0)
+        compose.onAllNodesWithText("Review & close shift").assertCountEquals(0)
+    }
+
+    @Test
+    fun mixedPosLegacyRefundsAndViewOnlyPermissionRemainInExpandedReconciliation() {
+        val baseline = shiftFixtureState(canClose = false)
+        val mixedShift = requireNotNull(baseline.open).copy(
+            expectedMinor = 9_000L,
+            posCollectionsMinor = 20_000L,
+            membershipCollectionsMinor = 5_000L,
+            grossCollectionsMinor = 25_000L,
+            cashCollectionsMinor = 9_000L,
+            cardCollectionsMinor = 6_000L,
+            upiCollectionsMinor = 7_000L,
+            otherCollectionsMinor = 3_000L,
+            settledPosRefundsMinor = 2_000L,
+            settledMembershipRefundsMinor = 1_000L,
+            totalRefundsMinor = 3_000L,
+            netCollectionsMinor = 22_000L,
+        )
+        val state = baseline.copy(open = mixedShift, expectedMinor = 9_000L)
+        compose.setContent {
+            DCompanyTheme {
+                Box(Modifier.width(872.dp).height(620.dp)) {
+                    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+                        ShiftDashboardOverview(
+                            state = state,
+                            canClose = false,
+                            presentation = WorkspaceFeatureProfiles.GamingCentre.presentationPolicy(),
+                            onRefresh = {},
+                            onReview = {},
+                        )
+                    }
+                }
+            }
+        }
+
+        compose.onNodeWithText("POS and gaming receipts (may include tips)").assertDoesNotExist()
+        compose.onNodeWithTag("shift-reconciliation-details-toggle")
+            .performScrollTo().assertIsDisplayed().performClick()
+        compose.onNodeWithTag("shift-reconciliation-details").assertIsDisplayed()
+        compose.onNodeWithText("POS and gaming receipts (may include tips)")
+            .performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Legacy/other receipts").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Settled legacy/other refunds").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Settled POS refunds").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Historical hidden-module money remains included", substring = true)
+            .performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Review only · close permission required")
+            .performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Review shift").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
     fun missingServerAccountingStaysUnavailable() {
         compose.setContent {
             ShiftFixture(width = 872, height = 400, accountingAvailable = false, onReview = {})
@@ -144,7 +211,6 @@ class ShiftOverviewUiTest {
                             canClosePermission = true,
                             canOpenPermission = true,
                             compactLayout = true,
-                            presentation = WorkspaceFeatureProfiles.Active.presentationPolicy(),
                             reviewAnchor = reviewTarget,
                             callbacks = ShiftCloseCallbacks(
                                 onRetryRejectedOpen = {},
@@ -188,7 +254,6 @@ class ShiftOverviewUiTest {
                                     canClosePermission = true,
                                     canOpenPermission = true,
                                     compactLayout = true,
-                                    presentation = WorkspaceFeatureProfiles.Active.presentationPolicy(),
                                     reviewAnchor = remember { BringIntoViewRequester() },
                                     callbacks = ShiftCloseCallbacks(
                                         onRetryRejectedOpen = {},
@@ -249,10 +314,11 @@ private fun ShiftFixture(
     accountingAvailable: Boolean = true,
     rejectedOpen: Boolean = false,
     canClose: Boolean = true,
+    originMessage: String? = null,
     onReview: () -> Unit,
     afterOverview: @Composable (ShiftUiState) -> Unit = {},
 ) {
-    val state = shiftFixtureState(accountingAvailable, rejectedOpen, canClose)
+    val state = shiftFixtureState(accountingAvailable, rejectedOpen, canClose, originMessage)
     DCompanyTheme {
         Box(Modifier.width(width.dp).height(height.dp).testTag("shift-overview-fixture")) {
             Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
@@ -272,6 +338,7 @@ private fun shiftFixtureState(
     accountingAvailable: Boolean = true,
     rejectedOpen: Boolean = false,
     canClose: Boolean = true,
+    originMessage: String? = null,
 ): ShiftUiState {
     val local = LocalShiftEntity(
         localId = "test-shift",
@@ -307,7 +374,8 @@ private fun shiftFixtureState(
         currentShiftLoaded = true,
         online = true,
         expectedMinor = if (accountingAvailable) 10_000 else null,
-        canClose = canClose,
+        canClose = canClose && originMessage == null,
+        closeOriginMessage = originMessage,
         rejectedShift = local.copy(
             localId = "rejected-open-attempt",
             serverShiftId = null,
