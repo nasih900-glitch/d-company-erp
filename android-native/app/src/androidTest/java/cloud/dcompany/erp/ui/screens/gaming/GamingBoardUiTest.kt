@@ -143,6 +143,51 @@ class GamingBoardUiTest {
     }
 
     @Test
+    fun compactUnpinnedDrinksReviewCanLiveInsideTheWorkspaceScrollOwner() {
+        val added = mutableListOf<Pair<String, Int>>()
+        val session = GameSession(
+            id = "compact-drinks-session",
+            stationId = "ps5-1",
+            shiftId = "shift-1",
+            status = "active",
+            startAt = "2026-09-27T10:00:00Z",
+            timerMinutes = 60,
+            packageVariantSnapshot = "single",
+            packageStationTypeSnapshot = "ps5",
+        )
+        compose.setContent {
+            DCompanyTheme {
+                Box(Modifier.width(360.dp).height(500.dp)) {
+                    Column(
+                        Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+                    ) {
+                        GamingInlineDrinkEditor(
+                            session = session,
+                            items = gamingDrinkFixtureItems(),
+                            configurableItemIds = emptySet(),
+                            busy = false,
+                            onConfirm = { item, quantity -> added += item.id to quantity },
+                            onConfigure = {},
+                            onClose = {},
+                            pinActions = false,
+                        )
+                    }
+                }
+            }
+        }
+
+        compose.onNodeWithTag("gaming-drinks-search").performTextInput("Mango")
+        compose.onNodeWithText("Mango drink").assertIsDisplayed()
+        compose.onNodeWithText("Select").performClick()
+        compose.onNodeWithText("Review Mango drink").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("+").performClick().performClick()
+        compose.runOnIdle { assertTrue(added.isEmpty()) }
+        compose.onNodeWithTag("gaming-drinks-inline-confirm")
+            .performScrollTo().assertIsDisplayed().performClick()
+        compose.runOnIdle { assertEquals(listOf("mango" to 3), added) }
+    }
+
+    @Test
     fun guestJoinNeverForwardsPhoneIncludingAfterLeavingSaveCustomerMode() {
         val joins = mutableListOf<List<String?>>()
         val session = GameSession(
@@ -1073,6 +1118,66 @@ class GamingBoardUiTest {
             assertEquals("extend-60", confirmedPackageId)
             assertEquals(0, fallbackDialogs)
         }
+    }
+
+    @Test
+    fun compactRunningSessionControlPaneMeasuresAt800By640() {
+        val station = Station("ps5-1", "PS5-1", "PS5 Station 1", "ps5", 12_000)
+        val session = GameSession(
+            id = "compact-session", stationId = station.id, shiftId = "shift-1",
+            status = "active", startAt = "2026-09-30T10:00:00Z",
+            timerMinutes = 60, amountMinor = 12_000, billingMode = "package",
+            packageId = "single-60", packagePriceMinorSnapshot = 12_000,
+            packageDurationMinutesSnapshot = 60, packageVariantSnapshot = "single",
+            packageStationTypeSnapshot = "ps5", packagePricingTierSnapshot = "standard",
+            effectivePackageId = "single-60", effectivePackagePriceMinor = 12_000,
+            effectivePackageDurationMinutes = 60, effectivePackageVariant = "single",
+            effectivePackageStationType = "ps5", effectivePackagePricingTier = "standard",
+        )
+        val state = GamingUiState(
+            stations = listOf(station), sessions = listOf(session),
+            activeShiftId = "shift-1", activeShiftServerConfirmed = true,
+            everSynced = true, refreshing = false, online = true,
+        )
+        compose.setContent {
+            DCompanyTheme {
+                val compactConfiguration = Configuration(LocalConfiguration.current).apply {
+                    screenWidthDp = 800
+                    screenHeightDp = 640
+                }
+                CompositionLocalProvider(LocalConfiguration provides compactConfiguration) {
+                    Box(Modifier.width(800.dp).height(640.dp)) {
+                        GamingCommandWorkspace(
+                            state = state,
+                            access = GamingAccess(canManageSessions = true),
+                            filters = listOf(StationFilter("all", "All")),
+                            selectedFilter = "all",
+                            visibleStations = listOf(station),
+                            selectedStationId = station.id,
+                            showDetail = false,
+                            focusStationId = null,
+                            focusRequested = false,
+                            startTerminalBlockMessage = null,
+                            wallClock = remember { mutableLongStateOf(1_780_134_000_000L) },
+                            attentionCount = 0,
+                            onSelectFilter = {}, onSelectStation = {}, onBackToBoard = {},
+                            onOpenAttention = {}, onRefresh = {}, onStart = {},
+                            onConfirmStart = { _, _, _, _, _, _, _ -> },
+                            onStop = { _, _ -> }, onSend = {}, onCancelUnbilled = {},
+                            onExtendTimer = {}, onExtendPackage = { _, _ -> },
+                            onTransfer = {}, onPauseResume = {}, onReconcile = {},
+                            onRepairBilling = {}, onResolveLegacyStart = {},
+                            onDiscardPackageExtension = {}, onAddItems = {},
+                            onVoidAddon = { _, _ -> }, onReviewRejectedAddon = {},
+                            onManageParticipants = {},
+                        )
+                    }
+                }
+            }
+        }
+
+        compose.onNodeWithTag("gaming-board-and-controls").performScrollToIndex(1)
+        compose.onNodeWithTag("gaming-control-pane").assertIsDisplayed()
     }
 
     @Test

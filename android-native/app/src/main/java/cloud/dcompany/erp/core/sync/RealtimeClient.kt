@@ -1,5 +1,6 @@
 package cloud.dcompany.erp.core.sync
 
+import android.os.SystemClock
 import cloud.dcompany.erp.BuildConfig
 import cloud.dcompany.erp.core.auth.TokenStore
 import cloud.dcompany.erp.core.net.ClientIdentityInterceptor
@@ -248,6 +249,21 @@ internal class RealtimeAuthenticationGate {
         currentToken != null && currentToken == presentedToken
 }
 
+/** Measures connection silence on an elapsed-time clock that cannot move backwards. */
+internal class RealtimeSilenceTracker(
+    private val monotonicMillis: () -> Long,
+) {
+    private var lastMessageAtMillis: Long? = null
+
+    fun recordMessage() {
+        lastMessageAtMillis = monotonicMillis()
+    }
+
+    fun hasExceeded(limitMillis: Long): Boolean = lastMessageAtMillis?.let { lastMessage ->
+        monotonicMillis() - lastMessage > limitMillis
+    } ?: false
+}
+
 /**
  * Live push over WebSocket — a 1:1 port of frontend/src/lib/realtime.ts onto
  * OkHttp, against the same endpoint (see backend app/api/v1/ws/router.py):
@@ -265,6 +281,7 @@ internal class RealtimeAuthenticationGate {
 class RealtimeClient(
     private val tokens: TokenStore,
     private val scope: CoroutineScope,
+    monotonicMillis: () -> Long = SystemClock::elapsedRealtime,
 ) {
     private val client = OkHttpClient.Builder()
         // No read timeout — a WebSocket is meant to sit open indefinitely.
@@ -285,7 +302,7 @@ class RealtimeClient(
     private var reconnectTicket = 0L
     private var watchdogJob: Job? = null
     private var intentionallyClosed = false
-    private var lastMessageAtMillis = 0L
+    private val silenceTracker = RealtimeSilenceTracker(monotonicMillis)
 
     private val serverPingIntervalMs = 20_000L
     private val silenceLimitMs = (serverPingIntervalMs * 2.5).toLong()
@@ -339,7 +356,7 @@ class RealtimeClient(
         override fun onOpen(webSocket: WebSocket, response: Response) {
             socketLifecycle.ifCurrent(generation, webSocket) {
                 val wasReconnect = reconnectAttempt > 0
-                lastMessageAtMillis = System.currentTimeMillis()
+                silenceTracker.recordMessage()
                 // Read fresh rather than whatever connect() saw — a token
                 // rotated by the normal HTTP refresh flow while this socket
                 // was reconnecting must never leave it retrying with a stale
@@ -363,7 +380,7 @@ class RealtimeClient(
 
         override fun onMessage(webSocket: WebSocket, text: String) {
             if (!socketLifecycle.ifCurrent(generation, webSocket) {
-                    lastMessageAtMillis = System.currentTimeMillis()
+                    silenceTracker.recordMessage()
                 }
             ) return
 
@@ -465,7 +482,7 @@ class RealtimeClient(
         socketLifecycle.ifCurrent(generation, webSocket) {
             stale = !intentionallyClosed &&
                 (!authentication.presentedTokenIsCurrent(tokens.accessToken()) ||
-                    System.currentTimeMillis() - lastMessageAtMillis > silenceLimitMs)
+                    silenceTracker.hasExceeded(silenceLimitMs))
         }
         if (stale) dropAndReconnect(generation, webSocket)
     }

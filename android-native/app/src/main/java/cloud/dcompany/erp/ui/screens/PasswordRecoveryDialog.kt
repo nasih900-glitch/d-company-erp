@@ -107,6 +107,12 @@ internal fun PasswordRecoveryDialog(
                             "not confirm whether a login exists for ${state.email}.",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    Text(
+                        "Use the code sent for this request in this same form. Requesting another " +
+                            "code cancels earlier codes. Your password changes only after confirmation.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
                     OutlinedTextField(
                         value = state.code,
                         onValueChange = onCodeChanged,

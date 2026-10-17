@@ -676,6 +676,9 @@ function PasswordModal({
             <div className="rounded-lg border border-accent-gold/30 bg-accent-gold/10 p-3 text-sm text-accent-gold">
               Approval code sent to {challenge.destination}
             </div>
+            <p className="text-sm text-fg-muted">
+              Use the code sent for this request in this same form. Requesting another code cancels earlier codes. Your password changes only after confirmation.
+            </p>
             <Field label="6-digit approval code">
               <input className="input text-center text-xl tracking-[0.35em]" required autoFocus
                 inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}"

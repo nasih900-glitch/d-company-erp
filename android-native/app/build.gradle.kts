@@ -84,8 +84,8 @@ android {
         // Build 48 is immutable predecessor history. This release advances
         // Room 55 under a direct version code so CI and upgrade checks cannot
         // produce different identities from a local Gradle property.
-        versionCode = 49
-        versionName = "3.1.41"
+        versionCode = 50
+        versionName = "3.1.42"
         buildConfigField("boolean", "DIRECT_UPDATES_ENABLED", "false")
         buildConfigField("String", "DISTRIBUTION_CHANNEL", buildConfigString("play"))
 
@@ -251,6 +251,8 @@ dependencies {
     // focus a field, enter text, or complete a no-keyboard fallback flow.
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     testImplementation("junit:junit:4.13.2")
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
+    testImplementation("com.squareup.okhttp3:okhttp-tls:4.12.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")

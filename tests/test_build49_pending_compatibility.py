@@ -43,11 +43,7 @@ def _extract(ref: str, destination: Path) -> bytes:
 
 
 def _candidate_snapshot(destination: Path) -> None:
-    _extract("HEAD", destination)
-    # The current release adds one protected installer path. Tests and the
-    # verifier are outside their own protected source inventory.
-    relative = Path("infra/scripts/install-on-vm.sh")
-    shutil.copy2(ROOT / relative, destination / relative)
+    _extract("a834b63d32c45513ab5c8fd9d4de417acc0a96c6", destination)
 
 
 def test_exact_immutable_build48_to_build49_source_delta(helper, tmp_path):

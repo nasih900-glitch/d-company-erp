@@ -218,18 +218,25 @@ export default function Login() {
         )}
 
         {isConfirm && (
-          <Field label="6-digit approval code">
-            <input
-              className="input text-center text-xl tracking-[0.35em]"
-              value={code}
-              onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-              autoComplete="one-time-code"
-              inputMode="numeric"
-              pattern="[0-9]{6}"
-              required
-              autoFocus
-            />
-          </Field>
+          <>
+            {mode === 'reset-confirm' && (
+              <p className="text-sm text-fg-muted">
+                Use the code sent for this request in this same form. Requesting another code cancels earlier codes. Your password changes only after confirmation.
+              </p>
+            )}
+            <Field label="6-digit approval code">
+              <input
+                className="input text-center text-xl tracking-[0.35em]"
+                value={code}
+                onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                autoComplete="one-time-code"
+                inputMode="numeric"
+                pattern="[0-9]{6}"
+                required
+                autoFocus
+              />
+            </Field>
+          </>
         )}
 
         {err && <Status tone="error" text={err}/>}

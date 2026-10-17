@@ -2008,13 +2008,7 @@ internal fun GamingCommandWorkspace(
                 }
                 Column(
                     Modifier.weight(0.38f)
-                        .then(if (fixedTabletWorkspace) Modifier.fillMaxHeight() else Modifier)
-                        .then(
-                            if (fixedTabletWorkspace) Modifier
-                            else Modifier.verticalScroll(
-                                remember(selectedStation.id, inlinePanel) { ScrollState(0) },
-                            ),
-                        ),
+                        .then(if (fixedTabletWorkspace) Modifier.fillMaxHeight() else Modifier),
                     verticalArrangement = Arrangement.spacedBy(Spacing.sm),
                 ) {
                 if (selectedSession == null && selectedStation.isActive) {
@@ -7587,7 +7581,13 @@ internal fun GamingInlineDrinkEditor(
                 }
             } else {
                 Column(
-                    Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()),
+                    Modifier.fillMaxWidth().then(
+                        if (pinActions) {
+                            Modifier.weight(1f).verticalScroll(rememberScrollState())
+                        } else {
+                            Modifier
+                        },
+                    ),
                     verticalArrangement = Arrangement.spacedBy(Spacing.xs),
                 ) {
                     Row(
