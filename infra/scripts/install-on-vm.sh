@@ -202,6 +202,7 @@ BUILD47_PENDING_COMPATIBILITY_VERIFIER="$CANDIDATE_BUILD_ROOT/infra/scripts/veri
 BUILD48_PENDING_COMPATIBILITY_VERIFIER="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-build48-pending-compatibility.py"
 BUILD49_PENDING_COMPATIBILITY_VERIFIER="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-build49-pending-compatibility.py"
 BUILD50_PENDING_COMPATIBILITY_VERIFIER="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-build50-pending-compatibility.py"
+BUILD50_POST_MIGRATION_VERIFIER="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-build50-post-migration-state.py"
 WEB_PUBLIC_ASSET_VERIFIER="$CANDIDATE_BUILD_ROOT/ops/verify_web_public_assets.py"
 BUSINESS_QUIESCENCE_VERIFIER="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-production-business-quiescence.py"
 BUSINESS_QUIESCENCE_SQL="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-production-business-quiescence.sql"
@@ -216,7 +217,7 @@ for release_input in \
   "$BUILD46_PENDING_COMPATIBILITY_VERIFIER" \
   "$BUILD47_PENDING_COMPATIBILITY_VERIFIER" \
   "$BUILD48_PENDING_COMPATIBILITY_VERIFIER" \
-  "$BUILD50_PENDING_COMPATIBILITY_VERIFIER" \
+  "$BUILD50_PENDING_COMPATIBILITY_VERIFIER" "$BUILD50_POST_MIGRATION_VERIFIER" \
   "$BUILD49_PENDING_COMPATIBILITY_VERIFIER" "$WEB_PUBLIC_ASSET_VERIFIER" \
   "$BUSINESS_QUIESCENCE_VERIFIER" "$BUSINESS_QUIESCENCE_SQL"; do
   if [ ! -f "$release_input" ] || [ -L "$release_input" ]; then
@@ -1922,6 +1923,55 @@ until python3 "$CANDIDATE_PARITY_TOOL" running \
   fi
   sleep 2
 done
+
+if [ "${BUILD50_PENDING_CARRIED_UNRESOLVED:-false}" = true ]; then
+  if [ -z "$UPGRADE_SNAPSHOT" ] || [ "$FRESH_INSTALL" = true ]; then
+    echo "Build50 post-migration proof requires an existing protected upgrade." >&2
+    exit 1
+  fi
+  CANDIDATE_POSTGRES_CONTAINER_IDS=()
+  while IFS= read -r container_id; do
+    [ -n "$container_id" ] && CANDIDATE_POSTGRES_CONTAINER_IDS+=("$container_id")
+  done < <("${candidate_compose[@]}" --env-file .env ps -q postgres)
+  if [ "${#CANDIDATE_POSTGRES_CONTAINER_IDS[@]}" -ne 1 ]; then
+    echo "Build50 post-migration proof requires one canonical PostgreSQL container." >&2
+    exit 1
+  fi
+  CANDIDATE_POSTGRES_CONTAINER=${CANDIDATE_POSTGRES_CONTAINER_IDS[0]}
+  RAW_BUILD50_POST_MIGRATION_STATE="$UPGRADE_SNAPSHOT/build50-post-migration-history-raw.json"
+  RAW_BUILD50_POST_MIGRATION_FLEET="$UPGRADE_SNAPSHOT/build50-post-migration-fleet-raw.json"
+  BUILD50_POST_MIGRATION_REPORT="$UPGRADE_SNAPSHOT/build50-post-migration-verification.json"
+  for evidence_path in "$RAW_BUILD50_POST_MIGRATION_STATE" \
+      "$RAW_BUILD50_POST_MIGRATION_FLEET" "$BUILD50_POST_MIGRATION_REPORT"; do
+    if [ -e "$evidence_path" ] || [ -L "$evidence_path" ]; then
+      echo "Refusing to overwrite existing build50 post-migration evidence." >&2
+      exit 1
+    fi
+  done
+  echo "==> Verifying exact build50 state after migration 0089…"
+  docker exec -i "$CANDIDATE_POSTGRES_CONTAINER" sh -eu -c '
+    : "${POSTGRES_USER:?POSTGRES_USER is not set}"
+    : "${POSTGRES_DB:?POSTGRES_DB is not set}"
+    exec psql -X --no-psqlrc --quiet --tuples-only --no-align \
+      --username "$POSTGRES_USER" --dbname "$POSTGRES_DB"
+  ' < "$POST_CLEANUP_STATE_SQL" > "$RAW_BUILD50_POST_MIGRATION_STATE"
+  docker exec -i "$CANDIDATE_POSTGRES_CONTAINER" sh -eu -c '
+    : "${POSTGRES_USER:?POSTGRES_USER is not set}"
+    : "${POSTGRES_DB:?POSTGRES_DB is not set}"
+    exec psql -X --no-psqlrc --quiet --tuples-only --no-align \
+      --username "$POSTGRES_USER" --dbname "$POSTGRES_DB"
+  ' < "$BUILD45_PENDING_STATE_SQL" > "$RAW_BUILD50_POST_MIGRATION_FLEET"
+  chmod 600 "$RAW_BUILD50_POST_MIGRATION_STATE" "$RAW_BUILD50_POST_MIGRATION_FLEET"
+  if ! (umask 077; python3 "$BUILD50_POST_MIGRATION_VERIFIER" \
+    --raw-historical-state "$RAW_BUILD50_POST_MIGRATION_STATE" \
+    --raw-fleet-state "$RAW_BUILD50_POST_MIGRATION_FLEET" \
+    > "$BUILD50_POST_MIGRATION_REPORT"); then
+    echo "Build50 post-migration state changed; public ingress remains closed." >&2
+    exit 1
+  fi
+  chmod 600 "$BUILD50_POST_MIGRATION_REPORT"
+  echo "==> Exact migration-0089 guard, history, and opaque fleet verified."
+fi
 
 # Read public files through nginx's unprivileged worker before ingress opens.
 # A healthy root page alone cannot prove copied public assets are readable.

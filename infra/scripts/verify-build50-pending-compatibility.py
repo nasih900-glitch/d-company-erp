@@ -26,9 +26,9 @@ CANDIDATE_VERSION = "3.1.42"
 CANDIDATE_DATABASE_HEAD = "0089"
 PRIOR_SOURCE_ARCHIVE_SHA256 = "a3cc663d594e2d5a40b4d03fd6265623c5e7ac12676f5f34ce3b298fc6caab53"
 PRIOR_BACKEND_MANIFEST_SHA256 = "ee4bba277ad5c51eb73b7be414628a093388bdc2daa16d0d87f5ef7d149183af"
-CANDIDATE_BACKEND_MANIFEST_SHA256 = "e4d91ec6f91296553b225d3a56f10e95aa277da8eebe2614eb7f18cf396d7373"
+CANDIDATE_BACKEND_MANIFEST_SHA256 = "2cacfea604ad4d22c68328c316e5752675bb7aba5c3e628785d0d173ed427743"
 PRIOR_SOURCE_SHA256 = "11f178acff0b78e65441ea8017e960efd7897639a5c4684330e3f1c828137e1e"
-CANDIDATE_SOURCE_SHA256 = "1b6a21cbefafc480b22bd7d03db4de38f86ca3788dabff266bfd5076da316e43"
+CANDIDATE_SOURCE_SHA256 = "c46073e5fb70fb6cac1c87352b06aa0814708eec12010ff91d13ec15b150378a"
 
 HISTORICAL_HELPER = "infra/scripts/verify-build47-pending-compatibility.py"
 HISTORICAL_HELPER_SHA256 = "bdadff290dccda6fb6c2fbdbc0a6a4ce47746f27650e72f859bf8dd5d40a9e1f"
@@ -65,6 +65,7 @@ PROTECTED_SCOPES = (
     "infra/scripts/validate-production-env.sh",
     "infra/scripts/verify-code30-2-post-cleanup-state.py",
     "infra/scripts/verify-code30-2-post-cleanup-state.sql",
+    "infra/scripts/verify-build50-post-migration-state.py",
     "infra/scripts/verify-build46-pending-compatibility.py",
     HISTORICAL_HELPER,
     IMMUTABLE_BUILD48_HELPER,
@@ -115,9 +116,10 @@ REVIEWED_CHANGES: dict[str, tuple[str | None, str | None]] = {'.env.production.e
  'backend/pyproject.toml': ('8d6eb01615a266f3d5bc09285381926836e0eeb096b2e389cc7fd3c38f59b3f9',
                             'eac4e43769ce61a5e3897f424a8585e3a9542bd77e071e0ac86e2a791a3f6d76'),
  'backend/tests/integration/test_client_installation_capacity_migration.py': (None,
-                                                                              'd4d0badd299864caa0aeef6b80ad16c723c3e6e784d16c8940c2db238018afd1'),
- 'backend/tests/unit/test_alembic_env.py': (None,
-                                            'f8f95981ea5984da9027f0e05956018b9473d24c6efb478aafc366ef419be271'),
+                                                                              'b15b6e66cc6b9eb0ad8779c8a8878b07646c6eba11e1da90d7024dcbece85816'),
+ 'backend/tests/integration/test_code30_post_cleanup_state_query.py': ('fe01fbf1710a5c5649768f9f2f782f075931766e0a3bf3d408e1b95271e6a02b',
+                                                                       'b9e799e54161cf1bebcc212763415a26eebcb99caadd5218a4c96cbe9b3c80e5'),
+ 'backend/tests/unit/test_alembic_env.py': (None, 'f8f95981ea5984da9027f0e05956018b9473d24c6efb478aafc366ef419be271'),
  'backend/tests/unit/test_release_contracts.py': ('33f75898c646aab8ecf07e15cea2c22cec6f00a4e8919246e01799ee436051c7',
                                                   '2978cfad70a5a6e9b4d1c511ed0044ed07a36bf09d3fd317b153930b716a6258'),
  'backend/tests/unit/test_remote_assistance_contract.py': ('34ab23ad96ae2fc4ffcc8a3e045fd8593c26ceec7c7fc3e87be5280a27fc622d',
@@ -135,7 +137,9 @@ REVIEWED_CHANGES: dict[str, tuple[str | None, str | None]] = {'.env.production.e
  'frontend/src/modules/staff/StaffScreen.tsx': ('74e0eb94f002ead85f810cab374f8a2febb860f2cfcac84a49b2b680c9ee572a',
                                                 '10e883b640dd8fc4b256cb34c7ac548603335c84fd520a3c1c643340c0d0daaa'),
  'infra/scripts/install-on-vm.sh': ('3ee444429f46b5ca9e397dce6b46a07307d2e8192a8662baa1be4c6652494db3',
-                                    'cb807d06771cfff83ca572e763ac7f6d617db25e79b5bd45129dd863e339c9cc')}
+                                    'cddccacf0e484f23b8ddab7695dc832d241e7667b48cc07187244a20795c6e70'),
+ 'infra/scripts/verify-build50-post-migration-state.py': (None,
+                                                          '0d393c31824d3595b3f8cec7666e06fb7acc2f2d7fbe412eb1d56ef98d122e81')}
 
 
 def _verify_immutable_build48_helper(candidate: Path) -> None:

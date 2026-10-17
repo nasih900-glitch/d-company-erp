@@ -7,19 +7,68 @@ import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
+from ipaddress import ip_address
 from pathlib import Path
 from uuid import UUID, uuid4
 
 import psycopg
 import pytest
 from psycopg import sql
-from sqlalchemy.engine import make_url
+from sqlalchemy.engine import URL, make_url
 
 _BACKEND_ROOT = Path(__file__).resolve().parents[2]
 _ADMIN_DATABASE_URL_ENV = "DCOMPANY_TEST_DATABASE_ADMIN_URL"
+_LIBPQ_DESTINATION_ENV = ("PGHOST", "PGHOSTADDR", "PGSERVICE", "PGSERVICEFILE")
+
+
+def _single_query_value(database_url: URL, key: str) -> str | None:
+    value = database_url.query.get(key)
+    if value is None:
+        return None
+    values = (value,) if isinstance(value, str) else tuple(value)
+    if len(values) != 1 or not values[0] or "," in values[0]:
+        raise AssertionError(f"database URL has ambiguous {key}")
+    return values[0]
+
+
+def _is_loopback_host(value: str) -> bool:
+    if value.casefold() == "localhost":
+        return True
+    try:
+        return ip_address(value).is_loopback
+    except ValueError:
+        return False
+
+
+def _validate_local_database_url(database_url: URL, *, label: str) -> None:
+    if database_url.get_backend_name() != "postgresql":
+        raise AssertionError(f"{label} must identify PostgreSQL")
+    if database_url.host is not None and not _is_loopback_host(database_url.host):
+        raise AssertionError(f"{label} authority must be loopback")
+    if "service" in database_url.query or "servicefile" in database_url.query:
+        raise AssertionError(f"{label} cannot use a libpq service override")
+
+    query_host = _single_query_value(database_url, "host")
+    if database_url.host is None and query_host is None:
+        raise AssertionError(f"{label} must have an explicit local destination")
+    if query_host is not None and not (
+        Path(query_host).is_absolute() or _is_loopback_host(query_host)
+    ):
+        raise AssertionError(f"{label} query host must be loopback or an absolute socket path")
+    query_hostaddr = _single_query_value(database_url, "hostaddr")
+    if query_hostaddr is not None and not _is_loopback_host(query_hostaddr):
+        raise AssertionError(f"{label} query hostaddr must be loopback")
+
+
+def _validate_no_ambient_libpq_destination() -> None:
+    for name in _LIBPQ_DESTINATION_ENV:
+        if os.environ.get(name):
+            raise AssertionError(f"{name} cannot override the disposable database destination")
 
 
 def _run_alembic(database_url: str, *args: str) -> subprocess.CompletedProcess[str]:
+    _validate_no_ambient_libpq_destination()
+    _validate_local_database_url(make_url(database_url), label="Alembic DATABASE_URL")
     return subprocess.run(  # noqa: S603 -- executable and migration arguments are test-owned.
         [sys.executable, "-m", "alembic", *args],
         cwd=_BACKEND_ROOT,
@@ -32,14 +81,9 @@ def _run_alembic(database_url: str, *args: str) -> subprocess.CompletedProcess[s
 
 @contextmanager
 def _disposable_database(prefix: str):
+    _validate_no_ambient_libpq_destination()
     source_url = make_url(os.environ["DATABASE_URL"])
-    if source_url.get_backend_name() != "postgresql" or source_url.host not in {
-        None,
-        "localhost",
-        "127.0.0.1",
-        "::1",
-    }:
-        pytest.skip("capacity migration proof is restricted to local PostgreSQL")
+    _validate_local_database_url(source_url, label="DATABASE_URL")
     database_name = f"{prefix}_{uuid4().hex[:12]}"
     source_url = source_url.set(drivername="postgresql+psycopg")
     owner = source_url.username
@@ -52,13 +96,7 @@ def _disposable_database(prefix: str):
             source_url.render_as_string(hide_password=False),
         )
     )
-    if admin_url.get_backend_name() != "postgresql" or admin_url.host not in {
-        None,
-        "localhost",
-        "127.0.0.1",
-        "::1",
-    }:
-        raise AssertionError(f"{_ADMIN_DATABASE_URL_ENV} must identify local PostgreSQL")
+    _validate_local_database_url(admin_url, label=_ADMIN_DATABASE_URL_ENV)
     admin_dsn = admin_url.set(drivername="postgresql", database="postgres").render_as_string(
         hide_password=False
     )
@@ -86,6 +124,60 @@ def _sync_url(database_url: str) -> str:
     return make_url(database_url).set(drivername="postgresql").render_as_string(
         hide_password=False
     )
+
+
+@pytest.mark.parametrize(
+    "database_url",
+    [
+        "postgresql+psycopg://erp:erp@localhost/erp?host=remote.example",
+        "postgresql+psycopg://erp:erp@localhost/erp?hostaddr=203.0.113.10",
+        "postgresql+psycopg://erp:erp@localhost/erp?host=localhost,remote.example",
+        "postgresql+psycopg://erp:erp@localhost/erp?host=localhost&host=%2Ftmp%2Fpg",
+        "postgresql+psycopg://erp:erp@localhost/erp?service=remote-service",
+        "postgresql+psycopg://erp:erp@/erp",
+    ],
+)
+def test_disposable_database_guard_rejects_effective_remote_targets(database_url: str) -> None:
+    with pytest.raises(AssertionError):
+        _validate_local_database_url(make_url(database_url), label="test URL")
+
+
+@pytest.mark.parametrize(
+    "database_url",
+    [
+        "postgresql+psycopg://erp:erp@localhost/erp",
+        "postgresql+psycopg://erp:erp@localhost/erp?host=%2Ftmp%2Fpostgres-socket",
+        "postgresql+psycopg://erp:erp@127.0.0.1/erp?hostaddr=127.0.0.1",
+        "postgresql+psycopg://erp:erp@[::1]/erp?hostaddr=::1",
+    ],
+)
+def test_disposable_database_guard_accepts_only_local_targets(database_url: str) -> None:
+    _validate_local_database_url(make_url(database_url), label="test URL")
+
+
+@pytest.mark.parametrize("name", _LIBPQ_DESTINATION_ENV)
+def test_disposable_database_guard_rejects_ambient_libpq_destination(
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+) -> None:
+    monkeypatch.setenv(name, "remote.example")
+
+    with pytest.raises(AssertionError, match=name):
+        _validate_no_ambient_libpq_destination()
+
+
+def test_alembic_guard_rejects_ambient_destination_before_subprocess(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PGHOST", "remote.example")
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *_args, **_kwargs: pytest.fail("subprocess must not start"),
+    )
+
+    with pytest.raises(AssertionError, match="PGHOST"):
+        _run_alembic("postgresql+psycopg://erp:erp@localhost/erp", "current")
 
 
 def _insert_installation(

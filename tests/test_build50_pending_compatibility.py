@@ -89,8 +89,8 @@ def test_exact_immutable_build49_to_build50_source_delta(helper, tmp_path):
     assert proof == {
         "prior_protected_source_sha256": helper.PRIOR_SOURCE_SHA256,
         "candidate_protected_source_sha256": helper.CANDIDATE_SOURCE_SHA256,
-        "protected_path_count": 1215,
-        "reviewed_changed_path_count": 25,
+        "protected_path_count": 1216,
+        "reviewed_changed_path_count": 27,
     }
     assert helper._backend_manifest_sha256(prior) == helper.PRIOR_BACKEND_MANIFEST_SHA256
     assert helper._backend_manifest_sha256(candidate) == helper.CANDIDATE_BACKEND_MANIFEST_SHA256

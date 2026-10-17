@@ -1335,7 +1335,8 @@ REVIEWED_CODE30_4_BUILD50_SHA256 = {'.env.production.example': 'bb3067963b7b927a
  'backend/app/__init__.py': 'ebb4297c434e9c80fe8200cb069d6a93dfc41e11ffde0dededa812ef77615cf4',
  'backend/app/models/client_update.py': '127d46013a5054d4904017a4edc07634171eb603037f0634f93aa5c296964f15',
  'backend/pyproject.toml': 'eac4e43769ce61a5e3897f424a8585e3a9542bd77e071e0ac86e2a791a3f6d76',
- 'backend/tests/integration/test_client_installation_capacity_migration.py': 'd4d0badd299864caa0aeef6b80ad16c723c3e6e784d16c8940c2db238018afd1',
+ 'backend/tests/integration/test_client_installation_capacity_migration.py': 'b15b6e66cc6b9eb0ad8779c8a8878b07646c6eba11e1da90d7024dcbece85816',
+ 'backend/tests/integration/test_code30_post_cleanup_state_query.py': 'b9e799e54161cf1bebcc212763415a26eebcb99caadd5218a4c96cbe9b3c80e5',
  'backend/tests/unit/test_alembic_env.py': 'f8f95981ea5984da9027f0e05956018b9473d24c6efb478aafc366ef419be271',
  'backend/tests/unit/test_release_contracts.py': '2978cfad70a5a6e9b4d1c511ed0044ed07a36bf09d3fd317b153930b716a6258',
  'backend/tests/unit/test_remote_assistance_contract.py': '880a143e80bbcc4f1e382f0b3e1fdd1632f4acea677ac702fdaae95c8cdc75fe',
@@ -1346,10 +1347,12 @@ REVIEWED_CODE30_4_BUILD50_SHA256 = {'.env.production.example': 'bb3067963b7b927a
  'frontend/package.json': '3077691b3a06731ffeacafac239afd374c185b1110fec7062abf6a3064bf1a1f',
  'frontend/src/modules/auth/Login.tsx': '5b04083b2ed1de635181971af5144758b70f1dbabde3ec1d82ed0162af6d6949',
  'frontend/src/modules/staff/StaffScreen.tsx': '10e883b640dd8fc4b256cb34c7ac548603335c84fd520a3c1c643340c0d0daaa',
- 'infra/scripts/install-on-vm.sh': 'cb807d06771cfff83ca572e763ac7f6d617db25e79b5bd45129dd863e339c9cc',
- 'infra/scripts/verify-build50-pending-compatibility.py': 'ad6b9494c0cb8d47483ad4ed95da1e5879e39b7d2ebd562ff6ebd24408318da6',
+ 'infra/scripts/install-on-vm.sh': 'cddccacf0e484f23b8ddab7695dc832d241e7667b48cc07187244a20795c6e70',
+ 'infra/scripts/verify-build50-pending-compatibility.py': '47d561d97ccb70f1415d226689d95454b179715a1eab913155e7dae692fcc1e4',
+ 'infra/scripts/verify-build50-post-migration-state.py': '0d393c31824d3595b3f8cec7666e06fb7acc2f2d7fbe412eb1d56ef98d122e81',
  'tests/test_build49_pending_compatibility.py': 'ac8b4a4b096e6cd4a05cf8141ed3211a250fc892daf832f36414ef462c049521',
- 'tests/test_build50_pending_compatibility.py': '3f6a15e977a78a0e7d8e2851fd7e79ce88d100719b4e5392aa603893acc55cb5',
+ 'tests/test_build50_pending_compatibility.py': '42c131769b45063ae891b12ca6ce47d5b01d0fe933bcda149acaaa8c5b9955d2',
+ 'tests/test_build50_post_migration_state.py': '67849774d5e2413e8758a88f608ed456acee0285fd34db649b8ed2073311c618',
  'tests/test_code26_physical_audit_lane.py': '3c13a10df7cae661b653a27b1cba222686955e64a569b1372fbb3490c3b50ade'}
 
 REVIEWED_CODE30_4_PRODUCTION_PATHS = frozenset(
