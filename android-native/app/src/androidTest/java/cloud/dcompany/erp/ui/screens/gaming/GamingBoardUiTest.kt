@@ -1181,6 +1181,167 @@ class GamingBoardUiTest {
     }
 
     @Test
+    fun compactAvailablePs5StartEditorRecoversAfterInitialStationSyncAt800By640() {
+        val station = Station("ps5-1", "PS5-1", "PS5 Station 1", "ps5", 12_000)
+        val packages = listOf(
+            GamingPackage(
+                id = "single-30", code = "single-30", stationType = "ps5",
+                variant = "single", kind = "base", name = "Single 30",
+                durationMinutes = 30, priceMinor = 8_000,
+            ),
+            GamingPackage(
+                id = "single-60", code = "single-60", stationType = "ps5",
+                variant = "single", kind = "base", name = "Single 60",
+                durationMinutes = 60, priceMinor = 12_000,
+            ),
+            GamingPackage(
+                id = "dual-30", code = "dual-30", stationType = "ps5",
+                variant = "dual", includedPlayers = 2, maxPlayers = 4,
+                kind = "base", name = "Dual 30", durationMinutes = 30,
+                priceMinor = 10_000,
+            ),
+        )
+        val state = mutableStateOf(GamingUiState())
+        val visibleStations = mutableStateOf(emptyList<Station>())
+        val selectedStationId = mutableStateOf<String?>(null)
+        var submittedPackageId: String? = null
+        compose.setContent {
+            DCompanyTheme {
+                val compactConfiguration = Configuration(LocalConfiguration.current).apply {
+                    screenWidthDp = 800
+                    screenHeightDp = 640
+                }
+                CompositionLocalProvider(LocalConfiguration provides compactConfiguration) {
+                    Box(Modifier.width(800.dp).height(640.dp)) {
+                        GamingCommandWorkspace(
+                            state = state.value,
+                            access = GamingAccess(canManageSessions = true),
+                            filters = listOf(StationFilter("all", "All")),
+                            selectedFilter = "all",
+                            visibleStations = visibleStations.value,
+                            selectedStationId = selectedStationId.value,
+                            showDetail = false,
+                            focusStationId = null,
+                            focusRequested = false,
+                            startTerminalBlockMessage = null,
+                            wallClock = remember { mutableLongStateOf(1_780_134_000_000L) },
+                            attentionCount = 0,
+                            onSelectFilter = {}, onSelectStation = {}, onBackToBoard = {},
+                            onOpenAttention = {}, onRefresh = {}, onStart = {},
+                            onConfirmStart = { _, _, _, _, _, packageId, _ ->
+                                submittedPackageId = packageId
+                            },
+                            onStop = { _, _ -> }, onSend = {}, onCancelUnbilled = {},
+                            onExtendTimer = {}, onExtendPackage = { _, _ -> },
+                            onTransfer = {}, onPauseResume = {}, onReconcile = {},
+                            onRepairBilling = {}, onResolveLegacyStart = {},
+                            onDiscardPackageExtension = {}, onAddItems = {},
+                            onVoidAddon = { _, _ -> }, onReviewRejectedAddon = {},
+                            onManageParticipants = {},
+                        )
+                    }
+                }
+            }
+        }
+
+        compose.runOnIdle {
+            state.value = GamingUiState(
+                refreshing = false,
+                refreshError = "The first station sync timed out.",
+            )
+        }
+        compose.waitForIdle()
+        compose.runOnIdle {
+            state.value = GamingUiState(
+                stations = listOf(station), packages = packages,
+                everSynced = true, refreshing = false, activeShiftId = "fixture-shift",
+                activeShiftServerConfirmed = true, online = true,
+            )
+            visibleStations.value = listOf(station)
+            selectedStationId.value = station.id
+        }
+
+        compose.onNodeWithTag("gaming-board-and-controls").performScrollToIndex(1)
+        compose.onNodeWithTag("gaming-control-pane").assertIsDisplayed()
+        compose.onNodeWithTag("gaming-start-inline").assertIsDisplayed()
+        compose.onNodeWithText("Single").assertIsDisplayed()
+        compose.onNodeWithText("Dual").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Add player").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Search saved customers by name or phone")
+            .assertIsDisplayed()
+        compose.onNodeWithTag("gaming-start-action").performScrollTo().assertIsDisplayed().performClick()
+        compose.runOnIdle { assertEquals("single-30", submittedPackageId) }
+    }
+
+    @Test
+    fun portraitAvailableRacingStartEditorMeasuresAt800By1280() {
+        val station = Station("racing-1", "RACE-1", "Racing Simulator 1", "racing", 10_000)
+        val packages = listOf(
+            GamingPackage(
+                id = "racing-30", code = "racing-30", stationType = "racing",
+                variant = "simdrive", kind = "base", name = "Racing 30",
+                durationMinutes = 30, priceMinor = 7_000,
+            ),
+            GamingPackage(
+                id = "racing-60", code = "racing-60", stationType = "racing",
+                variant = "simdrive", kind = "base", name = "Racing 60",
+                durationMinutes = 60, priceMinor = 10_000,
+            ),
+        )
+        var submittedPackageId: String? = null
+        compose.setContent {
+            DCompanyTheme {
+                val portraitConfiguration = Configuration(LocalConfiguration.current).apply {
+                    screenWidthDp = 800
+                    screenHeightDp = 1_280
+                }
+                CompositionLocalProvider(LocalConfiguration provides portraitConfiguration) {
+                    Box(Modifier.width(800.dp).height(1_280.dp)) {
+                        GamingCommandWorkspace(
+                            state = GamingUiState(
+                                stations = listOf(station), packages = packages,
+                                everSynced = true, refreshing = false,
+                                activeShiftId = "fixture-shift",
+                                activeShiftServerConfirmed = true, online = true,
+                            ),
+                            access = GamingAccess(canManageSessions = true),
+                            filters = listOf(StationFilter("all", "All")),
+                            selectedFilter = "all",
+                            visibleStations = listOf(station),
+                            selectedStationId = station.id,
+                            showDetail = false,
+                            focusStationId = null,
+                            focusRequested = false,
+                            startTerminalBlockMessage = null,
+                            wallClock = remember { mutableLongStateOf(1_780_134_000_000L) },
+                            attentionCount = 0,
+                            onSelectFilter = {}, onSelectStation = {}, onBackToBoard = {},
+                            onOpenAttention = {}, onRefresh = {}, onStart = {},
+                            onConfirmStart = { _, _, _, _, _, packageId, _ ->
+                                submittedPackageId = packageId
+                            },
+                            onStop = { _, _ -> }, onSend = {}, onCancelUnbilled = {},
+                            onExtendTimer = {}, onExtendPackage = { _, _ -> },
+                            onTransfer = {}, onPauseResume = {}, onReconcile = {},
+                            onRepairBilling = {}, onResolveLegacyStart = {},
+                            onDiscardPackageExtension = {}, onAddItems = {},
+                            onVoidAddon = { _, _ -> }, onReviewRejectedAddon = {},
+                            onManageParticipants = {},
+                        )
+                    }
+                }
+            }
+        }
+
+        compose.onNodeWithTag("gaming-board-and-controls").performScrollToIndex(1)
+        compose.onNodeWithTag("gaming-start-inline").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Search saved customers by name or phone")
+            .assertIsDisplayed()
+        compose.onNodeWithTag("gaming-start-action").performScrollTo().assertIsDisplayed().performClick()
+        compose.runOnIdle { assertEquals("racing-30", submittedPackageId) }
+    }
+
+    @Test
     fun fullTabletWorkspaceShowsBoardDialCustomerAndStartTogether() {
         val stations = (1..4).map { number ->
             Station("ps5-$number", "PS5-$number", "PS5 Station $number", "ps5", 12_000)

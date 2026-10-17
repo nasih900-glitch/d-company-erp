@@ -1279,7 +1279,8 @@ if [ -n "$EXISTING_POSTGRES_CONTAINER" ]; then
          [ "$PRIOR_REVISION" = a834b63d32c45513ab5c8fd9d4de417acc0a96c6 ] && \
          [ "$PRIOR_DB_HEAD" = 0088 ]; then
       # Preserve both reported counters through this exact server transition.
-      # Room-55/0088 business contracts are unchanged; both queues remain opaque.
+      # Room 55 remains unchanged; 0089 only widens bounded client telemetry
+      # admission. Both tablet queues remain opaque.
       # This path does not inspect either tablet queue or retire an installation.
       # It is bound to the exact immutable build49 source and current fleet.
       fleet_state_json=$(docker exec -i "$EXISTING_POSTGRES_CONTAINER" \
@@ -1328,7 +1329,7 @@ if [ -n "$EXISTING_POSTGRES_CONTAINER" ]; then
         --candidate-source-root "$CANDIDATE_BUILD_ROOT" \
         --prior-revision "$PRIOR_REVISION" --prior-version "$PRIOR_APP_VERSION" \
         --prior-db-head "$PRIOR_DB_HEAD" --candidate-revision "$CURRENT_REVISION" \
-        --candidate-version "$CANDIDATE_APP_VERSION" --candidate-db-head 0088 \
+        --candidate-version "$CANDIDATE_APP_VERSION" --candidate-db-head 0089 \
         --prior-image-id "$PRIOR_BACKEND_IMAGE" \
         --candidate-image-id "$CANDIDATE_BACKEND_IMAGE_ID" \
         --prior-backend-manifest-sha256 "$SOURCE_MANIFEST_DIGEST" \

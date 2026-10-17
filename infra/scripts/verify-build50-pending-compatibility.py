@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Verify the exact build-49 -> build-50 unresolved-pending server transition.
 
-The backend and Room/Alembic business contracts stay unchanged. Both historic
+The Room business contracts stay unchanged. Both historic
 pending counters remain opaque and unresolved. This server-only proof neither
 inspects tablet queues nor authorizes an app offer or tablet upgrade.
 """
@@ -23,12 +23,12 @@ PRIOR_REVISION = "a834b63d32c45513ab5c8fd9d4de417acc0a96c6"
 PRIOR_VERSION = "3.1.41"
 PRIOR_DATABASE_HEAD = "0088"
 CANDIDATE_VERSION = "3.1.42"
-CANDIDATE_DATABASE_HEAD = "0088"
+CANDIDATE_DATABASE_HEAD = "0089"
 PRIOR_SOURCE_ARCHIVE_SHA256 = "a3cc663d594e2d5a40b4d03fd6265623c5e7ac12676f5f34ce3b298fc6caab53"
 PRIOR_BACKEND_MANIFEST_SHA256 = "ee4bba277ad5c51eb73b7be414628a093388bdc2daa16d0d87f5ef7d149183af"
-CANDIDATE_BACKEND_MANIFEST_SHA256 = "c9ee93b7c3625f26e43dd1bb62fb6b50796d2e47a54313e38dcca1912d80328a"
+CANDIDATE_BACKEND_MANIFEST_SHA256 = "e4d91ec6f91296553b225d3a56f10e95aa277da8eebe2614eb7f18cf396d7373"
 PRIOR_SOURCE_SHA256 = "11f178acff0b78e65441ea8017e960efd7897639a5c4684330e3f1c828137e1e"
-CANDIDATE_SOURCE_SHA256 = "b3b4d08c8d964a156b8fb325c0636825e96264bc6d8da994b38ca65c7cdde1d9"
+CANDIDATE_SOURCE_SHA256 = "1b6a21cbefafc480b22bd7d03db4de38f86ca3788dabff266bfd5076da316e43"
 
 HISTORICAL_HELPER = "infra/scripts/verify-build47-pending-compatibility.py"
 HISTORICAL_HELPER_SHA256 = "bdadff290dccda6fb6c2fbdbc0a6a4ce47746f27650e72f859bf8dd5d40a9e1f"
@@ -101,13 +101,23 @@ REVIEWED_CHANGES: dict[str, tuple[str | None, str | None]] = {'.env.production.e
  'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/PasswordRecoveryDialog.kt': ('910edf156503778bd74323342fa8fb9efca1d6fec2c25e63e774158c2d9da069',
                                                                                               '39e7e36e4280f9ea2b6f04d1b70c738c9ba7154c94e592fbdf091a33967b83b3'),
  'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingScreen.kt': ('e31d273eae8f9740318644319c736e1e56e84b73e155daa5e0af6ca49355aa9e',
-                                                                                           'd67b118e1770bf1448a902aa83d71b7402d86e4b00edd3b04e7a8ee3d9c3fa5c'),
+                                                                                           'bd4d8ca2867378c1730df5a79d3cc1621552a35dff358d14bd2ee2c787e142a3'),
  'android-native/gradle/verification-metadata.xml': ('f2b7345d8111215c0240b317f60ff5167982cb39c48dfa1ea55b5707b25547c5',
                                                      'cb8ed35219d49d241b25ae103f0f32587057a7a82f1ffb072c151da0c4af57b7'),
+ 'backend/alembic/env.py': ('dc4260e617c79944631516a72e5569c0a4c124ede4c6373c648aa3560bc681c1',
+                            '2057d252d99bbcc3563ec3278eaf8a80d4ade7feba514e00ba325b755813e822'),
+ 'backend/alembic/versions/0089_expand_client_installation_user_capacity.py': (None,
+                                                                               '1a30f663f4efc2d9287183318051be9227147793341335cc9806961e90fd7cb5'),
  'backend/app/__init__.py': ('5119c15a2366648ebac4b8fd4bcf6d972a263e451388bf218285691908f96e81',
                              'ebb4297c434e9c80fe8200cb069d6a93dfc41e11ffde0dededa812ef77615cf4'),
+ 'backend/app/models/client_update.py': ('204615b947f1d97faf1f172288b8844acb14ede5c50e8909e41d01580a2c2c5d',
+                                         '127d46013a5054d4904017a4edc07634171eb603037f0634f93aa5c296964f15'),
  'backend/pyproject.toml': ('8d6eb01615a266f3d5bc09285381926836e0eeb096b2e389cc7fd3c38f59b3f9',
                             'eac4e43769ce61a5e3897f424a8585e3a9542bd77e071e0ac86e2a791a3f6d76'),
+ 'backend/tests/integration/test_client_installation_capacity_migration.py': (None,
+                                                                              'd4d0badd299864caa0aeef6b80ad16c723c3e6e784d16c8940c2db238018afd1'),
+ 'backend/tests/unit/test_alembic_env.py': (None,
+                                            'f8f95981ea5984da9027f0e05956018b9473d24c6efb478aafc366ef419be271'),
  'backend/tests/unit/test_release_contracts.py': ('33f75898c646aab8ecf07e15cea2c22cec6f00a4e8919246e01799ee436051c7',
                                                   '2978cfad70a5a6e9b4d1c511ed0044ed07a36bf09d3fd317b153930b716a6258'),
  'backend/tests/unit/test_remote_assistance_contract.py': ('34ab23ad96ae2fc4ffcc8a3e045fd8593c26ceec7c7fc3e87be5280a27fc622d',
@@ -125,7 +135,7 @@ REVIEWED_CHANGES: dict[str, tuple[str | None, str | None]] = {'.env.production.e
  'frontend/src/modules/staff/StaffScreen.tsx': ('74e0eb94f002ead85f810cab374f8a2febb860f2cfcac84a49b2b680c9ee572a',
                                                 '10e883b640dd8fc4b256cb34c7ac548603335c84fd520a3c1c643340c0d0daaa'),
  'infra/scripts/install-on-vm.sh': ('3ee444429f46b5ca9e397dce6b46a07307d2e8192a8662baa1be4c6652494db3',
-                                    '344628c3ad4f00a67c05498f97f7a3c4f8e3abd4c1661f2ff27fde0579aa8c4f')}
+                                    'cb807d06771cfff83ca572e763ac7f6d617db25e79b5bd45129dd863e339c9cc')}
 
 
 def _verify_immutable_build48_helper(candidate: Path) -> None:

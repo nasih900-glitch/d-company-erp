@@ -2033,6 +2033,7 @@ internal fun GamingCommandWorkspace(
                             startBlockMessage = startBlockMessage,
                             selectionState = startSelection,
                             externallyHostedDial = true,
+                            pinActions = fixedTabletWorkspace,
                         )
                     }
                 } else {
@@ -6388,6 +6389,7 @@ internal fun StartSessionEditor(
     startBlockMessage: String? = null,
     selectionState: GamingStartSelectionState? = null,
     externallyHostedDial: Boolean = false,
+    pinActions: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     var name by remember { mutableStateOf("") }
@@ -6923,11 +6925,20 @@ internal fun StartSessionEditor(
                 .padding(top = Spacing.xs),
             verticalArrangement = Arrangement.spacedBy(Spacing.xs),
         ) {
-            Column(
-                Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(Spacing.xs),
-            ) {
-                optionsContent()
+            if (pinActions) {
+                Column(
+                    Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.xs),
+                ) {
+                    optionsContent()
+                }
+            } else {
+                Column(
+                    Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.xs),
+                ) {
+                    optionsContent()
+                }
             }
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             Column(Modifier.fillMaxWidth()) {

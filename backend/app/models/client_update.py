@@ -73,7 +73,7 @@ ANDROID_RELEASE_STATUSES = ("staged", "active", "withdrawn")
 # preventing a stolen staff token from growing immutable evidence without
 # bound.  These are deliberately generous for a one-tablet shop and are also
 # enforced by migration-installed PostgreSQL triggers, not only by the API.
-CLIENT_INSTALLATIONS_MAX_PER_USER = 8
+CLIENT_INSTALLATIONS_MAX_PER_USER = 16
 CLIENT_INSTALLATIONS_MAX_PER_COMPANY = 32
 CLIENT_UPDATE_EVENTS_MAX_PER_INSTALLATION = 1_000
 CLIENT_UPDATE_EVENTS_MAX_PER_USER = 2_000

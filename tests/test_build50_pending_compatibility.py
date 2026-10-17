@@ -89,8 +89,8 @@ def test_exact_immutable_build49_to_build50_source_delta(helper, tmp_path):
     assert proof == {
         "prior_protected_source_sha256": helper.PRIOR_SOURCE_SHA256,
         "candidate_protected_source_sha256": helper.CANDIDATE_SOURCE_SHA256,
-        "protected_path_count": 1212,
-        "reviewed_changed_path_count": 20,
+        "protected_path_count": 1215,
+        "reviewed_changed_path_count": 25,
     }
     assert helper._backend_manifest_sha256(prior) == helper.PRIOR_BACKEND_MANIFEST_SHA256
     assert helper._backend_manifest_sha256(candidate) == helper.CANDIDATE_BACKEND_MANIFEST_SHA256
@@ -116,7 +116,7 @@ def test_unreviewed_protected_candidate_path_is_rejected(helper, tmp_path):
 def test_fresh_fleet_binding_is_exact_and_pending_remains_opaque(helper):
     assert helper.PRIOR_REVISION == "a834b63d32c45513ab5c8fd9d4de417acc0a96c6"
     assert (helper.PRIOR_VERSION, helper.CANDIDATE_VERSION) == ("3.1.41", "3.1.42")
-    assert (helper.PRIOR_DATABASE_HEAD, helper.CANDIDATE_DATABASE_HEAD) == ("0088", "0088")
+    assert (helper.PRIOR_DATABASE_HEAD, helper.CANDIDATE_DATABASE_HEAD) == ("0088", "0089")
     assert (helper.EXPECTED_INSTALLATION_ROWS, helper.EXPECTED_PENDING, helper.EXPECTED_NONZERO) == (12, 2, 2)
     assert helper.EXPECTED_ALL_INSTALLATIONS_IDENTITY_SHA256 == "d741c0d407f2b29c687f7b41ec7276a93f19853e99fc279fb65d0f5aec03d030"
     assert helper.EXPECTED_NONZERO_FLEET_SHA256 == "5a1100a5695e997be523eb7a948d06db0fd79fed1a4f3a5f48c3286c86ea5128"
@@ -152,7 +152,7 @@ def _identity(helper):
         ("prior_version", "3.1.40"),
         ("prior_db_head", "0087"),
         ("candidate_version", "3.1.41"),
-        ("candidate_db_head", "0089"),
+        ("candidate_db_head", "0088"),
         ("candidate_revision", "a834b63d32c45513ab5c8fd9d4de417acc0a96c6"),
         ("prior_image_id", "backend:latest"),
         ("candidate_image_id", "sha256:" + "b" * 64),
@@ -216,6 +216,7 @@ def test_installer_has_one_exact_fail_closed_build50_path():
     assert '${BUILD50_PENDING_CARRIED_UNRESOLVED:-false}' in source
     assert 'if [ "$pending_outbox_count" -ne 0 ] && [ "$accepted_pending_paths" -ne 1 ]' in source
     branch = source.split('elif [ "$CANDIDATE_APP_VERSION" = 3.1.42 ]', 1)[1].split('elif [ "$CANDIDATE_APP_VERSION" = 3.1.41 ]', 1)[0]
+    assert '--candidate-db-head 0089' in branch
     for forbidden in ("UPDATE tablet_installations", "DELETE FROM", "adb ", "queue_drained=true", "compatibility_floor"):
         assert forbidden not in branch
     for required in ("CANDIDATE_BACKEND_IMAGE_ID", "CANDIDATE_BACKEND_MANIFEST_SHA256", "PRIOR_SOURCE_ARCHIVE_SHA256", "CANDIDATE_SOURCE_ARCHIVE_SHA256"):

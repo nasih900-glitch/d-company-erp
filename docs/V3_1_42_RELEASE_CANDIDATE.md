@@ -8,11 +8,14 @@ an update offer, installation, or production behavior.
 The immutable predecessor is `v3.1.41` / Android build 49 / commit
 `a834b63d32c45513ab5c8fd9d4de417acc0a96c6`. The successor coordinates
 version `3.1.42` / tag `v3.1.42` / Android build 50. Room remains 55 and
-Alembic remains `0088`.
+Alembic advances from `0088` to `0089`.
 
 The candidate contains the reviewed resumable Android updater, compact Gaming
-layout, realtime liveness, and password-recovery guidance corrections. It does
-not change backend business behavior, database schemas, serialized offline
+layout, realtime liveness, password-recovery guidance, and bounded client
+telemetry capacity corrections. Migration `0089` raises only the per-user
+installation admission ceiling from 8 to 16; the company ceiling remains 32,
+and all existing installation and event evidence is retained. It does not
+change other backend business behavior, database columns, serialized offline
 action contracts, money rules, tenant boundaries, permissions, audit behavior,
 or the client compatibility policy defaults.
 
