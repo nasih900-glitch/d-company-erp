@@ -15,6 +15,7 @@ import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -395,14 +396,12 @@ internal fun GamingDurationDial(
                             Text(
                                 if (compactMarkers) "${option.minutes} min"
                                 else "${option.minutes} min\n${option.totalMinor.asRupees()}",
-                                // The first stop's knob sits near the top-left
-                                // of the arc. A 76dp label hit area overlaps it
-                                // on compact tablets and hides the price under
-                                // a mouse cursor; keep the text and touch target
-                                // clear of the draggable ring.
-                                modifier = Modifier.sizeIn(
+                                // Size to the wider explicit line so enlarged
+                                // money text remains whole. The parent half of
+                                // the dial still bounds the marker and keeps it
+                                // clear of the opposite endpoint.
+                                modifier = Modifier.width(IntrinsicSize.Max).sizeIn(
                                     minWidth = if (compactMarkers) 48.dp else 64.dp,
-                                    maxWidth = if (compactMarkers) 48.dp else 64.dp,
                                     minHeight = 48.dp,
                                 )
                                     .drawBehind {

@@ -25,8 +25,10 @@ import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -48,6 +50,7 @@ import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.printToLog
 import androidx.compose.ui.test.swipe
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import cloud.dcompany.erp.core.auth.GamingAccess
 import cloud.dcompany.erp.core.db.GamingSessionParticipantCacheEntity
@@ -309,6 +312,61 @@ class GamingBoardUiTest {
         capture("gaming-duration-price-hover.png", "dial-hover-fixture")
         sixtyMinutePrice.performClick()
         compose.runOnIdle { assertEquals("single-60", selected.value) }
+    }
+
+    @Test
+    fun durationEndpointPriceStaysCompleteAtEnlargedTabletText() {
+        compose.setContent {
+            val density = LocalDensity.current
+            CompositionLocalProvider(
+                LocalDensity provides Density(density.density, fontScale = 1.3f),
+            ) {
+                DCompanyTheme {
+                    Box(Modifier.width(800.dp).height(1_280.dp)) {
+                        GamingDurationDial(
+                            choices = listOf(
+                                GamingDurationChoice("single-30", 30, 8_000),
+                                GamingDurationChoice("single-60", 60, 12_000),
+                            ),
+                            selectedPackageId = "single-30",
+                            onSelect = {},
+                            dialSize = 280.dp,
+                            showChoiceChips = false,
+                        )
+                    }
+                }
+            }
+        }
+
+        val expected = "60 min\n₹120.00"
+        val endpoint = compose.onNodeWithText(expected, useUnmergedTree = true)
+            .assertIsDisplayed()
+        val ring = compose.onNodeWithTag("gaming-control-ring")
+            .assertIsDisplayed().getUnclippedBoundsInRoot()
+        val endpointBounds = endpoint.getUnclippedBoundsInRoot()
+        assertTrue(
+            "Endpoint sizing must not resize or escape the 280dp ring: " +
+                "ring=$ring endpoint=$endpointBounds",
+            abs((ring.right - ring.left).value - 280f) <= 1f &&
+                abs((ring.bottom - ring.top).value - 280f) <= 1f &&
+                endpointBounds.left >= ring.left && endpointBounds.right <= ring.right &&
+                endpointBounds.top >= ring.top && endpointBounds.bottom <= ring.bottom,
+        )
+        val layouts = mutableListOf<TextLayoutResult>()
+        endpoint
+            .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+        assertEquals(1, layouts.size)
+        val layout = layouts.single()
+        assertTrue(
+            "The enlarged endpoint must render two complete unclipped lines: " +
+                "size=${layout.size} lines=${layout.lineCount} " +
+                "visibleEnd=${layout.getLineEnd(layout.lineCount - 1, visibleEnd = true)}",
+            layout.lineCount == 2 &&
+                !layout.didOverflowHeight &&
+                !layout.isLineEllipsized(1) &&
+                layout.getLineEnd(1) == expected.length &&
+                layout.getLineEnd(1, visibleEnd = true) == expected.length,
+        )
     }
 
     @OptIn(ExperimentalTestApi::class)

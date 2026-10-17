@@ -28,7 +28,7 @@ PRIOR_SOURCE_ARCHIVE_SHA256 = "a3cc663d594e2d5a40b4d03fd6265623c5e7ac12676f5f34c
 PRIOR_BACKEND_MANIFEST_SHA256 = "ee4bba277ad5c51eb73b7be414628a093388bdc2daa16d0d87f5ef7d149183af"
 CANDIDATE_BACKEND_MANIFEST_SHA256 = "2cacfea604ad4d22c68328c316e5752675bb7aba5c3e628785d0d173ed427743"
 PRIOR_SOURCE_SHA256 = "11f178acff0b78e65441ea8017e960efd7897639a5c4684330e3f1c828137e1e"
-CANDIDATE_SOURCE_SHA256 = "c46073e5fb70fb6cac1c87352b06aa0814708eec12010ff91d13ec15b150378a"
+CANDIDATE_SOURCE_SHA256 = "abc80a38535ee327c0af0bb277efa3cf8620b6dc0b28333317e12f334eac5756"
 
 HISTORICAL_HELPER = "infra/scripts/verify-build47-pending-compatibility.py"
 HISTORICAL_HELPER_SHA256 = "bdadff290dccda6fb6c2fbdbc0a6a4ce47746f27650e72f859bf8dd5d40a9e1f"
@@ -101,6 +101,8 @@ REVIEWED_CHANGES: dict[str, tuple[str | None, str | None]] = {'.env.production.e
                                                                                   'a9e67fb0a22000dff10bc6cb97ada0c2505e6da3c5d61ea2902c83e92b3235b0'),
  'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/PasswordRecoveryDialog.kt': ('910edf156503778bd74323342fa8fb9efca1d6fec2c25e63e774158c2d9da069',
                                                                                               '39e7e36e4280f9ea2b6f04d1b70c738c9ba7154c94e592fbdf091a33967b83b3'),
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingDurationDial.kt': ('a8022b298f88515101fd2ec776ce08e89bfab8ef174269612ab30a193e79c99c',
+                                                                                                  'b4aeeefd13a53e96a8965cce0c4c574e4c7bdc6672a27132bdba1db5fded6cf6'),
  'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingScreen.kt': ('e31d273eae8f9740318644319c736e1e56e84b73e155daa5e0af6ca49355aa9e',
                                                                                            'bd4d8ca2867378c1730df5a79d3cc1621552a35dff358d14bd2ee2c787e142a3'),
  'android-native/gradle/verification-metadata.xml': ('f2b7345d8111215c0240b317f60ff5167982cb39c48dfa1ea55b5707b25547c5',
