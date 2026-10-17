@@ -19,8 +19,16 @@ import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
-import kotlinx.coroutines.CancellationException
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
@@ -31,16 +39,14 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.Call
-import okhttp3.Callback
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import java.io.IOException
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
@@ -49,8 +55,12 @@ private const val MAX_APK_BYTES = 512L * 1024L * 1024L
 private const val MIN_FREE_SPACE_MARGIN_BYTES = 16L * 1024L * 1024L
 private const val MAX_REDIRECTS = 5
 private const val READY_FILE_MAX_AGE_MILLIS = 24L * 60L * 60L * 1_000L
+private const val PROGRESS_INTERVAL_BYTES = 256L * 1024L
+private const val PROGRESS_INTERVAL_NANOS = 1_000_000_000L
 private val SHA256 = Regex("^[0-9a-f]{64}$")
 private val UPDATE_VERSION_NAME = Regex("^[0-9A-Za-z][0-9A-Za-z._+\\-]{0,79}$")
+private val CONTENT_RANGE = Regex("^bytes (\\d+)-(\\d+)/(\\d+)$")
+private val STRONG_ETAG = Regex("^\"[\\x21\\x23-\\x5B\\x5D-\\x7E]+\"$")
 
 internal fun isValidUpdateVersionName(raw: String): Boolean = UPDATE_VERSION_NAME.matches(raw)
 
@@ -76,6 +86,12 @@ internal data class VerifiedUpdateArtifactRecord(
     val fileName: String,
     val verifiedAtMillis: Long,
     val telemetryBinding: UpdateTelemetryBinding? = null,
+)
+
+@Serializable
+internal data class PartialUpdateRecord(
+    val descriptor: DirectUpdateDescriptor,
+    val strongEtag: String? = null,
 )
 
 internal fun verifiedArtifactRecordIsStructurallyValid(
@@ -373,6 +389,11 @@ sealed interface AppUpdateUiState {
     ) : AppUpdateUiState {
         val versionCode: Int get() = descriptor.versionCode
     }
+    data class Paused(
+        val descriptor: DirectUpdateDescriptor,
+        val downloadedBytes: Long,
+        val totalBytes: Long,
+    ) : AppUpdateUiState
     data class Verifying(val descriptor: DirectUpdateDescriptor) : AppUpdateUiState {
         val versionCode: Int get() = descriptor.versionCode
     }
@@ -390,6 +411,7 @@ sealed interface AppUpdateUiState {
         val message: String,
         val descriptor: DirectUpdateDescriptor? = null,
         internal val errorCode: UpdateErrorCode = UpdateErrorCode.UNKNOWN,
+        val canResume: Boolean = false,
     ) : AppUpdateUiState
 }
 
@@ -403,6 +425,7 @@ enum class InstallerLaunchResult {
 internal fun AppUpdateUiState.matchesDescriptor(descriptor: DirectUpdateDescriptor): Boolean =
     when (this) {
         is AppUpdateUiState.Downloading -> this.descriptor == descriptor
+        is AppUpdateUiState.Paused -> this.descriptor == descriptor
         is AppUpdateUiState.Verifying -> this.descriptor == descriptor
         is AppUpdateUiState.Ready -> this.descriptor == descriptor
         is AppUpdateUiState.Failed -> this.descriptor == descriptor
@@ -420,6 +443,8 @@ class AppUpdateViewModel : ViewModel() {
     val state: StateFlow<AppUpdateUiState> = _state.asStateFlow()
     @Volatile
     private var downloadJob: Job? = null
+    @Volatile
+    private var cleanupJob: Job? = null
     @Volatile
     private var operationGeneration = 0L
     @Volatile
@@ -459,6 +484,7 @@ class AppUpdateViewModel : ViewModel() {
         // artifact identity: cancel the old operation and make its Ready file
         // unreachable before starting the replacement download.
         val previousJob = downloadJob
+        val pendingCleanup = cleanupJob
         val generation = ++operationGeneration
         operationBinding = binding
         previousJob?.cancel()
@@ -484,6 +510,7 @@ class AppUpdateViewModel : ViewModel() {
                 // its cancellation cleanup before the replacement may delete,
                 // write or atomically rename any artifact.
                 previousJob?.cancelAndJoin()
+                pendingCleanup?.join()
                 currentCoroutineContext().ensureActive()
                 val file = downloader.download(descriptor) { downloaded ->
                     publishIfCurrent(
@@ -558,14 +585,14 @@ class AppUpdateViewModel : ViewModel() {
                 }
             } catch (cancelled: CancellationException) {
                 persistedRecord?.let(artifactStore::clearIfMatches)
-                preparedFile?.delete()
                 publishIfCurrent(generation, AppUpdateUiState.Idle)
                 throw cancelled
             } catch (failure: Exception) {
-                preparedFile?.delete()
                 artifactStore.clear()
                 val errorCode = (failure as? UpdatePreparationException)?.errorCode
                     ?: UpdateErrorCode.UNKNOWN
+                val canResume = errorCode == UpdateErrorCode.NETWORK_ERROR &&
+                    downloader.resumableBytes(descriptor) > 0
                 telemetry.recordFailed(descriptor, errorCode = errorCode, binding = binding)
                 publishIfCurrent(
                     generation,
@@ -578,6 +605,7 @@ class AppUpdateViewModel : ViewModel() {
                         },
                         descriptor,
                         errorCode,
+                        canResume,
                     ),
                 )
             } finally {
@@ -589,6 +617,7 @@ class AppUpdateViewModel : ViewModel() {
         replacementJob.start()
     }
 
+    /** Pause keeps descriptor-bound bytes so the next tap can resume safely. */
     fun cancel() {
         val current = _state.value
         val descriptor = when (current) {
@@ -600,10 +629,19 @@ class AppUpdateViewModel : ViewModel() {
         operationGeneration += 1
         val currentJob = downloadJob
         currentJob?.cancel()
-        artifactStore.clear()
-        downloader.deleteVerifiedFiles()
-        if (currentJob == null) downloader.deletePartialFiles()
-        _state.value = AppUpdateUiState.Idle
+        _state.value = when (current) {
+            is AppUpdateUiState.Downloading -> AppUpdateUiState.Paused(
+                current.descriptor,
+                current.downloadedBytes,
+                current.totalBytes,
+            )
+            is AppUpdateUiState.Verifying -> AppUpdateUiState.Paused(
+                current.descriptor,
+                current.descriptor.sizeBytes,
+                current.descriptor.sizeBytes,
+            )
+            else -> AppUpdateUiState.Idle
+        }
     }
 
     fun verifiedFile(notice: ClientUpdateNotice): File? {
@@ -639,9 +677,9 @@ class AppUpdateViewModel : ViewModel() {
         currentJob?.cancel()
         ready?.let { File(it.filePath).delete() }
         artifactStore.clear()
-        if (currentJob == null) downloader.deletePartialFiles()
         telemetry.recordIdle()
         _state.value = AppUpdateUiState.Idle
+        scheduleDiscard(currentJob)
     }
 
     fun installerLaunchResult(notice: ClientUpdateNotice, result: InstallerLaunchResult) {
@@ -671,9 +709,7 @@ class AppUpdateViewModel : ViewModel() {
 
     override fun onCleared() {
         operationGeneration += 1
-        val currentJob = downloadJob
-        currentJob?.cancel()
-        if (currentJob == null) downloader.deletePartialFiles()
+        downloadJob?.cancel()
         super.onCleared()
     }
 
@@ -683,7 +719,7 @@ class AppUpdateViewModel : ViewModel() {
         currentJob?.cancel()
         (_state.value as? AppUpdateUiState.Ready)?.let { File(it.filePath).delete() }
         artifactStore.clear()
-        if (currentJob == null) downloader.deletePartialFiles()
+        scheduleDiscard(currentJob)
     }
 
     private fun recoverVerifiedArtifact() {
@@ -697,7 +733,18 @@ class AppUpdateViewModel : ViewModel() {
             }
             val record = artifactStore.restore()
             if (record == null) {
-                if (generation == operationGeneration) telemetry.recordIdle()
+                val pending = downloader.pendingResume()
+                if (generation == operationGeneration) {
+                    if (pending != null) {
+                        _state.value = AppUpdateUiState.Paused(
+                            pending.descriptor,
+                            pending.downloadedBytes,
+                            pending.descriptor.sizeBytes,
+                        )
+                    } else {
+                        telemetry.recordIdle()
+                    }
+                }
                 return@launch
             }
             val file = File(downloader.directory, record.fileName)
@@ -729,17 +776,38 @@ class AppUpdateViewModel : ViewModel() {
     private fun publishIfCurrent(generation: Long, next: AppUpdateUiState) {
         if (generation == operationGeneration) _state.value = next
     }
+
+    /** A later download joins this job; it never cancels an explicit discard. */
+    private fun scheduleDiscard(currentJob: Job?) {
+        val previousCleanup = cleanupJob
+        val discardRequest = downloader.requestDiscard()
+        val replacement = CLEANUP_SCOPE.launch(start = CoroutineStart.LAZY) {
+            currentJob?.cancelAndJoin()
+            previousCleanup?.join()
+            downloader.discardAll(discardRequest)
+        }
+        cleanupJob = replacement
+        replacement.invokeOnCompletion {
+            if (cleanupJob === replacement) cleanupJob = null
+        }
+        replacement.start()
+    }
+
+    private companion object {
+        val CLEANUP_SCOPE = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    }
 }
 
-private class VerifiedApkDownloader(context: Context) {
-    val directory = File(context.cacheDir, "verified-updates")
-    private val client = OkHttpClient.Builder()
-        .followRedirects(false)
-        .followSslRedirects(false)
-        .connectTimeout(20, TimeUnit.SECONDS)
-        .readTimeout(90, TimeUnit.SECONDS)
-        .callTimeout(10, TimeUnit.MINUTES)
-        .build()
+internal class VerifiedApkDownloader internal constructor(
+    val directory: File,
+    private val client: OkHttpClient,
+) {
+    constructor(context: Context) : this(
+        directory = File(context.cacheDir, "verified-updates"),
+        client = productionUpdateClient(),
+    )
+
+    private val fileMutex = PROCESS_FILE_MUTEX
 
     // Deliberately use currently usable bytes plus a fixed margin. Asking
     // StorageManager to evict other app caches would make a background ERP
@@ -749,116 +817,322 @@ private class VerifiedApkDownloader(context: Context) {
         descriptor: DirectUpdateDescriptor,
         onProgress: (Long) -> Unit,
     ): File = withContext(Dispatchers.IO) {
+        awaitPendingDiscards()
+        fileMutex.withLock {
         ensureDirectory()
-        deletePartialFiles()
-        directory.listFiles().orEmpty()
-            .filter { it.extension == "apk" }
-            .forEach(File::delete)
+        val files = filesFor(descriptor)
+        reconcileFiles(files, descriptor)
+
+        if (verifyFileSizeAndSha256(files.verified, descriptor)) return@withLock files.verified
+        if (files.partial.length() == descriptor.sizeBytes) {
+            if (verifyFileSizeAndSha256(files.partial, descriptor)) {
+                atomicMove(files.partial, files.verified)
+                files.metadata.delete()
+                return@withLock files.verified
+            }
+            deleteResumeFiles(files)
+        }
 
         val usableSpace = directory.usableSpace
-        if (usableSpace > 0 && usableSpace < descriptor.sizeBytes + MIN_FREE_SPACE_MARGIN_BYTES) {
+        val remainingBytes = descriptor.sizeBytes - files.partial.length().coerceAtMost(descriptor.sizeBytes)
+        if (usableSpace > 0 && usableSpace < remainingBytes + MIN_FREE_SPACE_MARGIN_BYTES) {
             throw UpdatePreparationException(
                 UpdateErrorCode.INSUFFICIENT_STORAGE,
                 "Not enough free storage for this update.",
             )
         }
-        val stem = "d-company-${descriptor.versionCode}-${descriptor.sha256.take(12)}"
-        val partial = File(directory, "$stem.apk.part")
-        val verified = File(directory, "$stem.apk")
+
         try {
-            val response = openFollowingSafeRedirects(descriptor.url)
-            response.use { safeResponse ->
-                if (!safeResponse.isSuccessful) {
-                    throw UpdatePreparationException(
-                        UpdateErrorCode.HTTP_ERROR,
-                        "Update download failed (HTTP ${safeResponse.code}).",
-                    )
-                }
-                val body = safeResponse.body ?: throw UpdatePreparationException(
-                    UpdateErrorCode.SIZE_MISMATCH,
-                    "The update download was empty.",
+            downloadWithAtMostOneCleanRestart(files, descriptor, onProgress)
+            if (!verifyFileSizeAndSha256(files.partial, descriptor)) {
+                deleteResumeFiles(files)
+                throw UpdatePreparationException(
+                    UpdateErrorCode.CHECKSUM_MISMATCH,
+                    "The update failed its security checksum. Nothing was installed.",
                 )
-                val declaredLength = body.contentLength()
-                if (declaredLength >= 0 && declaredLength != descriptor.sizeBytes) {
-                    throw UpdatePreparationException(
-                        UpdateErrorCode.SIZE_MISMATCH,
-                        "The update size did not match the server release details.",
-                    )
-                }
-
-                val digest = MessageDigest.getInstance("SHA-256")
-                var total = 0L
-                var lastPublished = -1L
-                FileOutputStream(partial).use { output ->
-                    body.byteStream().use { input ->
-                        val buffer = ByteArray(DEFAULT_BUFFER_SIZE * 8)
-                        while (true) {
-                            currentCoroutineContext().ensureActive()
-                            val read = input.read(buffer)
-                            if (read == -1) break
-                            total += read
-                            if (total > descriptor.sizeBytes) {
-                                throw UpdatePreparationException(
-                                    UpdateErrorCode.SIZE_MISMATCH,
-                                    "The update exceeded its advertised size.",
-                                )
-                            }
-                            digest.update(buffer, 0, read)
-                            output.write(buffer, 0, read)
-                            if (total == descriptor.sizeBytes || total - lastPublished >= 256L * 1024L) {
-                                lastPublished = total
-                                onProgress(total)
-                            }
-                        }
-                    }
-                    output.flush()
-                    output.fd.sync()
-                }
-                if (total != descriptor.sizeBytes) {
-                    throw UpdatePreparationException(
-                        UpdateErrorCode.SIZE_MISMATCH,
-                        "The update was incomplete. Nothing was installed.",
-                    )
-                }
-                val actualSha = digest.digest().joinToString("") { "%02x".format(it) }
-                if (actualSha != descriptor.sha256) {
-                    throw UpdatePreparationException(
-                        UpdateErrorCode.CHECKSUM_MISMATCH,
-                        "The update failed its security checksum. Nothing was installed.",
-                    )
-                }
             }
-
-            Files.move(
-                partial.toPath(),
-                verified.toPath(),
-                StandardCopyOption.ATOMIC_MOVE,
-                StandardCopyOption.REPLACE_EXISTING,
-            )
-            verified
-        } catch (failure: Exception) {
-            partial.delete()
-            verified.delete()
+            atomicMove(files.partial, files.verified)
+            files.metadata.delete()
+            files.verified
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: UpdatePreparationException) {
+            if (failure.errorCode in TAINTED_DOWNLOAD_ERRORS) deleteResumeFiles(files)
             throw failure
+        }
         }
     }
 
-    fun deletePartialFiles() {
-        directory.listFiles().orEmpty()
-            .filter { it.name.endsWith(".part") }
-            .forEach(File::delete)
+    internal fun requestDiscard(): DiscardRequest = synchronized(PENDING_DISCARDS) {
+        val key = directory.absoluteFile.normalize().path
+        val completion = CompletableDeferred<Unit>()
+        DiscardRequest(key, PENDING_DISCARDS.put(key, completion), completion)
     }
 
-    fun deleteVerifiedFiles() {
-        directory.listFiles().orEmpty()
-            .filter { it.extension == "apk" }
-            .forEach(File::delete)
+    suspend fun discardAll(request: DiscardRequest = requestDiscard()) =
+        withContext(Dispatchers.IO) {
+            try {
+                request.predecessor?.await()
+                fileMutex.withLock {
+                    directory.listFiles().orEmpty().forEach(File::delete)
+                }
+            } finally {
+                request.completion.complete(Unit)
+                PENDING_DISCARDS.remove(request.key, request.completion)
+            }
+        }
+
+    suspend fun resumableBytes(descriptor: DirectUpdateDescriptor): Long =
+        withContext(Dispatchers.IO) { fileMutex.withLock {
+            val files = filesFor(descriptor)
+            val record = readPartialRecord(files.metadata)
+            files.partial.length().takeIf {
+                record?.descriptor == descriptor && it in 1..descriptor.sizeBytes
+            } ?: 0L
+        } }
+
+    suspend fun pendingResume(): PendingUpdateResume? =
+        withContext(Dispatchers.IO) {
+            awaitPendingDiscards()
+            fileMutex.withLock {
+                val metadataFiles = directory.listFiles().orEmpty()
+                    .filter { it.name.endsWith(".resume.json") }
+                val pending = metadataFiles.singleOrNull()?.let { metadata ->
+                    val record = readPartialRecord(metadata) ?: return@let null
+                    if (!partialDescriptorIsStructurallyValid(record)) return@let null
+                    val files = filesFor(record.descriptor)
+                    val downloaded = files.partial.length()
+                    if (metadata != files.metadata || downloaded !in 1..record.descriptor.sizeBytes) {
+                        null
+                    } else {
+                        PendingUpdateResume(record.descriptor, downloaded)
+                    }
+                }
+                if (pending == null && metadataFiles.isNotEmpty()) {
+                    directory.listFiles().orEmpty()
+                        .filter { it.name.endsWith(".part") || it.name.endsWith(".resume.json") }
+                        .forEach(File::delete)
+                }
+                pending
+            }
+        }
+
+    suspend fun deleteExpiredFiles(nowMillis: Long = System.currentTimeMillis()) =
+        withContext(Dispatchers.IO) { fileMutex.withLock {
+            directory.listFiles().orEmpty()
+                .filter { nowMillis - it.lastModified() > READY_FILE_MAX_AGE_MILLIS }
+                .forEach(File::delete)
+        } }
+
+    private suspend fun downloadWithAtMostOneCleanRestart(
+        files: DownloadFiles,
+        descriptor: DirectUpdateDescriptor,
+        onProgress: (Long) -> Unit,
+    ) {
+        var cleanRestartAvailable = true
+        while (true) {
+            val record = readPartialRecord(files.metadata)
+                ?.takeIf { it.descriptor == descriptor }
+                ?: PartialUpdateRecord(descriptor)
+            val offset = files.partial.length()
+            onProgress(offset)
+            val requestResult = executeRequestFollowingSafeRedirects(
+                initialUrl = descriptor.url,
+                offset = offset,
+                strongEtag = record.strongEtag,
+            ) { response ->
+                consumeDownloadResponse(response, files, descriptor, record, offset, onProgress)
+            }
+            if (requestResult != DownloadResponseResult.RestartClean) return
+            if (!cleanRestartAvailable) {
+                deleteResumeFiles(files)
+                throw UpdatePreparationException(
+                    UpdateErrorCode.SIZE_MISMATCH,
+                    "The update server could not resume this saved download safely.",
+                )
+            }
+            cleanRestartAvailable = false
+            deleteResumeFiles(files)
+        }
     }
 
-    fun deleteExpiredFiles(nowMillis: Long = System.currentTimeMillis()) {
+    private fun consumeDownloadResponse(
+        response: Response,
+        files: DownloadFiles,
+        descriptor: DirectUpdateDescriptor,
+        record: PartialUpdateRecord,
+        requestedOffset: Long,
+        onProgress: (Long) -> Unit,
+    ): DownloadResponseResult {
+        if (response.code == 416) {
+            return if (
+                requestedOffset == descriptor.sizeBytes &&
+                verifyFileSizeAndSha256(files.partial, descriptor)
+            ) DownloadResponseResult.Complete else DownloadResponseResult.RestartClean
+        }
+        if (response.code !in setOf(200, 206)) {
+            throw UpdatePreparationException(
+                UpdateErrorCode.HTTP_ERROR,
+                "Update download failed (HTTP ${response.code}). Saved download progress was kept.",
+            )
+        }
+
+        val append = response.code == 206
+        val contentEncoding = response.header("Content-Encoding")?.trim()
+        if (contentEncoding != null && !contentEncoding.equals("identity", ignoreCase = true)) {
+            throw UpdatePreparationException(
+                UpdateErrorCode.CHECKSUM_MISMATCH,
+                "The update server returned encoded bytes that cannot be resumed safely.",
+            )
+        }
+        // Weak or malformed validators are never persisted or sent in If-Range.
+        // The descriptor SHA-256 remains the authority for a fresh full body.
+        val responseEtag = response.header("ETag")?.trim()?.takeIf(::isStrongEtag)
+        if (append) {
+            validatePartialResponse(response, descriptor, requestedOffset, record.strongEtag, responseEtag)
+        }
+        val start = if (append) requestedOffset else 0L
+        val expectedBodyBytes = descriptor.sizeBytes - start
+        val body = response.body ?: throw taintedSizeError("The update download was empty.")
+        if (body.contentLength() >= 0 && body.contentLength() != expectedBodyBytes) {
+            throw taintedSizeError("The update size did not match the server release details.")
+        }
+
+        writePartialRecordAtomically(
+            files.metadata,
+            PartialUpdateRecord(descriptor, responseEtag),
+        )
+        var total = start
+        var lastPublished = start
+        var lastPublishedAt = System.nanoTime()
+        FileOutputStream(files.partial, append).use { output ->
+            body.byteStream().use { input ->
+                val buffer = ByteArray(DEFAULT_BUFFER_SIZE * 8)
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read == -1) break
+                    total += read
+                    if (total > descriptor.sizeBytes) throw taintedSizeError(
+                        "The update exceeded its advertised size.",
+                    )
+                    output.write(buffer, 0, read)
+                    val now = System.nanoTime()
+                    if (
+                        total == descriptor.sizeBytes ||
+                        total - lastPublished >= PROGRESS_INTERVAL_BYTES ||
+                        now - lastPublishedAt >= PROGRESS_INTERVAL_NANOS
+                    ) {
+                        lastPublished = total
+                        lastPublishedAt = now
+                        onProgress(total)
+                    }
+                }
+            }
+            output.flush()
+            output.fd.sync()
+        }
+        if (total != descriptor.sizeBytes) {
+            throw UpdatePreparationException(
+                UpdateErrorCode.NETWORK_ERROR,
+                "The connection ended early. Your saved download can resume.",
+            )
+        }
+        return DownloadResponseResult.Complete
+    }
+
+    private fun validatePartialResponse(
+        response: Response,
+        descriptor: DirectUpdateDescriptor,
+        requestedOffset: Long,
+        storedEtag: String?,
+        responseEtag: String?,
+    ) {
+        val match = response.header("Content-Range")?.let(CONTENT_RANGE::matchEntire)
+            ?: throw taintedSizeError("The update server returned an invalid resume range.")
+        val (start, end, total) = match.destructured
+        if (
+            start.toLongOrNull() != requestedOffset ||
+            end.toLongOrNull() != descriptor.sizeBytes - 1 ||
+            total.toLongOrNull() != descriptor.sizeBytes
+        ) throw taintedSizeError("The update server returned the wrong resume range.")
+        if (storedEtag != null && responseEtag != storedEtag) {
+            throw UpdatePreparationException(
+                UpdateErrorCode.CHECKSUM_MISMATCH,
+                "The update changed while it was downloading. Start it again.",
+            )
+        }
+    }
+
+    private fun reconcileFiles(files: DownloadFiles, descriptor: DirectUpdateDescriptor) {
+        val record = readPartialRecord(files.metadata)
+        val partialIsReusable = record?.descriptor == descriptor &&
+            files.partial.isFile && files.partial.length() in 0..descriptor.sizeBytes
         directory.listFiles().orEmpty()
-            .filter { nowMillis - it.lastModified() > READY_FILE_MAX_AGE_MILLIS }
+            .filter { it != files.partial && it != files.metadata && it != files.verified }
             .forEach(File::delete)
+        if (!partialIsReusable) {
+            files.partial.delete()
+            files.metadata.delete()
+        }
+        if (files.verified.exists() && !verifyFileSizeAndSha256(files.verified, descriptor)) {
+            files.verified.delete()
+        }
+    }
+
+    private fun filesFor(descriptor: DirectUpdateDescriptor): DownloadFiles {
+        val stem = "d-company-${descriptor.versionCode}-${descriptor.sha256.take(12)}"
+        return DownloadFiles(
+            partial = File(directory, "$stem.apk.part"),
+            metadata = File(directory, "$stem.resume.json"),
+            verified = File(directory, "$stem.apk"),
+        )
+    }
+
+    private fun readPartialRecord(file: File): PartialUpdateRecord? = runCatching {
+        if (!file.isFile || file.length() !in 1..16_384) return@runCatching null
+        ApiClient.json.decodeFromString<PartialUpdateRecord>(file.readText(Charsets.UTF_8))
+    }.getOrNull()
+
+    private fun partialDescriptorIsStructurallyValid(record: PartialUpdateRecord): Boolean {
+        val descriptor = record.descriptor
+        return descriptor.versionCode > BuildConfig.VERSION_CODE &&
+            isValidUpdateVersionName(descriptor.versionName) &&
+            safeHttpsApkUrl(descriptor.url) == descriptor.url &&
+            normalizeSha256(descriptor.sha256) == descriptor.sha256 &&
+            descriptor.sizeBytes in 1..MAX_APK_BYTES &&
+            descriptor.expectedCurrentSignerSha256 != null &&
+            normalizeSha256(descriptor.expectedCurrentSignerSha256) ==
+                descriptor.expectedCurrentSignerSha256 &&
+            (record.strongEtag == null || isStrongEtag(record.strongEtag))
+    }
+
+    private fun writePartialRecordAtomically(file: File, record: PartialUpdateRecord) {
+        val temporary = File(directory, "${file.name}.tmp")
+        val bytes = ApiClient.json.encodeToString(record).toByteArray(Charsets.UTF_8)
+        FileOutputStream(temporary).use { output ->
+            output.write(bytes)
+            output.flush()
+            output.fd.sync()
+        }
+        atomicMove(temporary, file)
+    }
+
+    private fun deleteResumeFiles(files: DownloadFiles) {
+        files.partial.delete()
+        files.metadata.delete()
+    }
+
+    private fun atomicMove(source: File, destination: File) {
+        try {
+            Files.move(
+                source.toPath(),
+                destination.toPath(),
+                StandardCopyOption.ATOMIC_MOVE,
+                StandardCopyOption.REPLACE_EXISTING,
+            )
+        } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
+            Files.move(source.toPath(), destination.toPath(), StandardCopyOption.REPLACE_EXISTING)
+        }
     }
 
     private fun ensureDirectory() {
@@ -874,7 +1148,20 @@ private class VerifiedApkDownloader(context: Context) {
         )
     }
 
-    private suspend fun openFollowingSafeRedirects(initialUrl: String): Response {
+    private suspend fun awaitPendingDiscards() {
+        val key = directory.absoluteFile.normalize().path
+        while (true) {
+            val pending = PENDING_DISCARDS[key] ?: return
+            pending.await()
+        }
+    }
+
+    private suspend fun <T> executeRequestFollowingSafeRedirects(
+        initialUrl: String,
+        offset: Long,
+        strongEtag: String?,
+        consume: (Response) -> T,
+    ): T {
         var url = initialUrl
         repeat(MAX_REDIRECTS + 1) { redirectCount ->
             val request = Request.Builder()
@@ -882,38 +1169,91 @@ private class VerifiedApkDownloader(context: Context) {
                 .get()
                 .header("Accept", "application/vnd.android.package-archive, application/octet-stream")
                 .header("Accept-Encoding", "identity")
+                .apply {
+                    if (offset > 0) {
+                        header("Range", "bytes=$offset-")
+                        strongEtag?.let { header("If-Range", it) }
+                    }
+                }
                 .build()
-            val response = try {
-                client.newCall(request).await()
+            val call = client.newCall(request)
+            val result = try {
+                call.executeAndConsume { response ->
+                    if (!response.isRedirect) return@executeAndConsume consume(response)
+                    RedirectResponse(response.header("Location"))
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: UpdatePreparationException) {
+                throw failure
             } catch (failure: IOException) {
+                currentCoroutineContext().ensureActive()
                 throw UpdatePreparationException(
                     UpdateErrorCode.NETWORK_ERROR,
-                    "The update could not be downloaded. Check the connection and try again.",
+                    "The connection was interrupted. Your saved download can resume.",
                     failure,
                 )
             }
-            if (!response.isRedirect) return response
-            val location = response.header("Location")
-            response.close()
-            if (redirectCount == MAX_REDIRECTS || location.isNullOrBlank()) {
+            if (result !is RedirectResponse) {
+                @Suppress("UNCHECKED_CAST")
+                return result as T
+            }
+            if (redirectCount == MAX_REDIRECTS || result.location.isNullOrBlank()) {
                 throw UpdatePreparationException(
                     UpdateErrorCode.HTTP_ERROR,
                     "The update link redirected too many times.",
                 )
             }
-            val resolved = runCatching { URI(url).resolve(location).toASCIIString() }.getOrNull()
-            url = safeHttpsApkUrl(resolved)
-                ?: throw UpdatePreparationException(
-                    UpdateErrorCode.INVALID_METADATA,
-                    "The update redirected to an unsafe address.",
-                )
+            val resolved = runCatching { URI(url).resolve(result.location).toASCIIString() }.getOrNull()
+            url = safeHttpsApkUrl(resolved) ?: throw UpdatePreparationException(
+                UpdateErrorCode.INVALID_METADATA,
+                "The update redirected to an unsafe address.",
+            )
         }
-        throw UpdatePreparationException(
-            UpdateErrorCode.HTTP_ERROR,
-            "The update link redirected too many times.",
+        error("redirect loop exhausted")
+    }
+
+    private data class DownloadFiles(val partial: File, val metadata: File, val verified: File)
+    private data class RedirectResponse(val location: String?)
+    private enum class DownloadResponseResult { Complete, RestartClean }
+
+    private companion object {
+        val PROCESS_FILE_MUTEX = Mutex()
+        val PENDING_DISCARDS = ConcurrentHashMap<String, CompletableDeferred<Unit>>()
+        val TAINTED_DOWNLOAD_ERRORS = setOf(
+            UpdateErrorCode.SIZE_MISMATCH,
+            UpdateErrorCode.CHECKSUM_MISMATCH,
+            UpdateErrorCode.INVALID_METADATA,
+        )
+
+        fun productionUpdateClient(): OkHttpClient = OkHttpClient.Builder()
+            .followRedirects(false)
+            .followSslRedirects(false)
+            .connectTimeout(30, TimeUnit.SECONDS)
+            .readTimeout(90, TimeUnit.SECONDS)
+            .callTimeout(30, TimeUnit.MINUTES)
+            .build()
+
+        fun isStrongEtag(value: String): Boolean =
+            STRONG_ETAG.matches(value)
+
+        fun taintedSizeError(message: String) = UpdatePreparationException(
+            UpdateErrorCode.SIZE_MISMATCH,
+            message,
         )
     }
 }
+
+internal data class DiscardRequest(
+    val key: String,
+    val predecessor: CompletableDeferred<Unit>?,
+    val completion: CompletableDeferred<Unit>,
+)
+
+internal data class PendingUpdateResume(
+    val descriptor: DirectUpdateDescriptor,
+    val downloadedBytes: Long,
+)
 
 internal fun verifyFileSizeAndSha256(
     file: File,
@@ -935,23 +1275,22 @@ internal fun verifyFileSizeAndSha256(
     return digest == descriptor.sha256
 }
 
-private suspend fun Call.await(): Response = suspendCancellableCoroutine { continuation ->
-    continuation.invokeOnCancellation { cancel() }
-    enqueue(
-        object : Callback {
-            override fun onFailure(call: Call, failure: IOException) {
-                if (continuation.isActive) continuation.resumeWithException(failure)
-            }
-
-            override fun onResponse(call: Call, response: Response) {
-                if (continuation.isActive) {
-                    continuation.resume(response)
-                } else {
-                    response.close()
-                }
-            }
-        },
-    )
+/** Cancellation aborts the socket, then waits for the writer to close before returning. */
+private suspend fun <T> Call.executeAndConsume(consume: (Response) -> T): T = coroutineScope {
+    val finished = AtomicBoolean(false)
+    val cancellationWatcher = launch(start = CoroutineStart.UNDISPATCHED) {
+        try {
+            awaitCancellation()
+        } finally {
+            if (!finished.get()) this@executeAndConsume.cancel()
+        }
+    }
+    try {
+        execute().use(consume)
+    } finally {
+        finished.set(true)
+        withContext(NonCancellable) { cancellationWatcher.cancelAndJoin() }
+    }
 }
 
 private fun ArchiveVerificationProblem.userMessage(): String = when (this) {

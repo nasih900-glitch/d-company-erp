@@ -329,6 +329,7 @@ private fun AppRoot(
                 outboxWorkStatus = outboxWorkStatus,
                 onDownload = { appUpdate.download(update.notice) },
                 onCancelDownload = appUpdate::cancel,
+                onDiscardDownload = appUpdate::discard,
                 onOpenUpdateLink = onOpenUpdateLink,
                 onInstall = {
                     appUpdate.verifiedFile(update.notice)?.let { file ->
@@ -1089,6 +1090,7 @@ private fun AppRoot(
             },
             onDownload = { appUpdate.download(notice) },
             onCancelDownload = appUpdate::cancel,
+            onDiscardDownload = appUpdate::discard,
             onOpenUpdateLink = onOpenUpdateLink,
             onInstall = {
                 appUpdate.verifiedFile(notice)?.let { file ->
@@ -1193,6 +1195,7 @@ private fun OptionalUpdateBanner(
     onDismiss: () -> Unit,
     onDownload: () -> Unit,
     onCancelDownload: () -> Unit,
+    onDiscardDownload: () -> Unit,
     onOpenUpdateLink: (String) -> Unit,
     onInstall: () -> Unit,
 ) {
@@ -1222,6 +1225,7 @@ private fun OptionalUpdateBanner(
                     outboxWorkStatus = outboxWorkStatus,
                     onDownload = onDownload,
                     onCancelDownload = onCancelDownload,
+                    onDiscardDownload = onDiscardDownload,
                     onOpenUpdateLink = {
                         onDismiss()
                         onOpenUpdateLink(it)
@@ -1241,6 +1245,7 @@ private fun RequiredUpdateScreen(
     outboxWorkStatus: OutboxWorkStatus,
     onDownload: () -> Unit,
     onCancelDownload: () -> Unit,
+    onDiscardDownload: () -> Unit,
     onOpenUpdateLink: (String) -> Unit,
     onInstall: () -> Unit,
 ) {
@@ -1275,6 +1280,7 @@ private fun RequiredUpdateScreen(
                     outboxWorkStatus = outboxWorkStatus,
                     onDownload = onDownload,
                     onCancelDownload = onCancelDownload,
+                    onDiscardDownload = onDiscardDownload,
                     onOpenUpdateLink = onOpenUpdateLink,
                     onInstall = onInstall,
                     compact = false,
@@ -1311,6 +1317,7 @@ private fun UpdateActionArea(
     outboxWorkStatus: OutboxWorkStatus,
     onDownload: () -> Unit,
     onCancelDownload: () -> Unit,
+    onDiscardDownload: () -> Unit,
     onOpenUpdateLink: (String) -> Unit,
     onInstall: () -> Unit,
     compact: Boolean,
@@ -1323,6 +1330,7 @@ private fun UpdateActionArea(
     val noticeVersion = notice.latestVersionCode
     val stateForNotice = when (state) {
         is AppUpdateUiState.Downloading,
+        is AppUpdateUiState.Paused,
         is AppUpdateUiState.Verifying,
         is AppUpdateUiState.Ready ->
             directDescriptor?.let { state.takeIf { current -> current.matchesDescriptor(it) } }
@@ -1387,11 +1395,28 @@ private fun UpdateActionArea(
                 trackColor = MaterialTheme.colorScheme.surface,
             )
             Text(
-                "Downloading ${(progress * 100).toInt()}% · do not close the app",
+                "Downloading ${(progress * 100).toInt()}% · saved progress can resume after a pause or connection interruption",
                 color = MaterialTheme.colorScheme.onSurface,
                 style = MaterialTheme.typography.bodySmall,
             )
-            TextButton(onClick = onCancelDownload) { Text("Cancel download") }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = onCancelDownload) { Text("Pause") }
+                TextButton(onClick = onDiscardDownload) { Text("Discard saved download") }
+            }
+        }
+        is AppUpdateUiState.Paused -> {
+            val percent = if (stateForNotice.totalBytes > 0) {
+                (stateForNotice.downloadedBytes * 100 / stateForNotice.totalBytes).coerceIn(0, 100)
+            } else 0
+            Text(
+                "Paused at $percent%. The saved bytes remain private on this device.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = onDownload) { Text("Resume saved download") }
+                TextButton(onClick = onDiscardDownload) { Text("Discard saved download") }
+            }
         }
         is AppUpdateUiState.Verifying -> Row(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -1415,7 +1440,14 @@ private fun UpdateActionArea(
         }
         is AppUpdateUiState.Failed -> {
             Text(stateForNotice.message, color = MaterialTheme.colorScheme.operationalDanger, style = MaterialTheme.typography.bodySmall)
-            if (directAvailable) Button(onClick = onDownload) { Text("Try download again") }
+            if (directAvailable) {
+                Button(onClick = onDownload) {
+                    Text(if (stateForNotice.canResume) "Resume saved download" else "Try download again")
+                }
+            }
+            if (stateForNotice.canResume) {
+                TextButton(onClick = onDiscardDownload) { Text("Discard saved download") }
+            }
             if (safeUrl != null) {
                 TextButton(onClick = { onOpenUpdateLink(safeUrl) }) { Text("Open HTTPS update link") }
             }

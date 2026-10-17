@@ -9,9 +9,9 @@ from __future__ import annotations
 import os
 from logging.config import fileConfig
 
-from alembic import context
 from sqlalchemy import engine_from_config, pool
 
+from alembic import context
 from app.models import Base  # noqa: F401 — ensures models are registered
 
 config = context.config
@@ -24,7 +24,10 @@ env_url = os.getenv("DATABASE_URL")
 if env_url:
     # Alembic uses sync driver
     sync_url = env_url.replace("+asyncpg", "+psycopg")
-    config.set_main_option("sqlalchemy.url", sync_url)
+    # ConfigParser treats percent-encoded URL components as interpolation.
+    # Escape them before storing the URL so local Unix-socket DSNs and encoded
+    # credentials reach SQLAlchemy unchanged.
+    config.set_main_option("sqlalchemy.url", sync_url.replace("%", "%%"))
 
 target_metadata = Base.metadata
 

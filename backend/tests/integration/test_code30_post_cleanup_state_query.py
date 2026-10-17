@@ -318,13 +318,28 @@ def _state(connection: psycopg.Connection) -> dict[str, object]:
 @pytest.mark.integration
 def test_post_cleanup_query_accepts_only_guarded_audited_key_churn() -> None:
     with _disposable_database("erp_code30_post_cleanup") as database_url:
-        upgraded = _run_alembic(database_url, "upgrade", "head")
+        upgraded = _run_alembic(database_url, "upgrade", "0088")
         assert upgraded.returncode == 0, upgraded.stdout + upgraded.stderr
         dsn = database_url.replace("postgresql+psycopg://", "postgresql://", 1)
         with psycopg.connect(dsn) as connection:
             _require_production_owner(connection)
             _seed_state(connection)
             connection.commit()
+            historical = _state(connection)
+            assert historical["client_installation_guard_function_sha256"] == (
+                "5e19e5e24daa5ef6de4d51f479e158f29981a01defded0c3f56a4d42a615f575"
+            )
+            assert historical["client_installation_guard_function_definition_sha256"] == (
+                "e04d616ebcd1c53e04424bd4071b881e1e6e439a6f2fda56419b6bcc2e3d6084"
+            )
+            assert historical["client_installation_guard_trigger_definition_sha256"] == (
+                "dcd3cdf560b382ab046934d824c29a3a90af5ba56a86fe56c87e78716e190ae7"
+            )
+
+        upgraded = _run_alembic(database_url, "upgrade", "0089")
+        assert upgraded.returncode == 0, upgraded.stdout + upgraded.stderr
+        with psycopg.connect(dsn) as connection:
+            _require_production_owner(connection)
 
             document = _state(connection)
             assert document["retired_installation_count"] == 1
@@ -334,10 +349,10 @@ def test_post_cleanup_query_accepts_only_guarded_audited_key_churn() -> None:
             assert document["retired_installation_invalid_telemetry_count"] == 0
             assert document["client_installation_guard_trigger_count"] == 1
             assert document["client_installation_guard_function_sha256"] == (
-                "5e19e5e24daa5ef6de4d51f479e158f29981a01defded0c3f56a4d42a615f575"
+                "e645c4c96223efca2fc522a55ea0abb16d51e0d87379d41e593e1b439702a46a"
             )
             assert document["client_installation_guard_function_definition_sha256"] == (
-                "e04d616ebcd1c53e04424bd4071b881e1e6e439a6f2fda56419b6bcc2e3d6084"
+                "495f0fce983228b68d3a5141f844c35c5ed1b0438dc26ff041737aba3b046f8b"
             )
             assert document["client_installation_guard_trigger_definition_sha256"] == (
                 "dcd3cdf560b382ab046934d824c29a3a90af5ba56a86fe56c87e78716e190ae7"
@@ -425,6 +440,24 @@ def test_post_cleanup_query_accepts_only_guarded_audited_key_churn() -> None:
             blocked = _state(connection)
             assert blocked["pending_outbox_count"] == 2
             assert blocked["nonzero_installation_count"] == 2
+            connection.rollback()
+
+        downgraded = _run_alembic(database_url, "downgrade", "0088")
+        assert downgraded.returncode == 0, downgraded.stdout + downgraded.stderr
+        with psycopg.connect(dsn) as connection:
+            _require_production_owner(connection)
+            restored = _state(connection)
+            assert restored["database_revision"] == "0088"
+            assert restored["pending_outbox_count"] == 1
+            assert restored["client_installation_guard_function_sha256"] == (
+                "5e19e5e24daa5ef6de4d51f479e158f29981a01defded0c3f56a4d42a615f575"
+            )
+            assert restored[
+                "client_installation_guard_function_definition_sha256"
+            ] == "e04d616ebcd1c53e04424bd4071b881e1e6e439a6f2fda56419b6bcc2e3d6084"
+            assert restored[
+                "client_installation_guard_trigger_definition_sha256"
+            ] == "dcd3cdf560b382ab046934d824c29a3a90af5ba56a86fe56c87e78716e190ae7"
 
 
 def _replace_trigger(

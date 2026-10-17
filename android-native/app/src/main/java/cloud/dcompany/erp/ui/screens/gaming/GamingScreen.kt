@@ -2008,13 +2008,7 @@ internal fun GamingCommandWorkspace(
                 }
                 Column(
                     Modifier.weight(0.38f)
-                        .then(if (fixedTabletWorkspace) Modifier.fillMaxHeight() else Modifier)
-                        .then(
-                            if (fixedTabletWorkspace) Modifier
-                            else Modifier.verticalScroll(
-                                remember(selectedStation.id, inlinePanel) { ScrollState(0) },
-                            ),
-                        ),
+                        .then(if (fixedTabletWorkspace) Modifier.fillMaxHeight() else Modifier),
                     verticalArrangement = Arrangement.spacedBy(Spacing.sm),
                 ) {
                 if (selectedSession == null && selectedStation.isActive) {
@@ -2039,6 +2033,7 @@ internal fun GamingCommandWorkspace(
                             startBlockMessage = startBlockMessage,
                             selectionState = startSelection,
                             externallyHostedDial = true,
+                            pinActions = fixedTabletWorkspace,
                         )
                     }
                 } else {
@@ -6394,6 +6389,7 @@ internal fun StartSessionEditor(
     startBlockMessage: String? = null,
     selectionState: GamingStartSelectionState? = null,
     externallyHostedDial: Boolean = false,
+    pinActions: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     var name by remember { mutableStateOf("") }
@@ -6929,11 +6925,20 @@ internal fun StartSessionEditor(
                 .padding(top = Spacing.xs),
             verticalArrangement = Arrangement.spacedBy(Spacing.xs),
         ) {
-            Column(
-                Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(Spacing.xs),
-            ) {
-                optionsContent()
+            if (pinActions) {
+                Column(
+                    Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.xs),
+                ) {
+                    optionsContent()
+                }
+            } else {
+                Column(
+                    Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.xs),
+                ) {
+                    optionsContent()
+                }
             }
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             Column(Modifier.fillMaxWidth()) {
@@ -7587,7 +7592,13 @@ internal fun GamingInlineDrinkEditor(
                 }
             } else {
                 Column(
-                    Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()),
+                    Modifier.fillMaxWidth().then(
+                        if (pinActions) {
+                            Modifier.weight(1f).verticalScroll(rememberScrollState())
+                        } else {
+                            Modifier
+                        },
+                    ),
                     verticalArrangement = Arrangement.spacedBy(Spacing.xs),
                 ) {
                     Row(

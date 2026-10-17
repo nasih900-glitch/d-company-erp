@@ -22,6 +22,7 @@ from scripts.verify_code26_regression_freeze import (
     CODE30_4_BUILD46_BASE,
     CODE30_4_BUILD47_BASE,
     CODE30_4_BUILD48_BASE,
+    CODE30_4_BUILD49_BASE,
     CODE30_4_FREEZE_CONTROL_PATHS,
     RegressionFreezeError,
     REVIEWED_CODE29_2_PRODUCTION_PATHS,
@@ -47,6 +48,7 @@ from scripts.verify_code26_regression_freeze import (
     REVIEWED_CODE30_4_BUILD47_SHA256,
     REVIEWED_CODE30_4_BUILD48_SHA256,
     REVIEWED_CODE30_4_BUILD49_SHA256,
+    REVIEWED_CODE30_4_BUILD50_SHA256,
     REVIEWED_CODE30_4_SHA256,
     REVIEWED_POST_CODE30_3_MAINTENANCE_SHA256,
     REVIEWED_CODE30_PRODUCTION_PATHS,
@@ -97,7 +99,7 @@ def _reviewed_code30_point4_maps(source: bytes) -> dict[str, dict[str, str]]:
 
 
 def _current_reviewed_sha256(path: str, fallback: str) -> str:
-    return REVIEWED_CODE30_4_BUILD49_SHA256.get(path) or REVIEWED_CODE30_4_BUILD48_SHA256.get(path) or REVIEWED_CODE30_4_BUILD47_SHA256.get(path) or REVIEWED_CODE30_4_BUILD46_SHA256.get(path) or REVIEWED_CODE30_4_BUILD45_SHA256.get(path) or REVIEWED_CODE30_4_BUILD44_SHA256.get(path) or REVIEWED_CODE30_4_BUILD43_SHA256.get(path) or REVIEWED_CODE30_4_BUILD42_SHA256.get(
+    return REVIEWED_CODE30_4_BUILD50_SHA256.get(path) or REVIEWED_CODE30_4_BUILD49_SHA256.get(path) or REVIEWED_CODE30_4_BUILD48_SHA256.get(path) or REVIEWED_CODE30_4_BUILD47_SHA256.get(path) or REVIEWED_CODE30_4_BUILD46_SHA256.get(path) or REVIEWED_CODE30_4_BUILD45_SHA256.get(path) or REVIEWED_CODE30_4_BUILD44_SHA256.get(path) or REVIEWED_CODE30_4_BUILD43_SHA256.get(path) or REVIEWED_CODE30_4_BUILD42_SHA256.get(
         path,
         REVIEWED_CODE30_4_BUILD41_SHA256.get(
             path,
@@ -322,6 +324,15 @@ def test_code30_point4_release_build48_identity_normalises_to_inherited_code25_b
 def test_code30_point4_release_build49_identity_normalises_to_inherited_code25_baseline() -> None:
     path = "android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt"
     current = 'assertEquals(49, BuildConfig.VERSION_CODE)\n"3.1.41"\ncode 30.4 artifact\n'
+    assert _normalise_release_identity(path, current) == (
+        'assertEquals(25, BuildConfig.VERSION_CODE)\n"3.1.14"\ncode 25 artifact\n'
+    )
+    assert _normalise_release_identity("backend/tests/unit/test_money.py", current) == current
+
+
+def test_code30_point4_release_build50_identity_normalises_to_inherited_code25_baseline() -> None:
+    path = "android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt"
+    current = 'assertEquals(50, BuildConfig.VERSION_CODE)\n"3.1.42"\ncode 30.4 artifact\n'
     assert _normalise_release_identity(path, current) == (
         'assertEquals(25, BuildConfig.VERSION_CODE)\n"3.1.14"\ncode 25 artifact\n'
     )
@@ -656,9 +667,9 @@ def test_code30_point4_build48_overlay_requires_exact_current_bytes(
     assert hashlib.sha256(current + b"\n").hexdigest() != expected_sha256
 
 
-def test_code30_point4_maps_through_build48_are_immutable() -> None:
+def test_code30_point4_maps_through_build49_are_immutable() -> None:
     historical = _reviewed_code30_point4_maps(
-        _git_object_bytes(CODE30_4_BUILD48_BASE, "scripts/verify_code26_regression_freeze.py")
+        _git_object_bytes(CODE30_4_BUILD49_BASE, "scripts/verify_code26_regression_freeze.py")
     )
     current = _reviewed_code30_point4_maps(
         (ROOT / "scripts/verify_code26_regression_freeze.py").read_bytes()
@@ -672,6 +683,17 @@ def test_code30_point4_maps_through_build48_are_immutable() -> None:
     ("path", "expected_sha256"), REVIEWED_CODE30_4_BUILD49_SHA256.items()
 )
 def test_code30_point4_build49_overlay_requires_exact_current_bytes(
+    path: str, expected_sha256: str
+) -> None:
+    current = _git_object_bytes(CODE30_4_BUILD49_BASE, path)
+    assert hashlib.sha256(current).hexdigest() == expected_sha256
+    assert hashlib.sha256(current + b"\n").hexdigest() != expected_sha256
+
+
+@pytest.mark.parametrize(
+    ("path", "expected_sha256"), REVIEWED_CODE30_4_BUILD50_SHA256.items()
+)
+def test_code30_point4_build50_overlay_requires_exact_current_bytes(
     path: str, expected_sha256: str
 ) -> None:
     current = (ROOT / path).read_bytes()
@@ -712,6 +734,7 @@ def test_code30_point4_delta_inventory_is_exact() -> None:
         | set(REVIEWED_CODE30_4_BUILD47_SHA256)
         | set(REVIEWED_CODE30_4_BUILD48_SHA256)
         | set(REVIEWED_CODE30_4_BUILD49_SHA256)
+        | set(REVIEWED_CODE30_4_BUILD50_SHA256)
     )
 
 
@@ -825,7 +848,22 @@ def test_code30_point4_build48_delta_inventory_is_exact() -> None:
 def test_code30_point4_build49_delta_inventory_is_exact() -> None:
     changed = set(
         subprocess.run(
-            ["git", "diff", "--name-only", CODE30_4_BUILD48_BASE],
+            ["git", "diff", "--name-only", CODE30_4_BUILD48_BASE, CODE30_4_BUILD49_BASE],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.splitlines()
+    )
+    assert {path for path in changed if path} == (
+        set(REVIEWED_CODE30_4_BUILD49_SHA256) | set(CODE30_4_FREEZE_CONTROL_PATHS)
+    )
+
+
+def test_code30_point4_build50_delta_inventory_is_exact() -> None:
+    changed = set(
+        subprocess.run(
+            ["git", "diff", "--name-only", CODE30_4_BUILD49_BASE],
             cwd=ROOT,
             check=True,
             capture_output=True,
@@ -842,7 +880,7 @@ def test_code30_point4_build49_delta_inventory_is_exact() -> None:
         ).stdout.splitlines()
     )
     assert {path for path in changed if path} == (
-        set(REVIEWED_CODE30_4_BUILD49_SHA256) | set(CODE30_4_FREEZE_CONTROL_PATHS)
+        set(REVIEWED_CODE30_4_BUILD50_SHA256) | set(CODE30_4_FREEZE_CONTROL_PATHS)
     )
 
 
