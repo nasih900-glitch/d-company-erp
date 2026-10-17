@@ -28,7 +28,7 @@ PRIOR_SOURCE_ARCHIVE_SHA256 = "a3cc663d594e2d5a40b4d03fd6265623c5e7ac12676f5f34c
 PRIOR_BACKEND_MANIFEST_SHA256 = "ee4bba277ad5c51eb73b7be414628a093388bdc2daa16d0d87f5ef7d149183af"
 CANDIDATE_BACKEND_MANIFEST_SHA256 = "c9ee93b7c3625f26e43dd1bb62fb6b50796d2e47a54313e38dcca1912d80328a"
 PRIOR_SOURCE_SHA256 = "11f178acff0b78e65441ea8017e960efd7897639a5c4684330e3f1c828137e1e"
-CANDIDATE_SOURCE_SHA256 = "210718fabdfae0723af11d10d533f3a6a99b51c1561b0636f3731e92078f4448"
+CANDIDATE_SOURCE_SHA256 = "b3b4d08c8d964a156b8fb325c0636825e96264bc6d8da994b38ca65c7cdde1d9"
 
 HISTORICAL_HELPER = "infra/scripts/verify-build47-pending-compatibility.py"
 HISTORICAL_HELPER_SHA256 = "bdadff290dccda6fb6c2fbdbc0a6a4ce47746f27650e72f859bf8dd5d40a9e1f"
@@ -125,7 +125,7 @@ REVIEWED_CHANGES: dict[str, tuple[str | None, str | None]] = {'.env.production.e
  'frontend/src/modules/staff/StaffScreen.tsx': ('74e0eb94f002ead85f810cab374f8a2febb860f2cfcac84a49b2b680c9ee572a',
                                                 '10e883b640dd8fc4b256cb34c7ac548603335c84fd520a3c1c643340c0d0daaa'),
  'infra/scripts/install-on-vm.sh': ('3ee444429f46b5ca9e397dce6b46a07307d2e8192a8662baa1be4c6652494db3',
-                                    'ba7b7c13cff43863e8207feca312fc25f67058e238f0fcd114597b4ebefb202d')}
+                                    '344628c3ad4f00a67c05498f97f7a3c4f8e3abd4c1661f2ff27fde0579aa8c4f')}
 
 
 def _verify_immutable_build48_helper(candidate: Path) -> None:

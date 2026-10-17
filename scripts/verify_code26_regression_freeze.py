@@ -1341,8 +1341,8 @@ REVIEWED_CODE30_4_BUILD50_SHA256 = {'.env.production.example': 'bb3067963b7b927a
  'frontend/package.json': '3077691b3a06731ffeacafac239afd374c185b1110fec7062abf6a3064bf1a1f',
  'frontend/src/modules/auth/Login.tsx': '5b04083b2ed1de635181971af5144758b70f1dbabde3ec1d82ed0162af6d6949',
  'frontend/src/modules/staff/StaffScreen.tsx': '10e883b640dd8fc4b256cb34c7ac548603335c84fd520a3c1c643340c0d0daaa',
- 'infra/scripts/install-on-vm.sh': 'ba7b7c13cff43863e8207feca312fc25f67058e238f0fcd114597b4ebefb202d',
- 'infra/scripts/verify-build50-pending-compatibility.py': 'a3a8449f3a07df610777c638b051eb0c57aea46f0867e05cd42a93efed32668b',
+ 'infra/scripts/install-on-vm.sh': '344628c3ad4f00a67c05498f97f7a3c4f8e3abd4c1661f2ff27fde0579aa8c4f',
+ 'infra/scripts/verify-build50-pending-compatibility.py': 'f440064f421c02a32ccbd37783ab590f4068cf5b91f5d0006abca4c0959e7221',
  'tests/test_build49_pending_compatibility.py': 'ac8b4a4b096e6cd4a05cf8141ed3211a250fc892daf832f36414ef462c049521',
  'tests/test_build50_pending_compatibility.py': '3da41c2a4efca887bcbada9a9c9f0cdc5f405a9b8c7b8ac4b7096832c4e9fee8',
  'tests/test_code26_physical_audit_lane.py': '3c13a10df7cae661b653a27b1cba222686955e64a569b1372fbb3490c3b50ade'}
