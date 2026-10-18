@@ -4,9 +4,7 @@ from copy import deepcopy
 import hashlib
 import importlib.util
 import io
-import os
 from pathlib import Path
-import shutil
 import subprocess
 import tarfile
 
@@ -45,31 +43,9 @@ def _extract(ref: str, destination: Path) -> bytes:
 
 
 def _candidate_snapshot(helper, destination: Path) -> None:
-    _extract(helper.PRIOR_REVISION, destination)
-    changed = set(
-        subprocess.check_output(
-            ["git", "diff", "--name-only", "-z", helper.PRIOR_REVISION], cwd=ROOT
-        ).decode().split("\0")
-    )
-    changed.update(
-        subprocess.check_output(
-            ["git", "ls-files", "--others", "--exclude-standard", "-z"], cwd=ROOT
-        ).decode().split("\0")
-    )
-    for relative_name in sorted(name for name in changed if name):
-        relative = Path(relative_name)
-        source = ROOT / relative
-        target = destination / relative
-        if source.is_symlink():
-            target.parent.mkdir(parents=True, exist_ok=True)
-            if target.exists() or target.is_symlink():
-                target.unlink()
-            target.symlink_to(os.readlink(source))
-        elif source.is_file():
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, target)
-        else:
-            target.unlink(missing_ok=True)
+    # The reviewed Build50 delta is historical. Today's Build51 working tree
+    # must never be relabelled as that exact compatibility candidate.
+    _extract("29e32b440ab8dc162b6c8f5d40f8283fad53ce04", destination)
 
 
 def test_exact_immutable_build49_to_build50_source_delta(helper, tmp_path):
