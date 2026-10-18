@@ -45,6 +45,9 @@ internal class FileTenderJournalStorage(
         val bytes = value.toByteArray(Charsets.UTF_8)
         require(bytes.size <= MAX_BYTES) { "Saved correction exceeds the supported size." }
         val parent = requireNotNull(checkedDirectory(create = true))
+        // A prior mkdir may have succeeded while its parent fsync failed.
+        // Existing in-memory/path visibility does not prove directory durability.
+        syncDirectory(requireNotNull(parent.parent))
         val base = path(parent, key)
         val temporary = temporary(base)
         FileChannel.open(temporary, CREATE, TRUNCATE_EXISTING, WRITE, NOFOLLOW_LINKS).use { channel ->
@@ -74,7 +77,6 @@ internal class FileTenderJournalStorage(
         } catch (missing: NoSuchFileException) {
             if (!create) return null
             Files.createDirectory(parent)
-            syncDirectory(requireNotNull(parent.parent))
             Files.readAttributes(parent, BasicFileAttributes::class.java, NOFOLLOW_LINKS)
         }
         check(attributes.isDirectory && !attributes.isSymbolicLink) { "Unsafe correction journal directory." }

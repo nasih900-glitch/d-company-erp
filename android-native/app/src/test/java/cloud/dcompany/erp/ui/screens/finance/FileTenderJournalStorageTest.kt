@@ -62,6 +62,25 @@ class FileTenderJournalStorageTest {
         assertEquals(command(),journal.reserve(command()))
     }
 
+    @Test fun failedContainingDirectorySyncCannotBeSkippedOnRetryAfterMkdir() = runBlocking {
+        var fail=true
+        var parentSyncs=0
+        val journal=TenderJournal(storage { path ->
+            if(path == folder().parent) {
+                parentSyncs++
+                if(fail) throw IOException("parent fsync failed after mkdir")
+            }
+        })
+        assertTrue(runCatching { journal.reserve(command()) }.isFailure)
+        assertTrue(Files.isDirectory(folder()))
+        assertTrue(runCatching { journal.reserve(command()) }.isFailure)
+        assertEquals(2,parentSyncs)
+        fail=false
+        assertEquals(command(),journal.reserve(command()))
+        assertEquals(3,parentSyncs)
+        assertEquals(command(),TenderJournal(storage()).read(scope))
+    }
+
     @Test fun unsupportedAtomicMoveHasNoCopyFallbackAndRetainsCompletePreparationForExactRecovery() = runBlocking {
         val failing=FileTenderJournalStorage({folder()},{},{from,to ->
             throw AtomicMoveNotSupportedException(from.toString(),to.toString(),"unsupported")
