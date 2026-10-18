@@ -408,6 +408,8 @@ private fun AppRoot(
                         signingIn = signingIn,
                         error = loginError,
                         onSignIn = session::signIn,
+                        appearancePreference = appearancePreference,
+                        onAppearancePreferenceChanged = onAppearancePreferenceChanged,
                     )
                 }
                 if (pendingNotificationTarget != null) {

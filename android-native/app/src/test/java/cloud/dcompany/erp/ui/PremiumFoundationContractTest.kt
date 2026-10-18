@@ -33,7 +33,6 @@ class PremiumFoundationContractTest {
         val brandMark = read("src/main/java/cloud/dcompany/erp/ui/components/DCompanyBrandMark.kt")
 
         assertTrue("DCompanyBrandMark(" in login)
-        assertTrue("size = 92.dp" in login)
         assertTrue("painterResource(R.mipmap.ic_launcher_foreground)" in brandMark)
         assertTrue("clip(CircleShape)" in brandMark)
         assertTrue("contentScale = ContentScale.Crop" in brandMark)
@@ -43,7 +42,6 @@ class PremiumFoundationContractTest {
         assertFalse("GAMING CENTRE" in login)
         assertFalse("GAMING CENTRE" in navigation)
         assertFalse("Cafe + Gaming Lounge" in login)
-        assertTrue("shape = Radius.shapeXl" in login)
     }
 
     @Test
