@@ -513,3 +513,45 @@ def test_creation_refuses_conflicting_baseline_or_cutoff_options(
     assert verifier.main() == 1
     assert "origin creation cannot select baseline" in capsys.readouterr().err
     assert not (tmp_path / "origin.json").exists()
+
+
+def test_installer_current_cutoff_cli_has_no_fresh_origin_requirement(
+    verifier, tmp_path, monkeypatch, capsys
+):
+    import sys
+    from types import SimpleNamespace
+
+    state = fresh_document(verifier)
+    raw = tmp_path / "current-state.json"
+    raw.write_text(json.dumps(state))
+    raw.chmod(0o600)
+    # CLI production admission requires root ownership; portable test only
+    # substitutes that filesystem check, not mode parsing or state validation.
+    monkeypatch.setattr(
+        verifier,
+        "_load_verifiers",
+        lambda _root: (SimpleNamespace(_private_file=lambda _path: None), None, None),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "verify51",
+            "--current-state",
+            "--raw-historical-state",
+            str(raw),
+            "--show-preserve-cutoff",
+        ],
+    )
+    assert verifier.main() == 0
+    assert capsys.readouterr().out.strip() == str(state["preserved_prefix"]["cutoff"])
+
+
+def test_preserve_cutoff_without_either_supported_mode_is_refused(
+    verifier, monkeypatch, capsys
+):
+    import sys
+
+    monkeypatch.setattr(sys, "argv", ["verify51", "--show-preserve-cutoff"])
+    assert verifier.main() == 1
+    assert "requires current state or fresh origin" in capsys.readouterr().err

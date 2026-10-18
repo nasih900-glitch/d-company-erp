@@ -545,10 +545,15 @@ def main():
         if (
             args.create_fresh_origin
             or args.show_origin_cutoff
-            or args.show_preserve_cutoff
             or args.baseline_fresh_state is not None
         ) and args.fresh_origin is None:
             raise PostMigrationError("fresh origin is required for lineage options")
+        if args.show_preserve_cutoff and not (
+            args.current_state or args.fresh_origin is not None
+        ):
+            raise PostMigrationError(
+                "preservation cutoff requires current state or fresh origin mode"
+            )
         if args.fresh_admission_confirmed and not args.create_fresh_origin:
             raise PostMigrationError(
                 "fresh admission is valid only during exclusive origin creation"
