@@ -720,15 +720,7 @@ async def _cleanup(case: _RefundCase, *, keys: tuple[str, ...]) -> None:
                 await cleanup.execute(select(Refund.id).where(Refund.id.in_(refund_ids)))
             ).scalars()
         )
-        await cleanup.execute(
-            delete(AuditLog).where(
-                AuditLog.company_id == case.company_id,
-                or_(
-                    AuditLog.client_action_id.in_(keys),
-                    AuditLog.entity_id.in_(entity_ids),
-                ),
-            )
-        )
+        # Retain append-only Audit evidence; fixture identities are unique.
         await cleanup.execute(delete(IdempotencyKey).where(IdempotencyKey.key.in_(keys)))
         await cleanup.execute(
             delete(CustomerSpendReconciliation).where(
@@ -2400,9 +2392,7 @@ async def test_cash_handoff_names_starter_and_requires_explicit_owner_takeover(
     finally:
         await _cleanup(case, keys=keys)
         async with AsyncSessionLocal() as cleanup:
-            await cleanup.execute(
-                delete(AuditLog).where(AuditLog.entity_id == str(takeover_owner.id))
-            )
+            # Retain append-only Audit evidence; fixture identities are unique.
             await cleanup.execute(delete(User).where(User.id == takeover_owner.id))
             await cleanup.commit()
 
@@ -2893,9 +2883,7 @@ async def test_database_rejects_cross_tenant_root_actor_time_and_null_forward_fl
         await _cleanup(case, keys=keys)
         async with AsyncSessionLocal() as cleanup:
             await cleanup.execute(delete(User).where(User.id == inactive_actor.id))
-            await cleanup.execute(
-                delete(AuditLog).where(AuditLog.company_id == other_company.id)
-            )
+            # Retain append-only Audit evidence; fixture identities are unique.
             await cleanup.execute(delete(User).where(User.id == other_owner.id))
             await cleanup.execute(delete(Company).where(Company.id == other_company.id))
             await cleanup.commit()
@@ -4008,13 +3996,7 @@ async def test_legacy_refund_is_visible_reconciled_once_and_append_only(
                     )
                 ).scalars()
             )
-            await cleanup.execute(
-                delete(AuditLog).where(
-                    AuditLog.entity_id.in_(
-                        [str(legacy_refund_id), *(str(row_id) for row_id in reconciliation_ids)]
-                    )
-                )
-            )
+            # Retain append-only Audit evidence; fixture identities are unique.
             await cleanup.execute(
                 delete(CustomerSpendReconciliation).where(
                     CustomerSpendReconciliation.pos_refund_id == legacy_refund_id
@@ -4025,9 +4007,7 @@ async def test_legacy_refund_is_visible_reconciled_once_and_append_only(
             await cleanup.commit()
         await _cleanup(case, keys=keys)
         async with AsyncSessionLocal() as cleanup:
-            await cleanup.execute(
-                delete(AuditLog).where(AuditLog.company_id == other_company.id)
-            )
+            # Retain append-only Audit evidence; fixture identities are unique.
             await cleanup.execute(delete(User).where(User.id == other_owner.id))
             await cleanup.execute(delete(Company).where(Company.id == other_company.id))
             await cleanup.commit()

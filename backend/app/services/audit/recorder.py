@@ -195,7 +195,11 @@ def clear_request_context() -> None:
 # ---------------------------------------------------------------------------
 # Tracked models — every write to one of these writes an audit row.
 # ---------------------------------------------------------------------------
+from app.models import DailyTenderReconciliation, PaymentTenderCorrection
+
 TRACKED: set[type] = {
+    PaymentTenderCorrection,
+    DailyTenderReconciliation,
     Account,
     Asset,
     Attendance,
@@ -499,7 +503,7 @@ def _enrich_manual_audit_row(row: AuditLog) -> None:
         key: value for key, value in (row.after or {}).items() if key in DETAIL_FIELDS
     })
     row.operation_id = row.operation_id or row.client_action_id or row.request_id
-    if row.operation_id and len(row.operation_id) > 100:
+    if row.operation_id and len(row.operation_id) > 160:
         row.operation_id = "sha256:" + hashlib.sha256(row.operation_id.encode()).hexdigest()
 
 

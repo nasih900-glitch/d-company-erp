@@ -93,6 +93,19 @@ class ExpenseLineDTO(BaseModel):
     amount_minor: int
 
 
+class TenderReclassificationRead(BaseModel):
+    id: UUID
+    branch_id: UUID
+    business_date: date
+    business_timezone: str
+    kind: Literal["applied", "unresolved"]
+    cash_delta_minor: int
+    upi_delta_minor: int
+    total_difference_minor: int
+    basis: Literal["unallocated_owner_attestation"]
+    recorded_at: datetime
+
+
 class ReportDTO(BaseModel):
     accounting_basis: Literal["operational_receipt"] = "operational_receipt"
     branch_id: UUID | None
@@ -109,6 +122,7 @@ class ReportDTO(BaseModel):
 
     revenue: RevenueDTO
     tax_collected: TaxDTO
+    tender_reclassifications: list[TenderReclassificationRead] = Field(default_factory=list)
     payments_received: PaymentsDTO
     # Same value as revenue.manual_collections_minor, repeated at the report
     # level so exports and accounting clients cannot mistake it for an order.
@@ -195,6 +209,7 @@ def _to_dto(r: PnLReport) -> ReportDTO:
             cess_minor=r.tax_collected.cess_minor,
             total_minor=r.tax_collected.total_minor,
         ),
+        tender_reclassifications=r.tender_reclassifications,
         payments_received=PaymentsDTO(
             cash_minor=r.payments_received.cash_minor,
             upi_minor=r.payments_received.upi_minor,

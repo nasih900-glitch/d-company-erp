@@ -34,7 +34,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from sqlalchemy import func, or_, select
+from sqlalchemy import exists, func, or_, select
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.orm import aliased
 
@@ -42,6 +42,8 @@ from app.core.cleanup_replay_fence import (
     refuse_retired_action_replay,
     refuse_versioned_shift_opening_replay,
 )
+from app.services.finance.tender_corrections import effective_payment_method, corrections_for_payments
+from app.models import PaymentTenderCorrection
 from app.core.db import SessionDep
 from app.core.errors import (
     BusinessRuleError,
@@ -410,6 +412,11 @@ class PaymentRead(BaseModel):
     order_id: UUID
     shift_id: UUID
     method: PosPaymentMethod
+    original_method: PosPaymentMethod | None = None
+    original_tendered_minor: int | None = None
+    original_change_minor: int | None = None
+    tender_correction_id: UUID | None = None
+    tender_correction_recorded_at: datetime | None = None
     # amount_minor is the total actually collected/banked (bill + tip), which
     # preserves the pre-existing API meaning. bill_amount_minor makes the split
     # explicit so receipt clients never add the tip twice.
@@ -468,6 +475,11 @@ class PaymentBundleCreate(BaseModel):
 class PaymentBundleLegRead(BaseModel):
     id: UUID
     method: PosPaymentMethod
+    original_method: PosPaymentMethod | None = None
+    original_tendered_minor: int | None = None
+    original_change_minor: int | None = None
+    tender_correction_id: UUID | None = None
+    tender_correction_recorded_at: datetime | None = None
     amount_minor: int
     tendered_minor: int | None
     change_minor: int | None
@@ -523,6 +535,11 @@ class ReceiptPaymentHistoryRead(BaseModel):
     id: UUID
     shift_id: UUID
     method: PosPaymentMethod
+    original_method: PosPaymentMethod | None = None
+    original_tendered_minor: int | None = None
+    original_change_minor: int | None = None
+    tender_correction_id: UUID | None = None
+    tender_correction_recorded_at: datetime | None = None
     amount_minor: int
     tendered_minor: int | None
     change_minor: int | None
@@ -678,6 +695,8 @@ class ReceiptHistoryRead(BaseModel):
 
 
 class ReceiptHistoryPage(BaseModel):
+    date_filter_basis: str = "invoice_issued_at_in_shop_timezone"
+    shop_timezone: str | None = None
     items: list[ReceiptHistoryRead]
     next_cursor: str | None
     has_more: bool
@@ -786,6 +805,7 @@ async def _receipt_history_reads(
         .scalars()
         .all()
     )
+    tender_corrections = await corrections_for_payments(session, [p.id for p in payment_rows])
     # A settlement moves money from an unresolved request into Refund. Reading
     # those tables in separate READ COMMITTED statements can observe the row
     # after it left the first projection but before it entered the second one,
@@ -1219,15 +1239,20 @@ async def _receipt_history_reads(
                     ReceiptPaymentHistoryRead(
                         id=payment.id,
                         shift_id=payment.shift_id,
-                        method=payment.method,
+                        method=tender_corrections[payment.id].effective_method if payment.id in tender_corrections else payment.method,
+                        original_method=payment.method,
+                        original_tendered_minor=payment.tendered_minor,
+                        original_change_minor=payment.change_minor,
+                        tender_correction_id=tender_corrections[payment.id].id if payment.id in tender_corrections else None,
+                        tender_correction_recorded_at=tender_corrections[payment.id].recorded_at if payment.id in tender_corrections else None,
                         amount_minor=int(payment.amount_minor),
                         tendered_minor=(
                             int(payment.tendered_minor)
-                            if payment.tendered_minor is not None
+                            if payment.tendered_minor is not None and payment.id not in tender_corrections
                             else None
                         ),
                         change_minor=(
-                            int(payment.change_minor) if payment.change_minor is not None else None
+                            int(payment.change_minor) if payment.change_minor is not None and payment.id not in tender_corrections else None
                         ),
                         reference=payment.ref_external,
                         paid_at=payment.paid_at,
@@ -1294,6 +1319,20 @@ async def _receipt_history_reads(
     return results
 
 
+async def _effective_payment_response(session, response):
+    corrections = await corrections_for_payments(session, [response.id])
+    correction = corrections.get(response.id)
+    if correction is None:
+        return response
+    return response.model_copy(update={"method": correction.effective_method,
+        "original_method": correction.original_method,
+        "original_tendered_minor": correction.original_tendered_minor,
+        "original_change_minor": correction.original_change_minor,
+        "tendered_minor": None, "change_minor": None,
+        "tender_correction_id": correction.id,
+        "tender_correction_recorded_at": correction.recorded_at})
+
+
 async def _payment_read_from_stored_response(
     session,
     *,
@@ -1311,7 +1350,7 @@ async def _payment_read_from_stored_response(
     stored bodies remain errors instead of being guessed at.
     """
     try:
-        return PaymentRead.model_validate(body)
+        return await _effective_payment_response(session, PaymentRead.model_validate(body))
     except ValidationError as validation_error:
         legacy_fields = {
             "id",
@@ -1355,7 +1394,7 @@ async def _payment_read_from_stored_response(
                 "owner to reconcile it."
             )
 
-        return PaymentRead(
+        return await _effective_payment_response(session, PaymentRead(
             id=payment.id,
             order_id=payment.order_id,
             shift_id=payment.shift_id,
@@ -1371,7 +1410,7 @@ async def _payment_read_from_stored_response(
             invoice_no=body["invoice_no"],
             fiscal_year=body["fiscal_year"],
             invoice_issued_at=body["invoice_issued_at"],
-        )
+        ))
 
 
 class OrderCustomerUpdate(BaseModel):
@@ -2168,11 +2207,11 @@ async def _final_payment_breakdown(
         existing_rows = (
             await session.execute(
                 select(
-                    Payment.method,
+                    effective_payment_method(),
                     func.coalesce(func.sum(Payment.amount_minor), 0),
                 )
                 .where(Payment.order_id == order_id)
-                .group_by(Payment.method)
+                .group_by(effective_payment_method())
             )
         ).all()
         existing_total = 0
@@ -2209,11 +2248,11 @@ async def _final_payment_bundle_breakdown(
         existing_rows = (
             await session.execute(
                 select(
-                    Payment.method,
+                    effective_payment_method(),
                     func.coalesce(func.sum(Payment.amount_minor), 0),
                 )
                 .where(Payment.order_id == order_id)
-                .group_by(Payment.method)
+                .group_by(effective_payment_method())
             )
         ).all()
         existing_total = 0
@@ -3557,11 +3596,18 @@ async def get_receipt_business(
     summary="List immutable POS receipts for cross-platform history sync",
 )
 async def list_receipt_history(
+    request: Request,
     session: SessionDep,
     tenant: TenantContext = Depends(requires("pos.read")),  # noqa: B008
     cursor: Annotated[str | None, Query(max_length=512)] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     q: Annotated[str | None, Query(max_length=200)] = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    station_id: UUID | None = None,
+    amount_minor: Annotated[int | None, Query(ge=0)] = None,
+    method: PosPaymentMethod | None = None,
+    staff_user_id: UUID | None = None,
 ) -> ReceiptHistoryPage:
     """Return newest-first finalized receipts with a stable opaque cursor.
 
@@ -3577,6 +3623,20 @@ async def list_receipt_history(
         )
 
     normalized_query = _normalized_receipt_query(q)
+    filters = {"date_from": str(date_from) if date_from else None,
+        "date_to": str(date_to) if date_to else None, "station_id": str(station_id) if station_id else None,
+        "amount_minor": amount_minor, "method": method, "staff_user_id": str(staff_user_id) if staff_user_id else None}
+    filtering = any(value is not None for value in filters.values())
+    cursor_query = normalized_query
+    allowed = {"q", "cursor", "limit", *filters}
+    if set(request.query_params) - allowed or len(request.query_params.multi_items()) != len(request.query_params):
+        raise BusinessRuleError("Unsupported or duplicate receipt investigation filter.")
+    if filtering:
+        if date_from and date_to and date_from > date_to:
+            raise BusinessRuleError("Receipt date range is reversed.")
+        zone = await company_timezone(session, tenant.company_id)
+        filters["shop_timezone"] = zone
+        cursor_query = json.dumps({"query": normalized_query, "filters": filters},sort_keys=True,separators=(",", ":"))
     stmt = select(Order).where(
         Order.company_id == tenant.company_id,
         Order.branch_id == tenant.branch_id,
@@ -3586,6 +3646,26 @@ async def list_receipt_history(
         Order.invoice_issued_at.is_not(None),
         Order.closed_at.is_not(None),
     )
+    if date_from is not None or date_to is not None:
+        zone = await company_timezone(session, tenant.company_id)
+        if date_from is not None:
+            lower, _ = local_date_bounds_utc(date_from, date_from, zone)
+            stmt = stmt.where(Order.invoice_issued_at >= lower)
+        if date_to is not None:
+            _, upper = local_date_bounds_utc(date_to, date_to, zone)
+            stmt = stmt.where(Order.invoice_issued_at < upper)
+    if amount_minor is not None:
+        stmt = stmt.where(Order.total_minor == amount_minor)
+    if station_id is not None:
+        stmt = stmt.where(exists().where(GamingSession.order_id == Order.id,
+            GamingSession.company_id == tenant.company_id, GamingSession.station_id == station_id))
+    if method is not None or staff_user_id is not None:
+        leg = select(Payment.id).where(Payment.order_id == Order.id)
+        if method is not None:
+            leg = leg.where(effective_payment_method() == method)
+        if staff_user_id is not None:
+            leg = leg.where(Payment.recorded_by == staff_user_id)
+        stmt = stmt.where(exists(leg))
     if normalized_query is not None:
         escaped_invoice = (
             normalized_query.replace("\\", "\\\\")
@@ -3622,7 +3702,7 @@ async def list_receipt_history(
     if cursor is not None:
         cursor_issued_at, cursor_order_id = _decode_receipt_cursor(
             cursor,
-            query=normalized_query,
+            query=cursor_query,
             company_id=tenant.company_id,
             branch_id=tenant.branch_id,
         )
@@ -3656,11 +3736,12 @@ async def list_receipt_history(
         next_cursor = _encode_receipt_cursor(
             last_order.invoice_issued_at,
             last_order.id,
-            query=normalized_query,
+            query=cursor_query,
             company_id=tenant.company_id,
             branch_id=tenant.branch_id,
         )
     return ReceiptHistoryPage(
+        shop_timezone=await company_timezone(session, tenant.company_id),
         items=items,
         next_cursor=next_cursor,
         has_more=has_more,
@@ -3704,6 +3785,98 @@ async def get_receipt_history(
         branch_id=tenant.branch_id,
     )
     return reads[0]
+
+
+class ParticipantIntervalHistoryRead(BaseModel):
+    id: UUID
+    gaming_session_id: UUID
+    participant_identity_id: UUID
+    customer_id: UUID | None
+    guest_name: str | None
+    joined_at: datetime
+    joined_play_elapsed_ms: int
+    join_timing_source: str
+    joined_by: UUID
+    left_at: datetime | None
+    left_play_elapsed_ms: int | None
+    leave_timing_source: str | None
+    left_by: UUID | None
+    settlement_line_id: UUID | None = None
+    settlement_id: UUID | None = None
+    charge_basis: str
+
+
+class ParticipantChargeHistoryRead(BaseModel):
+    id: UUID
+    gaming_session_id: UUID
+    participant_identity_id: UUID
+    settlement_id: UUID
+    play_elapsed_ms: int
+    interval_count: int
+    charge_minor: int
+    basis: str = "one_settled_charge_for_all_join_leave_intervals_of_this_identity"
+
+
+class AddonHistoryRead(BaseModel):
+    id: UUID
+    gaming_session_id: UUID
+    client_line_id: UUID
+    menu_item_id: UUID
+    menu_item_name_snapshot: str
+    qty: int
+    unit_price_minor: int
+    line_total_minor: int
+    created_at: datetime
+    created_by: UUID
+    voided_at: datetime | None
+    voided_by: UUID | None
+    void_reason: str | None
+    provenance: str = "retained_session_addon_receipt"
+
+
+class ReceiptInvestigationRead(BaseModel):
+    receipt: ReceiptHistoryRead
+    participant_intervals: list[ParticipantIntervalHistoryRead]
+    participant_charges: list[ParticipantChargeHistoryRead]
+    addons: list[AddonHistoryRead]
+    audit_source_references: list[str]
+    historical_evidence_note: str
+    invoice_date_basis: str = "invoice_issued_at_in_shop_timezone"
+
+
+@router.get("/receipts/{order_id}/investigation", response_model=ReceiptInvestigationRead)
+async def investigate_receipt(order_id: UUID, session: SessionDep,
+    tenant: TenantContext = Depends(requires("pos.read"))):
+    from app.models import GamingSessionParticipant, GamingParticipantSettlementLine, GamingSessionAddon
+    receipt = await get_receipt_history(order_id, session, tenant)
+    session_ids = [row.id for row in receipt.gaming_sessions]
+    intervals = []
+    charges = []
+    addons = []
+    if session_ids:
+        settlement_rows = (await session.scalars(select(GamingParticipantSettlementLine).where(
+            GamingParticipantSettlementLine.company_id == tenant.company_id,
+            GamingParticipantSettlementLine.gaming_session_id.in_(session_ids)))).all()
+        settled = {(row.gaming_session_id,row.participant_identity_id):row for row in settlement_rows}
+        charges = [ParticipantChargeHistoryRead(**{key:getattr(row,key) for key in ParticipantChargeHistoryRead.model_fields if hasattr(row,key)}) for row in settlement_rows]
+        for row in await session.scalars(select(GamingSessionParticipant).where(
+            GamingSessionParticipant.company_id == tenant.company_id,
+            GamingSessionParticipant.gaming_session_id.in_(session_ids)).order_by(GamingSessionParticipant.joined_at,GamingSessionParticipant.id)):
+            charge = settled.get((row.gaming_session_id,row.participant_identity_id))
+            values = {key:getattr(row,key) for key in ParticipantIntervalHistoryRead.model_fields if hasattr(row,key)}
+            intervals.append(ParticipantIntervalHistoryRead(**values,
+                settlement_line_id=charge.id if charge else None,
+                settlement_id=charge.settlement_id if charge else None,
+                charge_basis="identity_total_across_all_intervals_do_not_sum_rejoins" if charge else "no_retained_settlement"))
+        for row in await session.scalars(select(GamingSessionAddon).where(
+            GamingSessionAddon.company_id == tenant.company_id,
+            GamingSessionAddon.gaming_session_id.in_(session_ids)).order_by(GamingSessionAddon.created_at,GamingSessionAddon.id)):
+            addons.append(AddonHistoryRead(**{key:getattr(row,key) for key in AddonHistoryRead.model_fields if hasattr(row,key)}))
+    references = [str(order_id),receipt.invoice_no] + [str(row.id) for row in receipt.payments] + [str(x) for x in session_ids]
+    references += [str(row.tender_correction_id) for row in receipt.payments if row.tender_correction_id]
+    return ReceiptInvestigationRead(receipt=receipt,participant_intervals=intervals,participant_charges=charges,addons=addons,
+        audit_source_references=references,
+        historical_evidence_note="Only retained source receipts are shown. Missing older participant/add-on evidence is not reconstructed from today's catalogue or account profiles. Audit links require the separate protected Audit unlock.")
 
 
 @router.post(
@@ -5528,11 +5701,11 @@ async def list_orders(
         await session.execute(
             select(
                 Payment.order_id,
-                Payment.method,
+                effective_payment_method(),
                 func.coalesce(func.sum(Payment.amount_minor), 0),
             )
             .where(Payment.order_id.in_(order_ids))
-            .group_by(Payment.order_id, Payment.method)
+            .group_by(Payment.order_id, effective_payment_method())
         )
     ).all()
     paid_by_order: dict[UUID, int] = {}
@@ -5608,6 +5781,11 @@ async def list_orders(
 
 
 class ShiftRead(BaseModel):
+    tender_correction_minor: int = 0
+    reconstructed_cash_collections_minor: int | None = None
+    reconstructed_upi_collections_minor: int | None = None
+    reconstructed_expected_minor: int | None = None
+    collection_basis: str = "original_recorded_shift"
     id: UUID
     branch_id: UUID
     terminal_id: UUID | None = None
@@ -5831,6 +6009,9 @@ async def list_shifts(
     if only_open:
         stmt = stmt.where(Shift.status == "open")
     rows = (await session.execute(stmt)).all()
+    correction_totals = dict((await session.execute(select(PaymentTenderCorrection.shift_id,
+        func.sum(PaymentTenderCorrection.amount_minor)).where(PaymentTenderCorrection.company_id == tenant.company_id,
+        PaymentTenderCorrection.shift_id.in_([row[0].id for row in rows])).group_by(PaymentTenderCorrection.shift_id))).all()) if rows else {}
     result = []
     for (
         s,
@@ -5861,6 +6042,10 @@ async def list_shifts(
         result.append(
             ShiftRead(
                 id=s.id,
+                tender_correction_minor=int(correction_totals.get(s.id, 0)),
+                reconstructed_cash_collections_minor=cash_collections-int(correction_totals.get(s.id, 0)),
+                reconstructed_upi_collections_minor=upi_collections+int(correction_totals.get(s.id, 0)),
+                reconstructed_expected_minor=(int(s.expected_minor)-int(correction_totals.get(s.id, 0))) if s.expected_minor is not None else None,
                 branch_id=s.branch_id,
                 terminal_id=s.terminal_id,
                 status=s.status,
@@ -6323,7 +6508,13 @@ async def record_payment_bundle(
         terminal_id=tenant.terminal_id,
     )
     if existing_response:
-        return PaymentBundleRead.model_validate(existing_response["body"])
+        response = PaymentBundleRead.model_validate(existing_response["body"])
+        response.payments = [await _effective_payment_response(session, leg) for leg in response.payments]
+        totals = _empty_pos_payment_breakdown()
+        for leg in response.payments:
+            totals[leg.method] += leg.amount_minor
+        response.payment_breakdown_minor = totals
+        return response
 
     loyalty_program = await load_loyalty_program(
         session, company_id=tenant.company_id, company_lock="share"
@@ -6871,17 +7062,7 @@ async def create_pos_refund_request(
         )
     ).scalar_one_or_none()
     if existing_action is not None:
-        replay_methods = {
-            row.method
-            for row in (await session.execute(select(Payment).where(Payment.order_id == order.id)))
-            .scalars()
-            .all()
-        }
-        replay_settlement_method = "cash"
-        if payload.mode == "original":
-            replay_settlement_method = (
-                next(iter(replay_methods)) if len(replay_methods) == 1 else "invalid"
-            )
+        replay_settlement_method = existing_action.settlement_method
         if (
             existing_action.order_id != payload.order_id
             or existing_action.shift_id != payload.shift_id
@@ -6989,7 +7170,8 @@ async def create_pos_refund_request(
 
     settlement_method = "cash"
     if payload.mode == "original":
-        methods = {row.method for row in payment_rows}
+        corrections = await corrections_for_payments(session, [row.id for row in payment_rows])
+        methods = {corrections[row.id].effective_method if row.id in corrections else row.method for row in payment_rows}
         if len(methods) != 1:
             raise BusinessRuleError(
                 "Mixed-payment orders need an explicit cash refund. Review the "

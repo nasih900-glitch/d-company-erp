@@ -15,6 +15,7 @@ from app.api.v1.client_updates.router import router as client_updates_router
 from app.api.v1.customers.router import router as customers_router
 from app.api.v1.events.router import router as events_router
 from app.api.v1.finance.router import router as finance_router
+from app.api.v1.finance.tender_corrections import router as tender_router
 from app.api.v1.gaming.router import router as gaming_router
 from app.api.v1.insights.router import router as insights_router
 from app.api.v1.inventory.router import router as inventory_router
@@ -57,6 +58,7 @@ api_router.include_router(inventory_router, prefix="/inventory", tags=["inventor
 api_router.include_router(gaming_router, prefix="/gaming", tags=["gaming"])
 api_router.include_router(events_router, prefix="/events", tags=["events"])
 api_router.include_router(finance_router, prefix="/finance", tags=["finance"])
+api_router.include_router(tender_router, prefix="/finance/tender-corrections", tags=["finance"])
 api_router.include_router(ocr_router, prefix="/ocr", tags=["ocr"])
 api_router.include_router(staff_router, prefix="/staff", tags=["staff"])
 api_router.include_router(analytics_router, prefix="/analytics", tags=["analytics"])

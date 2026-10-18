@@ -132,6 +132,8 @@ from app.models.tables import Floor, Reservation, Table
 from app.models.tenant import Branch, Company, Terminal
 from app.models.user import Attendance, PayrollEntry, Role, User, UserRole
 
+from app.models.tender_correction import DailyTenderReconciliation, PaymentTenderCorrection
+
 __all__ = [
     "Account",
     "AndroidRelease",
@@ -222,6 +224,8 @@ __all__ = [
     "OrderLine",
     "Partner",
     "Payment",
+    "DailyTenderReconciliation",
+    "PaymentTenderCorrection",
     "PayrollEntry",
     "PointsRedemption",
     "PosRefundCashHandoff",

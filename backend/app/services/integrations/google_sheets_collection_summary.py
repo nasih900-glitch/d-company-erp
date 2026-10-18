@@ -288,3 +288,26 @@ __all__ = [
     "DailyCollectionScanResult",
     "scan_daily_collection_summaries",
 ]
+
+
+async def enqueue_tender_daily_snapshot(session: AsyncSession, *, company_id: UUID, branch_id: UUID, business_date) -> bool:
+    """Queue corrected totals in the receipt transaction, using normal signing.
+
+    The scanner takes the same Company lock before selecting a revision. Any
+    opposite settings/fence deadlock rolls back the whole idempotent command.
+    """
+    company = await session.scalar(select(Company).where(Company.id == company_id).with_for_update().execution_options(populate_existing=True))
+    if (company is None or not company.google_sheets_mirror_enabled
+        or company.google_sheets_export_mode != DAILY_COLLECTIONS_EXPORT_MODE
+        or company.google_sheets_summary_branch_id != branch_id
+        or company.google_sheets_summary_start_date is None
+        or business_date < company.google_sheets_summary_start_date):
+        return False
+    branch = await session.scalar(select(Branch).where(Branch.id == branch_id, Branch.company_id == company_id))
+    if branch is None:
+        return False
+    zone = company.google_sheets_summary_timezone or company.timezone
+    now = datetime.now(UTC)
+    snapshot = (await calculate_daily_collections(session, company_id=company_id, branch_id=branch_id,
+        timezone_name=zone, start_date=business_date, end_date=business_date, now=now))[0]
+    return await _enqueue_snapshot_if_changed(session, company=company, branch=branch, snapshot=snapshot, timezone_name=zone, now=now)

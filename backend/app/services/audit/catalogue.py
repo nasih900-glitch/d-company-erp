@@ -272,6 +272,9 @@ REFUNDS = {
 }
 REFERENCE_FIELDS = ("invoice_no", "reference", "source_reference", "receipt_no", "ref_id")
 DETAIL_FIELDS = (
+    "payment_id", "correction_id", "original_method", "effective_method", "evidence_kind",
+    "before_cash_minor", "before_upi_minor", "actual_cash_minor", "actual_upi_minor",
+    "cash_delta_minor", "upi_delta_minor", "total_difference_minor", "source_allocation", "kind",
     "amount_minor",
     "total_minor",
     "line_total_minor",
