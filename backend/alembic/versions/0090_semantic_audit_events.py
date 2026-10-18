@@ -24,12 +24,13 @@ def upgrade() -> None:
     for constraint in sa.inspect(op.get_bind()).get_foreign_keys("audit_log"):
         if constraint["constrained_columns"] in (["actor_user_id"], ["terminal_id"]):
             op.drop_constraint(constraint["name"], "audit_log", type_="foreignkey")
+    op.alter_column("audit_log", "client_action_id", existing_type=sa.String(100), type_=sa.String(160))
     for name, length in (
         ("action_code", 24),
         ("category", 32),
         ("stage", 32),
         ("outcome", 32),
-        ("operation_id", 100),
+        ("operation_id", 160),
         ("source_reference", 120),
         ("actor_kind", 24),
     ):
@@ -69,6 +70,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.execute("LOCK TABLE audit_log IN ACCESS EXCLUSIVE MODE")
     # An old application can run against these additive columns. Dropping them
     # after use would erase immutable actor/target/classification evidence.
     op.execute("""
@@ -77,7 +79,8 @@ def downgrade() -> None:
                        OR action_code IS NOT NULL OR business_details IS NOT NULL
                        OR target_user_id IS NOT NULL OR actor_kind IS NOT NULL
                        OR source_reference IS NOT NULL OR operation_id IS NOT NULL
-                       OR outcome IS NOT NULL OR stage IS NOT NULL OR category IS NOT NULL) THEN
+                       OR outcome IS NOT NULL OR stage IS NOT NULL OR category IS NOT NULL
+                       OR length(client_action_id) > 100) THEN
                 RAISE EXCEPTION 'cannot downgrade semantic Audit after evidence is recorded';
             END IF;
         END $$
@@ -107,6 +110,7 @@ def downgrade() -> None:
         ["id"],
         ondelete="SET NULL",
     )
+    op.alter_column("audit_log", "client_action_id", existing_type=sa.String(160), type_=sa.String(100))
     op.execute("DROP TRIGGER IF EXISTS audit_log_no_truncate ON audit_log")
     op.execute("DROP TRIGGER IF EXISTS audit_log_append_only ON audit_log")
     op.execute("DROP FUNCTION IF EXISTS guard_audit_log_append_only()")

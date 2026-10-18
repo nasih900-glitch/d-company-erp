@@ -292,8 +292,8 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
             request.headers.get("X-Client-Version-Code")
         )
         action_id = _printable_ascii_header(
-            request.headers.get("X-Client-Action-Id"), max_length=100
-        ) or _printable_ascii_header(request.headers.get("Idempotency-Key"), max_length=100)
+            request.headers.get("X-Client-Action-Id"), max_length=160
+        ) or _printable_ascii_header(request.headers.get("Idempotency-Key"), max_length=160)
         offline_raw = (request.headers.get("X-Offline-Captured") or "").strip().lower()
         client_was_offline = offline_raw in {"1", "true", "yes"}
         reported_raw = (request.headers.get("X-Client-Occurred-At") or "").strip()
