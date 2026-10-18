@@ -54,7 +54,7 @@ class FileTenderJournalStorageTest {
     @Test fun failedDirectorySyncAfterRenameStillRequiresSuccessfulSyncBeforeSend() = runBlocking {
         TenderJournal(storage()).reserve(command())
         var fail=true
-        val journal=TenderJournal(storage { if(fail) throw IOException("fsync failed") })
+        val journal=TenderJournal(storage { path -> if(fail && path == folder()) throw IOException("fsync failed after rename") })
         assertTrue(runCatching { journal.reserve(command()) }.isFailure)
         assertEquals(command(),TenderJournal(storage()).read(scope))
         assertTrue(runCatching { journal.reserve(command()) }.isFailure)
