@@ -433,7 +433,9 @@ async def audit_events(
         company_id=tenant.company_id, user_id=tenant.user_id, fingerprint=fingerprint,
         snapshot=snapshot, last=rows[-1].AuditLog.id, snapshot_id=snapshot_id,
     ) if has_more else None
-    current_count = int(await session.scalar(select(func.count()).select_from(base.subquery())) or 0)
+    new_matching_entries = bool(await session.scalar(select(
+        base.with_only_columns(AuditLog.id).where(AuditLog.id.not_in(ids)).exists()
+    )))
     matching_count = len(ids)
     explanation = ("Exact structured reference" if filters["reference"] else
                    "Exact action code" if filters["code"] or (filters["q"] or "").upper() in BY_CODE else
@@ -442,7 +444,7 @@ async def audit_events(
         entries=[_audit_entry(row, match_explanation=explanation) for row in rows],
         next_cursor=next_cursor, has_more=has_more, snapshot_max_id=snapshot,
         loaded_count=len(rows), matching_count=matching_count, shop_timezone=zone,
-        new_entries_available=current_count > matching_count,
+        new_entries_available=new_matching_entries,
     )
 
 

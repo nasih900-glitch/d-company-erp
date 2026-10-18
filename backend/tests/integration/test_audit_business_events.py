@@ -288,6 +288,47 @@ async def test_materialized_history_excludes_late_lower_id_commit_and_announces_
 
 
 @pytest.mark.asyncio
+async def test_refresh_indicator_detects_new_ids_when_current_profile_matches_cancel_out(
+    client, session, seed_owner
+):
+    from app.models import User
+
+    headers = await protected_headers(session, seed_owner)
+    needle = "PROFILE-" + uuid4().hex
+    owner = seed_owner["owner"]
+    owner.name = needle
+    colleague = User(
+        id=uuid4(), company_id=owner.company_id, email=f"colleague-{uuid4()}@test.local",
+        name=needle, password_hash=owner.password_hash, status="active",
+    )
+    session.add(colleague)
+    await session.flush()
+    old_id = await legacy_row(session, owner.company_id, actor=owner.id)
+    retained_id = await legacy_row(session, owner.company_id, actor=colleague.id)
+    await session.commit()
+    params = {"q": needle, "entity_type": "StockMovement", "limit": 1}
+    first = await client.get("/api/v1/admin/audit/events", headers=headers, params=params)
+    assert first.status_code == 200, first.text
+    assert first.json()["matching_count"] == 2
+    assert [row["id"] for row in first.json()["entries"]] == [retained_id]
+    # One existing match disappears because its current display label changed;
+    # one newly committed matching event appears. Counts remain equal.
+    owner.name = "Changed display label"
+    new_id = await legacy_row(session, owner.company_id, actor=colleague.id)
+    await session.commit()
+    second = await client.get(
+        "/api/v1/admin/audit/events", headers=headers,
+        params={**params, "cursor": first.json()["next_cursor"]},
+    )
+    assert second.status_code == 200, second.text
+    assert second.json()["matching_count"] == 2
+    assert [row["id"] for row in second.json()["entries"]] == [old_id]
+    assert second.json()["new_entries_available"] is True
+    refreshed = await client.get("/api/v1/admin/audit/events", headers=headers, params=params)
+    assert [row["id"] for row in refreshed.json()["entries"]] == [new_id]
+
+
+@pytest.mark.asyncio
 async def test_failed_login_target_filter_is_distinct_from_authenticated_actor(
     client, session, seed_owner
 ):
