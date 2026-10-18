@@ -519,6 +519,7 @@ async def confirm_password_reset(
         company_id=challenge.company_id,
         ip=trusted_client_ip(request),
         user_agent=audit_user_agent(request),
+        actor_kind="otp_approved_requester" if challenge.requested_by_user_id else "otp_approved_unknown",
     )
     user.password_hash = hash_password(payload.new_password)
     user.failed_login_count = 0

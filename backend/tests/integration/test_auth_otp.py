@@ -308,6 +308,13 @@ async def test_public_reset_preserves_otp_requester_without_claiming_current_aut
     # The old requester identity is evidence, not proof that the public
     # confirmation request presented a currently authenticated bearer.
     assert event.actor_kind != "authenticated"
+    automatic = await session.scalar(select(AuditLog).where(
+        AuditLog.company_id == owner.company_id,
+        AuditLog.entity_type == "User", AuditLog.entity_id == str(owner.id),
+        AuditLog.action == "update",
+    ).order_by(AuditLog.id.desc()))
+    assert automatic is not None
+    assert automatic.actor_kind == "otp_approved_requester"
 
 
 @pytest.mark.asyncio
