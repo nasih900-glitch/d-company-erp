@@ -23,6 +23,7 @@ import {
   terminalResolutionMessage,
 } from '@/lib/operational-context';
 import { connectRealtime, disconnectRealtime } from '@/lib/realtime';
+import { clearOwnerWorkspaces } from '@/lib/owner-workspace';
 import { alarmPermission, requestAlarmPermission } from '@/lib/alarm';
 
 export interface Me {
@@ -101,6 +102,7 @@ async function resolveTerminalClaim(me: Me, signal?: AbortSignal): Promise<Termi
 // cart look lost. resolveTerminalClaim revalidates the stored terminal against
 // the server on every login, so keeping it is not a trust shortcut.
 function clearStoredSession() {
+  clearOwnerWorkspaces();
   clearSessionCredentials();
 }
 

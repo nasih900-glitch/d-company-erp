@@ -24,12 +24,17 @@ import { parseRupeesToMinor } from '@/lib/money-input';
 import { resolveOpenShift, shiftResolutionMessage } from '@/lib/operational-context';
 import { profileMembershipMoneyLabel } from '@/lib/product-profile';
 import {
-  orders, receipts, shifts,
+  orders, receipts, shifts, gaming, staff,
+  type ReceiptInvestigationDTO, type StationDTO, type UserDTO,
   type OrderListItemDTO, type ReceiptGamingSessionHistoryDTO, type ReceiptHistoryDTO,
   type ShiftDTO,
   type ShiftRecoveryCandidateDTO, type ShiftRecoveryCloseDTO,
 } from '@/lib/erp-api';
 import Modal from '@/components/ui/Modal';
+import TenderCorrections from '@/modules/finance/TenderCorrections';
+import { Link } from 'react-router-dom';
+import { ownerScope, ownerWorkspaceGeneration, readOwnerWorkspace, rememberOwnerWorkspace } from '@/lib/owner-workspace';
+import { emptyReceiptFilters, receiptSearchParams, receiptSearchScope, taxPercentage, type ReceiptFilterInputs } from './receipt-search';
 import { useNotifications } from '@/components/ui/Notifications';
 import { useAuth } from '@/modules/auth/AuthContext';
 import { canAccessRefunds } from '@/modules/refunds/refund-policy';
@@ -137,6 +142,7 @@ const OPERATIONS_POLL_MS = 120_000;
 
 export default function OrdersAndShiftsScreen() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const {me}=useAuth();
   const [tab, setTab] = useState<Tab>(() => operationsInitialTab(searchParams));
   const requestedTab = operationsInitialTab(searchParams);
 
@@ -165,7 +171,7 @@ export default function OrdersAndShiftsScreen() {
         </TabBtn>
       </div>
 
-      {tab === 'orders' ? <OrdersTab/> : <ShiftsTab/>}
+      {tab === 'orders' ? <OrdersTab key={me?ownerScope(me):'anonymous'}/> : <ShiftsTab/>}
     </div>
   );
 }
@@ -173,34 +179,55 @@ export default function OrdersAndShiftsScreen() {
 // ============================================================================
 // Live orders and immutable receipt history
 // ============================================================================
+interface ReceiptWorkspaceState {
+  rows: ReceiptHistoryDTO[]; scope: ReceiptQueryScope;
+  paging: ReceiptRequestScope & {nextCursor:string|null;hasMore:boolean};
+  input: string; query: string; filters: ReceiptFilterInputs;
+  selected: {orderId:string;invoiceNo:string}|null; scroll: number; timezone?: string|null;
+}
 function OrdersTab() {
+  const workspaceGeneration=useRef(ownerWorkspaceGeneration()).current;
   const { me } = useAuth();
+  const [params] = useSearchParams();
+  const scope = me ? ownerScope(me) : 'anonymous';
+  const initial = useRef(readOwnerWorkspace<ReceiptWorkspaceState>(scope,'receipt-history'));
+  const cache = initial.current;
+  const [receiptFilters,setReceiptFilters] = useState<ReceiptFilterInputs>(cache?.filters ?? emptyReceiptFilters);
+  const [stationOptions,setStationOptions] = useState<StationDTO[]>([]);
+  const [staffOptions,setStaffOptions] = useState<UserDTO[]>([]);
+  useEffect(() => {
+    let active=true;
+    void gaming.listStations().then(rows=>{if(active)setStationOptions(rows);}).catch(()=>undefined);
+    if(me?.audit_access) void staff.listUsers().then(rows=>{if(active)setStaffOptions(rows);}).catch(()=>undefined);
+    return()=>{active=false;};
+  },[me?.audit_access]);
   const [operationalRows, setOperationalRows] = useState<OrderListItemDTO[]>([]);
-  const [receiptRows, setReceiptRows] = useState<ReceiptHistoryDTO[]>([]);
+  const [receiptRows, setReceiptRows] = useState<ReceiptHistoryDTO[]>(cache?.rows ?? []);
+  const [receiptTimezone,setReceiptTimezone]=useState(cache?.timezone ?? null);
   const [operationalLoading, setOperationalLoading] = useState(true);
   const [receiptsLoading, setReceiptsLoading] = useState(true);
   const [operationalError, setOperationalError] = useState<string | null>(null);
   const [receiptsError, setReceiptsError] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
-  const receiptScopeRef = useRef<ReceiptQueryScope>({ epoch: 0, query: '', loaded: false });
+  const receiptScopeRef = useRef<ReceiptQueryScope>(cache?.scope ?? { epoch: 0, query: '', loaded: false });
   const [receiptPaging, setReceiptPaging] = useState<ReceiptRequestScope & {
     nextCursor: string | null;
     hasMore: boolean;
-  }>({ epoch: 0, query: '', nextCursor: null, hasMore: false });
+  }>(cache?.paging ?? { epoch: 0, query: '', nextCursor: null, hasMore: false });
   const [pendingReceiptPage, setPendingReceiptPage] = useState<(ReceiptRequestScope & {
     newItems: ReceiptHistoryDTO[];
   }) | null>(null);
-  const [receiptQueryInput, setReceiptQueryInput] = useState('');
-  const [receiptQuery, setReceiptQuery] = useState('');
+  const [receiptQueryInput, setReceiptQueryInput] = useState(params.get('receipt_q') ?? cache?.input ?? '');
+  const [receiptQuery, setReceiptQuery] = useState(cache?.query ?? '');
   const [operationalView, setOperationalView] = useState<OrderListItemDTO | null>(null);
-  const [receiptView, setReceiptView] = useState<{ orderId: string; invoiceNo: string } | null>(null);
+  const [receiptView, setReceiptView] = useState<{ orderId: string; invoiceNo: string } | null>(() => params.get('receipt') ? {orderId:params.get('receipt')!,invoiceNo:'Linked receipt'} : cache?.selected ?? null);
   const [recoveryTarget, setRecoveryTarget] = useState<OrderListItemDTO | null>(null);
   const [recoveryIntent] = useState(() => new StableMutationIntent<DirectOrderRecoveryPayload>({
     prefix: 'pos-direct-recovery:web',
   }));
   const operationalSequence = useRef(0);
   const receiptSequence = useRef(0);
-  const receiptRowsRef = useRef<ReceiptHistoryDTO[]>([]);
+  const receiptRowsRef = useRef<ReceiptHistoryDTO[]>(cache?.rows ?? []);
   const { nextCursor, hasMore } = receiptPaging;
 
   useEffect(() => { receiptRowsRef.current = receiptRows; }, [receiptRows]);
@@ -241,11 +268,12 @@ function OrdersTab() {
     try {
       const page = await receipts.list({
         limit: 50,
-        ...(requestScope.query ? { q: requestScope.query } : {}),
+        ...receiptSearchParams(requestScope.query),
       });
       const requestIsCurrent = () => sequence === receiptSequence.current
         && receiptScopeMatches(receiptScopeRef.current, requestScope);
       if (!requestIsCurrent()) return;
+      setReceiptTimezone(page.shop_timezone ?? null);
       if (mode === 'stage') {
         const current = receiptRowsRef.current;
         if (!current.length) {
@@ -262,7 +290,7 @@ function OrdersTab() {
             (cursor) => receipts.list({
               cursor,
               limit: 50,
-              ...(requestScope.query ? { q: requestScope.query } : {}),
+              ...receiptSearchParams(requestScope.query),
             }),
             requestIsCurrent,
           );
@@ -308,8 +336,8 @@ function OrdersTab() {
   }, [loadOperational, loadReceipts]);
 
   useEffect(() => {
-    void Promise.all([loadOperational(true), loadReceipts(true)]);
-  }, [loadOperational, loadReceipts]);
+    void Promise.all([loadOperational(true), loadReceipts(!cache?.scope.loaded, cache?.scope.loaded ? 'stage' : 'replace')]);
+  }, [loadOperational, loadReceipts, cache?.scope.loaded]);
 
   useRealtimeRefresh({
     resources: ['orders', 'receipts'],
@@ -342,7 +370,7 @@ function OrdersTab() {
       const page = await receipts.list({
         cursor,
         limit: 50,
-        ...(requestScope.query ? { q: requestScope.query } : {}),
+        ...receiptSearchParams(requestScope.query),
       });
       if (
         sequence !== receiptSequence.current
@@ -379,8 +407,9 @@ function OrdersTab() {
     setPendingReceiptPage(null);
   }, [pendingReceiptPage]);
 
-  const changeReceiptQuery = useCallback((query: string) => {
-    const normalized = query.trim();
+  const changeReceiptQuery = useCallback((query: string, filters: ReceiptFilterInputs = emptyReceiptFilters) => {
+    let normalized: string;
+    try { normalized = receiptSearchScope(query, filters); } catch (cause) { setReceiptsError((cause as Error).message); return; }
     const currentScope = receiptScopeRef.current;
     if (normalized === currentScope.query) {
       setPendingReceiptPage(null);
@@ -411,6 +440,16 @@ function OrdersTab() {
     setReceiptQuery(normalized);
     void loadReceipts(true, 'replace');
   }, [loadReceipts]);
+
+  const receiptStateRef = useRef<ReceiptWorkspaceState>({rows:receiptRows,scope:receiptScopeRef.current,paging:receiptPaging,input:receiptQueryInput,query:receiptQuery,filters:receiptFilters,timezone:receiptTimezone,selected:receiptView,scroll:cache?.scroll ?? 0});
+  receiptStateRef.current={...receiptStateRef.current,rows:receiptRows,scope:receiptScopeRef.current,paging:receiptPaging,input:receiptQueryInput,query:receiptQuery,filters:receiptFilters,timezone:receiptTimezone,selected:receiptView};
+  useEffect(()=>{if(workspaceGeneration===ownerWorkspaceGeneration())rememberOwnerWorkspace(scope,'receipt-history',receiptStateRef.current);},[scope,workspaceGeneration,receiptRows,receiptPaging,receiptQueryInput,receiptQuery,receiptFilters,receiptView,receiptTimezone]);
+  useEffect(()=>{
+    const main=document.querySelector('main');if(main)main.scrollTop=cache?.scroll ?? 0;
+    const save=()=>{receiptStateRef.current.scroll=main?.scrollTop ?? 0;if(workspaceGeneration===ownerWorkspaceGeneration())rememberOwnerWorkspace(scope,'receipt-history',receiptStateRef.current);};
+    main?.addEventListener('scroll',save,{passive:true});return()=>{save();main?.removeEventListener('scroll',save);};
+  },[scope,workspaceGeneration,cache?.scroll]);
+  useEffect(()=>{if(params.get('receipt_q'))changeReceiptQuery(params.get('receipt_q')!);},[params,changeReceiptQuery]);
 
   const beginRecovery = useCallback((order: OrderListItemDTO) => {
     if (!me?.protected_access || !isDirectOrderRecoveryEligible(order)) return;
@@ -479,7 +518,7 @@ function OrdersTab() {
         </button>
       </div>
 
-      <section className="card !p-0 overflow-hidden">
+      {receiptView&&!operationalLoading&&!operationalRows.length&&!operationalError ? <p className="rounded-xl border border-bg-border px-4 py-3 text-sm text-fg-muted">No open or held bills · finalized receipt investigation below.</p> : (      <section className="card !p-0 overflow-hidden">
         <div className="flex items-center justify-between gap-3 border-b border-bg-border px-4 py-3">
           <div>
             <h3 className="font-semibold">Open &amp; held orders</h3>
@@ -500,13 +539,21 @@ function OrdersTab() {
           onView={setOperationalView}
           onRecover={beginRecovery}
         /> : null}
-      </section>
+      </section>)}
+
+
+      {receiptView && <ReceiptViewModal
+        key={receiptView.orderId}
+        orderId={receiptView.orderId}
+        invoiceNo={receiptView.invoiceNo}
+        onClose={() => setReceiptView(null)}
+      />}
 
       <section className="card !p-0 overflow-hidden">
         <div className="flex items-center justify-between gap-3 border-b border-bg-border px-4 py-3">
           <div>
             <h3 className="font-semibold">Receipt history</h3>
-            <p className="text-xs text-fg-muted">Finalized receipts from the shared server.</p>
+            <p className="text-xs text-fg-muted">Finalized receipts from the shared server. Invoice issued shop dates{receiptTimezone?` · ${receiptTimezone}`:' · timezone supplied by the server'}.</p>
           </div>
           <div className="text-right">
             <div className="text-xs text-fg-muted">Server history</div>
@@ -517,7 +564,7 @@ function OrdersTab() {
           className="flex flex-col gap-2 border-b border-bg-border px-4 py-3 sm:flex-row"
           onSubmit={(event) => {
             event.preventDefault();
-            changeReceiptQuery(receiptQueryInput);
+            changeReceiptQuery(receiptQueryInput, receiptFilters);
           }}
         >
           <label className="relative min-w-0 flex-1">
@@ -538,12 +585,22 @@ function OrdersTab() {
             <button
               type="button"
               className="btn btn-ghost"
-              onClick={() => { setReceiptQueryInput(''); changeReceiptQuery(''); }}
+              onClick={() => { setReceiptQueryInput(''); setReceiptFilters(emptyReceiptFilters); changeReceiptQuery(''); }}
             >
               <RotateCcw size={14}/> Clear
             </button>
           )}
         </form>
+        <details className="border-b border-bg-border px-4 py-3"><summary className="cursor-pointer text-sm font-medium">Narrow server receipt history</summary>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            <Field label="Invoice issued from (shop date)"><input type="date" className="input w-full" value={receiptFilters.date_from} onChange={event=>setReceiptFilters({...receiptFilters,date_from:event.target.value})}/></Field>
+            <Field label="Invoice issued through (shop date)"><input type="date" className="input w-full" value={receiptFilters.date_to} onChange={event=>setReceiptFilters({...receiptFilters,date_to:event.target.value})}/></Field>
+            <Field label="Exact invoice amount (₹)"><input className="input w-full" inputMode="decimal" value={receiptFilters.amount} onChange={event=>setReceiptFilters({...receiptFilters,amount:event.target.value})}/></Field>
+            <Field label="Effective payment method"><select className="input w-full" value={receiptFilters.method} onChange={event=>setReceiptFilters({...receiptFilters,method:event.target.value})}><option value="">All methods</option>{['cash','upi','card','qr','wallet'].map(method=><option key={method} value={method}>{method.toUpperCase()}</option>)}</select></Field>
+            <Field label="Station"><select className="input w-full" value={receiptFilters.station_id} onChange={event=>setReceiptFilters({...receiptFilters,station_id:event.target.value})}><option value="">All stations</option>{stationOptions.map(station=><option key={station.id} value={station.id}>{station.name}</option>)}</select></Field>
+            <Field label="Payment recorded by"><select className="input w-full" value={receiptFilters.staff_user_id} onChange={event=>setReceiptFilters({...receiptFilters,staff_user_id:event.target.value})}><option value="">All recorded staff</option>{staffOptions.map(user=><option key={user.id} value={user.id}>{user.name} (current profile)</option>)}</select></Field>
+          </div><p className="mt-2 text-xs text-fg-muted">These filters search retained server history, not only the loaded page. Unknown legacy staff remain unrecorded.</p><button className="btn btn-ghost mt-3" onClick={()=>changeReceiptQuery(receiptQueryInput,receiptFilters)} disabled={receiptsLoading}>Apply history filters</button>
+        </details>
         {pendingReceiptPage && (
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-accent/30 bg-accent/10 px-4 py-3 text-sm" role="status">
             <span>New receipts are available. Your loaded history stays in place until you choose to show them.</span>
@@ -586,11 +643,7 @@ function OrdersTab() {
         onRefresh={refreshAfterRecoveryFailure}
         onSubmit={(reason) => recoverDirectOrder(recoveryTarget, reason)}
       />}
-      {receiptView && <ReceiptViewModal
-        orderId={receiptView.orderId}
-        invoiceNo={receiptView.invoiceNo}
-        onClose={() => setReceiptView(null)}
-      />}
+
     </div>
   );
 }
@@ -913,6 +966,7 @@ function ReceiptViewModal({ orderId, invoiceNo, onClose }: {
   onClose: () => void;
 }) {
   const [receipt, setReceipt] = useState<ReceiptHistoryDTO | null>(null);
+  const [investigation,setInvestigation] = useState<ReceiptInvestigationDTO | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const requestSequence = useRef(0);
@@ -934,8 +988,8 @@ function ReceiptViewModal({ orderId, invoiceNo, onClose }: {
     setLoading(true);
     setError(null);
     try {
-      const result = await receipts.get(orderId);
-      if (sequence === requestSequence.current) setReceipt(result);
+      const result = await receipts.investigate(orderId);
+      if (sequence === requestSequence.current) {setReceipt(result.receipt);setInvestigation(result);}
     } catch (cause) {
       if (sequence === requestSequence.current) setError((cause as Error).message);
     } finally {
@@ -947,7 +1001,7 @@ function ReceiptViewModal({ orderId, invoiceNo, onClose }: {
   useRealtimeRefresh({ resources: ['receipts'], refresh: load, enabled: LIVE_MODE });
 
   return (
-    <Modal open onClose={onClose} title={`Receipt ${invoiceNo}`} size="lg">
+    <section id="receipt-investigation" className="card space-y-4" aria-label="Receipt investigation"><header className="flex items-center justify-between gap-3"><h3 className="text-lg font-semibold">Receipt {receipt?.invoice_no ?? invoiceNo}</h3><button className="btn btn-ghost" onClick={onClose}><X size={14}/> Close receipt details</button></header>
       {loading && !receipt ? <SkeletonCard/> : error && !receipt ? (
         <InlineLoadError message={error} onRetry={() => { void load(); }}/>
       ) : receipt ? (
@@ -961,9 +1015,12 @@ function ReceiptViewModal({ orderId, invoiceNo, onClose }: {
               ? () => navigate(`/refunds?order_id=${encodeURIComponent(receipt.order_id)}`)
               : undefined}
           />
+          {investigation && <RetainedInvestigation details={investigation}/>}
+          {me?.audit_access && <Link className="btn btn-ghost" to={`/audit?reference=${encodeURIComponent(receipt.invoice_no)}`}>Open linked Audit activity</Link>}
+          {me?.audit_access && me.effective_permissions?.includes('finance.tender.correct') && receipt.payments.filter(payment=>payment.method==='cash'&&!payment.tender_correction_id).map(payment=><details key={payment.id} className="rounded-xl border border-bg-border p-4"><summary className="cursor-pointer text-sm font-semibold">Correct this Cash payment to UPI · {inr(payment.amount_minor)}</summary><div className="mt-3"><TenderCorrections paymentId={payment.id} onCommitted={()=>void load()}/></div></details>)}
         </>
       ) : null}
-    </Modal>
+    </section>
   );
 }
 
@@ -1086,7 +1143,7 @@ function ReceiptLines({ receipt }: { receipt: ReceiptHistoryDTO }) {
                     </div>
                     {customizations.length > 0 && <div className="mt-1 text-xs text-fg-muted">{customizations.join(' · ')}</div>}
                     <div className="mt-1 text-[11px] text-fg-muted">
-                      {line.hsn_or_sac ? `HSN/SAC ${line.hsn_or_sac} · ` : ''}Tax {exactQuantityLabel(line.tax_rate)}%
+                      {line.hsn_or_sac ? `HSN/SAC ${line.hsn_or_sac} · ` : ''}Configured rate {taxPercentage(line.tax_rate)} · Tax charged {inr(line.cgst_minor + line.sgst_minor + line.igst_minor + line.cess_minor)}
                     </div>
                     {line.note && <div className="mt-1 text-xs text-fg-muted">Note: {line.note}</div>}
                     {line.void_reason && (
@@ -1127,6 +1184,7 @@ function ReceiptPayments({ receipt }: { receipt: ReceiptHistoryDTO }) {
             </div>
             <div className="mt-2 space-y-1">
               <Row label="Paid" value={formatDateTime(payment.paid_at)}/>
+              {payment.tender_correction_id&&<><Row label="Original recorded method" value={paymentMethodLabel(payment.original_method??'cash')}/><Row label="Effective method after correction" value={paymentMethodLabel(payment.method)}/><Row label="Correction recorded" value={formatOptionalDateTime(payment.tender_correction_recorded_at??null)}/><p className="text-xs text-fg-muted">Owner-attested classification correction. Original payment and bill total retained.</p>{payment.original_tendered_minor!=null&&<Row label="Original cash tendered (historical)" value={inr(payment.original_tendered_minor)}/>} {payment.original_change_minor!=null&&<Row label="Original change (historical)" value={inr(payment.original_change_minor)}/>}</>}
               <Row label="Recorded by" value={actorLabel(payment.recorded_by_name, payment.recorded_by)}/>
               {payment.tendered_minor !== null && <Row label="Cash tendered" value={inr(payment.tendered_minor)}/>}
               {payment.change_minor !== null && <Row label="Change given" value={inr(payment.change_minor)}/>}
@@ -2117,6 +2175,7 @@ function ShiftsTab() {
                         <Stat label="Net collections" value={inr(s.net_collections_minor ?? 0)} tone="good"/>
                       </div>
                       <ShiftRailBreakdown shift={s}/>
+                      <ShiftTenderEvidence shift={s}/>
                       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3 pt-3 border-t border-bg-border/60">
                         <Stat label="Opening float" value={inr(s.opening_float_minor)}/>
                         <Stat label="Expected cash" value={s.expected_minor != null ? inr(s.expected_minor) : '—'}/>
@@ -2908,4 +2967,19 @@ function Stat({ label, value, tone = 'default' }: {
       <div className={`font-mono font-bold ${color}`}>{value}</div>
     </div>
   );
+}
+
+export function ShiftTenderEvidence({shift}:{shift:ShiftDTO}) {
+  if(!shift.tender_correction_minor)return null;
+  return <section className="mt-3 rounded-xl border border-bg-border bg-bg-raised/30 p-3 text-sm" aria-label="Reconstructed bill tender"><h5 className="font-semibold">Recorded close preserved · reconstructed bill tender</h5><p className="mt-1 text-xs text-fg-muted">Original expected cash, physical count and variance stay unchanged. This includes identified bill corrections only; daily unallocated actuals are separate in Finance.</p><div className="mt-3 grid gap-3 sm:grid-cols-3"><Stat label="Reconstructed Cash collected" value={shift.reconstructed_cash_collections_minor==null?'Unavailable':inr(shift.reconstructed_cash_collections_minor)}/><Stat label="Reconstructed UPI collected" value={shift.reconstructed_upi_collections_minor==null?'Unavailable':inr(shift.reconstructed_upi_collections_minor)}/><Stat label="Reconstructed expected cash" value={shift.reconstructed_expected_minor==null?'Unavailable':inr(shift.reconstructed_expected_minor)}/></div></section>;
+}
+function RetainedInvestigation({details}:{details:ReceiptInvestigationDTO}) {
+  return <section className="space-y-4 rounded-xl border border-bg-border p-4"><h4 className="font-semibold">Retained players, drinks & billing evidence</h4><p className="text-xs text-fg-muted">{details.historical_evidence_note}</p>{details.participant_intervals.length>0&&<div className="space-y-2"><h5 className="text-sm font-semibold">Joining / Leave / rejoin history</h5>{details.participant_intervals.map(interval=><div key={interval.id} className="rounded-lg bg-bg-raised/40 p-3 text-sm"><b>{interval.guest_name || (interval.customer_id?'Recorded customer':'Anonymous player')}</b><p className="mt-1 text-xs text-fg-muted">Joined {formatDateTime(interval.joined_at)} · {interval.left_at?`Left ${formatDateTime(interval.left_at)}`:'No retained Leave event'}</p><p className="mt-1 text-xs">Play position {Math.floor(interval.joined_play_elapsed_ms/60000)} min → {interval.left_play_elapsed_ms==null?'end of session':`${Math.floor(interval.left_play_elapsed_ms/60000)} min`}. {interval.settlement_line_id?'Charge is listed once per player below, including all rejoins.':'No retained settled player charge.'}</p></div>)}</div>}{details.participant_charges.length>0&&<div className="space-y-2"><h5 className="text-sm font-semibold">One settled charge per player</h5>{details.participant_charges.map(charge=><div key={charge.id} className="flex justify-between gap-3 text-sm"><span>{charge.interval_count} joining interval{charge.interval_count===1?'':'s'} · {Math.floor(charge.play_elapsed_ms/60000)} min accumulated</span><b className="tabular-nums">{inr(charge.charge_minor)}</b></div>)}</div>}{details.addons.length>0&&<div className="space-y-2"><h5 className="text-sm font-semibold">Confirmed drinks & snacks</h5>{details.addons.map(addon=><div key={addon.id} className="rounded-lg bg-bg-raised/40 p-3 text-sm"><div className="flex justify-between gap-3"><b>{addon.qty} × {addon.menu_item_name_snapshot}</b><span className="tabular-nums">{inr(addon.line_total_minor)}</span></div><p className="mt-1 text-xs text-fg-muted">Confirmed {formatDateTime(addon.created_at)}{addon.voided_at?` · Voided ${formatDateTime(addon.voided_at)} · ${addon.void_reason??'Reason not retained'}`:''}</p></div>)}</div>}{!details.participant_intervals.length&&!details.addons.length&&<p className="text-sm text-fg-muted">No retained player intervals or session add-ons for this receipt. Older missing proof is not reconstructed from the current catalogue.</p>}</section>;
+}
+
+/** Inline shift work preserves its caller's station selection and POS draft. */
+export function InlineShiftWorkspace({onClose}:{onClose:()=>void}) {
+  return <section className="mb-5 rounded-xl border border-bg-border bg-bg-surface p-4" aria-label="Shift workspace">
+    <header className="mb-4 flex items-center justify-between gap-3"><div><h3 className="font-semibold">Shift workspace</h3><p className="mt-1 text-sm text-fg-muted">Your current station and bill stay in place while you open or review the shift.</p></div><button type="button" className="btn btn-ghost" onClick={onClose}>Return to work</button></header><ShiftsTab/>
+  </section>;
 }

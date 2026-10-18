@@ -1789,6 +1789,29 @@ export interface AuditEntryDTO {
   reason: string | null;
   created_at: string;
 }
+export interface BusinessAuditEntryDTO extends AuditEntryDTO {
+  action_code: string | null; action_label: string; category: string; stage: string; outcome: string;
+  classification_source: string; catalogue_version: number; actor_kind: string;
+  target_user_id: string | null; source_reference: string | null; operation_id: string | null;
+  summary: string; business_details: Record<string, unknown> | null;
+  actor_label_source: string; match_explanation: string | null;
+}
+export interface AuditEventsPageDTO {
+  activity_cursor?: string | null;
+  entries: BusinessAuditEntryDTO[]; next_cursor: string | null; has_more: boolean;
+  snapshot_max_id: number; loaded_count: number; matching_count: number; shop_timezone: string;
+  date_filter_basis: string; count_basis: string; new_entries_available: boolean;
+  snapshot_expires_in: number; scope: string;
+}
+export interface AuditCatalogueDTO {
+  version: number; categories: string[]; outcomes: string[]; views: string[];
+  actions: Array<{code: string; label: string; category: string; aliases: string[]; stages: string[]; outcomes: string[]}>;
+}
+export interface AuditEventFilters {
+  view?: 'business' | 'all'; q?: string; code?: string; category?: string; outcome?: string;
+  actor_user_id?: string; target_user_id?: string; reference?: string;
+  date_from?: string; date_to?: string; entity_type?: string; entity_id?: string;
+}
 export interface AuditFacetsDTO {
   entity_types: string[];
   actions: string[];
@@ -1803,6 +1826,9 @@ export interface PricingUnlockDTO {
 }
 
 export const audit = {
+  events: (params: AuditEventFilters & {limit?: number; cursor?: string}, token: string) =>
+    api.get<AuditEventsPageDTO>('/admin/audit/events', {params, headers: {'X-Audit-Token': token}}).then(r => r.data),
+  catalogue: (token: string) => api.get<AuditCatalogueDTO>('/admin/audit/catalogue', {headers: {'X-Audit-Token': token}}).then(r => r.data),
   unlock: (password: string) =>
     api.post<AuditUnlockDTO>('/admin/audit/unlock', { password }).then((r) => r.data),
   list: (params?: {
@@ -2703,7 +2729,13 @@ export interface ReportExpenseLineDTO {
   category: string;
   amount_minor: number;
 }
+export interface TenderReclassificationDTO {
+  id: string; branch_id: string; business_date: string; business_timezone: string;
+  kind: 'applied' | 'unresolved'; cash_delta_minor: number; upi_delta_minor: number;
+  total_difference_minor: number; basis: 'unallocated_owner_attestation'; recorded_at: string;
+}
 export interface ReportDataDTO {
+  tender_reclassifications?: TenderReclassificationDTO[];
   accounting_basis: 'operational_receipt';
   period: string;
   label: string;
@@ -2845,6 +2877,9 @@ export interface ReceiptLineHistoryDTO {
 }
 
 export interface ReceiptPaymentHistoryDTO {
+  original_method?: PosPaymentMethodDTO | null;
+  original_tendered_minor?: number | null; original_change_minor?: number | null;
+  tender_correction_id?: string | null; tender_correction_recorded_at?: string | null;
   id: string;
   shift_id: string;
   method: PosPaymentMethodDTO;
@@ -2990,12 +3025,16 @@ export interface ReceiptHistoryDTO {
 }
 
 export interface ReceiptHistoryPageDTO {
+  date_filter_basis?: string; shop_timezone?: string | null;
   items: ReceiptHistoryDTO[];
   next_cursor: string | null;
   has_more: boolean;
 }
 
 export interface ShiftDTO {
+  collection_basis?: 'original_recorded_shift'; tender_correction_minor?: number;
+  reconstructed_cash_collections_minor?: number | null; reconstructed_upi_collections_minor?: number | null;
+  reconstructed_expected_minor?: number | null;
   id: string;
   branch_id: string;
   terminal_id: string | null;
@@ -3081,8 +3120,28 @@ export const orders = {
   }).then((r) => r.data),
 };
 
+export interface ReceiptFiltersDTO {
+  date_from?: string; date_to?: string; station_id?: string; amount_minor?: number;
+  method?: PosPaymentMethodDTO; staff_user_id?: string;
+}
+export interface ReceiptInvestigationDTO {
+  receipt: ReceiptHistoryDTO;
+  participant_intervals: Array<{id: string; gaming_session_id: string; participant_identity_id: string;
+    customer_id: string | null; guest_name: string | null; joined_at: string; joined_play_elapsed_ms: number;
+    join_timing_source: string; joined_by: string; left_at: string | null; left_play_elapsed_ms: number | null;
+    leave_timing_source: string | null; left_by: string | null; settlement_line_id: string | null;
+    settlement_id: string | null; charge_basis: string}>;
+  participant_charges: Array<{id: string; gaming_session_id: string; participant_identity_id: string;
+    settlement_id: string; play_elapsed_ms: number; interval_count: number; charge_minor: number; basis: string}>;
+  addons: Array<{id: string; gaming_session_id: string; client_line_id: string; menu_item_id: string;
+    menu_item_name_snapshot: string; qty: number; unit_price_minor: number; line_total_minor: number;
+    created_at: string; created_by: string; voided_at: string | null; voided_by: string | null;
+    void_reason: string | null; provenance: string}>;
+  audit_source_references: string[]; historical_evidence_note: string; invoice_date_basis: string;
+}
 export const receipts = {
-  list: (params?: { cursor?: string; limit?: number; q?: string }) =>
+  investigate: (id: string) => api.get<ReceiptInvestigationDTO>(`/pos/receipts/${id}/investigation`).then(r => r.data),
+  list: (params?: ReceiptFiltersDTO & { cursor?: string; limit?: number; q?: string }) =>
     api.get<ReceiptHistoryPageDTO>('/pos/receipts', { params }).then((r) => r.data),
   get: (orderId: string) =>
     api.get<ReceiptHistoryDTO>(`/pos/receipts/${orderId}`).then((r) => r.data),
@@ -3962,6 +4021,20 @@ export const androidReleases = {
       .then((r) => r.data),
 };
 
+export interface ClientDiagnosticEventDTO {
+  id: string; installation_id: string; client_event_id: string; actor_user_id: string | null;
+  terminal_id: string | null; event_type: ClientDiagnosticEventType; severity: ClientDiagnosticSeverity;
+  occurred_at: string; received_at: string; version_name: string; version_code: number;
+  os_api_level: number; component: ClientDiagnosticComponent; reason_code: string;
+  failure_fingerprint: string | null; http_status: number | null; duration_bucket: string | null;
+  connectivity: string; pending_outbox_count: number | null;
+}
+export const diagnosticEvents = {
+  list: (params: {event_type?: ClientDiagnosticEventType; limit?: number; offset?: number}, signal?: AbortSignal) =>
+    api.get<{items: ClientDiagnosticEventDTO[]; total: number; limit: number; offset: number; retention_days: number}>(
+      '/client-diagnostics/events', {params, signal}).then(response => response.data),
+};
+
 export const systemHealth = {
   get: (signal?: AbortSignal) =>
     api.get<SystemHealthDTO>('/client-diagnostics/system-health', { signal })
@@ -4300,4 +4373,49 @@ export const settings = {
     api.get<ExpenseCategoryDTO[]>('/settings/expense-categories').then((r) => r.data),
   createExpenseCategory: (body: { name: string; code?: string }) =>
     api.post<ExpenseCategoryDTO>('/settings/expense-categories', body).then((r) => r.data),
+};
+
+// Owner corrections are online commands; callers retain one exact action key/body.
+export type TenderScopeDTO = 'payment' | 'daily' | 'history';
+export interface PaymentTenderPreviewDTO {
+  payment_id: string; order_id: string; invoice_no: string; branch_id: string;
+  business_date: string; business_timezone: string; source_fingerprint: string; amount_minor: number;
+  original_method: 'cash'; effective_method: 'upi'; before_cash_minor: number; before_upi_minor: number;
+  after_cash_minor: number; after_upi_minor: number; total_change_minor: 0;
+  evidence_kind: 'owner_attestation'; original_shift_record_unchanged: boolean;
+}
+export interface DailyTenderPreviewDTO {
+  branch_id: string; business_date: string; business_timezone: string; source_fingerprint: string;
+  recorded_cash_minor: number; recorded_upi_minor: number; recorded_total_minor: number;
+  attestation_scope: 'cash_upi_only'; unchanged_other_rails: Record<string, number>;
+  recorded_all_rails_total_minor: number; source_allocation: 'unallocated_owner_attestation'; physical_cash_count: false;
+}
+export interface PaymentTenderCommitDTO {payment_id: string; source_fingerprint: string; reason: string; evidence_reference?: string | null}
+export interface DailyTenderCommitDTO {branch_id: string; business_date: string; source_fingerprint: string;
+  actual_cash_minor: number; actual_upi_minor: number; reason: string; evidence_reference?: string | null}
+export interface TenderReceiptDTO {
+  id: string; receipt_reference: string; operation: 'payment_method_corrected' | 'daily_collections_reconciled' | 'daily_actuals_recorded';
+  financial_effect: boolean; company_id: string; branch_id: string; business_date: string; business_timezone: string;
+  recorded_by: string; recorded_at: string; reason: string; evidence_kind: string; evidence_reference: string | null;
+  source_fingerprint: string; idempotency_key: string; source_allocation: string; total_difference_minor: number;
+  payment_id: string | null; order_id: string | null; invoice_no: string | null; shift_id: string | null;
+  original_method: string | null; effective_method: string | null; amount_minor: number | null;
+  original_tendered_minor: number | null; original_change_minor: number | null; accounting_at: string | null;
+  kind: 'applied' | 'unresolved' | null; before_cash_minor: number | null; before_upi_minor: number | null;
+  actual_cash_minor: number | null; actual_upi_minor: number | null; cash_delta_minor: number | null; upi_delta_minor: number | null;
+}
+const tenderHeaders = (token: string, key?: string) => ({'X-Tender-Token': token, ...(key ? {'Idempotency-Key': key} : {})});
+export const tenderCorrections = {
+  unlock: (branch_id: string, scope: TenderScopeDTO, password: string) =>
+    api.post<{token: string; history_token: string; expires_in: number}>('/finance/tender-corrections/unlock', {branch_id, scope, password}).then(r => r.data),
+  preparePayment: (payment_id: string, token: string) =>
+    api.post<PaymentTenderPreviewDTO>('/finance/tender-corrections/payment/prepare', {payment_id}, {headers: tenderHeaders(token)}).then(r => r.data),
+  prepareDaily: (body: {branch_id: string; business_date: string}, token: string) =>
+    api.post<DailyTenderPreviewDTO>('/finance/tender-corrections/daily/prepare', body, {headers: tenderHeaders(token)}).then(r => r.data),
+  commitPayment: (body: PaymentTenderCommitDTO, key: string, token: string) =>
+    api.post<TenderReceiptDTO>('/finance/tender-corrections/payment/commit', body, {headers: tenderHeaders(token,key)}).then(r => r.data),
+  commitDaily: (body: DailyTenderCommitDTO, key: string, token: string) =>
+    api.post<TenderReceiptDTO>('/finance/tender-corrections/daily/commit', body, {headers: tenderHeaders(token,key)}).then(r => r.data),
+  history: (params: {branch_id: string; business_date?: string; payment_id?: string; limit?: number}, token: string) =>
+    api.get<TenderReceiptDTO[]>('/finance/tender-corrections/history', {params, headers: tenderHeaders(token)}).then(r => r.data),
 };

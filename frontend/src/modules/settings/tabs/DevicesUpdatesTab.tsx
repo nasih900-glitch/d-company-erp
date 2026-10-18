@@ -60,7 +60,7 @@ const CHANNEL_LABELS: Record<ClientDistributionChannel, string> = {
 };
 
 const UPDATE_STATES: Record<ClientUpdateState, { label: string; className: string }> = {
-  idle: { label: 'Ready', className: 'border-bg-border bg-bg-raised text-fg-muted' },
+  idle: { label: 'No update in progress', className: 'border-bg-border bg-bg-raised text-fg-muted' },
   update_available: {
     label: 'Update available',
     className: 'border-accent-gold/40 bg-accent-gold/10 text-accent-gold',
@@ -484,7 +484,7 @@ function SectionHeading({
   );
 }
 
-function InstallationCard({
+export function InstallationCard({
   installation,
   serverTime,
 }: {
@@ -518,15 +518,15 @@ function InstallationCard({
               ? 'border-accent-bad/40 bg-accent-bad/10 text-accent-bad'
               : 'border-accent-good/40 bg-accent-good/10 text-accent-good'}
           />
-          <StatusPill label={updateState.label} className={updateState.className} />
+          <StatusPill label={`${updateState.label} · last reported`} className={updateState.className} />
         </div>
       </div>
 
       <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
-        <InfoItem label="Installed version" value={`v${installation.version_name} · build ${installation.version_code}`} mono />
+        <InfoItem label="Last reported app version" value={`v${installation.version_name} · build ${installation.version_code}`} mono />
         <InfoItem
-          label="Last seen"
-          value={`${relativeTime(installation.last_seen_at, serverTime)} · ${formatDate(installation.last_seen_at)}`}
+          label="Last report received"
+          value={`${relativeTime(installation.last_seen_at, serverTime)} · ${formatDate(installation.last_seen_at)} (browser time)`}
         />
         <InfoItem
           label="Last successful Sync"
@@ -540,18 +540,18 @@ function InstallationCard({
             ? installation.is_stale
               ? `${installation.pending_outbox_count} last reported`
               : `${installation.pending_outbox_count} pending`
-            : 'Queue clear'}
+            : installation.is_stale ? '0 last reported · current queue unknown' : '0 pending at last report'}
           valueClass={installation.is_stale
             ? 'text-fg-muted'
             : installation.pending_outbox_count ? 'text-accent-gold' : 'text-accent-good'}
           mono
         />
-        {installation.is_stale && installation.pending_outbox_count > 0 ? (
+        {installation.is_stale ? (
           <p className="col-span-2 text-xs text-fg-muted">
             Last reported before this installation stopped checking in; this is historical telemetry, not a current pending count.
           </p>
         ) : null}
-        <InfoItem label="Last employee" value={installation.last_user_name || 'Not reported'} />
+        <InfoItem label="Last reported employee (current name)" value={installation.last_user_name || 'Not reported'} />
         <InfoItem label="Workspace" value={installation.terminal_name || 'No workspace header'} />
       </dl>
 
@@ -559,7 +559,7 @@ function InstallationCard({
         <div className="mt-4 flex items-start gap-2 rounded-lg border border-accent-bad/35 bg-accent-bad/10 p-3 text-sm">
           <AlertCircle className="mt-0.5 shrink-0 text-accent-bad" size={15} aria-hidden="true" />
           <div>
-            <p className="font-medium text-accent-bad">Update failed on this tablet</p>
+            <p className="font-medium text-accent-bad">Last reported update error</p>
             <p className="mt-0.5 text-xs text-fg-muted">
               {UPDATE_ERRORS[installation.update_error_code]}
             </p>

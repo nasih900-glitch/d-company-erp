@@ -1,3 +1,4 @@
+import IncidentReports from './IncidentReports';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   Activity,
@@ -139,6 +140,7 @@ export default function SystemHealthTab() {
   }
 
   return (
+    <>
     <SystemHealthOverview
       health={health}
       stale={refreshError !== null}
@@ -146,6 +148,8 @@ export default function SystemHealthTab() {
       refreshing={refreshing}
       onRefresh={() => void load(true)}
     />
+    <div className="mt-4 max-w-6xl"><IncidentReports/></div>
+    </>
   );
 }
 

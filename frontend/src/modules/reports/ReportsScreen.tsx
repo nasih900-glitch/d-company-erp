@@ -31,6 +31,8 @@ import {
 import { useAuth } from '@/modules/auth/AuthContext';
 import { useRealtimeRefresh } from '@/hooks/useRealtimeRefresh';
 import { useLatestRequest } from '@/hooks/useLatestRequest';
+import TenderAdjustments from '@/modules/finance/TenderAdjustments';
+import type { TenderReclassificationDTO } from '@/lib/erp-api';
 import { optionalCostingCoverage } from '@/modules/finance/partner-allocation';
 
 type Period = 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'half_yearly' | 'yearly';
@@ -48,6 +50,7 @@ const PERIODS: Array<{ value: Period; label: string }> = [
 const TAX_COMPLIANCE_UI_ENABLED = GAMING_CENTRE_FEATURES.taxCompliance;
 
 interface ReportData {
+  tender_reclassifications?: TenderReclassificationDTO[];
   period: Period | 'custom';
   label: string;
   period_start: string;
@@ -615,6 +618,8 @@ export default function ReportsScreen() {
                 v={report.net_payments_received_minor
                   ?? report.payments_received.total_minor - (report.settled_refunds_issued_minor ?? 0)} bold/>
             </section>
+
+            <TenderAdjustments rows={report.tender_reclassifications ?? []}/>
 
             {/* Expenses */}
             <section className="card print:border print:border-black/30 print:p-3">

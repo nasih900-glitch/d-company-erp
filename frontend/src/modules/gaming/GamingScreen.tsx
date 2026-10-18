@@ -1,3 +1,4 @@
+import { InlineShiftWorkspace } from '@/modules/pos/OrdersAndShiftsScreen';
 /**
  * Gaming screen — stations + sessions (live + demo).
  *
@@ -711,6 +712,7 @@ export default function GamingScreen() {
     }, gaming);
   }
   const [stations, setStations] = useState<StationDTO[]>([]);
+  const [inlineShift,setInlineShift]=useState(false);
   const [loading, setLoading] = useState(true);
   const [foregroundRefreshing, setForegroundRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -3611,6 +3613,8 @@ export default function GamingScreen() {
         </div>
       )}
 
+      {inlineShift&&<InlineShiftWorkspace onClose={()=>setInlineShift(false)}/>}
+
       {LIVE_MODE && !loading && canManageStations && terminalReady
         && canStartOnSelectedTerminal && !currentShiftId && (
         <div className="card mb-4 border-accent-gold/40 bg-accent-gold/10 text-sm flex items-start gap-3" role="status">
@@ -3622,8 +3626,8 @@ export default function GamingScreen() {
             </div>
           </div>
           <button type="button" className="btn btn-ghost shrink-0 !py-1.5 text-xs"
-            onClick={() => navigate('/operations?tab=shifts')}>
-            Go to Shifts
+            onClick={() => setInlineShift(true)}>
+            Open shift here
           </button>
         </div>
       )}

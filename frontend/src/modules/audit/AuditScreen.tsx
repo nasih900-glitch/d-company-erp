@@ -1,752 +1,852 @@
-/**
- * Audit Log — every create / update / delete in the system.
- *
- *  - Search across before/after JSON
- *  - Filter by entity (Order, Customer, MenuItem, …)
- *  - Filter by action (create, update, delete)
- *  - Click any row to see the full before-and-after JSON diff
- *
- * Powered by SQLAlchemy event listeners; the trail is auto-recorded on
- * every commit. No code change needed when new models join.
- */
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import {
-  ShieldCheck, Search, AlertCircle, RefreshCw, Eye,
-  Plus, Edit2, Trash2, KeyRound, LogIn, ShieldAlert, Lock,
+  AlertCircle,
+  ArrowUpRight,
+  ChevronDown,
+  Lock,
+  RefreshCw,
+  Search,
+  ShieldCheck,
+  X,
 } from 'lucide-react';
-
-import { audit, type AuditEntryDTO, type AuditFacetsDTO } from '@/lib/erp-api';
-import { inr } from '@/lib/inr';
-import Modal from '@/components/ui/Modal';
-import { SkeletonCard } from '@/components/ui/Skeleton';
+import {
+  audit,
+  staff,
+  type AuditCatalogueDTO,
+  type AuditEventFilters,
+  type AuditEventsPageDTO,
+  type BusinessAuditEntryDTO,
+  type UserDTO,
+} from '@/lib/erp-api';
+import type { ApiError } from '@/lib/api';
+import { useAuth } from '@/modules/auth/AuthContext';
+import { useLatestRequest } from '@/hooks/useLatestRequest';
 import { useRealtimeRefresh } from '@/hooks/useRealtimeRefresh';
+import {
+  ownerScope,
+  ownerWorkspaceGeneration,
+  readOwnerWorkspace,
+  rememberOwnerWorkspace,
+} from '@/lib/owner-workspace';
+import {
+  auditActor,
+  auditBusinessSummary,
+  auditOrderId,
+  businessLabel,
+  businessValue,
+  safeAuditValue,
+  shopTime,
+} from './audit-presentation';
 
-const ACTION_COLOR: Record<string, string> = {
-  create: 'border-accent-good/40 text-accent-good',
-  update: 'border-accent-gold/40 text-accent-gold',
-  delete: 'border-accent-bad/40 text-accent-bad',
-  login_success: 'border-accent-good/40 text-accent-good',
-  login_failed: 'border-accent-bad/40 text-accent-bad',
-  audit_unlock_success: 'border-accent/40 text-accent',
-  audit_unlock_failed: 'border-accent-bad/40 text-accent-bad',
-  pricing_unlock_success: 'border-accent/40 text-accent',
-  pricing_unlock_failed: 'border-accent-bad/40 text-accent-bad',
+type AuditState = {
+  token: string | null;
+  expiresAt: number;
+  rows: BusinessAuditEntryDTO[];
+  page: AuditEventsPageDTO | null;
+  filters: AuditEventFilters;
+  selected: BusinessAuditEntryDTO | null;
+  scroll: number;
+  catalogue: AuditCatalogueDTO | null;
+  users: UserDTO[];
 };
-const ACTION_ICON: Record<string, React.ReactNode> = {
-  create: <Plus size={11}/>,
-  update: <Edit2 size={11}/>,
-  delete: <Trash2 size={11}/>,
-  login_success: <LogIn size={11}/>,
-  login_failed: <ShieldAlert size={11}/>,
-  audit_unlock_success: <KeyRound size={11}/>,
-  audit_unlock_failed: <ShieldAlert size={11}/>,
-  pricing_unlock_success: <KeyRound size={11}/>,
-  pricing_unlock_failed: <ShieldAlert size={11}/>,
-};
-
-const AREA_OPTIONS = [
-  { value: '', label: 'All' },
-  { value: 'login', label: 'Login' },
-  { value: 'pos', label: 'POS & purchases' },
-  { value: 'customers', label: 'Customers' },
-  { value: 'staff', label: 'Users & staff' },
-  { value: 'inventory', label: 'Inventory' },
-  { value: 'finance', label: 'Finance' },
-  { value: 'menu', label: 'Menu' },
-  { value: 'operations', label: 'Operations' },
-  { value: 'system', label: 'System' },
-];
-
+const defaults: AuditEventFilters = { view: 'business' };
 export default function AuditScreen() {
-  const [auditToken, setAuditToken] = useState<string | null>(null);
+  const { me } = useAuth();
+  return me?.audit_access ? (
+    <AuditWorkspace key={ownerScope(me)} scope={ownerScope(me)} />
+  ) : (
+    <div className="card">Audit requires protected-owner access.</div>
+  );
+}
+function AuditWorkspace({ scope }: { scope: string }) {
+  const [searchParams] = useSearchParams();
+  const workspaceGeneration = useRef(ownerWorkspaceGeneration()).current;
+  const initial = useRef(readOwnerWorkspace<AuditState>(scope, 'audit'));
+  const cached = initial.current;
+  const [token, setToken] = useState(
+    cached && cached.expiresAt > Date.now() ? cached.token : null,
+  );
+  const [expiresAt, setExpiresAt] = useState(cached?.expiresAt ?? 0);
   const [password, setPassword] = useState('');
-  const [unlocking, setUnlocking] = useState(false);
-  const [rows, setRows] = useState<AuditEntryDTO[]>([]);
-  const [facets, setFacets] = useState<AuditFacetsDTO | null>(null);
-  const [q, setQ] = useState('');
-  const [area, setArea] = useState('');
-  const [entityType, setEntityType] = useState('');
-  const [action, setAction] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  const [view, setView] = useState<AuditEntryDTO | null>(null);
-
-  async function unlock(e: React.FormEvent) {
-    e.preventDefault();
-    setUnlocking(true); setErr(null);
-    try {
-      const r = await audit.unlock(password);
-      setAuditToken(r.audit_token);
-      setPassword('');
-    } catch (e) {
-      setErr((e as Error).message);
-    } finally {
-      setUnlocking(false);
-    }
-  }
-
-  function lockAudit() {
-    setAuditToken(null);
-    setPassword('');
-    setRows([]);
-    setFacets(null);
-    setView(null);
-  }
-
-  async function load(token = auditToken, silent = false) {
+  const linkedReference = searchParams.get('reference');
+  const sameReference =
+    !linkedReference || linkedReference === cached?.filters.reference;
+  const [rows, setRows] = useState(sameReference ? (cached?.rows ?? []) : []);
+  const [page, setPage] = useState(
+    sameReference ? (cached?.page ?? null) : null,
+  );
+  const [filters, setFilters] = useState<AuditEventFilters>(
+    linkedReference
+      ? { ...defaults, reference: linkedReference }
+      : (cached?.filters ?? defaults),
+  );
+  const [draft, setDraft] = useState(filters);
+  const [catalogue, setCatalogue] = useState<AuditCatalogueDTO | null>(
+    cached?.catalogue ?? null,
+  );
+  const [users, setUsers] = useState<UserDTO[]>(cached?.users ?? []);
+  const [selected, setSelected] = useState<BusinessAuditEntryDTO | null>(
+    sameReference ? (cached?.selected ?? null) : null,
+  );
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [newEntries, setNewEntries] = useState(false);
+  const requests = useLatestRequest();
+  const busyRef = useRef(false);
+  const list = useRef<HTMLDivElement>(null);
+  const rowsRef = useRef(rows);
+  rowsRef.current = rows;
+  const stateRef = useRef<AuditState>({
+    token,
+    expiresAt,
+    rows,
+    page,
+    filters,
+    selected,
+    scroll: cached?.scroll ?? 0,
+    catalogue,
+    users,
+  });
+  stateRef.current = {
+    token,
+    expiresAt,
+    rows,
+    page,
+    filters,
+    selected,
+    scroll: stateRef.current.scroll,
+    catalogue,
+    users,
+  };
+  const persist = useCallback(() => {
+    if (workspaceGeneration === ownerWorkspaceGeneration())
+      rememberOwnerWorkspace(scope, 'audit', stateRef.current);
+  }, [scope, workspaceGeneration]);
+  useEffect(() => {
+    persist();
+  }, [
+    token,
+    expiresAt,
+    rows,
+    page,
+    filters,
+    selected,
+    catalogue,
+    users,
+    persist,
+  ]);
+  useEffect(() => {
+    if (list.current) list.current.scrollTop = cached?.scroll ?? 0;
+  }, [cached]);
+  useEffect(() => {
     if (!token) return;
-    if (!silent) setLoading(true);
-    setErr(null);
-    try {
-      const [r, f] = await Promise.all([
-        audit.list({
-          q: q.trim() || undefined,
-          area: area || undefined,
-          entity_type: entityType || undefined,
-          action: action || undefined,
-          limit: 200,
-        }, token),
-        facets ? Promise.resolve(facets) : audit.facets(token),
-      ]);
-      setRows(r);
-      if (!facets) setFacets(f as AuditFacetsDTO);
-    } catch (e) {
-      const message = (e as Error).message;
-      setErr(message);
-      if (message.toLowerCase().includes('audit password unlock')) {
-        setAuditToken(null);
+    const id = window.setTimeout(
+      () => {
+        requests.invalidate();
+        busyRef.current = false;
+        setBusy(false);
+        setToken(null);
+        setPassword('');
+        setError(
+          'Owner unlock expired. Unlock again; your retained history and filters remain available.',
+        );
+      },
+      Math.max(0, expiresAt - Date.now()),
+    );
+    return () => window.clearTimeout(id);
+  }, [token, expiresAt, requests]);
+  const load = useCallback(
+    async (
+      mode: 'restart' | 'older' | 'check',
+      applied = filters,
+      activeToken = token,
+    ) => {
+      if (!activeToken || (mode === 'check' && busyRef.current)) return;
+      if (
+        mode === 'check' &&
+        (!page || (rowsRef.current.length > 0 && !page.activity_cursor))
+      )
+        return;
+      const current = requests.begin(),
+        authGeneration = ownerWorkspaceGeneration();
+      if (mode !== 'check') {
+        busyRef.current = true;
+        setBusy(true);
       }
-    }
-    finally { if (!silent) setLoading(false); }
-  }
-  // Unlocking loads once; search filters are intentionally submitted by the form.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { if (auditToken) load(auditToken); }, [auditToken]);
+      setError(null);
+      try {
+        const next = await audit.events(
+          {
+            ...applied,
+            limit: 50,
+            ...(mode === 'older' && page?.next_cursor
+              ? { cursor: page.next_cursor }
+              : mode === 'check' && page?.activity_cursor
+                ? { cursor: page.activity_cursor }
+                : {}),
+          },
+          activeToken,
+        );
+        if (!current() || authGeneration !== ownerWorkspaceGeneration()) return;
+        if (mode === 'check') {
+          if (
+            next.new_entries_available ||
+            (!rowsRef.current.length && next.entries.length > 0)
+          )
+            setNewEntries(true);
+        } else {
+          setRows((previous) =>
+            mode === 'older'
+              ? [
+                  ...previous,
+                  ...next.entries.filter(
+                    (row) => !previous.some((known) => known.id === row.id),
+                  ),
+                ]
+              : next.entries,
+          );
+          setPage(next);
+          setNewEntries(next.new_entries_available);
+          if (mode === 'restart') {
+            setFilters(applied);
+            setSelected(null);
+            if (list.current) list.current.scrollTop = 0;
+          }
+        }
+      } catch (cause) {
+        if (!current()) return;
+        setError(
+          (cause as Error).message + ' Your loaded events have been kept.',
+        );
+        if (
+          (cause as ApiError).status === 401 ||
+          (cause as ApiError).status === 403
+        ) {
+          setToken(null);
+          setExpiresAt(0);
+        }
+      } finally {
+        if (current()) {
+          busyRef.current = false;
+          setBusy(false);
+        }
+      }
+    },
+    [filters, page, requests, token],
+  );
   useRealtimeRefresh({
     resources: ['audit'],
-    enabled: Boolean(auditToken),
-    refresh: () => load(auditToken, true),
+    enabled: !!token,
+    refresh: () => load('check'),
   });
-
-  const onSearch = (e: React.FormEvent) => { e.preventDefault(); load(); };
-  const visibleRows = area ? rows.filter((e) => auditArea(e) === area) : rows;
-  const securityRows = visibleRows.filter((e) => auditArea(e) === 'login' || auditArea(e) === 'system').length;
-  const purchaseRows = visibleRows.filter((e) => auditArea(e) === 'pos').length;
-  const changeRows = visibleRows.filter((e) => ['create', 'update', 'delete'].includes(e.action)).length;
-
+  async function unlock(event: React.FormEvent) {
+    event.preventDefault();
+    if(busyRef.current)return;
+    busyRef.current=true;
+    setBusy(true);
+    setError(null);
+    const current = requests.begin(),
+      authGeneration = ownerWorkspaceGeneration();
+    const secret = password;
+    setPassword('');
+    try {
+      const result = await audit.unlock(secret);
+      if (!current() || authGeneration !== ownerWorkspaceGeneration()) return;
+      setToken(result.audit_token);
+      setExpiresAt(Date.now() + result.expires_in * 1000);
+      const [definitions, employees] = await Promise.allSettled([
+        audit.catalogue(result.audit_token),
+        staff.listUsers(),
+      ]);
+      if (!current() || authGeneration !== ownerWorkspaceGeneration()) return;
+      if (definitions.status === 'fulfilled') setCatalogue(definitions.value);
+      else
+        setError(
+          'Action suggestions could not load; retained events and server search remain available.',
+        );
+      if (employees.status === 'fulfilled') setUsers(employees.value);
+      if (!page || !sameReference)
+        await load('restart', filters, result.audit_token);
+    } catch (cause) {
+      if (current()) setError((cause as Error).message);
+    } finally {
+      // A nested list load owns its newer request generation and busy state.
+      // A locked/expired older unlock must not clear a subsequent operation.
+      if(current()){busyRef.current=false;setBusy(false);}
+    }
+  }
+  useEffect(() => {
+    if (token && linkedReference && !sameReference && !page&&!busyRef.current)
+      void load('restart', filters);
+  }, [token, linkedReference, sameReference, page, load, filters]);
+  const zone = page?.shop_timezone ?? 'Asia/Kolkata';
   return (
-    <div>
-      <header className="flex items-end justify-between mb-6 flex-wrap gap-4">
+    <div className="space-y-4">
+      <header className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="text-2xl font-bold flex items-center gap-2">
-            <ShieldCheck size={22} className="text-accent"/> Audit Log
+          <h2 className="flex items-center gap-2 text-2xl font-bold">
+            <ShieldCheck size={22} /> Audit activity
           </h2>
-          <p className="text-fg-muted text-sm">
-            Every change · actor · device · online/offline sync · before vs after
+          <p className="mt-1 text-sm text-fg-muted">
+            Business actions, retained evidence and clear outcomes.
           </p>
         </div>
-        <div className="flex gap-2">
-          {auditToken && (
-            <button className="btn btn-ghost" onClick={lockAudit}>
-              <Lock size={14}/> Lock
+        {token && (
+          <div className="flex gap-2">
+            <button
+              className="btn btn-ghost"
+              onClick={() => void load('check')}
+              disabled={busy}
+            >
+              <RefreshCw size={14} /> Check new activity
             </button>
-          )}
-          <button className="btn btn-ghost" onClick={() => load()} disabled={!auditToken || loading}>
-            <RefreshCw size={14}/> Refresh
-          </button>
-        </div>
-      </header>
-
-      {!auditToken ? (
-        <form onSubmit={unlock} className="card max-w-sm space-y-4">
-          <div className="flex items-center gap-2 font-semibold">
-            <KeyRound size={16} className="text-accent"/> Unlock Audit Log
+            <button
+              className="btn btn-ghost"
+              onClick={() => {
+                requests.invalidate();
+                busyRef.current = false;
+                setBusy(false);
+                setToken(null);
+                setExpiresAt(0);
+                setPassword('');
+              }}
+            >
+              <Lock size={14} /> Lock
+            </button>
           </div>
-          <label className="block">
-            <span className="text-xs text-fg-muted">Your account password (re-enter it to confirm it's you before viewing the audit log)</span>
+        )}
+      </header>
+      {!token ? (
+        <form onSubmit={unlock} className="card max-w-md space-y-3">
+          <h3 className="font-semibold">Confirm owner access</h3>
+          <p className="text-sm text-fg-muted">
+            Re-enter your password to view protected activity. The unlock stays
+            in memory for this account only.
+          </p>
+          <label className="block text-sm">
+            Owner password
             <input
-              className="input mt-1"
               type="password"
+              autoComplete="current-password"
+              className="input mt-1 w-full"
               value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              autoFocus
+              onChange={(event) => setPassword(event.target.value)}
             />
           </label>
-          {err && (
-            <div className="text-accent-bad text-sm flex items-center gap-2">
-              <AlertCircle size={14}/> {err}
-            </div>
-          )}
-          <button className="btn btn-primary w-full" disabled={unlocking || !password} type="submit">
-            {unlocking ? 'Unlocking…' : 'Unlock'}
+          <button className="btn btn-primary" disabled={busy || !password}>
+            {busy ? 'Confirming…' : 'Unlock activity'}
           </button>
+          {error && (
+            <p role="alert" className="text-sm text-accent-bad">
+              {error}
+            </p>
+          )}
         </form>
       ) : (
         <>
-      {/* Filters */}
-      <form
-        onSubmit={onSearch}
-        className="card mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-[minmax(220px,1fr)_180px_180px_180px_auto] xl:items-end"
-      >
-        <div className="sm:col-span-2 xl:col-span-1">
-          <label htmlFor="audit-search" className="text-xs text-fg-muted">Search</label>
-          <div className="flex items-center gap-2 mt-1">
-            <Search size={14} className="text-fg-muted"/>
-            <input id="audit-search" value={q} onChange={(e) => setQ(e.target.value)}
-              placeholder="customer name, invoice no., phone…"
-              className="input !min-h-[38px] !py-2 flex-1"/>
-          </div>
-        </div>
-        <div className="min-w-0">
-          <label htmlFor="audit-area" className="text-xs text-fg-muted">Area</label>
-          <select id="audit-area" className="input !min-h-[38px] !py-2 mt-1"
-            value={area} onChange={(e) => setArea(e.target.value)}>
-            {AREA_OPTIONS.map((opt) => (
-              <option key={opt.value || 'all'} value={opt.value}>{opt.label}</option>
-            ))}
-          </select>
-        </div>
-        <div className="min-w-0">
-          <label htmlFor="audit-entity" className="text-xs text-fg-muted">Entity</label>
-          <select id="audit-entity" className="input !min-h-[38px] !py-2 mt-1"
-            value={entityType} onChange={(e) => setEntityType(e.target.value)}>
-            <option value="">All</option>
-            {facets?.entity_types.map((t) => <option key={t} value={t}>{t}</option>)}
-          </select>
-        </div>
-        <div className="min-w-0">
-          <label htmlFor="audit-action" className="text-xs text-fg-muted">Action</label>
-          <select id="audit-action" className="input !min-h-[38px] !py-2 mt-1"
-            value={action} onChange={(e) => setAction(e.target.value)}>
-            <option value="">All</option>
-            {facets?.actions.map((a) => <option key={a} value={a}>{a}</option>)}
-          </select>
-        </div>
-        <button type="submit" className="btn btn-primary w-full sm:col-span-2 xl:col-span-1">Find</button>
-      </form>
-
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-        <AuditMetric label="Shown" value={visibleRows.length.toString()}/>
-        <AuditMetric label="Changes" value={changeRows.toString()}/>
-        <AuditMetric label="Purchases" value={purchaseRows.toString()}/>
-        <AuditMetric label="Security" value={securityRows.toString()}/>
-      </div>
-
-      {err && (
-        <div className="card mb-4 border-accent-bad/40 bg-accent-bad/10 text-accent-bad text-sm flex items-center gap-2">
-          <AlertCircle size={14}/> {err}
-        </div>
-      )}
-
-      {loading ? (
-        <SkeletonCard />
-      ) : !visibleRows.length ? (
-        <div className="card text-fg-muted text-sm">
-          No audit entries match. Try clearing filters — or take some actions and reload.
-        </div>
-      ) : (
-        <div className="card !p-0 overflow-hidden">
-          <div className="mobile-card-list md:hidden">
-            {visibleRows.map((e) => {
-              const summary = auditSummary(e);
-              const entryArea = auditArea(e);
-              return (
-                <button
-                  key={e.id}
-                  type="button"
-                  onClick={() => setView(e)}
-                  className="mobile-record-card w-full text-left active:bg-bg-raised/40"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="font-mono text-[11px] text-fg-muted">
-                        {new Date(e.created_at).toLocaleString('en-IN', {
-                          day: '2-digit', month: 'short',
-                          hour: '2-digit', minute: '2-digit', second: '2-digit',
-                        })}
-                      </div>
-                      <div className="mt-1 font-semibold leading-snug">{summary.title}</div>
-                    </div>
-                    <span className={`chip shrink-0 text-[10px] ${ACTION_COLOR[e.action] ?? ''}`}>
-                      {ACTION_ICON[e.action]} {actionLabel(e.action)}
-                    </span>
-                  </div>
-                  <div className="mt-2 text-xs leading-relaxed text-fg-muted">
-                    {summary.detail}
-                  </div>
-                  <div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 text-xs">
-                    <div className="min-w-0">
-                      <div className="text-fg-muted">Who</div>
-                      <div className="truncate font-medium">
-                        {e.actor_name || 'system / script'}
-                      </div>
-                      {e.actor_email && (
-                        <div className="truncate text-[10px] text-fg-muted">{e.actor_email}</div>
-                      )}
-                    </div>
-                    <div>
-                      <div className="text-fg-muted">Area</div>
-                      <div className="font-medium">{areaLabel(entryArea)}</div>
-                    </div>
-                    <div>
-                      <div className="text-fg-muted">Entity</div>
-                      <div className="font-medium">{entityLabel(e.entity_type)}</div>
-                    </div>
-                    <div>
-                      <div className="text-fg-muted">ID</div>
-                      <div className="font-mono text-[10px] text-fg-muted">
-                        {e.entity_id.slice(0, 8)}…
-                      </div>
-                    </div>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-          <div className="hidden md:block overflow-x-auto">
-          <table className="w-full min-w-[960px] text-sm">
-            <thead className="bg-bg-raised text-xs text-fg-muted">
-              <tr>
-                <th className="text-left p-3">Time</th>
-                <th className="text-left p-3">Who</th>
-                <th className="text-left p-3">What happened</th>
-                <th className="text-left p-3">Action</th>
-                <th className="text-left p-3">Area</th>
-                <th className="text-left p-3">Entity</th>
-                <th className="text-left p-3">ID</th>
-                <th className="p-3"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {visibleRows.map((e) => {
-                const summary = auditSummary(e);
-                return (
-                  <tr key={e.id} className="border-t border-bg-border/60 hover:bg-bg-raised/30">
-                    <td className="p-3 font-mono text-xs whitespace-nowrap">
-                      {new Date(e.created_at).toLocaleString('en-IN', {
-                        day: '2-digit', month: 'short',
-                        hour: '2-digit', minute: '2-digit', second: '2-digit',
-                      })}
-                    </td>
-                    <td className="p-3 min-w-[150px] max-w-[220px]">
-                      {e.actor_name || <span className="text-fg-muted italic">system / script</span>}
-                      {e.actor_email && (
-                        <div className="truncate text-[10px] text-fg-muted">{e.actor_email}</div>
-                      )}
-                    </td>
-                    <td className="p-3 max-w-[360px]">
-                      <div className="font-medium">{summary.title}</div>
-                      <div className="text-xs text-fg-muted">{summary.detail}</div>
-                    </td>
-                    <td className="p-3">
-                      <span className={`chip text-[10px] ${ACTION_COLOR[e.action] ?? ''}`}>
-                        {ACTION_ICON[e.action]} {actionLabel(e.action)}
-                      </span>
-                    </td>
-                    <td className="p-3 text-xs text-fg-muted">{areaLabel(auditArea(e))}</td>
-                    <td className="p-3 font-medium">{entityLabel(e.entity_type)}</td>
-                    <td className="p-3 font-mono text-[10px] text-fg-muted">
-                      {e.entity_id.slice(0, 8)}…
-                    </td>
-                    <td className="p-3 text-right">
-                      <button onClick={() => setView(e)} className="text-fg-muted hover:text-accent">
-                        <Eye size={14}/>
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          </div>
-        </div>
-      )}
-
-      {view && <AuditDetailModal entry={view} onClose={() => setView(null)}/>}
-      </>
-      )}
-    </div>
-  );
-}
-
-function AuditMetric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="card !p-3">
-      <div className="text-[10px] text-fg-muted uppercase tracking-wider">{label}</div>
-      <div className="text-xl font-bold mt-1">{value}</div>
-    </div>
-  );
-}
-
-const IGNORED_AUDIT_FIELDS = new Set(['updated_at', 'created_at']);
-const SENSITIVE_AUDIT_FIELDS = new Set([
-  'password',
-  'password_hash',
-  'current_password',
-  'new_password',
-  'token',
-  'access_token',
-  'refresh_token',
-  'refresh_token_hash',
-  'audit_token',
-  'pricing_token',
-]);
-
-function auditArea(entry: AuditEntryDTO): string {
-  if (entry.action.startsWith('login_')) return 'login';
-  if (entry.entity_type === 'AuditAccess' || entry.entity_type === 'PricingAccess') return 'system';
-  if (['User', 'UserRole', 'Role'].includes(entry.entity_type)) return 'staff';
-  if (['Order', 'OrderLine', 'Payment', 'Refund', 'MembershipPaymentRequest', 'MembershipPaymentCashCollection', 'MembershipPaymentProviderAction', 'MembershipPaymentRequestResolution', 'MembershipPayment', 'MembershipPaymentAttemptResolution', 'MembershipRefund', 'MembershipRefundCashHandoff', 'MembershipRefundProviderAction', 'MembershipRefundSettlement', 'MembershipRefundResolution', 'Shift'].includes(entry.entity_type)) return 'pos';
-  if (['Customer', 'CustomerMembership', 'MembershipTier'].includes(entry.entity_type)) return 'customers';
-  if (['Ingredient', 'Supplier', 'Batch', 'StockMovement', 'PurchaseOrder', 'PurchaseOrderLine', 'GRN'].includes(entry.entity_type)) return 'inventory';
-  if (['Account', 'Asset', 'Expense', 'ExpenseCategory', 'JournalEntry', 'JournalLine', 'ManualCollection', 'Partner', 'CapitalEntry'].includes(entry.entity_type)) return 'finance';
-  if (['MenuCategory', 'MenuItem'].includes(entry.entity_type)) return 'menu';
-  if (['Table', 'Floor', 'Reservation', 'Station', 'GamingSession', 'GamingBooking', 'Event', 'EventTicket'].includes(entry.entity_type)) {
-    return 'operations';
-  }
-  return 'system';
-}
-
-function areaLabel(area: string): string {
-  return AREA_OPTIONS.find((opt) => opt.value === area)?.label ?? 'System';
-}
-
-function entityLabel(entityType: string): string {
-  const labels: Record<string, string> = {
-    AuditAccess: 'Audit access',
-    PricingAccess: 'Pricing access',
-    User: 'User account',
-    UserRole: 'User role',
-    Role: 'Role',
-    Order: 'Order / bill',
-    OrderLine: 'Order item',
-    Payment: 'Payment',
-    Refund: 'Refund',
-    MembershipPaymentRequest: 'Membership payment request',
-    MembershipPaymentCashCollection: 'Membership cash collection started',
-    MembershipPaymentProviderAction: 'Membership provider payment started',
-    MembershipPaymentRequestResolution: 'Membership payment request resolution',
-    MembershipPayment: 'Membership payment',
-    MembershipPaymentAttemptResolution: 'Legacy membership payment recovery',
-    MembershipRefund: 'Membership refund request',
-    MembershipRefundCashHandoff: 'Membership refund cash handover started',
-    MembershipRefundProviderAction: 'Membership provider refund started',
-    MembershipRefundSettlement: 'Membership refund settlement',
-    MembershipRefundResolution: 'Membership refund withdrawal',
-    Shift: 'POS shift',
-    Customer: 'Customer',
-    CustomerMembership: 'Membership',
-    MembershipTier: 'Membership plan',
-    Ingredient: 'Ingredient',
-    Supplier: 'Supplier',
-    GRN: 'Stock received',
-    Account: 'Ledger account',
-    Asset: 'Asset',
-    Expense: 'Expense',
-    ExpenseCategory: 'Expense category',
-    JournalEntry: 'Journal entry',
-    JournalLine: 'Journal line',
-    ManualCollection: 'Manual collection',
-    Partner: 'Partner',
-    CapitalEntry: 'Partner capital',
-    MenuCategory: 'Menu category',
-    MenuItem: 'Menu item',
-    Table: 'Table',
-    Floor: 'Floor',
-    Reservation: 'Reservation',
-    Station: 'Gaming / hookah station',
-    GamingSession: 'Gaming / hookah session',
-    GamingBooking: 'Gaming booking',
-    Event: 'Event',
-    EventTicket: 'Event ticket',
-  };
-  return labels[entityType] ?? entityType;
-}
-
-function actionLabel(action: string): string {
-  const labels: Record<string, string> = {
-    create: 'Created',
-    update: 'Updated',
-    delete: 'Deleted',
-    login_success: 'Login success',
-    login_failed: 'Login failed',
-    audit_unlock_success: 'Audit unlocked',
-    audit_unlock_failed: 'Audit unlock failed',
-    pricing_unlock_success: 'Pricing unlocked',
-    pricing_unlock_failed: 'Pricing unlock failed',
-  };
-  return labels[action] ?? action.replaceAll('_', ' ');
-}
-
-function fieldLabel(field: string): string {
-  const labels: Record<string, string> = {
-    name: 'Name',
-    email: 'Email',
-    phone: 'Phone',
-    status: 'Status',
-    password_hash: 'Password',
-    failed_login_count: 'Failed login count',
-    last_login_at: 'Last login time',
-    locked_until: 'Locked until',
-    deleted_at: 'Deleted at',
-    total_minor: 'Total amount',
-    subtotal_minor: 'Subtotal',
-    discount_minor: 'Discount',
-    tax_minor: 'Tax',
-    cgst_minor: 'CGST',
-    sgst_minor: 'SGST',
-    igst_minor: 'IGST',
-    amount_minor: 'Amount',
-    customer_name: 'Customer name',
-    customer_phone: 'Customer phone',
-    kitchen_state: 'Kitchen status',
-    is_available: 'Available for sale',
-    base_price_minor: 'Price',
-    rate_per_hour_minor: 'Hourly rate',
-    current_qty: 'Current stock',
-    reorder_threshold: 'Low-stock alert level',
-    role_id: 'Role',
-    user_id: 'User',
-  };
-  return labels[field] ?? field.replaceAll('_', ' ');
-}
-
-function changedFields(entry: AuditEntryDTO): string[] {
-  if (!entry.before && !entry.after) return [];
-  const keys = new Set<string>();
-  Object.keys(entry.before ?? {}).forEach((k) => keys.add(k));
-  Object.keys(entry.after ?? {}).forEach((k) => keys.add(k));
-  return Array.from(keys).filter((key) => !IGNORED_AUDIT_FIELDS.has(key) && hasFieldChanged(entry, key));
-}
-
-function hasFieldChanged(entry: AuditEntryDTO, key: string): boolean {
-  if (!entry.before || !entry.after) return true;
-  return JSON.stringify(entry.before[key]) !== JSON.stringify(entry.after[key]);
-}
-
-function displayChangedFields(entry: AuditEntryDTO): string[] {
-  return changedFields(entry);
-}
-
-function changeSummary(entry: AuditEntryDTO, fields: string[]): string {
-  if (!fields.length) return 'Record changed';
-  const parts = fields.slice(0, 3).map((field) => {
-    if (SENSITIVE_AUDIT_FIELDS.has(field)) return `${fieldLabel(field)} changed`;
-    return `${fieldLabel(field)}: ${formatAuditValue(entry.before?.[field], field)} -> ${formatAuditValue(entry.after?.[field], field)}`;
-  });
-  const extra = fields.length > 3 ? ` +${fields.length - 3} more` : '';
-  return `${parts.join(', ')}${extra}`;
-}
-
-function formatAuditValue(value: unknown, key: string): string {
-  if (SENSITIVE_AUDIT_FIELDS.has(key)) return '[hidden]';
-  if (value === null || value === undefined || value === '') return 'blank';
-  if (typeof value === 'number') {
-    if (key.endsWith('_minor') || key.includes('price') || key.includes('rate_per_hour')) {
-      return inr(value);
-    }
-    return String(value);
-  }
-  if (typeof value === 'boolean') return value ? 'yes' : 'no';
-  if (typeof value === 'string') {
-    const cleaned = cleanAuditText(value);
-    return cleaned.length > 42 ? `${cleaned.slice(0, 39)}...` : cleaned;
-  }
-  return 'changed';
-}
-
-function textValue(entry: AuditEntryDTO, key: string): string | null {
-  const value = entry.after?.[key] ?? entry.before?.[key];
-  return typeof value === 'string' && value.trim() ? cleanAuditText(value) : null;
-}
-
-function cleanAuditText(value: string): string {
-  return value.replaceAll('super_owner', 'owner').replaceAll('Super Owner', 'Owner');
-}
-
-function cleanAuditValue(value: unknown, key?: string): unknown {
-  if (key && SENSITIVE_AUDIT_FIELDS.has(key)) return '[hidden]';
-  if (typeof value === 'string') return cleanAuditText(value);
-  if (Array.isArray(value)) return value.map((item) => cleanAuditValue(item));
-  if (value && typeof value === 'object') {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>).map(([key, val]) => [
-        key,
-        cleanAuditValue(val, key),
-      ]),
-    );
-  }
-  return value;
-}
-
-function auditJson(value: unknown, space?: number): string {
-  return JSON.stringify(cleanAuditValue(value), null, space);
-}
-
-function auditSummary(entry: AuditEntryDTO): { title: string; detail: string } {
-  const who = entry.actor_name || textValue(entry, 'email') || 'System';
-
-  if (entry.action === 'login_success') {
-    return {
-      title: `${who} logged in`,
-      detail: `Successful login for ${textValue(entry, 'email') || entry.actor_email || 'this user'}`,
-    };
-  }
-  if (entry.action === 'login_failed') {
-    return {
-      title: 'Failed login attempt',
-      detail: `${textValue(entry, 'email') || 'Unknown email'} · ${textValue(entry, 'reason') || 'invalid credentials'}`,
-    };
-  }
-  if (entry.action === 'audit_unlock_success') {
-    return { title: `${who} unlocked the Audit Log`, detail: 'Password check passed' };
-  }
-  if (entry.action === 'audit_unlock_failed') {
-    return { title: `${who} tried to unlock the Audit Log`, detail: 'Password check failed' };
-  }
-  if (entry.action === 'pricing_unlock_success') {
-    return { title: `${who} unlocked Pricing`, detail: 'Password check passed' };
-  }
-  if (entry.action === 'pricing_unlock_failed') {
-    return { title: `${who} tried to unlock Pricing`, detail: 'Password check failed' };
-  }
-
-  const entity = entityLabel(entry.entity_type);
-  const fields = changedFields(entry);
-  const readableFields = fields.map(fieldLabel);
-
-  if (entry.action === 'create') {
-    return { title: `${entity} created`, detail: createDetail(entry, readableFields) };
-  }
-  if (entry.action === 'delete') {
-    return { title: `${entity} deleted`, detail: readableFields.length ? readableFields.join(', ') : 'Record removed' };
-  }
-  if (entry.action === 'update') {
-    return {
-      title: `${entity} updated`,
-      detail: changeSummary(entry, fields),
-    };
-  }
-  return { title: `${entity} ${actionLabel(entry.action).toLowerCase()}`, detail: readableFields.join(', ') || 'Audit event' };
-}
-
-function createDetail(entry: AuditEntryDTO, readableFields: string[]): string {
-  if (entry.entity_type === 'Order') return `Bill/order ${textValue(entry, 'invoice_no') || 'created'}`;
-  if (entry.entity_type === 'Payment') return 'Payment recorded';
-  if (entry.entity_type === 'MembershipPaymentRequest') return 'Membership payment prepared';
-  if (entry.entity_type === 'MembershipPaymentCashCollection') return 'Membership cash collection started';
-  if (entry.entity_type === 'MembershipPaymentProviderAction') return 'Membership provider payment started';
-  if (entry.entity_type === 'MembershipPaymentRequestResolution') return 'Membership payment request resolved';
-  if (entry.entity_type === 'MembershipPayment') return 'Membership payment recorded';
-  if (entry.entity_type === 'MembershipPaymentAttemptResolution') return 'Rejected membership payment recovered';
-  if (entry.entity_type === 'MembershipRefund') return 'Membership refund accepted';
-  if (entry.entity_type === 'MembershipRefundCashHandoff') return 'Membership refund cash handover started';
-  if (entry.entity_type === 'MembershipRefundProviderAction') return 'Membership provider refund started';
-  if (entry.entity_type === 'MembershipRefundSettlement') return 'Membership refund settled';
-  if (entry.entity_type === 'MembershipRefundResolution') return 'Unpaid membership refund withdrawn';
-  if (entry.entity_type === 'Customer') return textValue(entry, 'phone') || 'Customer profile added';
-  if (entry.entity_type === 'User') return textValue(entry, 'email') || 'User account added';
-  if (entry.entity_type === 'Expense') return 'Expense recorded';
-  if (entry.entity_type === 'GRN') return 'Stock received into inventory';
-  return readableFields.length ? readableFields.join(', ') : 'Record added';
-}
-
-function AuditDetailModal({ entry, onClose }: { entry: AuditEntryDTO; onClose: () => void }) {
-  const summary = auditSummary(entry);
-  const changed = displayChangedFields(entry);
-  return (
-    <Modal open onClose={onClose}
-      title={summary.title} size="lg">
-      <div className="space-y-3 text-sm">
-        <Row label="Summary" value={summary.detail}/>
-        <Row label="Area" value={areaLabel(auditArea(entry))}/>
-        <Row label="Action" value={actionLabel(entry.action)}/>
-        <Row label="When" value={new Date(entry.created_at).toLocaleString('en-IN')}/>
-        <Row label="Who" value={entry.actor_name ? `${entry.actor_name} (${entry.actor_email || '—'})` : 'system'}/>
-        <Row label="Record" value={`${entityLabel(entry.entity_type)} · ${entry.entity_id}`}/>
-        <Row label="Connection" value={auditConnection(entry)}/>
-        {entry.terminal_id && <Row label="Terminal" value={entry.terminal_id}/>}
-        {entry.client_platform && (
-          <Row
-            label="Client"
-            value={`${entry.client_platform}${entry.client_version_code ? ` build ${entry.client_version_code}` : ''}`}
-          />
-        )}
-        {entry.client_reported_at && (
-          <Row
-            label="Device-reported time"
-            value={`${new Date(entry.client_reported_at).toLocaleString('en-IN')} (not authoritative)`}
-          />
-        )}
-        {entry.synced_at && <Row label="Accepted by server" value={new Date(entry.synced_at).toLocaleString('en-IN')}/>}
-        {entry.reason && <Row label="Reason / comment" value={entry.reason}/>}
-        {entry.client_action_id && <Row label="Client action ID" value={entry.client_action_id}/>}
-        {entry.request_id && <Row label="Request ID" value={entry.request_id}/>}
-        {entry.ip && <Row label="From IP" value={entry.ip}/>}
-
-        {entry.action === 'update' && changed.length > 0 && (
-          <div className="pt-3 border-t border-bg-border">
-            <div className="text-xs text-fg-muted uppercase tracking-wider mb-2">Changed fields</div>
-            <div className="overflow-x-auto">
-            <table className="w-full min-w-[520px] text-xs">
-              <thead className="text-fg-muted">
-                <tr>
-                  <th className="text-left p-2">Field</th>
-                  <th className="text-left p-2">Before</th>
-                  <th className="text-left p-2">After</th>
-                </tr>
-              </thead>
-              <tbody>
-                {changed.map((k) => (
-                  <tr key={k} className="border-t border-bg-border/60">
-                    <td className="p-2 font-medium">{fieldLabel(k)}</td>
-                    <td className="p-2 font-mono">
-                      <pre className="whitespace-pre-wrap break-all">{auditJson(entry.before![k])}</pre>
-                    </td>
-                    <td className="p-2 font-mono">
-                      <pre className="whitespace-pre-wrap break-all text-accent-good">{auditJson(entry.after![k])}</pre>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              void load('restart', draft);
+            }}
+            className="card space-y-3"
+          >
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-[minmax(230px,1fr)_165px_165px_auto]">
+              <label className="text-sm">
+                Action or reference
+                <div className="relative mt-1">
+                  <Search
+                    className="absolute left-3 top-3 text-fg-muted"
+                    size={15}
+                  />
+                  <input
+                    className="input w-full pl-9"
+                    list="audit-actions"
+                    placeholder="Code, action name or recorded text"
+                    value={draft.q ?? ''}
+                    onChange={(event) =>
+                      setDraft({ ...draft, q: event.target.value || undefined })
+                    }
+                  />
+                  <datalist id="audit-actions">
+                    {catalogue?.actions.map((action) => (
+                      <option key={action.code} value={action.code}>
+                        {action.label}
+                      </option>
+                    ))}
+                  </datalist>
+                </div>
+              </label>
+              <label className="text-sm">
+                Recorded from
+                <input
+                  type="date"
+                  className="input mt-1 w-full"
+                  value={draft.date_from ?? ''}
+                  onChange={(event) =>
+                    setDraft({
+                      ...draft,
+                      date_from: event.target.value || undefined,
+                    })
+                  }
+                />
+              </label>
+              <label className="text-sm">
+                Recorded through
+                <input
+                  type="date"
+                  className="input mt-1 w-full"
+                  value={draft.date_to ?? ''}
+                  onChange={(event) =>
+                    setDraft({
+                      ...draft,
+                      date_to: event.target.value || undefined,
+                    })
+                  }
+                />
+              </label>
+              <button className="btn btn-primary self-end" disabled={busy}>
+                Find activity
+              </button>
             </div>
+            <details>
+              <summary className="cursor-pointer text-sm font-medium">
+                Advanced filters
+              </summary>
+              <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                <label className="text-sm">
+                  Activity view
+                  <select
+                    className="input mt-1 w-full"
+                    value={draft.view ?? 'business'}
+                    onChange={(event) =>
+                      setDraft({
+                        ...draft,
+                        view: event.target.value === 'all' ? 'all' : 'business',
+                      })
+                    }
+                  >
+                    <option value="business">Business activity</option>
+                    <option value="all">All, including System</option>
+                  </select>
+                </label>
+                <label className="text-sm">
+                  Category
+                  <select
+                    className="input mt-1 w-full"
+                    value={draft.category ?? ''}
+                    onChange={(event) =>
+                      setDraft({
+                        ...draft,
+                        category: event.target.value || undefined,
+                      })
+                    }
+                  >
+                    <option value="">All categories</option>
+                    {catalogue?.categories.map((category) => (
+                      <option key={category} value={category}>
+                        {businessLabel(category)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="text-sm">
+                  Outcome
+                  <select
+                    className="input mt-1 w-full"
+                    value={draft.outcome ?? ''}
+                    onChange={(event) =>
+                      setDraft({
+                        ...draft,
+                        outcome: event.target.value || undefined,
+                      })
+                    }
+                  >
+                    <option value="">All outcomes</option>
+                    {catalogue?.outcomes.map((value) => (
+                      <option key={value} value={value}>
+                        {businessLabel(value)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="text-sm">
+                  Recorded actor
+                  <select
+                    className="input mt-1 w-full"
+                    value={draft.actor_user_id ?? ''}
+                    onChange={(event) =>
+                      setDraft({
+                        ...draft,
+                        actor_user_id: event.target.value || undefined,
+                      })
+                    }
+                  >
+                    <option value="">All actors</option>
+                    {users.map((user) => (
+                      <option key={user.id} value={user.id}>
+                        {user.name} (current profile)
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="text-sm">
+                  Exact bill / source reference
+                  <input
+                    className="input mt-1 w-full"
+                    value={draft.reference ?? ''}
+                    onChange={(event) =>
+                      setDraft({
+                        ...draft,
+                        reference: event.target.value || undefined,
+                      })
+                    }
+                  />
+                </label>
+                <label className="text-sm">
+                  Exact action
+                  <select
+                    className="input mt-1 w-full"
+                    value={draft.code ?? ''}
+                    onChange={(event) =>
+                      setDraft({
+                        ...draft,
+                        code: event.target.value || undefined,
+                      })
+                    }
+                  >
+                    <option value="">All actions</option>
+                    {catalogue?.actions.map((action) => (
+                      <option key={action.code} value={action.code}>
+                        {action.code} · {action.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            </details>
+          </form>
+          <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+            <span>
+              <b>{rows.length}</b> loaded · <b>{page?.matching_count ?? '—'}</b>{' '}
+              event{page?.matching_count === 1 ? '' : 's'} in this snapshot
+            </span>
+            <span className="text-fg-muted">
+              Recorded shop dates · {zone} · event count, not revenue
+            </span>
           </div>
-        )}
-
-        {entry.action === 'create' && entry.after && (
-          <div className="pt-3 border-t border-bg-border">
-            <div className="text-xs text-fg-muted uppercase tracking-wider mb-2">Created with</div>
-            <pre className="bg-bg-raised p-3 rounded-lg text-[10px] overflow-x-auto font-mono">
-{auditJson(entry.after, 2)}
-            </pre>
+          {error && (
+            <div
+              role="alert"
+              className="card border-accent-bad/40 text-sm text-accent-bad"
+            >
+              <AlertCircle size={15} className="mr-2 inline" />
+              {error}{' '}
+              <button
+                className="underline"
+                onClick={() => void load('restart')}
+              >
+                Start a fresh snapshot
+              </button>
+            </div>
+          )}
+          {newEntries && (
+            <div
+              className="card flex flex-wrap items-center justify-between gap-2 text-sm"
+              role="status"
+            >
+              <span>
+                New matching activity is available. Loaded history stays in
+                place.
+              </span>
+              <button
+                className="btn btn-ghost"
+                disabled={busy}
+                onClick={() => void load('restart')}
+              >
+                Show new activity
+              </button>
+            </div>
+          )}
+          <div
+            className={`grid items-start gap-4 ${selected ? '2xl:grid-cols-[minmax(0,1.6fr)_minmax(320px,1fr)]' : ''}`}
+          >
+            <section className="card min-w-0 !p-0">
+              <div
+                ref={list}
+                className="max-h-[70dvh] overflow-auto"
+                onScroll={(event) => {
+                  stateRef.current.scroll = event.currentTarget.scrollTop;
+                  persist();
+                }}
+              >
+                <table className="w-full min-w-[680px] text-sm">
+                  <thead className="sticky top-0 bg-bg-raised text-left text-xs text-fg-muted">
+                    <tr>
+                      <th className="p-3">Recorded shop time</th>
+                      <th className="p-3">Action & reference</th>
+                      <th className="p-3">Actor</th>
+                      <th className="p-3">Outcome</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((entry) => (
+                      <tr
+                        key={entry.id}
+                        className={`border-t border-bg-border ${selected?.id === entry.id ? 'bg-bg-raised' : ''}`}
+                      >
+                        <td className="p-3 tabular-nums text-xs">
+                          {shopTime(entry.created_at, zone)}
+                        </td>
+                        <td className="p-3">
+                          <button
+                            onClick={() => setSelected(entry)}
+                            className="w-full text-left"
+                          >
+                            <span className="mr-2 font-mono text-xs text-fg-muted">
+                              {entry.action_code ?? 'LEGACY'}
+                            </span>
+                            <span className="font-semibold">
+                              {entry.action_label}
+                            </span>
+                            <span className="mt-1 block text-xs text-fg-muted">
+                              {entry.source_reference ??
+                                'No retained business reference'}
+                            </span>
+                            <span className="mt-1 block text-xs">
+                              {auditBusinessSummary(entry)}
+                            </span>
+                          </button>
+                        </td>
+                        <td className="p-3 text-xs">
+                          {auditActor(entry)}
+                          {entry.target_user_id && (
+                            <span className="mt-1 block text-fg-muted">
+                              Target account is separate
+                            </span>
+                          )}
+                        </td>
+                        <td className="p-3 text-xs">
+                          <span
+                            className={
+                              /failed|rejected/.test(entry.outcome)
+                                ? 'text-accent-bad'
+                                : 'text-fg'
+                            }
+                          >
+                            {businessLabel(entry.outcome)}
+                          </span>
+                          <span className="mt-1 block text-fg-muted">
+                            {businessLabel(entry.stage)}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {!rows.length && (
+                  <p className="p-6 text-sm text-fg-muted">
+                    {busy
+                      ? 'Loading activity…'
+                      : error
+                        ? 'Activity could not be loaded. Retry without changing filters.'
+                        : 'No matching events in this search.'}
+                  </p>
+                )}
+              </div>
+              {page?.has_more && (
+                <div className="border-t border-bg-border p-3">
+                  <button
+                    className="btn btn-ghost w-full"
+                    onClick={() => void load('older')}
+                    disabled={busy}
+                  >
+                    <ChevronDown size={14} />
+                    {busy ? 'Loading…' : 'Load older activity'}
+                  </button>
+                </div>
+              )}
+            </section>
+            {selected && (
+              <AuditDetail
+                entry={selected}
+                zone={zone}
+                onClose={() => setSelected(null)}
+              />
+            )}
           </div>
-        )}
-
-        {entry.action === 'delete' && entry.before && (
-          <div className="pt-3 border-t border-bg-border">
-            <div className="text-xs text-fg-muted uppercase tracking-wider mb-2">Deleted record was</div>
-            <pre className="bg-bg-raised p-3 rounded-lg text-[10px] overflow-x-auto font-mono">
-{auditJson(entry.before, 2)}
-            </pre>
-          </div>
-        )}
-      </div>
-    </Modal>
+        </>
+      )}
+    </div>
   );
 }
-
-function auditConnection(entry: AuditEntryDTO): string {
-  if (entry.client_was_offline === true) return 'Captured offline and later synced';
-  if (entry.client_was_offline === false) return 'Online';
-  return 'Legacy / system action (not reported)';
-}
-
-function Row({ label, value }: { label: string; value: string }) {
+export function AuditDetail({
+  entry,
+  zone,
+  onClose,
+}: {
+  entry: BusinessAuditEntryDTO;
+  zone: string;
+  onClose: () => void;
+}) {
+  const orderId = auditOrderId(entry);
+  const isBusinessField = (key: string) =>
+    !/(^id$|_id$|_ids$|fingerprint|hash|password|secret|token|otp|authorization|cookie|private_key)/i.test(
+      key,
+    );
+  const details = Object.entries(entry.business_details ?? {}).filter(([key]) =>
+    isBusinessField(key),
+  );
+  const changes = [
+    ...new Set([
+      ...Object.keys(entry.before ?? {}),
+      ...Object.keys(entry.after ?? {}),
+    ]),
+  ].filter(
+    (key) =>
+      isBusinessField(key) &&
+      !['updated_at', 'created_at'].includes(key) &&
+      JSON.stringify(entry.before?.[key]) !==
+        JSON.stringify(entry.after?.[key]),
+  );
   return (
-    <div className="flex justify-between gap-3">
-      <span className="shrink-0 text-fg-muted">{label}</span>
-      <span className="min-w-0 break-words text-right font-medium">{value}</span>
+    <aside className="card min-w-0 space-y-4" aria-label="Activity details">
+      <header className="flex items-start justify-between gap-3">
+        <div>
+          <p className="font-mono text-xs text-fg-muted">
+            {entry.action_code ?? 'Legacy / unclassified'}
+          </p>
+          <h3 className="mt-1 text-lg font-semibold">{entry.action_label}</h3>
+        </div>
+        <button
+          className="btn btn-ghost !p-2"
+          aria-label="Close activity details"
+          onClick={onClose}
+        >
+          <X size={16} />
+        </button>
+      </header>
+      <p className="text-sm">{auditBusinessSummary(entry)}</p>
+      <dl className="space-y-2 text-sm">
+        <Detail label="Recorded actor" value={auditActor(entry)} />
+        <Detail
+          label="Actor provenance"
+          value={businessLabel(entry.actor_kind)}
+        />
+        <Detail
+          label="Actor name basis"
+          value={businessLabel(entry.actor_label_source)}
+        />
+        {entry.target_user_id && (
+          <Detail
+            label="Target account (not the actor)"
+            value={entry.target_user_id}
+          />
+        )}
+        <Detail
+          label="Result / stage"
+          value={`${businessLabel(entry.outcome)} · ${businessLabel(entry.stage)}`}
+        />
+        <Detail
+          label={`Server recorded · ${zone}`}
+          value={shopTime(entry.created_at, zone)}
+        />
+        <Detail
+          label="Source reference"
+          value={entry.source_reference ?? 'Not retained'}
+        />
+        <Detail
+          label="Classification evidence"
+          value={businessLabel(entry.classification_source)}
+        />
+        {entry.reason && <Detail label="Reason" value={entry.reason} />}{' '}
+        {details.map(([key, value]) => (
+          <Detail
+            key={key}
+            label={businessLabel(key)}
+            value={businessValue(key, value, zone)}
+          />
+        ))}
+      </dl>
+      {entry.match_explanation && (
+        <p className="text-xs text-fg-muted">
+          Match: {entry.match_explanation}
+        </p>
+      )}
+      {(orderId || entry.source_reference) && (
+        <Link
+          className="btn btn-ghost"
+          to={
+            orderId
+              ? `/operations?receipt=${encodeURIComponent(orderId)}`
+              : `/operations?receipt_q=${encodeURIComponent(entry.source_reference!)}`
+          }
+        >
+          <ArrowUpRight size={14} /> Open linked receipt
+        </Link>
+      )}
+      {changes.length > 0 && (
+        <details>
+          <summary className="cursor-pointer text-sm font-semibold">
+            Recorded Before → After
+          </summary>
+          <dl className="mt-3 space-y-2 text-sm">
+            {changes.map((key) => (
+              <Detail
+                key={key}
+                label={businessLabel(key)}
+                value={`${businessValue(key, safeAuditValue(entry.before?.[key]), zone)} → ${businessValue(key, safeAuditValue(entry.after?.[key]), zone)}`}
+              />
+            ))}
+          </dl>
+        </details>
+      )}
+      <details>
+        <summary className="cursor-pointer text-sm text-fg-muted">
+          Technical details
+        </summary>
+        <dl className="mt-3 space-y-2 text-xs">
+          <Detail
+            label="Event / operation"
+            value={`${entry.id} / ${entry.operation_id ?? 'Not retained'}`}
+          />
+          <Detail
+            label="Client reported (unverified)"
+            value={shopTime(entry.client_reported_at, zone)}
+          />
+          <Detail
+            label="Server sync received"
+            value={shopTime(entry.synced_at, zone)}
+          />
+          <Detail
+            label="Reported platform / build"
+            value={`${entry.client_platform ?? 'Unknown'} / ${entry.client_version_code ?? 'Unknown'}`}
+          />
+        </dl>
+        <pre className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap break-all text-xs">
+          {JSON.stringify(
+            safeAuditValue({
+              entity_type: entry.entity_type,
+              entity_id: entry.entity_id,
+              business_details: entry.business_details,
+              before: entry.before,
+              after: entry.after,
+              request_id: entry.request_id,
+            }),
+            null,
+            2,
+          )}
+        </pre>
+      </details>
+    </aside>
+  );
+}
+function Detail({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="grid gap-1 border-b border-bg-border/60 pb-2 sm:grid-cols-[minmax(100px,0.8fr)_minmax(0,1.2fr)]">
+      <dt className="text-fg-muted">{label}</dt>
+      <dd className="break-words tabular-nums">{value}</dd>
     </div>
   );
 }
