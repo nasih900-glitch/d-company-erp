@@ -282,6 +282,24 @@ async def test_materialized_history_excludes_late_lower_id_commit_and_announces_
     assert [row["id"] for row in second.json()["entries"]] == older[:1]
     assert second.json()["matching_count"] == 3
     assert second.json()["new_entries_available"] is True
+    # Repeated checks on a completed page must not allocate new snapshots or
+    # evict the original history; the delayed lower-ID commit must be noticed.
+    assert second.json()["activity_cursor"]
+    for _ in range(10):
+        checked = await client.get(
+            "/api/v1/admin/audit/events", headers=headers,
+            params={**params, "cursor": second.json()["activity_cursor"]},
+        )
+        assert checked.status_code == 200, checked.text
+        assert checked.json()["entries"] == []
+        assert checked.json()["matching_count"] == 3
+        assert checked.json()["new_entries_available"] is True
+    retained = await client.get(
+        "/api/v1/admin/audit/events", headers=headers,
+        params={**params, "cursor": first.json()["next_cursor"]},
+    )
+    assert retained.status_code == 200
+    assert [row["id"] for row in retained.json()["entries"]] == older[:1]
     refreshed = await client.get("/api/v1/admin/audit/events", headers=headers, params=params)
     assert late_id in [row["id"] for row in refreshed.json()["entries"]]
     assert refreshed.json()["matching_count"] == 4

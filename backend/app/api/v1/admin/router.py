@@ -8,7 +8,7 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Header, Query, Request
 from pydantic import BaseModel
-from sqlalchemy import String, and_, cast, distinct, func, or_, select
+from sqlalchemy import String, and_, cast, distinct, or_, select
 
 from app.core.client_ip import audit_user_agent, trusted_client_ip
 from app.core.db import SessionDep
@@ -91,6 +91,7 @@ class AuditEntry(BaseModel):
 class AuditEventsPage(BaseModel):
     entries: list[AuditEntry]
     next_cursor: str | None
+    activity_cursor: str | None = None
     has_more: bool
     snapshot_max_id: int
     loaded_count: int
@@ -433,6 +434,12 @@ async def audit_events(
         company_id=tenant.company_id, user_id=tenant.user_id, fingerprint=fingerprint,
         snapshot=snapshot, last=rows[-1].AuditLog.id, snapshot_id=snapshot_id,
     ) if has_more else None
+    # Activity checks reuse this snapshot without creating another retained set.
+    # Any retained last ID is valid even when the final page has no next cursor.
+    activity_cursor = encode_cursor(
+        company_id=tenant.company_id, user_id=tenant.user_id, fingerprint=fingerprint,
+        snapshot=snapshot, last=ids[-1], snapshot_id=snapshot_id,
+    ) if ids else None
     new_matching_entries = bool(await session.scalar(select(
         base.with_only_columns(AuditLog.id).where(AuditLog.id.not_in(ids)).exists()
     )))
@@ -442,7 +449,7 @@ async def audit_events(
                    "Text, current staff label or action-name match" if filters["q"] else None)
     return AuditEventsPage(
         entries=[_audit_entry(row, match_explanation=explanation) for row in rows],
-        next_cursor=next_cursor, has_more=has_more, snapshot_max_id=snapshot,
+        next_cursor=next_cursor, activity_cursor=activity_cursor, has_more=has_more, snapshot_max_id=snapshot,
         loaded_count=len(rows), matching_count=matching_count, shop_timezone=zone,
         new_entries_available=new_matching_entries,
     )

@@ -229,3 +229,27 @@ Receipts, semantic Audit and normal summary outbox entries commit together.
 UPDATE/DELETE/TRUNCATE of retained receipts are refused. Destructive migration
 downgrade waits for pending writers before checking evidence and refuses once
 receipts exist. A rollback must retain correction-aware readers and evidence.
+
+### Client refresh and retained Audit activity checks
+Successful payment commit invalidates `finance`, `orders`, `receipts`, `shifts`,
+`customers`, and `audit`; a daily commit invalidates `finance` and `audit` only.
+Unallocated actuals do not imply a changed invoice or customer spend.
+
+Audit events return an additive `activity_cursor` for each nonempty retained
+snapshot, including its last page. To check later matching commits, send that
+cursor with the exact same filters and limit; read `new_entries_available` but do
+not replace displayed rows, next cursor or snapshot. This reuses the same bounded
+snapshot rather than consuming the owner's eight-snapshot allowance on every
+background check. Empty snapshots have no cursor and can check a fresh empty
+query; they retain no older pages. Expiry must preserve visible rows and require
+an explicit fresh snapshot; a cursor never substitutes for owner unlock.
+
+### One confirmation, separate read/write purpose tokens
+`unlock` now returns additive `history_token` alongside the existing `token` and
+`expires_in` (300 seconds). A single password verification issues both grants for
+the same company, owner, branch and auth version. `token` retains the requested
+payment/daily/history purpose; `history_token` is always history-only and cannot
+prepare or commit corrections. Existing single-purpose tokens and older clients
+remain valid. New clients must use the bundle instead of performing a second
+password confirmation just to load the read-only history. Expiry, permission
+ceiling, password rate limiting and auth-version revocation remain unchanged.

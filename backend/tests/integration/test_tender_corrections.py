@@ -594,3 +594,77 @@ async def test_receipt_filters_bind_cursor_and_preserve_unknown_cashier(
     assert investigation.status_code == 200, investigation.text
     assert investigation.json()["receipt"]["order_id"] == str(order.id)
     assert investigation.json()["participant_intervals"] == []
+
+
+@pytest.mark.asyncio
+async def test_one_confirmation_bundle_keeps_read_write_scope_and_revocation(
+    client, session, seed_owner, monkeypatch
+):
+    from app.api.v1.finance import tender_corrections as route
+
+    headers, _, order, payment, _ = await case(session, seed_owner)
+    calls = []
+    original_verify = route.verify_password
+
+    def verify_once(secret, hashed):
+        calls.append(True)
+        return original_verify(secret, hashed)
+
+    monkeypatch.setattr(route, "verify_password", verify_once)
+    result = await client.post(
+        "/api/v1/finance/tender-corrections/unlock",
+        headers=headers,
+        json={
+            "branch_id": str(order.branch_id),
+            "scope": "payment",
+            "password": seed_owner["password"],
+        },
+    )
+    assert result.status_code == 200, result.text
+    assert len(calls) == 1
+    bundle = result.json()
+    assert bundle["expires_in"] == 300
+    assert bundle["token"] != bundle["history_token"]
+    action = {**headers, "X-Tender-Token": bundle["token"]}
+    history = {**headers, "X-Tender-Token": bundle["history_token"]}
+    prepare = "/api/v1/finance/tender-corrections/payment/prepare"
+    history_path = "/api/v1/finance/tender-corrections/history"
+    assert (
+        await client.post(prepare, headers=action, json={"payment_id": str(payment.id)})
+    ).status_code == 200
+    assert (
+        await client.post(prepare, headers=history, json={"payment_id": str(payment.id)})
+    ).status_code == 401
+    assert (
+        await client.get(history_path, headers=action, params={"branch_id": str(order.branch_id)})
+    ).status_code == 401
+    assert (
+        await client.get(history_path, headers=history, params={"branch_id": str(order.branch_id)})
+    ).status_code == 200
+    await session.execute(
+        text("UPDATE users SET auth_version=auth_version+1 WHERE id=:id"),
+        {"id": seed_owner["owner"].id},
+    )
+    await session.commit()
+    await session.refresh(seed_owner["owner"])
+    refreshed_access = "Bearer " + issue_access_token(
+        user_id=seed_owner["owner"].id,
+        company_id=order.company_id,
+        branch_id=order.branch_id,
+        roles=["super_owner"],
+        auth_version=seed_owner["owner"].auth_version,
+    )
+    assert (
+        await client.post(
+            prepare,
+            headers={**action, "Authorization": refreshed_access},
+            json={"payment_id": str(payment.id)},
+        )
+    ).status_code == 401
+    assert (
+        await client.get(
+            history_path,
+            headers={**history, "Authorization": refreshed_access},
+            params={"branch_id": str(order.branch_id)},
+        )
+    ).status_code == 401

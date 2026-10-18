@@ -119,6 +119,7 @@ class Unlock(StrictModel):
 
 class UnlockRead(BaseModel):
     token: str
+    history_token: str
     expires_in: int = 300
 
 
@@ -387,7 +388,16 @@ async def unlock(
             branch_id=payload.branch_id,
             auth_version=user.auth_version,
             scope=payload.scope,
-        )
+        ),
+        # One password confirmation, two distinct purpose-bound grants. The
+        # history token cannot prepare/commit a payment or daily correction.
+        history_token=issue_tender_token(
+            user_id=user.id,
+            company_id=tenant.company_id,
+            branch_id=payload.branch_id,
+            auth_version=user.auth_version,
+            scope="history",
+        ),
     )
 
 
