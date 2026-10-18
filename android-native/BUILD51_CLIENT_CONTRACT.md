@@ -1,0 +1,71 @@
+# Build 51 native client implementation
+
+## Contract and retained state
+
+The API contract is `backend/docs/TENDER_CORRECTIONS_API.md`. Financial writes
+are online, protected-owner actions; ordinary staff never gain correction
+permission through a client flag. Prepare only reads sources. Commit sends the
+server fingerprint, confirmed actuals where applicable, reason and evidence.
+Posting deltas are derived by the server. Unknown daily differences remain
+unresolved evidence without changing revenue, bills or drawer counts.
+
+`TenderJournal` uses dedicated private JSON files, lazily opened on IO.
+A shared process mutex serializes every instance. It persists only the company,
+owner, branch, operation, exact canonical body, idempotency key and preparation
+time. File force, atomic rename, directory fsync and readback must succeed before a request is sent. Android SharedPreferences is deliberately avoided because its XML reader silently replaces corrupt data with an empty map. Complete interrupted preparations retain their exact identity too; incomplete files fail closed. Malformed,
+unknown-version, unreadable or mismatched saved work is never treated as absent
+and is never automatically deleted. Cleanup compares the exact captured record.
+A missing entry that another view recovered does not authorize a new command:
+explicit recovery re-reserves the retained exact body/key. Tokens/passwords stay
+in memory. There is no financial outbox/background replay or automatic send on
+login/account switch. HTTP failures do not silently retire uncertain actions.
+
+Room 55 → 56 adds exactly five nullable columns to `shift_history_cache`:
+`collectionBasis`, `tenderCorrectionMinor`, `reconstructedCashCollectionsMinor`,
+`reconstructedUpiCollectionsMinor`, `reconstructedExpectedMinor`.
+They are server projection metadata, not replacements for recorded expected
+cash, count, variance or original tender totals. Old rows stay NULL until a
+successful authoritative pull. No other Room entity changes in this slice.
+The existing immutable `PosReceiptEntity` remains untouched. Correction-aware
+`CanonicalReceipt` JSON is replaceable shared history, with original and
+effective methods preserved separately through serialization.
+
+Audit reads use the backend-owned catalogue and materialized visible-ID page.
+`activity_cursor` performs a nonallocating check even for an empty snapshot;
+checks must not replace rows, filters, selection or the paging cursor. Snapshot
+expiry requires explicit refresh while keeping the existing loaded evidence
+labelled stale. Scope and token lifetime remain server-authoritative.
+
+Receipt filters are server predicates bound to the cursor: reference, inclusive
+invoice-issued shop date range, retained station, exact original invoice amount,
+effective method and retained payment recorder. They are not current-page-only
+search. Investigation uses retained participant intervals, one charge per
+identity, drink addition/void facts, receipt/refund legs and protected Audit
+references; current mutable catalogue names are not historical evidence.
+
+## Acceptance boundaries
+
+Contract/unit tests and migration component tests do not establish signed
+artifact identity, retained installed-build upgrades, actual staff workflows,
+physical tablet smoothness or production acceptance. Version identity and
+release freeze are coordinated after all client slices settle. Final app review
+must include actual Gaming, POS and Shift screens in the isolated emulator
+before an update is offered through the tablet's optional banner.
+
+## Contract slice evidence
+
+The local focused host run passed 34 tests: journal concurrency/restart/scope,
+real filesystem reopen/corruption and sync/move failures, Retrofit exact stored
+and replayed request bytes/keys, purpose-separated unlock/history, retained HTTP
+failure recovery, full receipt filter tuple, effective/original receipt JSON,
+and nullable Shift mapping/merge. Debug and Android-test Kotlin compilation
+passed with the isolated API override `http://10.0.2.2:8022/api/v1/`.
+This slice is still the development build identity; it is not a signed release
+or a claim that all native UI work or final device acceptance has completed.
+
+On the isolated API35 emulator `emulator-5620`, two real Android instrumentation
+tests passed: the 55→56 migration kept original recorded close totals and an
+unknown pending payment unchanged while all five reconstruction fields stayed
+NULL; the actual Android file adapter completed fsync/atomic rename, reopened
+its exact intent, and refused truncated underlying data without replacing it.
+The debug app was installed in place with `-r`; no uninstall/storage clearing.

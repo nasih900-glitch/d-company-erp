@@ -26,6 +26,11 @@ data class ShiftHistoryRow(
     val closedByUserId: String?,
     val closedByName: String?,
     val closedByEmail: String?,
+    val collectionBasis: String? = null,
+    val tenderCorrectionMinor: Long? = null,
+    val reconstructedCashCollectionsMinor: Long? = null,
+    val reconstructedUpiCollectionsMinor: Long? = null,
+    val reconstructedExpectedMinor: Long? = null,
 )
 
 /**
@@ -67,6 +72,12 @@ object ShiftHistoryMergePolicy {
                         closedByUserId = row.closedByUserId,
                         closedByName = row.closedByName,
                         closedByEmail = row.closedByEmail,
+                        collectionBasis = row.collectionBasis,
+                        tenderCorrectionMinor = row.tenderCorrectionMinor,
+                        reconstructedCashCollectionsMinor = row.reconstructedCashCollectionsMinor,
+                        reconstructedUpiCollectionsMinor = row.reconstructedUpiCollectionsMinor,
+                        reconstructedExpectedMinor = row.reconstructedExpectedMinor,
+
                     ),
                 )
             }

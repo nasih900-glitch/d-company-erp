@@ -48,6 +48,58 @@ data class AuditEntry(
     @SerialName("synced_at") val syncedAt: String? = null,
     val reason: String? = null,
     @SerialName("created_at") val createdAt: String,
+    @SerialName("action_code") val actionCode: String? = null,
+    @SerialName("action_label") val actionLabel: String = "Other / legacy activity",
+    val category: String = "other",
+    val stage: String = "unknown",
+    val outcome: String = "unknown",
+    @SerialName("classification_source") val classificationSource: String = "unclassified",
+    @SerialName("catalogue_version") val catalogueVersion: Int = 1,
+    @SerialName("actor_kind") val actorKind: String = "unverified_legacy",
+    @SerialName("target_user_id") val targetUserId: String? = null,
+    @SerialName("source_reference") val sourceReference: String? = null,
+    @SerialName("operation_id") val operationId: String? = null,
+    val summary: String = "",
+    @SerialName("business_details") val businessDetails: JsonObject? = null,
+    @SerialName("actor_label_source") val actorLabelSource: String = "current_account_profile",
+    @SerialName("match_explanation") val matchExplanation: String? = null,
+)
+
+@Serializable
+data class AuditActionDefinition(
+    val code: String,
+    val label: String,
+    val category: String,
+    val aliases: List<String>,
+    val stages: List<String>,
+    val outcomes: List<String>,
+)
+
+@Serializable
+data class AuditCatalogue(
+    val version: Int,
+    val categories: List<String>,
+    val outcomes: List<String>,
+    val views: List<String>,
+    val actions: List<AuditActionDefinition>,
+)
+
+@Serializable
+data class AuditEventsPage(
+    val entries: List<AuditEntry>,
+    @SerialName("next_cursor") val nextCursor: String? = null,
+    @SerialName("activity_cursor") val activityCursor: String? = null,
+    @SerialName("has_more") val hasMore: Boolean,
+    @SerialName("snapshot_max_id") val snapshotMaxId: Long,
+    @SerialName("loaded_count") val loadedCount: Int,
+    @SerialName("matching_count") val matchingCount: Int,
+    @SerialName("catalogue_version") val catalogueVersion: Int,
+    @SerialName("shop_timezone") val shopTimezone: String,
+    @SerialName("date_filter_basis") val dateFilterBasis: String,
+    @SerialName("count_basis") val countBasis: String,
+    @SerialName("new_entries_available") val newEntriesAvailable: Boolean,
+    @SerialName("snapshot_expires_in") val snapshotExpiresIn: Int,
+    val scope: String,
 )
 
 interface AuditLogApi {
@@ -64,6 +116,26 @@ interface AuditLogApi {
         @Query("action") action: String? = null,
         @Query("q") query: String? = null,
     ): List<AuditEntry>
+
+    @GET("admin/audit/catalogue")
+    suspend fun catalogue(@Header("X-Audit-Token") auditToken: String): AuditCatalogue
+
+    @GET("admin/audit/events")
+    suspend fun events(
+        @Header("X-Audit-Token") auditToken: String,
+        @Query("limit") limit: Int = 50,
+        @Query("cursor") cursor: String? = null,
+        @Query("view") view: String = "business",
+        @Query("code") code: String? = null,
+        @Query("category") category: String? = null,
+        @Query("outcome") outcome: String? = null,
+        @Query("actor_user_id") actorUserId: String? = null,
+        @Query("target_user_id") targetUserId: String? = null,
+        @Query("reference") reference: String? = null,
+        @Query("date_from") dateFrom: String? = null,
+        @Query("date_to") dateTo: String? = null,
+        @Query("q") query: String? = null,
+    ): AuditEventsPage
 
     @GET("admin/audit/facets")
     suspend fun facets(

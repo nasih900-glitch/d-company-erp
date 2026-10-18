@@ -36,6 +36,46 @@ class MigrationTest {
     )
 
     @Test
+    fun migrate55To56PreservesRecordedCloseAndCapturedWorkWithUnknownReconstruction() {
+        helper.createDatabase(dbName, 55).apply {
+            execSQL("INSERT INTO shift_history_cache " +
+                "(id,branchId,terminalId,status,openedAtMillis,closedAtMillis,openingFloatMinor," +
+                "expectedMinor,countedMinor,varianceMinor,posSalesMinor,cashCollectionsMinor," +
+                "upiCollectionsMinor,fetchedAtMillis) VALUES " +
+                "('retained-shift','branch','terminal','closed',1000,2000,10000,95000,95000,0,399000,95000,304000,3000)")
+            execSQL("INSERT INTO local_orders " +
+                "(localId,shiftId,type,estimateMinor,serverTotalMinor,serverPointsRedeemedMinor," +
+                "serverPointsRedeemed,checkoutVersion,paymentMethod,tenderedMinor,tipMinor," +
+                "createdAtMillis,syncState) VALUES " +
+                "('unknown-pending','shift-1','dine_in',5000,4800,200,20,7,'cash',5000,0,1000,'awaiting_payment')")
+            close()
+        }
+        val migrated = helper.runMigrationsAndValidate(dbName, 56, true, MIGRATION_55_56)
+        migrated.query("SELECT expectedMinor,countedMinor,varianceMinor,cashCollectionsMinor,upiCollectionsMinor," +
+            "collectionBasis,tenderCorrectionMinor,reconstructedCashCollectionsMinor," +
+            "reconstructedUpiCollectionsMinor,reconstructedExpectedMinor FROM shift_history_cache " +
+            "WHERE id='retained-shift'").use { row ->
+            assertTrue(row.moveToFirst())
+            assertEquals(95000L,row.getLong(0))
+            assertEquals(95000L,row.getLong(1))
+            assertEquals(0L,row.getLong(2))
+            assertEquals(95000L,row.getLong(3))
+            assertEquals(304000L,row.getLong(4))
+            (5..9).forEach { assertTrue("Reconstruction must remain unknown",row.isNull(it)) }
+        }
+        migrated.query("SELECT serverTotalMinor,checkoutVersion,paymentMethod,tenderedMinor,syncState " +
+            "FROM local_orders WHERE localId='unknown-pending'").use { row ->
+            assertTrue(row.moveToFirst())
+            assertEquals(4800L,row.getLong(0))
+            assertEquals(7L,row.getLong(1))
+            assertEquals("cash",row.getString(2))
+            assertEquals(5000L,row.getLong(3))
+            assertEquals("awaiting_payment",row.getString(4))
+        }
+        migrated.close()
+    }
+
+    @Test
     fun migrate53To54PreservesCapturedMoneyAndLeavesProgramProvenanceUnknown() {
         helper.createDatabase(dbName, 53).apply {
             execSQL(

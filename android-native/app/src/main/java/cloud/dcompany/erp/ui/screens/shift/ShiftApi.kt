@@ -55,6 +55,11 @@ data class ShiftDetail(
     /** Random app-install discriminator used only for fail-closed offline ownership checks. */
     @SerialName("opening_client_installation_id")
     val openingClientInstallationId: String? = null,
+    @SerialName("collection_basis") val collectionBasis: String? = null,
+    @SerialName("tender_correction_minor") val tenderCorrectionMinor: Long? = null,
+    @SerialName("reconstructed_cash_collections_minor") val reconstructedCashCollectionsMinor: Long? = null,
+    @SerialName("reconstructed_upi_collections_minor") val reconstructedUpiCollectionsMinor: Long? = null,
+    @SerialName("reconstructed_expected_minor") val reconstructedExpectedMinor: Long? = null,
     @SerialName("closed_by") val closedByUserId: String? = null,
     @SerialName("closed_by_name") val closedByName: String? = null,
     @SerialName("closed_by_email") val closedByEmail: String? = null,

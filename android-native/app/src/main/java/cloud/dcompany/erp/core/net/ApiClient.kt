@@ -116,6 +116,7 @@ class ApiException(
     val status: Int? = null,
     val code: String? = null,
     val diagnosticConflictEventId: String? = null,
+    val retryable: Boolean? = null,
 ) : IOException(message) {
 
     /** No answer from the server: the request may or may not have committed. */
@@ -580,6 +581,7 @@ object ApiClient {
                 status = response.code,
                 code = envelope?.error?.code,
                 diagnosticConflictEventId = envelope?.error?.details?.clientEventId,
+                retryable = envelope?.error?.details?.retryable,
             )
             DiagnosticsRuntime.recordApiFailure(
                 ApiFailureObservation(
