@@ -75,7 +75,9 @@ def downgrade() -> None:
         DO $$ BEGIN
             IF EXISTS (SELECT 1 FROM audit_log WHERE catalogue_version IS NOT NULL
                        OR action_code IS NOT NULL OR business_details IS NOT NULL
-                       OR target_user_id IS NOT NULL) THEN
+                       OR target_user_id IS NOT NULL OR actor_kind IS NOT NULL
+                       OR source_reference IS NOT NULL OR operation_id IS NOT NULL
+                       OR outcome IS NOT NULL OR stage IS NOT NULL OR category IS NOT NULL) THEN
                 RAISE EXCEPTION 'cannot downgrade semantic Audit after evidence is recorded';
             END IF;
         END $$
