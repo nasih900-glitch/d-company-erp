@@ -168,6 +168,41 @@ def test_signed_cursor_binds_user_tenant_filters_and_snapshot():
         decode_cursor(invalid, company_id=company, user_id=user, fingerprint=fingerprint)
 
 
+@pytest.mark.parametrize(("snapshot", "last"), [(0, 0), (1, 1), (100, 75)])
+def test_activity_cursor_accepts_only_empty_pair_or_positive_members(snapshot, last):
+    company, user = uuid4(), uuid4()
+    token = encode_cursor(
+        company_id=company,
+        user_id=user,
+        fingerprint="filters",
+        snapshot=snapshot,
+        last=last,
+        snapshot_id="a" * 32,
+    )
+    assert decode_cursor(token, company_id=company, user_id=user, fingerprint="filters") == (
+        snapshot,
+        last,
+        "a" * 32,
+    )
+
+
+@pytest.mark.parametrize(
+    ("snapshot", "last"), [(-1, -1), (0, 1), (1, 0), (1, -1), (1, 2), (True, 0), (0, False)]
+)
+def test_activity_cursor_refuses_mixed_zero_negative_or_boolean(snapshot, last):
+    company, user = uuid4(), uuid4()
+    token = encode_cursor(
+        company_id=company,
+        user_id=user,
+        fingerprint="filters",
+        snapshot=snapshot,
+        last=last,
+        snapshot_id="a" * 32,
+    )
+    with pytest.raises(BusinessRuleError):
+        decode_cursor(token, company_id=company, user_id=user, fingerprint="filters")
+
+
 def test_shop_date_filters_are_ist_midnights_not_browser_timezone():
     start, end = date_bounds(date(2026, 10, 18), date(2026, 10, 18), "Asia/Kolkata")
     assert start == datetime(2026, 10, 17, 18, 30, tzinfo=UTC)

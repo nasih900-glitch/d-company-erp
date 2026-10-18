@@ -43,9 +43,7 @@ def decode_cursor(
             or claims.get("filters") != fingerprint
             or type(snapshot) is not int
             or type(last) is not int
-            or snapshot < 1
-            or last < 1
-            or last > snapshot
+            or not ((snapshot == 0 and last == 0) or (snapshot >= 1 and 1 <= last <= snapshot))
             or not isinstance(identity, str)
             or len(identity) != 32
             or UUID(hex=identity).hex != identity
@@ -202,7 +200,7 @@ def predicates(filters: dict[str, Any], *, timezone: str) -> list:
                 or_(
                     cast(AuditLog.before, String).ilike(pattern, escape="\\"),
                     cast(AuditLog.after, String).ilike(pattern, escape="\\"),
-                cast(AuditLog.business_details, String).ilike(pattern, escape="\\"),
+                    cast(AuditLog.business_details, String).ilike(pattern, escape="\\"),
                     AuditLog.reason.ilike(pattern, escape="\\"),
                     AuditLog.source_reference.ilike(pattern, escape="\\"),
                     AuditLog.entity_id.ilike(pattern, escape="\\"),

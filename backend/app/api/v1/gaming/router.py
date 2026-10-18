@@ -1915,6 +1915,7 @@ async def _legacy_stop_recovery_outcome(
                     AuditLog.entity_type == "GamingSession",
                     AuditLog.entity_id == str(gaming_session.id),
                     AuditLog.client_action_id == stop_key,
+                    AuditLog.action == "update",
                 )
             )
         )
@@ -2578,6 +2579,56 @@ def _legacy_hourly_captured_amount(
     )
 
 
+def _original_start_semantic_companion(
+    audit: AuditLog,
+    *,
+    canonical: AuditLog | None,
+    original: SessionRead,
+    original_start_key: str,
+) -> bool:
+    """Recognize one corroborating Start, never later use or a name-only match."""
+    if canonical is None or not canonical.request_id or canonical.actor_user_id is None:
+        return False
+    expected = {
+        "station_id": str(original.station_id),
+        "shift_id": str(original.shift_id),
+        "start_at": original.start_at.isoformat(),
+        "timer_minutes": original.timer_minutes,
+        "amount_minor": original.amount_minor,
+        "status": original.status,
+    }
+    after = audit.after if isinstance(audit.after, dict) else {}
+    created = canonical.after if isinstance(canonical.after, dict) else {}
+    return all(
+        (
+            audit.action == "gaming_session_started",
+            audit.company_id == canonical.company_id,
+            audit.entity_type == canonical.entity_type == "GamingSession",
+            audit.entity_id == canonical.entity_id == str(original.id),
+            audit.operation_id == original_start_key,
+            audit.client_action_id == canonical.client_action_id == original_start_key,
+            audit.request_id == canonical.request_id,
+            audit.actor_user_id == canonical.actor_user_id,
+            canonical.terminal_id is not None,
+            audit.terminal_id == canonical.terminal_id,
+            audit.client_platform == canonical.client_platform == "android",
+            audit.client_version_code == canonical.client_version_code,
+            audit.client_was_offline is canonical.client_was_offline is True,
+            audit.client_reported_at == canonical.client_reported_at,
+            set(after) == set(expected),
+            all(
+                type(after.get(key)) is type(value) and after.get(key) == value
+                for key, value in expected.items()
+            ),
+            all(
+                type(created.get(key)) is type(value) and created.get(key) == value
+                for key, value in expected.items()
+                if key != "start_at"
+            ),
+        )
+    )
+
+
 async def _cancel_untouched_recovered_no_play(
     session,
     *,
@@ -2612,16 +2663,12 @@ async def _cancel_untouched_recovered_no_play(
         or current.rate_per_hour_minor != original_snapshot.rate_per_hour_minor
         or current.billing_mode != original_snapshot.billing_mode
         or current.package_id != original_snapshot.package_id
-        or current.package_price_minor_snapshot
-        != original_snapshot.package_price_minor_snapshot
+        or current.package_price_minor_snapshot != original_snapshot.package_price_minor_snapshot
         or current.package_duration_minutes_snapshot
         != original_snapshot.package_duration_minutes_snapshot
-        or current.package_variant_snapshot
-        != original_snapshot.package_variant_snapshot
-        or current.package_station_type_snapshot
-        != original_snapshot.package_station_type_snapshot
-        or current.package_pricing_tier_snapshot
-        != original_snapshot.package_pricing_tier_snapshot
+        or current.package_variant_snapshot != original_snapshot.package_variant_snapshot
+        or current.package_station_type_snapshot != original_snapshot.package_station_type_snapshot
+        or current.package_pricing_tier_snapshot != original_snapshot.package_pricing_tier_snapshot
         or current.extra_controllers != original_snapshot.extra_controllers
     ):
         raise ConflictError(
@@ -2630,25 +2677,47 @@ async def _cancel_untouched_recovered_no_play(
         )
 
     extension_ids = (
-        await session.execute(
-            select(GamingSessionExtension.id)
-            .where(
-                GamingSessionExtension.company_id == tenant.company_id,
-                GamingSessionExtension.gaming_session_id == gaming_session.id,
-            )
-            .with_for_update()
-        )
-    ).scalars().all()
-    contradictory_audits = (
-        await session.execute(
-            select(AuditLog.id).where(
-                AuditLog.company_id == tenant.company_id,
-                AuditLog.entity_type == "GamingSession",
-                AuditLog.entity_id == str(gaming_session.id),
-                AuditLog.action != "create",
+        (
+            await session.execute(
+                select(GamingSessionExtension.id)
+                .where(
+                    GamingSessionExtension.company_id == tenant.company_id,
+                    GamingSessionExtension.gaming_session_id == gaming_session.id,
+                )
+                .with_for_update()
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
+    retained_audits = (
+        (
+            await session.execute(
+                select(AuditLog).where(
+                    AuditLog.company_id == tenant.company_id,
+                    AuditLog.entity_type == "GamingSession",
+                    AuditLog.entity_id == str(gaming_session.id),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    start_key = f"gaming-session-start:{payload.local_action_id}"
+    creates = [row for row in retained_audits if row.action == "create"]
+    canonical = (
+        creates[0] if len(creates) == 1 and creates[0].client_action_id == start_key else None
+    )
+    post_start = [row for row in retained_audits if row.action != "create"]
+    matching_companion = len(post_start) == 1 and _original_start_semantic_companion(
+        post_start[0],
+        canonical=canonical,
+        original=original_snapshot,
+        original_start_key=start_key,
+    )
+    contradictory_audits = (bool(creates) and canonical is None) or (
+        bool(post_start) and not matching_companion
+    )
     if extension_ids or contradictory_audits:
         raise ConflictError(
             "The recovered server session has extension, transfer, pause, stop, or "

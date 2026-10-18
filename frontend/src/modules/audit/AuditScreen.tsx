@@ -165,7 +165,7 @@ function AuditWorkspace({ scope }: { scope: string }) {
       if (!activeToken || (mode === 'check' && busyRef.current)) return;
       if (
         mode === 'check' &&
-        (!page || (rowsRef.current.length > 0 && !page.activity_cursor))
+        (!page || !page.activity_cursor)
       )
         return;
       const current = requests.begin(),

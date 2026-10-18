@@ -240,8 +240,9 @@ snapshot, including its last page. To check later matching commits, send that
 cursor with the exact same filters and limit; read `new_entries_available` but do
 not replace displayed rows, next cursor or snapshot. This reuses the same bounded
 snapshot rather than consuming the owner's eight-snapshot allowance on every
-background check. Empty snapshots have no cursor and can check a fresh empty
-query; they retain no older pages. Expiry must preserve visible rows and require
+background check. Empty snapshots also return an activity cursor, with signed zero/zero position
+validated only against the same retained empty ID set. Repeated checks must reuse
+it, so an empty tab cannot evict another tab's history by allocating snapshots. Expiry must preserve visible rows and require
 an explicit fresh snapshot; a cursor never substitutes for owner unlock.
 
 ### One confirmation, separate read/write purpose tokens

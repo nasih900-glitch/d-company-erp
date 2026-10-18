@@ -545,3 +545,78 @@ async def test_parent_lifecycle_keeps_original_audit_actor_and_terminal_ids(sess
     evidence = await session.get(AuditLog, identity)
     assert evidence.actor_user_id == actor_id
     assert evidence.terminal_id == terminal_id
+
+
+@pytest.mark.asyncio
+async def test_empty_activity_checks_preserve_other_snapshot_and_report_later_match(
+    client, session, seed_owner
+):
+    from app.core.security import decode_token, issue_audit_page_cursor
+
+    headers = await protected_headers(session, seed_owner)
+    company = seed_owner["company"].id
+    retained_ref, empty_ref = f"RETAIN-{uuid4().hex}", f"EMPTY-{uuid4().hex}"
+    retained_ids = [await legacy_row(session, company, ref=retained_ref) for _ in range(3)]
+    await session.commit()
+    retained_params = {"reference": retained_ref, "limit": 1}
+    retained = await client.get(
+        "/api/v1/admin/audit/events", headers=headers, params=retained_params
+    )
+    assert retained.status_code == 200
+    empty_params = {"reference": empty_ref, "limit": 1}
+    empty = await client.get("/api/v1/admin/audit/events", headers=headers, params=empty_params)
+    assert empty.status_code == 200
+    empty_cursor = empty.json()["activity_cursor"]
+    assert empty_cursor
+    claims = decode_token(empty_cursor)
+    assert claims["snapshot"] == claims["last"] == 0
+    for _ in range(10):
+        checked = await client.get(
+            "/api/v1/admin/audit/events",
+            headers=headers,
+            params={**empty_params, "cursor": empty_cursor},
+        )
+        assert checked.status_code == 200, checked.text
+        assert checked.json()["entries"] == []
+        assert checked.json()["matching_count"] == 0
+        assert not checked.json()["new_entries_available"]
+        assert (
+            decode_token(checked.json()["activity_cursor"])["snapshot_id"] == claims["snapshot_id"]
+        )
+    older = await client.get(
+        "/api/v1/admin/audit/events",
+        headers=headers,
+        params={**retained_params, "cursor": retained.json()["next_cursor"]},
+    )
+    assert older.status_code == 200, older.text
+    assert [row["id"] for row in older.json()["entries"]] == [retained_ids[1]]
+    late = await legacy_row(session, company, ref=empty_ref)
+    await session.commit()
+    checked = await client.get(
+        "/api/v1/admin/audit/events",
+        headers=headers,
+        params={**empty_params, "cursor": empty_cursor},
+    )
+    assert checked.status_code == 200
+    assert checked.json()["entries"] == []
+    assert checked.json()["matching_count"] == 0
+    assert checked.json()["new_entries_available"]
+    fresh = await client.get("/api/v1/admin/audit/events", headers=headers, params=empty_params)
+    assert [row["id"] for row in fresh.json()["entries"]] == [late]
+    # Even correctly signed boundary mutations must match the retained set.
+    for snapshot, last in ((0, 1), (1, 0), (-1, -1), (1, 1)):
+        altered = issue_audit_page_cursor({**claims, "snapshot": snapshot, "last": last})
+        refused = await client.get(
+            "/api/v1/admin/audit/events",
+            headers=headers,
+            params={**empty_params, "cursor": altered},
+        )
+        assert refused.status_code == 422, refused.text
+    nonempty_claims = decode_token(retained.json()["activity_cursor"])
+    signed_empty = issue_audit_page_cursor({**nonempty_claims, "snapshot": 0, "last": 0})
+    refused = await client.get(
+        "/api/v1/admin/audit/events",
+        headers=headers,
+        params={**retained_params, "cursor": signed_empty},
+    )
+    assert refused.status_code == 422

@@ -3625,7 +3625,12 @@ export default function LivePOSScreen() {
           </div>
         )}
 
-        {inlineShift&&<InlineShiftWorkspace onClose={()=>setInlineShift(false)}/>}
+        {inlineShift && <InlineShiftWorkspace onClose={() => {
+          setInlineShift(false);
+          // Reconcile the existing accountable draft against the server shift;
+          // never silently transfer a cart or rely on best-effort push delivery.
+          void loadShiftCollections();
+        }}/>}
 
         {shiftError && (
           <div

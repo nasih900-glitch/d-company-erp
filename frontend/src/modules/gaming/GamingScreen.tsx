@@ -1341,9 +1341,11 @@ export default function GamingScreen() {
   // disrupt the locally ticking countdown for sessions nothing happened to.
   useEffect(() => {
     if (!LIVE_MODE) return;
-    const unsubscribe = subscribeRealtime('gaming', () => { void loadRef.current('background'); });
+    const refreshBoard = () => { void loadRef.current('background'); };
+    const unsubscribe = subscribeRealtime('gaming', refreshBoard);
+    const unsubscribeShifts = subscribeRealtime('shifts', refreshBoard);
     const id = setInterval(() => { void loadRef.current('background'); }, GAMING_SESSIONS_POLL_MS);
-    return () => { unsubscribe(); clearInterval(id); };
+    return () => { unsubscribe(); unsubscribeShifts(); clearInterval(id); };
   }, []);
 
   // A transfer POST may commit even when its response is lost. Once a fresh
@@ -3613,7 +3615,12 @@ export default function GamingScreen() {
         </div>
       )}
 
-      {inlineShift&&<InlineShiftWorkspace onClose={()=>setInlineShift(false)}/>}
+      {inlineShift && <InlineShiftWorkspace onClose={() => {
+        setInlineShift(false);
+        // The child owns its own query state. Re-read this board's authoritative
+        // shift even when realtime delivery is unavailable; retain station drafts.
+        void loadRef.current('background');
+      }}/>}
 
       {LIVE_MODE && !loading && canManageStations && terminalReady
         && canStartOnSelectedTerminal && !currentShiftId && (

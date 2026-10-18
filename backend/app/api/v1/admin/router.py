@@ -412,9 +412,16 @@ async def audit_events(
             cursor, company_id=tenant.company_id, user_id=tenant.user_id, fingerprint=fingerprint)
         ids = await load_snapshot(company_id=tenant.company_id, user_id=tenant.user_id,
                                   fingerprint=fingerprint, snapshot_id=snapshot_id)
-        if last_id not in ids or (ids and ids[0] != snapshot):
-            raise BusinessRuleError("Audit cursor does not match its snapshot. Refresh the list.")
-        remaining_ids = ids[ids.index(last_id) + 1:]
+        if ids:
+            if last_id not in ids or ids[0] != snapshot:
+                raise BusinessRuleError("Audit cursor does not match its snapshot. Refresh the list.")
+            remaining_ids = ids[ids.index(last_id) + 1:]
+        else:
+            # A signed zero sentinel is an activity cursor only for this exact
+            # retained empty set, never a shortcut through nonempty history.
+            if snapshot != 0 or last_id != 0:
+                raise BusinessRuleError("Audit cursor does not match its snapshot. Refresh the list.")
+            remaining_ids = []
     else:
         # One SQL statement captures exactly the currently visible matching IDs.
         # Lower sequence IDs that commit later cannot slip into this history.
@@ -438,8 +445,8 @@ async def audit_events(
     # Any retained last ID is valid even when the final page has no next cursor.
     activity_cursor = encode_cursor(
         company_id=tenant.company_id, user_id=tenant.user_id, fingerprint=fingerprint,
-        snapshot=snapshot, last=ids[-1], snapshot_id=snapshot_id,
-    ) if ids else None
+        snapshot=snapshot, last=ids[-1] if ids else 0, snapshot_id=snapshot_id,
+    )
     new_matching_entries = bool(await session.scalar(select(
         base.with_only_columns(AuditLog.id).where(AuditLog.id.not_in(ids)).exists()
     )))
