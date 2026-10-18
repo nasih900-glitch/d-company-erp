@@ -63,10 +63,10 @@ from app.models import (
     CustomerMembership,
     CustomerSpendReconciliation,
     Floor,
+    GamingParticipantSettlement,
     GamingSession,
     GamingSessionExtension,
     GamingSessionPackageAmendment,
-    GamingParticipantSettlement,
     MembershipPayment,
     MembershipPaymentRequest,
     MembershipPaymentRequestResolution,
@@ -96,6 +96,7 @@ from app.models import (
     User,
 )
 from app.schemas.pos import OrderModifierSnapshotRead, OrderVariantSnapshotRead
+from app.services.audit.events import record_operation
 from app.services.customers.deletion_fence import (
     MAX_DIRECTORY_REVISION,
     CustomerDirectoryFence,
@@ -116,22 +117,6 @@ from app.services.pos.checkout_claims import (
     validate_checkout_claim,
 )
 from app.services.pos.customer_identity import resolve_order_customer
-from app.services.pos.membership_benefits import (
-    applied_benefits_for_order,
-    consume_membership_benefits,
-    reserve_membership_benefits,
-)
-from app.services.pos.order_validation import require_operational_order
-from app.services.pos.points import (
-    award_eligible_gaming_ranks,
-    apply_refund_loyalty_adjustment,
-    consume_points_redemption,
-    points_redeemed_for_order,
-    reprice_existing_points_redemption,
-    record_order_loyalty_settlement,
-    reserve_catalog_reward_redemption,
-    reserve_points_redemption,
-)
 from app.services.pos.loyalty_program import (
     LoadedLoyaltyProgram,
     checked_points_add,
@@ -139,6 +124,22 @@ from app.services.pos.loyalty_program import (
     load_loyalty_program,
     minor_to_points,
     require_expected_revision,
+)
+from app.services.pos.membership_benefits import (
+    applied_benefits_for_order,
+    consume_membership_benefits,
+    reserve_membership_benefits,
+)
+from app.services.pos.order_validation import require_operational_order
+from app.services.pos.points import (
+    apply_refund_loyalty_adjustment,
+    award_eligible_gaming_ranks,
+    consume_points_redemption,
+    points_redeemed_for_order,
+    record_order_loyalty_settlement,
+    reprice_existing_points_redemption,
+    reserve_catalog_reward_redemption,
+    reserve_points_redemption,
 )
 from app.services.pos.pricing import (
     InvoiceNumberService,
@@ -9320,6 +9321,14 @@ async def open_shift(
         status="open",
     )
     session.add(shift)
+    record_operation(
+        session, company_id=tenant.company_id, actor_user_id=tenant.user_id,
+        terminal_id=tenant.terminal_id, action="shift_opened", entity_type="Shift",
+        entity_id=shift.id, operation_id=capture.key,
+        after={"opening_float_minor": payload.opening_float_minor,
+               "branch_id": str(tenant.branch_id), "status": "open",
+               "opened_at": capture.opened_at.isoformat()},
+    )
     return {"id": str(shift.id), "status": "open"}
 
 
@@ -9708,6 +9717,16 @@ async def _close_shift_impl(
         "closed_by": str(shift.closed_by),
         "closed_by_was_opener": shift.closed_by == shift.opened_by,
     }
+    if recovery is None:
+        record_operation(
+            session, company_id=tenant.company_id, actor_user_id=tenant.user_id,
+            terminal_id=tenant.terminal_id, action="shift_closed", entity_type="Shift",
+            entity_id=shift.id, before={"status": "open"},
+            after={"status": "closed", "counted_minor": int(shift.counted_minor),
+                   "expected_minor": int(shift.expected_minor or 0),
+                   "variance_minor": int(shift.variance_minor),
+                   "closed_by": str(shift.closed_by)},
+        )
     if recovery is not None:
         result["recovery_close"] = True
         session.add(

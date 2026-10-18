@@ -167,6 +167,17 @@ async def _set_role(session, tenant: TenantContext, user_id: UUID, role_code: st
     ).scalar_one_or_none()
     if not role:
         raise BusinessRuleError(f"role '{role_code}' does not exist for this company")
+    from app.services.audit.events import record_operation
+
+    record_operation(
+        session, company_id=tenant.company_id, actor_user_id=tenant.user_id,
+        action="staff_access_changed", entity_type="StaffAccess", entity_id=user_id,
+        target_user_id=user_id,
+        before={"before_roles": sorted(current_roles),
+                "branch_id": str(preserved_branch_id) if preserved_branch_id else None},
+        after={"after_roles": [role_code], "target_user_id": str(user_id),
+               "branch_id": str(preserved_branch_id) if preserved_branch_id else None},
+    )
     # Remove existing role assignments — one role per user in this simple model.
     await session.execute(delete(UserRole).where(UserRole.user_id == user_id))
     session.add(

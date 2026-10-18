@@ -72,6 +72,7 @@ from app.models import (
     User,
 )
 from app.models.gaming import GamingPauseEvent
+from app.services.audit.events import record_operation
 from app.services.customers.deletion_fence import (
     MAX_DIRECTORY_REVISION,
     lock_customer_directory,
@@ -3275,6 +3276,15 @@ async def start_session(
     )
     session.add(gs)
     await session.flush()
+    record_operation(
+        session, company_id=tenant.company_id, actor_user_id=tenant.user_id,
+        terminal_id=tenant.terminal_id, action="gaming_session_started",
+        entity_type="GamingSession", entity_id=gs.id,
+        operation_id=idempotency_key,
+        after={"station_id": str(gs.station_id), "shift_id": str(gs.shift_id),
+               "start_at": gs.start_at.isoformat(), "timer_minutes": gs.timer_minutes,
+               "amount_minor": gs.amount_minor, "status": gs.status},
+    )
     response = session_read(gs)
     if idempotency_key is not None:
         await store_response(
@@ -3569,6 +3579,14 @@ async def extend_session_timer(
         )
 
     gs.timer_minutes = target_timer
+    record_operation(
+        session, company_id=tenant.company_id, actor_user_id=tenant.user_id,
+        terminal_id=tenant.terminal_id, action="gaming_timer_extended",
+        entity_type="GamingSession", entity_id=gs.id, operation_id=idempotency_key,
+        before={"timer_minutes": stored_timer},
+        after={"timer_minutes": target_timer, "additional_minutes": payload.additional_minutes,
+               "gaming_session_id": str(gs.id)},
+    )
     await session.flush()
     response = session_read(gs)
     await store_response(
@@ -5341,6 +5359,14 @@ async def stop_session(
         )
     gs.status = "ended"
     gs.stopped_by = tenant.user_id
+    record_operation(
+        session, company_id=tenant.company_id, actor_user_id=tenant.user_id,
+        terminal_id=tenant.terminal_id, action="gaming_session_stopped",
+        entity_type="GamingSession", entity_id=gs.id, operation_id=idempotency_key,
+        after={"station_id": str(gs.station_id), "shift_id": str(gs.shift_id),
+               "end_at": gs.end_at.isoformat(), "amount_minor": gs.amount_minor,
+               "billable_minutes": gs.billable_minutes, "status": gs.status},
+    )
     response = session_read(gs)
     if idempotency_key is not None:
         await store_response(
@@ -7797,6 +7823,13 @@ async def send_session_to_pos(
         target_shift=shift,
         company_id=tenant.company_id,
         opened_by=tenant.user_id,
+    )
+    record_operation(
+        session, company_id=tenant.company_id, actor_user_id=tenant.user_id,
+        terminal_id=tenant.terminal_id, action="gaming_session_sent_to_pos",
+        entity_type="GamingSession", entity_id=gs.id, source_reference=order.invoice_no,
+        after={"order_id": str(order.id), "gaming_session_id": str(gs.id),
+               "amount_minor": int(order.total_minor), "status": "held"},
     )
     return {"order_id": str(order.id), "amount_minor": int(order.total_minor)}
 

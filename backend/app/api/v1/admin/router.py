@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Literal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Header, Query, Request
 from pydantic import BaseModel
-from sqlalchemy import String, and_, cast, distinct, or_, select
+from sqlalchemy import String, and_, cast, distinct, func, or_, select
 
 from app.core.client_ip import audit_user_agent, trusted_client_ip
 from app.core.db import SessionDep
@@ -25,6 +25,26 @@ from app.core.roles import PROTECTED_OWNER_ROLE
 from app.core.security import decode_token, issue_audit_token, issue_pricing_token, verify_password
 from app.core.tenant import TenantContext
 from app.models import AuditLog, RolePermissionOverride, User
+from app.services.audit.catalogue import (
+    AREA_TYPES,
+    BY_CODE,
+    CATALOGUE,
+    CATALOGUE_VERSION,
+    CATEGORIES,
+    OUTCOMES,
+    category_expression,
+    describe,
+)
+from app.services.audit.query import (
+    decode_cursor,
+    encode_cursor,
+    event_query,
+    filter_fingerprint,
+    predicates,
+    shop_timezone,
+)
+from app.services.audit.recorder import json_safe
+from app.services.audit.snapshots import MAX_SNAPSHOT_ENTRIES, load_snapshot, save_snapshot
 
 router = APIRouter()
 
@@ -51,6 +71,37 @@ class AuditEntry(BaseModel):
     synced_at: datetime | None
     reason: str | None
     created_at: datetime
+    action_code: str | None = None
+    action_label: str = "Other / legacy activity"
+    category: str = "other"
+    stage: str = "unknown"
+    outcome: str = "unknown"
+    classification_source: str = "unclassified"
+    catalogue_version: int = CATALOGUE_VERSION
+    actor_kind: str = "unverified_legacy"
+    target_user_id: UUID | None = None
+    source_reference: str | None = None
+    operation_id: str | None = None
+    summary: str = ""
+    business_details: dict[str, Any] | None = None
+    actor_label_source: str = "current_account_profile"
+    match_explanation: str | None = None
+
+
+class AuditEventsPage(BaseModel):
+    entries: list[AuditEntry]
+    next_cursor: str | None
+    has_more: bool
+    snapshot_max_id: int
+    loaded_count: int
+    matching_count: int
+    catalogue_version: int = CATALOGUE_VERSION
+    shop_timezone: str
+    date_filter_basis: str = "server_recorded_shop_date"
+    count_basis: str = "audit_entries_in_visible_id_snapshot_not_revenue_or_business_operations"
+    new_entries_available: bool = False
+    snapshot_expires_in: int = 600
+    scope: str = "company_wide_protected_owner"
 
 
 class AuditFacetsDTO(BaseModel):
@@ -72,82 +123,37 @@ class PricingUnlockResponse(BaseModel):
     expires_in: int
 
 
-AUDIT_AREA_ENTITY_TYPES: dict[str, tuple[str, ...]] = {
-    "pos": (
-        "Order", "OrderLine", "Payment", "Refund", "MembershipPaymentRequest",
-        "MembershipPaymentCashCollection", "MembershipPaymentProviderAction",
-        "MembershipPaymentRequestResolution", "MembershipPayment",
-        "MembershipPaymentAttemptResolution", "MembershipRefund",
-        "MembershipRefundCashHandoff", "MembershipRefundProviderAction",
-        "MembershipRefundResolution", "MembershipRefundSettlement", "Shift",
-    ),
-    "customers": ("Customer", "CustomerMembership", "MembershipTier"),
-    "staff": ("User", "UserRole", "Role", "Attendance"),
-    "inventory": (
-        "Ingredient",
-        "Supplier",
-        "Batch",
-        "StockMovement",
-        "PurchaseOrder",
-        "PurchaseOrderLine",
-        "GoodsReceiptNote",
-        "GRN",
-    ),
-    "finance": (
-        "Account",
-        "Asset",
-        "Expense",
-        "ExpenseCategory",
-        "JournalEntry",
-        "JournalLine",
-        "ManualCollection",
-        "MembershipPaymentRequest",
-        "MembershipPaymentCashCollection",
-        "MembershipPaymentProviderAction",
-        "MembershipPaymentRequestResolution",
-        "MembershipPayment",
-        "MembershipPaymentAttemptResolution",
-        "MembershipRefund",
-        "MembershipRefundCashHandoff",
-        "MembershipRefundProviderAction",
-        "MembershipRefundResolution",
-        "MembershipRefundSettlement",
-        "Partner",
-        "CapitalEntry",
-    ),
-    "menu": (
-        "MenuCategory",
-        "MenuItem",
-        "MenuModifierGroup",
-        "MenuModifier",
-        "MenuVariant",
-    ),
-    "operations": (
-        "Table",
-        "Floor",
-        "Reservation",
-        "Station",
-        "GamingSession",
-        "GamingBooking",
-        "Event",
-        "EventTicket",
-    ),
-    "system": ("AuditAccess", "PricingAccess", "RolePermissionOverride"),
-}
+AUDIT_AREA_ENTITY_TYPES = AREA_TYPES
 
 
 def _apply_audit_area_filter(stmt: Any, area: str | None) -> Any:
     if not area:
         return stmt
     normalized = area.strip().lower()
-    if normalized == "login":
-        return stmt.where(AuditLog.action.like("login_%"))
     if normalized == "changes":
         return stmt.where(AuditLog.action.in_(("create", "update", "delete")))
-    entity_types = AUDIT_AREA_ENTITY_TYPES.get(normalized)
-    if entity_types:
-        return stmt.where(AuditLog.entity_type.in_(entity_types))
-    return stmt
+    if normalized not in CATEGORIES:
+        raise BusinessRuleError("Unsupported Audit area.")
+    return stmt.where(category_expression() == normalized)
+
+
+def _audit_entry(row, *, match_explanation: str | None = None) -> AuditEntry:
+    entry = row.AuditLog
+    semantic = describe(entry)
+    semantic["business_details"] = json_safe(semantic["business_details"])
+    unauthenticated = semantic["actor_kind"] == "unauthenticated"
+    return AuditEntry(
+        **{field: getattr(entry, field) for field in (
+            "id", "action", "entity_type", "entity_id", "ip", "user_agent", "terminal_id",
+            "request_id", "client_platform", "client_version_code", "client_action_id",
+            "client_reported_at", "client_was_offline", "synced_at", "reason", "created_at",
+        )},
+        before=json_safe(entry.before), after=json_safe(entry.after),
+        actor_user_id=None if unauthenticated else entry.actor_user_id,
+        actor_name=None if unauthenticated else row.name,
+        actor_email=None if unauthenticated else row.email,
+        **semantic, match_explanation=match_explanation,
+    )
 
 
 def _audit_security_event(
@@ -308,7 +314,7 @@ async def list_audit(
     if action:
         stmt = stmt.where(AuditLog.action == action)
     if actor_user_id:
-        stmt = stmt.where(AuditLog.actor_user_id == actor_user_id)
+        stmt = stmt.where(AuditLog.actor_user_id == actor_user_id, AuditLog.action != "login_failed")
     if entity_id:
         stmt = stmt.where(AuditLog.entity_id == entity_id)
     if terminal_id:
@@ -331,32 +337,113 @@ async def list_audit(
             )
         )
     rows = (await session.execute(stmt)).all()
-    return [
-        AuditEntry(
-            id=r.AuditLog.id,
-            actor_user_id=r.AuditLog.actor_user_id,
-            actor_name=r.name,
-            actor_email=r.email,
-            action=r.AuditLog.action,
-            entity_type=r.AuditLog.entity_type,
-            entity_id=r.AuditLog.entity_id,
-            before=r.AuditLog.before,
-            after=r.AuditLog.after,
-            ip=r.AuditLog.ip,
-            user_agent=r.AuditLog.user_agent,
-            terminal_id=r.AuditLog.terminal_id,
-            request_id=r.AuditLog.request_id,
-            client_platform=r.AuditLog.client_platform,
-            client_version_code=r.AuditLog.client_version_code,
-            client_action_id=r.AuditLog.client_action_id,
-            client_reported_at=r.AuditLog.client_reported_at,
-            client_was_offline=r.AuditLog.client_was_offline,
-            synced_at=r.AuditLog.synced_at,
-            reason=r.AuditLog.reason,
-            created_at=r.AuditLog.created_at,
-        )
-        for r in rows
-    ]
+    return [_audit_entry(row) for row in rows]
+
+
+@router.get("/audit/catalogue")
+async def audit_catalogue(
+    tenant: TenantContext = Depends(requires("admin.audit.read")),
+    x_audit_token: str | None = Header(default=None, alias="X-Audit-Token"),
+) -> dict[str, Any]:
+    _require_audit_unlock(x_audit_token, tenant)
+    return {
+        "version": CATALOGUE_VERSION,
+        "categories": list(CATEGORIES), "outcomes": list(OUTCOMES),
+        "views": ["business", "all"],
+        "actions": [{"code": d.code, "label": d.label, "category": d.category,
+                     "aliases": list(d.aliases), "stages": list(d.stages),
+                     "outcomes": list(d.outcomes)} for d in CATALOGUE],
+    }
+
+
+@router.get("/audit/events", response_model=AuditEventsPage)
+async def audit_events(
+    request: Request,
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("admin.audit.read")),
+    x_audit_token: str | None = Header(default=None, alias="X-Audit-Token"),
+    limit: int = Query(default=50, ge=1, le=200),
+    cursor: str | None = Query(default=None, max_length=2000),
+    view: str = Query(default="business", max_length=16),
+    code: str | None = Query(default=None, max_length=24),
+    category: str | None = Query(default=None, max_length=32),
+    outcome: str | None = Query(default=None, max_length=32),
+    actor_user_id: UUID | None = None,
+    target_user_id: UUID | None = None,
+    reference: str | None = Query(default=None, max_length=120),
+    date_from: date | None = None,
+    date_to: date | None = None,
+    q: str | None = Query(default=None, min_length=1, max_length=200),
+    entity_type: str | None = Query(default=None, max_length=100),
+    entity_id: str | None = Query(default=None, max_length=64),
+    action: str | None = Query(default=None, max_length=100),
+    terminal_id: UUID | None = None,
+    request_id: str | None = Query(default=None, max_length=64),
+) -> AuditEventsPage:
+    """Materialized visible-ID paging. A cursor never grants permission by itself."""
+    _require_audit_unlock(x_audit_token, tenant)
+    supported = {"limit", "cursor", "view", "code", "category", "outcome", "actor_user_id",
+                 "reference", "date_from", "date_to", "q", "entity_type", "entity_id",
+                 "action", "terminal_id", "request_id", "target_user_id"}
+    if set(request.query_params) - supported:
+        raise BusinessRuleError("Unsupported Audit filter.")
+    if any(len(request.query_params.getlist(key)) != 1 for key in request.query_params):
+        raise BusinessRuleError("Audit filters must be supplied once.")
+    zone = await shop_timezone(session, company_id=tenant.company_id, branch_id=tenant.branch_id)
+    filters = {
+        "view": view.strip().lower(),
+        "code": code.strip().upper() if code else None,
+        "category": category.strip().lower() if category else None,
+        "outcome": outcome.strip().lower() if outcome else None,
+        "actor_user_id": actor_user_id, "target_user_id": target_user_id, "reference": reference.strip() if reference else None,
+        "date_from": date_from, "date_to": date_to, "q": q.strip() if q else None,
+        "entity_type": entity_type, "entity_id": entity_id, "action": action,
+        "terminal_id": terminal_id, "request_id": request_id,
+    }
+    conditions = predicates(filters, timezone=zone)
+    fingerprint = filter_fingerprint({
+        **filters, "limit": limit, "timezone": zone,
+        "context_branch_id": str(tenant.branch_id) if tenant.branch_id else None,
+    })
+    base = event_query(tenant.company_id).where(*conditions)
+    if cursor:
+        snapshot, last_id, snapshot_id = decode_cursor(
+            cursor, company_id=tenant.company_id, user_id=tenant.user_id, fingerprint=fingerprint)
+        ids = await load_snapshot(company_id=tenant.company_id, user_id=tenant.user_id,
+                                  fingerprint=fingerprint, snapshot_id=snapshot_id)
+        if last_id not in ids or (ids and ids[0] != snapshot):
+            raise BusinessRuleError("Audit cursor does not match its snapshot. Refresh the list.")
+        remaining_ids = ids[ids.index(last_id) + 1:]
+    else:
+        # One SQL statement captures exactly the currently visible matching IDs.
+        # Lower sequence IDs that commit later cannot slip into this history.
+        ids = list((await session.execute(base.with_only_columns(AuditLog.id)
+                   .order_by(AuditLog.id.desc()).limit(MAX_SNAPSHOT_ENTRIES + 1))).scalars().all())
+        snapshot_id = await save_snapshot(company_id=tenant.company_id, user_id=tenant.user_id,
+                                          fingerprint=fingerprint, ids=ids)
+        snapshot = ids[0] if ids else 0
+        remaining_ids = ids
+    page_ids = remaining_ids[:limit]
+    rows = (await session.execute(event_query(tenant.company_id).where(AuditLog.id.in_(page_ids))
+            .order_by(AuditLog.id.desc()))).all() if page_ids else []
+    if len(rows) != len(page_ids):
+        raise BusinessRuleError("Audit snapshot evidence is unavailable. Refresh and contact the owner.")
+    has_more = len(remaining_ids) > limit
+    next_cursor = encode_cursor(
+        company_id=tenant.company_id, user_id=tenant.user_id, fingerprint=fingerprint,
+        snapshot=snapshot, last=rows[-1].AuditLog.id, snapshot_id=snapshot_id,
+    ) if has_more else None
+    current_count = int(await session.scalar(select(func.count()).select_from(base.subquery())) or 0)
+    matching_count = len(ids)
+    explanation = ("Exact structured reference" if filters["reference"] else
+                   "Exact action code" if filters["code"] or (filters["q"] or "").upper() in BY_CODE else
+                   "Text, current staff label or action-name match" if filters["q"] else None)
+    return AuditEventsPage(
+        entries=[_audit_entry(row, match_explanation=explanation) for row in rows],
+        next_cursor=next_cursor, has_more=has_more, snapshot_max_id=snapshot,
+        loaded_count=len(rows), matching_count=matching_count, shop_timezone=zone,
+        new_entries_available=current_count > matching_count,
+    )
 
 
 @router.get("/audit/facets", response_model=AuditFacetsDTO)

@@ -9,7 +9,6 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     DateTime,
-    ForeignKey,
     Index,
     Integer,
     String,
@@ -33,22 +32,37 @@ class AuditLog(Base):
         Index("ix_audit_entity_id", "entity_id"),
         Index("ix_audit_created_at", "created_at"),
         Index("ix_audit_log_company_id_id", "company_id", "id"),
+        Index("ix_audit_company_code_id", "company_id", "action_code", "id"),
+        Index("ix_audit_company_category_id", "company_id", "category", "id"),
+        Index("ix_audit_company_actor_id", "company_id", "actor_user_id", "id"),
+        Index("ix_audit_company_reference_id", "company_id", "source_reference", "id"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     actor_user_id: Mapped[UUID | None] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
+        PG_UUID(as_uuid=True)
     )
     company_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
     action: Mapped[str] = mapped_column(String(100), nullable=False)
     entity_type: Mapped[str] = mapped_column(String(100), nullable=False)
     entity_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    # Additive semantic evidence. Null on legacy rows: never backfill guessed history.
+    action_code: Mapped[str | None] = mapped_column(String(24))
+    category: Mapped[str | None] = mapped_column(String(32))
+    stage: Mapped[str | None] = mapped_column(String(32))
+    outcome: Mapped[str | None] = mapped_column(String(32))
+    operation_id: Mapped[str | None] = mapped_column(String(100))
+    source_reference: Mapped[str | None] = mapped_column(String(120))
+    actor_kind: Mapped[str | None] = mapped_column(String(24))
+    target_user_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True))
+    business_details: Mapped[dict | None] = mapped_column(JSONB)
+    catalogue_version: Mapped[int | None] = mapped_column(Integer)
     before: Mapped[dict | None] = mapped_column(JSONB)
     after: Mapped[dict | None] = mapped_column(JSONB)
     ip: Mapped[str | None] = mapped_column(String(45))
     user_agent: Mapped[str | None] = mapped_column(String(500))
     terminal_id: Mapped[UUID | None] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("terminals.id", ondelete="SET NULL"), index=True
+        PG_UUID(as_uuid=True), index=True
     )
     request_id: Mapped[str | None] = mapped_column(String(64), index=True)
     client_platform: Mapped[str | None] = mapped_column(String(20))
