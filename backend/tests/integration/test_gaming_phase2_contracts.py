@@ -3367,11 +3367,23 @@ async def test_staff_start_is_recovered_only_by_protected_owner_with_actor_prove
                 AuditLog.entity_type == "GamingSession",
                 AuditLog.entity_id == str(server_session.id),
                 AuditLog.client_action_id == original_start_key,
+                AuditLog.action == "create",
             )
         )
     ).scalar_one()
     assert start_audit.actor_user_id == staff.id
     assert start_audit.after["opened_by"] == str(staff.id)
+    semantic_start = (await session.execute(select(AuditLog).where(
+        AuditLog.company_id == seed_owner["company"].id,
+        AuditLog.entity_type == "GamingSession",
+        AuditLog.entity_id == str(server_session.id),
+        AuditLog.client_action_id == original_start_key,
+        AuditLog.action == "gaming_session_started",
+    ))).scalar_one()
+    assert semantic_start.actor_user_id == staff.id
+    assert semantic_start.operation_id == original_start_key
+    assert semantic_start.request_id == start_audit.request_id
+    assert semantic_start.terminal_id == start_audit.terminal_id
 
     await _grant_protected_owner(session, seed_owner)
     owner_token = await _login(client, seed_owner)

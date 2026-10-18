@@ -237,6 +237,9 @@ class _Result:
     def all(self):
         return self.rows
 
+    def __iter__(self):
+        return iter(self.rows)
+
     def scalars(self):
         return self
 
@@ -245,6 +248,17 @@ class _QueuedSession:
     def __init__(self, results: list[_Result]) -> None:
         self.results = list(results)
         self.statements: list = []
+
+    async def scalars(self, statement):
+        # These pre-correction fixtures contain no immutable tender receipts.
+        # Keep every legacy query strict and ordered; only these additive
+        # model projections have an explicitly empty source in this fixture.
+        from app.models import DailyTenderReconciliation, PaymentTenderCorrection
+
+        assert [column["entity"] for column in statement.column_descriptions] in (
+            [PaymentTenderCorrection], [DailyTenderReconciliation],
+        ), f"Unexpected scalar query: {statement}"
+        return _Result(rows=[])
 
     async def execute(self, statement):
         self.statements.append(statement)

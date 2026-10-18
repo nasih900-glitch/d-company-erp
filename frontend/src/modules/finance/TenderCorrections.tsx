@@ -387,7 +387,12 @@ function TenderWorkspace({
                   <button
                     className="btn btn-ghost"
                     onClick={() => {
-                      journal.clear(pending);
+                      try {
+                        journal.clear(pending);
+                      } catch (cause) {
+                        setError(cause instanceof Error ? cause.message : 'Saved correction could not be cleared. Its exact request was kept.');
+                        return;
+                      }
                       setPending(null);
                       setTokens(null);
                       setPreview(null);

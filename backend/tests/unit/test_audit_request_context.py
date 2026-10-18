@@ -161,7 +161,7 @@ def test_request_context_rejects_unsafe_correlation_and_naive_device_time() -> N
             headers={
                 "X-Request-Id": "x" * 65,
                 "X-Client-Version-Code": str(2**63),
-                "X-Client-Action-Id": "a" * 101,
+                "X-Client-Action-Id": "a" * 161,
                 "Idempotency-Key": "safe-action-id",
                 "X-Client-Occurred-At": "2026-08-25T12:00:00",
             },

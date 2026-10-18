@@ -89,6 +89,9 @@ async def _wait_for_company_lock_wait(
 ) -> None:
     deadline = monotonic() + timeout_seconds
     while monotonic() < deadline:
+        # pg_stat_activity otherwise retains the first transaction's PID
+        # snapshot and cannot see a worker connection opened after that read.
+        await observer.execute(text("SELECT pg_stat_clear_snapshot()"))
         blocked = await observer.scalar(
             text(
                 "SELECT EXISTS ("

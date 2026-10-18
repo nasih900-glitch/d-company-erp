@@ -147,6 +147,22 @@ async function prepareAndConfirm() {
   expect(inputs.length).toBeGreaterThan(0);
 }
 describe('Protected tender workflow in StrictMode', () => {
+  it.each(['getItem', 'removeItem'] as const)('keeps rejected exact evidence when storage %s fails during reviewed discard', async (operation) => {
+    mocks.commitPayment.mockRejectedValue({status:409, code:'conflict', message:'Source changed'});
+    await render(); await unlock(); await prepareAndConfirm(); await click('Confirm reviewed correction');
+    const saved = new TenderJournal(identity, localStorage).read();
+    expect(saved).not.toBeNull();
+    const failed = vi.spyOn(localStorage, operation).mockImplementation(() => { throw new Error('Storage access denied; saved request kept'); });
+    await click('Reviewed rejection');
+    expect(host.textContent).toContain('Storage access denied');
+    expect(host.textContent).toContain('Recover saved result');
+    expect(host.textContent).toContain(saved!.key);
+    expect(mocks.commitPayment).toHaveBeenCalledOnce();
+    expect(mocks.unlock).toHaveBeenCalledOnce();
+    failed.mockRestore();
+    expect(new TenderJournal(identity, localStorage).read()).toEqual(saved);
+  });
+
   it('finishes unlock and source preview after effect replay and never stores the password or token', async () => {
     await render();
     await unlock();

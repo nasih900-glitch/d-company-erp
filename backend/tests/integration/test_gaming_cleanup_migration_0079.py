@@ -12,15 +12,7 @@ from psycopg import sql
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
-from app.models import (
-    AuditLog,
-    Branch,
-    ClientGamingCleanupReconciliation,
-    ClientInstallation,
-    Station,
-    Terminal,
-    User,
-)
+from tests.integration.historical_seed import insert_historical
 from tests.integration.test_cafe_workflow_migration import (
     _disposable_database,
     _run_alembic,
@@ -28,6 +20,7 @@ from tests.integration.test_cafe_workflow_migration import (
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+    from types import SimpleNamespace
 
 
 @pytest.fixture(scope="module")
@@ -62,115 +55,149 @@ def _seed_scope(database_url: str) -> dict[str, object]:
             session,
             name=f"0079 trigger {uuid4()}",
         )
-        branch = Branch(
-            company_id=company_id,
-            name="Main",
-            code=f"B{uuid4().hex[:4]}",
-            invoice_series_code=uuid4().hex[:2].upper(),
-            state_code="32",
+        branch = insert_historical(
+            session,
+            "branches",
+            {
+                "company_id": company_id,
+                "name": "Main",
+                "code": f"B{uuid4().hex[:4]}",
+                "invoice_series_code": uuid4().hex[:2].upper(),
+                "state_code": "32",
+                "id": uuid4(),
+            },
         )
-        session.add(branch)
         session.flush()
-        terminal = Terminal(
-            branch_id=branch.id,
-            name="0079 terminal",
-            device_id=f"0079-{uuid4()}",
+        terminal = insert_historical(
+            session,
+            "terminals",
+            {
+                "branch_id": branch.id,
+                "name": "0079 terminal",
+                "device_id": f"0079-{uuid4()}",
+                "id": uuid4(),
+            },
         )
-        session.add(terminal)
         session.flush()
-        approver = User(
-            company_id=company_id,
-            email=f"approver-{uuid4()}@test.local",
-            password_hash="not-a-real-password-hash",
-            name="Approver",
+        approver = insert_historical(
+            session,
+            "users",
+            {
+                "company_id": company_id,
+                "email": f"approver-{uuid4()}@test.local",
+                "password_hash": "not-a-real-password-hash",
+                "name": "Approver",
+                "id": uuid4(),
+                "status": "active",
+                "failed_login_count": 0,
+            },
         )
-        other_user = User(
-            company_id=company_id,
-            email=f"other-{uuid4()}@test.local",
-            password_hash="not-a-real-password-hash",
-            name="Other user",
+        other_user = insert_historical(
+            session,
+            "users",
+            {
+                "company_id": company_id,
+                "email": f"other-{uuid4()}@test.local",
+                "password_hash": "not-a-real-password-hash",
+                "name": "Other user",
+                "id": uuid4(),
+                "status": "active",
+                "failed_login_count": 0,
+            },
         )
-        session.add_all([approver, other_user])
         session.flush()
-        station = Station(
-            company_id=company_id,
-            branch_id=branch.id,
-            code=f"S{uuid4().hex[:6]}",
-            name="0079 station",
-            type="ps5",
-            rate_per_hour_minor=15_000,
+        station = insert_historical(
+            session,
+            "stations",
+            {
+                "company_id": company_id,
+                "branch_id": branch.id,
+                "code": f"S{uuid4().hex[:6]}",
+                "name": "0079 station",
+                "type": "ps5",
+                "rate_per_hour_minor": 15_000,
+                "id": uuid4(),
+                "is_active": True,
+                "sac_code": "999692",
+                "tax_rate": 0.18,
+                "rate_includes_tax": True,
+            },
         )
-        installation = ClientInstallation(
-            company_id=company_id,
-            installation_id=uuid4(),
-            registered_by_user_id=approver.id,
-            last_user_id=approver.id,
-            terminal_id=terminal.id,
-            platform="android",
-            distribution_channel="direct",
-            version_name="3.1.29",
-            version_code=37,
-            pending_outbox_count=0,
-            last_successful_sync_at=now,
-            update_state="idle",
-            update_error_code=None,
-            last_seen_at=now,
+        installation = insert_historical(
+            session,
+            "client_installations",
+            {
+                "company_id": company_id,
+                "installation_id": uuid4(),
+                "registered_by_user_id": approver.id,
+                "last_user_id": approver.id,
+                "terminal_id": terminal.id,
+                "platform": "android",
+                "distribution_channel": "direct",
+                "version_name": "3.1.29",
+                "version_code": 37,
+                "pending_outbox_count": 0,
+                "last_successful_sync_at": now,
+                "update_state": "idle",
+                "update_error_code": None,
+                "last_seen_at": now,
+                "id": uuid4(),
+            },
         )
-        session.add_all([station, installation])
         session.flush()
-        receipt = AuditLog(
-            actor_user_id=approver.id,
-            company_id=company_id,
-            action="maintenance.production_trial_cleanup",
-            entity_type="system",
-            entity_id="production-trial-cleanup",
+        receipt = insert_historical(
+            session,
+            "audit_log",
+            {
+                "actor_user_id": approver.id,
+                "company_id": company_id,
+                "action": "maintenance.production_trial_cleanup",
+                "entity_type": "system",
+                "entity_id": "production-trial-cleanup",
+            },
         )
-        session.add(receipt)
         session.flush()
 
-        def reconciliation(status: str) -> ClientGamingCleanupReconciliation:
+        def reconciliation(status: str) -> SimpleNamespace:
             approved = status == "approved"
-            return ClientGamingCleanupReconciliation(
-                company_id=company_id,
-                client_installation_id=installation.id,
-                branch_id=branch.id,
-                terminal_id=terminal.id,
-                station_id=station.id,
-                local_action_id=uuid4(),
-                server_session_id=uuid4(),
-                revision=1,
-                reported_local_state="stop_pending",
-                local_evidence_revision=7,
-                reported_app_version_name=installation.version_name,
-                reported_app_version_code=installation.version_code,
-                local_snapshot={"evidence_revision": 7},
-                local_snapshot_sha256="a" * 64,
-                start_request_hash="b" * 64,
-                stop_request_hash="c" * 64,
-                original_action_user_id=approver.id,
-                candidate_sha256="d" * 64,
-                unresolved_child_count=0,
-                cleanup_receipt_audit_id=receipt.id,
-                status=status,
-                reported_at=now,
-                approved_at=now if approved else None,
-                approved_by=approver.id if approved else None,
-                approval_reason="Owner approved exact evidence" if approved else None,
-                approval_idempotency_key="approval-key" if approved else None,
+            return insert_historical(
+                session,
+                "client_gaming_cleanup_reconciliation",
+                {
+                    "company_id": company_id,
+                    "client_installation_id": installation.id,
+                    "branch_id": branch.id,
+                    "terminal_id": terminal.id,
+                    "station_id": station.id,
+                    "local_action_id": uuid4(),
+                    "server_session_id": uuid4(),
+                    "revision": 1,
+                    "reported_local_state": "stop_pending",
+                    "local_evidence_revision": 7,
+                    "reported_app_version_name": installation.version_name,
+                    "reported_app_version_code": installation.version_code,
+                    "local_snapshot": {"evidence_revision": 7},
+                    "local_snapshot_sha256": "a" * 64,
+                    "start_request_hash": "b" * 64,
+                    "stop_request_hash": "c" * 64,
+                    "original_action_user_id": approver.id,
+                    "candidate_sha256": "d" * 64,
+                    "unresolved_child_count": 0,
+                    "cleanup_receipt_audit_id": receipt.id,
+                    "status": status,
+                    "reported_at": now,
+                    "approved_at": now if approved else None,
+                    "approved_by": approver.id if approved else None,
+                    "approval_reason": "Owner approved exact evidence" if approved else None,
+                    "approval_idempotency_key": "approval-key" if approved else None,
+                    "id": uuid4(),
+                },
             )
 
         reported_rejected = reconciliation("reported")
         reported_allowed = reconciliation("reported")
         approved_rejected = [reconciliation("approved") for _ in range(4)]
         approved_allowed = reconciliation("approved")
-        session.add_all(
-            [
-                reported_rejected,
-                reported_allowed,
-                *approved_rejected,
-                approved_allowed,
-            ]
-        )
         session.commit()
         result: dict[str, object] = {
             "approver_id": approver.id,
@@ -267,62 +294,93 @@ def test_0081_refuses_to_fabricate_app_identity_for_populated_legacy_ledger() ->
                 session,
                 name=f"0081 legacy {uuid4()}",
             )
-            branch = Branch(
-                company_id=company_id,
-                name="Main",
-                code=f"B{uuid4().hex[:4]}",
-                invoice_series_code=uuid4().hex[:2].upper(),
-                state_code="32",
+            branch = insert_historical(
+                session,
+                "branches",
+                {
+                    "company_id": company_id,
+                    "name": "Main",
+                    "code": f"B{uuid4().hex[:4]}",
+                    "invoice_series_code": uuid4().hex[:2].upper(),
+                    "state_code": "32",
+                    "id": uuid4(),
+                },
             )
-            session.add(branch)
             session.flush()
-            terminal = Terminal(
-                branch_id=branch.id,
-                name="0081 legacy terminal",
-                device_id=f"0081-legacy-{uuid4()}",
+            terminal = insert_historical(
+                session,
+                "terminals",
+                {
+                    "branch_id": branch.id,
+                    "name": "0081 legacy terminal",
+                    "device_id": f"0081-legacy-{uuid4()}",
+                    "id": uuid4(),
+                },
             )
-            user = User(
-                company_id=company_id,
-                email=f"legacy-{uuid4()}@test.local",
-                password_hash="not-a-real-password-hash",
-                name="Legacy reporter",
+            user = insert_historical(
+                session,
+                "users",
+                {
+                    "company_id": company_id,
+                    "email": f"legacy-{uuid4()}@test.local",
+                    "password_hash": "not-a-real-password-hash",
+                    "name": "Legacy reporter",
+                    "id": uuid4(),
+                    "status": "active",
+                    "failed_login_count": 0,
+                },
             )
-            station = Station(
-                company_id=company_id,
-                branch_id=branch.id,
-                code=f"S{uuid4().hex[:6]}",
-                name="0081 legacy station",
-                type="ps5",
-                rate_per_hour_minor=15_000,
+            station = insert_historical(
+                session,
+                "stations",
+                {
+                    "company_id": company_id,
+                    "branch_id": branch.id,
+                    "code": f"S{uuid4().hex[:6]}",
+                    "name": "0081 legacy station",
+                    "type": "ps5",
+                    "rate_per_hour_minor": 15_000,
+                    "id": uuid4(),
+                    "is_active": True,
+                    "sac_code": "999692",
+                    "tax_rate": 0.18,
+                    "rate_includes_tax": True,
+                },
             )
-            session.add_all([terminal, user, station])
             session.flush()
-            installation = ClientInstallation(
-                company_id=company_id,
-                installation_id=uuid4(),
-                registered_by_user_id=user.id,
-                last_user_id=user.id,
-                terminal_id=terminal.id,
-                platform="android",
-                distribution_channel="direct",
-                version_name="3.1.29",
-                version_code=37,
-                pending_outbox_count=0,
-                last_successful_sync_at=now,
-                update_state="idle",
-                update_error_code=None,
-                last_seen_at=now,
+            installation = insert_historical(
+                session,
+                "client_installations",
+                {
+                    "company_id": company_id,
+                    "installation_id": uuid4(),
+                    "registered_by_user_id": user.id,
+                    "last_user_id": user.id,
+                    "terminal_id": terminal.id,
+                    "platform": "android",
+                    "distribution_channel": "direct",
+                    "version_name": "3.1.29",
+                    "version_code": 37,
+                    "pending_outbox_count": 0,
+                    "last_successful_sync_at": now,
+                    "update_state": "idle",
+                    "update_error_code": None,
+                    "last_seen_at": now,
+                    "id": uuid4(),
+                },
             )
-            session.add(installation)
             session.flush()
-            receipt = AuditLog(
-                actor_user_id=user.id,
-                company_id=company_id,
-                action="maintenance.production_trial_cleanup",
-                entity_type="system",
-                entity_id="production-trial-cleanup",
+            receipt = insert_historical(
+                session,
+                "audit_log",
+                {
+                    "actor_user_id": user.id,
+                    "company_id": company_id,
+                    "action": "maintenance.production_trial_cleanup",
+                    "entity_type": "system",
+                    "entity_id": "production-trial-cleanup",
+                },
             )
-            session.add(receipt)
             session.flush()
             row_id = uuid4()
             session.execute(

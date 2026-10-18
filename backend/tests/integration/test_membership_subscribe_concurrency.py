@@ -353,9 +353,7 @@ async def _cleanup(
             await cleanup.execute(
                 text(f"ALTER TABLE {table_name} DISABLE TRIGGER {trigger_name}")
             )
-        await cleanup.execute(
-            delete(AuditLog).where(AuditLog.company_id == case.company_id)
-        )
+        # Audit rows remain immutable, even during disposable fixture cleanup.
         for model in (
             MembershipEvidenceReconciliation,
             MembershipCustomerSpendApplication,
@@ -2254,7 +2252,7 @@ async def test_legacy_cash_refund_attempt_is_quarantined_then_reconciled_once(
                     | (IdempotencyKey.terminal_id == other_terminal.id)
                 )
             )
-            await cleanup.execute(delete(AuditLog).where(AuditLog.company_id == other_company.id))
+            # Preserve the other tenant's immutable Audit evidence too.
             await cleanup.execute(delete(User).where(User.id == other_owner.id))
             await cleanup.execute(delete(Terminal).where(Terminal.id == other_terminal.id))
             await cleanup.execute(delete(Branch).where(Branch.id == other_branch.id))
