@@ -479,7 +479,7 @@ export default function SupportLauncher({ inboxUnread = 0 }: { inboxUnread?: num
     <>
       <button
         type="button"
-        className="fixed bottom-4 right-4 z-30 inline-flex min-h-12 min-w-12 items-center justify-center gap-2 rounded-full border border-bg-border bg-bg-surface/95 px-3 py-3 text-sm font-semibold text-fg shadow-2xl backdrop-blur transition hover:border-accent/40 hover:bg-bg-raised active:scale-[0.98] sm:rounded-2xl sm:px-4"
+        className="fixed bottom-4 right-4 z-30 inline-flex min-h-12 min-w-12 items-center justify-center gap-2 rounded-full border border-bg-border bg-bg-surface/95 px-3 py-3 text-sm font-semibold text-fg shadow-2xl backdrop-blur transition hover:border-accent/40 hover:bg-bg-raised active:scale-[0.98] sm:rounded-2xl sm:px-4 lg:hidden"
         style={{ marginBottom: 'env(safe-area-inset-bottom)' }}
         onClick={() => {
           setFailureContext(readLastFailedSupportAction());

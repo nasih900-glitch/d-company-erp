@@ -1795,6 +1795,7 @@ export interface BusinessAuditEntryDTO extends AuditEntryDTO {
   target_user_id: string | null; source_reference: string | null; operation_id: string | null;
   summary: string; business_details: Record<string, unknown> | null;
   actor_label_source: string; match_explanation: string | null;
+  linked_bill_reference?: string | null; linked_bill_reference_basis?: string | null;
 }
 export interface AuditEventsPageDTO {
   activity_cursor?: string | null;

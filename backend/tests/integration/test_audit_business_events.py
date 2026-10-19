@@ -9,7 +9,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.core.roles import PROTECTED_OWNER_ROLE
 from app.core.security import issue_access_token, issue_audit_token
-from app.models import AuditLog, Ingredient, Role, UserRole
+from app.models import AuditLog, Ingredient, Order, Role, Shift, UserRole
 from app.services.audit.catalogue import describe
 from app.services.audit.recorder import clear_actor, install_audit_listeners, set_actor
 
@@ -306,6 +306,96 @@ async def test_materialized_history_excludes_late_lower_id_commit_and_announces_
 
 
 @pytest.mark.asyncio
+async def test_invoice_link_added_after_empty_snapshot_announces_refresh_without_rewriting_event(
+    client, session, seed_owner
+):
+    headers = await protected_headers(session, seed_owner)
+    company = seed_owner["company"].id
+    order_id = uuid4()
+    shift = Shift(
+        id=uuid4(),
+        company_id=company,
+        branch_id=seed_owner["branch"].id,
+        terminal_id=seed_owner["terminal"].id,
+        opened_by=seed_owner["owner"].id,
+        opened_at=datetime.now(UTC),
+        opening_float_minor=0,
+        status="open",
+    )
+    order = Order(
+        id=order_id,
+        company_id=company,
+        branch_id=seed_owner["branch"].id,
+        terminal_id=seed_owner["terminal"].id,
+        shift_id=shift.id,
+        opened_by=seed_owner["owner"].id,
+        type="takeaway",
+        status="open",
+        subtotal_minor=0,
+        total_minor=0,
+        opened_at=shift.opened_at,
+    )
+    payment_event = AuditLog(
+        company_id=company,
+        action="create",
+        entity_type="Payment",
+        entity_id=str(uuid4()),
+        after={"order_id": str(order_id), "amount_minor": 0, "method": "cash"},
+        business_details={"order_id": str(order_id), "amount_minor": 0, "method": "cash"},
+        category="pos",
+        catalogue_version=1,
+    )
+    session.add(shift)
+    await session.flush()
+    session.add_all([order, payment_event])
+    await session.commit()
+    original_after = dict(payment_event.after)
+    original_details = dict(payment_event.business_details)
+    invoice_no = "D/MN/26-27/00999"
+
+    initial = await client.get(
+        "/api/v1/admin/audit/events",
+        headers=headers,
+        params={"reference": invoice_no},
+    )
+    assert initial.status_code == 200, initial.text
+    assert initial.json()["entries"] == []
+    assert initial.json()["matching_count"] == 0
+
+    issued_at = datetime.now(UTC)
+    order.status = "paid"
+    order.closed_at = issued_at
+    order.invoice_issued_at = issued_at
+    order.invoice_no = invoice_no
+    order.fiscal_year = "2026-27"
+    await session.commit()
+
+    activity = await client.get(
+        "/api/v1/admin/audit/events",
+        headers=headers,
+        params={"reference": invoice_no, "cursor": initial.json()["activity_cursor"]},
+    )
+    assert activity.status_code == 200, activity.text
+    assert activity.json()["entries"] == []
+    assert activity.json()["matching_count"] == 0
+    assert activity.json()["new_entries_available"] is True
+
+    refreshed = await client.get(
+        "/api/v1/admin/audit/events",
+        headers=headers,
+        params={"reference": invoice_no},
+    )
+    assert refreshed.status_code == 200, refreshed.text
+    matched = next(row for row in refreshed.json()["entries"] if row["id"] == payment_event.id)
+    assert matched["business_details"]["amount_minor"] == 0
+    assert matched["linked_bill_reference"] == invoice_no
+    assert matched["match_explanation"] == "Current bill linked by retained order identity"
+    await session.refresh(payment_event)
+    assert payment_event.after == original_after
+    assert payment_event.business_details == original_details
+
+
+@pytest.mark.asyncio
 async def test_refresh_indicator_detects_new_ids_when_current_profile_matches_cancel_out(
     client, session, seed_owner
 ):
@@ -469,6 +559,134 @@ async def test_business_view_keeps_security_and_access_but_hides_connection_nois
     )
     assert remote in [row["id"] for row in system.json()["entries"]]
     assert access not in [row["id"] for row in system.json()["entries"]]
+
+
+@pytest.mark.asyncio
+async def test_business_view_hides_only_proven_housekeeping_and_keeps_uncoded_operations(
+    client, session, seed_owner
+):
+    headers = await protected_headers(session, seed_owner)
+    company = seed_owner["company"].id
+    claim = AuditLog(
+        company_id=company,
+        action="create",
+        entity_type="OrderCheckoutClaim",
+        entity_id=str(uuid4()),
+        after={"order_id": str(uuid4())},
+        category="pos",
+        catalogue_version=1,
+    )
+    raw_shift = AuditLog(
+        company_id=company,
+        action="update",
+        entity_type="Shift",
+        entity_id=str(uuid4()),
+        before={"expected_minor": 0},
+        after={"expected_minor": 100},
+        category="pos",
+        catalogue_version=1,
+    )
+    held_order = AuditLog(
+        company_id=company,
+        action="update",
+        entity_type="Order",
+        entity_id=str(uuid4()),
+        before={"status": "open"},
+        after={"status": "held"},
+        category="pos",
+        catalogue_version=1,
+    )
+    void_order = AuditLog(
+        company_id=company,
+        action="update",
+        entity_type="Order",
+        entity_id=str(uuid4()),
+        before={"status": "held"},
+        after={"status": "void", "notes": "Voided: customer request"},
+        category="pos",
+        catalogue_version=1,
+    )
+    unknown_customer = AuditLog(
+        company_id=company,
+        action="future_customer_operation",
+        entity_type="Customer",
+        entity_id=str(uuid4()),
+        after={"status": "reviewed"},
+        category="customers",
+        catalogue_version=1,
+    )
+    session.add_all([claim, raw_shift, held_order, void_order, unknown_customer])
+    await session.commit()
+
+    business = await client.get("/api/v1/admin/audit/events", headers=headers)
+    assert business.status_code == 200, business.text
+    rows = {row["id"]: row for row in business.json()["entries"]}
+    assert claim.id not in rows
+    for operation in (raw_shift, held_order, void_order):
+        assert rows[operation.id]["classification_source"] == "unclassified_recorded"
+        assert rows[operation.id]["action_label"] == "Unclassified record"
+    assert rows[unknown_customer.id]["classification_source"] == "unclassified_recorded"
+    assert rows[unknown_customer.id]["action_label"] == "Unclassified record"
+
+    system = await client.get(
+        "/api/v1/admin/audit/events",
+        headers=headers,
+        params={"view": "all", "category": "system"},
+    )
+    assert system.status_code == 200, system.text
+    system_rows = {row["id"]: row for row in system.json()["entries"]}
+    assert system_rows[claim.id]["classification_source"] == "technical_companion"
+    assert raw_shift.id not in system_rows
+    assert held_order.id not in system_rows
+    assert void_order.id not in system_rows
+
+
+@pytest.mark.asyncio
+async def test_actor_and_target_filters_are_combined_as_one_evidence_scope(
+    client, session, seed_owner
+):
+    headers = await protected_headers(session, seed_owner)
+    company = seed_owner["company"].id
+    owner = seed_owner["owner"].id
+    exact = AuditLog(
+        company_id=company,
+        actor_user_id=owner,
+        target_user_id=owner,
+        action="future_customer_operation",
+        entity_type="Customer",
+        entity_id=str(uuid4()),
+        category="customers",
+        catalogue_version=1,
+    )
+    actor_only = AuditLog(
+        company_id=company,
+        actor_user_id=owner,
+        action="future_customer_operation",
+        entity_type="Customer",
+        entity_id=str(uuid4()),
+        category="customers",
+        catalogue_version=1,
+    )
+    target_only = AuditLog(
+        company_id=company,
+        target_user_id=owner,
+        action="future_customer_operation",
+        entity_type="Customer",
+        entity_id=str(uuid4()),
+        category="customers",
+        catalogue_version=1,
+    )
+    session.add_all([exact, actor_only, target_only])
+    await session.commit()
+
+    response = await client.get(
+        "/api/v1/admin/audit/events",
+        headers=headers,
+        params={"actor_user_id": str(owner), "target_user_id": str(owner)},
+    )
+
+    assert response.status_code == 200, response.text
+    assert [row["id"] for row in response.json()["entries"]] == [exact.id]
 
 
 @pytest.mark.asyncio

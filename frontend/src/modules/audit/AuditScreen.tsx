@@ -32,6 +32,7 @@ import {
 import {
   auditActor,
   auditBusinessSummary,
+  auditReadableSourceReference,
   auditBusinessChanges,
   auditRetainedSnapshots,
   auditOrderId,
@@ -637,14 +638,16 @@ function AuditWorkspace({ scope }: { scope: string }) {
                             className="w-full text-left"
                           >
                             <span className="mr-2 font-mono text-xs text-fg-muted">
-                              {entry.action_code ?? 'LEGACY'}
+                              {entry.action_code ?? (entry.classification_source === 'technical_companion' ? 'TECHNICAL' : entry.classification_source === 'unclassified_recorded' ? 'UNCLASSIFIED' : 'LEGACY')}
                             </span>
                             <span className="font-semibold">
                               {entry.action_label}
                             </span>
                             <span className="mt-1 block text-xs text-fg-muted">
-                              {entry.source_reference ??
-                                'No retained business reference'}
+                              {auditReadableSourceReference(entry) ??
+                                (entry.linked_bill_reference
+                                  ? `Current linked bill · ${entry.linked_bill_reference}`
+                                  : 'No retained business reference')}
                             </span>
                             <span className="mt-1 block text-xs">
                               {auditBusinessSummary(entry)}
@@ -722,8 +725,9 @@ export function AuditDetail({
   onClose: () => void;
 }) {
   const orderId = auditOrderId(entry);
+  const readableSourceReference = auditReadableSourceReference(entry);
   const isBusinessField = (key: string) =>
-    !/(^id$|_id$|_ids$|fingerprint|hash|password|secret|token|otp|authorization|cookie|private_key)/i.test(
+    !/(^id$|_id$|_ids$|_by$|fingerprint|hash|password|secret|token|otp|authorization|cookie|private_key)/i.test(
       key,
     );
   const details = Object.entries(entry.business_details ?? {}).filter(([key]) =>
@@ -736,7 +740,7 @@ export function AuditDetail({
       <header className="flex items-start justify-between gap-3">
         <div>
           <p className="font-mono text-xs text-fg-muted">
-            {entry.action_code ?? 'Legacy / unclassified'}
+            {entry.action_code ?? (entry.classification_source === 'technical_companion' ? 'Technical record' : entry.classification_source === 'unclassified_recorded' ? 'Unclassified record' : 'Legacy / unclassified')}
           </p>
           <h3 className="mt-1 text-lg font-semibold">{entry.action_label}</h3>
         </div>
@@ -775,8 +779,11 @@ export function AuditDetail({
         />
         <Detail
           label="Source reference"
-          value={entry.source_reference ?? 'Not retained'}
+          value={readableSourceReference ?? 'Not retained'}
         />
+        {entry.linked_bill_reference && entry.linked_bill_reference !== readableSourceReference && (
+          <Detail label="Current linked bill" value={`${entry.linked_bill_reference} · resolved from retained order identity`} />
+        )}
         <Detail
           label="Classification evidence"
           value={businessLabel(entry.classification_source)}
@@ -795,13 +802,13 @@ export function AuditDetail({
           Match: {entry.match_explanation}
         </p>
       )}
-      {(orderId || entry.source_reference) && (
+      {(orderId || readableSourceReference || entry.linked_bill_reference) && (
         <Link
           className="btn btn-ghost"
           to={
             orderId
               ? `/operations?receipt=${encodeURIComponent(orderId)}`
-              : `/operations?receipt_q=${encodeURIComponent(entry.source_reference!)}`
+              : `/operations?receipt_q=${encodeURIComponent((readableSourceReference ?? entry.linked_bill_reference)!)}`
           }
         >
           <ArrowUpRight size={14} /> Open linked receipt

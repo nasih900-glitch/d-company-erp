@@ -218,6 +218,14 @@ AREA_TYPES: dict[str, tuple[str, ...]] = {
 CATEGORIES = ("login", *AREA_TYPES.keys(), "other")
 OUTCOMES = ("completed", "failed", "pending", "withdrawn", "reversed", "unresolved", "unknown")
 
+# ORM rows emitted as implementation companions to a source-defined operation.
+# They remain immutable and available in All activity, but a newly recorded,
+# uncoded CRUD row is not itself a second business action.
+TECHNICAL_COMPANION_ENTITIES = (
+    "OrderCheckoutClaim",
+)
+TECHNICAL_COMPANION_ACTIONS = ("create", "update", "delete")
+
 # Codes that can be established from an explicit operation (not arbitrary CRUD).
 EXPLICIT = {
     "gaming_session_started": ("GAM-STA", "committed", "completed"),
@@ -476,6 +484,16 @@ def retained_reference(before: dict | None, after: dict | None) -> str | None:
     return None
 
 
+def is_technical_companion(row: AuditLog) -> bool:
+    return bool(
+        row.catalogue_version
+        and row.action_code is None
+        and row.action in TECHNICAL_COMPANION_ACTIONS
+        and row.entity_type in TECHNICAL_COMPANION_ENTITIES
+        and classify_values(row.action, row.entity_type, row.before, row.after) is None
+    )
+
+
 def describe(row: AuditLog) -> dict[str, Any]:
     derived = classify_values(row.action, row.entity_type, row.before, row.after)
     code = row.action_code or (derived[0] if derived else None)
@@ -484,15 +502,33 @@ def describe(row: AuditLog) -> dict[str, Any]:
     outcome = row.outcome or (derived[2] if derived else "unknown")
     legacy_failed = row.action == "login_failed"
     actor_kind = row.actor_kind or ("unauthenticated" if legacy_failed else "unverified_legacy")
+    technical = is_technical_companion(row)
+    classification_source = (
+        "technical_companion"
+        if technical
+        else (
+            "recorded"
+            if row.catalogue_version and (row.action_code or derived)
+            else (
+                "unclassified_recorded"
+                if row.catalogue_version
+                else ("derived_legacy" if derived else "unclassified_legacy")
+            )
+        )
+    )
     return {
         "action_code": code,
-        "action_label": definition.label if definition else "Other / legacy activity",
-        "category": row.category or category_for(row.action, row.entity_type, code),
+        "action_label": definition.label if definition else (
+            "Technical record" if technical else (
+                "Unclassified record" if row.catalogue_version else "Other / legacy activity"
+            )
+        ),
+        "category": "system" if technical else (
+            row.category or category_for(row.action, row.entity_type, code)
+        ),
         "stage": stage,
         "outcome": outcome,
-        "classification_source": "recorded"
-        if row.catalogue_version
-        else ("derived_legacy" if derived else "unclassified"),
+        "classification_source": classification_source,
         "catalogue_version": row.catalogue_version or CATALOGUE_VERSION,
         "actor_kind": actor_kind,
         "target_user_id": row.target_user_id or (row.actor_user_id if legacy_failed else None),
@@ -568,6 +604,16 @@ def code_expression():
     return func.coalesce(AuditLog.action_code, case(*conditions, else_=None))
 
 
+def technical_companion_expression():
+    """Fresh, known ORM companions; never a blanket uncoded-row rule."""
+    return and_(
+        AuditLog.catalogue_version.is_not(None),
+        AuditLog.action_code.is_(None),
+        AuditLog.action.in_(TECHNICAL_COMPANION_ACTIONS),
+        AuditLog.entity_type.in_(TECHNICAL_COMPANION_ENTITIES),
+    )
+
+
 def category_expression():
     code = code_expression()
     conditions = [
@@ -580,7 +626,10 @@ def category_expression():
     conditions.extend(
         (AuditLog.entity_type.in_(types), literal(area)) for area, types in AREA_TYPES.items()
     )
-    return func.coalesce(AuditLog.category, case(*conditions, else_="other"))
+    return case(
+        (technical_companion_expression(), literal("system")),
+        else_=func.coalesce(AuditLog.category, case(*conditions, else_="other")),
+    )
 
 
 def state_expression(index: int):

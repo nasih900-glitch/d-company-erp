@@ -7,6 +7,8 @@ import {
   businessLabel,
   safeAuditValue,
   auditActor,
+  auditOrderId,
+  auditReadableSourceReference,
 } from './audit-presentation';
 import type { BusinessAuditEntryDTO } from '@/lib/erp-api';
 const event = (details: Record<string, unknown>) =>
@@ -75,6 +77,19 @@ describe('Source-backed business language', () => {
       'No additional business facts retained',
     );
   });
+  it('summarizes shift money independently and preserves recorded zero', () => {
+    expect(auditBusinessSummary({...event({opening_float_minor: 0}),action_code:'SHF-OPN'})).toBe('Opening float ₹0.00');
+    expect(auditBusinessSummary({...event({counted_minor: 10000, expected_minor: 10000, variance_minor: 0}),action_code:'SHF-CLS'})).toBe('Counted ₹100.00 · Expected ₹100.00 · Variance ₹0.00');
+    expect(auditBusinessSummary({...event({counted_minor: 10000}),action_code:'SHF-CLS'})).toBe('Counted ₹100.00');
+    expect(auditBusinessSummary(event({status:'closed'}))).toBe('Additional retained facts below');
+  });
+  it('distinguishes retained readable references from a current linked bill', () => {
+    const orderId='11111111-1111-4111-8111-111111111111';
+    const stock={...event({ref_type:'order',ref_id:orderId}),entity_type:'StockMovement',source_reference:orderId,linked_bill_reference:'D/QA/26-27/00001'};
+    expect(auditOrderId(stock)).toBe(orderId);
+    expect(auditReadableSourceReference(stock)).toBeNull();
+    expect(auditReadableSourceReference({...stock,business_details:{...stock.business_details,invoice_no:'D/QA/26-27/00001'}})).toBe('D/QA/26-27/00001');
+  });
 });
 
 describe('Snapshot evidence versus genuine mutations', () => {
@@ -101,6 +116,7 @@ describe('Snapshot evidence versus genuine mutations', () => {
     const row={...event({}),action:'update',before:{status:'open'},after:{status:'closed',name:'Observed'}};
     expect(auditBusinessChanges(row)).toEqual([{key:'status',before:'open',after:'closed'}]);
     expect(auditRetainedSnapshots(row)).toEqual([{side:'Retained after action',key:'name',value:'Observed'}]);
+    expect(auditRetainedSnapshots({...row,after:{status:'closed',closed_by:'11111111-1111-4111-8111-111111111111'}})).toEqual([]);
   });
 });
 

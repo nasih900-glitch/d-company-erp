@@ -9,11 +9,12 @@ from typing import Any
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import String, and_, cast, literal, or_, select
+from sqlalchemy import String, and_, case, cast, func, literal, or_, select
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 
 from app.core.errors import BusinessRuleError
 from app.core.security import decode_token, issue_audit_page_cursor
-from app.models import AuditLog, Branch, Company, User
+from app.models import AuditLog, Branch, Company, Order, User
 from app.services.audit.catalogue import (
     BY_CODE,
     CATEGORIES,
@@ -22,7 +23,45 @@ from app.services.audit.catalogue import (
     category_expression,
     code_expression,
     state_expression,
+    technical_companion_expression,
 )
+
+
+def linked_order_id_expression():
+    """Typed order relation; only canonical retained UUID text is ever cast."""
+    business_order_id = AuditLog.business_details["order_id"].astext
+    after_order_id = AuditLog.after["order_id"].astext
+    before_order_id = AuditLog.before["order_id"].astext
+    stock_ref_type = func.coalesce(
+        AuditLog.business_details["ref_type"].astext,
+        AuditLog.after["ref_type"].astext,
+        AuditLog.before["ref_type"].astext,
+    )
+    stock_ref_id = func.coalesce(
+        AuditLog.business_details["ref_id"].astext,
+        AuditLog.after["ref_id"].astext,
+        AuditLog.before["ref_id"].astext,
+    )
+    linked_order_text = case(
+        (AuditLog.entity_type == "Order", AuditLog.entity_id),
+        (
+            AuditLog.entity_type.in_(("Payment", "MembershipPayment")),
+            func.coalesce(business_order_id, after_order_id, before_order_id),
+        ),
+        (
+            and_(AuditLog.entity_type == "StockMovement", stock_ref_type == "order"),
+            stock_ref_id,
+        ),
+        else_=None,
+    )
+    canonical_uuid = linked_order_text.op("~")(
+        r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+        r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    )
+    return case(
+        (canonical_uuid, cast(linked_order_text, PG_UUID(as_uuid=True))),
+        else_=None,
+    )
 
 
 def filter_fingerprint(filters: dict[str, Any]) -> str:
@@ -114,20 +153,24 @@ def predicates(filters: dict[str, Any], *, timezone: str) -> list:
     if view not in {"business", "all"}:
         raise BusinessRuleError("Unsupported Audit activity view.")
     if view == "business":
+        technical = technical_companion_expression()
         result.append(
             or_(
                 code_expression().is_not(None),
-                category_expression().in_(
-                    (
-                        "login",
-                        "pos",
-                        "customers",
-                        "staff",
-                        "inventory",
-                        "finance",
-                        "menu",
-                        "operations",
-                    )
+                and_(
+                    ~technical,
+                    category_expression().in_(
+                        (
+                            "login",
+                            "pos",
+                            "customers",
+                            "staff",
+                            "inventory",
+                            "finance",
+                            "menu",
+                            "operations",
+                        )
+                    ),
                 ),
                 AuditLog.action == "refresh_token_reuse_rejected",
             )
@@ -170,6 +213,7 @@ def predicates(filters: dict[str, Any], *, timezone: str) -> list:
             or_(
                 AuditLog.source_reference == reference,
                 AuditLog.entity_id == reference,
+                Order.invoice_no == reference,
                 *(
                     snapshot[field].astext == reference
                     for snapshot in (AuditLog.before, AuditLog.after)
@@ -206,6 +250,7 @@ def predicates(filters: dict[str, Any], *, timezone: str) -> list:
                     AuditLog.entity_id.ilike(pattern, escape="\\"),
                     AuditLog.request_id.ilike(pattern, escape="\\"),
                     AuditLog.client_action_id.ilike(pattern, escape="\\"),
+                    Order.invoice_no.ilike(pattern, escape="\\"),
                     and_(AuditLog.action != "login_failed", User.name.ilike(pattern, escape="\\")),
                     and_(AuditLog.action != "login_failed", User.email.ilike(pattern, escape="\\")),
                     code_expression().in_(code_matches) if code_matches else literal(False),
@@ -215,13 +260,26 @@ def predicates(filters: dict[str, Any], *, timezone: str) -> list:
 
 
 def event_query(company_id: UUID):
+    linked_order_id = linked_order_id_expression()
     return (
-        select(AuditLog, User.name, User.email)
+        select(
+            AuditLog,
+            User.name,
+            User.email,
+            Order.invoice_no.label("linked_bill_reference"),
+        )
         .outerjoin(
             User,
             and_(
                 User.id == AuditLog.actor_user_id,
                 User.company_id == AuditLog.company_id,
+            ),
+        )
+        .outerjoin(
+            Order,
+            and_(
+                Order.company_id == AuditLog.company_id,
+                Order.id == linked_order_id,
             ),
         )
         .where(AuditLog.company_id == company_id)

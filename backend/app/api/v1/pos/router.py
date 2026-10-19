@@ -6435,7 +6435,6 @@ async def record_payment(
         ref_external=payload.ref_external,
         paid_at=now,
     )
-    session.add(payment)
     if payload.method == "cash":
         shift.expected_minor = int(shift.expected_minor or 0) + collected_minor
     if finalized:
@@ -6447,8 +6446,13 @@ async def record_payment(
             at=now,
             payment_method="split" if already_paid > 0 else payload.method,
             payment_breakdown_minor=payment_breakdown_minor,
+            final_payment_bundle=[payment],
             loyalty_program=loyalty_program,
         )
+    else:
+        # A partial payment has no issued bill identity yet. Record it now and
+        # leave its immutable Audit snapshot without a future invoice number.
+        session.add(payment)
     response = PaymentRead(
         id=payment.id,
         order_id=payment.order_id,

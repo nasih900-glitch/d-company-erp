@@ -250,9 +250,18 @@ private fun AuditInlineDetail(entry:AuditEntry,zone:String?,ownerKey:String,stat
             add("Actor" to auditActor(entry))
             add("Name provenance" to auditBusinessLabel(entry.actorLabelSource))
             entry.targetUserId?.let { target -> add("Targeted account" to (state.staff.firstOrNull{it.id==target}?.name?.let{"$it · current account label"} ?: "Retained account identity; current label unavailable")) }
-            add("Classification" to when(entry.classificationSource){"recorded"->"Recorded at action time";"derived_legacy"->"Derived from retained legacy evidence";else->"Other / legacy · not classified"})
+            add("Classification" to when(entry.classificationSource){
+                "recorded"->"Recorded at action time"
+                "derived_legacy"->"Derived from retained legacy evidence"
+                "technical_companion"->"Technical companion · retained in All activity"
+                "unclassified_recorded"->"Recorded event · action not classified"
+                else->"Historical record · action not classified"
+            })
             entry.matchExplanation?.let { add("Why this matched" to it) }
-            entry.sourceReference?.let { add("Business reference" to it) }
+            auditReadableSourceReference(entry)?.let { add("Business reference" to it) }
+            entry.linkedBillReference?.takeIf { it != auditReadableSourceReference(entry) }?.let {
+                add("Current linked bill" to "$it · resolved from retained order identity")
+            }
             auditBusinessFacts(entry).forEach { (key,value)->add(auditBusinessLabel(key) to auditBusinessValue(key,value,timezone)) }
             auditBusinessChanges(entry).take(12).forEach { (key,before,after) ->
                 add("${auditBusinessLabel(key)} · Before → After" to "${auditBusinessValue(key,before,timezone)} → ${auditBusinessValue(key,after,timezone)}")

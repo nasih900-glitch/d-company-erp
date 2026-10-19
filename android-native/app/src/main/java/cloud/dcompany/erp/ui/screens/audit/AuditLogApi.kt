@@ -63,6 +63,8 @@ data class AuditEntry(
     @SerialName("business_details") val businessDetails: JsonObject? = null,
     @SerialName("actor_label_source") val actorLabelSource: String = "current_account_profile",
     @SerialName("match_explanation") val matchExplanation: String? = null,
+    @SerialName("linked_bill_reference") val linkedBillReference: String? = null,
+    @SerialName("linked_bill_reference_basis") val linkedBillReferenceBasis: String? = null,
 )
 
 @Serializable
