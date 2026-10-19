@@ -30,6 +30,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -48,6 +50,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Block
@@ -73,6 +76,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
@@ -144,8 +150,18 @@ private fun FinanceContent(
     var tab by remember { mutableIntStateOf(0) }
     val tabs = listOf("Overview", "Expenses", "Collections", "Tip payouts", "Assets", "Partners")
 
+    val imeVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
+    val keyboard = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
+    val importantStatus = !state.online || state.error != null || state.pendingOnlineWrite != null ||
+        state.pendingExpenses.isNotEmpty() || state.pendingExpenseReceipts.isNotEmpty() ||
+        state.pendingAssets.isNotEmpty() || state.pendingCapitalEntries.isNotEmpty()
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-        Header(state, onRefresh = vm::load)
+        if (!imeVisible) Header(state, onRefresh = vm::load)
+        else Row(Modifier.fillMaxWidth().padding(horizontal=Spacing.lg), verticalAlignment=Alignment.CenterVertically) {
+            Text("Finance · ${tabs[tab]}",style=MaterialTheme.typography.titleSmall,modifier=Modifier.weight(1f))
+            TextButton({ keyboard?.hide();focusManager.clearFocus() }) { Text("Finish text entry") }
+        }
         when (state.primaryContentState) {
             FinancePrimaryContentState.ERROR -> ErrorBlock(
                 state.error ?: financeLoadFailureMessage(
@@ -166,7 +182,7 @@ private fun FinanceContent(
             }
 
             FinancePrimaryContentState.DATA -> {
-                PremiumTabBar(
+                if (!imeVisible) PremiumTabBar(
                     options = tabs.mapIndexed { index, title ->
                         TabOption(index.toString(), title)
                     },
@@ -174,7 +190,7 @@ private fun FinanceContent(
                     onSelect = { selected -> tab = selected.toIntOrNull() ?: 0 },
                     modifier = Modifier.padding(horizontal = Spacing.lg),
                 )
-                FinanceStatusRegion(state = state, vm = vm, access = access)
+                if (!imeVisible || importantStatus) FinanceStatusRegion(state = state, vm = vm, access = access, compact = imeVisible)
                 when (tab) {
                     0 -> OverviewTab(state, presentation)
                     1 -> ExpensesTab(state, vm, access.canRecordExpenses)
@@ -288,6 +304,7 @@ private fun FinanceStatusRegion(
     state: FinanceUiState,
     vm: FinanceViewModel,
     access: FinanceAccess,
+    compact: Boolean = false,
 ) {
     val hasPendingChanges = state.pendingExpenses.isNotEmpty() ||
         state.pendingExpenseReceipts.isNotEmpty() || state.pendingAssets.isNotEmpty() ||
@@ -298,12 +315,12 @@ private fun FinanceStatusRegion(
     Box(
         Modifier
             .fillMaxWidth()
-            .height(FINANCE_STATUS_REGION_HEIGHT)
+            .height(if (compact) 48.dp else if (hasStatus) FINANCE_STATUS_REGION_HEIGHT else 40.dp)
             .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
     ) {
         if (!hasStatus) {
             Text(
-                "Finance records are online · no saved finance actions need attention",
+                "Finance records are online · protected recovery is listed in saved-work status",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelSmall,
                 modifier = Modifier.align(Alignment.CenterStart),
@@ -692,7 +709,7 @@ private fun ManualCollectionsTab(
         item {
             StatGrid(
                 listOf(
-                    StatSpec("Active total", totals.totalMinor.asRupees(), countLabel(totals.activeCount, "entry")),
+                    StatSpec("Active total", totals.totalMinor.asRupees(), countLabel(totals.activeCount, "entry", "entries")),
                     StatSpec("Cash", totals.cashMinor.asRupees()),
                     StatSpec("UPI", totals.upiMinor.asRupees()),
                     StatSpec(

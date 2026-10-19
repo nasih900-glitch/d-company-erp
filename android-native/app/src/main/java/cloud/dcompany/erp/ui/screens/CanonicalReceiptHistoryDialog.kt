@@ -575,7 +575,7 @@ private fun CanonicalReceiptDetail(
                     if (receipt.pointsRedeemedMinor != 0L) {
                         ReceiptMoneyRow("Points redeemed", -receipt.pointsRedeemedMinor)
                     }
-                    if (receipt.taxMinor != 0L) ReceiptMoneyRow("Tax", receipt.taxMinor)
+                    ReceiptMoneyRow("Tax actually charged", receipt.taxMinor)
                     if (receipt.tipMinor != 0L) ReceiptMoneyRow("Tip", receipt.tipMinor)
                     if (receipt.roundOffMinor != 0L) ReceiptMoneyRow("Round-off", receipt.roundOffMinor)
                     HorizontalDivider(color = MaterialTheme.colorScheme.outline)
@@ -681,6 +681,7 @@ private fun ReceiptLineRow(line: CanonicalReceiptLine) {
             listOfNotNull(
                 variantName,
                 modifierLabels.takeIf(List<String>::isNotEmpty)?.joinToString(", "),
+                "Configured tax rate ${configuredTaxPercent(line.taxRate)} · tax charged ${(line.cgstMinor + line.sgstMinor + line.igstMinor + line.cessMinor).asRupees()}",
                 line.note?.let { "Note: $it" },
                 line.discountMinor.takeIf { it != 0L }?.let {
                     "Line discount: ${it.asRupees()}"
@@ -705,6 +706,13 @@ private fun ReceiptPaymentRow(payment: CanonicalReceiptPayment) {
         ReceiptMoneyRow(payment.method.uppercase(), payment.amountMinor, emphasized = true)
         ReceiptValueRow("Recorded by", payment.recordedByName ?: "Staff record unavailable")
         ReceiptValueRow("Paid", payment.paidAt.receiptDateTime())
+        if (payment.tenderCorrectionId != null) {
+            ReceiptValueRow("Originally recorded method",payment.originalMethod?.uppercase() ?: "Not retained")
+            payment.originalTenderedMinor?.let { ReceiptMoneyRow("Originally recorded cash received",it) }
+            payment.originalChangeMinor?.let { ReceiptMoneyRow("Originally recorded change",it) }
+            payment.tenderCorrectionRecordedAt?.let { ReceiptValueRow("Correction recorded",it.receiptDateTime()) }
+            Text("The effective method is shown above. Original payment, bill total and recorded drawer close are retained.",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+        }
         payment.tenderedMinor?.let { ReceiptMoneyRow("Cash received", it) }
         payment.changeMinor?.let { ReceiptMoneyRow("Change", it) }
         payment.reference?.takeIf(String::isNotBlank)?.let { ReceiptValueRow("Reference", it) }
@@ -796,3 +804,8 @@ private fun ReceiptMoneyRow(label: String, amountMinor: Long, emphasized: Boolea
 private fun String.receiptQuantity(): String = runCatching {
     BigDecimal(this).stripTrailingZeros().toPlainString()
 }.getOrDefault(this)
+
+/** Persisted fractions remain exact: 0.18 is 18%, 0.005 is 0.5%. */
+internal fun configuredTaxPercent(fraction:String):String = runCatching {
+    BigDecimal(fraction).movePointRight(2).stripTrailingZeros().toPlainString()+"%"
+}.getOrElse { "Rate unavailable" }

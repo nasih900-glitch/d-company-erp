@@ -1,10 +1,18 @@
 package cloud.dcompany.erp.ui.screens.finance
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -19,6 +27,7 @@ import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.ui.components.ActionIntent
 import cloud.dcompany.erp.ui.components.ErpButton
 import cloud.dcompany.erp.ui.components.SectionCard
+import cloud.dcompany.erp.ui.components.ownerVerificationKeyboardOptions
 import cloud.dcompany.erp.ui.theme.Spacing
 import java.time.Instant
 import java.time.ZoneId
@@ -27,7 +36,7 @@ import java.util.Locale
 import kotlinx.serialization.decodeFromString
 
 /** One inline workspace. Verification, evidence and final receipt stay beside their source. */
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class, ExperimentalFoundationApi::class)
 @Composable
 internal fun TenderWorkspace(
     context: TenderContext,
@@ -62,6 +71,22 @@ internal fun TenderWorkspace(
         if (verified && receipt != null && notified != receipt.id) { notified = receipt.id; onCommitted(receipt) }
     }
     val busy = state.busy || state.readingSavedWork
+    val focusManager = LocalFocusManager.current
+    val keyboard = LocalSoftwareKeyboardController.current
+    val passwordView = remember { BringIntoViewRequester() }
+    var passwordFocused by remember { mutableStateOf(false) }
+    val imeBottom = WindowInsets.ime.getBottom(LocalDensity.current)
+    LaunchedEffect(passwordFocused, imeBottom) {
+        if (passwordFocused) passwordView.bringIntoView()
+    }
+    fun verifyOwner() {
+        if (busy || password.isBlank()) return
+        val input = password
+        password = ""
+        keyboard?.hide()
+        focusManager.clearFocus()
+        vm.unlock(input, ownerKey, context)
+    }
     SectionCard(title = if (context is TenderContext.Payment) "Correct recorded payment method" else "Review daily Cash / UPI actuals",
         subtitle = "Owner-attested evidence · original bills and recorded drawer closes stay unchanged") {
         if (!state.allowed) {
@@ -84,10 +109,11 @@ internal fun TenderWorkspace(
         if (!canAct) {
             Text(if (verified) "Verify owner access for ${if (neededKind == TenderKind.PAYMENT) "this payment correction" else "daily actuals"}." else "Use your current owner password. Verification stays only in memory and expires automatically.", style = MaterialTheme.typography.bodySmall)
             OutlinedTextField(password, { password = it }, label = { Text("Owner password") }, singleLine = true,
-                visualTransformation = PasswordVisualTransformation(), enabled = !busy, modifier = Modifier.fillMaxWidth())
-            ErpButton("Verify owner access", {
-                val input = password; password = ""; vm.unlock(input, ownerKey, context)
-            }, enabled = !busy && password.isNotBlank(), busy = state.busy)
+                visualTransformation = PasswordVisualTransformation(), enabled = !busy,
+                keyboardOptions = ownerVerificationKeyboardOptions,
+                keyboardActions = KeyboardActions(onDone = { verifyOwner() }),
+                modifier = Modifier.fillMaxWidth().bringIntoViewRequester(passwordView).onFocusChanged { passwordFocused = it.isFocused })
+            ErpButton("Verify owner access", ::verifyOwner, enabled = !busy && password.isNotBlank(), busy = state.busy)
         }
         if (verified) {
             FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {

@@ -15,6 +15,8 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -61,6 +63,15 @@ fun AuditLogScreen(
     val state = if (current.ownerScopeKey == ownerKey && (current.locked || vm.verificationIsCurrent())) current
         else AuditLogUiState(allowed = allowed, unlockError = if (!current.locked) "Owner verification expired. Unlock to continue." else null)
     var password by remember(ownerKey) { mutableStateOf("") }
+    val keyboard = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
+    fun verifyOwner() {
+        val value = password
+        password = ""
+        keyboard?.hide()
+        focusManager.clearFocus()
+        vm.unlock(value, ownerKey)
+    }
     var expandedFilters by remember(ownerKey) { mutableStateOf(false) }
     LaunchedEffect(ownerKey, initialReference) { initialReference?.let(vm::reference) }
     LaunchedEffect(state.locked) { password = "" }
@@ -82,10 +93,10 @@ fun AuditLogScreen(
                         OutlinedTextField(value = password, onValueChange = { password = it },
                             label = { Text("Owner password") }, visualTransformation = PasswordVisualTransformation(),
                             singleLine = true, enabled = !state.unlocking, modifier = Modifier.fillMaxWidth(),
-                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                            keyboardActions = KeyboardActions(onDone = { val value=password; password=""; vm.unlock(value, ownerKey) }))
+                            keyboardOptions = ownerVerificationKeyboardOptions,
+                            keyboardActions = KeyboardActions(onDone = { verifyOwner() }))
                         state.unlockError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-                        ErpButton("Unlock activity", { val value=password; password=""; vm.unlock(value, ownerKey) },
+                        ErpButton("Unlock activity", ::verifyOwner,
                             enabled = password.isNotBlank() && !state.unlocking, busy = state.unlocking)
                     }
                 }

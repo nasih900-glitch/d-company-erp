@@ -244,4 +244,12 @@ class ShiftClosePresentationTest {
         totalRefundsMinor = membershipRefundsMinor,
         netCollectionsMinor = 10_000 + membershipCollectionsMinor - membershipRefundsMinor,
     )
+    @Test fun unenteredDrawerCountIsUnknownWhileExplicitZeroAndDurableZeroRemainKnown() {
+        val unentered=shiftClosePresentation(null,null,null,true)
+        assertNull(unentered.displayedCountedMinor);assertTrue(unentered.canEditCount)
+        assertEquals(0L,shiftClosePresentation(null,null,0L,true).displayedCountedMinor)
+        assertEquals(0L,shiftClosePresentation(ShiftState.CLOSE_PENDING,0L,null,true).displayedCountedMinor)
+        assertEquals(0L,shiftClosePresentation(ShiftState.CLOSE_REJECTED,0L,null,true).displayedCountedMinor)
+    }
+
 }

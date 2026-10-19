@@ -209,6 +209,13 @@ fun ShiftScreen(
                             style = MaterialTheme.typography.labelMedium)
                     }
                 }
+                state.operationNotice?.let { message ->
+                    Column(Modifier.fillMaxWidth().padding(vertical=Spacing.xs),verticalArrangement=Arrangement.spacedBy(Spacing.xs)) {
+                        Text("Shift update",style=MaterialTheme.typography.labelMedium)
+                        Text(message,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+                        TextButton(vm::dismissOperationNotice) { Text("Dismiss status") }
+                    }
+                }
                 if (!state.currentShiftLoaded) {
                     ShiftLoadingWorkspace()
                 } else if (state.open == null) {
@@ -217,7 +224,6 @@ fun ShiftScreen(
                             "Shift opening is view only for this account. Ask an authorised cashier or manager.",
                         )
                     }
-                    ShiftSummaryRow(state)
                     OpenShiftCard(state, vm, access.canOpen)
                 } else {
                     if (!access.canClose) {
@@ -279,7 +285,7 @@ fun ShiftScreen(
                         }
                     }
                 }
-                Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
+                if (state.open != null) Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
                     PastShiftsPanel(state, Modifier.fillMaxWidth().height(280.dp))
                 }
             }
@@ -293,19 +299,6 @@ fun ShiftScreen(
             onDismissRequest = vm::dismissOperationError,
             confirmButton = { TextButton(onClick = vm::dismissOperationError) { Text("OK") } },
             title = { Text("Shift action needs attention") },
-            text = { Text(message) },
-        )
-    }
-
-    state.operationNotice?.let { message ->
-        AlertDialog(
-            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-            shape = cloud.dcompany.erp.ui.theme.Radius.shapeLg,
-            onDismissRequest = vm::dismissOperationNotice,
-            confirmButton = {
-                TextButton(onClick = vm::dismissOperationNotice) { Text("OK") }
-            },
-            title = { Text("Shift update") },
             text = { Text(message) },
         )
     }
@@ -849,7 +842,7 @@ private fun ShiftSummaryRow(state: ShiftUiState) {
 private fun PastShiftsPanel(state: ShiftUiState, modifier: Modifier = Modifier) {
     SectionCard(
         title = "Business-day collections",
-        subtitle = "One IST day total, with every shift segment kept for review",
+        subtitle = "Recorded shift segments · unallocated owner actuals are separate in Finance",
         icon = Icons.Filled.History,
         modifier = modifier,
     ) {
@@ -930,14 +923,24 @@ private fun OpenShiftCard(state: ShiftUiState, vm: ShiftViewModel, canOpen: Bool
         Spacer(Modifier.height(14.dp))
     }
 
-    OpenShiftForm(
-        online = state.online,
-        busy = state.busy,
-        canOpen = canOpen,
-        blockedByRejectedShift = state.rejectedShift != null,
-        offlineGamingSupported = state.offlineGamingSupported,
-        onOpenShift = vm::openShift,
-    )
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val opening: @Composable () -> Unit = {
+            OpenShiftForm(online=state.online, busy=state.busy, canOpen=canOpen,
+                blockedByRejectedShift=state.rejectedShift != null,
+                offlineGamingSupported=state.offlineGamingSupported, onOpenShift=vm::openShift)
+        }
+        if (maxWidth >= 900.dp) Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(Spacing.lg),verticalAlignment=Alignment.Top) {
+            Box(Modifier.weight(1f)) { opening() }
+            Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(Spacing.md)) {
+                ShiftSummaryRow(state)
+                PastShiftsPanel(state,Modifier.fillMaxWidth().height(240.dp))
+            }
+        } else Column(Modifier.fillMaxWidth(),verticalArrangement=Arrangement.spacedBy(Spacing.md)) {
+            ShiftSummaryRow(state)
+            opening()
+            PastShiftsPanel(state,Modifier.fillMaxWidth().height(280.dp))
+        }
+    }
 }
 
 /** Actual open-shift form, separated from ViewModel wiring for rendered UI tests. */
@@ -962,7 +965,7 @@ internal fun OpenShiftForm(
         title = "Open shift",
         subtitle = "Record the drawer cash before accepting the first payment.",
         icon = Icons.Filled.AccountBalanceWallet,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.widthIn(max = 520.dp).fillMaxWidth(),
         action = {
             ErpButton(
                 text = "Open shift with ${floatMinor.asRupees()}",
@@ -1132,7 +1135,8 @@ internal fun CloseShiftCard(
         closeBlocked,
         saver = DrawerCountDraftSaver,
     ) { mutableStateMapOf<Long, String>() }
-    val draftCountedMinor = drawerCountedMinor(counts)
+    var countReviewed by rememberSaveable(shiftIdentity, closeBlocked) { mutableStateOf(false) }
+    val draftCountedMinor = if (countReviewed) drawerCountedMinor(counts) else null
     val closePresentation = shiftClosePresentation(
         localState = shift.local?.state,
         savedCountedMinor = shift.local?.countedMinor,
@@ -1340,7 +1344,7 @@ internal fun CloseShiftCard(
                     style = MaterialTheme.typography.labelSmall,
                 )
                 ErpButton(
-                    text = if (counts.isEmpty()) "Count cash" else "Edit cash count",
+                    text = if (!countReviewed) "Count cash" else "Edit cash count",
                     onClick = { drawerCountOpen = true },
                     enabled = closePresentation.canEditCount,
                     leadingIcon = Icons.Filled.AccountBalanceWallet,
@@ -1355,7 +1359,7 @@ internal fun CloseShiftCard(
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text("Counted", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text(
-                    displayedCountedMinor?.asRupees() ?: "unavailable",
+                    displayedCountedMinor?.asRupees() ?: if (closePresentation.usesSavedCount) "Saved count unavailable" else "Not counted yet",
                     color = if (displayedCountedMinor == null) MaterialTheme.colorScheme.operationalDanger else MaterialTheme.colorScheme.onSurface,
                     fontWeight = FontWeight.Bold,
                 )
@@ -1396,7 +1400,7 @@ internal fun CloseShiftCard(
                             confirmation = ShiftCloseConfirmation(shiftIdentity, counted)
                         }
                     },
-                    enabled = canClosePermission && !closeBlocked && !state.busy && state.canClose,
+                    enabled = canClosePermission && !closeBlocked && !state.busy && state.canClose && closePresentation.displayedCountedMinor != null,
                     busy = closing,
                     intent = ActionIntent.Destructive,
                 )
@@ -1415,6 +1419,7 @@ internal fun CloseShiftCard(
                 updatedCounts
                     .filterValues(String::isNotBlank)
                     .forEach { (note, value) -> counts[note] = value }
+                countReviewed = true
                 drawerCountOpen = false
             },
         )
@@ -1733,7 +1738,7 @@ internal data class ShiftClosePresentation(
 internal fun shiftClosePresentation(
     localState: String?,
     savedCountedMinor: Long?,
-    draftCountedMinor: Long,
+    draftCountedMinor: Long?,
     canEdit: Boolean,
 ): ShiftClosePresentation {
     val usesSavedCount = localState == ShiftState.CLOSE_PENDING ||
@@ -1926,6 +1931,13 @@ private fun HistoryRow(s: ShiftHistoryRow) {
             style = MaterialTheme.typography.labelSmall,
             color = if (s.varianceMinor == 0L) MaterialTheme.colorScheme.operationalGood else MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        Text("Recorded expected drawer ${s.expectedMinor?.asRupees() ?: "Not retained"} · recorded count / variance above remain unchanged.",
+            style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+        if ((s.tenderCorrectionMinor ?: 0L) != 0L) {
+            Text("Reconstructed tender · identified payment correction",style=MaterialTheme.typography.labelMedium)
+            Text("Cash ${s.reconstructedCashCollectionsMinor?.asRupees() ?: "Unavailable"} · UPI ${s.reconstructedUpiCollectionsMinor?.asRupees() ?: "Unavailable"}",style=MaterialTheme.typography.bodySmall)
+            Text("Reconstructed expected drawer ${s.reconstructedExpectedMinor?.asRupees() ?: "Unavailable"}. This does not replace the original counted cash or recorded variance.",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+        }
         if (s.source == ShiftHistorySource.LOCAL) {
             Text(
                 "Saved on this tablet; waiting for server history refresh.",

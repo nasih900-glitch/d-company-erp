@@ -197,7 +197,7 @@ data class ReportData(
 
     /** A period in which genuinely nothing happened, as opposed to a failed load. */
     val hasNothing: Boolean
-        get() = ordersCount == 0 &&
+        get() = tenderReclassifications.isEmpty() && ordersCount == 0 &&
             ticketsCount == 0 &&
             avgTicketMinor == 0L &&
             unissuedPaidOrdersCount == 0 &&

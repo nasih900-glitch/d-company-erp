@@ -1074,6 +1074,25 @@ private fun PaymentsCard(
             sub = "money that actually moved, not profit",
             bold = true,
         )
+        if (report.tenderReclassifications.isNotEmpty()) {
+            Divider()
+            Text("Separate owner-attested daily evidence",style=MaterialTheme.typography.titleSmall)
+            Text("These unallocated records do not add a payment, refund or sale to the totals above. Original bills and drawer counts remain unchanged.",
+                style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+            report.tenderReclassifications.forEach { row ->
+                Text("${row.businessDate} · ${row.businessTimezone}",style=MaterialTheme.typography.labelMedium)
+                if (row.kind == "applied") {
+                    MoneyRow("Unallocated Cash classification",row.cashDeltaMinor)
+                    MoneyRow("Unallocated UPI classification",row.upiDeltaMinor)
+                    Text("Applied as an unallocated Cash to UPI reclassification; no source bill is claimed.",style=MaterialTheme.typography.bodySmall)
+                } else if (row.kind == "unresolved") {
+                    MoneyRow("Unresolved Cash + UPI difference",row.totalDifferenceMinor)
+                    Text("Recorded actuals for review only · no financial posting.",style=MaterialTheme.typography.bodySmall)
+                } else {
+                    Text("This saved evidence type is not recognised. Refresh and review its protected receipt; posting status is unknown.",style=MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
     }
 }
 
