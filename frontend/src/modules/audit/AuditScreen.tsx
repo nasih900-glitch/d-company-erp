@@ -701,7 +701,7 @@ function AuditWorkspace({ scope }: { scope: string }) {
               )}
             </section>
             {selected && (
-              <div ref={detail} id={`audit-detail-${selected.id}`} tabIndex={-1} className="min-w-0" aria-label="Selected activity evidence">
+              <div ref={detail} id={`audit-detail-${selected.id}`} tabIndex={-1} className="min-w-0 focus:outline-none focus:ring-2 focus:ring-fg-muted focus:ring-offset-2 focus:ring-offset-bg" aria-label="Selected activity evidence">
                 <AuditDetail entry={selected} zone={zone} onClose={closeDetails} />
                 <button className="btn btn-ghost mt-3" onClick={closeDetails}>Return to loaded activity</button>
               </div>
