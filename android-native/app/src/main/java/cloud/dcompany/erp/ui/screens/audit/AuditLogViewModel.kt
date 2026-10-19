@@ -3,6 +3,9 @@ package cloud.dcompany.erp.ui.screens.audit
 import android.os.SystemClock
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import cloud.dcompany.erp.ui.screens.finance.TenderCorrectionNotice
+import cloud.dcompany.erp.ui.screens.finance.TenderCorrectionNotices
+import cloud.dcompany.erp.ui.screens.finance.matchesOwnerKey
 import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.ApiException
 import cloud.dcompany.erp.ui.screens.staff.StaffApi
@@ -75,6 +78,21 @@ class AuditLogViewModel(
     private var expiry: Job? = null
     private var retained: AuditLogUiState? = null
     private var requestedReference: String? = null
+    private var queuedCorrectionCheck = false
+
+    init { tasks.launch { TenderCorrectionNotices.changes.collect { correctionRecorded(it) } } }
+
+    internal fun correctionRecorded(notice: TenderCorrectionNotice) {
+        if (!notice.matchesOwnerKey(identity) || !verificationIsCurrent()) return
+        queuedCorrectionCheck = true
+        drainCorrectionCheck()
+    }
+
+    private fun drainCorrectionCheck() {
+        if (!queuedCorrectionCheck || busy() || !verificationIsCurrent() || _state.value.page?.activityCursor == null) return
+        queuedCorrectionCheck = false
+        checkActivity()
+    }
 
     fun bindIdentity(userId: String?, companyId: String?, branchId: String?, allowed: Boolean) {
         val next = if (!userId.isNullOrBlank() && !companyId.isNullOrBlank() && allowed) "$companyId|$userId|${branchId.orEmpty()}" else null
@@ -254,6 +272,8 @@ class AuditLogViewModel(
                         error = if (expiredSnapshot) "This history snapshot expired. Loaded rows are retained; refresh to start a new snapshot."
                             else failure.message ?: "History could not be checked. Loaded rows are unchanged.")
                 }
+            } finally {
+                if (current(operation, owner)) drainCorrectionCheck()
             }
         }
     }
@@ -283,6 +303,6 @@ class AuditLogViewModel(
     }
 
     private fun current(operation: Long, owner: String) = operation == generation && identity == owner
-    private fun invalidate() { generation++; request?.cancel(); expiry?.cancel(); token = null; grantDeadline = null }
+    private fun invalidate() { queuedCorrectionCheck = false; generation++; request?.cancel(); expiry?.cancel(); token = null; grantDeadline = null }
     override fun onCleared() { invalidate(); retained = null; super.onCleared() }
 }

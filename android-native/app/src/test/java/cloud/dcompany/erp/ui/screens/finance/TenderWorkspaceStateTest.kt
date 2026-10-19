@@ -90,7 +90,7 @@ class TenderWorkspaceStateTest {
         val tasks=CoroutineScope(coroutineContext+SupervisorJob())
         try {
             val api=Api();val storage=Storage();val journal=TenderJournal(storage)
-            val vm=TenderWorkspaceViewModel(api.api,journal,{account},tasks,{1000},{1000})
+            val vm=TenderWorkspaceViewModel(api.api,journal,{account},tasks,{1000},{1000},refreshReaders={_,_->emptyList()})
             vm.bind(source,account);ready(vm);preview(vm)
             api.commitFailure=IOException("Reply lost")
             vm.commit();idle(vm)
@@ -109,11 +109,11 @@ class TenderWorkspaceStateTest {
         val tasks=CoroutineScope(coroutineContext+SupervisorJob())
         try {
             val api=Api();val journal=TenderJournal(Storage())
-            val a=TenderWorkspaceViewModel(api.api,journal,{account},tasks,{1000},{1000})
+            val a=TenderWorkspaceViewModel(api.api,journal,{account},tasks,{1000},{1000},refreshReaders={_,_->emptyList()})
             a.bind(source,account);ready(a);preview(a)
             api.commitFailure=IOException("Reply lost");a.commit();idle(a)
             val pending=requireNotNull(a.state.value.pending)
-            val b=TenderWorkspaceViewModel(api.api,journal,{account},tasks,{1000},{1000})
+            val b=TenderWorkspaceViewModel(api.api,journal,{account},tasks,{1000},{1000},refreshReaders={_,_->emptyList()})
             b.bind(source,account);ready(b)
             api.commitFailure=null;b.recover(requireNotNull(b.state.value.pending));idle(b)
             assertNull(journal.read(scope))
@@ -127,7 +127,7 @@ class TenderWorkspaceStateTest {
         val tasks=CoroutineScope(coroutineContext+SupervisorJob())
         try {
             val api=Api();val journal=TenderJournal(Storage())
-            val vm=TenderWorkspaceViewModel(api.api,journal,{account},tasks,{1000},{1000})
+            val vm=TenderWorkspaceViewModel(api.api,journal,{account},tasks,{1000},{1000},refreshReaders={_,_->emptyList()})
             vm.bind(source,account);ready(vm);preview(vm)
             val other=journal.reserve(paymentTenderCommand(scope,PaymentTenderCommit(secondPayment,fingerprint,"Different source"),"different-source",1000))
             vm.commit();idle(vm)
@@ -140,7 +140,7 @@ class TenderWorkspaceStateTest {
         val tasks=CoroutineScope(coroutineContext+SupervisorJob())
         try {
             val api=Api();val storage=Storage();val journal=TenderJournal(storage)
-            val vm=TenderWorkspaceViewModel(api.api,journal,{account},tasks,{1000},{1000})
+            val vm=TenderWorkspaceViewModel(api.api,journal,{account},tasks,{1000},{1000},refreshReaders={_,_->emptyList()})
             vm.bind(source,account);ready(vm);preview(vm)
             storage.failPut=true;vm.commit();idle(vm)
             val saved=requireNotNull(vm.state.value.pending)
@@ -156,7 +156,7 @@ class TenderWorkspaceStateTest {
         try {
             var elapsed=1000L
             val api=Api();val journal=TenderJournal(Storage())
-            val vm=TenderWorkspaceViewModel(api.api,journal,{account},tasks,{elapsed},{1000})
+            val vm=TenderWorkspaceViewModel(api.api,journal,{account},tasks,{elapsed},{1000},refreshReaders={_,_->emptyList()})
             vm.bind(source,account);ready(vm);preview(vm)
             api.blockCommit=true;vm.commit()
             withTimeout(5000){while(api.blocked==null)delay(5)}
@@ -177,7 +177,7 @@ class TenderWorkspaceStateTest {
         try {
             var active=account
             val api=Api();val journal=TenderJournal(Storage())
-            val vm=TenderWorkspaceViewModel(api.api,journal,{active},tasks,{1000},{1000})
+            val vm=TenderWorkspaceViewModel(api.api,journal,{active},tasks,{1000},{1000},refreshReaders={_,_->emptyList()})
             vm.bind(source,active);ready(vm);preview(vm)
             api.blockCommit=true;vm.commit()
             withTimeout(5000){while(api.blocked==null)delay(5)}
@@ -197,7 +197,7 @@ class TenderWorkspaceStateTest {
         val tasks=CoroutineScope(coroutineContext+SupervisorJob())
         try {
             val api=Api();val storage=Storage().also{it.failRead=true}
-            val vm=TenderWorkspaceViewModel(api.api,TenderJournal(storage),{account},tasks,{1000},{1000})
+            val vm=TenderWorkspaceViewModel(api.api,TenderJournal(storage),{account},tasks,{1000},{1000},refreshReaders={_,_->emptyList()})
             vm.bind(source,account);ready(vm)
             assertFalse(vm.state.value.savedWorkVerified);assertNotNull(vm.state.value.storageError)
             vm.prepare();vm.confirm(true);vm.commit();idle(vm)
@@ -210,7 +210,7 @@ class TenderWorkspaceStateTest {
         try {
             for(failure in listOf(ApiException("Expired",401),ApiException("Forbidden",403),ApiException("Retry later",409,"conflict",retryable=true),IOException("Offline"))) {
                 val api=Api();val journal=TenderJournal(Storage())
-                val vm=TenderWorkspaceViewModel(api.api,journal,{account},tasks,{1000},{1000})
+                val vm=TenderWorkspaceViewModel(api.api,journal,{account},tasks,{1000},{1000},refreshReaders={_,_->emptyList()})
                 vm.bind(source,account);ready(vm);preview(vm)
                 api.commitFailure=failure;vm.commit();idle(vm)
                 assertNotNull(vm.state.value.pending);assertNull(vm.state.value.reviewedRejection)
@@ -223,7 +223,7 @@ class TenderWorkspaceStateTest {
         val tasks=CoroutineScope(coroutineContext+SupervisorJob())
         try {
             val api=Api();val storage=Storage();val journal=TenderJournal(storage)
-            val vm=TenderWorkspaceViewModel(api.api,journal,{account},tasks,{1000},{1000})
+            val vm=TenderWorkspaceViewModel(api.api,journal,{account},tasks,{1000},{1000},refreshReaders={_,_->emptyList()})
             vm.bind(source,account);ready(vm);preview(vm)
             api.commitFailure=ApiException("Source changed",409,"conflict",retryable=false)
             vm.commit();idle(vm)
@@ -242,4 +242,69 @@ class TenderWorkspaceStateTest {
         assertTrue(review.supportedTransfer);assertEquals(50000L,preview.unchangedOtherRails["card"])
         assertNull(dailyActualsReview(preview,"-1","120"));assertNull(dailyActualsReview(preview,"1.001","120"))
     }
+    @Test fun acceptedReplayRefreshesReadersAndReadFailureNeverBecomesAnotherWrite()=runBlocking {
+        val tasks=CoroutineScope(coroutineContext+SupervisorJob())
+        try {
+            val api=Api();val journal=TenderJournal(Storage())
+            var refreshes=0;var failRefresh=true
+            val notices=mutableListOf<TenderReceipt>()
+            val vm=TenderWorkspaceViewModel(api.api,journal,{account},tasks,{1000},{1000},
+                refreshReaders={owner,row-> assertEquals(scope,owner);assertEquals("payment_method_corrected",row.operation);refreshes++
+                    if(failRefresh) throw IOException("Read failed") else emptyList() },
+                notifyReaders={owner,row->assertEquals(scope,owner);notices+=row})
+            vm.bind(source,account);ready(vm);preview(vm)
+            api.commitFailure=IOException("Accepted reply lost");vm.commit();idle(vm)
+            assertEquals(0,refreshes);assertTrue(notices.isEmpty())
+            val pending=requireNotNull(vm.state.value.pending)
+            api.commitFailure=null;vm.recover(pending);idle(vm)
+            assertEquals(2,api.commits.size);assertEquals(api.commits[0],api.commits[1])
+            assertNotNull(vm.state.value.receipt);assertNull(vm.state.value.pending);assertNull(journal.read(scope))
+            assertNull(vm.state.value.error);assertNotNull(vm.state.value.refreshError);assertEquals(1,notices.size)
+            failRefresh=false;vm.refreshViews();idle(vm)
+            assertEquals(2,api.commits.size);assertEquals(2,refreshes);assertNull(vm.state.value.refreshError)
+            assertEquals(notices.first(),notices.last())
+        } finally { tasks.cancel() }
+    }
+
+    @Test fun acceptedReceiptSurvivesCleanupFailureAndStillRefreshesReaders()=runBlocking {
+        val tasks=CoroutineScope(coroutineContext+SupervisorJob())
+        try {
+            val api=Api();val storage=Storage();val journal=TenderJournal(storage);var refreshed=0
+            val vm=TenderWorkspaceViewModel(api.api,journal,{account},tasks,{1000},{1000},refreshReaders={_,_->refreshed++;emptyList()})
+            vm.bind(source,account);ready(vm);preview(vm);storage.failRemove=true;vm.commit();idle(vm)
+            val pending=requireNotNull(vm.state.value.pending)
+            assertNotNull(vm.state.value.receipt);assertNotNull(vm.state.value.storageError);assertNull(vm.state.value.error)
+            assertEquals(pending,journal.read(scope));assertEquals(1,refreshed)
+            storage.failRemove=false;vm.recover(pending);idle(vm)
+            assertEquals(api.commits[0],api.commits[1]);assertEquals(2,refreshed);assertNull(vm.state.value.pending)
+            assertNull(vm.state.value.storageError)
+        } finally { tasks.cancel() }
+    }
+
+    @Test fun accountSwitchDuringReadRefreshCannotRepaintOtherOwnersWorkspace()=runBlocking {
+        val tasks=CoroutineScope(coroutineContext+SupervisorJob())
+        try {
+            var active=account;var refreshStarted=false
+            val waiting=CompletableDeferred<List<String>>()
+            val api=Api();val journal=TenderJournal(Storage())
+            val vm=TenderWorkspaceViewModel(api.api,journal,{active},tasks,{1000},{1000},refreshReaders={_,_->refreshStarted=true;waiting.await()})
+            vm.bind(source,active);ready(vm);preview(vm);vm.commit()
+            withTimeout(5000){while(!refreshStarted)delay(5)}
+            assertNotNull(vm.state.value.receipt);assertNull(journal.read(scope))
+            active=account.copy(userId="88888888-8888-8888-8888-888888888888");vm.bind(source,active);idle(vm)
+            waiting.complete(listOf("Old owner's read failed"));delay(10)
+            assertNull(vm.state.value.receipt);assertNull(vm.state.value.refreshError);assertEquals(1,api.commits.size)
+        } finally { tasks.cancel() }
+    }
+
+    @Test fun correctionResourcesAndOwnerBranchHintsAreExplicit() {
+        val paymentRow=TenderReceipt("id","reference","payment_method_corrected",true,company,branch,"2026-10-17","Asia/Kolkata",owner,"2026-10-19T10:00:00Z","reason","owner_attestation",sourceFingerprint=fingerprint,idempotencyKey="key",sourceAllocation="identified_payment",totalDifferenceMinor=0)
+        assertEquals(setOf("receipts","orders","shifts","finance","customers","reports","audit"),tenderAffectedResources(paymentRow))
+        assertEquals(setOf("finance","reports","audit"),tenderAffectedResources(paymentRow.copy(operation="daily_actuals_recorded",financialEffect=false)))
+        val notice=TenderCorrectionNotice(scope,"id",setOf("audit"))
+        assertTrue(notice.matchesOwnerKey(scope.ownerKey()));assertTrue(notice.matchesOwnerKey("$company|$owner|"))
+        assertFalse(notice.matchesOwnerKey("$company|$owner|other-branch"));assertFalse(notice.matchesOwnerKey("other-company|$owner|$branch"))
+        assertFalse(notice.matchesOwnerKey("$company|other-owner|$branch"));assertFalse(notice.matchesOwnerKey(null))
+    }
+
 }

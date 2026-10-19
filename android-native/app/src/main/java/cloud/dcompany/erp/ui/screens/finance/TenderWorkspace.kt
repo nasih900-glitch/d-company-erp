@@ -154,6 +154,10 @@ internal fun TenderWorkspace(
                 }
             }
             state.receipt?.let { TenderReceiptFacts(it, finalResult = true) }
+            state.refreshError?.let {
+                Text("The receipt is recorded. Some views may still show earlier figures.\n$it", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                ErpButton("Refresh affected views · reads only", vm::refreshViews, intent = ActionIntent.Secondary, enabled = !busy)
+            }
             TextButton({ historyOpen = !historyOpen }) { Text(if (historyOpen) "Hide protected correction history" else "Show protected correction history") }
             if (historyOpen) {
                 Text("Newest 50 matching receipts. A bounded or unavailable history is not proof that no other action exists.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)

@@ -1,6 +1,8 @@
 package cloud.dcompany.erp.ui.screens.audit
 
 import cloud.dcompany.erp.core.net.ApiException
+import cloud.dcompany.erp.ui.screens.finance.TenderCorrectionNotice
+import cloud.dcompany.erp.ui.screens.finance.TenderScope
 import cloud.dcompany.erp.ui.screens.staff.StaffApi
 import cloud.dcompany.erp.ui.screens.staff.StaffUser
 import java.lang.reflect.Proxy
@@ -267,4 +269,36 @@ class AuditSnapshotStateTest {
             assertEquals(AuditFilters(),vm.state.value.filters)
         } finally { scope.cancel() }
     }
+    @Test fun acceptedCorrectionChecksRetainedSnapshotWithoutChangingLoadedRowsOrSelection() {
+        val scope=CoroutineScope(SupervisorJob()+Dispatchers.Unconfined)
+        try {
+            val api=Api().also{it.next=page(100,99,more=true)}
+            val vm=vm(api,scope);vm.unlock("synthetic-password");vm.select(vm.state.value.entries.last())
+            val loaded=vm.state.value.entries;val selected=vm.state.value.selected
+            api.next=page(900,new=true)
+            val notice=TenderCorrectionNotice(TenderScope("company","owner","branch"),"receipt",setOf("audit"))
+            vm.correctionRecorded(notice)
+            assertEquals("activity",api.calls.last()["cursor"]);assertEquals(loaded,vm.state.value.entries)
+            assertEquals(selected,vm.state.value.selected);assertTrue(vm.state.value.newEntriesAvailable)
+            val count=api.calls.size
+            vm.correctionRecorded(notice.copy(scope=TenderScope("company","other-owner","branch")))
+            vm.correctionRecorded(notice.copy(scope=TenderScope("company","owner","other-branch")))
+            assertEquals(count,api.calls.size)
+            vm.lock();vm.correctionRecorded(notice);assertEquals(count,api.calls.size)
+        } finally { scope.cancel() }
+    }
+
+    @Test fun correctionArrivingDuringOlderRequestQueuesOnlyRetainedActivityCheck() {
+        val scope=CoroutineScope(SupervisorJob()+Dispatchers.Unconfined)
+        try {
+            val api=Api().also{it.next=page(100,99,more=true)}
+            val vm=vm(api,scope);vm.unlock("synthetic-password");api.block=true;vm.loadMore()
+            vm.correctionRecorded(TenderCorrectionNotice(TenderScope("company","owner","branch"),"receipt",setOf("audit")))
+            assertEquals(2,api.calls.size)
+            api.next=page(901,new=true);requireNotNull(api.blocked).resume(page(98,97))
+            assertEquals(3,api.calls.size);assertEquals("activity",api.calls.last()["cursor"])
+            assertEquals(listOf(100L,99L,98L,97L),vm.state.value.entries.map{it.id});assertTrue(vm.state.value.newEntriesAvailable)
+        } finally { scope.cancel() }
+    }
+
 }

@@ -39,6 +39,7 @@ internal data class TenderWorkspaceState(
     val error: String? = null,
     val storageError: String? = null,
     val historyError: String? = null,
+    val refreshError: String? = null,
     val authorizedKind: TenderKind? = null,
     val pending: PendingTenderCommand? = null,
     val paymentPreview: PaymentTenderPreview? = null,
@@ -84,6 +85,8 @@ internal class TenderWorkspaceViewModel(
     private val suppliedScope: CoroutineScope? = null,
     private val elapsedNow: () -> Long = { SystemClock.elapsedRealtime() },
     private val wallNow: () -> Long = System::currentTimeMillis,
+    private val refreshReaders: suspend (TenderScope, TenderReceipt) -> List<String> = ::refreshTenderReaders,
+    private val notifyReaders: (TenderScope, TenderReceipt) -> Unit = TenderCorrectionNotices::publish,
 ) : ViewModel() {
     private val tasks get() = suppliedScope ?: viewModelScope
     private val _state = MutableStateFlow(TenderWorkspaceState())
@@ -122,7 +125,7 @@ internal class TenderWorkspaceViewModel(
         invalidate()
         _state.value = _state.value.copy(busy = false, readingSavedWork = false, authorizedKind = null,
             paymentPreview = null, dailyPreview = null, receipt = null, history = emptyList(),
-            historyError = null, confirmed = false, error = message, reviewedRejection = null)
+            historyError = null, refreshError = null, confirmed = false, error = message, reviewedRejection = null)
     }
 
     fun readSavedWork() {
@@ -197,7 +200,7 @@ internal class TenderWorkspaceViewModel(
         }
         val token = grant ?: return
         val operation = ++generation
-        _state.value = _state.value.copy(busy = true, error = null, receipt = null, confirmed = false,
+        _state.value = _state.value.copy(busy = true, error = null, refreshError = null, receipt = null, confirmed = false,
             paymentPreview = null, dailyPreview = null, reviewedRejection = null)
         work = tasks.launch {
             try {
@@ -282,12 +285,23 @@ internal class TenderWorkspaceViewModel(
                 sent = true
                 val result = executeTenderCommand(api, token.token, command)
                 if (!current(operation, owner, source) || !requireGrant(command.kind)) return@launch
-                journal.clearExact(command)
-                val remaining = journal.read(owner)
-                if (!current(operation, owner, source) || !requireGrant(command.kind)) return@launch
-                _state.value = _state.value.copy(pending = remaining, receipt = result, paymentPreview = null,
-                    dailyPreview = null, confirmed = false, reviewedRejection = null, storageError = null,
+                // A matching server receipt proves success independently of local cleanup
+                // and read refresh. Neither later failure may become a fresh write retry.
+                _state.value = _state.value.copy(receipt = result, paymentPreview = null,
+                    dailyPreview = null, confirmed = false, reviewedRejection = null, error = null,
                     history = (listOf(result) + _state.value.history).distinctBy { it.id })
+                notifyReaders(owner, result)
+                try {
+                    journal.clearExact(command)
+                    val remaining = journal.read(owner)
+                    if (!current(operation, owner, source) || !requireGrant(command.kind)) return@launch
+                    _state.value = _state.value.copy(pending = remaining, storageError = null)
+                } catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) {
+                    if (!current(operation, owner, source) || !requireGrant(command.kind)) return@launch
+                    _state.value = _state.value.copy(storageError = "The receipt is recorded, but saved-request cleanup could not be verified. Keep this exact request for recovery.")
+                }
+                refreshAcceptedReaders(result, operation, owner, source)
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (failure: Exception) {
                 if (!current(operation, owner, source)) return@launch
@@ -299,6 +313,30 @@ internal class TenderWorkspaceViewModel(
                     storageError = if (!sent) failure.message ?: "Saved work could not be verified. Nothing was sent." else _state.value.storageError)
                 if (apiFailure?.status in setOf(401, 403)) lock("Owner access must be verified again. Saved request retained.")
             } finally { finish(operation, owner, source) }
+        }
+    }
+
+    /** Explicit read retry; never executes or replaces the retained command. */
+    fun refreshViews() {
+        val owner = scope ?: return
+        val source = _state.value.context ?: return
+        val receipt = _state.value.receipt ?: return
+        if (busy() || !verificationIsCurrent()) return
+        val operation = ++generation
+        _state.value = _state.value.copy(busy = true)
+        notifyReaders(owner, receipt)
+        work = tasks.launch {
+            try { refreshAcceptedReaders(receipt, operation, owner, source) }
+            finally { finish(operation, owner, source) }
+        }
+    }
+
+    private suspend fun refreshAcceptedReaders(receipt: TenderReceipt, operation: Long, owner: TenderScope, source: TenderContext) {
+        val failures = try { refreshReaders(owner, receipt) }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { listOf("Read refresh failed; cached views may still show earlier figures.") }
+        if (current(operation, owner, source) && verificationIsCurrent()) {
+            _state.value = _state.value.copy(refreshError = failures.takeIf { it.isNotEmpty() }?.joinToString("\n"))
         }
     }
 
