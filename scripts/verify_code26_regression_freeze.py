@@ -1625,6 +1625,7 @@ REVIEWED_CODE30_4_BUILD53_SHA256 = {
  'android-native/app/build.gradle.kts': '3b73a6ead5044d34f9fdc572d0667b33b32b7dcd46e5e80fab9ee5dd20337b52',
  'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/PosEmptyCatalogueUiTest.kt': '05107a6c00d80994e108e0ccd6b220b42f93aa55e227e776f2d12c17f5df58d6',
  'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingBoardUiTest.kt': '3421b119761fd86662d8c6c0eb3c795bb98e02b1c08275f2a8b4ad0d33fa05c3',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingRejectedSessionAttentionUiTest.kt': '3f3d5ac543b17815a7422aaf8f935ad23b227d0a7df5b48c746da0d9ea195929',
  'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/shift/ShiftCompactUiTest.kt': '9bc9bee8185584684ec20fd0674319bc5dc0066c580f285b919440a3be8986ed',
  'android-native/app/src/main/java/cloud/dcompany/erp/MainActivity.kt': '00865fabf5ce52fb7ff441c20974a9494e1968267e555e8bbe1c0896641e49a9',
  'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/PosScreen.kt': 'caa10835975e8b7bdbae88a51a494368933f122fcae410f46d7dfb4ef66cb9ac',
