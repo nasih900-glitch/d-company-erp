@@ -62,5 +62,6 @@ data class ReceiptInvestigation(
     @SerialName("audit_source_references") val auditSourceReferences: List<String>,
     @SerialName("historical_evidence_note") val historicalEvidenceNote: String,
     @SerialName("invoice_date_basis") val invoiceDateBasis: String,
+    @SerialName("shop_timezone") val shopTimezone: String? = null,
 )
 

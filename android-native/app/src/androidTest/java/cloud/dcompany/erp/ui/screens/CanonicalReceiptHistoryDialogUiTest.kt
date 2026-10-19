@@ -6,6 +6,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextReplacement
@@ -37,10 +39,10 @@ class CanonicalReceiptHistoryDialogUiTest {
                     onLoadMore = {},
                     onOpenReceipt = {},
                     search = search,
-                    onSearch = { query ->
-                        queries += query
+                    onSearch = { filters ->
+                        queries += filters.query
                         search = ReceiptSearchUiState(
-                            query = query,
+                            criteria = filters, appliedCriteria = filters,
                             source = ReceiptSearchSource.CACHED,
                             cachedAtMillis = 1_797_000_000_000,
                         )
@@ -69,4 +71,27 @@ class CanonicalReceiptHistoryDialogUiTest {
             assertEquals(0, globalRefreshes)
         }
     }
+    @Test
+    fun blankReferenceAllowsExactAmountAndShopDateOnlySearch() {
+        val requests = mutableListOf<ReceiptHistoryFilters>()
+        compose.setContent {
+            DCompanyTheme {
+                CanonicalReceiptHistoryDialog(
+                    receipts=emptyList(),hasMore=false,loading=false,error=null,hasLocalReceipt=false,
+                    onOpenLastLocalReceipt={},onRefresh={},onLoadMore={},onOpenReceipt={},
+                    search=ReceiptSearchUiState(),onSearch={requests+=it},onLoadMoreSearch={},
+                    onRefundReceipt=null,onDismiss={},
+                )
+            }
+        }
+        compose.onNodeWithText("More filters").performClick()
+        compose.onNodeWithTag("receipt-filter-from").performScrollTo().performTextReplacement("2026-10-17")
+        compose.onNodeWithTag("receipt-filter-to").performScrollTo().performTextReplacement("2026-10-18")
+        compose.onNodeWithTag("receipt-filter-amount").performScrollTo().performTextReplacement("270.00")
+        compose.onNodeWithText("Search").assertIsDisplayed().performClick()
+        compose.runOnIdle {
+            assertEquals(listOf(ReceiptHistoryFilters(dateFrom="2026-10-17",dateTo="2026-10-18",amountMinor=27000)),requests)
+        }
+    }
+
 }

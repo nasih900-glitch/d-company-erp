@@ -6,6 +6,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import cloud.dcompany.erp.DCompanyApp
+import cloud.dcompany.erp.core.auth.CacheScopeLease
+import cloud.dcompany.erp.core.net.ErpApi
 import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.ReceiptInvestigation
 import cloud.dcompany.erp.core.net.asRupees
@@ -28,18 +31,43 @@ internal fun ReceiptInvestigationPanel(
     var record by remember(orderId,ownerScopeKey) { mutableStateOf<ReceiptInvestigation?>(null) }
     var failure by remember(orderId,ownerScopeKey) { mutableStateOf<String?>(null) }
     var reload by remember(orderId,ownerScopeKey) { mutableIntStateOf(0) }
+    var generation by remember(orderId, ownerScopeKey) { mutableLongStateOf(0) }
     LaunchedEffect(orderId,ownerScopeKey,reload) {
+        val operation = ++generation
+        val captured = DCompanyApp.instance.cacheIsolation.currentLease()
+        if (captured == null || ownerScopeKey != "${captured.scope.companyId}|${captured.scope.userId}|${captured.scope.branchId.orEmpty()}") {
+            failure = "This bill workspace is not verified. Reconnect and open the bill again."
+            return@LaunchedEffect
+        }
         failure=null
-        try { record=ApiClient.api.investigateReceipt(orderId) }
+        try {
+            val result = ApiClient.api.scopedReceiptInvestigation(orderId, captured)
+            DCompanyApp.instance.cacheIsolation.commitIfCurrent(captured) {
+                if (generation == operation) record=result
+            }
+        }
         catch(cancelled:CancellationException) { throw cancelled }
-        catch(error:Exception) { failure=error.message ?: "Bill investigation could not load. Retained receipt facts are unchanged." }
+        catch(error:Exception) {
+            DCompanyApp.instance.cacheIsolation.commitIfCurrent(captured) {
+                if (generation == operation) failure=error.message ?: "Bill investigation could not load. Retained receipt facts are unchanged."
+            }
+        }
     }
     SectionCard(title="Bill investigation",subtitle="Retained receipt, player, drink and settlement evidence") {
         val data=record
         if(data==null && failure==null) LinearProgressIndicator(Modifier.fillMaxWidth())
         failure?.let { Text(it,color=MaterialTheme.colorScheme.error); TextButton({reload++}){Text("Retry investigation")} }
-        if(data!=null) ReceiptInvestigationContent(data,shopTimezone,onAuditReference)
+        if(data!=null) ReceiptInvestigationContent(data,data.shopTimezone ?: shopTimezone,onAuditReference)
     }
+}
+
+internal suspend fun ErpApi.scopedReceiptInvestigation(orderId: String, lease: CacheScopeLease): ReceiptInvestigation {
+    val result = investigateReceipt(orderId)
+    require(result.receipt.orderId == orderId && result.receipt.companyId == lease.scope.companyId &&
+        (lease.scope.branchId == null || result.receipt.branchId == lease.scope.branchId)) {
+        "The server returned a different bill or shop. Existing investigation evidence was not replaced."
+    }
+    return result
 }
 
 @Composable

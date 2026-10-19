@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cloud.dcompany.erp.DCompanyApp
@@ -32,6 +33,8 @@ import cloud.dcompany.erp.ui.screens.audit.AuditLogViewModel
 import cloud.dcompany.erp.ui.screens.finance.TenderContext
 import cloud.dcompany.erp.ui.screens.finance.TenderWorkspace
 import cloud.dcompany.erp.ui.screens.finance.tenderScope
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -51,6 +54,9 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
+import androidx.compose.runtime.LaunchedEffect
+import cloud.dcompany.erp.core.money.parseRupeesToMinor
+import cloud.dcompany.erp.core.money.minorToRupeesInput
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -93,16 +99,29 @@ internal fun CanonicalReceiptHistoryDialog(
     onLoadMore: () -> Unit,
     onOpenReceipt: (String) -> Unit,
     search: ReceiptSearchUiState,
-    onSearch: (String) -> Unit,
+    filterChoices: ReceiptFilterChoices = ReceiptFilterChoices(),
+    onSearch: (ReceiptHistoryFilters) -> Unit,
     onLoadMoreSearch: () -> Unit,
     onRefundReceipt: ((CanonicalReceipt) -> Unit)?,
     onDismiss: () -> Unit,
 ) {
     var selectedOrderId by rememberSaveable { mutableStateOf<String?>(null) }
-    var searchDraft by rememberSaveable { mutableStateOf(search.query) }
-    val displayedReceipts = if (search.query.isBlank()) receipts else search.receipts
+    var draft by remember { mutableStateOf(search.criteria) }
+    var amountDraft by remember { mutableStateOf(search.criteria.amountMinor?.let(::minorToRupeesInput).orEmpty()) }
+    var filterError by remember { mutableStateOf<String?>(null) }
+    var filtersOpen by rememberSaveable { mutableStateOf(search.criteria.isAdvanced) }
+    val listState = rememberLazyListState()
+    LaunchedEffect(search.viewportRevision) { if (search.viewportRevision > 0) listState.scrollToItem(0) }
+    fun submitSearch() {
+        val amount = amountDraft.takeIf(String::isNotBlank)?.let(::parseRupeesToMinor)
+        if (amountDraft.isNotBlank() && amount == null) { filterError = "Enter a valid invoice amount with at most two decimal places."; return }
+        val filters = draft.copy(amountMinor = amount).normalized()
+        filterError = receiptFilterError(filters)
+        if (filterError == null) { selectedOrderId = null; onSearch(filters) }
+    }
+    val displayedReceipts = if (!search.isActive) receipts else search.receipts
     val selected = selectedOrderId?.let { id ->
-        search.detail?.takeIf { search.query.isNotBlank() && it.orderId == id }
+        search.detail?.takeIf { search.isActive && it.orderId == id }
             ?: displayedReceipts.firstOrNull { it.orderId == id }
             ?: receipts.firstOrNull { it.orderId == id }
     }
@@ -119,39 +138,41 @@ internal fun CanonicalReceiptHistoryDialog(
                 .fillMaxWidth(0.92f)
                 .fillMaxHeight(0.9f)
                 .widthIn(max = 980.dp)
-                .heightIn(min = 420.dp, max = 760.dp)
+                .heightIn(min = 240.dp, max = 760.dp).imePadding()
                 .border(1.dp, MaterialTheme.colorScheme.outline, Radius.shapeXl),
         ) {
             if (selected == null) {
                 ReceiptHistoryList(
                     receipts = displayedReceipts,
-                    hasMore = if (search.query.isBlank()) hasMore else search.hasMore,
-                    loading = if (search.query.isBlank()) loading else search.loading,
-                    error = if (search.query.isBlank()) error else search.error,
-                    searchDraft = searchDraft,
+                    hasMore = if (!search.isActive) hasMore else search.hasMore && search.criteria == search.appliedCriteria,
+                    loading = if (!search.isActive) loading else search.loading,
+                    error = filterError ?: if (!search.isActive) error else search.error,
+                    searchDraft = draft.query,
                     search = search,
-                    onSearchDraftChange = { searchDraft = it.take(200) },
-                    onSearch = { onSearch(searchDraft) },
-                    onClearSearch = { searchDraft = ""; onSearch("") },
+                    listState = listState,
+                    filterDraft = draft, amountDraft = amountDraft, filtersOpen = filtersOpen, choices = filterChoices,
+                    onFiltersOpen = { filtersOpen = !filtersOpen },
+                    onFilterChange = { draft = it; filterError = null },
+                    onAmountChange = { amountDraft = it; filterError = null },
+                    onSearchDraftChange = { draft = draft.copy(query = it.take(200)); filterError = null },
+                    onSearch = ::submitSearch,
+                    onClearSearch = { draft = ReceiptHistoryFilters(); amountDraft = ""; filterError = null; onSearch(draft) },
                     hasLocalReceipt = hasLocalReceipt,
                     onOpenLastLocalReceipt = onOpenLastLocalReceipt,
                     onSelect = {
                         selectedOrderId = it.orderId
                         onOpenReceipt(it.orderId)
                     },
-                    onRefresh = if (search.query.isBlank()) {
-                        onRefresh
-                    } else {
-                        { onSearch(search.query) }
-                    },
-                    onLoadMore = if (search.query.isBlank()) onLoadMore else onLoadMoreSearch,
+                    onRefresh = if (!search.isActive) onRefresh else { { onSearch(search.appliedCriteria ?: search.criteria) } },
+                    onLoadMore = if (!search.isActive) onLoadMore else onLoadMoreSearch,
                     onDismiss = onDismiss,
                 )
             } else {
                 CanonicalReceiptDetail(
                     receipt = selected,
-                    loading = if (search.query.isBlank()) loading else search.detailLoading,
-                    error = if (search.query.isBlank()) error else search.detailError,
+                    loading = if (!search.isActive) loading else search.detailLoading,
+                    error = if (!search.isActive) error else search.detailError,
+                    shopTimezone = search.shopTimezone,
                     onRefresh = { onOpenReceipt(selected.orderId) },
                     onBack = { selectedOrderId = null },
                     onDismiss = onDismiss,
@@ -170,6 +191,14 @@ private fun ReceiptHistoryList(
     error: String?,
     searchDraft: String,
     search: ReceiptSearchUiState,
+    listState: LazyListState,
+    filterDraft: ReceiptHistoryFilters,
+    amountDraft: String,
+    filtersOpen: Boolean,
+    choices: ReceiptFilterChoices,
+    onFiltersOpen: () -> Unit,
+    onFilterChange: (ReceiptHistoryFilters) -> Unit,
+    onAmountChange: (String) -> Unit,
     onSearchDraftChange: (String) -> Unit,
     onSearch: () -> Unit,
     onClearSearch: () -> Unit,
@@ -209,32 +238,41 @@ private fun ReceiptHistoryList(
             ErpButton(
                 text = if (search.loading) "Searching…" else "Search",
                 onClick = onSearch,
-                enabled = searchDraft.isNotBlank() && !search.loading,
+                enabled = !search.loading,
                 leadingIcon = Icons.Default.Search,
                 intent = ActionIntent.Secondary,
             )
-            if (search.query.isNotBlank()) {
-                ErpButton("Clear", onClearSearch, intent = ActionIntent.Quiet)
-            }
         }
-        if (search.query.isNotBlank()) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = Spacing.lg),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+            TextButton(onFiltersOpen) { Text(if (filtersOpen) "Hide filters" else "More filters") }
+            if (search.isActive || filterDraft.isActive || amountDraft.isNotBlank()) TextButton(onClearSearch) { Text("Clear filters") }
+        }
+        if (filtersOpen) ReceiptFilterControls(filterDraft, onFilterChange, amountDraft, onAmountChange, choices)
+        if (search.isActive) {
             Text(
                 when (search.source) {
                     ReceiptSearchSource.ONLINE ->
-                        "Online search across retained history · exact identifiers · ${receipts.size} loaded"
+                        "Online retained history · ${receipts.size} loaded · invoice-issued shop dates · ${search.shopTimezone ?: "shop timezone not provided"}"
                     ReceiptSearchSource.CACHED -> {
                         val cached = search.cachedAtMillis?.let {
                             java.time.Instant.ofEpochMilli(it).toString().receiptDateTime()
                         } ?: "time unavailable"
                         "Offline cached lookup · bounded to receipts already on this tablet · cached $cached · not full history"
                     }
-                    ReceiptSearchSource.NONE -> "Searching retained receipt history…"
+                    ReceiptSearchSource.NONE -> if (search.loading) "Searching retained receipt history…" else "Search not applied; review the error."
                 },
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.xs),
             )
         }
+
+        if (search.appliedCriteria != null) Text(
+            "Applied: ${receiptFilterSummary(search.appliedCriteria, choices)}" +
+                if (search.criteria != search.appliedCriteria) " · The proposed filters have not replaced these results." else "",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.xs))
 
         if (receipts.isEmpty()) {
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
@@ -250,7 +288,12 @@ private fun ReceiptHistoryList(
                         modifier = Modifier.size(40.dp),
                     )
                     Text(
-                        if (search.query.isBlank()) "No shared receipts loaded" else "No matching receipt",
+                        when {
+                            loading -> "Loading receipt history"
+                            error != null -> "Receipt search needs attention"
+                            !search.isActive -> "No shared receipts loaded"
+                            else -> "No matching receipt"
+                        },
                         style = MaterialTheme.typography.titleLarge,
                     )
                     Text(
@@ -272,6 +315,7 @@ private fun ReceiptHistoryList(
             }
         } else {
             LazyColumn(
+                state = listState,
                 modifier = Modifier.weight(1f).fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(Spacing.sm),
             ) {
@@ -426,6 +470,7 @@ private fun CanonicalReceiptDetail(
     receipt: CanonicalReceipt,
     loading: Boolean,
     error: String?,
+    shopTimezone: String?,
     onRefresh: () -> Unit,
     onBack: () -> Unit,
     onDismiss: () -> Unit,
@@ -545,7 +590,7 @@ private fun CanonicalReceiptDetail(
             item(key = "consolidated-investigation") {
                 Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
                     TextButton({ investigate = !investigate }) { Text(if (investigate) "Hide consolidated bill investigation" else "Investigate players, drinks, payments and related activity") }
-                    if (investigate) ReceiptInvestigationPanel(receipt.orderId, ownerKey, onAuditReference =
+                    if (investigate) ReceiptInvestigationPanel(receipt.orderId, ownerKey, shopTimezone = shopTimezone, onAuditReference =
                         if (account?.auditAccess == true) ({ reference -> linkedAudit = reference }) else null)
                     linkedAudit?.let { reference ->
                         TextButton({ linkedAudit = null }) { Text("Close linked protected Audit") }

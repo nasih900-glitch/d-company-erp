@@ -544,7 +544,7 @@ class RefundsViewModel : ViewModel() {
                 "The amount is above this tablet's latest refundable balance. Refresh and try again."
             REFUND_REASONS.none { it.first == reasonCode } -> "Choose a valid refund reason."
             !refundRailPolicy(order.paymentMethods).requestReady ->
-                "The server did not provide this order's original payment rail. Refresh before requesting a refund."
+                "The server did not provide this receipt's effective payment method. Refresh before requesting a refund."
             !refundRailPolicy(order.paymentMethods).allows(mode) ->
                 "That payout rail does not match the order's authoritative payment history. Refresh and review it."
             else -> null

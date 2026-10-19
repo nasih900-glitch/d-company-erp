@@ -755,6 +755,7 @@ private fun AppRoot(
                                 val receiptHistoryError by
                                     pos.receiptHistoryError.collectAsStateWithLifecycle()
                                 val receiptSearch by pos.receiptSearch.collectAsStateWithLifecycle()
+                                val receiptFilterChoices by pos.receiptFilterChoices.collectAsStateWithLifecycle()
                                 val eligibleRewardCatalog by
                                     pos.eligibleRewardCatalog.collectAsStateWithLifecycle()
                                 val unacknowledgedPosReceipt by pos.unacknowledgedReceipt.collectAsStateWithLifecycle()
@@ -771,6 +772,7 @@ private fun AppRoot(
                                     receiptHistoryLoading = receiptHistoryLoading,
                                     receiptHistoryError = receiptHistoryError,
                                     receiptSearch = receiptSearch,
+                                    receiptFilterChoices = receiptFilterChoices,
                                     eligibleRewardCatalog = eligibleRewardCatalog,
                                     unacknowledgedReceipt = unacknowledgedPosReceipt,
                                     access = permissions.posAccess(),

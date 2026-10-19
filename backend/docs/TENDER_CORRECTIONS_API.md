@@ -205,7 +205,9 @@ authorization and returns typed `ReceiptInvestigationRead`:
   Rejoins link to this one total; do not duplicate its charge on each interval.
 - `addons`: retained addon/client-line/session/item UUIDs, item-name snapshot,
   quantity, unit/line amounts, creation actor/time and void actor/time/reason.
-- `audit_source_references`, `historical_evidence_note`, `invoice_date_basis`.
+- `audit_source_references`, `historical_evidence_note`, `invoice_date_basis` and
+  additive `shop_timezone` from the same company-timezone projection as receipt
+  date filtering. This is presentation metadata, not rewritten event timestamps.
 
 No current catalogue/profile is presented as historical proof. Missing legacy
 evidence is labelled. Audit references do not grant Audit access: follow-up

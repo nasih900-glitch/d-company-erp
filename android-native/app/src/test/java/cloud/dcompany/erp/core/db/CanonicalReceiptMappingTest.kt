@@ -3,6 +3,7 @@ package cloud.dcompany.erp.core.db
 import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.CanonicalReceipt
 import cloud.dcompany.erp.ui.screens.matchesCachedReceiptQuery
+import cloud.dcompany.erp.ui.screens.ReceiptHistoryFilters
 import cloud.dcompany.erp.ui.screens.ReceiptSearchSource
 import cloud.dcompany.erp.ui.screens.ReceiptSearchUiState
 import cloud.dcompany.erp.ui.screens.withRefreshedDetail
@@ -75,7 +76,8 @@ class CanonicalReceiptMappingTest {
             refundableMinor = 10_500,
         )
         val state = ReceiptSearchUiState(
-            query = "00001",
+            criteria = ReceiptHistoryFilters(query = "00001"),
+            appliedCriteria = ReceiptHistoryFilters(query = "00001"),
             receipts = listOf(original),
             nextCursor = "scoped-cursor",
             hasMore = true,

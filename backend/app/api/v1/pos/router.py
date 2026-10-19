@@ -3842,6 +3842,7 @@ class ReceiptInvestigationRead(BaseModel):
     audit_source_references: list[str]
     historical_evidence_note: str
     invoice_date_basis: str = "invoice_issued_at_in_shop_timezone"
+    shop_timezone: str | None = None
 
 
 @router.get("/receipts/{order_id}/investigation", response_model=ReceiptInvestigationRead)
@@ -3875,6 +3876,7 @@ async def investigate_receipt(order_id: UUID, session: SessionDep,
     references = [str(order_id),receipt.invoice_no] + [str(row.id) for row in receipt.payments] + [str(x) for x in session_ids]
     references += [str(row.tender_correction_id) for row in receipt.payments if row.tender_correction_id]
     return ReceiptInvestigationRead(receipt=receipt,participant_intervals=intervals,participant_charges=charges,addons=addons,
+        shop_timezone=await company_timezone(session, tenant.company_id),
         audit_source_references=references,
         historical_evidence_note="Only retained source receipts are shown. Missing older participant/add-on evidence is not reconstructed from today's catalogue or account profiles. Audit links require the separate protected Audit unlock.")
 

@@ -594,6 +594,7 @@ async def test_receipt_filters_bind_cursor_and_preserve_unknown_cashier(
     assert investigation.status_code == 200, investigation.text
     assert investigation.json()["receipt"]["order_id"] == str(order.id)
     assert investigation.json()["participant_intervals"] == []
+    assert investigation.json()["shop_timezone"] == "Asia/Kolkata"
 
 
 @pytest.mark.asyncio
