@@ -133,7 +133,7 @@ def test_protected_source_and_backend_manifest_match_reviewed_worktree(
     proof = verifier._verify_sources(build50, prior, candidate)
     assert proof["prior_protected_path_count"] == 1217
     assert proof["candidate_protected_path_count"] == 1285
-    assert proof["reviewed_changed_path_count"] == 184
+    assert proof["reviewed_changed_path_count"] == 186
     assert (
         build50._backend_manifest_sha256(candidate)
         == verifier.CANDIDATE_BACKEND_MANIFEST_SHA256

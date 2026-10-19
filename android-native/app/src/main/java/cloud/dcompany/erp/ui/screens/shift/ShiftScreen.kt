@@ -73,7 +73,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -460,23 +459,15 @@ internal fun ShiftDashboardOverview(
         ) {
             Row(
                 Modifier.fillMaxWidth().clip(Radius.shapeLg)
-                    .background(
-                        Brush.horizontalGradient(
-                            listOf(statusColor.copy(alpha = 0.12f), MaterialTheme.colorScheme.surface, MaterialTheme.colorScheme.surfaceContainerLow),
-                        ),
-                    )
-                    .border(1.dp, statusColor.copy(alpha = 0.34f), Radius.shapeLg)
+                    .background(MaterialTheme.colorScheme.surface)
+                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeLg)
                     .padding(Spacing.md),
                 horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Box(
-                    Modifier.size(42.dp).clip(CircleShape)
-                        .background(
-                            Brush.radialGradient(
-                                listOf(statusColor.copy(alpha = 0.32f), statusColor.copy(alpha = 0.02f)),
-                            ),
-                        ),
+                    Modifier.size(42.dp).clip(Radius.shapeMd)
+                        .background(MaterialTheme.colorScheme.surfaceContainerLow),
                     contentAlignment = Alignment.Center,
                 ) {
                     Box(Modifier.size(14.dp).clip(CircleShape).background(statusColor))
@@ -534,10 +525,7 @@ internal fun ShiftDashboardOverview(
                     )
                 }
                 Column(
-                    Modifier.fillMaxWidth().clip(Radius.shapeMd)
-                        .background(MaterialTheme.colorScheme.surfaceContainerLow)
-                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeMd)
-                        .padding(horizontal = Spacing.lg, vertical = Spacing.md),
+                    Modifier.fillMaxWidth().padding(horizontal = Spacing.xs, vertical = Spacing.sm),
                     verticalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
                     Text(
@@ -762,14 +750,8 @@ private fun ShiftOverviewMoneyCard(
 ) {
     val accent = tint ?: MaterialTheme.colorScheme.onSurfaceVariant
     Row(
-        modifier.heightIn(min = 68.dp).clip(Radius.shapeMd)
-            .background(MaterialTheme.colorScheme.surfaceContainerLow)
-            .border(
-                1.dp,
-                tint?.copy(alpha = 0.47f) ?: MaterialTheme.colorScheme.outlineVariant,
-                Radius.shapeMd,
-            )
-            .padding(horizontal = Spacing.md, vertical = Spacing.sm),
+        modifier.heightIn(min = 64.dp)
+            .padding(horizontal = Spacing.xs, vertical = Spacing.sm),
         horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -786,7 +768,7 @@ private fun ShiftOverviewMoneyCard(
 }
 
 @Composable
-private fun ShiftSummaryRow(state: ShiftUiState) {
+internal fun ShiftSummaryRow(state: ShiftUiState) {
     val open = state.open
     val localState = open?.local?.state
     val confirming = open != null && open.server == null && open.local?.serverShiftId == null
@@ -798,72 +780,45 @@ private fun ShiftSummaryRow(state: ShiftUiState) {
     )
     val opener = open?.openedByName?.takeIf(String::isNotBlank)
         ?: open?.openedByEmail?.takeIf(String::isNotBlank)
-    val cards: List<@Composable (Modifier) -> Unit> = listOf(
-        { modifier ->
-            CompactStatCard(
-                label = "Shift status",
-                value = statusCopy.value,
-                detail = statusCopy.detail,
-                icon = Icons.Filled.LockClock,
-                tone = when {
-                    localState == ShiftState.CLOSE_REJECTED -> UiTone.Danger
-                    open == null || confirming || localState == ShiftState.CLOSE_PENDING -> UiTone.Warning
-                    else -> UiTone.Success
-                },
-                modifier = modifier,
-            )
-        },
-        { modifier ->
-            CompactStatCard(
-                label = if (open == null) "Business-day collections" else "Opened by",
-                value = if (open == null) state.businessDayHistory.size.toString() else (opener ?: "Verifying"),
-                detail = if (open == null) {
-                    "IST days loaded for this device"
-                } else {
-                    formatHistoryDate(open.openedAtMillis)
-                },
-                icon = if (open == null) Icons.Filled.History else Icons.Filled.Person,
-                tone = UiTone.Neutral,
-                modifier = modifier,
-            )
-        },
-        { modifier ->
-            CompactStatCard(
-                label = if (open == null) "Opening float" else "Expected drawer",
-                value = if (open == null) "₹0.00 allowed" else (state.expectedMinor?.asRupees() ?: "Unavailable"),
-                detail = if (open == null) {
-                    "Count existing drawer cash"
-                } else if (state.expectedMinor == null) {
-                    "Refresh when online"
-                } else {
-                    "Before final count"
-                },
-                icon = Icons.Filled.AccountBalanceWallet,
-                tone = if (open != null && state.expectedMinor == null) UiTone.Warning else UiTone.Information,
-                modifier = modifier,
-            )
-        },
-    )
+    val statusCard: @Composable (Modifier) -> Unit = { modifier ->
+        CompactStatCard(
+            label = "Shift status",
+            value = statusCopy.value,
+            detail = statusCopy.detail,
+            icon = Icons.Filled.LockClock,
+            tone = when {
+                localState == ShiftState.CLOSE_REJECTED -> UiTone.Danger
+                open == null || confirming || localState == ShiftState.CLOSE_PENDING -> UiTone.Warning
+                else -> UiTone.Success
+            },
+            modifier = modifier,
+        )
+    }
+    val historyCard: @Composable (Modifier) -> Unit = { modifier ->
+        CompactStatCard(
+            label = if (open == null) "Business-day collections" else "Opened by",
+            value = if (open == null) state.businessDayHistory.size.toString() else (opener ?: "Verifying"),
+            detail = if (open == null) "IST business days"
+            else formatHistoryDate(open.openedAtMillis),
+            icon = if (open == null) Icons.Filled.History else Icons.Filled.Person,
+            tone = UiTone.Neutral,
+            modifier = modifier,
+        )
+    }
 
     BoxWithConstraints(Modifier.fillMaxWidth()) {
-        when {
-            maxWidth >= 760.dp -> Row(
+        if (maxWidth >= 520.dp) {
+            Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(Spacing.md),
             ) {
-                cards.forEach { card -> card(Modifier.weight(1f)) }
+                statusCard(Modifier.weight(1.2f))
+                historyCard(Modifier.weight(0.8f))
             }
-            maxWidth >= 520.dp -> Column(verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(Spacing.md),
-                ) {
-                    cards.take(2).forEach { card -> card(Modifier.weight(1f)) }
-                }
-                cards.last()(Modifier.fillMaxWidth())
-            }
-            else -> Column(verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
-                cards.forEach { card -> card(Modifier.fillMaxWidth()) }
+        } else {
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
+                statusCard(Modifier.fillMaxWidth())
+                historyCard(Modifier.fillMaxWidth())
             }
         }
     }
@@ -992,7 +947,7 @@ internal fun OpenShiftForm(
     val floatMinor = parsedFloat ?: 0L
     val validFloat = float.isBlank() || parsedFloat != null
 
-    BoxWithConstraints(Modifier.widthIn(max = 520.dp).fillMaxWidth()) {
+    BoxWithConstraints(Modifier.fillMaxWidth().testTag("shift-open-form")) {
         // The inline Gaming pane cannot fit an icon, readable title and the
         // submit action in one row. Keep the normal wide-screen header intact.
         val compact = maxWidth < 440.dp
@@ -1811,9 +1766,7 @@ private fun CollectionMetric(
     valueColor: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.onSurface,
 ) {
     Column(
-        modifier.clip(Radius.shapeMd).background(MaterialTheme.colorScheme.surfaceVariant)
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeMd)
-            .padding(Spacing.md),
+        modifier.padding(horizontal = Spacing.xs, vertical = Spacing.sm),
         verticalArrangement = Arrangement.spacedBy(Spacing.xs),
     ) {
         Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelMedium)

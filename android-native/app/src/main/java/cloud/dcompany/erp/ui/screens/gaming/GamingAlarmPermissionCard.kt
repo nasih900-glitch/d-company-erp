@@ -195,8 +195,8 @@ internal fun OperationalAlarmPermissionCard(contextLabel: String, compact: Boole
     OperationalBanner(
         title = "$contextLabel alerts need attention",
         detail = feedback ?: (
-            "Enable notifications and precise alarms so session-end alerts still arrive " +
-                "with the screen off. Billing remains protected by server time."
+            "Allow notifications and precise alarms for screen-off session alerts. " +
+                "Server time still protects billing."
             ),
         tone = UiTone.Warning,
         icon = Icons.Filled.NotificationsOff,

@@ -98,8 +98,6 @@ import androidx.compose.runtime.key
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalConfiguration
@@ -671,6 +669,7 @@ fun PosScreen(
                     else -> CartPanel(
                         state = state,
                         compact = compactWorkspace,
+                        severelyConstrained = compactWorkspace && maxHeight < 240.dp,
                         inlineShiftContent = if (inlineShiftOpen) ({
                             InlineShiftOpeningWorkspace(shiftAccess, onReturn = { inlineShiftOpen = false })
                         }) else null,
@@ -2712,7 +2711,7 @@ private fun MenuTile(
     val icon = remember(item.type, item.name, categoryName) { posProductIcon(item, categoryName) }
     Column(
         modifier = modifier
-            .height(if (compact) 116.dp else 148.dp)
+            .height(if (compact) 124.dp else 156.dp)
             .testTag("pos-product-${item.id}")
             .graphicsLayer {
                 scaleX = scale
@@ -2720,18 +2719,11 @@ private fun MenuTile(
                 alpha = if (enabled) 1f else 0.55f
             }
             .clip(Radius.shapeLg)
-            .background(
-                Brush.verticalGradient(
-                    listOf(
-                        MaterialTheme.colorScheme.surfaceContainerHigh,
-                        MaterialTheme.colorScheme.surfaceContainer,
-                        MaterialTheme.colorScheme.surface,
-                    ),
-                ),
-            )
+            .background(MaterialTheme.colorScheme.surface)
             .border(
                 1.dp,
-                if (pressed && enabled) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.primary.copy(alpha = 0.30f),
+                if (pressed && enabled) MaterialTheme.colorScheme.onPrimaryContainer
+                else MaterialTheme.colorScheme.outlineVariant,
                 Radius.shapeLg,
             )
             .semantics {
@@ -2754,58 +2746,30 @@ private fun MenuTile(
     ) {
         Box(
             Modifier.fillMaxWidth().weight(1f).clip(Radius.shapeSm)
-                .background(
-                    Brush.radialGradient(
-                        listOf(
-                            MaterialTheme.colorScheme.surfaceContainerHighest,
-                            MaterialTheme.colorScheme.surfaceContainerHigh,
-                            MaterialTheme.colorScheme.surfaceContainer,
-                        ),
-                    ),
-                )
-                .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.13f), Radius.shapeSm),
+                .background(MaterialTheme.colorScheme.surfaceContainerLow),
             contentAlignment = Alignment.Center,
         ) {
-            if (!categoryName.isNullOrBlank() && !compact) {
-                Text(
-                    categoryName.uppercase(Locale.ROOT),
-                    modifier = Modifier.align(Alignment.TopStart)
-                        .padding(horizontal = Spacing.xs, vertical = 3.dp),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
             Box(
-                Modifier.size(if (compact) 48.dp else 78.dp)
+                Modifier.size(if (compact) 44.dp else 68.dp)
                     .clip(CircleShape)
-                    .background(
-                        Brush.radialGradient(
-                            listOf(
-                                MaterialTheme.colorScheme.primary.copy(alpha = 0.18f),
-                                MaterialTheme.colorScheme.primary.copy(alpha = 0.04f),
-                                Color.Transparent,
-                            ),
-                        ),
-                    )
-                    .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.34f), CircleShape),
+                    .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
                     icon,
                     contentDescription = null,
                     tint = if (enabled) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(if (compact) 29.dp else 41.dp),
+                    modifier = Modifier.size(if (compact) 27.dp else 36.dp),
                 )
             }
         }
         Text(
             item.name,
-            style = MaterialTheme.typography.bodySmall,
-            fontWeight = FontWeight.SemiBold,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onSurface,
-            maxLines = 1,
+            maxLines = 2,
             overflow = TextOverflow.Ellipsis,
         )
         NumericValue(
@@ -2827,24 +2791,18 @@ private fun PosCheckoutButton(
     modifier: Modifier = Modifier,
 ) {
     val active = enabled && !busy
-    val finish = if (active) {
-        Brush.horizontalGradient(listOf(MaterialTheme.colorScheme.primary, MaterialTheme.colorScheme.primary))
-    } else {
-        Brush.horizontalGradient(listOf(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.secondaryContainer))
-    }
     Button(
         onClick = onClick,
         enabled = active,
         shape = Radius.shapeMd,
         colors = ButtonDefaults.buttonColors(
-            containerColor = Color.Transparent,
+            containerColor = MaterialTheme.colorScheme.primary,
             contentColor = MaterialTheme.colorScheme.onPrimary,
-            disabledContainerColor = Color.Transparent,
+            disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
             disabledContentColor = if (busy) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
         ),
         modifier = modifier.heightIn(min = 48.dp)
             .clip(Radius.shapeMd)
-            .background(finish)
             .border(
                 1.dp,
                 if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
@@ -2867,9 +2825,10 @@ private fun PosCheckoutButton(
 }
 
 @Composable
-private fun CartPanel(
+internal fun CartPanel(
     state: PosUiState,
     compact: Boolean,
+    severelyConstrained: Boolean = false,
     inlineShiftContent: (@Composable () -> Unit)? = null,
     onOpenShift: (() -> Unit)? = null,
     onSyncShift: () -> Unit = {},
@@ -2897,7 +2856,7 @@ private fun CartPanel(
                     onClick = { onPaymentMethodChanged(value) },
                     enabled = state.online || value == "cash",
                     label = { Text(label) },
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f).heightIn(min = 48.dp),
                 )
             }
         }
@@ -2912,7 +2871,9 @@ private fun CartPanel(
             prefix = { Text("₹") },
             singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-            modifier = detailModifier.testTag("pos-inline-cash-received"),
+            modifier = detailModifier
+                .then(if (severelyConstrained) Modifier.height(48.dp) else Modifier)
+                .testTag("pos-inline-cash-received"),
         ) else Text(
             if (paymentMethod == "split") "Split amounts follow the verified bill."
             else "UPI uses the verified total.",
@@ -2921,27 +2882,14 @@ private fun CartPanel(
             modifier = detailModifier,
         )
     }
-    Column(
-        modifier = modifier.clip(Radius.shapeLg)
-            .background(
-                Brush.verticalGradient(
-                    listOf(
-                        MaterialTheme.colorScheme.surfaceContainerHigh,
-                        MaterialTheme.colorScheme.surfaceContainer,
-                        MaterialTheme.colorScheme.surface,
-                    ),
-                ),
-            )
-            .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.32f), Radius.shapeLg),
-    ) {
+    val cartHeader: @Composable () -> Unit = {
         Row(
             Modifier.fillMaxWidth()
-                .background(
-                    Brush.horizontalGradient(
-                        listOf(MaterialTheme.colorScheme.primary.copy(alpha = 0.13f), Color.Transparent),
-                    ),
-                )
-                .padding(horizontal = Spacing.md, vertical = Spacing.sm),
+                .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                .padding(
+                    horizontal = Spacing.md,
+                    vertical = if (compact) 0.dp else Spacing.sm,
+                ),
             horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -2979,7 +2927,17 @@ private fun CartPanel(
                 }
             }
         }
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+    }
+    val scrollCartHeader = severelyConstrained && state.cart.isNotEmpty() && inlineShiftContent == null
+    Column(
+        modifier = modifier.clip(Radius.shapeLg)
+            .background(MaterialTheme.colorScheme.surface)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeLg),
+    ) {
+        if (!scrollCartHeader) {
+            cartHeader()
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        }
 
         if (inlineShiftContent != null) {
             Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())
@@ -2999,6 +2957,10 @@ private fun CartPanel(
             LazyColumn(
                 modifier = Modifier.weight(1f).padding(horizontal = Spacing.md),
             ) {
+                if (scrollCartHeader) item(key = "compact-cart-header") {
+                    cartHeader()
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                }
                 items(state.cart, key = { it.lineId }) { line ->
                     Column(
                         Modifier.fillMaxWidth().animateItem(),
@@ -3014,9 +2976,9 @@ private fun CartPanel(
                                 Text(
                                     line.item.name,
                                     color = MaterialTheme.colorScheme.onSurface,
-                                    style = MaterialTheme.typography.bodySmall,
+                                    style = MaterialTheme.typography.bodyMedium,
                                     fontWeight = FontWeight.SemiBold,
-                                    maxLines = 1,
+                                    maxLines = 2,
                                     overflow = TextOverflow.Ellipsis,
                                 )
                                 val optionLabel = buildList {
@@ -3038,7 +3000,7 @@ private fun CartPanel(
                                 }
                                 Text(
                                     line.lineTotalMinor.asRupees(),
-                                    style = MaterialTheme.typography.labelSmall,
+                                    style = MaterialTheme.typography.labelMedium,
                                     color = MaterialTheme.colorScheme.onPrimaryContainer,
                                     fontWeight = FontWeight.SemiBold,
                                 )
@@ -3084,9 +3046,11 @@ private fun CartPanel(
         Column(
             Modifier.fillMaxWidth().padding(
                 horizontal = Spacing.md,
-                vertical = if (compact) Spacing.xs else Spacing.md,
+                vertical = if (compact) 0.dp else Spacing.md,
             ),
-            verticalArrangement = Arrangement.spacedBy(Spacing.xs),
+            verticalArrangement = Arrangement.spacedBy(
+                if (severelyConstrained) 2.dp else Spacing.xs,
+            ),
         ) {
             if (!compact) PaymentAmountRow("Subtotal estimate", state.estimateMinor)
             if (state.manualDiscountMinor > 0L) {
@@ -3100,16 +3064,13 @@ private fun CartPanel(
             }
             Box(
                 Modifier.fillMaxWidth().clip(Radius.shapeMd)
-                    .background(
-                        Brush.horizontalGradient(
-                            listOf(
-                                MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
-                                MaterialTheme.colorScheme.surfaceContainer,
-                            ),
-                        ),
+                    .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeMd)
+                    .padding(
+                        horizontal = Spacing.sm,
+                        vertical = if (severelyConstrained) 2.dp else Spacing.xs,
                     )
-                    .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.48f), Radius.shapeMd)
-                    .padding(horizontal = Spacing.sm, vertical = Spacing.xs),
+                    .testTag("pos-cart-total"),
             ) {
                 Row(
                     Modifier.fillMaxWidth(),
@@ -3139,7 +3100,28 @@ private fun CartPanel(
                 )
             }
             if (state.cart.isNotEmpty()) {
-                if (compact) {
+                Column(
+                    Modifier.fillMaxWidth().then(
+                        if (compact) {
+                            Modifier
+                        } else {
+                            Modifier.clip(Radius.shapeMd)
+                                .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                                .border(
+                                    1.dp,
+                                    MaterialTheme.colorScheme.outlineVariant,
+                                    Radius.shapeMd,
+                                )
+                                .padding(horizontal = Spacing.sm, vertical = Spacing.xs)
+                        },
+                    ),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.xs),
+                ) {
+                    if (!compact) Text(
+                        "Payment method",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
                     Row(
                         Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
@@ -3147,22 +3129,6 @@ private fun CartPanel(
                     ) {
                         Box(Modifier.weight(0.58f)) { paymentMethodSelector() }
                         paymentDetail(Modifier.weight(0.42f))
-                    }
-                } else {
-                    Column(
-                        Modifier.fillMaxWidth().clip(Radius.shapeMd)
-                            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeMd)
-                            .padding(horizontal = Spacing.sm, vertical = Spacing.xs),
-                        verticalArrangement = Arrangement.spacedBy(Spacing.xs),
-                    ) {
-                        Text(
-                            "Payment method",
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                        paymentMethodSelector()
-                        paymentDetail(Modifier.fillMaxWidth())
                     }
                 }
             }
@@ -3190,7 +3156,9 @@ private fun CartPanel(
                     !state.heldSelectionBlocked &&
                     (state.online || state.draftState == SyncState.DRAFT),
                 busy = state.checkoutBusy,
-                modifier = Modifier.fillMaxWidth().height(52.dp).testTag("pos-take-payment"),
+                modifier = Modifier.fillMaxWidth()
+                    .height(if (severelyConstrained) 48.dp else 52.dp)
+                    .testTag("pos-take-payment"),
             )
             if (state.checkoutBusy) {
                 Text(
@@ -4038,7 +4006,9 @@ private fun PayDialog(
     val paymentBody: @Composable (Modifier) -> Unit = { bodyModifier ->
             Column(
                 modifier = bodyModifier,
-                verticalArrangement = Arrangement.spacedBy(Spacing.md),
+                verticalArrangement = Arrangement.spacedBy(
+                    if (inline) Spacing.sm else Spacing.md,
+                ),
             ) {
                 if (verifiedSharedOrder) {
                     Text(
@@ -4053,7 +4023,7 @@ private fun PayDialog(
                         Modifier.fillMaxWidth().clip(Radius.shapeMd)
                             .background(MaterialTheme.colorScheme.surfaceVariant)
                             .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeMd)
-                            .padding(Spacing.md),
+                            .padding(if (inline) Spacing.sm else Spacing.md),
                         verticalArrangement = Arrangement.spacedBy(Spacing.xs),
                     ) {
                         subtotalMinor?.let { PaymentAmountRow("Subtotal", it) }
@@ -4375,7 +4345,6 @@ private fun PayDialog(
     if (inline) {
         SectionCard(
             title = title,
-            subtitle = "Final payment confirmation",
             modifier = modifier.testTag("pos-payment-confirmation-inline"),
             contentFillsAvailableHeight = true,
         ) {

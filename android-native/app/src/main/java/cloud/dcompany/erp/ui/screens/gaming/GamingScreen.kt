@@ -1925,7 +1925,8 @@ internal fun GamingCommandWorkspace(
         }
     }
 
-    val controlPane: @Composable (Modifier) -> Unit = { paneModifier ->
+    val controlPane: @Composable (Modifier, Boolean) -> Unit = {
+        paneModifier, compactBlockedStartControls ->
         val selectedHeroPresentation = selectedSession?.let { current ->
             stationPresentation(
                 station = selectedStation ?: return@let null,
@@ -2120,6 +2121,7 @@ internal fun GamingCommandWorkspace(
                             selectionState = startSelection,
                             externallyHostedDial = true,
                             pinActions = fixedTabletWorkspace,
+                            compactEmbeddedControls = compactBlockedStartControls,
                         )
                     }
                 } else {
@@ -2402,6 +2404,7 @@ internal fun GamingCommandWorkspace(
                             .clip(Radius.shapeLg)
                             .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.28f), Radius.shapeLg)
                             .testTag("gaming-control-pane"),
+                        compactHeightGrid && startBlockMessage != null,
                     )
                 }
             } else {
@@ -2438,6 +2441,7 @@ internal fun GamingCommandWorkspace(
                                 .clip(Radius.shapeLg)
                                 .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.28f), Radius.shapeLg)
                                 .testTag("gaming-control-pane"),
+                            startBlockMessage != null,
                         )
                     }
                 }
@@ -2716,16 +2720,21 @@ internal fun GamingCommandAttentionBar(
         else -> "Gaming activity · $attentionCount update${if (attentionCount == 1) "" else "s"}"
     }
     val statusDetail = when {
-        healthy && state.refreshing -> "Checking the server · saved station controls remain available"
-        healthy && state.online -> "Live data is connected · no action needs attention"
-        healthy -> "Saved station data is available · reconnect to refresh live changes"
+        healthy && state.refreshing -> "Checking server · saved controls remain available"
+        healthy && state.online -> "Live · no action needs attention"
+        healthy -> "Saved data available · reconnect to refresh"
         else -> details.joinToString(" · ")
     }
     Row(
-        Modifier.fillMaxWidth().heightIn(min = 60.dp)
+        Modifier.fillMaxWidth().heightIn(min = 64.dp)
             .clip(Radius.shapeLg)
-            .background(statusIconBackground(tone))
-            .border(1.dp, accent.copy(alpha = 0.48f), Radius.shapeLg)
+            .background(MaterialTheme.colorScheme.surface)
+            .border(
+                1.dp,
+                if (healthy) MaterialTheme.colorScheme.outlineVariant else accent.copy(alpha = 0.58f),
+                Radius.shapeLg,
+            )
+            .testTag("gaming-attention-bar")
             .semantics {
                 liveRegion = LiveRegionMode.Polite
                 contentDescription = "$statusTitle. $statusDetail"
@@ -2751,6 +2760,8 @@ internal fun GamingCommandAttentionBar(
                 color = MaterialTheme.colorScheme.onSurface,
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
             Text(
                 statusDetail,
@@ -3222,16 +3233,8 @@ internal fun GamingStationTile(
         })
             .clip(Radius.shapeLg)
             .background(
-                Brush.verticalGradient(
-                    if (highlighted) listOf(
-                        MaterialTheme.colorScheme.surfaceContainerHighest,
-                        MaterialTheme.colorScheme.surfaceContainer,
-                        MaterialTheme.colorScheme.surface,
-                    ) else listOf(
-                        MaterialTheme.colorScheme.surfaceContainerLow,
-                        MaterialTheme.colorScheme.surface,
-                    ),
-                ),
+                if (highlighted) MaterialTheme.colorScheme.surfaceContainerHigh
+                else MaterialTheme.colorScheme.surface,
             )
             .border(if (highlighted) 2.dp else 1.dp, borderColor, Radius.shapeLg)
             .clickable(role = Role.Button, onClick = onSelect)
@@ -3259,7 +3262,15 @@ internal fun GamingStationTile(
                 horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                GamingStationArtwork(station.type, Modifier.size(if (compactRowHeight >= 80.dp) 40.dp else 28.dp))
+                Box(
+                    Modifier.size(if (compactRowHeight >= 80.dp) 44.dp else 36.dp)
+                        .clip(Radius.shapeSm)
+                        .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                        .padding(4.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    GamingStationArtwork(station.type, Modifier.fillMaxSize())
+                }
                 Column(
                     Modifier.weight(1f),
                     verticalArrangement = Arrangement.spacedBy(2.dp),
@@ -3301,13 +3312,9 @@ internal fun GamingStationTile(
                 Modifier.fillMaxWidth().height(
                     if (dense) 32.dp else if (compact) 76.dp else 96.dp,
                 )
-                    .background(
-                        Brush.radialGradient(
-                            if (highlighted) listOf(
-                                MaterialTheme.colorScheme.primary.copy(alpha = 0.20f), Color.Transparent,
-                            ) else listOf(MaterialTheme.colorScheme.primary.copy(alpha = 0.06f), Color.Transparent),
-                        ),
-                    ),
+                    .clip(Radius.shapeSm)
+                    .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                    .padding(if (dense) 2.dp else Spacing.xs),
                 contentAlignment = Alignment.Center,
             ) {
                 GamingStationArtwork(station.type, Modifier.fillMaxSize())
@@ -3899,11 +3906,8 @@ internal fun GamingStationCard(
             // turning the board into a field of competing colour blocks.
             .clip(Radius.shapeLg)
             .background(
-                if (compactDetail) {
-                    Brush.verticalGradient(listOf(MaterialTheme.colorScheme.surface, MaterialTheme.colorScheme.surfaceContainerLow))
-                } else {
-                    Brush.verticalGradient(listOf(MaterialTheme.colorScheme.surface, MaterialTheme.colorScheme.surface))
-                },
+                if (compactDetail) MaterialTheme.colorScheme.surfaceContainerLow
+                else MaterialTheme.colorScheme.surface,
             )
             .border(
                 if (focused) 2.dp else 1.dp,
@@ -4704,9 +4708,9 @@ private fun StationBody(
             Text(
                 cleanupWorkflowMessage ?: when (presentation.state) {
                     StationVisualState.Starting ->
-                        "Saved on this tablet and waiting to sync. Play time and the booked timer use the captured start time."
+                        "Saved locally · sync pending. Play time uses the captured start."
                     StationVisualState.Overtime -> if (session?.isPackageBilling() == true) {
-                        "Booked time has ended. Add the matching paid extension or stop now; the selected package remains locked."
+                        "Time is up. Add a paid extension or stop. Package price stays fixed."
                     } else {
                         "Booked time has ended. Stop when play finishes."
                     }
@@ -4735,9 +4739,9 @@ private fun StationBody(
                         }
                     }
                     else -> if (session?.isPackageBilling() == true) {
-                        "${gamingPackageSelectionLabel(session) ?: "Fixed package"}. The displayed package total was locked when the session started."
+                        "${gamingPackageSelectionLabel(session) ?: "Fixed package"} · total locked at start."
                     } else {
-                        "Final elapsed-time charge is calculated by the server when stopped."
+                        "Server calculates the final elapsed-time charge when stopped."
                     }
                 },
                 color = if (cleanupWorkflowMessage != null) {
@@ -4751,7 +4755,7 @@ private fun StationBody(
                 maxLines = if (
                     cleanupWorkflowMessage != null || presentation.state == StationVisualState.StopFailed ||
                     session?.legacyOriginalCapturedStopAt != session?.endAt
-                ) 4 else 1,
+                ) 4 else 2,
                 overflow = TextOverflow.Ellipsis,
             )
             sessionCustomerLabel(session)?.let { customer ->
@@ -4760,7 +4764,7 @@ private fun StationBody(
                         customer,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.labelSmall,
-                        maxLines = 1,
+                        maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
@@ -5251,8 +5255,7 @@ private fun GamingSessionAddonSummary(
     onReviewRejected: (String) -> Unit,
 ) {
     Column(
-        Modifier.fillMaxWidth().clip(Radius.shapeMd).background(MaterialTheme.colorScheme.surfaceVariant)
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeMd).padding(Spacing.sm),
+        Modifier.fillMaxWidth().padding(vertical = Spacing.xs),
         verticalArrangement = Arrangement.spacedBy(Spacing.xs),
     ) {
         val activeTotal = gamingSessionAddonBillableTotalMinor(addons)
@@ -6534,6 +6537,7 @@ internal fun StartSessionEditor(
     externallyHostedDial: Boolean = false,
     showInlineBlocker: Boolean = false,
     pinActions: Boolean = false,
+    compactEmbeddedControls: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     var minutes by remember { mutableStateOf<Int?>(60) }
@@ -6734,8 +6738,9 @@ internal fun StartSessionEditor(
         if (supportsPlayerModes) {
             if (!embedded) Text("Mode", color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelMedium)
-            val compactEmbeddedPlayers = embedded &&
-                LocalConfiguration.current.screenHeightDp < 700
+            val compactEmbeddedPlayers = embedded && (
+                compactEmbeddedControls || LocalConfiguration.current.screenHeightDp < 700
+            )
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(
@@ -6843,8 +6848,9 @@ internal fun StartSessionEditor(
                 }
             }
         } ?: run {
-            val compactEmbeddedCustomer = embedded && externallyHostedDial &&
-                LocalConfiguration.current.screenHeightDp < 700
+            val compactEmbeddedCustomer = embedded && externallyHostedDial && (
+                compactEmbeddedControls || LocalConfiguration.current.screenHeightDp < 700
+            )
             if (embedded && !compactEmbeddedCustomer) Row(
                 Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,

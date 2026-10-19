@@ -95,6 +95,90 @@ import java.util.UUID
 /** Direct tablet carts are counter sales; table and gaming workflows retain their own server types. */
 internal const val DIRECT_COUNTER_SALE_ORDER_TYPE = "takeaway"
 
+/**
+ * Owns only definitive, ephemeral success feedback from asynchronous payment
+ * outcome observers. All warnings and recovery notices remain unowned, so a
+ * later checkout can clear its predecessor's success without erasing them.
+ */
+internal class PosSuccessfulOutcomeNoticeOwner {
+    class Ticket internal constructor(
+        val provenance: String,
+        internal val checkoutGeneration: Long,
+        internal val successEligible: Boolean,
+    )
+
+    private data class OwnedNotice(val ticket: Ticket, val message: String)
+
+    private val monitor = Any()
+    private var checkoutGeneration = 0L
+    private var ownedNotice: OwnedNotice? = null
+
+    fun register(provenance: String, successEligible: Boolean = true): Ticket = synchronized(monitor) {
+        Ticket(provenance, checkoutGeneration, successEligible)
+    }
+
+    fun publish(
+        ticket: Ticket,
+        message: String,
+        notice: MutableStateFlow<String?>,
+    ) {
+        synchronized(monitor) {
+            if (!ticket.successEligible) return
+            if (ticket.checkoutGeneration != checkoutGeneration) return
+            if (ownedNotice?.ticket?.provenance == ticket.provenance) return
+            ownedNotice = OwnedNotice(ticket, message)
+            notice.value = message
+        }
+    }
+
+    fun beginCheckout(notice: MutableStateFlow<String?>) {
+        synchronized(monitor) {
+            checkoutGeneration += 1L
+            val owned = ownedNotice ?: return@synchronized
+            ownedNotice = null
+            notice.compareAndSet(owned.message, null)
+        }
+    }
+
+    fun clearOwnership() {
+        synchronized(monitor) { ownedNotice = null }
+    }
+}
+
+internal fun hasActiveCheckoutForOutcomeNotice(
+    heldCheckoutPrepared: Boolean,
+    directCheckoutPhaseLocalId: String?,
+    directCheckoutRendered: Boolean,
+): Boolean = heldCheckoutPrepared || directCheckoutPhaseLocalId != null || directCheckoutRendered
+
+internal fun publishDirectSaleOutcomeFeedback(
+    outcome: LocalOrderEntity,
+    ticket: PosSuccessfulOutcomeNoticeOwner.Ticket,
+    owner: PosSuccessfulOutcomeNoticeOwner,
+    notice: MutableStateFlow<String?>,
+) {
+    val message = directSaleOutcomeNotice(outcome) ?: return
+    if (outcome.syncState == SyncState.SYNCED) {
+        owner.publish(ticket, message, notice)
+    } else {
+        notice.value = message
+    }
+}
+
+internal fun publishHeldPaymentOutcomeFeedback(
+    outcome: LocalHeldOrderPaymentEntity,
+    ticket: PosSuccessfulOutcomeNoticeOwner.Ticket,
+    owner: PosSuccessfulOutcomeNoticeOwner,
+    notice: MutableStateFlow<String?>,
+) {
+    val message = heldPaymentOutcomeNotice(outcome) ?: return
+    if (outcome.syncState == HeldOrderPaymentState.SYNCED) {
+        owner.publish(ticket, message, notice)
+    } else {
+        notice.value = message
+    }
+}
+
 internal data class DraftCustomerDirectoryEvidence(
     val revision: Long?,
     val companyId: String?,
@@ -596,7 +680,14 @@ class PosViewModel : ViewModel() {
 
     private val selectedCategory = MutableStateFlow<String?>(null)
     private val notice = MutableStateFlow<String?>(null)
+    private val successfulOutcomeNoticeOwner = PosSuccessfulOutcomeNoticeOwner()
     private val directReviewOrderId = MutableStateFlow<String?>(null)
+    /**
+     * Set synchronously at the committed prepare boundary. Room drives the
+     * rendered checkout, but its flow can emit one dispatcher turn later; a
+     * retry registered in that gap must still be unable to overlay success.
+     */
+    private val preparedDirectCheckoutLocalId = MutableStateFlow<String?>(null)
     private val checkoutBusy = MutableStateFlow(false)
     private val preparingHeldOrderId = MutableStateFlow<String?>(null)
     private val heldOrderReview = MutableStateFlow<HeldOrderReview?>(null)
@@ -1509,7 +1600,10 @@ class PosViewModel : ViewModel() {
         }
     }
 
-    fun dismissNotice() { notice.value = null }
+    fun dismissNotice() {
+        successfulOutcomeNoticeOwner.clearOwnership()
+        notice.value = null
+    }
 
     fun acknowledgeReceipt(receiptId: String) {
         val scopeLease = scopeLeaseOrNotice(POS_RECEIPT_WORKSPACE_UNAVAILABLE_MESSAGE) ?: return
@@ -2108,8 +2202,10 @@ class PosViewModel : ViewModel() {
             )
         }
         directReviewOrderId.value = null
+        preparedDirectCheckoutLocalId.value = local.localId
         // The prepared checkout is already the inline, authoritative review.
         // Do not cover its payment fields with a second acknowledgement modal.
+        successfulOutcomeNoticeOwner.beginCheckout(notice)
         notice.value = null
     }
 
@@ -2140,6 +2236,7 @@ class PosViewModel : ViewModel() {
                 notice.value = "The bill is still reserved on this tablet. Try closing it again."
                 return@launch
             }
+            clearPreparedDirectCheckout(prepared.localId)
             releaseClaimBestEffort(prepared.orderId, prepared.claimToken)
             notice.value = "Bill saved in the payment queue. Select it there when the customer is ready."
             app.sync.refresh("orders")
@@ -2540,6 +2637,7 @@ class PosViewModel : ViewModel() {
                             recovered is cloud.dcompany.erp.core.auth.ScopedCommitResult.Committed &&
                             recovered.value == 1
                         ) {
+                            clearPreparedDirectCheckout(prepared.localId)
                             releaseClaimBestEffort(prepared.orderId, prepared.claimToken)
                         } else {
                             notice.value = "The zero-total completion was refused, but this tablet " +
@@ -2589,6 +2687,7 @@ class PosViewModel : ViewModel() {
                         "could not save the acknowledgement. Collect no money; restart and sync receipts."
                     return@launch
                 }
+                clearPreparedDirectCheckout(prepared.localId)
 
                 val receiptSaved = try {
                     val finalOrder = ApiClient.api.order(prepared.orderId)
@@ -2677,6 +2776,7 @@ class PosViewModel : ViewModel() {
                                 "No void request was sent; it may remain reserved. Reload the payment queue and try again."
                         return@launch
                     }
+                    clearPreparedDirectCheckout(direct.localId)
                     checkoutClosedSafely = true
                 }
                 if (held != null) {
@@ -2856,6 +2956,7 @@ class PosViewModel : ViewModel() {
                         }
                     }
                 ) return@launch
+                clearPreparedDirectCheckout(prepared.localId)
                 if (inserted == -1L) {
                     notice.value = duplicateHeldPaymentNotice(existing)
                 } else {
@@ -2990,6 +3091,10 @@ class PosViewModel : ViewModel() {
         }
         if (localId in retryingRejectedSaleIds.value) return
         val scopeLease = scopeLeaseOrNotice(POS_RETRY_WORKSPACE_UNAVAILABLE_MESSAGE) ?: return
+        val outcomeTicket = successfulOutcomeNoticeOwner.register(
+            provenance = "direct-sale:$localId",
+            successEligible = !hasPreparedCheckout(),
+        )
         retryingRejectedSaleIds.update { it + localId }
         viewModelScope.launch {
             try {
@@ -3018,7 +3123,7 @@ class PosViewModel : ViewModel() {
                 }
                 notice.value = "The original saved sale is queued for confirmation using the same " +
                     "sale identity. Do not collect payment again."
-                watchRetriedSaleOutcome(localId)
+                watchRetriedSaleOutcome(localId, outcomeTicket)
                 try {
                     // A refusal becomes visible while a sync pass may still be
                     // draining other rows. Wait for that pass before starting the
@@ -3040,21 +3145,47 @@ class PosViewModel : ViewModel() {
 
     private fun watchCapturedSaleOutcome(localId: String) {
         capturedSaleOutcomeJob?.cancel()
-        capturedSaleOutcomeJob = launchDirectSaleOutcomeObserver(localId)
+        capturedSaleOutcomeJob = launchDirectSaleOutcomeObserver(
+            localId,
+            successfulOutcomeNoticeOwner.register("direct-sale:$localId"),
+        )
     }
 
-    private fun watchRetriedSaleOutcome(localId: String) {
+    private fun hasPreparedCheckout(): Boolean =
+        hasActiveCheckoutForOutcomeNotice(
+            heldCheckoutPrepared = preparedHeldCheckout.value != null,
+            directCheckoutPhaseLocalId = preparedDirectCheckoutLocalId.value,
+            directCheckoutRendered = state.value.preparedDirectCheckout != null,
+        )
+
+    private fun clearPreparedDirectCheckout(localId: String) {
+        preparedDirectCheckoutLocalId.compareAndSet(localId, null)
+    }
+
+    private fun watchRetriedSaleOutcome(
+        localId: String,
+        ticket: PosSuccessfulOutcomeNoticeOwner.Ticket,
+    ) {
         retriedSaleOutcomeJob?.cancel()
-        retriedSaleOutcomeJob = launchDirectSaleOutcomeObserver(localId)
+        retriedSaleOutcomeJob = launchDirectSaleOutcomeObserver(localId, ticket)
     }
 
-    private fun launchDirectSaleOutcomeObserver(localId: String): Job =
-        viewModelScope.launch {
+    private fun launchDirectSaleOutcomeObserver(
+        localId: String,
+        ticket: PosSuccessfulOutcomeNoticeOwner.Ticket,
+    ): Job {
+        return viewModelScope.launch {
             val outcome = db.orderDao().observeByLocalId(localId)
                 .filterNotNull()
                 .first { row -> row.syncState == SyncState.SYNCED || row.syncState == SyncState.REJECTED }
-            directSaleOutcomeNotice(outcome)?.let { message -> notice.value = message }
+            publishDirectSaleOutcomeFeedback(
+                outcome = outcome,
+                ticket = ticket,
+                owner = successfulOutcomeNoticeOwner,
+                notice = notice,
+            )
         }
+    }
 
     /** Load the complete live bill before reserving it for checkout. */
     fun prepareHeldOrderReview(order: HeldOrderCacheEntity) {
@@ -3306,6 +3437,7 @@ class PosViewModel : ViewModel() {
                     return@launch
                 }
                 preparedHeldCheckout.value = prepared
+                successfulOutcomeNoticeOwner.beginCheckout(notice)
             } catch (e: ApiException) {
                 acquiredToken?.let { releaseClaimBestEffort(orderId, it) }
                 notice.value = when (e.code) {
@@ -3787,6 +3919,10 @@ class PosViewModel : ViewModel() {
         }
         if (localId in retryingHeldPaymentIds.value) return
         val scopeLease = scopeLeaseOrNotice(POS_RETRY_WORKSPACE_UNAVAILABLE_MESSAGE) ?: return
+        val outcomeTicket = successfulOutcomeNoticeOwner.register(
+            provenance = "held-payment:$localId",
+            successEligible = !hasPreparedCheckout(),
+        )
         retryingHeldPaymentIds.update { it + localId }
         viewModelScope.launch {
             try {
@@ -3813,7 +3949,7 @@ class PosViewModel : ViewModel() {
                 }
                 notice.value = "The original held-order payment is queued with the same safe payment " +
                     "identity. Do not collect again."
-                watchRetriedHeldPaymentOutcome(localId)
+                watchRetriedHeldPaymentOutcome(localId, outcomeTicket)
                 requestHeldPaymentSyncAfterActivePass()
             } finally {
                 retryingHeldPaymentIds.update { it - localId }
@@ -3823,24 +3959,39 @@ class PosViewModel : ViewModel() {
 
     private fun watchCapturedHeldPaymentOutcome(localId: String) {
         capturedHeldPaymentOutcomeJob?.cancel()
-        capturedHeldPaymentOutcomeJob = launchHeldPaymentOutcomeObserver(localId)
+        capturedHeldPaymentOutcomeJob = launchHeldPaymentOutcomeObserver(
+            localId,
+            successfulOutcomeNoticeOwner.register("held-payment:$localId"),
+        )
     }
 
-    private fun watchRetriedHeldPaymentOutcome(localId: String) {
+    private fun watchRetriedHeldPaymentOutcome(
+        localId: String,
+        ticket: PosSuccessfulOutcomeNoticeOwner.Ticket,
+    ) {
         retriedHeldPaymentOutcomeJob?.cancel()
-        retriedHeldPaymentOutcomeJob = launchHeldPaymentOutcomeObserver(localId)
+        retriedHeldPaymentOutcomeJob = launchHeldPaymentOutcomeObserver(localId, ticket)
     }
 
-    private fun launchHeldPaymentOutcomeObserver(localId: String): Job =
-        viewModelScope.launch {
+    private fun launchHeldPaymentOutcomeObserver(
+        localId: String,
+        ticket: PosSuccessfulOutcomeNoticeOwner.Ticket,
+    ): Job {
+        return viewModelScope.launch {
             val outcome = db.heldOrderDao().observePayment(localId)
                 .filterNotNull()
                 .first { row ->
                     row.syncState == HeldOrderPaymentState.SYNCED ||
                         row.syncState == HeldOrderPaymentState.REJECTED
                 }
-            heldPaymentOutcomeNotice(outcome)?.let { message -> notice.value = message }
+            publishHeldPaymentOutcomeFeedback(
+                outcome = outcome,
+                ticket = ticket,
+                owner = successfulOutcomeNoticeOwner,
+                notice = notice,
+            )
         }
+    }
 
     private fun requestHeldPaymentSyncAfterActivePass() {
         viewModelScope.launch {

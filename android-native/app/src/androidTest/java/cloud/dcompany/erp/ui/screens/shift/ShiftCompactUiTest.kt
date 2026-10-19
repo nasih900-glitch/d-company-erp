@@ -14,17 +14,22 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotFocused
+import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -33,8 +38,10 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Density
 import cloud.dcompany.erp.ui.components.ActionIntent
 import cloud.dcompany.erp.ui.components.ErpButton
 import cloud.dcompany.erp.ui.theme.DCompanyTheme
@@ -49,29 +56,90 @@ class ShiftCompactUiTest {
     val compose = createComposeRule()
 
     @Test
+    fun closedShiftSummaryShowsCompleteBusinessDayDetail() {
+        compose.setContent {
+            DCompanyTheme {
+                Box(Modifier.width(560.dp)) {
+                    ShiftSummaryRow(ShiftUiState(currentShiftLoaded = true))
+                }
+            }
+        }
+
+        compose.onNodeWithText("No open shift").assertIsDisplayed()
+        compose.onNodeWithText("Business-day collections").assertIsDisplayed()
+        val detail = compose.onNodeWithText("IST business days").assertIsDisplayed()
+        val layouts = mutableListOf<TextLayoutResult>()
+        detail.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { action ->
+            action(layouts)
+        }
+        assertEquals(1, layouts.single().lineCount)
+        assertEquals(false, layouts.single().isLineEllipsized(0))
+    }
+
+    @Test
+    fun stackedOpenShiftFormFillsWideParentWithCompleteTouchControls() {
+        compose.setContent {
+            DCompanyTheme {
+                Box(Modifier.width(760.dp).testTag("wide-stacked-shift-parent")) {
+                    OpenShiftForm(
+                        online = true,
+                        busy = false,
+                        canOpen = true,
+                        blockedByRejectedShift = false,
+                        onOpenShift = {},
+                    )
+                }
+            }
+        }
+
+        val parent = compose.onNodeWithTag("wide-stacked-shift-parent")
+            .getUnclippedBoundsInRoot()
+        val form = compose.onNodeWithTag("shift-open-form")
+            .assertIsDisplayed().getUnclippedBoundsInRoot()
+        assertEquals(
+            "The stacked opening form should consume its caller's available width",
+            (parent.right - parent.left).value,
+            (form.right - form.left).value,
+            1f,
+        )
+        listOf("Decimal point", "Digit 0", "Delete last digit", "Clear Opening float (₹)")
+            .forEach { description ->
+                compose.onNodeWithContentDescription(description)
+                    .assertIsDisplayed().assertHeightIsAtLeast(48.dp)
+            }
+        compose.onNodeWithText("Open shift with ₹0.00")
+            .assertIsDisplayed().assertIsEnabled().assertHeightIsAtLeast(48.dp)
+    }
+
+    @Test
     fun openingFloatAndPrimaryActionRemainReachableInCompactShiftPanels() {
         var submittedMinor: Long? = null
 
         compose.setContent {
             DCompanyTheme {
+                val density = LocalDensity.current
                 // The app shell and summary row leave approximately this much
                 // vertical space on the 960 x 600dp production layout.
-                Box(Modifier.width(872.dp).height(360.dp)) {
-                    CompactShiftPanels(
-                        stateIdentity = "closed",
-                        currentPanel = {
-                            OpenShiftForm(
-                                online = true,
-                                busy = false,
-                                canOpen = true,
-                                blockedByRejectedShift = false,
-                                onOpenShift = { submittedMinor = it },
-                            )
-                        },
-                        historyPanel = {
-                            Box(Modifier.height(280.dp)) { Text("Past shifts") }
-                        },
-                    )
+                CompositionLocalProvider(
+                    LocalDensity provides Density(density.density, fontScale = 1.3f),
+                ) {
+                    Box(Modifier.width(872.dp).height(360.dp)) {
+                        CompactShiftPanels(
+                            stateIdentity = "closed",
+                            currentPanel = {
+                                OpenShiftForm(
+                                    online = true,
+                                    busy = false,
+                                    canOpen = true,
+                                    blockedByRejectedShift = false,
+                                    onOpenShift = { submittedMinor = it },
+                                )
+                            },
+                            historyPanel = {
+                                Box(Modifier.height(280.dp)) { Text("Past shifts") }
+                            },
+                        )
+                    }
                 }
             }
         }
@@ -82,7 +150,17 @@ class ShiftCompactUiTest {
         compose.onNodeWithContentDescription("Opening float (₹), zero")
             .performScrollTo()
             .assertIsDisplayed()
-            .performTextReplacement("210.50")
+        listOf("Decimal point", "Digit 0", "Delete last digit", "Clear Opening float (₹)")
+            .forEach { description ->
+                compose.onNodeWithContentDescription(description)
+                    .performScrollTo().assertIsDisplayed()
+            }
+        compose.onNodeWithContentDescription("Decimal point").performScrollTo().performClick()
+        compose.onNodeWithContentDescription("Digit 0").performScrollTo().performClick()
+        compose.onNodeWithContentDescription("Delete last digit").performScrollTo().performClick()
+        compose.onNodeWithContentDescription("Clear Opening float (₹)").performScrollTo().performClick()
+        compose.onNodeWithContentDescription("Opening float (₹), zero")
+            .performScrollTo().performTextReplacement("210.50")
 
         compose.onNodeWithText("Open shift with ₹210.50")
             .performScrollTo()
@@ -302,6 +380,7 @@ class ShiftCompactUiTest {
     @Test
     fun target1280By800WideLayoutKeepsOpeningMoneyEntryAndActionReachable() {
         var submittedMinor: Long? = null
+        var submitCount = 0
 
         compose.setContent {
             DCompanyTheme {
@@ -311,17 +390,35 @@ class ShiftCompactUiTest {
                         busy = false,
                         canOpen = true,
                         blockedByRejectedShift = false,
-                        onOpenShift = { submittedMinor = it },
+                        onOpenShift = {
+                            submittedMinor = it
+                            submitCount++
+                        },
                     )
                 }
             }
         }
 
         compose.onNodeWithText("Open shift with ₹0.00").assertIsDisplayed()
-        compose.onNodeWithContentDescription("Opening float (₹), zero")
-            .performScrollTo()
-            .assertIsDisplayed()
-            .performTextReplacement("210.50")
+        listOf("Digit 2", "Decimal point", "Digit 0", "Delete last digit", "Clear Opening float (₹)")
+            .forEach { description ->
+                compose.onNodeWithContentDescription(description)
+                    .performScrollTo().assertIsDisplayed()
+            }
+        listOf("Digit 2", "Decimal point", "Digit 5", "Digit 0")
+            .forEach { description ->
+                compose.onNodeWithContentDescription(description).performScrollTo().performClick()
+            }
+        compose.onNodeWithContentDescription("Opening float (₹), 2.50").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Delete last digit").performScrollTo().performClick()
+        compose.onNodeWithContentDescription("Opening float (₹), 2.5").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Clear Opening float (₹)")
+            .performScrollTo().performClick()
+        compose.onNodeWithContentDescription("Opening float (₹), zero").assertIsDisplayed()
+        listOf("Digit 2", "Digit 1", "Digit 0", "Decimal point", "Digit 5", "Digit 0")
+            .forEach { description ->
+                compose.onNodeWithContentDescription(description).performScrollTo().performClick()
+            }
 
         compose.onNodeWithText("Open shift with ₹210.50")
             .performScrollTo()
@@ -329,7 +426,10 @@ class ShiftCompactUiTest {
             .assertIsEnabled()
             .performClick()
 
-        compose.runOnIdle { assertEquals(21_050L, submittedMinor) }
+        compose.runOnIdle {
+            assertEquals(21_050L, submittedMinor)
+            assertEquals(1, submitCount)
+        }
         compose.onNodeWithContentDescription("Opening float (₹), 210.50")
             .assertIsNotFocused()
     }

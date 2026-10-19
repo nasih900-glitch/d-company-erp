@@ -2,14 +2,114 @@ package cloud.dcompany.erp.ui.screens
 
 import cloud.dcompany.erp.core.db.HeldOrderPaymentState
 import cloud.dcompany.erp.core.db.LocalHeldOrderPaymentEntity
+import cloud.dcompany.erp.core.db.LocalOrderEntity
+import cloud.dcompany.erp.core.db.SyncState
 import cloud.dcompany.erp.core.checkout.SplitPaymentLeg
 import cloud.dcompany.erp.core.checkout.SplitPaymentPolicy
+import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class HeldPaymentFeedbackTest {
+
+    @Test
+    fun newHeldCheckoutClearsOnlyTheExactOwnedSuccessNotice() {
+        val notice = MutableStateFlow<String?>(null)
+        val owner = PosSuccessfulOutcomeNoticeOwner()
+        val success = "Held-order payment confirmed by the server. Total ₹30.00. " +
+            "No further collection is needed."
+
+        owner.publish(owner.register("held-payment:old"), success, notice)
+        owner.beginCheckout(notice)
+
+        assertNull(notice.value)
+    }
+
+    @Test
+    fun newHeldCheckoutDoesNotClearARefusalThatReplacedTheOwnedSuccess() {
+        val notice = MutableStateFlow<String?>(null)
+        val owner = PosSuccessfulOutcomeNoticeOwner()
+        val success = "Held-order payment confirmed by the server. Total ₹30.00. " +
+            "No further collection is needed."
+        val refusal = "Held-order payment saved, but the server refused it. Do not collect again."
+        val ticket = owner.register("held-payment:old")
+
+        owner.publish(ticket, success, notice)
+        notice.value = refusal
+        owner.publish(ticket, success, notice)
+        assertEquals(refusal, notice.value)
+        owner.beginCheckout(notice)
+
+        assertEquals(refusal, notice.value)
+    }
+
+    @Test
+    fun lateOldOutcomePublishesARefusalButNotSuccessOverTheNewCheckout() {
+        val notice = MutableStateFlow<String?>(null)
+        val owner = PosSuccessfulOutcomeNoticeOwner()
+        val oldTicket = owner.register("held-payment:old")
+        owner.beginCheckout(notice)
+
+        publishHeldPaymentOutcomeFeedback(
+            outcome = payment(HeldOrderPaymentState.SYNCED),
+            ticket = oldTicket,
+            owner = owner,
+            notice = notice,
+        )
+        assertNull(notice.value)
+
+        publishHeldPaymentOutcomeFeedback(
+            outcome = payment(
+                HeldOrderPaymentState.REJECTED,
+                error = "Checkout total changed",
+            ),
+            ticket = oldTicket,
+            owner = owner,
+            notice = notice,
+        )
+        assertTrue(notice.value.orEmpty().contains("Checkout total changed"))
+        assertTrue(notice.value.orEmpty().contains("Do not collect again"))
+    }
+
+    @Test
+    fun retryRegisteredDuringDirectPrepareLagCannotPublishSuccessAfterCheckoutFinishes() {
+        val notice = MutableStateFlow<String?>(null)
+        val owner = PosSuccessfulOutcomeNoticeOwner()
+        // The durable prepare boundary is authoritative even before Room has
+        // emitted the checkout into rendered state.
+        val checkoutActiveDuringRegistration = hasActiveCheckoutForOutcomeNotice(
+            heldCheckoutPrepared = false,
+            directCheckoutPhaseLocalId = "new-checkout",
+            directCheckoutRendered = false,
+        )
+        val oldTicket = owner.register(
+            "direct-sale:old",
+            successEligible = !checkoutActiveDuringRegistration,
+        )
+
+        // Closing that checkout later cannot retroactively make this retry's
+        // success eligible to cover the next user context.
+        assertTrue(checkoutActiveDuringRegistration)
+
+        publishDirectSaleOutcomeFeedback(
+            outcome = directOrder(SyncState.SYNCED),
+            ticket = oldTicket,
+            owner = owner,
+            notice = notice,
+        )
+        assertNull(notice.value)
+
+        publishDirectSaleOutcomeFeedback(
+            outcome = directOrder(SyncState.REJECTED, "Shift was closed"),
+            ticket = oldTicket,
+            owner = owner,
+            notice = notice,
+        )
+        assertTrue(notice.value.orEmpty().contains("Shift was closed"))
+        assertTrue(notice.value.orEmpty().contains("Do not collect payment again"))
+    }
 
     @Test
     fun pendingPaymentNeverClaimsServerConfirmation() {
@@ -83,6 +183,20 @@ class HeldPaymentFeedbackTest {
         claimToken = null,
         claimExpiresAtMillis = null,
         claimOrderVersion = 7,
+        createdAtMillis = 1_000,
+        syncState = state,
+        lastError = error,
+    )
+
+    private fun directOrder(state: String, error: String? = null) = LocalOrderEntity(
+        localId = "sale-1",
+        serverOrderId = "server-order-1",
+        shiftId = "shift-1",
+        type = "takeaway",
+        estimateMinor = 3_000,
+        serverTotalMinor = 3_000,
+        paymentMethod = "cash",
+        tenderedMinor = 5_000,
         createdAtMillis = 1_000,
         syncState = state,
         lastError = error,
