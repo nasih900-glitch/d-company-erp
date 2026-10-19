@@ -9,6 +9,11 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
@@ -53,6 +58,7 @@ internal fun inlineShiftOpeningStatus(state: ShiftUiState): String = when {
 }
 
 /** No scroll owner here: Gaming's detail pane and POS's cart own their bounded scroll. */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun InlineShiftOpeningContent(
     state: ShiftUiState,
@@ -63,11 +69,13 @@ internal fun InlineShiftOpeningContent(
     onRetryRejected: () -> Unit = {},
     onVerifyRejected: () -> Unit = {},
 ) {
+    val heading = remember { BringIntoViewRequester() }
+    LaunchedEffect(Unit) { heading.bringIntoView() }
     Column(
         Modifier.fillMaxWidth().testTag("inline-shift-opening-workspace"),
         verticalArrangement = Arrangement.spacedBy(Spacing.sm),
     ) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Row(Modifier.fillMaxWidth().bringIntoViewRequester(heading), horizontalArrangement = Arrangement.SpaceBetween) {
             Text("Shift · same workspace", style = MaterialTheme.typography.titleSmall)
             TextButton(onReturn) { Text("Return to work") }
         }

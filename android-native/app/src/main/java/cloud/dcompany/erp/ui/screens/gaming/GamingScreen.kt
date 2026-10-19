@@ -987,9 +987,11 @@ fun GamingScreen(
                 startEnabled = !shiftBlocksStart && startTerminalBlockMessage == null,
                 startBlockMessage = if (shiftBlocksStart) "Open and confirm this till's shift before starting Gaming." else startTerminalBlockMessage,
                 blockerActions = {
-                    if (inlineShiftOpen) InlineShiftOpeningWorkspace(shiftAccess, onReturn = { inlineShiftOpen = false })
-                    else if (shiftBlocksStart) ShiftBlockerActions(shiftAccess.canOpen && startTerminalBlockMessage == null,
+                    if (!inlineShiftOpen && shiftBlocksStart) ShiftBlockerActions(shiftAccess.canOpen && startTerminalBlockMessage == null,
                         state.activeShiftId == null, { inlineShiftOpen = true }, vm::load)
+                },
+                blockerContent = {
+                    if (inlineShiftOpen) InlineShiftOpeningWorkspace(shiftAccess, onReturn = { inlineShiftOpen = false })
                 },
                 onSearchCustomer = vm::searchCustomersForStart,
                 onDismiss = { starting = null },
@@ -1793,6 +1795,7 @@ internal fun GamingCommandWorkspace(
     val selectedStation = visibleStations.firstOrNull { it.id == selectedStationId }
         ?: visibleStations.firstOrNull()
     val selectedSession = selectedStation?.let { state.activeFor(it.id) }
+    val stationStartSelections = rememberGamingStationStartSelections(state.stations, state.packages)
     var extensionPreview by remember { mutableStateOf<InlinePackageExtensionPreview?>(null) }
     var extensionReviewError by remember { mutableStateOf<String?>(null) }
     var extensionConfirming by remember { mutableStateOf(false) }
@@ -1898,7 +1901,7 @@ internal fun GamingCommandWorkspace(
                 val stationPackages = state.packages.filter {
                     it.stationType == selectedStation.type && it.kind == "base"
                 }
-                val startSelection = rememberGamingStartSelectionState(selectedStation, stationPackages)
+                val startSelection = stationStartSelections.getValue(selectedStation.id)
                 val durationChoices = gamingDurationChoices(selectedStation, stationPackages, startSelection)
                 LaunchedEffect(selectedSession?.id, selectedSession?.effectivePackageId, selectedSession?.packageId) {
                     val bookedVariant = selectedSession?.effectivePackageVariant
@@ -2050,15 +2053,16 @@ internal fun GamingCommandWorkspace(
                             startEnabled = startBlockMessage == null,
                             startBlockMessage = startBlockMessage,
                             blockerActions = {
-                                if (inlineShiftOpen) {
-                                    InlineShiftOpeningWorkspace(shiftAccess, onReturn = { inlineShiftOpen = false })
-                                } else if (startBlockMessage != null && access.canManageSessions) {
+                                if (!inlineShiftOpen && startBlockMessage != null && access.canManageSessions) {
                                     ShiftBlockerActions(
                                         canOpen = shiftAccess.canOpen && startTerminalBlockMessage == null,
                                         missingShift = state.activeShiftId == null,
                                         onOpen = { inlineShiftOpen = true }, onSync = onRefresh,
                                     )
                                 }
+                            },
+                            blockerContent = {
+                                if (inlineShiftOpen) InlineShiftOpeningWorkspace(shiftAccess, onReturn = { inlineShiftOpen = false })
                             },
                             selectionState = startSelection,
                             externallyHostedDial = true,
@@ -2325,17 +2329,21 @@ internal fun GamingCommandWorkspace(
                     Modifier.fillMaxWidth().weight(1f),
                     horizontalArrangement = Arrangement.spacedBy(Spacing.md),
                 ) {
-                    GamingStationSelectionGrid(
-                        state = state, stations = visibleStations,
-                        selectedStationId = selectedStation?.id,
-                        focusStationId = focusStationId,
-                        wallClock = wallClock, columns = columns,
-                        dense = denseGrid,
-                        compactHeight = compactHeightGrid,
-                        onSelectStation = onSelectStation,
-                        modifier = Modifier.weight(0.29f).fillMaxHeight()
-                            .verticalScroll(rememberScrollState()),
-                    )
+                    BoxWithConstraints(Modifier.weight(0.29f).fillMaxHeight()) {
+                        val rowCount = (visibleStations.size + columns - 1) / columns
+                        val rowHeight = gamingStationRowHeight(maxHeight.value.toInt(), rowCount).dp
+                        GamingStationSelectionGrid(
+                            state = state, stations = visibleStations,
+                            selectedStationId = selectedStation?.id,
+                            focusStationId = focusStationId,
+                            wallClock = wallClock, columns = columns,
+                            dense = denseGrid,
+                            compactHeight = compactHeightGrid,
+                            compactRowHeight = rowHeight,
+                            onSelectStation = onSelectStation,
+                            modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+                        )
+                    }
                     controlPane(
                         Modifier.weight(0.71f).fillMaxHeight()
                             .clip(Radius.shapeLg)
@@ -2391,6 +2399,9 @@ private fun GamingAmbientBackdrop() {
     Box(Modifier.fillMaxSize())
 }
 
+internal fun gamingStationRowHeight(availableHeightDp: Int, rowCount: Int): Int =
+    if (rowCount <= 0) 60 else ((availableHeightDp - (rowCount - 1) * 2) / rowCount).coerceIn(60, 100)
+
 @Composable
 private fun GamingStationSelectionGrid(
     state: GamingUiState,
@@ -2402,6 +2413,7 @@ private fun GamingStationSelectionGrid(
     dense: Boolean,
     compactHeight: Boolean,
     onSelectStation: (String) -> Unit,
+    compactRowHeight: Dp = 60.dp,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -2427,6 +2439,7 @@ private fun GamingStationSelectionGrid(
                         onSelect = { onSelectStation(station.id) },
                         compact = true, dense = dense,
                         compactHeight = compactHeight,
+                        compactRowHeight = compactRowHeight,
                         modifier = Modifier.weight(1f),
                     )
                 }
@@ -3064,6 +3077,7 @@ internal fun GamingStationTile(
     compact: Boolean = false,
     dense: Boolean = false,
     compactHeight: Boolean = false,
+    compactRowHeight: Dp = 60.dp,
     modifier: Modifier = Modifier,
 ) {
     val shouldTick = session?.status == "active" ||
@@ -3148,7 +3162,7 @@ internal fun GamingStationTile(
     val highlighted = selected || focused
     Column(
         modifier.fillMaxWidth().heightIn(min = when {
-            compactHeight -> 60.dp
+            compactHeight -> compactRowHeight.coerceIn(60.dp, 100.dp)
             dense -> 98.dp
             compact -> 154.dp
             else -> 178.dp
@@ -3192,7 +3206,7 @@ internal fun GamingStationTile(
                 horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                GamingStationArtwork(station.type, Modifier.size(28.dp))
+                GamingStationArtwork(station.type, Modifier.size(if (compactRowHeight >= 80.dp) 40.dp else 28.dp))
                 Column(
                     Modifier.weight(1f),
                     verticalArrangement = Arrangement.spacedBy(2.dp),
@@ -3219,19 +3233,13 @@ internal fun GamingStationTile(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
-                        if (session != null) {
-                            Spacer(Modifier.weight(1f))
-                            RemoteSensitiveContent {
-                                Text(
-                                    primaryValue,
-                                    color = accent,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = FontWeight.Bold,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            }
-                        }
+                    }
+                    if (session != null) RemoteSensitiveContent {
+                        Text(primaryValue, color = accent, style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        if (compactRowHeight >= 88.dp) Text(supportingValue,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
             }
@@ -6336,6 +6344,18 @@ private fun ReconcileSessionDialog(
     )
 }
 
+/** Station keys stay above Row/LazyColumn branches, so orientation cannot replace a booking draft. */
+@Composable
+internal fun rememberGamingStationStartSelections(
+    stations: List<Station>,
+    packages: List<GamingPackage>,
+): Map<String, GamingStartSelectionState> = stations.associate { station ->
+    androidx.compose.runtime.key(station.id) {
+        station.id to rememberGamingStartSelectionState(station,
+            packages.filter { it.stationType == station.type && it.kind == "base" })
+    }
+}
+
 @Composable
 private fun rememberGamingStartSelectionState(
     station: Station,
@@ -6374,6 +6394,12 @@ internal data class GamingStartSelectionState(
     val selectedVariant: MutableState<String?>,
     val playerCount: MutableIntState,
     val selectedPackageId: MutableState<String?>,
+    // Customer entry stays session-memory only, while selection has its existing saveable fields.
+    val customerName: MutableState<String> = mutableStateOf(""),
+    val customerPhone: MutableState<String> = mutableStateOf(""),
+    val customerMode: MutableState<String> = mutableStateOf("search"),
+    val customerQuery: MutableState<String> = mutableStateOf(""),
+    val customer: MutableState<GamingCustomerOption?> = mutableStateOf(null),
 )
 
 private fun gamingDurationChoices(
@@ -6404,6 +6430,7 @@ private fun gamingDurationChoices(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun StartSessionEditor(
     station: Station,
@@ -6417,16 +6444,12 @@ internal fun StartSessionEditor(
     startEnabled: Boolean = true,
     startBlockMessage: String? = null,
     blockerActions: (@Composable () -> Unit)? = null,
+    blockerContent: (@Composable () -> Unit)? = null,
     selectionState: GamingStartSelectionState? = null,
     externallyHostedDial: Boolean = false,
     pinActions: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
-    var name by remember { mutableStateOf("") }
-    var phone by remember { mutableStateOf("") }
-    var customerMode by rememberSaveable(station.id) { mutableStateOf("search") }
-    var customerQuery by rememberSaveable(station.id) { mutableStateOf("") }
-    var selectedCustomer by remember(station.id) { mutableStateOf<GamingCustomerOption?>(null) }
     var minutes by remember { mutableStateOf<Int?>(60) }
     val basePackages = remember(packages) {
         packages.filter {
@@ -6438,6 +6461,11 @@ internal fun StartSessionEditor(
     }
     val localSelectionState = rememberGamingStartSelectionState(station, packages)
     val effectiveSelectionState = selectionState ?: localSelectionState
+    var name by effectiveSelectionState.customerName
+    var phone by effectiveSelectionState.customerPhone
+    var customerMode by effectiveSelectionState.customerMode
+    var customerQuery by effectiveSelectionState.customerQuery
+    var selectedCustomer by effectiveSelectionState.customer
     var selectedVariant by effectiveSelectionState.selectedVariant
     val supportsPlayerModes = stationFilterId(station.type) == "ps5" &&
         basePackages.any { it.variant in setOf("single", "dual") }
@@ -6496,15 +6524,8 @@ internal fun StartSessionEditor(
     val customerResults = remember(customers, customerQuery) {
         filterGamingCustomerOptions(customers, customerQuery).take(8)
     }
-    LaunchedEffect(customers) {
-        val selectedId = selectedCustomer?.customerId
-        if (selectedId != null && customers.none { it.customerId == selectedId }) {
-            selectedCustomer = null
-            name = ""
-            phone = ""
-            customerQuery = ""
-        }
-    }
+    // Search results are partial/current reads, not proof that a selected identity was deleted.
+    // Keep the selected customer until staff clear it or the exact Start is validated by the server.
 
     // One form owns the package, customer and start payload in either presentation.
     val optionsContent: @Composable () -> Unit = {
@@ -6660,16 +6681,20 @@ internal fun StartSessionEditor(
                     Icon(Icons.Filled.Add, contentDescription = "Add player")
                 }
             }
-            if (!compactEmbeddedPlayers) Row(
+            if (!compactEmbeddedPlayers) FlowRow(
                 Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                verticalArrangement = Arrangement.spacedBy(Spacing.xs),
             ) {
-                Text("Players", color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.labelMedium)
-                Text(playerCount.toString(), color = MaterialTheme.colorScheme.onSurface,
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.weight(1f))
+                Row(Modifier.widthIn(min = 76.dp).heightIn(min = 48.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                    Text("Players", color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.labelMedium)
+                    Text("$playerCount/$maximumPlayers", color = MaterialTheme.colorScheme.onSurface,
+                        style = MaterialTheme.typography.titleSmall,
+                        modifier = Modifier.testTag("gaming-booked-player-count"))
+                }
                 TextButton(
                     onClick = { playerCount = (playerCount + 1).coerceAtMost(maximumPlayers) },
                     enabled = playerCount < maximumPlayers,
@@ -6882,7 +6907,7 @@ internal fun StartSessionEditor(
         startBlockMessage?.let { message ->
             Text(message, color = MaterialTheme.colorScheme.operationalWarning, style = MaterialTheme.typography.labelMedium)
         }
-        blockerActions?.invoke()
+        blockerContent?.invoke()
         if (!embedded) Text(
             if (selectedPackage != null) {
                 "Price, duration and controller surcharge are captured now and verified by the server. The timer starts at this tap."
@@ -6973,6 +6998,7 @@ internal fun StartSessionEditor(
             }
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             Column(Modifier.fillMaxWidth()) {
+                blockerActions?.invoke()
                 Box(Modifier.fillMaxWidth().testTag("gaming-primary-action-host")) {
                     startAction(Modifier.fillMaxWidth())
                 }
@@ -7088,6 +7114,7 @@ internal fun StartSessionEditor(
                                 ) {
                                     optionsContent()
                                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                                    blockerActions?.invoke()
                                     startAction(Modifier.fillMaxWidth())
                                 }
                             }
@@ -7111,6 +7138,7 @@ internal fun StartSessionEditor(
                     }
                 }
                 if (!wideEmbeddedWorkspace) {
+                    blockerActions?.invoke()
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                     Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                         startAction(
@@ -7188,11 +7216,13 @@ internal fun StartSessionDialog(
     startEnabled: Boolean = true,
     startBlockMessage: String? = null,
     blockerActions: (@Composable () -> Unit)? = null,
+    blockerContent: (@Composable () -> Unit)? = null,
 ) = StartSessionEditor(
     station = station, packages = packages, customers = customers,
     online = online, onSearchCustomer = onSearchCustomer,
     onDismiss = onDismiss, onConfirm = onConfirm,
-    startEnabled = startEnabled, startBlockMessage = startBlockMessage, blockerActions = blockerActions,
+    startEnabled = startEnabled, startBlockMessage = startBlockMessage,
+    blockerActions = blockerActions, blockerContent = blockerContent,
 )
 
 @Composable

@@ -28,6 +28,14 @@ class GamingStationPresentationTest {
     private val now = Instant.parse("2026-08-26T18:00:00Z").toEpochMilli()
 
     @Test
+    fun `station rows use spare board height without stretching or shrinking below safe controls`() {
+        assertEquals(88, gamingStationRowHeight(360, 4))
+        assertEquals(100, gamingStationRowHeight(900, 4))
+        assertEquals(60, gamingStationRowHeight(240, 8))
+        assertEquals(60, gamingStationRowHeight(240, 0))
+    }
+
+    @Test
     fun `available canonical stations advertise fixed packages and never the legacy hourly rate`() {
         val packages = listOf(
             GamingPackage(
