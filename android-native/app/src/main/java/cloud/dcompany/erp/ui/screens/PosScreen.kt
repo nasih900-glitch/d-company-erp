@@ -1,5 +1,9 @@
 package cloud.dcompany.erp.ui.screens
 
+import cloud.dcompany.erp.core.auth.ShiftAccess
+import cloud.dcompany.erp.ui.screens.shift.InlineShiftOpeningWorkspace
+import cloud.dcompany.erp.ui.screens.shift.ShiftBlockerActions
+
 import cloud.dcompany.erp.ui.theme.operationalDanger
 import cloud.dcompany.erp.ui.theme.operationalDangerContainer
 import cloud.dcompany.erp.ui.theme.operationalGood
@@ -187,6 +191,7 @@ fun PosScreen(
     receiptSearch: ReceiptSearchUiState = ReceiptSearchUiState(),
     unacknowledgedReceipt: PosReceiptEntity?,
     access: PosAccess,
+    shiftAccess: ShiftAccess = ShiftAccess(),
     onAccessChanged: (PosAccess) -> Unit,
     onAdd: (MenuItemEntity) -> Unit,
     onAddConfigured: (
@@ -256,6 +261,7 @@ fun PosScreen(
     var inlineCashTendered by rememberSaveable(state.draftLocalId) { mutableStateOf("") }
     val latestDismissHeldOrderReview by rememberUpdatedState(onDismissHeldOrderReview)
     val latestDismissHeldOrder by rememberUpdatedState(onDismissHeldOrder)
+    var inlineShiftOpen by rememberSaveable { mutableStateOf(false) }
     val categoryItems = remember(state.operationalItems, state.selectedCategoryId) {
         state.selectedCategoryId?.let { selected ->
             state.operationalItems.filter { it.categoryId == selected }
@@ -664,6 +670,11 @@ fun PosScreen(
                     else -> CartPanel(
                         state = state,
                         compact = compactWorkspace,
+                        inlineShiftContent = if (inlineShiftOpen) ({
+                            InlineShiftOpeningWorkspace(shiftAccess, onReturn = { inlineShiftOpen = false })
+                        }) else null,
+                        onOpenShift = if (shiftAccess.canOpen) ({ inlineShiftOpen = true }) else null,
+                        onSyncShift = onRefresh,
                         canWrite = access.canCreateAndCollect,
                         canDiscount = access.canApplyDiscount,
                         onIncrementLine = onIncrementLine,
@@ -2857,6 +2868,9 @@ private fun PosCheckoutButton(
 private fun CartPanel(
     state: PosUiState,
     compact: Boolean,
+    inlineShiftContent: (@Composable () -> Unit)? = null,
+    onOpenShift: (() -> Unit)? = null,
+    onSyncShift: () -> Unit = {},
     canWrite: Boolean,
     canDiscount: Boolean,
     onIncrementLine: (String) -> Unit,
@@ -2965,7 +2979,10 @@ private fun CartPanel(
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
-        if (state.cart.isEmpty()) {
+        if (inlineShiftContent != null) {
+            Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())
+                .padding(Spacing.sm)) { inlineShiftContent() }
+        } else if (state.cart.isEmpty()) {
             DesignedEmptyState(
                 title = if (canWrite) "Build this order" else "View-only POS",
                 body = if (canWrite) {
@@ -3192,11 +3209,16 @@ private fun CartPanel(
                     color = MaterialTheme.colorScheme.operationalWarning,
                 )
             }
-            if (state.cart.isNotEmpty() && !state.canCollectPayment) {
+            if (!state.canCollectPayment) {
                 Text(
                     state.shiftAccessMessage ?: "Open a shift before taking payment.",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.operationalWarning,
+                )
+                if (inlineShiftContent == null) ShiftBlockerActions(
+                    canOpen = onOpenShift != null,
+                    missingShift = state.activeShiftId == null,
+                    onOpen = { onOpenShift?.invoke() }, onSync = onSyncShift,
                 )
             }
         }

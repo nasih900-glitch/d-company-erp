@@ -1,5 +1,9 @@
 package cloud.dcompany.erp.ui.screens.gaming
 
+import cloud.dcompany.erp.core.auth.ShiftAccess
+import cloud.dcompany.erp.ui.screens.shift.InlineShiftOpeningWorkspace
+import cloud.dcompany.erp.ui.screens.shift.ShiftBlockerActions
+
 import cloud.dcompany.erp.ui.theme.operationalDanger
 import cloud.dcompany.erp.ui.theme.operationalDangerContainer
 import cloud.dcompany.erp.ui.theme.operationalGood
@@ -408,6 +412,7 @@ internal class LegacyRecoveryBoundsState {
 @Composable
 fun GamingScreen(
     access: GamingAccess = GamingAccess(),
+    shiftAccess: ShiftAccess = ShiftAccess(),
     focusSessionId: String? = null,
     focusStationId: String? = null,
     onDismissFocus: () -> Unit = {},
@@ -557,6 +562,7 @@ fun GamingScreen(
                 GamingCommandWorkspace(
                     state = state,
                     access = access,
+                    shiftAccess = shiftAccess,
                     filters = filters,
                     selectedFilter = selectedFilter,
                     visibleStations = visibleStations,
@@ -969,12 +975,22 @@ fun GamingScreen(
     }
 
     starting?.takeIf { access.canManageSessions }?.let { station ->
+        var inlineShiftOpen by rememberSaveable(station.id) { mutableStateOf(false) }
+        val shiftBlocksStart = state.activeShiftId == null ||
+            (!state.activeShiftServerConfirmed && !state.activeShiftAllowsQueuedStart)
         RemoteSensitiveContent {
             StartSessionDialog(
                 station = station,
                 packages = state.packages.filter { it.stationType == station.type && it.kind == "base" },
                 customers = state.customers,
                 online = state.online,
+                startEnabled = !shiftBlocksStart && startTerminalBlockMessage == null,
+                startBlockMessage = if (shiftBlocksStart) "Open and confirm this till's shift before starting Gaming." else startTerminalBlockMessage,
+                blockerActions = {
+                    if (inlineShiftOpen) InlineShiftOpeningWorkspace(shiftAccess, onReturn = { inlineShiftOpen = false })
+                    else if (shiftBlocksStart) ShiftBlockerActions(shiftAccess.canOpen && startTerminalBlockMessage == null,
+                        state.activeShiftId == null, { inlineShiftOpen = true }, vm::load)
+                },
                 onSearchCustomer = vm::searchCustomersForStart,
                 onDismiss = { starting = null },
                 onConfirm = { customerId, name, phone, minutes, packageId, extraControllers ->
@@ -1767,6 +1783,7 @@ internal fun GamingCommandWorkspace(
     onJoinParticipant: (GameSession, String?, String?, String?, String?) -> Unit = { _, _, _, _, _ -> },
     onLeaveParticipant: (GameSession, String) -> Unit = { _, _ -> },
     onConfirmExtension: ((PackageExtensionReview) -> String?)? = null,
+    shiftAccess: ShiftAccess = ShiftAccess(),
 ) {
     // Selection changes the control pane; it never removes the station board.
     // `showDetail`/`onBackToBoard` remain as compatibility inputs for deep-link
@@ -1780,6 +1797,7 @@ internal fun GamingCommandWorkspace(
     var extensionReviewError by remember { mutableStateOf<String?>(null) }
     var extensionConfirming by remember { mutableStateOf(false) }
     var customerCacheRequested by remember { mutableStateOf(false) }
+    var inlineShiftOpen by rememberSaveable(selectedStationId) { mutableStateOf(false) }
     var inlinePanel by rememberSaveable(selectedStationId) { mutableStateOf<String?>(null) }
     LaunchedEffect(selectedStation != null && selectedSession == null, access.canManageSessions) {
         if (selectedStation != null && selectedSession == null &&
@@ -2031,6 +2049,17 @@ internal fun GamingCommandWorkspace(
                             embedded = true,
                             startEnabled = startBlockMessage == null,
                             startBlockMessage = startBlockMessage,
+                            blockerActions = {
+                                if (inlineShiftOpen) {
+                                    InlineShiftOpeningWorkspace(shiftAccess, onReturn = { inlineShiftOpen = false })
+                                } else if (startBlockMessage != null && access.canManageSessions) {
+                                    ShiftBlockerActions(
+                                        canOpen = shiftAccess.canOpen && startTerminalBlockMessage == null,
+                                        missingShift = state.activeShiftId == null,
+                                        onOpen = { inlineShiftOpen = true }, onSync = onRefresh,
+                                    )
+                                }
+                            },
                             selectionState = startSelection,
                             externallyHostedDial = true,
                             pinActions = fixedTabletWorkspace,
@@ -6387,6 +6416,7 @@ internal fun StartSessionEditor(
     embedded: Boolean = false,
     startEnabled: Boolean = true,
     startBlockMessage: String? = null,
+    blockerActions: (@Composable () -> Unit)? = null,
     selectionState: GamingStartSelectionState? = null,
     externallyHostedDial: Boolean = false,
     pinActions: Boolean = false,
@@ -6852,6 +6882,7 @@ internal fun StartSessionEditor(
         startBlockMessage?.let { message ->
             Text(message, color = MaterialTheme.colorScheme.operationalWarning, style = MaterialTheme.typography.labelMedium)
         }
+        blockerActions?.invoke()
         if (!embedded) Text(
             if (selectedPackage != null) {
                 "Price, duration and controller surcharge are captured now and verified by the server. The timer starts at this tap."
@@ -7154,10 +7185,14 @@ internal fun StartSessionDialog(
     onSearchCustomer: (String) -> Unit = {},
     onDismiss: () -> Unit,
     onConfirm: (String?, String?, String?, Int?, String?, Int) -> Unit,
+    startEnabled: Boolean = true,
+    startBlockMessage: String? = null,
+    blockerActions: (@Composable () -> Unit)? = null,
 ) = StartSessionEditor(
     station = station, packages = packages, customers = customers,
     online = online, onSearchCustomer = onSearchCustomer,
     onDismiss = onDismiss, onConfirm = onConfirm,
+    startEnabled = startEnabled, startBlockMessage = startBlockMessage, blockerActions = blockerActions,
 )
 
 @Composable

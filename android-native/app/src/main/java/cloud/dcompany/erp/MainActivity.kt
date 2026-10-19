@@ -774,6 +774,7 @@ private fun AppRoot(
                                     eligibleRewardCatalog = eligibleRewardCatalog,
                                     unacknowledgedReceipt = unacknowledgedPosReceipt,
                                     access = permissions.posAccess(),
+                                    shiftAccess = permissions.shiftAccess(),
                                     onAccessChanged = pos::updateAccess,
                                     onAdd = pos::add,
                                     onAddConfigured = pos::addConfigured,
@@ -839,6 +840,7 @@ private fun AppRoot(
                                                     s.me.protectedAccess && s.me.auditAccess,
                                         )
                                     },
+                                    shiftAccess = permissions.shiftAccess(),
                                     focusSessionId = gamingFocus?.sessionId,
                                     focusStationId = gamingFocus?.stationId,
                                     onDismissFocus = { operationalFocus = null },

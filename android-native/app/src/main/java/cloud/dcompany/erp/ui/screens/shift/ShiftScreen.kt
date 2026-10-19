@@ -1010,7 +1010,7 @@ internal fun OpenShiftForm(
 }
 
 @Composable
-private fun RejectedShiftCard(
+internal fun RejectedShiftCard(
     rejected: LocalShiftEntity,
     busy: Boolean,
     online: Boolean,

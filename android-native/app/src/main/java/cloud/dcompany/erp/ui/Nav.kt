@@ -87,6 +87,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -671,7 +672,7 @@ private fun WorkspaceHeader(
         OutboxWorkStatusPill(
             status = outboxWorkStatus,
             syncing = syncing,
-            showDetail = !compact,
+            showDetail = !compact || LocalConfiguration.current.screenWidthDp >= 900,
         )
 
         Surface(
