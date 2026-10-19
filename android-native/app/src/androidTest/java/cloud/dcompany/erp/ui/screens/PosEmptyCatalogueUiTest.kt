@@ -17,19 +17,26 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsNotFocused
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.hasScrollToIndexAction
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performImeAction
 import androidx.compose.ui.test.performTextReplacement
@@ -261,6 +268,187 @@ class PosEmptyCatalogueUiTest {
         compose.runOnIdle {
             assertEquals(listOf("add:crisps", "increment:cola-line", "clear", "pay"), actions)
         }
+    }
+
+    @Test
+    fun longProductNameWrapsWhileCategoryRemainsAvailableThroughFilterAndSemantics() {
+        val category = MenuCategoryEntity("audit", "Cold drinks", 0, false)
+        val longDrink = menuItem(
+            "long-drink",
+            "House mango passion fruit cooler large",
+            12_500L,
+        )
+        val actions = mutableListOf<String>()
+        renderDynamic(
+            state = mutableStateOf(
+                PosUiState(
+                    categories = listOf(category),
+                    items = listOf(longDrink),
+                    operationalCategories = listOf(category),
+                    operationalItems = listOf(longDrink),
+                    online = true,
+                    activeShiftId = "shift-1",
+                    canCollectPayment = true,
+                ),
+            ),
+            viewportSize = mutableStateOf(960 to 416),
+            onAddItem = { actions += it.id },
+        )
+
+        compose.onAllNodesWithText("Cold drinks").assertCountEquals(1)
+        val nameBounds = compose.onNodeWithText(longDrink.name)
+            .assertIsDisplayed().getUnclippedBoundsInRoot()
+        assertTrue(
+            "Long product names should use more than one text line",
+            nameBounds.bottom - nameBounds.top > 24.dp,
+        )
+        compose.onNodeWithContentDescription(
+            "Add ${longDrink.name}, ₹125.00, Cold drinks to the current order",
+        ).assertIsDisplayed().performClick()
+        compose.runOnIdle { assertEquals(listOf("long-drink"), actions) }
+    }
+
+    @Test
+    fun compactImeHeightKeepsCheckoutPinnedAndThreeItemCartScrollable() {
+        val items = listOf(
+            menuItem("cola", "Audit Cola", 5_000L),
+            menuItem("crisps", "Audit Crisps", 3_000L),
+            menuItem("long-drink", "House mango passion fruit cooler large", 12_500L),
+        )
+        val state = PosUiState(
+            items = items,
+            operationalItems = items,
+            cart = items.mapIndexed { index, item ->
+                CartLine("line-$index", item, qty = index + 1, unitPriceMinor = item.basePriceMinor)
+            },
+            online = true,
+            activeShiftId = "shift-1",
+            canCollectPayment = true,
+            draftState = SyncState.DRAFT,
+            draftLocalId = "draft-ime",
+            draftRevision = 1L,
+        )
+
+        compose.setContent {
+            DCompanyTheme {
+                Box(
+                    Modifier.width(622.dp).height(195.dp)
+                        .testTag("pos-ime-cart-viewport"),
+                ) {
+                    CartPanel(
+                        state = state,
+                        compact = true,
+                        severelyConstrained = true,
+                        canWrite = true,
+                        canDiscount = true,
+                        onIncrementLine = {},
+                        onDecrementLine = {},
+                        onClear = {},
+                        onEditDetails = {},
+                        paymentMethod = "cash",
+                        cashTendered = "",
+                        onPaymentMethodChanged = {},
+                        onCashTenderedChanged = {},
+                        modifier = Modifier.fillMaxSize(),
+                        onPay = {},
+                    )
+                }
+            }
+        }
+
+        val viewport = compose.onNodeWithTag("pos-ime-cart-viewport")
+            .getUnclippedBoundsInRoot()
+        val total = compose.onNodeWithTag("pos-cart-total")
+            .assertIsDisplayed().getUnclippedBoundsInRoot()
+        val action = compose.onNodeWithTag("pos-take-payment")
+            .assertIsDisplayed().assertIsEnabled().getUnclippedBoundsInRoot()
+        compose.onNodeWithText("Cash").assertIsDisplayed()
+        compose.onNodeWithText("UPI").assertIsDisplayed()
+        compose.onNodeWithText("Split").assertIsDisplayed()
+        assertTrue("Total must remain pinned inside the IME-height cart", total.bottom <= viewport.bottom)
+        assertTrue(
+            "Payment action must remain fully visible and at least 48dp high: action=$action viewport=$viewport",
+            action.bottom <= viewport.bottom && action.bottom - action.top >= 48.dp,
+        )
+
+        val pinnedAction = action
+        val thirdLine = hasContentDescription(
+            "Increase House mango passion fruit cooler large quantity from 3",
+        )
+        compose.onNode(hasScrollToIndexAction()).performScrollToNode(thirdLine)
+        compose.onNode(thirdLine).assertIsDisplayed()
+        assertEquals(
+            "Scrolling three cart items must not move the checkout action",
+            pinnedAction,
+            compose.onNodeWithTag("pos-take-payment").getUnclippedBoundsInRoot(),
+        )
+    }
+
+    @Test
+    fun cashEntryKeepsFocusAndAcceptsInputAcrossImeHeightTransition() {
+        val cola = menuItem("cola", "Audit Cola", 5_000L)
+        val height = mutableStateOf(520.dp)
+        val tendered = mutableStateOf("")
+        val state = PosUiState(
+            items = listOf(cola),
+            operationalItems = listOf(cola),
+            cart = listOf(CartLine("cola-line", cola, qty = 1, unitPriceMinor = 5_000L)),
+            online = true,
+            activeShiftId = "shift-1",
+            canCollectPayment = true,
+            draftState = SyncState.DRAFT,
+            draftLocalId = "draft-focus",
+            draftRevision = 1L,
+        )
+
+        compose.setContent {
+            DCompanyTheme {
+                Box(
+                    Modifier.width(622.dp).height(height.value)
+                        .testTag("pos-resizing-cart-viewport"),
+                ) {
+                    CartPanel(
+                        state = state,
+                        compact = height.value < 480.dp,
+                        severelyConstrained = height.value < 240.dp,
+                        canWrite = true,
+                        canDiscount = true,
+                        onIncrementLine = {},
+                        onDecrementLine = {},
+                        onClear = {},
+                        onEditDetails = {},
+                        paymentMethod = "cash",
+                        cashTendered = tendered.value,
+                        onPaymentMethodChanged = {},
+                        onCashTenderedChanged = { tendered.value = it },
+                        modifier = Modifier.fillMaxSize(),
+                        onPay = {},
+                    )
+                }
+            }
+        }
+
+        compose.onNodeWithTag("pos-inline-cash-received")
+            .assertIsDisplayed().performClick().assertIsFocused()
+            .performTextReplacement("50")
+        compose.runOnIdle {
+            assertEquals("50", tendered.value)
+            height.value = 195.dp
+        }
+        compose.waitForIdle()
+
+        compose.onNodeWithTag("pos-inline-cash-received")
+            .assertIsDisplayed().assertIsFocused()
+            .performTextReplacement("60")
+        compose.runOnIdle { assertEquals("60", tendered.value) }
+        val viewport = compose.onNodeWithTag("pos-resizing-cart-viewport")
+            .getUnclippedBoundsInRoot()
+        val action = compose.onNodeWithTag("pos-take-payment")
+            .assertIsDisplayed().assertIsEnabled().getUnclippedBoundsInRoot()
+        assertTrue(
+            "Focused cash entry must keep the payment action fully visible after IME resize",
+            action.bottom <= viewport.bottom && action.bottom - action.top >= 48.dp,
+        )
     }
 
     private fun menuItem(id: String, name: String, priceMinor: Long) = MenuItemEntity(
@@ -554,6 +742,43 @@ class PosEmptyCatalogueUiTest {
         }
         compose.onNodeWithText("Payment submitted once").assertIsNotEnabled().performClick()
         compose.runOnIdle { assertEquals(1, submitted.size) }
+    }
+
+    @Test
+    fun retainedNoticeKeepsHeldCashPresetsCompleteAbovePinnedActions() {
+        val viewport = mutableStateOf(1_280 to 616)
+        renderDynamic(
+            state = mutableStateOf(
+                PosUiState(
+                    online = true,
+                    activeShiftId = "shift-1",
+                    canCollectPayment = true,
+                    notice = "Held-order payment confirmed by the server. Total ₹30.00. " +
+                        "No further collection is needed.",
+                    preparedHeldCheckout = preparedHeldCheckout(
+                        claimToken = "retained-banner-claim",
+                        subtotalMinor = 27_000L,
+                        totalMinor = 27_000L,
+                        dueMinor = 27_000L,
+                    ),
+                ),
+            ),
+            viewportSize = viewport,
+        )
+
+        compose.onNodeWithTag("pos-inline-notice").assertIsDisplayed()
+        compose.onNodeWithTag("pos-payment-confirmation-inline").assertIsDisplayed()
+        val preset = compose.onNodeWithContentDescription(
+            "Set Cash received (₹) to ₹270.00",
+        ).assertIsDisplayed().assertHeightIsAtLeast(48.dp).getUnclippedBoundsInRoot()
+        val actions = compose.onNodeWithTag("pos-payment-confirmation-actions")
+            .assertIsDisplayed().getUnclippedBoundsInRoot()
+        assertTrue(
+            "Held cash presets must be fully visible above pinned actions: " +
+                "preset=$preset actions=$actions",
+            preset.bottom <= actions.top,
+        )
+        compose.onNodeWithText("Enter cash received").assertIsDisplayed().assertIsNotEnabled()
     }
 
     @Test

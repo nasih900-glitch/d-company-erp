@@ -61,7 +61,7 @@ class GamingRejectedSessionAttentionUiTest {
             current.value = GamingUiState(online = true, refreshing = false)
         }
         compose.onNodeWithText("Gaming board ready").assertIsDisplayed()
-        compose.onNodeWithText("Live data is connected · no action needs attention").assertIsDisplayed()
+        compose.onNodeWithText("Live · no action needs attention").assertIsDisplayed()
     }
 
     @Test

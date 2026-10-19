@@ -3,6 +3,7 @@ from decimal import Decimal
 from uuid import uuid4
 
 import pytest
+from sqlalchemy.dialects import postgresql
 
 from app.core.errors import BusinessRuleError
 from app.core.security import issue_audit_page_cursor
@@ -16,7 +17,13 @@ from app.services.audit.catalogue import (
     classify_values,
     describe,
 )
-from app.services.audit.query import date_bounds, decode_cursor, encode_cursor, filter_fingerprint
+from app.services.audit.query import (
+    date_bounds,
+    decode_cursor,
+    encode_cursor,
+    event_query,
+    filter_fingerprint,
+)
 from app.services.audit.recorder import _enrich_manual_audit_row, json_safe
 
 
@@ -29,6 +36,14 @@ def test_catalogue_contains_27_unique_real_operations_with_valid_states():
         assert expected[1] in definition.stages
         assert expected[2] in definition.outcomes
         assert classify_values(action, "Any", None, {"purpose": "password_reset"}) == expected
+
+
+def test_current_bill_join_keeps_order_uuid_index_side_uncast():
+    sql = str(event_query(uuid4()).compile(dialect=postgresql.dialect()))
+
+    assert "CAST(orders.id AS VARCHAR)" not in sql
+    assert "orders.id = CASE" in sql
+    assert " AS UUID" in sql
 
 
 @pytest.mark.parametrize(("movement_type", "code"), STOCK_CODES.items())
@@ -128,7 +143,7 @@ def test_failed_target_is_never_authenticated_actor_and_legacy_is_not_rewritten(
     )
     assert unknown["actor_kind"] == "unverified_legacy"
     assert unknown["outcome"] == "unknown"
-    assert unknown["classification_source"] == "unclassified"
+    assert unknown["classification_source"] == "unclassified_legacy"
 
 
 def test_signed_cursor_binds_user_tenant_filters_and_snapshot():

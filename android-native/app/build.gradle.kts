@@ -81,11 +81,11 @@ android {
         // Every Room schema change must ship under a strictly newer Android
         // version code so an installed tablet upgrades in place instead of
         // requiring an uninstall that would destroy its offline outbox.
-        // Build 48 is immutable predecessor history. This release advances
-        // Room 55 under a direct version code so CI and upgrade checks cannot
+        // Build 52 is immutable withheld predecessor history. This release keeps
+        // Room 56 under a direct version code so CI and upgrade checks cannot
         // produce different identities from a local Gradle property.
-        versionCode = 52
-        versionName = "3.1.44"
+        versionCode = 53
+        versionName = "3.1.45"
         buildConfigField("boolean", "DIRECT_UPDATES_ENABLED", "false")
         buildConfigField("String", "DISTRIBUTION_CHANNEL", buildConfigString("play"))
 

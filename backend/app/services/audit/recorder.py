@@ -481,7 +481,13 @@ def _enrich_manual_audit_row(row: AuditLog) -> None:
         row.action_code, row.stage, row.outcome = derived
     row.category = category_for(row.action, row.entity_type, row.action_code)
     row.catalogue_version = CATALOGUE_VERSION
-    row.source_reference = row.source_reference or retained_reference(row.before, row.after)
+    row.business_details = json_safe(row.business_details or {
+        key: value for key, value in (row.after or {}).items() if key in DETAIL_FIELDS
+    })
+    row.source_reference = row.source_reference or retained_reference(
+        row.before,
+        {**(row.after or {}), **(row.business_details or {})},
+    )
     if row.action == "login_failed":
         row.target_user_id = row.target_user_id or row.actor_user_id
         row.actor_user_id = None
@@ -499,12 +505,47 @@ def _enrich_manual_audit_row(row: AuditLog) -> None:
         ) else "recorded_actor"
     elif row.actor_kind is None:
         row.actor_kind = "unverified"
-    row.business_details = json_safe(row.business_details or {
-        key: value for key, value in (row.after or {}).items() if key in DETAIL_FIELDS
-    })
     row.operation_id = row.operation_id or row.client_action_id or row.request_id
     if row.operation_id and len(row.operation_id) > 160:
         row.operation_id = "sha256:" + hashlib.sha256(row.operation_id.encode()).hexdigest()
+
+
+def _linked_order(obj: Any, session: Session) -> Order | None:
+    order_id = (
+        obj.order_id
+        if isinstance(obj, Payment)
+        else obj.ref_id
+        if isinstance(obj, StockMovement) and obj.ref_type == "order"
+        else None
+    )
+    if order_id is None:
+        return None
+    actor_company = (actor_ctx.get() or {}).get("company_id")
+    return next(
+        (
+            row
+            for row in [*session.identity_map.values(), *session.new]
+            if isinstance(row, Order)
+            and row.id == order_id
+            and (actor_company is None or row.company_id == actor_company)
+        ),
+        None,
+    )
+
+
+def _payment_details(obj: Any, session: Session) -> dict | None:
+    if not isinstance(obj, Payment):
+        return None
+    details = {
+        "order_id": str(obj.order_id),
+        "shift_id": str(obj.shift_id),
+        "amount_minor": int(obj.amount_minor),
+        "method": obj.method,
+    }
+    order = _linked_order(obj, session)
+    if order is not None and order.invoice_no:
+        details["invoice_no"] = order.invoice_no
+    return details
 
 
 def _stock_details(obj: Any, session: Session) -> dict | None:
@@ -528,6 +569,11 @@ def _stock_details(obj: Any, session: Session) -> dict | None:
         "batch_id": str(batch.id), "type": obj.type,
         "ref_type": obj.ref_type, "ref_id": str(obj.ref_id) if obj.ref_id else None,
     }
+    order = _linked_order(obj, session)
+    if order is not None:
+        details["order_id"] = str(order.id)
+        if order.invoice_no:
+            details["invoice_no"] = order.invoice_no
     if history.deleted:
         details["balance_before"] = json_safe(history.deleted[0])
         details["balance_after"] = json_safe(ingredient.current_qty)
@@ -572,9 +618,11 @@ def install_audit_listeners() -> None:
                 row_company = _company_id_of(obj) or company_id
                 if row_company is not None:
                     context = _audit_context_fields(obj)
-                    stock_details = _stock_details(obj, session)
-                    if stock_details is not None:
-                        context["business_details"] = stock_details
+                    business_details = _stock_details(obj, session) or _payment_details(
+                        obj, session
+                    )
+                    if business_details is not None:
+                        context["business_details"] = business_details
                     pending.append((obj, row_company, actor_user, context))
 
         # Updates

@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 
 import psycopg
 import pytest
+from fastapi import BackgroundTasks
 from psycopg import errors
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -20,6 +21,7 @@ from app.core.errors import BusinessRuleError
 from app.core.tenant import TenantContext
 from app.core.timezone import company_timezone
 from app.models import (
+    AuditLog,
     Customer,
     GoogleSheetsDelivery,
     IdempotencyKey,
@@ -31,12 +33,16 @@ from app.models import (
 )
 from app.services.accounting.accounts import (
     CASH,
+    COST_OF_GOODS_SOLD,
+    INVENTORY,
     POS_SETTLEMENT_CLEARING,
     SALES_RETURNS,
     SALES_REVENUE,
     UPI_CLEARING,
 )
 from app.services.accounting.ledger import build_operational_ledger
+from app.services.audit.query import event_query, predicates
+from app.services.audit.recorder import clear_actor, install_audit_listeners, set_actor
 from app.services.pos.checkout_claims import acquire_checkout_claim
 from app.services.pos.loyalty_program import LEGACY_RULES
 from app.services.reports import ReportsAggregator
@@ -190,6 +196,147 @@ def _attempt_overpaid_bundle(
 
 
 @pytest.mark.integration
+@pytest.mark.asyncio
+async def test_single_tender_api_snapshots_invoice_and_rolls_back_all_finalization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with _disposable_database("erp_pos_single_api") as database_url:
+        upgraded = _run_alembic(database_url, "upgrade", "head")
+        assert upgraded.returncode == 0, upgraded.stdout + upgraded.stderr
+        with psycopg.connect(_sync_dsn(database_url)) as connection:
+            paid_ids = _seed_open_order(connection)
+            rollback_ids = _seed_open_order(connection)
+            _seed_revision_zero_program(connection, paid_ids["company"])
+            _seed_revision_zero_program(connection, rollback_ids["company"])
+            connection.execute(
+                "UPDATE orders SET customer_phone='+919900001111', "
+                "customer_name='Single Tender Customer' WHERE id=%s",
+                (paid_ids["order"],),
+            )
+            connection.commit()
+
+        engine = create_async_engine(
+            database_url.replace("postgresql+psycopg://", "postgresql+asyncpg://", 1),
+            pool_pre_ping=True,
+        )
+        sessions = async_sessionmaker(engine, expire_on_commit=False, autoflush=False)
+        try:
+            install_audit_listeners()
+            set_actor(
+                user_id=paid_ids["user"],
+                company_id=paid_ids["company"],
+                terminal_id=paid_ids["terminal"],
+            )
+            try:
+                async with sessions() as session:
+                    response = await pos_router.record_payment(
+                        paid_ids["order"],
+                        pos_router.PaymentCreate(
+                            method="upi",
+                            amount_minor=2_500,
+                            ref_external=f"UPI-SINGLE-{uuid4().hex[:12]}",
+                            expected_order_total_minor=2_500,
+                            expected_due_minor=2_500,
+                        ),
+                        session,
+                        _request(f"single-payment:{uuid4()}"),
+                        BackgroundTasks(),
+                        _tenant(paid_ids),
+                    )
+                    await session.commit()
+            finally:
+                clear_actor()
+
+            assert response.order_status == "paid"
+            assert response.invoice_no is not None
+            async with sessions() as session:
+                payment_count = await session.scalar(
+                    select(func.count()).select_from(Payment).where(
+                        Payment.order_id == paid_ids["order"]
+                    )
+                )
+                settlement = await session.scalar(
+                    select(OrderLoyaltySettlement).where(
+                        OrderLoyaltySettlement.order_id == paid_ids["order"]
+                    )
+                )
+                payment_audit = (
+                    await session.execute(
+                        select(AuditLog).where(
+                            AuditLog.company_id == paid_ids["company"],
+                            AuditLog.entity_type == "Payment",
+                            AuditLog.entity_id == str(response.id),
+                        )
+                    )
+                ).scalar_one()
+            assert payment_count == 1
+            assert settlement is not None
+            assert settlement.order_paid_minor == 2_500
+            assert payment_audit.business_details == {
+                "amount_minor": 2_500,
+                "invoice_no": response.invoice_no,
+                "method": "upi",
+                "order_id": str(paid_ids["order"]),
+                "shift_id": str(paid_ids["shift"]),
+            }
+            assert payment_audit.source_reference == response.invoice_no
+            assert "invoice_no" not in payment_audit.after
+
+            async def fail_after_finalization(*_args, **_kwargs):
+                raise RuntimeError("forced response-store rollback")
+
+            with monkeypatch.context() as scoped_patch:
+                scoped_patch.setattr(pos_router, "store_response", fail_after_finalization)
+                set_actor(
+                    user_id=rollback_ids["user"],
+                    company_id=rollback_ids["company"],
+                    terminal_id=rollback_ids["terminal"],
+                )
+                try:
+                    async with sessions() as session:
+                        with pytest.raises(RuntimeError, match="forced response-store rollback"):
+                            await pos_router.record_payment(
+                                rollback_ids["order"],
+                                pos_router.PaymentCreate(
+                                    method="upi",
+                                    amount_minor=2_500,
+                                    ref_external=f"UPI-ROLLBACK-{uuid4().hex[:12]}",
+                                    expected_order_total_minor=2_500,
+                                    expected_due_minor=2_500,
+                                ),
+                                session,
+                                _request(f"rollback-payment:{uuid4()}"),
+                                BackgroundTasks(),
+                                _tenant(rollback_ids),
+                            )
+                        await session.rollback()
+                finally:
+                    clear_actor()
+
+            async with sessions() as session:
+                rolled_back_order = await session.get(Order, rollback_ids["order"])
+                rolled_back_payments = await session.scalar(
+                    select(func.count()).select_from(Payment).where(
+                        Payment.order_id == rollback_ids["order"]
+                    )
+                )
+                rolled_back_audits = await session.scalar(
+                    select(func.count()).select_from(AuditLog).where(
+                        AuditLog.company_id == rollback_ids["company"],
+                        AuditLog.entity_type == "Payment",
+                    )
+                )
+            assert rolled_back_order is not None
+            assert rolled_back_order.status == "open"
+            assert rolled_back_order.invoice_no is None
+            assert rolled_back_payments == 0
+            assert rolled_back_audits == 0
+        finally:
+            clear_actor()
+            await engine.dispose()
+
+
+@pytest.mark.integration
 def test_0080_allows_complete_bundle_but_rejects_partial_and_overpaid_commit() -> None:
     with _disposable_database("erp_pos_split_guard") as database_url:
         # This is an 0080 trigger round-trip. Newer Gaming revisions keep
@@ -253,6 +400,32 @@ async def test_payment_bundle_endpoint_is_atomic_replay_safe_and_claim_scoped(
         with psycopg.connect(_sync_dsn(database_url)) as connection:
             paid_ids = _seed_open_order(connection)
             rollback_ids = _seed_open_order(connection)
+            ingredient_id, recipe_id, batch_id = uuid4(), uuid4(), uuid4()
+            connection.execute(
+                "INSERT INTO ingredients "
+                "(id, company_id, sku, name, base_unit, reorder_threshold, reorder_qty, "
+                "avg_cost_minor, current_qty) VALUES (%s, %s, %s, 'Audit ingredient', "
+                "'unit', 0, 0, 25, 10)",
+                (ingredient_id, paid_ids["company"], f"AUD-{uuid4().hex[:8]}"),
+            )
+            connection.execute(
+                "INSERT INTO recipes "
+                "(id, menu_item_id, name, yield_qty, version, is_active, cost_minor) "
+                "VALUES (%s, %s, 'Audit recipe', 1, 1, true, 25)",
+                (recipe_id, paid_ids["item"]),
+            )
+            connection.execute(
+                "INSERT INTO recipe_lines "
+                "(id, recipe_id, ingredient_id, qty, wastage_pct) "
+                "VALUES (%s, %s, %s, 1, 0)",
+                (uuid4(), recipe_id, ingredient_id),
+            )
+            connection.execute(
+                "INSERT INTO batches "
+                "(id, ingredient_id, branch_id, received_at, qty_initial, qty_on_hand, "
+                "cost_per_unit_minor, lot_code) VALUES (%s, %s, %s, %s, 10, 10, 25, 'AUDIT')",
+                (batch_id, ingredient_id, paid_ids["branch"], datetime.now(UTC)),
+            )
             _seed_revision_zero_program(connection, paid_ids["company"])
             _seed_revision_zero_program(connection, rollback_ids["company"])
             connection.execute(
@@ -271,6 +444,31 @@ async def test_payment_bundle_endpoint_is_atomic_replay_safe_and_claim_scoped(
         )
         sessions = async_sessionmaker(engine, expire_on_commit=False, autoflush=False)
         try:
+            install_audit_listeners()
+            async with sessions() as session:
+                historical_partial = AuditLog(
+                    company_id=paid_ids["company"],
+                    action="create",
+                    entity_type="Payment",
+                    entity_id=str(uuid4()),
+                    after={
+                        "order_id": str(paid_ids["order"]),
+                        "shift_id": str(paid_ids["shift"]),
+                        "amount_minor": 1_000,
+                        "method": "cash",
+                    },
+                    business_details={
+                        "order_id": str(paid_ids["order"]),
+                        "shift_id": str(paid_ids["shift"]),
+                        "amount_minor": 1_000,
+                        "method": "cash",
+                    },
+                )
+                session.add(historical_partial)
+                await session.commit()
+                historical_partial_details = dict(historical_partial.business_details)
+                historical_partial_after = dict(historical_partial.after)
+
             # Turn the first bill into shared checkout work and acquire its one
             # claim before collecting either tender leg.
             async with sessions() as session:
@@ -294,16 +492,24 @@ async def test_payment_bundle_endpoint_is_atomic_replay_safe_and_claim_scoped(
 
             key = f"split-payment:{uuid4()}"
             payload = _payload()
-            async with sessions() as session:
-                response = await pos_router.record_payment_bundle(
-                    paid_ids["order"],
-                    payload,
-                    session,
-                    _request(key),
-                    _tenant(paid_ids),
-                    claim_token,
-                )
-                await session.commit()
+            set_actor(
+                user_id=paid_ids["user"],
+                company_id=paid_ids["company"],
+                terminal_id=paid_ids["terminal"],
+            )
+            try:
+                async with sessions() as session:
+                    response = await pos_router.record_payment_bundle(
+                        paid_ids["order"],
+                        payload,
+                        session,
+                        _request(key),
+                        _tenant(paid_ids),
+                        claim_token,
+                    )
+                    await session.commit()
+            finally:
+                clear_actor()
             assert response.total_amount_minor == 2_500
             assert response.payment_breakdown_minor == {
                 "cash": 1_000,
@@ -314,6 +520,134 @@ async def test_payment_bundle_endpoint_is_atomic_replay_safe_and_claim_scoped(
             }
             assert response.payments[0].change_minor == 200
             assert response.order_status == "paid"
+            assert response.invoice_no is not None
+
+            async with sessions() as session:
+                historical_stock = AuditLog(
+                    company_id=paid_ids["company"],
+                    action="create",
+                    entity_type="StockMovement",
+                    entity_id=str(uuid4()),
+                    after={
+                        "type": "sale",
+                        "qty_delta": "-1",
+                        "batch_id": str(uuid4()),
+                        "ref_type": "order",
+                        "ref_id": str(paid_ids["order"]),
+                    },
+                )
+                malformed_link = AuditLog(
+                    company_id=paid_ids["company"],
+                    action="create",
+                    entity_type="Payment",
+                    entity_id=str(uuid4()),
+                    business_details={"order_id": "not-a-uuid", "amount_minor": 0},
+                )
+                null_link = AuditLog(
+                    company_id=paid_ids["company"],
+                    action="create",
+                    entity_type="Payment",
+                    entity_id=str(uuid4()),
+                    business_details={"order_id": None, "amount_minor": 0},
+                )
+                array_link = AuditLog(
+                    company_id=paid_ids["company"],
+                    action="create",
+                    entity_type="Payment",
+                    entity_id=str(uuid4()),
+                    business_details={
+                        "order_id": [str(paid_ids["order"])],
+                        "amount_minor": 0,
+                    },
+                )
+                foreign_company = uuid4()
+                cross_tenant_link = AuditLog(
+                    company_id=foreign_company,
+                    action="create",
+                    entity_type="Payment",
+                    entity_id=str(uuid4()),
+                    business_details={
+                        "order_id": str(paid_ids["order"]),
+                        "amount_minor": 0,
+                    },
+                )
+                session.add_all(
+                    [
+                        historical_stock,
+                        malformed_link,
+                        null_link,
+                        array_link,
+                        cross_tenant_link,
+                    ]
+                )
+                await session.commit()
+                historical_payload = dict(historical_stock.after)
+                audit_rows = (
+                    await session.execute(
+                        event_query(paid_ids["company"]).where(
+                            *predicates(
+                                {"view": "business", "reference": response.invoice_no},
+                                timezone="Asia/Kolkata",
+                            )
+                        )
+                    )
+                ).all()
+                malformed_rows = (
+                    await session.execute(
+                        event_query(paid_ids["company"]).where(
+                            AuditLog.id.in_((malformed_link.id, null_link.id, array_link.id))
+                        )
+                    )
+                ).all()
+                cross_tenant_row = (
+                    await session.execute(
+                        event_query(foreign_company).where(AuditLog.id == cross_tenant_link.id)
+                    )
+                ).one()
+            payment_audit = [
+                row.AuditLog for row in audit_rows if row.AuditLog.entity_type == "Payment"
+            ]
+            finalized_payment_audit = [
+                row for row in payment_audit if row.id != historical_partial.id
+            ]
+            historical_partial_row = next(
+                row for row in audit_rows if row.AuditLog.id == historical_partial.id
+            )
+            assert len(finalized_payment_audit) == 2
+            assert {row.business_details["method"] for row in finalized_payment_audit} == {
+                "cash",
+                "upi",
+            }
+            assert all(
+                row.business_details["invoice_no"] == response.invoice_no
+                for row in finalized_payment_audit
+            )
+            assert all(
+                row.source_reference == response.invoice_no for row in finalized_payment_audit
+            )
+            assert all("invoice_no" not in row.after for row in finalized_payment_audit)
+            assert historical_partial_row.AuditLog.business_details == historical_partial_details
+            assert historical_partial_row.AuditLog.after == historical_partial_after
+            assert "invoice_no" not in historical_partial_row.AuditLog.business_details
+            assert historical_partial_row.linked_bill_reference == response.invoice_no
+            stock_audit = next(
+                row for row in audit_rows if row.AuditLog.id == historical_stock.id
+            )
+            assert stock_audit.AuditLog.source_reference == str(paid_ids["order"])
+            assert stock_audit.AuditLog.after == historical_payload
+            assert stock_audit.linked_bill_reference == response.invoice_no
+            normal_flow_stock = [
+                row.AuditLog
+                for row in audit_rows
+                if row.AuditLog.entity_type == "StockMovement"
+                and row.AuditLog.id != historical_stock.id
+            ]
+            assert len(normal_flow_stock) == 1
+            assert normal_flow_stock[0].business_details["invoice_no"] == response.invoice_no
+            assert normal_flow_stock[0].business_details["order_id"] == str(paid_ids["order"])
+            assert len(malformed_rows) == 3
+            assert all(row.linked_bill_reference is None for row in malformed_rows)
+            assert cross_tenant_row.linked_bill_reference is None
 
             # A mixed-rail receipt can only enter the explicit cash-refund
             # workflow. Never guess one "original" rail and silently move the
@@ -467,8 +801,8 @@ async def test_payment_bundle_endpoint_is_atomic_replay_safe_and_claim_scoped(
             assert report.settled_refunds_issued_minor == 0
             assert report.net_payments_received_minor == 2_500
 
-            assert sum(line.debit_minor for line in ledger) == 5_000
-            assert sum(line.credit_minor for line in ledger) == 5_000
+            assert sum(line.debit_minor for line in ledger) == 5_025
+            assert sum(line.credit_minor for line in ledger) == 5_025
             expected_payment_entries = {
                 response.payments[0].id: {
                     (CASH.code, 1_000, 0),
@@ -492,6 +826,15 @@ async def test_payment_bundle_endpoint_is_atomic_replay_safe_and_claim_scoped(
             } == {
                 (POS_SETTLEMENT_CLEARING.code, 2_500, 0),
                 (SALES_REVENUE.code, 0, 2_500),
+            }
+            stock_movement_id = UUID(normal_flow_stock[0].entity_id)
+            assert {
+                (line.account_code, line.debit_minor, line.credit_minor)
+                for line in ledger
+                if line.ref_type == "stock_sale" and line.ref_id == stock_movement_id
+            } == {
+                (COST_OF_GOODS_SOLD.code, 25, 0),
+                (INVENTORY.code, 0, 25),
             }
 
             # Complete a real partial cash refund against the mixed-rail bill.
@@ -644,8 +987,8 @@ async def test_payment_bundle_endpoint_is_atomic_replay_safe_and_claim_scoped(
             assert refunded_report.payments_received.total_minor == 2_500
             assert refunded_report.net_payments_received_minor == 2_000
 
-            assert sum(line.debit_minor for line in refunded_ledger) == 5_500
-            assert sum(line.credit_minor for line in refunded_ledger) == 5_500
+            assert sum(line.debit_minor for line in refunded_ledger) == 5_525
+            assert sum(line.credit_minor for line in refunded_ledger) == 5_525
             assert {
                 (line.account_code, line.debit_minor, line.credit_minor)
                 for line in refunded_ledger

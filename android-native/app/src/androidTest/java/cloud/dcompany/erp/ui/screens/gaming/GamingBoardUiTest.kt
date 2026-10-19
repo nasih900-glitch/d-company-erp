@@ -53,6 +53,7 @@ import androidx.compose.ui.test.swipe
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import cloud.dcompany.erp.core.auth.GamingAccess
+import cloud.dcompany.erp.core.auth.ShiftAccess
 import cloud.dcompany.erp.core.db.GamingSessionParticipantCacheEntity
 import cloud.dcompany.erp.core.db.GamingSessionState
 import cloud.dcompany.erp.core.db.MenuItemEntity
@@ -64,6 +65,7 @@ import cloud.dcompany.erp.ui.components.SyncAvailabilityProblem
 import cloud.dcompany.erp.ui.theme.AppearancePreference
 import cloud.dcompany.erp.ui.theme.DCompanyTheme
 import java.io.File
+import java.time.Instant
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.roundToInt
@@ -369,6 +371,81 @@ class GamingBoardUiTest {
                 !layout.isLineEllipsized(1) &&
                 layout.getLineEnd(1) == expected.length &&
                 layout.getLineEnd(1, visibleEnd = true) == expected.length,
+        )
+    }
+
+    @Test
+    fun compactOvertimeWarningFitsTwoLinesWithoutEllipsis() {
+        val station = Station(
+            id = "ps5-overtime",
+            code = "PS5-OT",
+            name = "PS5 Overtime",
+            type = "ps5",
+            ratePerHourMinor = 12_000,
+        )
+        val start = Instant.parse("2026-10-19T15:35:00Z")
+        val warning = "Time is up. Add a paid extension or stop. Package price stays fixed."
+        compose.setContent {
+            DCompanyTheme {
+                Box(Modifier.width(284.dp)) {
+                    GamingStationCard(
+                        station = station,
+                        session = GameSession(
+                            id = "session-overtime",
+                            stationId = station.id,
+                            shiftId = "shift-1",
+                            status = "active",
+                            startAt = start.toString(),
+                            timerMinutes = 30,
+                            timerEndsAt = start.plusSeconds(30 * 60).toString(),
+                            packageId = "single-30",
+                            packagePriceMinorSnapshot = 8_000,
+                            packageDurationMinutesSnapshot = 30,
+                            packageVariantSnapshot = "single",
+                            packageStationTypeSnapshot = "ps5",
+                        ),
+                        packageExtensionAction = null,
+                        wallClock = remember {
+                            mutableLongStateOf(start.plusSeconds(40 * 60).toEpochMilli())
+                        },
+                        actionInProgress = false,
+                        busyHere = false,
+                        focused = false,
+                        canWrite = true,
+                        canReconcileLegacy = false,
+                        activeShiftId = "shift-1",
+                        activeShiftServerConfirmed = true,
+                        packages = emptyList(),
+                        hasTransferTarget = true,
+                        onStart = {},
+                        onStop = {},
+                        onSend = {},
+                        onCancelUnbilled = {},
+                        onExtendTimer = {},
+                        onExtendPackage = { _, _ -> },
+                        onTransfer = {},
+                        onReconcile = {},
+                        onRepairBilling = {},
+                        onResolveLegacyStart = {},
+                        onDiscardPackageExtension = {},
+                        compactDetail = true,
+                    )
+                }
+            }
+        }
+
+        val warningNode = compose.onNodeWithText(warning, useUnmergedTree = true)
+            .assertIsDisplayed()
+        val layouts = mutableListOf<TextLayoutResult>()
+        warningNode.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+        val layout = layouts.single()
+        assertTrue(
+            "The 284dp overtime warning must render completely in two lines: " +
+                "lines=${layout.lineCount} visibleEnd=" +
+                layout.getLineEnd(layout.lineCount - 1, visibleEnd = true),
+            layout.lineCount <= 2 && !layout.didOverflowHeight &&
+                !layout.isLineEllipsized(layout.lineCount - 1) &&
+                layout.getLineEnd(layout.lineCount - 1, visibleEnd = true) == warning.length,
         )
     }
 
@@ -1499,6 +1576,7 @@ class GamingBoardUiTest {
                             },
                             onVoidAddon = { _, _ -> }, onReviewRejectedAddon = {},
                             onManageParticipants = {},
+                            shiftAccess = ShiftAccess(canOpen = true, canClose = true),
                         )
                     }
                 }
@@ -1508,6 +1586,16 @@ class GamingBoardUiTest {
         compose.onNodeWithTag("gaming-filter-racing").assertIsDisplayed()
         compose.onNodeWithTag("gaming-filter-vr").assertIsDisplayed()
         compose.onNodeWithText("Gaming board ready").assertIsDisplayed()
+        val readyAttentionBounds = compose.onNodeWithTag("gaming-attention-bar")
+            .assertIsDisplayed().getUnclippedBoundsInRoot()
+        compose.runOnIdle { state.value = state.value.copy(refreshing = true) }
+        compose.onNodeWithText("Refreshing Gaming board").assertIsDisplayed()
+        assertEquals(
+            "Ready and refreshing attention states must keep identical bounds",
+            readyAttentionBounds,
+            compose.onNodeWithTag("gaming-attention-bar").getUnclippedBoundsInRoot(),
+        )
+        compose.runOnIdle { state.value = state.value.copy(refreshing = false) }
         val firstTile = compose.onNodeWithTag("gaming-station-ps5-1")
             .getUnclippedBoundsInRoot()
         val racingTile = compose.onNodeWithTag("gaming-station-racing-1")
@@ -1535,6 +1623,41 @@ class GamingBoardUiTest {
             val wideDraftPrimaryBounds = compose.onNodeWithTag("gaming-primary-action-host")
                 .assertIsDisplayed().getUnclippedBoundsInRoot()
             capture("gaming-full-workspace-1280x800.png", "gaming-full-workspace")
+
+            compose.runOnIdle {
+                state.value = state.value.copy(
+                    activeShiftId = null,
+                    activeShiftServerConfirmed = false,
+                )
+            }
+            compose.onNodeWithText("Open shift here").assertIsDisplayed()
+            compose.onNodeWithText("Sync shift state").assertIsDisplayed()
+            compose.onNodeWithContentDescription("Add new customer").assertIsDisplayed()
+            val blockedSearch = compose.onNodeWithContentDescription(
+                "Search saved customers by name or phone",
+            ).fetchSemanticsNode()
+            val blockedSearchBounds = blockedSearch.boundsInRoot
+            val minimumTouchHeightPx = 48f * compose.activity.resources.displayMetrics.density
+            assertTrue(
+                "Closed-shift recovery must leave the full customer lookup visible: " +
+                    "bounds=$blockedSearchBounds measured=${blockedSearch.size}",
+                blockedSearchBounds.height >= minimumTouchHeightPx - 1f &&
+                    abs(blockedSearchBounds.height - blockedSearch.size.height) <= 1f,
+            )
+            assertEquals(
+                "Closed-shift recovery controls must not move the duration dial",
+                wideDraftRingBounds,
+                compose.onNodeWithTag("gaming-control-ring")
+                    .assertIsDisplayed().getUnclippedBoundsInRoot(),
+            )
+            compose.onNodeWithTag("gaming-start-action").assertIsNotEnabled()
+
+            compose.runOnIdle {
+                state.value = state.value.copy(
+                    activeShiftId = "fixture-shift",
+                    activeShiftServerConfirmed = true,
+                )
+            }
 
             compose.runOnIdle {
                 state.value = state.value.copy(sessions = listOf(GameSession(
@@ -1673,6 +1796,11 @@ class GamingBoardUiTest {
                 )))
             }
             compose.onNodeWithText("Action centre · 1 to review").assertIsDisplayed()
+            assertEquals(
+                "Review attention must not resize the operational rail",
+                readyAttentionBounds,
+                compose.onNodeWithTag("gaming-attention-bar").getUnclippedBoundsInRoot(),
+            )
             assertEquals(
                 "Payment attention must update the status rail without moving the dial",
                 wideActiveRingBounds,

@@ -112,6 +112,9 @@ class _Session:
     def add(self, entity) -> None:
         self.added.append(entity)
 
+    def add_all(self, entities) -> None:
+        self.added.extend(entities)
+
     async def flush(self) -> None:
         self.flush_count += 1
 

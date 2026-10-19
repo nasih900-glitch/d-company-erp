@@ -208,7 +208,7 @@ def test_full_protected_source_inventory_matches_reviewed_worktree(verifier, tmp
     candidate.mkdir()
     for revision, destination in (
         (verifier.PRIOR_REVISION, prior),
-        ("HEAD", candidate),
+        ("f78d567b2093671992be289133af22637e6d7b0d", candidate),
     ):
         archive = destination / "source.tar"
         with archive.open("wb") as output:
@@ -221,26 +221,6 @@ def test_full_protected_source_inventory_matches_reviewed_worktree(verifier, tmp
         assert result.returncode == 0
         subprocess.run(["tar", "-xf", archive, "-C", destination], check=True)
         archive.unlink()
-    changed = subprocess.run(
-        ["git", "diff", "--name-only", "HEAD", "--"],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.splitlines()
-    changed.extend(
-        (
-            "infra/scripts/verify-build52-transition-state.sql",
-            "backend/tests/integration/test_build52_transition_state_query.py",
-        )
-    )
-    for relative in sorted(set(changed)):
-        source = ROOT / relative
-        if not source.is_file():
-            continue
-        target = candidate / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(source, target)
     build50, _, _ = verifier._load_modules(ROOT)
     proof = verifier._verify_sources(build50, prior, candidate)
     assert proof["prior_protected_path_count"] == 1217
@@ -339,14 +319,15 @@ def test_transition_json_rejects_duplicate_nonfinite_and_unbounded_input(verifie
 
 def test_installer_has_one_exact_pre_post_rollback_route_before_ingress():
     source = INSTALLER.read_text(encoding="utf-8")
-    assert source.count('python3 "$BUILD52_PENDING_COMPATIBILITY_VERIFIER" pre') == 1
-    assert source.count('python3 "$BUILD52_PENDING_COMPATIBILITY_VERIFIER" post') == 1
+    assert source.count('python3 "$EXACT_BUILD50_VERIFIER" pre') == 1
+    assert source.count('python3 "$EXACT_BUILD50_VERIFIER" post') == 1
     assert (
-        source.count('python3 "$BUILD52_PENDING_COMPATIBILITY_VERIFIER" rollback') == 1
+        source.count('python3 "$EXACT_BUILD50_VERIFIER" rollback') == 1
     )
-    pre = source.index('python3 "$BUILD52_PENDING_COMPATIBILITY_VERIFIER" pre')
+    assert 'EXACT_BUILD50_VERIFIER="$BUILD52_PENDING_COMPATIBILITY_VERIFIER"' in source
+    pre = source.index('python3 "$EXACT_BUILD50_VERIFIER" pre')
     backup = source.index("==> Creating final quiesced pre-upgrade PostgreSQL backup")
-    post = source.index('python3 "$BUILD52_PENDING_COMPATIBILITY_VERIFIER" post')
+    post = source.index('python3 "$EXACT_BUILD50_VERIFIER" post')
     migration = source.index("--entrypoint python backend -m alembic upgrade head")
     normal_writers = source.index(
         "up -d --no-build --pull never postgres redis backend frontend"
@@ -360,9 +341,9 @@ def test_installer_has_one_exact_pre_post_rollback_route_before_ingress():
     assert 'image: "$CANDIDATE_BACKEND_IMAGE_ID"' in source
     assert 'expected["services"]["backend"]["image"] = sys.argv[3]' in source
     assert "migration override changed more than the backend image" in source
-    assert "Attested Build52 backend image is missing before migration." in source
+    assert "Attested $EXACT_BUILD50_SUCCESSOR backend image is missing before migration." in source
     assert (
-        "BUILD52 normal writers require the in-process quiesced post proof." in source
+        "$EXACT_BUILD50_SUCCESSOR normal writers require the in-process quiesced post proof." in source
     )
     assert '[ "$PRIOR_DB_HEAD" = 0089 ]' in source
     assert '[ "$PRIOR_REVISION" = 29e32b440ab8dc162b6c8f5d40f8283fad53ce04 ]' in source
@@ -371,7 +352,7 @@ def test_installer_has_one_exact_pre_post_rollback_route_before_ingress():
 def test_migration_runtime_probe_belongs_to_the_exact_build52_branch():
     source = INSTALLER.read_text(encoding="utf-8")
     old_start = '    elif [ "$CANDIDATE_APP_VERSION" = 3.1.36 ]'
-    new_start = '    elif [ "$CANDIDATE_APP_VERSION" = 3.1.44 ]'
+    new_start = '    elif { [ "$CANDIDATE_APP_VERSION" = 3.1.44 ]'
     next_start = '    elif [ "$CANDIDATE_APP_VERSION" = 3.1.42 ]'
     historical = subprocess.run(
         [
@@ -393,7 +374,7 @@ def test_migration_runtime_probe_belongs_to_the_exact_build52_branch():
     branch = source[source.index(new_start) : source.index(next_start)]
     probe = branch.index("--entrypoint python")
     verified = branch.index("BUILD52_MIGRATION_RUNTIME_VERIFIED=true")
-    admission = branch.index('python3 "$BUILD52_PENDING_COMPATIBILITY_VERIFIER" pre')
+    admission = branch.index('python3 "$EXACT_BUILD50_VERIFIER" pre')
     accepted = branch.index("BUILD52_PENDING_CARRIED_UNRESOLVED=true")
     assert probe < verified < admission < accepted
     assert source.count("BUILD52_MIGRATION_RUNTIME_VERIFIED=true") == 1
@@ -435,7 +416,7 @@ def test_transition_query_is_read_only_and_projects_only_additive_audit_columns(
 
 def test_runtime_image_gate_exercises_build52_one_off_migration_before_writers():
     source = RUNTIME_IMAGE_VERIFIER.read_text(encoding="utf-8")
-    component = source.index('if [ "$APP_VERSION" = 3.1.44 ]; then')
+    component = source.index('  3.1.44) EXACT_MIGRATION_BUILD=Build52 ;;')
     predecessor = source.index(
         "--entrypoint python backend -m alembic upgrade 0089", component
     )

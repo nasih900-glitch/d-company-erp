@@ -8,7 +8,7 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Header, Query, Request
 from pydantic import BaseModel
-from sqlalchemy import String, and_, cast, distinct, or_, select
+from sqlalchemy import String, cast, distinct, or_, select
 
 from app.core.client_ip import audit_user_agent, trusted_client_ip
 from app.core.db import SessionDep
@@ -86,6 +86,8 @@ class AuditEntry(BaseModel):
     business_details: dict[str, Any] | None = None
     actor_label_source: str = "current_account_profile"
     match_explanation: str | None = None
+    linked_bill_reference: str | None = None
+    linked_bill_reference_basis: str | None = None
 
 
 class AuditEventsPage(BaseModel):
@@ -138,11 +140,23 @@ def _apply_audit_area_filter(stmt: Any, area: str | None) -> Any:
     return stmt.where(category_expression() == normalized)
 
 
-def _audit_entry(row, *, match_explanation: str | None = None) -> AuditEntry:
+def _audit_entry(
+    row,
+    *,
+    match_explanation: str | None = None,
+    matched_reference: str | None = None,
+) -> AuditEntry:
     entry = row.AuditLog
     semantic = describe(entry)
     semantic["business_details"] = json_safe(semantic["business_details"])
     unauthenticated = semantic["actor_kind"] == "unauthenticated"
+    linked_bill_reference = getattr(row, "linked_bill_reference", None)
+    if (
+        matched_reference
+        and linked_bill_reference == matched_reference
+        and semantic["source_reference"] != matched_reference
+    ):
+        match_explanation = "Current bill linked by retained order identity"
     return AuditEntry(
         **{field: getattr(entry, field) for field in (
             "id", "action", "entity_type", "entity_id", "ip", "user_agent", "terminal_id",
@@ -153,7 +167,12 @@ def _audit_entry(row, *, match_explanation: str | None = None) -> AuditEntry:
         actor_user_id=None if unauthenticated else entry.actor_user_id,
         actor_name=None if unauthenticated else row.name,
         actor_email=None if unauthenticated else row.email,
-        **semantic, match_explanation=match_explanation,
+        **semantic,
+        match_explanation=match_explanation,
+        linked_bill_reference=linked_bill_reference,
+        linked_bill_reference_basis=(
+            "current_linked_order" if linked_bill_reference is not None else None
+        ),
     )
 
 
@@ -296,15 +315,7 @@ async def list_audit(
     _require_audit_unlock(x_audit_token, tenant)
 
     stmt = (
-        select(AuditLog, User.name, User.email)
-        .outerjoin(
-            User,
-            and_(
-                User.id == AuditLog.actor_user_id,
-                User.company_id == AuditLog.company_id,
-            ),
-        )
-        .where(AuditLog.company_id == tenant.company_id)
+        event_query(tenant.company_id)
         .order_by(AuditLog.id.desc())
         .limit(limit)
     )
@@ -455,7 +466,14 @@ async def audit_events(
                    "Exact action code" if filters["code"] or (filters["q"] or "").upper() in BY_CODE else
                    "Text, current staff label or action-name match" if filters["q"] else None)
     return AuditEventsPage(
-        entries=[_audit_entry(row, match_explanation=explanation) for row in rows],
+        entries=[
+            _audit_entry(
+                row,
+                match_explanation=explanation,
+                matched_reference=filters["reference"],
+            )
+            for row in rows
+        ],
         next_cursor=next_cursor, activity_cursor=activity_cursor, has_more=has_more, snapshot_max_id=snapshot,
         loaded_count=len(rows), matching_count=matching_count, shop_timezone=zone,
         new_entries_available=new_matching_entries,

@@ -84,7 +84,11 @@ internal fun auditEntityLabel(entityType: String): String = when (entityType) {
 
 internal fun auditEntryTitle(entry: AuditEntry): String =
     entry.actionCode?.let { "$it · ${entry.actionLabel}" }
-        ?: "${auditEntityLabel(entry.entityType)} · ${auditActionLabel(entry.action)} (legacy / technical)"
+        ?: "${auditEntityLabel(entry.entityType)} · ${auditActionLabel(entry.action)} (${when(entry.classificationSource) {
+            "technical_companion" -> "technical record"
+            "unclassified_recorded" -> "unclassified record"
+            else -> "legacy / unclassified"
+        }})"
 
 internal fun auditConnectionLabel(entry: AuditEntry): String = when (entry.clientWasOffline) {
     true -> "Captured offline and later synced"
@@ -138,7 +142,7 @@ internal fun auditBusinessLabel(value: String): String = when (value) {
 }
 
 private val secretAuditField = Regex("password|secret|token|otp|authorization|cookie|private.?key|api.?key|access.?key",RegexOption.IGNORE_CASE)
-private val technicalAuditField = Regex("(^id$|_id$|_ids$|fingerprint|hash|idempotency|client_action|request_id|email|phone)",RegexOption.IGNORE_CASE)
+private val technicalAuditField = Regex("(^id$|_id$|_ids$|_by$|fingerprint|hash|idempotency|client_action|request_id|email|phone)",RegexOption.IGNORE_CASE)
 
 internal fun redactAuditValue(value: JsonElement): JsonElement = when (value) {
     is JsonObject -> JsonObject(value.mapValues { (key,item) -> if(secretAuditField.containsMatchIn(key)) JsonPrimitive("[redacted]") else redactAuditValue(item) })
@@ -185,6 +189,12 @@ internal fun auditBusinessFacts(entry: AuditEntry): List<Pair<String,JsonElement
 internal fun auditBusinessSummary(entry: AuditEntry): String {
     val facts=entry.businessDetails.orEmpty()
     val pieces=mutableListOf<String>()
+    if(entry.actionCode == "SHF-OPN") (facts["opening_float_minor"] as? JsonPrimitive)?.longOrNull?.let { pieces += "Opening float ${it.asRupees()}" }
+    if(entry.actionCode in setOf("SHF-CLS", "SHF-REC")) listOf(
+        "counted_minor" to "Counted",
+        "expected_minor" to "Expected",
+        "variance_minor" to "Variance",
+    ).forEach { (key,label) -> (facts[key] as? JsonPrimitive)?.longOrNull?.let { pieces += "$label ${it.asRupees()}" } }
     ((facts["amount_minor"] ?: facts["line_total_minor"] ?: facts["total_minor"]) as? JsonPrimitive)?.longOrNull?.let { pieces += it.asRupees() }
     val method=(facts["effective_method"] ?: facts["payment_method"] ?: facts["method"]) as? JsonPrimitive
     if(method != null) {
@@ -201,6 +211,7 @@ internal fun auditBusinessSummary(entry: AuditEntry): String {
         pieces += "${auditBusinessLabel(key)}: ${auditBusinessValue(key,facts[key],ZoneId.of("UTC"))}"
     }
     return pieces.takeIf { it.isNotEmpty() }?.joinToString(" · ")
+        ?: facts.keys.takeIf { keys -> keys.any(::businessSnapshotField) }?.let { "Additional retained facts below" }
         ?: entry.summary.takeIf { it.isNotBlank() && it != entry.actionLabel && it != "${entry.entityType} ${entry.action}" }
         ?: "No additional business facts retained"
 }
@@ -208,7 +219,18 @@ internal fun auditBusinessSummary(entry: AuditEntry): String {
 internal fun auditOrderId(entry: AuditEntry): String? {
     val retained=entry.businessDetails?.get("order_id") ?: entry.after?.get("order_id") ?: entry.before?.get("order_id")
     val candidate=(retained as? JsonPrimitive)?.content ?: entry.entityId.takeIf { entry.entityType == "Order" }
-    return candidate?.takeIf { it.matches(Regex("[a-fA-F0-9-]{36}")) }
+    candidate?.takeIf { it.matches(Regex("[a-fA-F0-9-]{36}")) }?.let { return it }
+    val refType=(entry.businessDetails?.get("ref_type") ?: entry.after?.get("ref_type") ?: entry.before?.get("ref_type") as? JsonPrimitive)
+        .let { (it as? JsonPrimitive)?.content }
+    val refId=(entry.businessDetails?.get("ref_id") ?: entry.after?.get("ref_id") ?: entry.before?.get("ref_id") as? JsonPrimitive)
+        .let { (it as? JsonPrimitive)?.content }
+    return refId?.takeIf { entry.entityType == "StockMovement" && refType == "order" && it.matches(Regex("[a-fA-F0-9-]{36}")) }
+}
+
+internal fun auditReadableSourceReference(entry: AuditEntry): String? {
+    val retained=(entry.businessDetails?.get("invoice_no") as? JsonPrimitive)?.contentOrNull
+    if(!retained.isNullOrBlank()) return retained
+    return entry.sourceReference?.takeUnless { it.matches(Regex("[a-fA-F0-9-]{36}")) }
 }
 
 /** Source-defined mutations only. Observation/create/delete snapshots are facts, not changes. */

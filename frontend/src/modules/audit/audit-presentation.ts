@@ -134,13 +134,40 @@ export function auditOrderId(entry: BusinessAuditEntryDTO): string | null {
     entry.after?.order_id ??
     entry.before?.order_id;
   if (typeof id === 'string' && /^[a-f0-9-]{36}$/i.test(id)) return id;
+  const refType = entry.business_details?.ref_type ?? entry.after?.ref_type ?? entry.before?.ref_type;
+  const refId = entry.business_details?.ref_id ?? entry.after?.ref_id ?? entry.before?.ref_id;
+  if (entry.entity_type === 'StockMovement' && refType === 'order' && typeof refId === 'string' && /^[a-f0-9-]{36}$/i.test(refId)) return refId;
   return entry.entity_type === 'Order' ? entry.entity_id : null;
+}
+
+export function auditReadableSourceReference(entry: BusinessAuditEntryDTO): string | null {
+  const retainedInvoice = entry.business_details?.invoice_no;
+  if (typeof retainedInvoice === 'string' && retainedInvoice.trim()) return retainedInvoice;
+  return entry.source_reference && !/^[a-f0-9-]{36}$/i.test(entry.source_reference)
+    ? entry.source_reference
+    : null;
 }
 
 /** Display retained facts without classifying or upgrading the event outcome. */
 export function auditBusinessSummary(entry: BusinessAuditEntryDTO): string {
   const facts = entry.business_details ?? {};
   const pieces: string[] = [];
+  if (entry.action_code === 'SHF-OPN') {
+    const opening = facts.opening_float_minor;
+    if (typeof opening === 'number' && Number.isSafeInteger(opening))
+      pieces.push(`Opening float ${inr(opening)}`);
+  }
+  if (entry.action_code === 'SHF-CLS' || entry.action_code === 'SHF-REC') {
+    for (const [key, label] of [
+      ['counted_minor', 'Counted'],
+      ['expected_minor', 'Expected'],
+      ['variance_minor', 'Variance'],
+    ] as const) {
+      const value = facts[key];
+      if (typeof value === 'number' && Number.isSafeInteger(value))
+        pieces.push(`${label} ${inr(value)}`);
+    }
+  }
   const amount =
     facts.amount_minor ?? facts.line_total_minor ?? facts.total_minor;
   if (typeof amount === 'number' && Number.isSafeInteger(amount))
@@ -173,11 +200,11 @@ export function auditBusinessSummary(entry: BusinessAuditEntryDTO): string {
   }
   if (typeof facts.duration_minutes === 'number')
     pieces.push(`${facts.duration_minutes} min`);
-  return pieces.length
-    ? pieces.join(' · ')
-    : entry.summary === entry.action_label
-      ? 'No additional business facts retained'
-      : entry.summary;
+  if (pieces.length) return pieces.join(' · ');
+  if (Object.keys(facts).some(businessSnapshotField)) return 'Additional retained facts below';
+  return entry.summary === entry.action_label
+    ? 'No additional business facts retained'
+    : entry.summary;
 }
 
 const mutationActions = new Set([
@@ -192,7 +219,7 @@ const mutationActions = new Set([
   'bug_report_status_change', 'bug_report_resolution_note_change',
 ]);
 function businessSnapshotField(key: string): boolean {
-  return !/(^id$|_id$|_ids$|fingerprint|hash|password|secret|token|otp|authorization|cookie|private.?key|api.?key|access.?key|email|phone|client_action|request_id)/i.test(key) &&
+  return !/(^id$|_id$|_ids$|_by$|fingerprint|hash|password|secret|token|otp|authorization|cookie|private.?key|api.?key|access.?key|email|phone|client_action|request_id)/i.test(key) &&
     !['created_at', 'updated_at', 'auth_version', 'token_version'].includes(key);
 }
 /** Two-sided source-defined mutation evidence only; absent is never a recorded null. */

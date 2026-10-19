@@ -1113,10 +1113,7 @@ private fun AppRoot(
             notice = notice,
             updateState = appUpdateState,
             outboxWorkStatus = outboxWorkStatus,
-            onDismiss = {
-                appUpdate.discard()
-                compatibility.dismissOptionalUpdate()
-            },
+            onDismiss = compatibility::dismissOptionalUpdate,
             onDownload = { appUpdate.download(notice) },
             onCancelDownload = appUpdate::cancel,
             onDiscardDownload = appUpdate::discard,

@@ -89,6 +89,9 @@ class _RouteSession:
     def add(self, entity) -> None:
         self.added.append(entity)
 
+    def add_all(self, entities) -> None:
+        self.added.extend(entities)
+
     async def delete(self, entity) -> None:
         self.deleted.append(entity)
 
@@ -711,11 +714,22 @@ async def test_valid_held_payment_consumes_claim_in_sale_transaction(monkeypatch
     async def _store(*_args, **kwargs):
         stored.update(kwargs)
 
-    async def _finalize(_session, *, order, **_kwargs):
+    async def _finalize(
+        _session,
+        *,
+        order,
+        final_payment_bundle=None,
+        **_kwargs,
+    ):
         order.status = "paid"
         order.invoice_no = "TEST-0001"
         order.fiscal_year = "2026-27"
         order.invoice_issued_at = now
+        if final_payment_bundle is not None:
+            # Match the production finalizer's invoice-before-payment ordering.
+            await _session.flush()
+            _session.add_all(final_payment_bundle)
+            await _session.flush()
 
     monkeypatch.setattr(pos_router, "check_or_reserve", _reserve)
     monkeypatch.setattr(pos_router, "store_response", _store)

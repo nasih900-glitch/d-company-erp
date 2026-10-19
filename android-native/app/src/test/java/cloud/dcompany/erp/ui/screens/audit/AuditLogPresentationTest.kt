@@ -45,7 +45,7 @@ class AuditLogPresentationTest {
         )
 
         assertEquals("Unverified legacy attribution · Protected Owner", auditActor(entry))
-        assertEquals("Payment · Created (legacy / technical)", auditEntryTitle(entry))
+        assertEquals("Payment · Created (legacy / unclassified)", auditEntryTitle(entry))
         assertEquals("Captured offline and later synced", auditConnectionLabel(entry))
         assertEquals("Android build 2", auditClientLabel(entry))
         assertEquals("25 Aug, 12:34:56", formatAuditTimestamp(entry.createdAt, ZoneOffset.UTC, Locale.UK))
@@ -111,6 +111,21 @@ class AuditLogPresentationTest {
 
         assertEquals(listOf("Attendance", "Payment"), facets.entityTypes)
         assertEquals(listOf("clock_in", "create"), facets.actions)
+    }
+
+    @Test
+    fun `shift summaries preserve zero and typed stock order relation`() {
+        val close = json.decodeFromString<AuditEntry>(
+            """{"id":1,"action":"shift_closed","action_code":"SHF-CLS","entity_type":"Shift","entity_id":"s","created_at":"2026-10-19T00:00:00Z","business_details":{"counted_minor":10000,"expected_minor":10000,"variance_minor":0,"closed_by":"11111111-1111-4111-8111-111111111111"}}""",
+        )
+        assertEquals("Counted ₹100.00 · Expected ₹100.00 · Variance ₹0.00", auditBusinessSummary(close))
+        val orderId = "11111111-1111-4111-8111-111111111111"
+        val stock = json.decodeFromString<AuditEntry>(
+            """{"id":2,"action":"create","entity_type":"StockMovement","entity_id":"m","created_at":"2026-10-19T00:00:00Z","source_reference":"$orderId","linked_bill_reference":"D/QA/26-27/00001","business_details":{"ref_type":"order","ref_id":"$orderId"}}""",
+        )
+        assertEquals(orderId, auditOrderId(stock))
+        assertEquals(null, auditReadableSourceReference(stock))
+        assertFalse(auditBusinessFacts(close).any { it.first == "closed_by" })
     }
 
     @Test

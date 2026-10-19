@@ -26,6 +26,7 @@ from scripts.verify_code26_regression_freeze import (
     CODE30_4_BUILD49_BASE,
     CODE30_4_BUILD50_BASE,
     CODE30_4_BUILD51_BASE,
+    CODE30_4_BUILD52_BASE,
     CODE30_4_FREEZE_CONTROL_PATHS,
     RegressionFreezeError,
     REVIEWED_CODE29_2_PRODUCTION_PATHS,
@@ -54,6 +55,7 @@ from scripts.verify_code26_regression_freeze import (
     REVIEWED_CODE30_4_BUILD50_SHA256,
     REVIEWED_CODE30_4_BUILD51_SHA256,
     REVIEWED_CODE30_4_BUILD52_SHA256,
+    REVIEWED_CODE30_4_BUILD53_SHA256,
     REVIEWED_CODE30_4_SHA256,
     REVIEWED_POST_CODE30_3_MAINTENANCE_SHA256,
     REVIEWED_CODE30_PRODUCTION_PATHS,
@@ -105,7 +107,7 @@ def _reviewed_code30_point4_maps(source: bytes) -> dict[str, dict[str, str]]:
 
 
 def _current_reviewed_sha256(path: str, fallback: str) -> str:
-    return REVIEWED_CODE30_4_BUILD52_SHA256.get(path) or REVIEWED_CODE30_4_BUILD51_SHA256.get(path) or REVIEWED_CODE30_4_BUILD50_SHA256.get(path) or REVIEWED_CODE30_4_BUILD49_SHA256.get(path) or REVIEWED_CODE30_4_BUILD48_SHA256.get(path) or REVIEWED_CODE30_4_BUILD47_SHA256.get(path) or REVIEWED_CODE30_4_BUILD46_SHA256.get(path) or REVIEWED_CODE30_4_BUILD45_SHA256.get(path) or REVIEWED_CODE30_4_BUILD44_SHA256.get(path) or REVIEWED_CODE30_4_BUILD43_SHA256.get(path) or REVIEWED_CODE30_4_BUILD42_SHA256.get(
+    return REVIEWED_CODE30_4_BUILD53_SHA256.get(path) or REVIEWED_CODE30_4_BUILD52_SHA256.get(path) or REVIEWED_CODE30_4_BUILD51_SHA256.get(path) or REVIEWED_CODE30_4_BUILD50_SHA256.get(path) or REVIEWED_CODE30_4_BUILD49_SHA256.get(path) or REVIEWED_CODE30_4_BUILD48_SHA256.get(path) or REVIEWED_CODE30_4_BUILD47_SHA256.get(path) or REVIEWED_CODE30_4_BUILD46_SHA256.get(path) or REVIEWED_CODE30_4_BUILD45_SHA256.get(path) or REVIEWED_CODE30_4_BUILD44_SHA256.get(path) or REVIEWED_CODE30_4_BUILD43_SHA256.get(path) or REVIEWED_CODE30_4_BUILD42_SHA256.get(
         path,
         REVIEWED_CODE30_4_BUILD41_SHA256.get(
             path,
@@ -743,6 +745,7 @@ def test_code30_point4_delta_inventory_is_exact() -> None:
         | set(REVIEWED_CODE30_4_BUILD50_SHA256)
         | set(REVIEWED_CODE30_4_BUILD51_SHA256)
         | set(REVIEWED_CODE30_4_BUILD52_SHA256)
+        | set(REVIEWED_CODE30_4_BUILD53_SHA256)
     )
 
 
@@ -892,7 +895,17 @@ def test_code30_point4_build51_delta_inventory_is_exact() -> None:
 
 def test_code30_point4_build52_delta_inventory_is_exact() -> None:
     changed = set(subprocess.run(
-        ["git", "diff", "--name-only", CODE30_4_BUILD51_BASE],
+        ["git", "diff", "--name-only", CODE30_4_BUILD51_BASE, CODE30_4_BUILD52_BASE],
+        cwd=ROOT, check=True, capture_output=True, text=True,
+    ).stdout.splitlines())
+    assert {path for path in changed if path} == (
+        set(REVIEWED_CODE30_4_BUILD52_SHA256) | set(CODE30_4_FREEZE_CONTROL_PATHS)
+    )
+
+
+def test_code30_point4_build53_delta_inventory_is_exact() -> None:
+    changed = set(subprocess.run(
+        ["git", "diff", "--name-only", CODE30_4_BUILD52_BASE],
         cwd=ROOT, check=True, capture_output=True, text=True,
     ).stdout.splitlines())
     changed.update(subprocess.run(
@@ -900,7 +913,7 @@ def test_code30_point4_build52_delta_inventory_is_exact() -> None:
         cwd=ROOT, check=True, capture_output=True, text=True,
     ).stdout.splitlines())
     assert {path for path in changed if path} == (
-        set(REVIEWED_CODE30_4_BUILD52_SHA256) | set(CODE30_4_FREEZE_CONTROL_PATHS)
+        set(REVIEWED_CODE30_4_BUILD53_SHA256) | set(CODE30_4_FREEZE_CONTROL_PATHS)
     )
 
 
@@ -1027,7 +1040,9 @@ def test_all_historical_reviewed_literal_maps_remain_unchanged_at_build50() -> N
     for name, reviewed_map in historical.items():
         assert current[name] == reviewed_map, name
     assert current.keys() - historical.keys() == {
-        "REVIEWED_CODE30_4_BUILD51_SHA256", "REVIEWED_CODE30_4_BUILD52_SHA256"
+        "REVIEWED_CODE30_4_BUILD51_SHA256",
+        "REVIEWED_CODE30_4_BUILD52_SHA256",
+        "REVIEWED_CODE30_4_BUILD53_SHA256",
     }
 
 
@@ -1052,7 +1067,7 @@ def test_build51_exact_guard_refuses_changed_removed_linked_or_extra_source(
         check=True, capture_output=True,
     )
     # Include the separately reviewed controls when this test runs before their commit.
-    for path in CODE30_4_FREEZE_CONTROL_PATHS | set(REVIEWED_CODE30_4_BUILD52_SHA256):
+    for path in CODE30_4_FREEZE_CONTROL_PATHS | set(REVIEWED_CODE30_4_BUILD53_SHA256):
         destination = candidate / path
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT / path, destination)
@@ -1077,7 +1092,7 @@ def test_build51_exact_guard_refuses_changed_removed_linked_or_extra_source(
     else:
         path = "backend/app/services/finance/unreviewed_build51_source.py"
         (candidate / path).write_text("UNREVIEWED = True\n", encoding="utf-8")
-        expected = f"unreviewed path entered the Code30.4 build-52 delta: {path}"
+        expected = f"unreviewed path entered the Code30.4 build-53 delta: {path}"
     errors: list[str] = []
     _verify_code30_4_exact_delta(candidate, errors)
     assert expected in errors
@@ -1096,6 +1111,13 @@ def test_build52_release_identity_normalisation_is_narrow() -> None:
         assert _normalise_release_identity(path, current) == current
 
 
+def test_build53_release_identity_normalisation_is_narrow() -> None:
+    identity = "android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt"
+    current = 'assertEquals(53, BuildConfig.VERSION_CODE)\n"3.1.45"\nversion_code = 53\n'
+    expected = 'assertEquals(25, BuildConfig.VERSION_CODE)\n"3.1.14"\nversion_code=25\n'
+    assert _normalise_release_identity(identity, current) == expected
+
+
 def test_all_frozen_build51_reviewed_literal_maps_remain_unchanged() -> None:
     def maps(source: bytes) -> dict:
         return {
@@ -1112,31 +1134,55 @@ def test_all_frozen_build51_reviewed_literal_maps_remain_unchanged() -> None:
     assert "REVIEWED_CODE30_4_BUILD51_SHA256" in historical
     for name, value in historical.items():
         assert current[name] == value, name
-    assert current.keys() - historical.keys() == {"REVIEWED_CODE30_4_BUILD52_SHA256"}
+    assert current.keys() - historical.keys() == {
+        "REVIEWED_CODE30_4_BUILD52_SHA256",
+        "REVIEWED_CODE30_4_BUILD53_SHA256",
+    }
+
+
+def test_all_frozen_build52_reviewed_literal_maps_remain_unchanged() -> None:
+    historical = _reviewed_code30_point4_maps(
+        _git_object_bytes(CODE30_4_BUILD52_BASE, "scripts/verify_code26_regression_freeze.py")
+    )
+    current = _reviewed_code30_point4_maps(
+        (ROOT / "scripts/verify_code26_regression_freeze.py").read_bytes()
+    )
+    assert historical
+    assert "REVIEWED_CODE30_4_BUILD52_SHA256" in historical
+    for name, value in historical.items():
+        assert current[name] == value, name
+    assert current.keys() - historical.keys() == {"REVIEWED_CODE30_4_BUILD53_SHA256"}
 
 
 @pytest.mark.parametrize(("path", "expected_sha256"), REVIEWED_CODE30_4_BUILD52_SHA256.items())
 def test_build52_reviewed_overlay_rejects_any_byte_change(path: str, expected_sha256: str) -> None:
+    current = _git_object_bytes(CODE30_4_BUILD52_BASE, path)
+    assert hashlib.sha256(current).hexdigest() == expected_sha256
+    assert hashlib.sha256(current + b"\n").hexdigest() != expected_sha256
+
+
+@pytest.mark.parametrize(("path", "expected_sha256"), REVIEWED_CODE30_4_BUILD53_SHA256.items())
+def test_build53_reviewed_overlay_rejects_any_byte_change(path: str, expected_sha256: str) -> None:
     current = (ROOT / path).read_bytes()
     assert hashlib.sha256(current).hexdigest() == expected_sha256
     assert hashlib.sha256(current + b"\n").hexdigest() != expected_sha256
 
 
 @pytest.mark.parametrize("mutation", ("bytes", "removed", "linked", "untracked"))
-def test_build52_exact_guard_refuses_source_mutations_after_positive_baseline(tmp_path: Path, mutation: str) -> None:
+def test_build53_exact_guard_refuses_source_mutations_after_positive_baseline(tmp_path: Path, mutation: str) -> None:
     candidate = tmp_path / "candidate"
     subprocess.run(
         ["git", "clone", "--shared", "--quiet", "--no-hardlinks", str(ROOT), str(candidate)],
         check=True, capture_output=True,
     )
-    for path in CODE30_4_FREEZE_CONTROL_PATHS | set(REVIEWED_CODE30_4_BUILD52_SHA256):
+    for path in CODE30_4_FREEZE_CONTROL_PATHS | set(REVIEWED_CODE30_4_BUILD53_SHA256):
         destination = candidate / path
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT / path, destination)
     baseline_errors: list[str] = []
     _verify_code30_4_exact_delta(candidate, baseline_errors)
     assert not baseline_errors, baseline_errors
-    path = "infra/scripts/verify-build52-pending-compatibility.py"
+    path = "infra/scripts/verify-build53-pending-compatibility.py"
     target = candidate / path
     if mutation == "bytes":
         target.write_bytes(target.read_bytes() + b"\n")
@@ -1151,9 +1197,9 @@ def test_build52_exact_guard_refuses_source_mutations_after_positive_baseline(tm
         target.symlink_to(external)
         expected = f"reviewed Code30.4 file was removed, linked, or non-regular: {path}"
     else:
-        path = "infra/scripts/unreviewed_build52_source.py"
+        path = "infra/scripts/unreviewed_build53_source.py"
         (candidate / path).write_text("UNREVIEWED = True\n")
-        expected = f"unreviewed path entered the Code30.4 build-52 delta: {path}"
+        expected = f"unreviewed path entered the Code30.4 build-53 delta: {path}"
     errors: list[str] = []
     _verify_code30_4_exact_delta(candidate, errors)
     assert expected in errors
