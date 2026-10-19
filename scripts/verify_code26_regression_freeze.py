@@ -203,6 +203,8 @@ CODE30_4_BUILD47_BASE = "986584a4e24dc6ab777ab89afe4f6fec374229c6"
 CODE30_4_BUILD48_BASE = "4058fb29e70789a9bb3fa62b2d580330b25db8a3"
 # Published v3.1.41 / build 49: build50 extends its frozen bytes separately.
 CODE30_4_BUILD49_BASE = "a834b63d32c45513ab5c8fd9d4de417acc0a96c6"
+# Published v3.1.42 / build 50: immutable base for the reviewed build-51 overlay.
+CODE30_4_BUILD50_BASE = "29e32b440ab8dc162b6c8f5d40f8283fad53ce04"
 CODE30_2_FREEZE_CONTROL_PATHS = frozenset({
     "scripts/verify_code26_regression_freeze.py",
     "tests/test_code26_regression_freeze.py",
@@ -1356,6 +1358,238 @@ REVIEWED_CODE30_4_BUILD50_SHA256 = {'.env.production.example': 'bb3067963b7b927a
  'tests/test_build50_post_migration_state.py': '67849774d5e2413e8758a88f608ed456acee0285fd34db649b8ed2073311c618',
  'tests/test_code26_physical_audit_lane.py': '3c13a10df7cae661b653a27b1cba222686955e64a569b1372fbb3490c3b50ade'}
 
+# v3.1.43 / build 51: separately reviewed, additive overlay from immutable build50.
+# Historical maps above remain byte-for-byte release records.
+REVIEWED_CODE30_4_BUILD51_SHA256 = {'.env.production.example': 'bc7f3fd80d9072e9ee2518c950bd7f7fac42ee2495fdde7114fb635cbaaaac22',
+ 'android-native/BUILD51_CLIENT_CONTRACT.md': 'fa2808bf87ff0fb01147959a651d276bbcf3d7a4fbaa1213cd104fd9175f4554',
+ 'android-native/app/build.gradle.kts': '331950afd56051b5cd2974adf7cd1a900888fdb7ce5b61f7102de0b94bd2dd1b',
+ 'android-native/app/schemas/cloud.dcompany.erp.core.db.ErpDatabase/56.json': 'e478b64882aa43fd69b058a30b5a543033a07e65f65ec0eff4e805915b32b03e',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/core/db/MigrationTest.kt': '3cdb0b8551666196e74c44f95c4a4ee37ec8e4ae8eca9e8ca1430ffec2dc9b1e',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/GamingCentreNavigationUiTest.kt': 'b53da69dcb021126210bf13de36b43135036c17871328ab680d72c37567b0143',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/CanonicalReceiptHistoryDialogUiTest.kt': 'dd699b47975ffa95905e7080c36c43dc7b83fb4b274fcba468a010b9b4284278',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/LoginNativeResponsivenessUiTest.kt': 'b4d8325fe0d4e2ae533e42bf4ebd4a5165b41086464a3cdbd964806077e77f56',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/LoginWorkspaceUiTest.kt': 'c04ef97d63d3958d46dd540acd1d2d6cbd1c3dec02b39a9b3581f4d06cb0289e',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/finance/FinanceStatusViewportUiTest.kt': '23dda1f720367a1207f8af66c8692df890bbc838b696b91c40cf4c26fb9709c8',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/finance/TenderJournalPersistenceTest.kt': 'f66e52e6ddf50eea5abb77ba7a5b5513c21faed952c69522392987583d2f6933',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingBoardUiTest.kt': 'c398ee2d526f1ae68bec42d898074139b731939e1dc28f1c3abb443c0843ff20',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingDialogUiTest.kt': '20598d5585d56e786906dde07ec07a8ec26b1fb6690dbba5b322d5846f7e2a1e',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingInlineShiftWorkspaceUiTest.kt': 'd2d9cde08d1440a2e61324c6a873bf1ba0c32ff90ed55d401cfd70961e2d93f5',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingNextActionUiTest.kt': '1e27e47514d5f7d6afc368dec0157ecaff440478d4dfb04c7552b6845fee4e2b',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/settings/DeviceHealthPanelUiTest.kt': 'ec64242e5db6d3b917e40f9cc76c630bbda3ebf7086937b58a3982b3178d3f9c',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/shift/InlineShiftOpeningUiTest.kt': 'e485a2207097ccbadbfcfe7d553c6f07647c6bbccc97d30dee0fbfa7f651b8f5',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/shift/ShiftOverviewUiTest.kt': '0de68e963c1f0a7553298134f1b7e9ab730f409740e4420e01ca1ccdb1978d7e',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/MainActivity.kt': 'fcd7ef7e52195cfc4764ffbe9352f73810a843bb653f15a492db281560171aaf',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/core/db/Dao.kt': 'da040a1d9d58cd2d9adb99dac0f1c393c304dc39f7642e01397e4be437b11875',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/core/db/Migrations.kt': '447265ce3066be26453df5786537d087abdae3689554a1bb137953c2d9234987',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/core/db/ShiftEntities.kt': '8aba4414d7e9a6b96553c41dcc01db7b7a3efc4b7bb660818f49c7d1ee413afb',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/core/db/ShiftHistory.kt': '01b4e2cd7cf2bcf8c3bb76ddde6f6e45ab50c9f8a16435d94c720ec63adf59f8',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/core/net/ApiClient.kt': '005c05d5f11c0de6b1d68c8df474d7369e2bf660efecfc1b6d0af4c5e48fa74d',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/core/net/Dtos.kt': '3dbd31696ae074fe63743c5e5c4f2404d21a02eeeb6b44ce7f8874f1302c873a',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/core/net/ErpApi.kt': '548701442c89abdae046298cdc741824387a1b9749ee10e99cd2a38637210e6e',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/core/net/Models.kt': '81a8f47602a240036405f9ca9305b8df528bcf2809b7ae808654e6b759eb3a07',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/core/net/ReceiptHistoryModels.kt': '004a4c6e133b3606dfc4628e7d739e7df3d634e429823237dc37eb35b2fec251',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/core/net/ReceiptInvestigationModels.kt': 'd913cdf8fd66a251362f3c6f135a857169d30c2e772400f4a69a8d114f902c01',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/core/sync/OutboxWorkStatus.kt': '228770fc8175175d575c833da70144ee25f1ff5e2cbd3a2ffd3ca6f0bc509596',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/core/sync/ShiftMapping.kt': '842ab317edf9f14968446695e1abc9b998b10eb3a8f13bd57f5d13d0861ecf8e',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/Nav.kt': '72013637276103298dd709beabb824b4af84dcee4fdabb5c819680110f046b3b',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/components/AppearanceControl.kt': '95126194de6cf34cd73a43f8574d14e7d1fa255236d19d3c3fca0769d2a15ccf',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/components/OwnerVerificationInput.kt': '9af2100e9e35d7618102f76da0edebc76f261f8641a3c47ad887fe4f96d572f5',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/CanonicalReceiptHistoryDialog.kt': 'edf1bc2c6cc3ba1f6eed60f28f2ac3277230d73285fd44509c85cd4c69fac71c',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/LoginScreen.kt': '4737afbb6f0e7d8f159b94972761c647a83a73df53fad758f4c40f2d4e5bc229',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/PosScreen.kt': '10d12bba65b994b035f93ced915d2cac6627dfc2f522faa16d0a0105d6970bb8',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/PosViewModel.kt': '1367710cfe40c191fc950ad967f70f5395e0b463fd5eefd36817e14b479b9c03',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/ReceiptFilterControls.kt': 'fb1060473ed252126c1c72b0277eeca7336ba1910c4fbb9256f76813330b94ff',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/ReceiptHistorySearch.kt': 'ee2370f6f521556a8e0d6b6f649aee26a4ce0d0804da3be2292837087b3c58c2',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/ReceiptInvestigationPanel.kt': '87e8c0637433ec838a0636d70017fad7a1c16779fad69d99575713baecbd6085',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/audit/AuditLogApi.kt': '9b0ae3fcabe1da3806ba38fb7d6ad0451d7d09e15bf4146fc5bf181b36c5202d',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/audit/AuditLogPresentation.kt': '1a37851b9c2131758fa5e5127791cf77a82e63b19dcab6b468d07edfd6caee71',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/audit/AuditLogScreen.kt': '25fd7a4defbfe8694ee97fa9b60b8a5dd89af7381b5b2ac0c3b385f97a96ce6d',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/audit/AuditLogViewModel.kt': '916f115daf77ab172fa95b892e7b2adafd40067b9dd68d1880341461fc231215',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/finance/FileTenderJournalStorage.kt': '25e319f534d356e908b4cc71563c7848a72a16efd59d2128493384dc59988396',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/finance/FinanceApi.kt': 'da95a9ee59f3af1bc0604dfdf34af14c5d55e06e39c2f42274dc561eeb5c1b58',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/finance/FinanceScreen.kt': '2975e4130772c62b2eb3d8642bf5e85b256c5e2aede7bab5f772fcafd559e120',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/finance/TenderCorrectionRefresh.kt': 'dd829da31e65861d8e0b716784c8eb3a727ad7fe8679916f8d81d81218e7791e',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/finance/TenderJournal.kt': 'a04d911ea68f2632f1f547702449c11c6295f0b9215d5087470dff41c6830618',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/finance/TenderModels.kt': 'cb2d0e6e2a5d66811076c4d169b34a31ac6398413356ede188bf47d154929921',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/finance/TenderWorkspace.kt': '8f125c19a597ee7f0ae84cf5b60fa903b4e6c82d06efd8023183926b9c9068cf',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/finance/TenderWorkspaceViewModel.kt': 'b6fa868aeb0f0e40db5dd879369fbbbf3793f951e9229a64f066690e4e17177c',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingScreen.kt': 'c42c693e69050c76f714081564770fdb0bab289955d067712bedb358c9d9b31f',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingViewModel.kt': '6b7a15af3f4533d4a9e83c66253da2b9985683d0ac5cc327151cfc3db368a28a',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/menu/MenuScreen.kt': '3b8bc213bfa8708472e30fdf884b52466e99421d99895ab748f1285a16aba1f3',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/refunds/RefundsScreen.kt': '70ec430fe07b2de520876703d75a234887ede4aac3a7e752c6da6e72c6a283d3',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/refunds/RefundsViewModel.kt': 'a700b7de053e9996854556b9f5cad2b30226dd3c21f07142c7c51894a59e2931',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/reports/ReportsModels.kt': '93dba7ddb1a85acc471d1ba337642911a188c2cda35f3e9306058012646254e0',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/reports/ReportsScreen.kt': '85078523395fcdd0be860b96368f2fb6d17deaf565f5f60d818bb177677dee34',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/reports/ReportsViewModel.kt': '5131b164f638ae56628e1e8f870e20bcdaf1058a9a55d2ddf7c37b55b4e8d730',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/reports/TenderReclassification.kt': 'b5334aa2fc56bdb372ac8defa45073cbd23493b5203182aa2b5975eac5ed760c',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/settings/DeviceHealthApi.kt': '3b1c9646edb8ebbef95df9537b18b3c1162fe3460146fa40b36584cc827b1f8b',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/settings/DeviceHealthPanel.kt': '129ef9a44bf5a624c190c9c54b2abac9c32775308eef536d9c24728b60a0c408',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/settings/DeviceHealthViewModel.kt': 'b20376327efad81a651d5e87e86e20293178e8a719c19f0e7cf9432ed787f33b',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/settings/SettingsScreen.kt': '89047c4f2d9440ffdda2efc5b9ad76200ebcf3f68a8008bc2183b1fc1a2ea53c',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/settings/SettingsViewModel.kt': 'd989cbb9385054fe96c777528fafb318d1cd5b282bc399ea78b9fcb4f35abff6',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/shift/InlineShiftOpeningWorkspace.kt': '9dfd43f5a12b80acc2886abf49e60d875258b7e0b34ca616b6040a1d59ca5a51',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/shift/ShiftApi.kt': 'a3a4340953695fcf0b677ec14e2c98e8cc25e1c09e933a0eb4137ea62f8cc479',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/shift/ShiftScreen.kt': '8a294ef2f39abb2df30798b366ba7c59547df902d7802ad3902294d85eb60d62',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/shift/ShiftViewModel.kt': '3c00cdf68899740e8a00ee75af6398f93174f86fee938d3155e161cd8d859677',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/theme/LaunchAppearance.kt': '10d2b718caf0a277c8b957187adb5372c8b386970d3ebac6b2314526b9a40033',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/theme/Theme.kt': 'a921693a91d07e00832e097a382f188295746ebf1294f7b175a32dd03f1f17e0',
+ 'android-native/app/src/main/res/values-night/colors.xml': 'aa0545f1e112788c46fe15ea24ea21ce41e7204d9312281f6ec62657cc1e7c7a',
+ 'android-native/app/src/main/res/values-v27/themes.xml': 'd562dbc3092eb4f15cd735277e196abbc532cab819a3ff7b0bfb4e4b90c5266b',
+ 'android-native/app/src/main/res/values-v31/launch_themes.xml': 'e604e930df239865e61a31c059b9b0a5db00918781ae0061b1a50dac6f82603e',
+ 'android-native/app/src/main/res/values/colors.xml': 'f58bb62c43e94b9bb78a0395791ccb998b2d850f2027ecb80a8ae38d3c376248',
+ 'android-native/app/src/main/res/values/themes.xml': '3f82d5f99f7e680a449e77804948e85df132b2578bf9e401a86983d0d37cbb12',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt': '602fc16bbc420d4f387dffadb6ff0d35a2c96380b3195e2478aa73295c096ecd',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/core/db/CanonicalReceiptMappingTest.kt': '2723a7e3bfbcdc9790000dc7a9b1fdaf3373d53410624b492fdd5ed302599191',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/core/sync/OutboxWorkStatusTest.kt': 'e72ea4278a031b2fe9a1d35cb948d4cf5bf0066ba9c7bfcf1942bb2fc42b2b57',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/core/sync/TenderReconstructionContractTest.kt': 'fcfc74ff605d4936acee05d3bc346cd37c245118d261270d7cea4a0ecc5be6ed',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/PremiumFoundationContractTest.kt': '5d7541530c959ee9b7e06c4537666698ee1ed5df6abbc5b919c57dbdd647254d',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/WorkspaceLeaseFeedbackContractTest.kt': 'ea9a8e5d0620fc9381bd78b27d9b19b8f2e55baacae2bfcec162236c3874165c',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/components/OwnerVerificationInputTest.kt': '23123f337ca831d53c276c2c6798ee5a2e1cd779b5c8e5797e369bc3b15e0fae',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/CanonicalReceiptPresentationTest.kt': '06efaf809b073ea03b49cd837fa528fa5a45c6c1a549eb5be621f2ace4fb8111',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/ReceiptHistorySearchTest.kt': '536ca8363ffa1701cd3b1274c289c1b269301c4344c7c609fbbd02f4bae5a055',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/audit/AuditEventsApiContractTest.kt': 'a03f3e698c21da01722aea4021b8aa8c10151e781098dba2f92ade8c8bcc058c',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/audit/AuditLogPresentationTest.kt': 'df53f7e4bfaceecf67d76c39cabb689afc0ddfa90a715bee022062cae9e36194',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/audit/AuditSnapshotStateTest.kt': '9a0cc942194970437d2b651a040a966518c3e7a00bedaa8a7329106cacd75239',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/audit/SemanticAuditPresentationTest.kt': '06841d9b41c9849ddd6da5ef7e3b602aae63f350d260dbdcf6ff900032bc9196',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/finance/FileTenderJournalStorageTest.kt': 'ac700aba54aa744875be8ff13e20a4082816e2c1a24001eb5ab1c2c5c6a54706',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/finance/TenderApiContractTest.kt': '699b1dafb88eb4f2d31fd1b885ae63d8afb2179832adf547cde938ce486c93e7',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/finance/TenderJournalTest.kt': 'ab1053145759adaf3e7f509f79bb5b6097b43e6f7d7ce6eedc54e5ea8a946740',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/finance/TenderWorkspaceStateTest.kt': 'f1f532e1894322142d77b94bbcf0eb966b59058ce182f3af29d59e1a4ae2e0b3',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/gaming/GamingCustomerDraftLifetimeTest.kt': 'cffd28ddc54812b71eef9f0989207257bab440d5a4bafae6fe1d77bb3783c4b5',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/gaming/GamingParticipantAmendmentPolicyTest.kt': 'c0f46ba10f9a1c6e0022e6703d04ff02bccbfa181052c6dca40559c9e0289b71',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/gaming/GamingStationPresentationTest.kt': '5872c926fe17f49f861787411ee2535c48472381d70b6a287afab3bc915e4c91',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/reports/ReportsPresentationPolicyTest.kt': '67593e2d8dfb978ad0d2d945c111cb3820057927d17402accaff3a10b84cc9d6',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/settings/DeviceHealthApiTest.kt': '3cddf556177bf293822141da87c30ace91d2c1ac8a6998394acfef71a47ed88f',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/settings/DeviceHealthViewModelTest.kt': '30428dbe706121ce72e46953457e0687adba6775e4076bace0dcce97f50cec91',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/shift/InlineShiftOpeningStatusTest.kt': '219ea9b55861ef5872870ff9b0742bbf5ed90d0b713f53d35f8de8dc69145780',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/shift/ShiftClosePresentationTest.kt': 'd09cc052f95d14377bc293ae4a32e06846dee4712e8fc6b96f6cc1f325fb4977',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/shift/ShiftOpeningCaptureTest.kt': '1585b8f6d1ac2d57a0adb583d8e19037f5fc313aa140c48d6fabc2afd89580a2',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/shift/ShiftOpeningNoticeTest.kt': 'd57c4b6801b2f7a051398e936af694295dea284fdb7d882a6f0278c48fc17cc6',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/theme/LaunchAppearanceTest.kt': 'ae4b89a62c19df8a2bd999527c970597a7032650226acd458f6482c8211fffe6',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/theme/ThemeContrastTest.kt': '3085851d7e9ba2f98bd1d7d7233eda4f69eccc47187893008a2bcc71958db06e',
+ 'backend/alembic/versions/0090_semantic_audit_events.py': '6fad3d990aeaeebcf9d616921f0c762e353c5fe1074e57f0351a60ffa6163ff3',
+ 'backend/alembic/versions/0091_tender_correction_receipts.py': '8b23a568c099588d1edc5e8e7af84a475963382892e69e6e7a48ed6ca08dfbfb',
+ 'backend/app/__init__.py': 'a08cbabfae1a4c07ef076750edd4228bf76bb8a356ed565491720a59039dc3a1',
+ 'backend/app/api/v1/admin/router.py': 'c2a144f84725f9e64fc155e3fe6d3dd0fd8419f0eb5af020cf1fa1b0343a13a0',
+ 'backend/app/api/v1/auth/router.py': '43a0554f99387b7344f582bc635e58822b4eaeaf5d0dff8a485453eaceb6b35d',
+ 'backend/app/api/v1/customers/router.py': '69ccdddba04f3c97ab9a375e1312fa639df1fb2633e6e271a3f7788fd3c3e6a9',
+ 'backend/app/api/v1/finance/tender_corrections.py': 'd93f4d6feef660c6ecb799c2ba62f7d145fa69583ba17163a677f18c736d64f0',
+ 'backend/app/api/v1/gaming/router.py': '6370e869dc566c140e97b2b0f15fcd6f005aa076f25d8a76cf469c7910d439ca',
+ 'backend/app/api/v1/pos/router.py': 'ae37e45fbef1e79d17ee422a29ba45656e1a920096c8da21fa0d99a4bdbc6044',
+ 'backend/app/api/v1/reports/router.py': '14225f1196aa42c9a1a199ffd5fb1dc8273b4c52c7390d99f4a4ab52e7128a95',
+ 'backend/app/api/v1/router.py': '00697462823579ec5f79809f3d9c5e4d7a0c811a28390680f73ac61a5fb53eb5',
+ 'backend/app/api/v1/staff/router.py': '42f160341f5d1be9ce30fc36260922e9192a58e36f7027969ee3ceb3a049219d',
+ 'backend/app/core/middleware.py': 'ee5f16a96b8dad07f7ccb7d56624239c233fbf2d62bbf34b131341fd4098beb1',
+ 'backend/app/core/permissions.py': '279fe66f878b0d62a79eb244081d7cf5e84abeddd0731776d18f18510ed18ff0',
+ 'backend/app/core/security.py': '095885b4ec6fc0aed0c3d1a0067c666c52e44d41599c47f9c16ce0ec4a9c5394',
+ 'backend/app/models/__init__.py': 'fca3c888a9c600372a39ae548cb0dc91c1361d996f8e38353a659c8ae44a868d',
+ 'backend/app/models/audit.py': 'e4a8e71920fc6508ea0f1d3fa22b5f231e2da860cd105bff34bd0c4fb3cc33e0',
+ 'backend/app/models/tender_correction.py': '868b1be32367d24bb7a254d985f1e09d66499a84782cc53576cba4c0547f405d',
+ 'backend/app/services/accounting/ledger.py': '3bc959d7c81173cc91fbad624b2bf9c4ec705e04269085b41e892cdaff24b37b',
+ 'backend/app/services/audit/catalogue.py': 'b7deff49f73d5b7756331bd019f8d3f42e339244757e8b17dec15e71c724b340',
+ 'backend/app/services/audit/events.py': '7fe579e26aa81115caaff18821b947630db92b51166747cb00bfe758dfef656a',
+ 'backend/app/services/audit/query.py': 'a348ad1f66cd24cbc1342adf8ec633c9b96518c57acce41b2dad9430cd3f4dd7',
+ 'backend/app/services/audit/recorder.py': 'b9be6e463434b02acc2427787898ddaa531826e19433c2bff59a80702297ff25',
+ 'backend/app/services/audit/snapshots.py': '87a66a1474b6ec81282c0b01bb5b11d05582cc115ab5d6d27753b55a7ad63224',
+ 'backend/app/services/auth/otp.py': '6ad97beef7f116b5b5fcddae6baf71dd0451d73b81d641ca73c81fe42d05f93e',
+ 'backend/app/services/finance/tender_corrections.py': 'd07d64faa160c82669a75bd66050cc937b3321e4c82353156a3f01209afdf314',
+ 'backend/app/services/integrations/google_sheets_collection_summary.py': 'ccbd812def11976d697792801ce6c6393c79ace0fe37decae55826d2e5605bba',
+ 'backend/app/services/integrations/google_sheets_collections.py': '6d9b4c272efb8186c8fa306fab8609bc9d3e56b0f21fbe5169f4bbbed26fdf79',
+ 'backend/app/services/realtime.py': 'be20050fed4744c6b0e4ec5a5be437e1bc8a746cbf180d4a29a976c9e350a63a',
+ 'backend/app/services/reports/aggregator.py': '66224b8765e5fc3a773e41250ee692cb72f860d0e04588f563476c85cd419cb1',
+ 'backend/docs/AUDIT_EVENTS_API.md': '6fed8162998d5a5d31d1fb1758bd7ff442dc7d680fcc557189a0b23ebf0c8ee1',
+ 'backend/docs/TENDER_CORRECTIONS_API.md': '55b5e5f1cdb193af5ba5488f3c64ded27e8d0b83e74991615d26b675379d49d8',
+ 'backend/pyproject.toml': 'cb27f9cf458f53517eb5026854fc96768b18ec95ec0218cfd45b0bcc193fe84d',
+ 'backend/tests/integration/historical_seed.py': 'edf6a5fcc128db540260a2a45292fd578a2307d45996407488587a8491210abf',
+ 'backend/tests/integration/test_audit_business_events.py': '12e9bdcadca4d63e8fabf0b03ffb9e4bad2203dde4a873ff475a1b14f52c2e67',
+ 'backend/tests/integration/test_audit_semantic_downgrade.py': '967a8be64031f32a99a29b2c0810398e7d64df40c1185d593ad57a18e66c20be',
+ 'backend/tests/integration/test_auth_otp.py': '0a5be81203e8c813609737ca4fa54f2aae3d24764c65c92bb759d58f77d6a947',
+ 'backend/tests/integration/test_build51_history_bridge.py': 'c6c7e572fbdcd53b120789769f7accd83ef2306ce6c077731dcb21264d00d97b',
+ 'backend/tests/integration/test_checkout_claim_contention.py': '1a517efee95b819deb3c794cca49d32a284903a4f75cf1b088cf37723938cb3f',
+ 'backend/tests/integration/test_gaming_cleanup_migration_0079.py': 'd7efc8e3d6472a83b7f68ba75c22116918233665727bbe1bb752398849cef8ee',
+ 'backend/tests/integration/test_gaming_package_amendments.py': '928638d824dd51705e451a2533b500bb7ed5c5fe8609024d72a2b3fe75a062fe',
+ 'backend/tests/integration/test_gaming_phase2_contracts.py': 'a57ccc461a7fd969f1ac44d86fcfdc7fe401c8688ba66335e8c6e83e3dc54081',
+ 'backend/tests/integration/test_gaming_session_participants.py': '298794f23f014051a6b39fee7a3c744cae39bae6523bc368e4b1443d3b51b9b0',
+ 'backend/tests/integration/test_google_sheets_settings.py': 'e871eca08a6f854812df822c803b13dc5ab53f931f0fa09ae27651870b50be7d',
+ 'backend/tests/integration/test_membership_migration_downgrade.py': '6cb781232d9516a7982f6a0e10fb45807a189e67f64b759e36eca7bb7be68a93',
+ 'backend/tests/integration/test_membership_subscribe_concurrency.py': '405dc124655f9b576dd7c6bb8410d3c3e413d71530932a587a61080613323c9f',
+ 'backend/tests/integration/test_pos_refund_migration_downgrade.py': 'fe43523cce9fb2e67e7a813625ffd53d83b6479e27632b68a75d98835902bd07',
+ 'backend/tests/integration/test_pos_refund_settlement.py': '6cffc1ce8b194fb120d738d58bf58d41f69be894e620867cf94f5e63d18a6186',
+ 'backend/tests/integration/test_pos_tenant_lock_scope.py': '1591823b2c620e1aca5127c75a20a9cfbef23f87b8bb6efbc43faf7fa46bae74',
+ 'backend/tests/integration/test_shift_close_count_validation.py': 'b80fafcdd8b3297e1cf37809d3f76f2492990a1822f93b446e7f0c85ab5ecaa6',
+ 'backend/tests/integration/test_tender_correction_edges.py': '7440991869d9da3753415a491edb23756bd9a0d4dd47116c884d4c8233b71a98',
+ 'backend/tests/integration/test_tender_correction_migration.py': '878025211250e037e7444f645ad839ca71165b966c0048eef90e7ca7a7f7c8c7',
+ 'backend/tests/integration/test_tender_corrections.py': 'a178534838a526d12e9fd887223127e8a17b5470328e1fdd408625d4cd73f88e',
+ 'backend/tests/unit/test_accounting_provenance.py': '49b17c491c4cc43a2c8be183ba6938c4305e68eefca5f71ad3655907e9769983',
+ 'backend/tests/unit/test_audit_business_catalogue.py': '4f73f4ae44217aa89804efe62bd806a77b90d4ff3cc1d9cf4dc538247834994b',
+ 'backend/tests/unit/test_audit_request_context.py': '2a9063fb7de3e148b0e7a90b42627d6636c0a655873e2b17a3ab68e94216ef7a',
+ 'backend/tests/unit/test_depreciation.py': '07b03e613e65c2e8af7b7d7af138995c2b5ea08c3940ff4b8e3914a3882d1017',
+ 'backend/tests/unit/test_event_ticket_report_integrity.py': '7af76470d90c31a9b423a16efd2d54c4c9e04bb6e3e3afe744c6ffa1824dc8a2',
+ 'backend/tests/unit/test_manual_collections.py': '43d94e86178e4a22b7eaedd700859ddf932a3629212847122ca954ee91cb9f3a',
+ 'backend/tests/unit/test_operational_route_integrity.py': '27881e5caf71eb15c21b59e1abf0f0d6f4e58fd09c420fb53a07f23bfce63f1b',
+ 'backend/tests/unit/test_permissions.py': '72c71c6a291a669998325f1418362d97c79d9150be8903785ff9353e50bc06f2',
+ 'backend/tests/unit/test_realtime_resource_map.py': 'bbc7361ef3bcd0466f6fb7736774689d585f966b2674075c53187daf60832321',
+ 'backend/tests/unit/test_release_contracts.py': 'b203bb755055de37099d8f730a0589f907d306db31b0270e3e921f109ca47749',
+ 'backend/tests/unit/test_remote_assistance_contract.py': '2f67075945cd1ddf6903cae5ea353a01f2624c3341794254b1fd7635e89d8cf9',
+ 'backend/tests/unit/test_report_roundoff_reconciliation.py': 'ce33a26278832e2857b675ed1206b2acb7927a80369295c67fa5fac4eb859c4f',
+ 'backend/tests/unit/test_shift_open_terminal_locking.py': 'febc35e22bde2415c718510a0ded65e3fcb1c97853e6658f1d9091b94ad4c0b4',
+ 'backend/tests/unit/test_staff_role_security.py': '23dd8fe95e76985c8611748c0aca3c44c56dc0411de911ee550a1d93a5edfbc5',
+ 'backend/tests/unit/test_tip_payouts.py': '5d3576362ec59de498a3006402380b4cf0a686ec3574974f2f80e7f1d3c7ad64',
+ 'backend/tests/unit/test_tip_refund_ledger.py': '174027721cf0d868cb88e8ba3dc2b6f964c41b1ff4a8b2902132fdd1981bb006',
+ 'docker-compose.prod.yml': '12a1b839608cc8cba4f13bc9fce3df6b5d773341560ded6716fd1e284f6f8111',
+ 'docs/V3_1_43_RELEASE_FREEZE_REVIEW.md': '2ad1745930b4995447fe7b1a4aac44c8914fa7916a2670c38c48c182b4f3f525',
+ 'frontend/.env.example': 'f946c9a44f9c62235b45e41aea4756d25816c5e0a8590581a3ffb75ce376da5a',
+ 'frontend/BUILD51_OWNER_WORKSPACES.md': '262754c983aa3d508fbdceb7cd608232d33b48c5fc1ec5028b7d7742d3d7a89b',
+ 'frontend/package-lock.json': '6a8c94399172a1f54c1985ab1e5179cd771530567dee4a68ce9f8198bcd008a3',
+ 'frontend/package.json': '5f00cb764a62b50fdacba3441e7c8df579613ff9b00a1217220ea09abcb5ca15',
+ 'frontend/src/components/layout/AppShell.appearance.test.tsx': 'ab07f4d3e3867f2319bc25d0ec22e756d5315677e8e9fc8a0eb5ef166e003d18',
+ 'frontend/src/components/layout/AppShell.tsx': 'edfd7211cc95fda1aa1625f0a44eea37e9c681366a7ea5caf6cd1c65778b3670',
+ 'frontend/src/components/ui/Modal.tsx': 'c6e7721597addd4b0100f18d82126284b7068add0771e4bfb77fae049ff5f57c',
+ 'frontend/src/lib/api.ts': '1526f20b262b6586a8202dc1c3d50b7b7d370a318659f4d2ee0df4151f19a97e',
+ 'frontend/src/lib/client-report-evidence.test.ts': '71090b9a0e9bfd8c2a60ac2cb06897914bb326b8d5067f8550e57d3b8724ae71',
+ 'frontend/src/lib/client-report-evidence.ts': '6028a691f6b34eb2a2078b3038f318c508d304f9c80645155cb0abf6c0141c0f',
+ 'frontend/src/lib/erp-api.ts': 'f6ce3e2a3226d13e0aa86572d0932dcd13af28ef8dfc60d272c8be9aaf4b806c',
+ 'frontend/src/lib/owner-workspace.ts': '771b15dda2df82b8975ed5b79ec8a771ab6fd7a483e01bdea0ea4fd3988cf6d1',
+ 'frontend/src/modules/audit/AuditScreen.test.tsx': 'a117d7baf5b0a316c0d3f462c15f7b2a102e61cc3a4c64db0f817dd3d5f29925',
+ 'frontend/src/modules/audit/AuditScreen.tsx': '4d3fd4ef35eef10216e6e8be760c616f646344322b4ae55aece5ce201a1994c6',
+ 'frontend/src/modules/audit/audit-presentation.test.ts': '1652b780b8ef1af582597e3566e2f09f64248ca12ada194e2b36119b872a70e1',
+ 'frontend/src/modules/audit/audit-presentation.ts': '8203082dd1900ae1bbf8fdd1f390d6f7bf56fa738ed0d38e672733e2a158a6f1',
+ 'frontend/src/modules/auth/AuthContext.tsx': '8cdbcd3c94281755bfbe0737f7bcd4cc9cf7adf1e004ed4effce6d3519cea782',
+ 'frontend/src/modules/finance/FinanceScreen.tsx': 'b595b6e3ea263d3a2017c48914f15bd540452e3cd7558abec25511eb73a27031',
+ 'frontend/src/modules/finance/TenderAdjustments.tsx': 'ec7005dbda587c27c2518e30e5b6bc9a71b45d124eb8ad01fefe2d2e90c82012',
+ 'frontend/src/modules/finance/TenderCorrections.test.tsx': '1144e84b4e35b5cc5725269e9e786e99f2e7ecb65e2b983cddf5b20bbfd55100',
+ 'frontend/src/modules/finance/TenderCorrections.tsx': '6ecb28c7ab8a172e188b2be25f996b9117c74519db1af72cdadea433e183e364',
+ 'frontend/src/modules/finance/tender-journal.test.ts': '843f3f337e9f19bff0dea0b6159b6672c1bfdb9374cc63a818a2add63ec1a82a',
+ 'frontend/src/modules/finance/tender-journal.ts': 'b03cb79efddc091fb19b5a70529a4407563d67b3ecbd6a95482fc4f952697f01',
+ 'frontend/src/modules/gaming/GamingInlineShift.test.tsx': '6300abf8601bc97231f0ba36d2df0c0f523ddd74b0e59beed164e1d098eb203e',
+ 'frontend/src/modules/gaming/GamingPlayerLabels.test.ts': 'a3f941a52dc6dc7822b1a34ff49ab00548a5b53365afc69ab4d8e4abd3fada34',
+ 'frontend/src/modules/gaming/GamingScreen.tsx': '04707ff630adf19018b8fd512dd36098af7201409fcc666888e46eb1bcb11fa8',
+ 'frontend/src/modules/menu/ItemFormTax.test.tsx': 'c5570674fbc3366b48548bd87323d8bc20cdd2b1eefbe7d8ae9278ee355b480a',
+ 'frontend/src/modules/menu/MenuScreen.tsx': 'a414ad681e9a349db956189b8da7d947c6a7fe2048a627ae7e37c3e77d111739',
+ 'frontend/src/modules/pos/CloseShiftWorkspace.test.tsx': '3b8191769d7c6dec9be1465911b45449d2a223845d2e201205dfd16105296cec',
+ 'frontend/src/modules/pos/LivePOSScreen.tsx': '6320f2c3fada5d2836eafc85e6de6d7157b7969e0692eca9aca84f38a4d6a69c',
+ 'frontend/src/modules/pos/OrdersAndShiftsScreen.tsx': '878377b1f34a77562408db94a083abf90bc54e78045aacbe68faf443aaa23114',
+ 'frontend/src/modules/pos/ShiftAmbiguity.test.tsx': 'f812fa186270070f5b238ace0f338a67cabd1db9912f04a25e25014a196aad42',
+ 'frontend/src/modules/pos/receipt-search.test.ts': '3a9c8e9eb8b11ae3bbf11091e25b2f2d8e4fa42e2b520b9c63466330a6bb32c2',
+ 'frontend/src/modules/pos/receipt-search.ts': '39c057223c6b27144e2f0f6b821a16e723732e5b6f75efaa8f0de70bf4360983',
+ 'frontend/src/modules/refunds/RefundsScreen.tsx': 'dff60a6a90b40b39a5e3b4c6d73e83b43c1879d9bf6c70d8411ac93d32861f86',
+ 'frontend/src/modules/reports/ReportsScreen.tsx': 'fa67753d8d18e7cfdce12b80add640f60858e01d9d4df6b19bb9fe7858e1c81b',
+ 'frontend/src/modules/settings/tabs/DevicesUpdatesTab.tsx': 'aaacfa34f6e308529c5710db3ea972da8e5db170295d6f7885afcb113cacb576',
+ 'frontend/src/modules/settings/tabs/IncidentReports.test.tsx': 'eab732c5ad6ba4fc726d00f02f6478cd2ef7947e1366f0501dee83e8be77b263',
+ 'frontend/src/modules/settings/tabs/IncidentReports.tsx': '2440697a212f117f1cf7738faab3ab287cf66c79e53c976ae72d80569aa90ebf',
+ 'frontend/src/modules/settings/tabs/ReportedQueueSummary.test.tsx': 'd29bc8e9169cd56c0c507ce2df50a47703cecaf8d656ae9e6b25a0e8dd44114b',
+ 'frontend/src/modules/settings/tabs/SystemHealthTab.test.tsx': '491057e6775fac4a9dc241daaf8d3723961d8a5a7fb0869e198ffa8fe244c3ff',
+ 'frontend/src/modules/settings/tabs/SystemHealthTab.tsx': '9997d58a048a0477c26fd71808f637bd4fec304d1438dfc48fc90e15613761c5',
+ 'frontend/src/modules/settings/tabs/build51-evidence.test.tsx': 'b6bdf58ed0d2f277f75213af542862e9e8d342eb97aeb4c02f6534ba02988417',
+ 'frontend/src/styles/index.css': 'd8723e968309303e6d8868699ffd42799e92528ca87192eb2262670132940538',
+ 'infra/scripts/BUILD51_HISTORY_BRIDGE.md': 'c87fa3697e5ec11c06f604528941924e7e8dfe13cb3fb075408394574bb4b752',
+ 'infra/scripts/install-on-vm.sh': 'ab066d510d8cac2f4df581e6ed50c30c16bd2840ed7a762b136f18440b9d2471',
+ 'infra/scripts/verify-build51-post-migration-state.py': 'de464d28e260233e7f8f4869363538635dac846ac57b7e96d1c1d2de16a88696',
+ 'infra/scripts/verify-build51-post-migration-state.sql': '7ba32fb5fef8eda83866835a57b087b6ec54836f0bcb7991de65da18912f686f',
+ 'tests/test_build50_pending_compatibility.py': '2f26b80c5f14a7453eb1b32dfdacfc91f3b75af3bd0fb4d643a0140e9a82aacc',
+ 'tests/test_build51_post_migration_state.py': 'c9ce78ec1c99c95cd94e65d68e7429cdce47c085f8f6ea6c7f33a31eadde45ba',
+ 'tests/test_code26_physical_audit_lane.py': '545806cbbde2a8c25cce55ab21dbd33e5792a0758345fb393a5dcdbbbfdaa4a4'}
+
 REVIEWED_CODE30_4_PRODUCTION_PATHS = frozenset(
     path
     for path in (
@@ -1371,13 +1605,14 @@ REVIEWED_CODE30_4_PRODUCTION_PATHS = frozenset(
         | REVIEWED_CODE30_4_BUILD48_SHA256
         | REVIEWED_CODE30_4_BUILD49_SHA256
         | REVIEWED_CODE30_4_BUILD50_SHA256
+        | REVIEWED_CODE30_4_BUILD51_SHA256
     )
     if path.startswith(("backend/app/", "frontend/src/", "android-native/app/src/main/"))
 )
 
 
 def _current_code30_4_sha256(path: str, fallback: str | None = None) -> str | None:
-    return REVIEWED_CODE30_4_BUILD50_SHA256.get(path) or REVIEWED_CODE30_4_BUILD49_SHA256.get(path) or REVIEWED_CODE30_4_BUILD48_SHA256.get(path) or REVIEWED_CODE30_4_BUILD47_SHA256.get(path) or REVIEWED_CODE30_4_BUILD46_SHA256.get(path) or REVIEWED_CODE30_4_BUILD45_SHA256.get(path) or REVIEWED_CODE30_4_BUILD44_SHA256.get(path) or REVIEWED_CODE30_4_BUILD43_SHA256.get(path) or REVIEWED_CODE30_4_BUILD42_SHA256.get(
+    return REVIEWED_CODE30_4_BUILD51_SHA256.get(path) or REVIEWED_CODE30_4_BUILD50_SHA256.get(path) or REVIEWED_CODE30_4_BUILD49_SHA256.get(path) or REVIEWED_CODE30_4_BUILD48_SHA256.get(path) or REVIEWED_CODE30_4_BUILD47_SHA256.get(path) or REVIEWED_CODE30_4_BUILD46_SHA256.get(path) or REVIEWED_CODE30_4_BUILD45_SHA256.get(path) or REVIEWED_CODE30_4_BUILD44_SHA256.get(path) or REVIEWED_CODE30_4_BUILD43_SHA256.get(path) or REVIEWED_CODE30_4_BUILD42_SHA256.get(
         path,
         REVIEWED_CODE30_4_BUILD41_SHA256.get(
             path,
@@ -1592,6 +1827,7 @@ def _normalise_release_identity(path: str, text: str) -> str:
         return text
     normalised = text
     for current, baseline in (
+        ("3.1.43", "3.1.14"),
         ("3.1.42", "3.1.14"),
         ("3.1.41", "3.1.14"),
         ("3.1.40", "3.1.14"),
@@ -1678,10 +1914,10 @@ def _normalise_release_identity(path: str, text: str) -> str:
     ):
         normalised = normalised.replace(current, baseline)
     normalised = re.sub(
-        r"version_code\s*=\s*(?:26|27|28|29|30|31|32|33|34|35|36|37|38|39|40|41|42|43|44|45|46|47|48|49|50)\b", "version_code=25", normalised
+        r"version_code\s*=\s*(?:26|27|28|29|30|31|32|33|34|35|36|37|38|39|40|41|42|43|44|45|46|47|48|49|50|51)\b", "version_code=25", normalised
     )
     normalised = re.sub(
-        r"assertEquals\((?:26|27|28|29|30|31|32|33|34|35|36|37|38|39|40|41|42|43|44|45|46|47|48|49|50),\s*BuildConfig\.VERSION_CODE\)",
+        r"assertEquals\((?:26|27|28|29|30|31|32|33|34|35|36|37|38|39|40|41|42|43|44|45|46|47|48|49|50|51),\s*BuildConfig\.VERSION_CODE\)",
         "assertEquals(25, BuildConfig.VERSION_CODE)",
         normalised,
     )
@@ -1852,7 +2088,11 @@ def _code30_4_build49_delta_paths(root: Path) -> set[str]:
 
 
 def _code30_4_build50_delta_paths(root: Path) -> set[str]:
-    changed = set(_git(root, "diff", "--name-only", CODE30_4_BUILD49_BASE).splitlines())
+    return set(_git(root, "diff", "--name-only", CODE30_4_BUILD49_BASE, CODE30_4_BUILD50_BASE).splitlines())
+
+
+def _code30_4_build51_delta_paths(root: Path) -> set[str]:
+    changed = set(_git(root, "diff", "--name-only", CODE30_4_BUILD50_BASE).splitlines())
     changed.update(_git(root, "ls-files", "--others", "--exclude-standard").splitlines())
     return {path for path in changed if path}
 
@@ -2129,6 +2369,15 @@ def _verify_code30_4_exact_delta(root: Path, errors: list[str]) -> None:
         if hashlib.sha256(released_bytes).hexdigest() != expected_sha256:
             errors.append(f"Code30.4 build-49 file differs from reviewed bytes: {path}")
 
+    for path, expected_sha256 in REVIEWED_CODE30_4_BUILD50_SHA256.items():
+        try:
+            released_bytes = _git_bytes(root, "show", f"{CODE30_4_BUILD50_BASE}:{path}")
+        except subprocess.CalledProcessError:
+            errors.append(f"Code30.4 build-50 file absent from immutable base: {path}")
+            continue
+        if hashlib.sha256(released_bytes).hexdigest() != expected_sha256:
+            errors.append(f"Code30.4 build-50 file differs from reviewed bytes: {path}")
+
     expected_build42_paths = set(REVIEWED_CODE30_4_BUILD42_SHA256) | set(
         CODE30_4_FREEZE_CONTROL_PATHS
     )
@@ -2194,6 +2443,13 @@ def _verify_code30_4_exact_delta(root: Path, errors: list[str]) -> None:
     for path in sorted(current_build50_paths - expected_build50_paths):
         errors.append(f"unreviewed path entered the Code30.4 build-50 delta: {path}")
 
+    expected_build51_paths = set(REVIEWED_CODE30_4_BUILD51_SHA256) | set(CODE30_4_FREEZE_CONTROL_PATHS)
+    current_build51_paths = _code30_4_build51_delta_paths(root)
+    for path in sorted(expected_build51_paths - current_build51_paths):
+        errors.append(f"reviewed Code30.4 build-51 delta path disappeared: {path}")
+    for path in sorted(current_build51_paths - expected_build51_paths):
+        errors.append(f"unreviewed path entered the Code30.4 build-51 delta: {path}")
+
     # Post-release Code30.3 maintenance tools are pinned by their own map.
     expected_paths = set(REVIEWED_CODE30_4_SHA256) | set(
         CODE30_4_FREEZE_CONTROL_PATHS
@@ -2203,7 +2459,7 @@ def _verify_code30_4_exact_delta(root: Path, errors: list[str]) -> None:
         REVIEWED_CODE30_4_BUILD41_SHA256
     ) | set(
         REVIEWED_CODE30_4_BUILD42_SHA256
-    ) | set(REVIEWED_CODE30_4_BUILD43_SHA256) | set(REVIEWED_CODE30_4_BUILD44_SHA256) | set(REVIEWED_CODE30_4_BUILD45_SHA256) | set(REVIEWED_CODE30_4_BUILD46_SHA256) | set(REVIEWED_CODE30_4_BUILD47_SHA256) | set(REVIEWED_CODE30_4_BUILD48_SHA256) | set(REVIEWED_CODE30_4_BUILD49_SHA256) | set(REVIEWED_CODE30_4_BUILD50_SHA256)
+    ) | set(REVIEWED_CODE30_4_BUILD43_SHA256) | set(REVIEWED_CODE30_4_BUILD44_SHA256) | set(REVIEWED_CODE30_4_BUILD45_SHA256) | set(REVIEWED_CODE30_4_BUILD46_SHA256) | set(REVIEWED_CODE30_4_BUILD47_SHA256) | set(REVIEWED_CODE30_4_BUILD48_SHA256) | set(REVIEWED_CODE30_4_BUILD49_SHA256) | set(REVIEWED_CODE30_4_BUILD50_SHA256) | set(REVIEWED_CODE30_4_BUILD51_SHA256)
     current_paths = _code30_4_delta_paths(root)
     for path in sorted(expected_paths - current_paths):
         errors.append(f"reviewed Code30.4 delta path disappeared: {path}")
@@ -2223,6 +2479,7 @@ def _verify_code30_4_exact_delta(root: Path, errors: list[str]) -> None:
         | REVIEWED_CODE30_4_BUILD48_SHA256
         | REVIEWED_CODE30_4_BUILD49_SHA256
         | REVIEWED_CODE30_4_BUILD50_SHA256
+        | REVIEWED_CODE30_4_BUILD51_SHA256
     )
     for path, expected_sha256 in current_hashes.items():
         # These files define the freeze itself and cannot carry a current-tree
@@ -2285,6 +2542,7 @@ def verify_repository(root: Path, baseline: str = CODE25_BASE) -> RegressionFree
     _git(root, "cat-file", "-e", f"{CODE30_4_BUILD47_BASE}^{{commit}}")
     _git(root, "cat-file", "-e", f"{CODE30_4_BUILD48_BASE}^{{commit}}")
     _git(root, "cat-file", "-e", f"{CODE30_4_BUILD49_BASE}^{{commit}}")
+    _git(root, "cat-file", "-e", f"{CODE30_4_BUILD50_BASE}^{{commit}}")
     _verify_code30_2_exact_delta(root, errors)
     _verify_code30_3_exact_delta(root, errors)
     _verify_code30_4_exact_delta(root, errors)
@@ -2309,7 +2567,8 @@ def verify_repository(root: Path, baseline: str = CODE25_BASE) -> RegressionFree
             path, candidate_normalised
         )
         reviewed_test_sha256 = (
-            REVIEWED_CODE30_4_BUILD50_SHA256.get(path)
+            REVIEWED_CODE30_4_BUILD51_SHA256.get(path)
+            or REVIEWED_CODE30_4_BUILD50_SHA256.get(path)
             or REVIEWED_CODE30_4_BUILD49_SHA256.get(path)
             or REVIEWED_CODE30_4_BUILD48_SHA256.get(path)
             or REVIEWED_CODE30_4_BUILD47_SHA256.get(path)
