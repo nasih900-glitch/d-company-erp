@@ -81,9 +81,17 @@ class WorkspaceLeaseFeedbackContractTest {
             "All operator Unit commits must use the notifying stale boundary",
             "commitIfCurrent(scopeLease)" in source,
         )
+        val capturedStart = source.between("    fun start(", "    fun stop(")
+        val savedStartAcknowledgement =
+            "if (appCtx.cacheIsolation.currentLease() == scopeLease) onCaptured(localSessionId)"
         assertTrue(
-            "Only init recovery, the feedback helper, Start, Stop and the shared direct mutation may capture a raw lease",
-            source.countOccurrences("cacheIsolation.currentLease()") == 5,
+            "The saved-Start acknowledgement must recheck its captured lease before clearing a customer draft",
+            savedStartAcknowledgement in capturedStart,
+        )
+        val withoutSavedStartAcknowledgement = source.replace(savedStartAcknowledgement, "")
+        assertTrue(
+            "Only init recovery, the feedback helper, Start, Stop and direct mutation may otherwise capture a raw lease",
+            withoutSavedStartAcknowledgement.countOccurrences("cacheIsolation.currentLease()") == 5,
         )
     }
 

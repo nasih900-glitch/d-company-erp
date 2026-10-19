@@ -98,6 +98,7 @@ import cloud.dcompany.erp.ui.screens.PosViewModel
 import cloud.dcompany.erp.ui.screens.TerminalSelectionScreen
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.AppearancePreference
+import cloud.dcompany.erp.ui.theme.syncLaunchAppearance
 import cloud.dcompany.erp.ui.theme.AppearanceStore
 import cloud.dcompany.erp.ui.theme.DCompanyTheme
 import cloud.dcompany.erp.core.net.ClientCompatibilityState
@@ -144,9 +145,11 @@ class MainActivity : ComponentActivity() {
         // older releases while also applying Compose insets risks divergent
         // (and, on some OEM builds, double-inset) tablet geometry.
         WindowCompat.setDecorFitsSystemWindows(window, false)
+        val appearanceStore = AppearanceStore(applicationContext)
+        val initialAppearance = appearanceStore.load()
+        syncLaunchAppearance(initialAppearance)
         setContent {
-            val appearanceStore = remember { AppearanceStore(applicationContext) }
-            var appearance by remember { mutableStateOf(appearanceStore.load()) }
+            var appearance by remember { mutableStateOf(initialAppearance) }
             CompositionLocalProvider(
                 LocalRemoteCapturePrivacyController provides
                     DCompanyApp.instance.remoteAssistance.privacy,
@@ -170,6 +173,7 @@ class MainActivity : ComponentActivity() {
                                 appearancePreference = appearance,
                                 onAppearancePreferenceChanged = { next ->
                                     appearanceStore.save(next)
+                                    syncLaunchAppearance(next)
                                     appearance = next
                                 },
                             )

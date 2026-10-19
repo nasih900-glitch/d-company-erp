@@ -19,6 +19,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -153,9 +154,6 @@ private fun FinanceContent(
     val imeVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
     val keyboard = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
-    val importantStatus = !state.online || state.error != null || state.pendingOnlineWrite != null ||
-        state.pendingExpenses.isNotEmpty() || state.pendingExpenseReceipts.isNotEmpty() ||
-        state.pendingAssets.isNotEmpty() || state.pendingCapitalEntries.isNotEmpty()
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         if (!imeVisible) Header(state, onRefresh = vm::load)
         else Row(Modifier.fillMaxWidth().padding(horizontal=Spacing.lg), verticalAlignment=Alignment.CenterVertically) {
@@ -190,7 +188,7 @@ private fun FinanceContent(
                     onSelect = { selected -> tab = selected.toIntOrNull() ?: 0 },
                     modifier = Modifier.padding(horizontal = Spacing.lg),
                 )
-                if (!imeVisible || importantStatus) FinanceStatusRegion(state = state, vm = vm, access = access, compact = imeVisible)
+                FinanceStatusRegion(state = state, vm = vm, access = access, compact = imeVisible)
                 when (tab) {
                     0 -> OverviewTab(state, presentation)
                     1 -> ExpensesTab(state, vm, access.canRecordExpenses)
@@ -312,19 +310,9 @@ private fun FinanceStatusRegion(
     val hasStatus = !state.online || (state.error != null && state.online) ||
         state.pendingOnlineWrite != null || state.notice != null || hasPendingChanges
 
-    Box(
-        Modifier
-            .fillMaxWidth()
-            .height(if (compact) 48.dp else if (hasStatus) FINANCE_STATUS_REGION_HEIGHT else 40.dp)
-            .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
-    ) {
+    FinanceStatusViewport(compact = compact) {
         if (!hasStatus) {
-            Text(
-                "Finance records are online · protected recovery is listed in saved-work status",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.labelSmall,
-                modifier = Modifier.align(Alignment.CenterStart),
-            )
+            FinanceReadySummary(state.lastUpdatedAtMillis, compact)
         } else {
             Column(
                 Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
@@ -348,6 +336,56 @@ private fun FinanceStatusRegion(
             }
         }
     }
+}
+
+@Composable
+internal fun BoxScope.FinanceReadySummary(lastUpdatedAtMillis: Long?, compact: Boolean) {
+    if (compact) {
+        Text(
+            "Finance online · protected recovery is in saved work",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.align(Alignment.CenterStart),
+        )
+    } else {
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.spacedBy(Spacing.sm, Alignment.CenterVertically),
+        ) {
+            Text("Finance records online", style = MaterialTheme.typography.labelLarge)
+            val refreshedAt = lastUpdatedAtMillis?.let {
+                DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(it))
+            }
+            Text(
+                refreshedAt?.let { "Figures last refreshed: $it · device clock" }
+                    ?: "Last successful financial refresh is not retained.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.labelSmall,
+            )
+            Text(
+                "Protected corrections are checked separately in saved-work status; recovery is never automatic.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.labelSmall,
+            )
+        }
+    }
+}
+
+// Report content stays at the same position as network/status messages change.
+// The compact keyboard viewport has its own fixed rail, independent of status.
+@Composable
+internal fun FinanceStatusViewport(
+    compact: Boolean = false,
+    content: @Composable BoxScope.() -> Unit,
+) {
+    Box(
+        modifier = Modifier.fillMaxWidth()
+            .then(if (compact) Modifier.height(48.dp) else Modifier.height(FINANCE_STATUS_REGION_HEIGHT))
+            .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
+        content = content,
+    )
 }
 
 private val FINANCE_STATUS_REGION_HEIGHT = 132.dp

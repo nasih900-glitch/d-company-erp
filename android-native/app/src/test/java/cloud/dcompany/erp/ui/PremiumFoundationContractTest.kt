@@ -50,7 +50,9 @@ class PremiumFoundationContractTest {
         val primitives = read("src/main/java/cloud/dcompany/erp/ui/components/Primitives.kt")
         val nativeColors = read("src/main/res/values/colors.xml")
 
-        assertTrue("Launch background must match the Compose background", "#08131B" in nativeColors)
+        val nativeNightColors = read("src/main/res/values-night/colors.xml")
+        assertTrue("Day launch must match the Web/Compose background", "#FAFAFA" in nativeColors)
+        assertTrue("Night launch must match the Web/Compose background", "#050505" in nativeNightColors)
         assertFalse("linearGradient" in theme)
         assertFalse("verticalGradient" in theme)
         assertFalse("GoldSheen" in theme)
