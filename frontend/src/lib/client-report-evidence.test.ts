@@ -16,8 +16,8 @@ describe("Reported device and incident evidence", () => {
       const row = {
         reason_code,
         event_type: "crash",
-        version_code: 51,
-        version_name: "3.1.43",
+        version_code: 52,
+        version_name: "3.1.44",
         occurred_at: "2026-10-17T01:00:00Z",
       } as ClientDiagnosticEventDTO;
       const original = structuredClone(row);
