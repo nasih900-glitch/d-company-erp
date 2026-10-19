@@ -22,6 +22,9 @@ REDIS_REF="d-company-erp-redis:${APP_REVISION}"
 CANDIDATE_ENV=$(mktemp)
 ROUTED_READY=$(mktemp)
 DIAGNOSTIC_LOG=$(mktemp)
+MIGRATION_OVERRIDE=$(mktemp)
+MIGRATION_BASE_CONFIG=$(mktemp)
+MIGRATION_PINNED_CONFIG=$(mktemp)
 rm -f "$CANDIDATE_ENV"
 
 compose=(
@@ -86,7 +89,9 @@ cleanup() {
     emit_failure_diagnostics "$failure_code"
   fi
   "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
-  rm -f "$CANDIDATE_ENV" "$ROUTED_READY" "$DIAGNOSTIC_LOG"
+  rm -f "$CANDIDATE_ENV" "$ROUTED_READY" "$DIAGNOSTIC_LOG" \
+    "$MIGRATION_OVERRIDE" "$MIGRATION_BASE_CONFIG" \
+    "$MIGRATION_PINNED_CONFIG"
   exit "$failure_code"
 }
 trap cleanup EXIT
@@ -113,6 +118,93 @@ candidate_images=$(python3 ops/runtime_release_parity.py candidate \
   --root "$ROOT" --env-file "$CANDIDATE_ENV" \
   --version-name "$APP_VERSION" --source-git-sha "$APP_REVISION" \
   --project-name "$PROJECT_NAME")
+
+# Build52's exact pending-data transition runs Alembic from the attested backend
+# image before its normal entrypoint or any other application runtime starts.
+# Exercise that same Compose/image boundary here; the later full runtime check
+# remains the proof for the ordinary fresh-install startup path.
+if [ "$APP_VERSION" = 3.1.44 ]; then
+  CANDIDATE_BACKEND_IMAGE_ID=$(python3 -c \
+    'import json,sys; print(json.loads(sys.argv[1])["services"]["backend"]["image_id"])' \
+    "$candidate_images")
+  if ! [[ "$CANDIDATE_BACKEND_IMAGE_ID" =~ ^sha256:[0-9a-f]{64}$ ]] || \
+     [ "$(docker image inspect --format '{{.Id}}' \
+       "$CANDIDATE_BACKEND_IMAGE_ID" 2>/dev/null)" \
+       != "$CANDIDATE_BACKEND_IMAGE_ID" ]; then
+    echo "Attested Build52 backend image is unavailable for migration proof." >&2
+    exit 1
+  fi
+  (umask 077
+   cat > "$MIGRATION_OVERRIDE" <<YAML
+services:
+  backend:
+    image: "$CANDIDATE_BACKEND_IMAGE_ID"
+YAML
+  )
+  migration_compose=(
+    docker compose -p "$PROJECT_NAME" --project-directory "$ROOT"
+    -f "$ROOT/docker-compose.prod.yml" -f "$MIGRATION_OVERRIDE"
+    --env-file "$CANDIDATE_ENV"
+  )
+  "${compose[@]}" config --format json > "$MIGRATION_BASE_CONFIG"
+  "${migration_compose[@]}" config --format json > "$MIGRATION_PINNED_CONFIG"
+  chmod 600 "$MIGRATION_OVERRIDE" "$MIGRATION_BASE_CONFIG" \
+    "$MIGRATION_PINNED_CONFIG"
+  python3 - "$MIGRATION_BASE_CONFIG" "$MIGRATION_PINNED_CONFIG" \
+      "$CANDIDATE_BACKEND_IMAGE_ID" <<'PY'
+import copy
+import json
+from pathlib import Path
+import sys
+
+base = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+pinned = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
+expected = copy.deepcopy(base)
+expected["services"]["backend"]["image"] = sys.argv[3]
+if pinned != expected:
+    raise SystemExit("Build52 migration override changed more than the backend image")
+PY
+  assert_no_normal_application_runtime() {
+    local service
+    local containers
+    for service in redis backend frontend; do
+      containers=$("${compose[@]}" ps --all -q "$service")
+      if [ -n "$containers" ]; then
+        echo "Build52 migration proof found an unexpected $service runtime." >&2
+        return 1
+      fi
+    done
+  }
+  assert_no_normal_application_runtime
+  "${compose[@]}" up -d --no-build --pull never --wait --wait-timeout 180 \
+    postgres
+  assert_no_normal_application_runtime
+  mapfile -t MIGRATION_POSTGRES_CONTAINERS \
+    < <("${compose[@]}" ps --all --status running -q postgres)
+  if [ "${#MIGRATION_POSTGRES_CONTAINERS[@]}" -ne 1 ] || \
+     ! [[ "${MIGRATION_POSTGRES_CONTAINERS[0]}" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "Build52 migration proof requires exactly one running PostgreSQL container." >&2
+    exit 1
+  fi
+  "${migration_compose[@]}" run --pull never --rm --no-deps \
+    --entrypoint python backend -m alembic upgrade 0089
+  assert_no_normal_application_runtime
+  PRIOR_MIGRATION_HEAD=$(docker exec "${MIGRATION_POSTGRES_CONTAINERS[0]}" \
+    psql -U erp -d erp -Atc 'SELECT version_num FROM alembic_version')
+  if [ "$PRIOR_MIGRATION_HEAD" != 0089 ]; then
+    echo "Build52 image migration proof did not establish prior head 0089." >&2
+    exit 1
+  fi
+  "${migration_compose[@]}" run --pull never --rm --no-deps \
+    --entrypoint python backend -m alembic upgrade head
+  assert_no_normal_application_runtime
+  MIGRATED_DATABASE_HEAD=$(docker exec "${MIGRATION_POSTGRES_CONTAINERS[0]}" \
+    psql -U erp -d erp -Atc 'SELECT version_num FROM alembic_version')
+  if [ "$MIGRATED_DATABASE_HEAD" != 0091 ]; then
+    echo "Build52 one-off image migration did not produce database head 0091." >&2
+    exit 1
+  fi
+fi
 
 "${compose[@]}" up -d --no-build --wait --wait-timeout 180 \
   postgres redis backend frontend
