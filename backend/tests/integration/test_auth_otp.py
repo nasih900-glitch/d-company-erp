@@ -273,3 +273,79 @@ async def test_standard_owner_reaches_operational_modules_but_not_protected_admi
         json={"password": seed_owner["password"]},
     )
     assert audit.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_public_reset_preserves_otp_requester_without_claiming_current_authentication(
+    client, session, seed_owner, configured_security_email,
+):
+    from sqlalchemy import select
+    from app.models import AuditLog
+    from app.services.audit.recorder import install_audit_listeners
+
+    install_audit_listeners()
+    owner = seed_owner["owner"]
+    login = await client.post("/api/v1/auth/login", json={
+        "email": owner.email, "password": seed_owner["password"],
+    })
+    requested = await client.post("/api/v1/auth/password-reset/request",
+        headers={"Authorization": "Bearer " + login.json()["access_token"]},
+        json={"email": owner.email})
+    assert requested.status_code == 202, requested.text
+    owner.auth_version += 1
+    await session.commit()
+    confirmed = await client.post("/api/v1/auth/password-reset/confirm", json={
+        "challenge_id": requested.json()["challenge_id"], "code": "123456",
+        "new_password": "synthetic-reset-password-51",
+    })
+    assert confirmed.status_code == 200, confirmed.text
+    event = await session.scalar(select(AuditLog).where(
+        AuditLog.company_id == owner.company_id, AuditLog.action == "otp_password_reset_success",
+    ).order_by(AuditLog.id.desc()))
+    assert event.actor_user_id == owner.id
+    assert event.target_user_id == owner.id
+    assert event.actor_kind == "otp_approved_requester"
+    # The old requester identity is evidence, not proof that the public
+    # confirmation request presented a currently authenticated bearer.
+    assert event.actor_kind != "authenticated"
+    automatic = await session.scalar(select(AuditLog).where(
+        AuditLog.company_id == owner.company_id,
+        AuditLog.entity_type == "User", AuditLog.entity_id == str(owner.id),
+        AuditLog.action == "update",
+    ).order_by(AuditLog.id.desc()))
+    assert automatic is not None
+    assert automatic.actor_kind == "otp_approved_requester"
+
+
+@pytest.mark.asyncio
+async def test_otp_failures_log_first_and_final_once_and_bound_replay(
+    client, session, seed_owner, configured_security_email,
+):
+    from sqlalchemy import select
+    from app.models import AuditLog
+    from app.services.audit.recorder import install_audit_listeners
+
+    install_audit_listeners()
+    requested = await client.post("/api/v1/auth/password-reset/request",
+                                   json={"email": seed_owner["owner"].email})
+    challenge_id = requested.json()["challenge_id"]
+    for _ in range(10):
+        response = await client.post("/api/v1/auth/password-reset/confirm", json={
+            "challenge_id": challenge_id, "code": "000000",
+            "new_password": "synthetic-never-applied-51",
+        }, headers={"X-Forwarded-For": "198.51.100.250"})
+        assert response.status_code == 422
+    limited = await client.post("/api/v1/auth/password-reset/confirm", json={
+        "challenge_id": challenge_id, "code": "000000", "new_password": "synthetic-never-applied-51",
+    })
+    assert limited.status_code == 429
+    rows = (await session.execute(select(AuditLog).where(
+        AuditLog.company_id == seed_owner["company"].id,
+        AuditLog.entity_id == challenge_id, AuditLog.action == "security_otp_rejected",
+    ).order_by(AuditLog.id))).scalars().all()
+    assert len(rows) == 2
+    assert [row.after["result"] for row in rows] == ["invalid_code", "attempt_limit_reached"]
+    assert all(row.ip.startswith("2001:db8:") for row in rows)
+    assert all(row.ip != "198.51.100.250" for row in rows)
+    assert all(row.user_agent for row in rows)
+    assert "000000" not in repr([row.after for row in rows])

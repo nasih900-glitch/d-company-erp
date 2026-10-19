@@ -203,6 +203,8 @@ BUILD48_PENDING_COMPATIBILITY_VERIFIER="$CANDIDATE_BUILD_ROOT/infra/scripts/veri
 BUILD49_PENDING_COMPATIBILITY_VERIFIER="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-build49-pending-compatibility.py"
 BUILD50_PENDING_COMPATIBILITY_VERIFIER="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-build50-pending-compatibility.py"
 BUILD50_POST_MIGRATION_VERIFIER="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-build50-post-migration-state.py"
+BUILD51_POST_MIGRATION_VERIFIER="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-build51-post-migration-state.py"
+BUILD51_POST_MIGRATION_SQL="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-build51-post-migration-state.sql"
 WEB_PUBLIC_ASSET_VERIFIER="$CANDIDATE_BUILD_ROOT/ops/verify_web_public_assets.py"
 BUSINESS_QUIESCENCE_VERIFIER="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-production-business-quiescence.py"
 BUSINESS_QUIESCENCE_SQL="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-production-business-quiescence.sql"
@@ -218,6 +220,7 @@ for release_input in \
   "$BUILD47_PENDING_COMPATIBILITY_VERIFIER" \
   "$BUILD48_PENDING_COMPATIBILITY_VERIFIER" \
   "$BUILD50_PENDING_COMPATIBILITY_VERIFIER" "$BUILD50_POST_MIGRATION_VERIFIER" \
+  "$BUILD51_POST_MIGRATION_VERIFIER" "$BUILD51_POST_MIGRATION_SQL" \
   "$BUILD49_PENDING_COMPATIBILITY_VERIFIER" "$WEB_PUBLIC_ASSET_VERIFIER" \
   "$BUSINESS_QUIESCENCE_VERIFIER" "$BUSINESS_QUIESCENCE_SQL"; do
   if [ ! -f "$release_input" ] || [ -L "$release_input" ]; then
@@ -298,6 +301,12 @@ EXISTING_BACKEND_CONTAINER=""
 PRIOR_PROJECT_NAME=""
 PRIOR_DB_HEAD=""
 ROLLBACK_STATE_MANIFEST_DIGEST=""
+BUILD51_FRESH_ADMISSION=false
+BUILD51_FRESH_BASELINE=""
+BUILD51_CURRENT_BASELINE=""
+BUILD51_CURRENT_CUTOFF=""
+BUILD51_ORIGIN_CUTOFF=""
+BUILD51_PRESERVE_CUTOFF=""
 DATABASE_BACKUP_SHA256=""
 CONTAINER_IDS=()
 RUNNING_CONTAINER_IDS=()
@@ -624,6 +633,16 @@ YAML
       >> "$UPGRADE_SNAPSHOT/container-images.txt"
   done
   chmod 600 "$UPGRADE_SNAPSHOT/revision.txt" "$UPGRADE_SNAPSHOT/container-images.txt"
+  PRIOR_FRESH_ORIGIN="/var/lib/dcompany-erp/fresh-lineage-${PRIOR_PROJECT_NAME}.json"
+  if [ -e "$PRIOR_FRESH_ORIGIN" ] || [ -L "$PRIOR_FRESH_ORIGIN" ]; then
+    python3 "$BUILD51_POST_MIGRATION_VERIFIER" --fresh-origin "$PRIOR_FRESH_ORIGIN" \
+      --project "$PRIOR_PROJECT_NAME" --show-origin-cutoff >/dev/null
+    install -m 0600 "$PRIOR_FRESH_ORIGIN" "$UPGRADE_SNAPSHOT/fresh-lineage-origin.json"
+    if ! cmp -s "$PRIOR_FRESH_ORIGIN" "$UPGRADE_SNAPSHOT/fresh-lineage-origin.json"; then
+      echo "Fresh origin receipt changed while copying protected rollback inputs." >&2
+      exit 1
+    fi
+  fi
   ROLLBACK_STATE_MANIFEST="$UPGRADE_SNAPSHOT/rollback-state.sha256"
   (
     cd "$UPGRADE_SNAPSHOT"
@@ -631,6 +650,9 @@ YAML
       docker-compose.rollback-live-data.yml revision.txt container-images.txt \
       backend-source.sha256 backend-source.paths prior-source.tar
   ) > "$ROLLBACK_STATE_MANIFEST"
+  if [ -f "$UPGRADE_SNAPSHOT/fresh-lineage-origin.json" ]; then
+    (cd "$UPGRADE_SNAPSHOT" && sha256sum fresh-lineage-origin.json) >> "$ROLLBACK_STATE_MANIFEST"
+  fi
   chmod 400 "$ROLLBACK_STATE_MANIFEST"
   ROLLBACK_STATE_MANIFEST_DIGEST=$(sha256sum "$ROLLBACK_STATE_MANIFEST" \
     | awk '{print $1}')
@@ -659,6 +681,7 @@ else
     echo "Refusing a fresh secret reset; recover the prior .env through the incident runbook." >&2
     exit 1
   fi
+  BUILD51_FRESH_ADMISSION=true
 fi
 
 if [ -n "$PRIOR_PROJECT_NAME" ]; then
@@ -666,6 +689,7 @@ if [ -n "$PRIOR_PROJECT_NAME" ]; then
 else
   DEPLOY_PROJECT_NAME=$inferred_project_name
 fi
+BUILD51_FRESH_ORIGIN="/var/lib/dcompany-erp/fresh-lineage-${DEPLOY_PROJECT_NAME}.json"
 # This is the one intentionally mutable bind: signed APKs are operational
 # release data staged by the independently locked publisher. Code, Compose,
 # Caddy configuration, Dockerfiles, and verification tools stay in the frozen
@@ -778,6 +802,13 @@ handle_install_failure() {
             | awk '{print $1}')" != "$DATABASE_BACKUP_SHA256" ] || \
          ! sha256sum -c "$UPGRADE_SNAPSHOT/database.dump.sha256" \
            >/dev/null 2>&1; }; then
+      rollback_succeeded=false
+    fi
+
+    if [ "$rollback_succeeded" = true ] && \
+       [ -f "$UPGRADE_SNAPSHOT/fresh-lineage-origin.json" ] && \
+       ! cmp -s "$BUILD51_FRESH_ORIGIN" "$UPGRADE_SNAPSHOT/fresh-lineage-origin.json"; then
+      echo "Fresh origin receipt is missing or changed; preserve the checksummed backup for controlled recovery." >&2
       rollback_succeeded=false
     fi
 
@@ -900,6 +931,36 @@ handle_install_failure() {
           2>/dev/null || true)
         if [ "$restored_head" != "$PRIOR_DB_HEAD" ]; then
           rollback_succeeded=false
+        fi
+        if [ "$rollback_succeeded" = true ] && [ -n "$BUILD51_CURRENT_BASELINE" ]; then
+          RESTORED_CURRENT_STATE="$UPGRADE_SNAPSHOT/current-restored-history-raw.json"
+          if ! (cd "$UPGRADE_SNAPSHOT" && sha256sum -c build51-current-history-before.json.sha256 >/dev/null); then
+            rollback_succeeded=false
+          fi
+          docker exec -i \
+            -e "PGOPTIONS=-c dcompany.build51_fresh_lineage=true -c dcompany.build51_origin_cutoff=$BUILD51_CURRENT_CUTOFF -c dcompany.build51_preserve_cutoff=$BUILD51_CURRENT_CUTOFF" \
+            "$rollback_postgres" psql -X --no-psqlrc --quiet -U erp -d erp --tuples-only --no-align \
+            < "$BUILD51_POST_MIGRATION_SQL" > "$RESTORED_CURRENT_STATE" || rollback_succeeded=false
+          chmod 600 "$RESTORED_CURRENT_STATE"
+          if [ "$rollback_succeeded" = true ] && ! python3 "$BUILD51_POST_MIGRATION_VERIFIER" --current-state \
+              --raw-historical-state "$RESTORED_CURRENT_STATE" --baseline-current-state "$BUILD51_CURRENT_BASELINE" >/dev/null; then
+            echo "Restored current Audit or correction history differs; ingress and writers stay stopped." >&2
+            rollback_succeeded=false
+          fi
+        fi
+        if [ "$rollback_succeeded" = true ] && [ -n "$BUILD51_FRESH_BASELINE" ]; then
+          RESTORED_FRESH_STATE="$UPGRADE_SNAPSHOT/fresh-restored-history-raw.json"
+          docker exec -i -e "PGOPTIONS=-c dcompany.build51_fresh_lineage=true -c dcompany.build51_origin_cutoff=$BUILD51_ORIGIN_CUTOFF -c dcompany.build51_preserve_cutoff=$BUILD51_PRESERVE_CUTOFF" \
+            "$rollback_postgres" psql -X --no-psqlrc --quiet -U erp -d erp --tuples-only --no-align \
+            < "$BUILD51_POST_MIGRATION_SQL" > "$RESTORED_FRESH_STATE" || rollback_succeeded=false
+          chmod 600 "$RESTORED_FRESH_STATE"
+          if [ "$rollback_succeeded" = true ] && ! python3 "$BUILD51_POST_MIGRATION_VERIFIER" \
+              --fresh-origin "$BUILD51_FRESH_ORIGIN" --project "$DEPLOY_PROJECT_NAME" \
+              --raw-historical-state "$RESTORED_FRESH_STATE" --baseline-fresh-state "$BUILD51_FRESH_BASELINE" >/dev/null; then
+            echo "Restored fresh lineage identity or history changed; ingress stays closed." >&2
+            echo "Retain the original receipt, restored DB and verified rollback bundle for controlled recovery; do not create a new birth receipt." >&2
+            rollback_succeeded=false
+          fi
         fi
       fi
     fi
@@ -1207,6 +1268,35 @@ if [ -n "$EXISTING_POSTGRES_CONTAINER" ]; then
     echo "Reported tablet outbox state is invalid; refusing migration." >&2
     exit 1
   fi
+  if [ "$PRIOR_DB_HEAD" = 0091 ]; then
+    BUILD51_CURRENT_BASELINE="$UPGRADE_SNAPSHOT/build51-current-history-before.json"
+    (umask 077; docker exec -i -e "PGOPTIONS=-c dcompany.build51_fresh_lineage=true" \
+      "$EXISTING_POSTGRES_CONTAINER" psql -X --no-psqlrc --quiet -U erp -d erp --tuples-only --no-align \
+      < "$BUILD51_POST_MIGRATION_SQL" > "$BUILD51_CURRENT_BASELINE")
+    chmod 600 "$BUILD51_CURRENT_BASELINE"
+    BUILD51_CURRENT_CUTOFF=$(python3 "$BUILD51_POST_MIGRATION_VERIFIER" --current-state \
+      --raw-historical-state "$BUILD51_CURRENT_BASELINE" --show-preserve-cutoff)
+    (cd "$UPGRADE_SNAPSHOT" && sha256sum build51-current-history-before.json) \
+      > "$BUILD51_CURRENT_BASELINE.sha256"
+    chmod 600 "$BUILD51_CURRENT_BASELINE.sha256"
+  fi
+  if [ -e "$BUILD51_FRESH_ORIGIN" ] || [ -L "$BUILD51_FRESH_ORIGIN" ]; then
+    if [ "$PRIOR_DB_HEAD" != 0091 ] || [ "$pending_outbox_count" -ne 0 ]; then
+      echo "Fresh lineage requires exact0091 with zero pending work; no compatibility exception applies." >&2
+      exit 1
+    fi
+    BUILD51_ORIGIN_CUTOFF=$(python3 "$BUILD51_POST_MIGRATION_VERIFIER" \
+      --fresh-origin "$BUILD51_FRESH_ORIGIN" --project "$DEPLOY_PROJECT_NAME" --show-origin-cutoff)
+    BUILD51_FRESH_BASELINE="$UPGRADE_SNAPSHOT/build51-fresh-history-before.json"
+    (umask 077; docker exec -i \
+      -e "PGOPTIONS=-c dcompany.build51_fresh_lineage=true -c dcompany.build51_origin_cutoff=$BUILD51_ORIGIN_CUTOFF" \
+      "$EXISTING_POSTGRES_CONTAINER" psql -X --no-psqlrc --quiet -U erp -d erp --tuples-only --no-align \
+        < "$BUILD51_POST_MIGRATION_SQL" > "$BUILD51_FRESH_BASELINE")
+    chmod 600 "$BUILD51_FRESH_BASELINE"
+    BUILD51_PRESERVE_CUTOFF=$(python3 "$BUILD51_POST_MIGRATION_VERIFIER" \
+      --fresh-origin "$BUILD51_FRESH_ORIGIN" --project "$DEPLOY_PROJECT_NAME" \
+      --raw-historical-state "$BUILD51_FRESH_BASELINE" --show-preserve-cutoff)
+  fi
   if [ "$pending_outbox_count" -ne 0 ]; then
     # The one stale counter may survive forever as preserved historical
     # evidence. An already-cleaned database is accepted only when a read-only
@@ -1214,16 +1304,47 @@ if [ -n "$EXISTING_POSTGRES_CONTAINER" ]; then
     # cleanup receipt, all 13 replay fences and the continued absence of every
     # reviewed deleted row. Any changed, duplicate or partial receipt fails
     # closed and cannot be mistaken for the one-time pre-cleanup bridge.
+    historical_state_sql="$POST_CLEANUP_STATE_SQL"
+    case "$PRIOR_DB_HEAD" in
+      0091) historical_state_sql="$BUILD51_POST_MIGRATION_SQL" ;;
+      0089|0078|0079|0082|0085|0086|0087|0088) ;;
+      0073)
+        # Only the separately preserved exact Code30.2 precursor may use this.
+        if [ "$CANDIDATE_APP_VERSION" != 3.1.29 ]; then
+          echo "Unaccepted historical reader schema." >&2; exit 1
+        fi ;;
+      *)
+        echo "Unknown or unreleased schema cannot establish the historical bridge." >&2
+        exit 1 ;;
+    esac
     post_cleanup_state_json=$(docker exec -i "$EXISTING_POSTGRES_CONTAINER" \
       psql -X --no-psqlrc --quiet -U erp -d erp --tuples-only --no-align \
-      < "$POST_CLEANUP_STATE_SQL")
+      < "$historical_state_sql")
     # Preserve the complete, unmodified query result even when compatibility
     # is refused. The scoped proof below never overwrites this private evidence.
     RAW_PENDING_STATE="$UPGRADE_SNAPSHOT/tablet-pending-raw.json"
     (umask 077; printf '%s\n' "$post_cleanup_state_json" > "$RAW_PENDING_STATE")
     chmod 600 "$RAW_PENDING_STATE"
-    if printf '%s\n' "$post_cleanup_state_json" \
-       | python3 "$POST_CLEANUP_STATE_VERIFIER" --quiet; then
+    historical_proof_passed=false
+    case "$PRIOR_DB_HEAD" in
+      0091)
+        if python3 "$BUILD51_POST_MIGRATION_VERIFIER" --raw-historical-state "$RAW_PENDING_STATE" \
+             > "$UPGRADE_SNAPSHOT/build51-retry-history-verification.json"; then
+          historical_proof_passed=true
+        fi ;;
+      0089)
+        if python3 "$BUILD51_POST_MIGRATION_VERIFIER" --pre-migration-0089 \
+             --raw-historical-state "$RAW_PENDING_STATE" \
+             > "$UPGRADE_SNAPSHOT/build51-prior0089-history-verification.json"; then
+          historical_proof_passed=true
+        fi ;;
+      *)
+        if printf '%s\n' "$post_cleanup_state_json" \
+             | python3 "$POST_CLEANUP_STATE_VERIFIER" --quiet; then
+          historical_proof_passed=true
+        fi ;;
+    esac
+    if [ "$historical_proof_passed" = true ]; then
       CODE30_2_POST_CLEANUP_STALE_OUTBOX_ACCEPTED=true
       echo "==> Verified completed Code30.2 cleanup and retained historical outbox evidence."
     elif [ "$CANDIDATE_APP_VERSION" = 3.1.36 ] && \
@@ -1973,6 +2094,73 @@ if [ "${BUILD50_PENDING_CARRIED_UNRESOLVED:-false}" = true ]; then
   echo "==> Exact migration-0089 guard, history, and opaque fleet verified."
 fi
 
+# Route by the actual migrated schema, including an already0091 retry. This
+# verifies history only: no new50-to51 opaque pending-work exception is granted.
+if [ "$FRESH_INSTALL" = false ]; then
+  BUILD51_POSTGRES_IDS=()
+  while IFS= read -r container_id; do
+    [ -n "$container_id" ] && BUILD51_POSTGRES_IDS+=("$container_id")
+  done < <("${candidate_compose[@]}" --env-file .env ps -q postgres)
+  if [ "${#BUILD51_POSTGRES_IDS[@]}" -ne 1 ]; then
+    echo "Post-migration schema routing requires one canonical PostgreSQL container." >&2
+    exit 1
+  fi
+  BUILD51_POSTGRES_CONTAINER=${BUILD51_POSTGRES_IDS[0]}
+  migrated_history_head=$(docker exec "$BUILD51_POSTGRES_CONTAINER" \
+    psql -X --no-psqlrc --quiet -U erp -d erp --tuples-only --no-align \
+      --command "SELECT version_num FROM alembic_version")
+  case "$migrated_history_head" in
+    0091)
+      RAW_BUILD51_HISTORY="$UPGRADE_SNAPSHOT/build51-post-migration-history-raw.json"
+      BUILD51_HISTORY_REPORT="$UPGRADE_SNAPSHOT/build51-post-migration-history-verification.json"
+      for evidence_path in "$RAW_BUILD51_HISTORY" "$BUILD51_HISTORY_REPORT"; do
+        if [ -e "$evidence_path" ] || [ -L "$evidence_path" ]; then
+          echo "Refusing to overwrite existing Build51 history evidence." >&2
+          exit 1
+        fi
+      done
+      if [ -n "$BUILD51_CURRENT_BASELINE" ]; then
+        if ! (cd "$UPGRADE_SNAPSHOT" && sha256sum -c build51-current-history-before.json.sha256 >/dev/null); then
+          echo "Quiesced current history evidence changed; ingress stays closed." >&2; exit 1
+        fi
+        RAW_CURRENT_AFTER="$UPGRADE_SNAPSHOT/build51-current-history-after.json"
+        (umask 077; docker exec -i \
+          -e "PGOPTIONS=-c dcompany.build51_fresh_lineage=true -c dcompany.build51_origin_cutoff=$BUILD51_CURRENT_CUTOFF -c dcompany.build51_preserve_cutoff=$BUILD51_CURRENT_CUTOFF" \
+          "$BUILD51_POSTGRES_CONTAINER" psql -X --no-psqlrc --quiet -U erp -d erp --tuples-only --no-align \
+          < "$BUILD51_POST_MIGRATION_SQL" > "$RAW_CURRENT_AFTER")
+        chmod 600 "$RAW_CURRENT_AFTER"
+        python3 "$BUILD51_POST_MIGRATION_VERIFIER" --current-state \
+          --raw-historical-state "$RAW_CURRENT_AFTER" --baseline-current-state "$BUILD51_CURRENT_BASELINE" >/dev/null
+      fi
+      BUILD51_LINEAGE_OPTIONS=()
+      BUILD51_QUERY_OPTIONS=()
+      if [ -e "$BUILD51_FRESH_ORIGIN" ] || [ -L "$BUILD51_FRESH_ORIGIN" ]; then
+        if [ -z "$BUILD51_FRESH_BASELINE" ]; then
+          echo "Fresh origin has no verified quiesced baseline; refusing history acceptance." >&2
+          exit 1
+        fi
+        BUILD51_LINEAGE_OPTIONS=(--fresh-origin "$BUILD51_FRESH_ORIGIN" --project "$DEPLOY_PROJECT_NAME" --baseline-fresh-state "$BUILD51_FRESH_BASELINE")
+        BUILD51_QUERY_OPTIONS=(-e "PGOPTIONS=-c dcompany.build51_fresh_lineage=true -c dcompany.build51_origin_cutoff=$BUILD51_ORIGIN_CUTOFF -c dcompany.build51_preserve_cutoff=$BUILD51_PRESERVE_CUTOFF")
+      fi
+      (umask 077; docker exec -i "${BUILD51_QUERY_OPTIONS[@]}" "$BUILD51_POSTGRES_CONTAINER" \
+        psql -X --no-psqlrc --quiet -U erp -d erp --tuples-only --no-align \
+          < "$BUILD51_POST_MIGRATION_SQL" > "$RAW_BUILD51_HISTORY")
+      chmod 600 "$RAW_BUILD51_HISTORY"
+      if ! (umask 077; python3 "$BUILD51_POST_MIGRATION_VERIFIER" \
+          --raw-historical-state "$RAW_BUILD51_HISTORY" "${BUILD51_LINEAGE_OPTIONS[@]}" > "$BUILD51_HISTORY_REPORT"); then
+        echo "Build51 projected history or guard identity changed; public ingress remains closed." >&2
+        exit 1
+      fi
+      chmod 600 "$BUILD51_HISTORY_REPORT" ;;
+    0078|0079|0082|0085|0086|0087|0088|0089)
+      # Retained older release paths above remain unchanged.
+      ;;
+    *)
+      echo "Unknown post-migration schema cannot select a historical proof reader." >&2
+      exit 1 ;;
+  esac
+fi
+
 # Read public files through nginx's unprivileged worker before ingress opens.
 # A healthy root page alone cannot prove copied public assets are readable.
 # The exact Compose container must still use the scanned candidate image.
@@ -2195,6 +2383,27 @@ with urllib.request.urlopen(protected_request, timeout=10) as response:
 '
   unset OWNER_PASSWORD
   echo "==> Fresh owner authentication and protected access accepted."
+  if [ "$BUILD51_FRESH_ADMISSION" != true ]; then
+    echo "A fresh origin requires the earlier no-prior-container/volume/network/evidence admission." >&2
+    exit 1
+  fi
+  FRESH_POSTGRES_CONTAINER=$("${candidate_compose[@]}" --env-file .env ps -q postgres)
+  if ! [[ "$FRESH_POSTGRES_CONTAINER" =~ ^[a-f0-9]{12,64}$ ]]; then
+    echo "Fresh origin requires one canonical PostgreSQL container." >&2; exit 1
+  fi
+  FRESH_SCHEMA_HEAD=$(docker exec "$FRESH_POSTGRES_CONTAINER" psql -X --no-psqlrc --quiet \
+    -U erp -d erp --tuples-only --no-align --command "SELECT version_num FROM alembic_version")
+  if [ "$FRESH_SCHEMA_HEAD" = 0091 ]; then
+    FRESH_ORIGIN_STATE="$SECURITY_EVIDENCE_DIR/build51-fresh-origin-state.json"
+    (umask 077; docker exec -i -e "PGOPTIONS=-c dcompany.build51_fresh_lineage=true" \
+      "$FRESH_POSTGRES_CONTAINER" psql -X --no-psqlrc --quiet -U erp -d erp --tuples-only --no-align \
+        < "$BUILD51_POST_MIGRATION_SQL" > "$FRESH_ORIGIN_STATE")
+    chmod 600 "$FRESH_ORIGIN_STATE"
+    python3 "$BUILD51_POST_MIGRATION_VERIFIER" --raw-historical-state "$FRESH_ORIGIN_STATE" \
+      --fresh-origin "$BUILD51_FRESH_ORIGIN" --create-fresh-origin --fresh-admission-confirmed \
+      --project "$DEPLOY_PROJECT_NAME" --source-git-sha "$CURRENT_REVISION" \
+      --source-archive-sha256 "$CANDIDATE_SOURCE_ARCHIVE_SHA256"
+  fi
 fi
 
 echo "==> Backend acceptance passed; reopening public ingress…"

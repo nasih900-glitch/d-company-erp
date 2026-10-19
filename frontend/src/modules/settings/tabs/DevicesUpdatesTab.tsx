@@ -60,10 +60,10 @@ const CHANNEL_LABELS: Record<ClientDistributionChannel, string> = {
 };
 
 const UPDATE_STATES: Record<ClientUpdateState, { label: string; className: string }> = {
-  idle: { label: 'Ready', className: 'border-bg-border bg-bg-raised text-fg-muted' },
+  idle: { label: 'No update in progress', className: 'border-bg-border bg-bg-raised text-fg-muted' },
   update_available: {
     label: 'Update available',
-    className: 'border-accent-gold/40 bg-accent-gold/10 text-accent-gold',
+    className: 'border-accent-gold/40 bg-accent-gold/10 text-fg',
   },
   downloading: {
     label: 'Downloading',
@@ -111,7 +111,7 @@ const RELEASE_STATUS: Record<AndroidReleaseStatus, { label: string; className: s
   },
   staged: {
     label: 'Staged',
-    className: 'border-accent-gold/40 bg-accent-gold/10 text-accent-gold',
+    className: 'border-accent-gold/40 bg-accent-gold/10 text-fg',
   },
   withdrawn: {
     label: 'Withdrawn',
@@ -233,7 +233,6 @@ export default function DevicesUpdatesTab() {
   }
 
   const liveInstallations = installations.items.filter((item) => !item.is_stale).length;
-  const pendingOutbox = currentPendingOutboxCount(installations.items);
   const activeRelease = releases.find((release) => release.status === 'active') ?? null;
   const stagedReleases = releases.filter((release) => release.status === 'staged');
   const withdrawnReleases = releases.filter((release) => release.status === 'withdrawn');
@@ -289,18 +288,12 @@ export default function DevicesUpdatesTab() {
         />
         <SummaryCard
           icon={<Cloud size={18} aria-hidden="true" />}
-          label="Recently online"
+          label="Recent reports at check"
           value={String(liveInstallations)}
-          detail={installations.items.length ? 'Authenticated heartbeat received' : 'No heartbeat yet'}
+          detail={installations.items.length ? 'Loaded reports only · as of the displayed check' : 'No heartbeat yet · current coverage unknown'}
           tone={liveInstallations > 0 ? 'good' : 'neutral'}
         />
-        <SummaryCard
-          icon={<HardDrive size={18} aria-hidden="true" />}
-          label="Waiting to sync"
-          value={String(pendingOutbox)}
-          detail={pendingOutbox ? 'Saved tablet actions still pending' : 'Reported queues are clear'}
-          tone={pendingOutbox ? 'warning' : 'good'}
-        />
+        <ReportedQueueSummary installations={installations}/>
         <SummaryCard
           icon={<PackageCheck size={18} aria-hidden="true" />}
           label="Active release"
@@ -437,6 +430,27 @@ function DevicesUpdatesSkeleton() {
   );
 }
 
+export function ReportedQueueSummary({ installations }: { installations: ClientInstallationListDTO }) {
+  const recent = installations.items.filter(item => !item.is_stale);
+  const pending = currentPendingOutboxCount(recent);
+  const stale = installations.items.length - recent.length;
+  const missing = Math.max(0, installations.total - installations.items.length);
+  const partial = stale > 0 || missing > 0;
+  const coverage = [
+    stale ? `${stale} loaded stale report${stale === 1 ? '' : 's'} excluded` : null,
+    missing ? `${missing} additional tablet${missing === 1 ? '' : 's'} not loaded` : null,
+  ].filter(Boolean).join('; ');
+  return <SummaryCard
+    icon={<HardDrive size={18} aria-hidden="true"/>}
+    label="Reported automatic queue"
+    value={recent.length ? String(pending) : 'Unknown'}
+    detail={recent.length
+      ? `${recent.length} loaded recent report${recent.length === 1 ? '' : 's'} only, at check. ${coverage ? `${coverage}. ` : ''}Protected owner recovery is separate; current queues are not verified.`
+      : `No recent reports in the loaded list; current queues unknown. ${coverage ? `${coverage}. ` : ''}Protected owner recovery is separate.`}
+    tone={!recent.length ? 'neutral' : pending ? 'warning' : partial ? 'neutral' : 'good'}
+  />;
+}
+
 function SummaryCard({
   icon,
   label,
@@ -452,7 +466,7 @@ function SummaryCard({
 }) {
   const toneClass = tone === 'good'
     ? 'text-accent-good'
-    : tone === 'warning' ? 'text-accent-gold' : 'text-fg-muted';
+    : tone === 'warning' ? 'text-fg' : 'text-fg-muted';
   return (
     <div className="card min-w-0 !p-4">
       <div className={`flex items-center gap-2 text-xs font-medium ${toneClass}`}>
@@ -484,7 +498,7 @@ function SectionHeading({
   );
 }
 
-function InstallationCard({
+export function InstallationCard({
   installation,
   serverTime,
 }: {
@@ -513,20 +527,21 @@ function InstallationCard({
         </div>
         <div className="flex flex-wrap justify-end gap-2">
           <StatusPill
-            label={installation.is_stale ? 'Not reporting' : 'Recently online'}
+            label={installation.is_stale ? 'Stale report at check' : 'Recent report at check'}
             className={installation.is_stale
               ? 'border-accent-bad/40 bg-accent-bad/10 text-accent-bad'
               : 'border-accent-good/40 bg-accent-good/10 text-accent-good'}
           />
-          <StatusPill label={updateState.label} className={updateState.className} />
+          <StatusPill label={`${updateState.label} · last reported`} className={updateState.className} />
         </div>
       </div>
 
+      <p className="mt-3 text-xs text-fg-muted">Report snapshot checked {formatDate(serverTime)} (browser time). Freshness and stages refer to this check, not a live connection.</p>
       <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
-        <InfoItem label="Installed version" value={`v${installation.version_name} · build ${installation.version_code}`} mono />
+        <InfoItem label="Last reported app version" value={`v${installation.version_name} · build ${installation.version_code}`} mono />
         <InfoItem
-          label="Last seen"
-          value={`${relativeTime(installation.last_seen_at, serverTime)} · ${formatDate(installation.last_seen_at)}`}
+          label="Last report received"
+          value={`${relativeTime(installation.last_seen_at, serverTime)} at check · ${formatDate(installation.last_seen_at)} (browser time)`}
         />
         <InfoItem
           label="Last successful Sync"
@@ -535,31 +550,34 @@ function InstallationCard({
             : 'Not reported yet'}
         />
         <InfoItem
-          label={installation.is_stale ? 'Last reported queue' : 'Saved actions waiting'}
+          label="Automatic outbox at last report"
           value={installation.pending_outbox_count
             ? installation.is_stale
               ? `${installation.pending_outbox_count} last reported`
               : `${installation.pending_outbox_count} pending`
-            : 'Queue clear'}
+            : installation.is_stale ? '0 last reported · current queue unknown' : '0 pending at last report'}
           valueClass={installation.is_stale
             ? 'text-fg-muted'
-            : installation.pending_outbox_count ? 'text-accent-gold' : 'text-accent-good'}
+            : installation.pending_outbox_count ? 'text-fg' : 'text-accent-good'}
           mono
         />
-        {installation.is_stale && installation.pending_outbox_count > 0 ? (
+        {installation.is_stale ? (
           <p className="col-span-2 text-xs text-fg-muted">
             Last reported before this installation stopped checking in; this is historical telemetry, not a current pending count.
           </p>
         ) : null}
-        <InfoItem label="Last employee" value={installation.last_user_name || 'Not reported'} />
-        <InfoItem label="Workspace" value={installation.terminal_name || 'No workspace header'} />
+        <InfoItem label="Last reported employee (current name)" value={installation.last_user_name || 'Not reported'} />
+        <InfoItem label="Workspace (current label)" value={installation.terminal_name || 'No workspace header'} />
+        <InfoItem label="Last app launch" value="Not reported" />
+        <InfoItem label="Post-update health" value="Not reported" />
+        <p className="col-span-2 text-xs text-fg-muted">Download target build is not retained in this heartbeat. An offer, ready download or installer launch does not prove installation or a healthy app launch.</p>
       </dl>
 
       {installation.update_error_code ? (
         <div className="mt-4 flex items-start gap-2 rounded-lg border border-accent-bad/35 bg-accent-bad/10 p-3 text-sm">
           <AlertCircle className="mt-0.5 shrink-0 text-accent-bad" size={15} aria-hidden="true" />
           <div>
-            <p className="font-medium text-accent-bad">Update failed on this tablet</p>
+            <p className="font-medium text-accent-bad">Last reported update error</p>
             <p className="mt-0.5 text-xs text-fg-muted">
               {UPDATE_ERRORS[installation.update_error_code]}
             </p>

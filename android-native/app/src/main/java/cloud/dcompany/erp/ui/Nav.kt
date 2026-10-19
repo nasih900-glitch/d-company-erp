@@ -13,7 +13,6 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -87,6 +86,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -104,6 +104,7 @@ import androidx.compose.ui.window.DialogProperties
 import cloud.dcompany.erp.BuildConfig
 import cloud.dcompany.erp.core.sync.OutboxWorkStatus
 import cloud.dcompany.erp.core.sync.outboxWorkVisibleLabel
+import cloud.dcompany.erp.ui.components.AppearanceControl
 import cloud.dcompany.erp.ui.components.SyncAvailabilityProblem
 import cloud.dcompany.erp.ui.components.DCompanyBrandMark
 import cloud.dcompany.erp.ui.components.fieldColors
@@ -589,8 +590,6 @@ private fun WorkspaceHeader(
     onSignOut: () -> Unit,
 ) {
     var accountMenuOpen by remember { mutableStateOf(false) }
-    val resolvedNight = appearancePreference == AppearancePreference.Night ||
-        (appearancePreference == AppearancePreference.System && isSystemInDarkTheme())
     val controlDeckDestination = destination in setOf(
         Destination.Gaming,
         Destination.Pos,
@@ -671,40 +670,14 @@ private fun WorkspaceHeader(
         OutboxWorkStatusPill(
             status = outboxWorkStatus,
             syncing = syncing,
-            showDetail = !compact,
+            showDetail = !compact || LocalConfiguration.current.screenWidthDp >= 900,
         )
 
-        Surface(
-            color = MaterialTheme.colorScheme.surface,
-            shape = Radius.shapePill,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-            modifier = Modifier.heightIn(min = 42.dp)
-                .testTag("workspace-day-night-toggle")
-                .clickable {
-                    onAppearancePreferenceChanged(
-                        if (resolvedNight) AppearancePreference.Day
-                        else AppearancePreference.Night,
-                    )
-                }
-                .semantics {
-                    role = Role.Switch
-                    stateDescription = if (resolvedNight) "Night" else "Day"
-                    contentDescription = "Day and night appearance"
-                },
-        ) {
-            Row(
-                Modifier.padding(horizontal = Spacing.md),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
-            ) {
-                Icon(Icons.Filled.Brightness6, contentDescription = null, modifier = Modifier.size(18.dp))
-                Text(
-                    if (resolvedNight) "Night mode" else "Day mode",
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.Bold,
-                )
-            }
-        }
+        AppearanceControl(
+            preference = appearancePreference,
+            onChange = onAppearancePreferenceChanged,
+            modifier = Modifier.testTag("workspace-day-night-toggle"),
+        )
 
         val supportDescription = if (pendingSupportCount > 0) {
             "Help and support. $pendingSupportCount saved request${if (pendingSupportCount == 1) "" else "s"} waiting"
@@ -1012,12 +985,14 @@ private fun OutboxWorkStatusPill(
     ) {
         if (visibleLabel != null) {
             val color = when {
-                status.actionRequiredCount > 0 -> MaterialTheme.colorScheme.operationalDanger
+                status.protectedReviewUnknown || status.protectedReviewCount > 0 || status.actionRequiredCount > 0 -> MaterialTheme.colorScheme.operationalDanger
                 syncing -> MaterialTheme.colorScheme.operationalInformation
                 status.retryableCount > 0 -> MaterialTheme.colorScheme.operationalWarning
                 else -> MaterialTheme.colorScheme.operationalInformation
             }
             val accessibilityDetail = buildList {
+                if (status.protectedReviewUnknown) add("protected recovery storage unknown; owner review required")
+                else if (status.protectedReviewCount > 0) add("${status.protectedReviewCount} protected requests need explicit owner recovery, not automatic Sync")
                 if (status.actionRequiredCount > 0) add("${status.actionRequiredCount} need review")
                 if (status.retryableCount > 0) add("${status.retryableCount} waiting to sync")
                 if (status.savedDraftCount > 0) add("${status.savedDraftCount} saved drafts")

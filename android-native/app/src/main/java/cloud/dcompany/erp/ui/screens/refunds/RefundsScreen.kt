@@ -1061,7 +1061,7 @@ private fun RefundDialog(order: Order, busy: Boolean, online: Boolean, vm: Refun
                     overRefund -> Text("That is above the latest refundable balance.", color = MaterialTheme.colorScheme.operationalDanger)
                 }
 
-                Text("Original payment", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("Receipt payment method", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 when (railPolicy.kind) {
                     RefundRailKind.UNKNOWN -> OperationalBanner(
                         title = "Payment rail unavailable — refund locked",
@@ -1094,7 +1094,7 @@ private fun RefundDialog(order: Order, busy: Boolean, online: Boolean, vm: Refun
                             FilterChip(
                                 selected = mode == "original",
                                 onClick = { mode = "original" },
-                                label = { Text("Original $originalLabel") },
+                                label = { Text("Same $originalLabel") },
                                 modifier = Modifier.weight(1f),
                                 colors = refundChipColors(),
                             )
@@ -1110,7 +1110,7 @@ private fun RefundDialog(order: Order, busy: Boolean, online: Boolean, vm: Refun
                             if (mode == "original") {
                                 "The server must open this exact $originalLabel payout before the provider app is used."
                             } else {
-                                "Cash uses the guarded drawer handover workflow even though the original payment was $originalLabel."
+                                "Cash uses the guarded drawer handover workflow instead of the receipt payment method, $originalLabel."
                             },
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.bodySmall,

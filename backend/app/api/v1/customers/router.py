@@ -18,6 +18,8 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Query, Response, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from app.services.finance.tender_corrections import effective_payment_method
+
 from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 
@@ -645,7 +647,7 @@ async def get_customer_purchase_history(
     )
     payment_rows = (
         await session.execute(
-            select(Payment.order_id, Payment.method, Payment.amount_minor)
+            select(Payment.order_id, effective_payment_method().label("method"), Payment.amount_minor)
             .where(Payment.order_id.in_(order_ids))
             .order_by(Payment.paid_at)
         )

@@ -66,10 +66,19 @@ interface ErpApi {
         @Query("cursor") cursor: String? = null,
         @Query("limit") limit: Int = 50,
         @Query("q") query: String? = null,
+        @Query("date_from") dateFrom: String? = null,
+        @Query("date_to") dateTo: String? = null,
+        @Query("station_id") stationId: String? = null,
+        @Query("amount_minor") amountMinor: Long? = null,
+        @Query("method") method: String? = null,
+        @Query("staff_user_id") staffUserId: String? = null,
     ): CanonicalReceiptPage
 
     @GET("pos/receipts/{order_id}")
     suspend fun receipt(@Path("order_id") orderId: String): CanonicalReceipt
+
+    @GET("pos/receipts/{order_id}/investigation")
+    suspend fun investigateReceipt(@Path("order_id") orderId: String): ReceiptInvestigation
 
     /** Retrofit repeats `status` once per list entry — matches the backend's `list[str]` param. */
     @GET("pos/orders")

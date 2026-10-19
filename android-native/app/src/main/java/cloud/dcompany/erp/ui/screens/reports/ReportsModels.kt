@@ -184,6 +184,7 @@ data class ReportData(
     @SerialName("net_revenue_minor") val netRevenueMinor: Long = 0,
     @SerialName("gross_profit_minor") val grossProfitMinor: Long = 0,
     @SerialName("net_profit_minor") val netProfitMinor: Long = 0,
+    @SerialName("tender_reclassifications") val tenderReclassifications: List<TenderReclassification> = emptyList(),
 ) {
     /**
      * Everything the period cost. Depreciation is included deliberately: it is
@@ -196,7 +197,7 @@ data class ReportData(
 
     /** A period in which genuinely nothing happened, as opposed to a failed load. */
     val hasNothing: Boolean
-        get() = ordersCount == 0 &&
+        get() = tenderReclassifications.isEmpty() && ordersCount == 0 &&
             ticketsCount == 0 &&
             avgTicketMinor == 0L &&
             unissuedPaidOrdersCount == 0 &&

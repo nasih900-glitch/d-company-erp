@@ -12,6 +12,7 @@ import {
 import { LIVE_MODE } from '@/lib/demo';
 import { CATEGORIES, MENU } from '@/lib/demo-data';
 import { inr } from '@/lib/inr';
+import { taxPercentage } from '@/modules/pos/receipt-search';
 import { parseRupeesToMinor } from '@/lib/money-input';
 import { GAMING_CENTRE_CATALOG_GUIDANCE } from '@/lib/product-profile';
 import { APP_STORE_REVIEW, isAppStoreAllowedType } from '@/lib/app-store-compliance';
@@ -198,7 +199,7 @@ export default function MenuScreen() {
                   <td className="p-3 font-mono text-xs text-fg-muted">{m.hsn_code || '-'}</td>
                   <td className="p-3 text-right font-mono">{inr(m.base_price_minor)}</td>
                   <td className="p-3 text-right text-fg-muted">
-                    {(m.tax_rate * 100).toFixed(0)}% {m.price_includes_tax ? 'incl.' : 'extra'}
+                    {taxPercentage(String(m.tax_rate))} {m.price_includes_tax ? 'incl.' : 'extra'}
                   </td>
                   <td className="p-3 text-center">
                     {canManageMenu ? (
@@ -252,7 +253,7 @@ export default function MenuScreen() {
                   <div className="shrink-0 text-right">
                     <div className="font-mono text-sm font-semibold">{inr(m.base_price_minor)}</div>
                     <div className="text-[10px] text-fg-muted">
-                      {(m.tax_rate * 100).toFixed(0)}% GST {m.price_includes_tax ? 'incl.' : 'extra'}
+                      {taxPercentage(String(m.tax_rate))} GST {m.price_includes_tax ? 'incl.' : 'extra'}
                     </div>
                   </div>
                 </div>
@@ -338,7 +339,7 @@ export default function MenuScreen() {
 }
 
 // ---------------------------------------------------------------- ItemForm
-function ItemForm({
+export function ItemForm({
   cats, item, onClose, onSuccess,
 }: {
   cats: MenuCategoryDTO[];
@@ -348,13 +349,14 @@ function ItemForm({
 }) {
   const isEdit = !!item;
   const initialMeta = defaultTaxMeta((item?.type as ItemType) ?? 'food');
+  const initialTaxPercent = item ? taxPercentage(String(item.tax_rate)).replace(/%$/, '') : initialMeta.tax_rate_pct;
   const [form, setForm] = useState({
     category_id: (item as MenuItemDTO & { category_id?: string })?.category_id ?? cats[0]?.id ?? '',
     sku: item?.sku ?? '',
     name: item?.name ?? '',
     type: (item?.type as ItemType) ?? 'food',
     price_rupees: item ? (item.base_price_minor / 100).toFixed(2) : '',
-    tax_rate_pct: item ? Math.round(item.tax_rate * 100).toString() : initialMeta.tax_rate_pct,
+    tax_rate_pct: initialTaxPercent,
     hsn_code: item?.hsn_code ?? initialMeta.hsn_code,
     price_includes_tax: item?.price_includes_tax ?? true,
     description: item?.description ?? '',
@@ -370,7 +372,12 @@ function ItemForm({
       if (base_price_minor === null) {
         throw new Error('Price must be a non-negative amount with at most two decimals.');
       }
-      const tax_rate = parseFloat(form.tax_rate_pct || '0') / 100;
+      const percentage = Number(form.tax_rate_pct);
+      if (!/^(?:\d+)(?:\.\d+)?$/.test(form.tax_rate_pct) || !Number.isFinite(percentage) || percentage < 0 || percentage > 100) {
+        throw new Error('Choose a valid configured tax percentage from 0% to 100%.');
+      }
+      // An unrelated edit retains the original fraction; do not round-trip saved metadata.
+      const tax_rate = item && form.tax_rate_pct === initialTaxPercent ? item.tax_rate : percentage / 100;
       if (isEdit) {
         await menuAdmin.updateItem(item!.id, {
           category_id: form.category_id,
@@ -444,9 +451,12 @@ function ItemForm({
               value={form.price_rupees}
               onChange={(e) => setForm({ ...form, price_rupees: e.target.value })}/>
           </Field>
-          <Field label="GST rate (%)">
+          <Field label="Configured GST rate (%)">
             <select className="input" value={form.tax_rate_pct}
               onChange={(e) => setForm({ ...form, tax_rate_pct: e.target.value })}>
+              {!['0', '5', '12', '18', '28'].includes(initialTaxPercent) && (
+                <option value={initialTaxPercent}>{initialTaxPercent}% · current configured rate</option>
+              )}
               <option value="0">0% (exempt)</option>
               <option value="5">5% (most food)</option>
               <option value="12">12%</option>

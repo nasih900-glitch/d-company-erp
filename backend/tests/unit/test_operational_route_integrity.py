@@ -1871,7 +1871,8 @@ async def test_shift_summary_keeps_pos_and_membership_receipts_explicit() -> Non
                     1_000,
                 )
             ]
-        )
+        ),
+        _Result(rows=[]),  # no identified bill corrections in this fixture
     )
 
     rows = await pos_router.list_shifts(

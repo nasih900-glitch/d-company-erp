@@ -1,3 +1,5 @@
+import { taxPercentage } from './receipt-search';
+import { InlineShiftWorkspace } from '@/modules/pos/OrdersAndShiftsScreen';
 /**
  * Live POS — calls the FastAPI backend.
  *
@@ -14,7 +16,7 @@
  * it remains attributed for that shift's cash and payment activity.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {
   Plus, Minus, Trash2, ShoppingCart, Receipt as ReceiptIcon,
   Banknote, CreditCard, Smartphone, QrCode, Check, Loader2,
@@ -333,6 +335,7 @@ export default function LivePOSScreen() {
   const [paying, setPaying] = useState(false);
   const [receipt, setReceipt] = useState<PrintableReceipt | null>(null);
   const [receiptBusiness, setReceiptBusiness] = useState<ReceiptBusinessDetails | null>(null);
+  const [inlineShift,setInlineShift]=useState(false);
   const [receiptSettingsError, setReceiptSettingsError] = useState<string | null>(null);
   const [checkoutRetry, setCheckoutRetry] = useState<PosCheckoutRetry | null>(null);
   const checkoutFlowInFlightRef = useRef(false);
@@ -3623,6 +3626,13 @@ export default function LivePOSScreen() {
           </div>
         )}
 
+        {inlineShift && <InlineShiftWorkspace onClose={() => {
+          setInlineShift(false);
+          // Reconcile the existing accountable draft against the server shift;
+          // never silently transfer a cart or rely on best-effort push delivery.
+          void loadShiftCollections();
+        }}/>}
+
         {shiftError && (
           <div
             className="mb-4 flex max-w-3xl items-start gap-3 rounded-xl border border-accent-gold/40 bg-accent-gold/10 px-3 py-3 text-sm"
@@ -3635,9 +3645,7 @@ export default function LivePOSScreen() {
               <p className="mt-1 text-fg-muted">{shiftError}</p>
             </div>
             {shiftIssueCopy.showShiftLink && !localWorkNeedsReconciliation && (
-              <Link className="btn btn-ghost shrink-0 !py-1.5 text-xs" to="/operations?tab=shifts">
-                Go to Shifts
-              </Link>
+              <button type="button" className="btn btn-ghost shrink-0 !py-1.5 text-xs" onClick={()=>setInlineShift(true)}>Open shift here</button>
             )}
           </div>
         )}
@@ -3859,7 +3867,7 @@ export default function LivePOSScreen() {
               <div className="text-fg-muted text-xs mt-1 flex items-center justify-between">
                 <span>{inr(item.base_price_minor)}</span>
                 {TAX_COMPLIANCE_UI_ENABLED && (
-                  <span className="chip !py-0 !px-2 !text-[10px]">{(item.tax_rate * 100).toFixed(0)}%</span>
+                  <span className="chip !py-0 !px-2 !text-[10px]">{taxPercentage(String(item.tax_rate))}</span>
                 )}
               </div>
             </button>
@@ -3867,7 +3875,7 @@ export default function LivePOSScreen() {
         </div>
       </section>
 
-      <aside className="hidden xl:flex card h-[calc(100dvh-7rem)] max-h-[calc(100dvh-7rem)] self-start overflow-hidden flex-col sticky top-0">
+      <aside className="hidden xl:flex card max-h-[calc(100dvh-8rem)] self-start overflow-hidden flex-col sticky top-0">
         <header className="flex items-center justify-between mb-3">
           <h3 className="text-lg font-semibold flex items-center gap-2"><ShoppingCart size={18} /> Bill · {visibleBillQty}</h3>
               {cart.length > 0 && !checkoutRetry && (

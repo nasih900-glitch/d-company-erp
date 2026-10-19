@@ -12,12 +12,14 @@ from html import escape
 from uuid import UUID
 
 from fastapi import Request
+from redis.exceptions import RedisError
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.client_ip import audit_user_agent, trusted_client_ip
 from app.core.config import get_settings
 from app.core.errors import BusinessRuleError, RateLimitError, ServiceUnavailableError
+from app.core.redis_clients import close_request_path_redis_client, request_path_redis_client
 from app.models import AuditLog, AuthOtpChallenge
 from app.services.email.mailer import Mailer
 
@@ -230,11 +232,37 @@ async def create_challenge(
 
     if not sent:
         challenge.consumed_at = datetime.now(UTC)
+        session.add(AuditLog(
+            company_id=challenge.company_id, actor_user_id=challenge.requested_by_user_id,
+            target_user_id=challenge.target_user_id,
+            action="security_otp_delivery_failed", entity_type="AuthAccess",
+            entity_id=str(challenge.id),
+            after={"purpose": challenge.purpose, "result": "delivery_failed"},
+        ))
         await session.commit()
         raise ServiceUnavailableError(
             "the security code could not be delivered; contact the protected owner"
         ) from send_error
     return challenge
+
+
+async def _limit_confirmation(request: Request, challenge_id: UUID) -> None:
+    # Per-IP and per-challenge windows bound verification and append-only
+    # attempt evidence. Redis failure is fail-closed, like sign-in limiting.
+    digest = hashlib.sha256((trusted_client_ip(request) or "unknown").encode()).hexdigest()
+    client = request_path_redis_client(get_settings().redis_url)
+    try:
+        for identity, limit in ((f"ip:{digest}", 60), (f"challenge:{challenge_id}", 10)):
+            count = await client.eval(
+                "local n=redis.call('INCR',KEYS[1]); if n==1 then redis.call('EXPIRE',KEYS[1],600) end; return n",
+                1, f"dcompany:otp-confirm:{identity}",
+            )
+            if int(count) > limit:
+                raise RateLimitError("Too many approval attempts. Wait, then request a new code.")
+    except RedisError as exc:
+        raise ServiceUnavailableError("Approval verification is temporarily unavailable. Retry shortly.") from exc
+    finally:
+        await close_request_path_redis_client(client)
 
 
 async def consume_challenge(
@@ -243,7 +271,10 @@ async def consume_challenge(
     challenge_id: UUID,
     code: str,
     purpose: str,
+    request: Request | None = None,
 ) -> AuthOtpChallenge:
+    if request is not None:
+        await _limit_confirmation(request, challenge_id)
     challenge = (
         await session.execute(
             select(AuthOtpChallenge).where(AuthOtpChallenge.id == challenge_id).with_for_update()
@@ -258,12 +289,36 @@ async def consume_challenge(
         or challenge.expires_at <= now
         or challenge.failed_attempts >= settings.account_otp_max_attempts
     )
+    def rejection(result: str) -> AuditLog:
+        return AuditLog(
+            company_id=challenge.company_id, actor_user_id=None,
+            target_user_id=challenge.target_user_id,
+            action="security_otp_rejected", entity_type="AuthAccess",
+            entity_id=str(challenge.id),
+            after={"purpose": purpose, "result": result,
+                   "failed_attempts": challenge.failed_attempts},
+            ip=trusted_client_ip(request) if request is not None else None,
+            user_agent=audit_user_agent(request) if request is not None else None,
+        )
+
     if invalid:
+        # Log the first expired rejection once. Replaying an already consumed
+        # or locked challenge must not grow immutable Audit indefinitely.
+        if (challenge is not None and challenge.purpose == purpose
+                and challenge.consumed_at is None
+                and challenge.failed_attempts < settings.account_otp_max_attempts):
+            challenge.failed_attempts = settings.account_otp_max_attempts
+            challenge.consumed_at = now
+            session.add(rejection("expired"))
+            await session.commit()
         raise BusinessRuleError("invalid or expired approval code")
     if not otp_matches(challenge.id, code.strip(), challenge.code_hash):
         challenge.failed_attempts += 1
-        if challenge.failed_attempts >= settings.account_otp_max_attempts:
+        final = challenge.failed_attempts >= settings.account_otp_max_attempts
+        if final:
             challenge.consumed_at = now
+        if challenge.failed_attempts == 1 or final:
+            session.add(rejection("attempt_limit_reached" if final else "invalid_code"))
         await session.commit()
         raise BusinessRuleError("invalid or expired approval code")
     challenge.consumed_at = now

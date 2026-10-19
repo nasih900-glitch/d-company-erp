@@ -166,3 +166,15 @@ def test_every_mapped_business_write_includes_audit_invalidation() -> None:
 
     for path_fragment, _resource in _PATH_RESOURCE_MAP:
         assert "audit" in resources_for_path(f"/api/v1{path_fragment}")
+
+
+def test_identified_tender_commit_refreshes_effective_payment_consumers_only() -> None:
+    assert resources_for_path("/api/v1/finance/tender-corrections/payment/commit/") == (
+        "finance", "orders", "receipts", "shifts", "customers", "audit",
+    )
+    for path in (
+        "/api/v1/finance/tender-corrections/daily/commit",
+        "/api/v1/finance/tender-corrections/payment/prepare",
+        "/api/v1/finance/tender-corrections/unlock",
+    ):
+        assert resources_for_path(path) == ("finance", "audit")

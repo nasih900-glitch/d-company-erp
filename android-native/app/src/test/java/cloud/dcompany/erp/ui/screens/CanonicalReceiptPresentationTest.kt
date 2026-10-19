@@ -24,6 +24,15 @@ class CanonicalReceiptPresentationTest {
         assertNull(receiptPaymentSummary(emptyList()))
     }
 
+
+    @Test fun `configured tax display preserves the exact fraction including noninteger percentages`() {
+        assertEquals("18%",configuredTaxPercent("0.1800"))
+        assertEquals("5%",configuredTaxPercent("0.05"))
+        assertEquals("0.5%",configuredTaxPercent("0.005"))
+        assertEquals("0%",configuredTaxPercent("0"))
+        assertEquals("Rate unavailable",configuredTaxPercent("unknown"))
+    }
+
     private fun payment(
         id: String,
         method: String,

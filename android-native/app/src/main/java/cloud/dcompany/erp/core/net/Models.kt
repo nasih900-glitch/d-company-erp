@@ -365,6 +365,11 @@ data class PaymentResult(
     @SerialName("invoice_no") val invoiceNo: String? = null,
     @SerialName("fiscal_year") val fiscalYear: String? = null,
     @SerialName("invoice_issued_at") val invoiceIssuedAt: String? = null,
+    @SerialName("original_method") val originalMethod: String? = null,
+    @SerialName("original_tendered_minor") val originalTenderedMinor: Long? = null,
+    @SerialName("original_change_minor") val originalChangeMinor: Long? = null,
+    @SerialName("tender_correction_id") val tenderCorrectionId: String? = null,
+    @SerialName("tender_correction_recorded_at") val tenderCorrectionRecordedAt: String? = null,
 )
 
 @Serializable
@@ -376,6 +381,11 @@ data class PaymentBundleLegResult(
     @SerialName("change_minor") val changeMinor: Long? = null,
     @SerialName("ref_external") val refExternal: String? = null,
     @SerialName("paid_at") val paidAt: String,
+    @SerialName("original_method") val originalMethod: String? = null,
+    @SerialName("original_tendered_minor") val originalTenderedMinor: Long? = null,
+    @SerialName("original_change_minor") val originalChangeMinor: Long? = null,
+    @SerialName("tender_correction_id") val tenderCorrectionId: String? = null,
+    @SerialName("tender_correction_recorded_at") val tenderCorrectionRecordedAt: String? = null,
 )
 
 /** Authoritative receipt returned by the atomic split-payment endpoint. */

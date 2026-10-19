@@ -32,6 +32,7 @@ enum class SettingsTab(val label: String) {
     Branches("Shop"),
     Terminals("Terminals"),
     Points("Points"),
+    Devices("Devices & health"),
 }
 
 data class PendingBranchRow(
@@ -234,7 +235,7 @@ class SettingsViewModel : ViewModel() {
     fun selectTab(tab: SettingsTab) {
         _state.value = _state.value.copy(tab = tab)
         when (tab) {
-            SettingsTab.Account -> Unit
+            SettingsTab.Account, SettingsTab.Devices -> Unit
             SettingsTab.Company -> loadCompany()
             SettingsTab.Branches -> loadBranches()
             SettingsTab.Terminals -> {

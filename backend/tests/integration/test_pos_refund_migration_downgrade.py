@@ -19,14 +19,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.models import (
-    Customer,
-    PosRefundCashHandoff,
-    PosRefundCashHandoffCompletion,
-    PosRefundProviderPayoutStart,
-    PosRefundRequest,
-    User,
-)
+from tests.integration.historical_seed import insert_historical
 
 _BACKEND_ROOT = Path(__file__).resolve().parents[2]
 
@@ -51,10 +44,7 @@ def _insert_legacy_branch(
 
     branch_id = uuid4()
     session.execute(
-        text(
-            "INSERT INTO branches (id, company_id, name) "
-            "VALUES (:id, :company_id, 'Main')"
-        ),
+        text("INSERT INTO branches (id, company_id, name) VALUES (:id, :company_id, 'Main')"),
         {"id": branch_id, "company_id": company_id},
     )
     return SimpleNamespace(id=branch_id)
@@ -259,9 +249,7 @@ def _disposable_database(prefix: str):
                     (database_name,),
                 )
                 admin.execute(
-                    sql.SQL("DROP DATABASE IF EXISTS {}").format(
-                        sql.Identifier(database_name)
-                    )
+                    sql.SQL("DROP DATABASE IF EXISTS {}").format(sql.Identifier(database_name))
                 )
         except Exception:
             # The assertion failure remains primary; this is always a uniquely
@@ -318,24 +306,36 @@ def test_0034_downgrade_refuses_to_drop_normalized_order_customer() -> None:
                     name="Guard terminal",
                     device_id=f"guard-{uuid4()}",
                 )
-                owner = User(
-                    id=uuid4(),
-                    company_id=company.id,
-                    email=f"guard-{uuid4().hex[:8]}@test.local",
-                    name="Guard owner",
-                    password_hash="not-used-by-migration-test",
-                    status="active",
+                owner = insert_historical(
+                    session,
+                    "users",
+                    {
+                        "id": uuid4(),
+                        "company_id": company.id,
+                        "email": f"guard-{uuid4().hex[:8]}@test.local",
+                        "name": "Guard owner",
+                        "password_hash": "not-used-by-migration-test",
+                        "status": "active",
+                        "failed_login_count": 0,
+                    },
                 )
-                customer = Customer(
-                    id=uuid4(),
-                    company_id=company.id,
-                    name="Guard customer",
-                    phone=f"7{uuid4().int % 10**9:09d}",
+                customer = insert_historical(
+                    session,
+                    "customers",
+                    {
+                        "id": uuid4(),
+                        "company_id": company.id,
+                        "name": "Guard customer",
+                        "phone": f"7{uuid4().int % 10**9:09d}",
+                        "visit_count": 0,
+                        "total_spent_minor": 0,
+                        "loyalty_points": 0,
+                        "lifetime_gaming_points_earned": 0,
+                    },
                 )
                 # These models expose IDs instead of relationships; make the
                 # FK order explicit so this test proves the migration rather
                 # than SQLAlchemy's unit-of-work dependency heuristics.
-                session.add_all([owner, customer])
                 session.flush()
                 now = datetime.now(UTC)
                 shift = _insert_legacy_shift(
@@ -378,9 +378,7 @@ def test_0034_downgrade_refuses_to_drop_normalized_order_customer() -> None:
                     (database_name,),
                 )
                 admin.execute(
-                    sql.SQL("DROP DATABASE IF EXISTS {}").format(
-                        sql.Identifier(database_name)
-                    )
+                    sql.SQL("DROP DATABASE IF EXISTS {}").format(sql.Identifier(database_name))
                 )
         except Exception:
             # The assertion failure remains primary; the database name is
@@ -413,15 +411,19 @@ def test_0036_upgrade_refuses_untrusted_legacy_refund_provenance(
                     name="Orphan provider terminal",
                     device_id=f"orphan-provider-{uuid4()}",
                 )
-                owner = User(
-                    id=uuid4(),
-                    company_id=company.id,
-                    email=f"orphan-provider-{uuid4().hex[:8]}@test.local",
-                    name="Orphan provider owner",
-                    password_hash="not-used-by-migration-test",
-                    status="active",
+                owner = insert_historical(
+                    session,
+                    "users",
+                    {
+                        "id": uuid4(),
+                        "company_id": company.id,
+                        "email": f"orphan-provider-{uuid4().hex[:8]}@test.local",
+                        "name": "Orphan provider owner",
+                        "password_hash": "not-used-by-migration-test",
+                        "status": "active",
+                        "failed_login_count": 0,
+                    },
                 )
-                session.add(owner)
                 session.flush()
                 now = datetime.now(UTC)
                 shift = _insert_legacy_shift(
@@ -442,39 +444,35 @@ def test_0036_upgrade_refuses_untrusted_legacy_refund_provenance(
                     amount_minor=10_000,
                     occurred_at=now,
                 )
-                session.add(
-                    PosRefundRequest(
-                        id=uuid4(),
-                        company_id=company.id,
-                        order_id=order.id,
-                        branch_id=branch.id,
-                        terminal_id=terminal.id,
-                        shift_id=shift.id,
-                        approved_by=owner.id,
-                        manager_override_user_id=(
-                            owner.id if legacy_fault == "client_manager" else None
-                        ),
-                        reason_code="CUSTOMER_REQUEST",
-                        amount_minor=10_000,
-                        mode="original" if legacy_fault == "orphan_provider" else "cash",
-                        settlement_method=(
-                            "upi" if legacy_fault == "orphan_provider" else "cash"
-                        ),
-                        order_paid_snapshot_minor=10_000,
-                        order_refundable_snapshot_minor=10_000,
-                        accepted_at=now,
-                        external_reference=(
-                            "legacy-provider-success"
-                            if legacy_fault == "orphan_provider"
-                            else None
-                        ),
-                        provider_settled_at=(
-                            now if legacy_fault == "orphan_provider" else None
-                        ),
-                        client_action_id=f"orphan-provider:{uuid4()}",
-                        idempotency_key=f"orphan-provider:{uuid4()}",
-                        note="Legacy provider evidence without accounting",
-                    )
+                insert_historical(
+                    session,
+                    "pos_refund_requests",
+                    {
+                        "id": uuid4(),
+                        "company_id": company.id,
+                        "order_id": order.id,
+                        "branch_id": branch.id,
+                        "terminal_id": terminal.id,
+                        "shift_id": shift.id,
+                        "approved_by": owner.id,
+                        "manager_override_user_id": owner.id
+                        if legacy_fault == "client_manager"
+                        else None,
+                        "reason_code": "CUSTOMER_REQUEST",
+                        "amount_minor": 10_000,
+                        "mode": "original" if legacy_fault == "orphan_provider" else "cash",
+                        "settlement_method": "upi" if legacy_fault == "orphan_provider" else "cash",
+                        "order_paid_snapshot_minor": 10_000,
+                        "order_refundable_snapshot_minor": 10_000,
+                        "accepted_at": now,
+                        "external_reference": "legacy-provider-success"
+                        if legacy_fault == "orphan_provider"
+                        else None,
+                        "provider_settled_at": now if legacy_fault == "orphan_provider" else None,
+                        "client_action_id": f"orphan-provider:{uuid4()}",
+                        "idempotency_key": f"orphan-provider:{uuid4()}",
+                        "note": "Legacy provider evidence without accounting",
+                    },
                 )
                 session.commit()
         finally:
@@ -518,22 +516,33 @@ def test_0036_preserves_legacy_refund_but_rejects_forward_unlinked_writes() -> N
                     name="Legacy LTV terminal",
                     device_id=f"legacy-ltv-{uuid4()}",
                 )
-                owner = User(
-                    id=uuid4(),
-                    company_id=company.id,
-                    email=f"legacy-ltv-{uuid4().hex[:8]}@test.local",
-                    name="Legacy LTV owner",
-                    password_hash="not-used-by-migration-test",
-                    status="active",
+                owner = insert_historical(
+                    session,
+                    "users",
+                    {
+                        "id": uuid4(),
+                        "company_id": company.id,
+                        "email": f"legacy-ltv-{uuid4().hex[:8]}@test.local",
+                        "name": "Legacy LTV owner",
+                        "password_hash": "not-used-by-migration-test",
+                        "status": "active",
+                        "failed_login_count": 0,
+                    },
                 )
-                customer = Customer(
-                    id=uuid4(),
-                    company_id=company.id,
-                    name="Legacy LTV customer",
-                    phone=f"5{uuid4().int % 10**9:09d}",
-                    total_spent_minor=10_000,
+                customer = insert_historical(
+                    session,
+                    "customers",
+                    {
+                        "id": uuid4(),
+                        "company_id": company.id,
+                        "name": "Legacy LTV customer",
+                        "phone": f"5{uuid4().int % 10**9:09d}",
+                        "total_spent_minor": 10_000,
+                        "visit_count": 0,
+                        "loyalty_points": 0,
+                        "lifetime_gaming_points_earned": 0,
+                    },
                 )
-                session.add_all([owner, customer])
                 session.flush()
                 now = datetime.now(UTC)
                 shift = _insert_legacy_shift(
@@ -591,9 +600,7 @@ def test_0036_preserves_legacy_refund_but_rejects_forward_unlinked_writes() -> N
         try:
             with Session(engine) as session:
                 state = session.execute(
-                    text(
-                        "SELECT customer_spend_reconciled FROM refunds WHERE id = :id"
-                    ),
+                    text("SELECT customer_spend_reconciled FROM refunds WHERE id = :id"),
                     {"id": refund_id},
                 ).scalar_one()
                 source_state_nullable = session.execute(
@@ -620,9 +627,7 @@ def test_0036_preserves_legacy_refund_but_rejects_forward_unlinked_writes() -> N
             # rows; the NOT VALID constraint is the independent forward-write
             # boundary and must reject a brand-new unlinked refund.
             with Session(engine) as session:
-                with pytest.raises(
-                    IntegrityError, match="ck_refund_forward_write_linkage"
-                ):
+                with pytest.raises(IntegrityError, match="ck_refund_forward_write_linkage"):
                     session.execute(
                         text(
                             "INSERT INTO refunds (id, order_id, approved_by, "
@@ -640,20 +645,12 @@ def test_0036_preserves_legacy_refund_but_rejects_forward_unlinked_writes() -> N
             # append-only trigger that normally rejects every refund update
             # even earlier in the executor pipeline.
             with Session(engine) as session:
-                with pytest.raises(
-                    IntegrityError, match="ck_refund_forward_write_linkage"
-                ):
+                with pytest.raises(IntegrityError, match="ck_refund_forward_write_linkage"):
                     session.execute(
-                        text(
-                            "ALTER TABLE refunds DISABLE TRIGGER "
-                            "trg_refunds_immutable"
-                        )
+                        text("ALTER TABLE refunds DISABLE TRIGGER trg_refunds_immutable")
                     )
                     session.execute(
-                        text(
-                            "UPDATE refunds SET reason_code = reason_code "
-                            "WHERE id = :legacy_id"
-                        ),
+                        text("UPDATE refunds SET reason_code = reason_code WHERE id = :legacy_id"),
                         {"legacy_id": refund_id},
                     )
                     session.commit()
@@ -686,9 +683,7 @@ def test_0036_preserves_legacy_refund_but_rejects_forward_unlinked_writes() -> N
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize(
-    "workflow_state", ["provider_start", "cash_completion", "cash_settlement"]
-)
+@pytest.mark.parametrize("workflow_state", ["provider_start", "cash_completion", "cash_settlement"])
 def test_0036_downgrade_refuses_to_drop_forward_workflow_history(
     workflow_state: str,
 ) -> None:
@@ -712,21 +707,33 @@ def test_0036_downgrade_refuses_to_drop_forward_workflow_history(
                     name="Guard terminal",
                     device_id=f"guard-0036-{uuid4()}",
                 )
-                owner = User(
-                    id=uuid4(),
-                    company_id=company.id,
-                    email=f"guard-0036-{uuid4().hex[:8]}@test.local",
-                    name="Guard owner",
-                    password_hash="not-used-by-migration-test",
-                    status="active",
+                owner = insert_historical(
+                    session,
+                    "users",
+                    {
+                        "id": uuid4(),
+                        "company_id": company.id,
+                        "email": f"guard-0036-{uuid4().hex[:8]}@test.local",
+                        "name": "Guard owner",
+                        "password_hash": "not-used-by-migration-test",
+                        "status": "active",
+                        "failed_login_count": 0,
+                    },
                 )
-                customer = Customer(
-                    id=uuid4(),
-                    company_id=company.id,
-                    name="Guard customer",
-                    phone=f"6{uuid4().int % 10**9:09d}",
+                customer = insert_historical(
+                    session,
+                    "customers",
+                    {
+                        "id": uuid4(),
+                        "company_id": company.id,
+                        "name": "Guard customer",
+                        "phone": f"6{uuid4().int % 10**9:09d}",
+                        "visit_count": 0,
+                        "total_spent_minor": 0,
+                        "loyalty_points": 0,
+                        "lifetime_gaming_points_earned": 0,
+                    },
                 )
-                session.add_all([owner, customer])
                 session.flush()
                 now = datetime.now(UTC)
                 shift = _insert_legacy_shift(
@@ -757,75 +764,84 @@ def test_0036_downgrade_refuses_to_drop_forward_workflow_history(
                     paid_at=now,
                     ref_external="sale-reference",
                 )
-                request = PosRefundRequest(
-                    id=uuid4(),
-                    company_id=company.id,
-                    order_id=order.id,
-                    branch_id=branch.id,
-                    terminal_id=terminal.id,
-                    shift_id=shift.id,
-                    approved_by=owner.id,
-                    manager_override_user_id=None,
-                    reason_code="CUSTOMER_REQUEST",
-                    amount_minor=10_000,
-                    mode="original" if workflow_state == "provider_start" else "cash",
-                    settlement_method=(
-                        "upi" if workflow_state == "provider_start" else "cash"
-                    ),
-                    order_paid_snapshot_minor=10_000,
-                    order_refundable_snapshot_minor=10_000,
-                    accepted_at=now,
-                    external_reference=None,
-                    provider_settled_at=None,
-                    client_action_id=f"downgrade-request:{uuid4()}",
-                    idempotency_key=f"downgrade-request:{uuid4()}",
-                    note="0036 downgrade proof",
+                request = insert_historical(
+                    session,
+                    "pos_refund_requests",
+                    {
+                        "id": uuid4(),
+                        "company_id": company.id,
+                        "order_id": order.id,
+                        "branch_id": branch.id,
+                        "terminal_id": terminal.id,
+                        "shift_id": shift.id,
+                        "approved_by": owner.id,
+                        "manager_override_user_id": None,
+                        "reason_code": "CUSTOMER_REQUEST",
+                        "amount_minor": 10_000,
+                        "mode": "original" if workflow_state == "provider_start" else "cash",
+                        "settlement_method": "upi"
+                        if workflow_state == "provider_start"
+                        else "cash",
+                        "order_paid_snapshot_minor": 10_000,
+                        "order_refundable_snapshot_minor": 10_000,
+                        "accepted_at": now,
+                        "external_reference": None,
+                        "provider_settled_at": None,
+                        "client_action_id": f"downgrade-request:{uuid4()}",
+                        "idempotency_key": f"downgrade-request:{uuid4()}",
+                        "note": "0036 downgrade proof",
+                    },
                 )
-                session.add(request)
                 session.flush()
                 if workflow_state == "provider_start":
-                    session.add(
-                        PosRefundProviderPayoutStart(
-                            id=uuid4(),
-                            company_id=company.id,
-                            refund_request_id=request.id,
-                            branch_id=branch.id,
-                            terminal_id=terminal.id,
-                            shift_id=shift.id,
-                            started_at=now,
-                            started_by=owner.id,
-                            idempotency_key=f"downgrade-provider-start:{uuid4()}",
-                        )
+                    insert_historical(
+                        session,
+                        "pos_refund_provider_payout_starts",
+                        {
+                            "id": uuid4(),
+                            "company_id": company.id,
+                            "refund_request_id": request.id,
+                            "branch_id": branch.id,
+                            "terminal_id": terminal.id,
+                            "shift_id": shift.id,
+                            "started_at": now,
+                            "started_by": owner.id,
+                            "idempotency_key": f"downgrade-provider-start:{uuid4()}",
+                        },
                     )
                 else:
-                    session.add(
-                        PosRefundCashHandoff(
-                            id=uuid4(),
-                            company_id=company.id,
-                            refund_request_id=request.id,
-                            branch_id=branch.id,
-                            terminal_id=terminal.id,
-                            shift_id=shift.id,
-                            started_at=now,
-                            started_by=owner.id,
-                            idempotency_key=f"downgrade-cash-start:{uuid4()}",
-                        )
+                    insert_historical(
+                        session,
+                        "pos_refund_cash_handoffs",
+                        {
+                            "id": uuid4(),
+                            "company_id": company.id,
+                            "refund_request_id": request.id,
+                            "branch_id": branch.id,
+                            "terminal_id": terminal.id,
+                            "shift_id": shift.id,
+                            "started_at": now,
+                            "started_by": owner.id,
+                            "idempotency_key": f"downgrade-cash-start:{uuid4()}",
+                        },
                     )
                     session.flush()
-                    session.add(
-                        PosRefundCashHandoffCompletion(
-                            id=uuid4(),
-                            company_id=company.id,
-                            refund_request_id=request.id,
-                            branch_id=branch.id,
-                            terminal_id=terminal.id,
-                            shift_id=shift.id,
-                            handed_over_at=now,
-                            recorded_at=now,
-                            recorded_by=owner.id,
-                            captured_time_reconciled=True,
-                            idempotency_key=f"downgrade-cash-complete:{uuid4()}",
-                        )
+                    insert_historical(
+                        session,
+                        "pos_refund_cash_handoff_completions",
+                        {
+                            "id": uuid4(),
+                            "company_id": company.id,
+                            "refund_request_id": request.id,
+                            "branch_id": branch.id,
+                            "terminal_id": terminal.id,
+                            "shift_id": shift.id,
+                            "handed_over_at": now,
+                            "recorded_at": now,
+                            "recorded_by": owner.id,
+                            "captured_time_reconciled": True,
+                            "idempotency_key": f"downgrade-cash-complete:{uuid4()}",
+                        },
                     )
                     session.flush()
                     if workflow_state == "cash_settlement":
@@ -875,9 +891,7 @@ def test_0036_downgrade_refuses_to_drop_forward_workflow_history(
                                 "settled_by": owner.id,
                                 "client_occurred_at": now,
                                 "idempotency_key": f"downgrade-settle:{uuid4()}",
-                                "receipt_no": (
-                                    f"R/RF/26-27/{uuid4().int % 100000:05d}"
-                                ),
+                                "receipt_no": (f"R/RF/26-27/{uuid4().int % 100000:05d}"),
                                 "receipt_issued_at": now,
                             },
                         )

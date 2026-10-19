@@ -113,6 +113,8 @@ data class ApiErrorBody(
  */
 @Serializable
 data class ClientCompatibilityErrorDetails(
+    /** A server-side retry instruction, independent of compatibility policy. */
+    val retryable: Boolean? = null,
     /** Exact diagnostics outbox row involved in an immutable UUID collision. */
     @SerialName("client_event_id") val clientEventId: String? = null,
     val platform: String? = null,

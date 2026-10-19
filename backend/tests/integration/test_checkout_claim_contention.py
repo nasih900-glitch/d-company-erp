@@ -539,12 +539,7 @@ async def test_direct_publish_claim_and_legacy_protected_recovery(
                 if order_id is not None
             ]
             if order_ids:
-                await cleanup.execute(
-                    delete(AuditLog).where(
-                        AuditLog.entity_type == "Order",
-                        AuditLog.entity_id.in_([str(order_id) for order_id in order_ids]),
-                    )
-                )
+                # Audit is immutable evidence; retain it in this disposable test database.
                 await cleanup.execute(
                     delete(OrderCheckoutClaim).where(
                         OrderCheckoutClaim.order_id.in_(order_ids)

@@ -149,6 +149,11 @@ def resources_for_path(path: str) -> tuple[str, ...]:
     if primary is None:
         return ()
     normalized_path = path.rstrip("/")
+    if normalized_path.endswith("/finance/tender-corrections/payment/commit"):
+        return with_audit("finance", "orders", "receipts", "shifts", "customers")
+    if normalized_path.endswith("/finance/tender-corrections/daily/commit"):
+        # Unallocated actuals affect day aggregates, never an unrelated invoice.
+        return with_audit("finance")
     if primary == "memberships":
         return with_audit("memberships", "shifts", "customers", "finance")
     if "/pos/customer-spend-reconciliations" in path:

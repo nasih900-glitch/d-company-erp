@@ -260,12 +260,8 @@ async def test_authorized_colleague_closes_shift_and_is_durably_attributed(
             assert audit.after["status"] == "closed"
     finally:
         async with AsyncSessionLocal() as cleanup:
-            await cleanup.execute(
-                delete(AuditLog).where(
-                    AuditLog.company_id == company.id,
-                    AuditLog.entity_id == str(shift.id),
-                )
-            )
+            # Retain immutable Audit evidence in the isolated fixture database;
+            # production guards intentionally reject even direct SQL deletion.
             await cleanup.execute(delete(Shift).where(Shift.id == shift.id))
             await cleanup.execute(delete(UserRole).where(UserRole.id == assignment.id))
             await cleanup.execute(delete(User).where(User.id == closer.id))

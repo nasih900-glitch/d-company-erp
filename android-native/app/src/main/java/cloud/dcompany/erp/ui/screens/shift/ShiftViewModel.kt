@@ -18,10 +18,12 @@ import cloud.dcompany.erp.core.db.observeShiftForManagement
 import cloud.dcompany.erp.core.net.MeResponse
 import cloud.dcompany.erp.core.sync.RejectedShiftOpenVerificationStatus
 import cloud.dcompany.erp.ui.screens.businessDateTime
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
@@ -139,6 +141,23 @@ private fun historyAgeLabel(ageMillis: Long): String = when {
     else -> "${ageMillis / 86_400_000L} day${if (ageMillis / 86_400_000L == 1L) "" else "s"} ago"
 }
 
+/** The identity is allocated inside [save], only after the shared busy gate wins. */
+internal fun launchShiftOpeningCapture(
+    scope: CoroutineScope,
+    busy: MutableStateFlow<Boolean>,
+    save: suspend () -> Unit,
+): Boolean {
+    if (!busy.compareAndSet(false, true)) return false
+    scope.launch {
+        try {
+            save()
+        } finally {
+            busy.value = false
+        }
+    }
+    return true
+}
+
 /**
  * Room-backed, offline-first — the UI reads the local shift row, never the
  * network, for the part that has to keep working through a dropped link.
@@ -209,7 +228,9 @@ class ShiftViewModel : ViewModel() {
                         // acknowledgement. Historical closed rows migrate as
                         // false and therefore never appear as a fresh success
                         // merely because the process was restarted.
-                        latestLocalClosed = local.firstOrNull { it.closeResultPending },
+                        latestLocalClosed = local.firstOrNull {
+                            it.closeResultPending && it.terminalId == terminalId
+                        },
                         lastSyncMillis = meta?.lastSyncMillis,
                     )
                 }
@@ -230,6 +251,7 @@ class ShiftViewModel : ViewModel() {
     private val busy = MutableStateFlow(false)
     private val operationError = MutableStateFlow<String?>(null)
     private val operationNotice = MutableStateFlow<String?>(null)
+    private val openingNotice = MutableStateFlow<ShiftOpeningNotice?>(null)
 
     val state: StateFlow<ShiftUiState> = combine(
         resolvedShift,
@@ -280,13 +302,12 @@ class ShiftViewModel : ViewModel() {
         val closeOrigin = currentOpen?.let {
             shiftCloseOriginDecision(it, app.updateTelemetry.installation.installationId())
         }
-        val justClosed = historyState.latestLocalClosed?.takeIf {
-            shouldShowShiftResult(
-                itemId = it.localId,
-                resultPending = it.closeResultPending,
-                dismissedId = interaction.dismissedClosedId,
-            )
-        }
+        val justClosed = visiblePendingShiftCloseResult(
+            result = historyState.latestLocalClosed,
+            currentShiftLoaded = scopedCurrent != null,
+            terminalId = session.terminalId,
+            dismissedId = interaction.dismissedClosedId,
+        )
         ShiftUiState(
             open = currentOpen,
             currentShiftLoaded = scopedCurrent != null,
@@ -322,6 +343,14 @@ class ShiftViewModel : ViewModel() {
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ShiftUiState())
 
     init {
+        viewModelScope.launch {
+            combine(resolvedShift, openingNotice) { current, captured -> current?.open to captured }
+                .collect { (current, captured) ->
+                    if (clearConfirmedShiftOpeningNotice(current, captured, operationNotice)) {
+                        openingNotice.compareAndSet(captured, null)
+                    }
+                }
+        }
         app.sync.requestSync()
     }
 
@@ -381,8 +410,7 @@ class ShiftViewModel : ViewModel() {
                 "The signed-in account is still being verified. Wait a moment, then open the shift again."
             return
         }
-        busy.value = true
-        viewModelScope.launch {
+        val started = launchShiftOpeningCapture(viewModelScope, busy) {
             try {
                 val localId = UUID.randomUUID().toString()
                 if (!app.cacheIsolation.commitIfCurrent(scopeLease) {
@@ -403,24 +431,25 @@ class ShiftViewModel : ViewModel() {
                 ) {
                     operationError.value =
                         "The signed-in account changed before the shift was saved. Nothing was opened; review Shift again."
-                    return@launch
+                    return@launchShiftOpeningCapture
                 }
                 operationError.value = null
-                operationNotice.value = if (state.value.offlineGamingSupported) {
+                val openingMessage = if (state.value.offlineGamingSupported) {
                     "Shift saved on this tablet. Gaming and supported POS work can continue offline. Saved work will sync in order; review any server conflict before taking payment again."
                 } else if (state.value.online) {
                     "Shift saved on this tablet. POS work can be saved locally; wait for server confirmation before starting Gaming."
                 } else {
                     "Shift saved offline. POS work can be saved locally. Reconnect to confirm this shift before starting Gaming; pending work will sync automatically."
                 }
+                operationNotice.value = openingMessage
+                openingNotice.value = ShiftOpeningNotice(localId, assignedTerminalId, openingMessage)
                 app.sync.requestSync()
             } catch (_: Exception) {
                 operationError.value =
                     "The shift could not be saved on this tablet. Try again; if it continues, ask an owner for help."
-            } finally {
-                busy.value = false
             }
         }
+        if (!started) operationNotice.value = "Shift opening is already being saved. Wait for the current result."
     }
 
     fun closeShift(countedMinor: Long) {
@@ -735,14 +764,27 @@ class ShiftViewModel : ViewModel() {
         }
     }
 
-    fun dismissResult() {
-        val localId = state.value.closedResult?.localId ?: return
-        dismissedClosedId.value = localId
+    fun dismissResult(localId: String) {
+        val lease = app.cacheIsolation.currentLease() ?: return
+        val terminalId = app.terminalStore.confirmedTerminalId()
+        if (lease.scope.terminalId != terminalId ||
+            !canAcknowledgeShiftCloseResult(localId, state.value, terminalId)) return
         viewModelScope.launch {
             try {
-                db.shiftDao().acknowledgeCloseResult(localId)
+                app.cacheIsolation.commitIfCurrent(lease) {
+                    // The button belongs to the rendered receipt, never a newer result.
+                    val activeTerminalId = app.terminalStore.confirmedTerminalId()
+                    if (activeTerminalId == terminalId &&
+                        canAcknowledgeShiftCloseResult(localId, state.value, activeTerminalId) &&
+                        db.shiftDao().acknowledgeCloseResult(localId) == 1
+                    ) dismissedClosedId.value = localId
+                }
             } catch (_: Exception) {
-                operationError.value =
+                if (app.cacheIsolation.currentLease() == lease &&
+                    canAcknowledgeShiftCloseResult(
+                        localId, state.value, app.terminalStore.confirmedTerminalId(),
+                    )
+                ) operationError.value =
                     "The acknowledgement could not be saved. The close result may appear again after restart."
             }
         }
@@ -778,6 +820,26 @@ internal fun shouldShowShiftResult(
     dismissedId: String?,
 ): Boolean = resultPending && itemId != dismissedId
 
+/** History and current-shift flows may briefly belong to adjacent terminal emissions. */
+internal fun visiblePendingShiftCloseResult(
+    result: LocalShiftEntity?,
+    currentShiftLoaded: Boolean,
+    terminalId: String?,
+    dismissedId: String?,
+): LocalShiftEntity? = result?.takeIf {
+    currentShiftLoaded && !terminalId.isNullOrBlank() && it.terminalId == terminalId &&
+        it.state == ShiftState.CLOSED && shouldShowShiftResult(it.localId, it.closeResultPending, dismissedId)
+}
+
+internal fun canAcknowledgeShiftCloseResult(
+    renderedLocalId: String,
+    current: ShiftUiState,
+    terminalId: String?,
+): Boolean = current.closedResult?.localId == renderedLocalId &&
+    visiblePendingShiftCloseResult(
+        current.closedResult, current.currentShiftLoaded, terminalId, dismissedId = null,
+    ) != null
+
 internal enum class ShiftCloseResultKind { LOCAL_CONFIRMED, REMOTE_RECONCILED }
 
 internal fun shiftCloseResultKind(shift: LocalShiftEntity): ShiftCloseResultKind =
@@ -786,3 +848,15 @@ internal fun shiftCloseResultKind(shift: LocalShiftEntity): ShiftCloseResultKind
     } else {
         ShiftCloseResultKind.REMOTE_RECONCILED
     }
+
+/** Only retire the exact local-open notice once that same durable command is server-confirmed. */
+internal data class ShiftOpeningNotice(val localId: String, val terminalId: String, val message: String)
+internal fun clearConfirmedShiftOpeningNotice(
+    current: ResolvedOpenShift?, captured: ShiftOpeningNotice?, notice: MutableStateFlow<String?>,
+): Boolean {
+    val saved = current?.local ?: return false
+    if (captured == null || saved.localId != captured.localId || saved.terminalId != captured.terminalId ||
+        saved.state != ShiftState.OPEN_SYNCED || saved.serverShiftId.isNullOrBlank()) return false
+    notice.compareAndSet(captured.message, null)
+    return true
+}

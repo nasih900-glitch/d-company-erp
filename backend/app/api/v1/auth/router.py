@@ -42,6 +42,7 @@ from app.services.auth.otp import (
 from app.services.auth.rate_limit import enforce_login_rate_limit
 from app.services.auth.refresh_sessions import (
     RefreshTokenReuseDetectedError,
+    access_family_is_active,
     consume_refresh_session,
     register_refresh_session,
     revoke_access_session,
@@ -261,6 +262,13 @@ async def _optional_requester(
         return None
     if not user or user.company_id != company_id or user.deleted_at or user.status != "active":
         return None
+    try:
+        if (UUID(claims["company_id"]) != company_id
+                or int(claims.get("auth_version", 0)) != user.auth_version
+                or not await access_family_is_active(session, user=user, claims=claims)):
+            return None
+    except (KeyError, TypeError, ValueError, AuthError):
+        return None
     return user
 
 
@@ -288,7 +296,8 @@ def _audit_auth_event(
         return
     session.add(
         AuditLog(
-            actor_user_id=user.id if user else None,
+            actor_user_id=user.id if user and action == "login_success" else None,
+            target_user_id=user.id if user else None,
             company_id=company_id,
             action=action,
             entity_type="User",
@@ -364,6 +373,7 @@ async def confirm_registration(
         challenge_id=payload.challenge_id,
         code=payload.code,
         purpose=OTP_REGISTER,
+        request=request,
     )
     if not challenge.pending_name or not challenge.pending_password_hash:
         raise BusinessRuleError("invalid or expired approval code")
@@ -394,6 +404,7 @@ async def confirm_registration(
         company_id=challenge.company_id,
         ip=trusted_client_ip(request),
         user_agent=audit_user_agent(request),
+        actor_kind="otp_approved_requester",
     )
     user = User(
         id=uuid4(),
@@ -420,6 +431,7 @@ async def confirm_registration(
             actor_user_id=challenge.requested_by_user_id,
             company_id=challenge.company_id,
             action="otp_account_created",
+            target_user_id=user.id,
             entity_type="User",
             entity_id=str(user.id),
             before=None,
@@ -490,6 +502,7 @@ async def confirm_password_reset(
         challenge_id=payload.challenge_id,
         code=payload.code,
         purpose=OTP_PASSWORD_RESET,
+        request=request,
     )
     user = await session.get(User, challenge.target_user_id) if challenge.target_user_id else None
     if (
@@ -506,6 +519,7 @@ async def confirm_password_reset(
         company_id=challenge.company_id,
         ip=trusted_client_ip(request),
         user_agent=audit_user_agent(request),
+        actor_kind="otp_approved_requester" if challenge.requested_by_user_id else "otp_approved_unknown",
     )
     user.password_hash = hash_password(payload.new_password)
     user.failed_login_count = 0
@@ -518,6 +532,7 @@ async def confirm_password_reset(
             actor_user_id=challenge.requested_by_user_id,
             company_id=challenge.company_id,
             action="otp_password_reset_success",
+            target_user_id=user.id,
             entity_type="User",
             entity_id=str(user.id),
             before=None,
@@ -735,6 +750,16 @@ async def refresh(
         # Reuse detection is a security write, not a failed business mutation.
         # Persist family revocation before returning 401; the request dependency
         # would otherwise roll it back together with the raised AuthError.
+        # The reuse helper already validated/revoked this credential's family.
+        user = await session.get(User, UUID(claims["sub"]))
+        if user is not None:
+            session.add(AuditLog(
+                company_id=user.company_id, actor_user_id=None, target_user_id=user.id,
+                action="refresh_token_reuse_rejected", entity_type="AuthSession",
+                stage="rejected", outcome="failed", actor_kind="credential_presenter",
+                entity_id=str(user.id), after={"result": "rejected", "reason": "credential_reuse"},
+                ip=trusted_client_ip(request), user_agent=audit_user_agent(request),
+            ))
         await session.commit()
         raise AuthError("refresh token reuse detected; sign in again") from exc
     user = consumed.user
@@ -822,6 +847,13 @@ async def logout(
 
     _clear_refresh_cookie(response)
     for company_id in changed_companies:
+        session.add(AuditLog(
+            company_id=company_id, actor_user_id=None, action="session_logout",
+            stage="committed", outcome="completed", actor_kind="credential_presenter",
+            entity_type="AuthSession", entity_id=str(company_id),
+            after={"result": "session_credentials_revoked"},
+            ip=trusted_client_ip(request), user_agent=audit_user_agent(request),
+        ))
         background_tasks.add_task(
             realtime_manager.broadcast,
             company_id,

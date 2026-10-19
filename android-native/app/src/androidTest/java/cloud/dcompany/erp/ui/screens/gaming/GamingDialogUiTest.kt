@@ -32,6 +32,7 @@ import androidx.compose.ui.test.assertWidthIsAtLeast
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.isDisplayed
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -221,12 +222,15 @@ class GamingDialogUiTest {
         val playersList = compose.onNodeWithTag("gaming-players-list")
         playersList.performScrollToNode(hasText("Amina Rahman · 9876543210"))
         compose.onNodeWithText("Amina Rahman · 9876543210").performClick()
-        customerSearch.assertIsNotFocused()
         // Selection recomposes this lazy item while the IME window is closing.
         // Ask the list to materialize the updated row before checking its
         // merged, clickable semantics and visible position.
         playersList.performScrollToNode(hasText("Amina Rahman · 9876543210 · selected"))
         compose.onNodeWithText("Amina Rahman · 9876543210 · selected").assertIsDisplayed()
+        // Re-materialize the search item before checking focus: LazyColumn may
+        // dispose its previous semantics node when the selected row recomposes.
+        playersList.performScrollToNode(hasTestTag("gaming-customer-search"))
+        compose.onNodeWithTag("gaming-customer-search").assertIsNotFocused()
         compose.onNodeWithTag("gaming-add-player")
             .performScrollTo()
             .assertIsDisplayed()

@@ -20,16 +20,22 @@ import {
 
 import { LIVE_MODE } from '@/lib/demo';
 import { inr } from '@/lib/inr';
+import { shopTime } from '@/modules/audit/audit-presentation';
 import { parseRupeesToMinor } from '@/lib/money-input';
 import { resolveOpenShift, shiftResolutionMessage } from '@/lib/operational-context';
 import { profileMembershipMoneyLabel } from '@/lib/product-profile';
 import {
-  orders, receipts, shifts,
+  orders, receipts, shifts, gaming, staff,
+  type ReceiptInvestigationDTO, type StationDTO, type UserDTO,
   type OrderListItemDTO, type ReceiptGamingSessionHistoryDTO, type ReceiptHistoryDTO,
   type ShiftDTO,
   type ShiftRecoveryCandidateDTO, type ShiftRecoveryCloseDTO,
 } from '@/lib/erp-api';
 import Modal from '@/components/ui/Modal';
+import TenderCorrections from '@/modules/finance/TenderCorrections';
+import { Link } from 'react-router-dom';
+import { ownerScope, ownerWorkspaceGeneration, readOwnerWorkspace, rememberOwnerWorkspace } from '@/lib/owner-workspace';
+import { emptyReceiptFilters, receiptSearchParams, receiptSearchScope, taxPercentage, type ReceiptFilterInputs } from './receipt-search';
 import { useNotifications } from '@/components/ui/Notifications';
 import { useAuth } from '@/modules/auth/AuthContext';
 import { canAccessRefunds } from '@/modules/refunds/refund-policy';
@@ -137,6 +143,7 @@ const OPERATIONS_POLL_MS = 120_000;
 
 export default function OrdersAndShiftsScreen() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const {me}=useAuth();
   const [tab, setTab] = useState<Tab>(() => operationsInitialTab(searchParams));
   const requestedTab = operationsInitialTab(searchParams);
 
@@ -165,7 +172,7 @@ export default function OrdersAndShiftsScreen() {
         </TabBtn>
       </div>
 
-      {tab === 'orders' ? <OrdersTab/> : <ShiftsTab/>}
+      {tab === 'orders' ? <OrdersTab key={me?ownerScope(me):'anonymous'}/> : <ShiftsTab/>}
     </div>
   );
 }
@@ -173,34 +180,55 @@ export default function OrdersAndShiftsScreen() {
 // ============================================================================
 // Live orders and immutable receipt history
 // ============================================================================
+interface ReceiptWorkspaceState {
+  rows: ReceiptHistoryDTO[]; scope: ReceiptQueryScope;
+  paging: ReceiptRequestScope & {nextCursor:string|null;hasMore:boolean};
+  input: string; query: string; filters: ReceiptFilterInputs;
+  selected: {orderId:string;invoiceNo:string}|null; scroll: number; timezone?: string|null;
+}
 function OrdersTab() {
+  const workspaceGeneration=useRef(ownerWorkspaceGeneration()).current;
   const { me } = useAuth();
+  const [params] = useSearchParams();
+  const scope = me ? ownerScope(me) : 'anonymous';
+  const initial = useRef(readOwnerWorkspace<ReceiptWorkspaceState>(scope,'receipt-history'));
+  const cache = initial.current;
+  const [receiptFilters,setReceiptFilters] = useState<ReceiptFilterInputs>(cache?.filters ?? emptyReceiptFilters);
+  const [stationOptions,setStationOptions] = useState<StationDTO[]>([]);
+  const [staffOptions,setStaffOptions] = useState<UserDTO[]>([]);
+  useEffect(() => {
+    let active=true;
+    void gaming.listStations().then(rows=>{if(active)setStationOptions(rows);}).catch(()=>undefined);
+    if(me?.audit_access) void staff.listUsers().then(rows=>{if(active)setStaffOptions(rows);}).catch(()=>undefined);
+    return()=>{active=false;};
+  },[me?.audit_access]);
   const [operationalRows, setOperationalRows] = useState<OrderListItemDTO[]>([]);
-  const [receiptRows, setReceiptRows] = useState<ReceiptHistoryDTO[]>([]);
+  const [receiptRows, setReceiptRows] = useState<ReceiptHistoryDTO[]>(cache?.rows ?? []);
+  const [receiptTimezone,setReceiptTimezone]=useState(cache?.timezone ?? null);
   const [operationalLoading, setOperationalLoading] = useState(true);
   const [receiptsLoading, setReceiptsLoading] = useState(true);
   const [operationalError, setOperationalError] = useState<string | null>(null);
   const [receiptsError, setReceiptsError] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
-  const receiptScopeRef = useRef<ReceiptQueryScope>({ epoch: 0, query: '', loaded: false });
+  const receiptScopeRef = useRef<ReceiptQueryScope>(cache?.scope ?? { epoch: 0, query: '', loaded: false });
   const [receiptPaging, setReceiptPaging] = useState<ReceiptRequestScope & {
     nextCursor: string | null;
     hasMore: boolean;
-  }>({ epoch: 0, query: '', nextCursor: null, hasMore: false });
+  }>(cache?.paging ?? { epoch: 0, query: '', nextCursor: null, hasMore: false });
   const [pendingReceiptPage, setPendingReceiptPage] = useState<(ReceiptRequestScope & {
     newItems: ReceiptHistoryDTO[];
   }) | null>(null);
-  const [receiptQueryInput, setReceiptQueryInput] = useState('');
-  const [receiptQuery, setReceiptQuery] = useState('');
+  const [receiptQueryInput, setReceiptQueryInput] = useState(params.get('receipt_q') ?? cache?.input ?? '');
+  const [receiptQuery, setReceiptQuery] = useState(cache?.query ?? '');
   const [operationalView, setOperationalView] = useState<OrderListItemDTO | null>(null);
-  const [receiptView, setReceiptView] = useState<{ orderId: string; invoiceNo: string } | null>(null);
+  const [receiptView, setReceiptView] = useState<{ orderId: string; invoiceNo: string } | null>(() => params.get('receipt') ? {orderId:params.get('receipt')!,invoiceNo:'Linked receipt'} : cache?.selected ?? null);
   const [recoveryTarget, setRecoveryTarget] = useState<OrderListItemDTO | null>(null);
   const [recoveryIntent] = useState(() => new StableMutationIntent<DirectOrderRecoveryPayload>({
     prefix: 'pos-direct-recovery:web',
   }));
   const operationalSequence = useRef(0);
   const receiptSequence = useRef(0);
-  const receiptRowsRef = useRef<ReceiptHistoryDTO[]>([]);
+  const receiptRowsRef = useRef<ReceiptHistoryDTO[]>(cache?.rows ?? []);
   const { nextCursor, hasMore } = receiptPaging;
 
   useEffect(() => { receiptRowsRef.current = receiptRows; }, [receiptRows]);
@@ -241,11 +269,12 @@ function OrdersTab() {
     try {
       const page = await receipts.list({
         limit: 50,
-        ...(requestScope.query ? { q: requestScope.query } : {}),
+        ...receiptSearchParams(requestScope.query),
       });
       const requestIsCurrent = () => sequence === receiptSequence.current
         && receiptScopeMatches(receiptScopeRef.current, requestScope);
       if (!requestIsCurrent()) return;
+      setReceiptTimezone(page.shop_timezone ?? null);
       if (mode === 'stage') {
         const current = receiptRowsRef.current;
         if (!current.length) {
@@ -262,7 +291,7 @@ function OrdersTab() {
             (cursor) => receipts.list({
               cursor,
               limit: 50,
-              ...(requestScope.query ? { q: requestScope.query } : {}),
+              ...receiptSearchParams(requestScope.query),
             }),
             requestIsCurrent,
           );
@@ -308,8 +337,8 @@ function OrdersTab() {
   }, [loadOperational, loadReceipts]);
 
   useEffect(() => {
-    void Promise.all([loadOperational(true), loadReceipts(true)]);
-  }, [loadOperational, loadReceipts]);
+    void Promise.all([loadOperational(true), loadReceipts(!cache?.scope.loaded, cache?.scope.loaded ? 'stage' : 'replace')]);
+  }, [loadOperational, loadReceipts, cache?.scope.loaded]);
 
   useRealtimeRefresh({
     resources: ['orders', 'receipts'],
@@ -342,7 +371,7 @@ function OrdersTab() {
       const page = await receipts.list({
         cursor,
         limit: 50,
-        ...(requestScope.query ? { q: requestScope.query } : {}),
+        ...receiptSearchParams(requestScope.query),
       });
       if (
         sequence !== receiptSequence.current
@@ -379,8 +408,9 @@ function OrdersTab() {
     setPendingReceiptPage(null);
   }, [pendingReceiptPage]);
 
-  const changeReceiptQuery = useCallback((query: string) => {
-    const normalized = query.trim();
+  const changeReceiptQuery = useCallback((query: string, filters: ReceiptFilterInputs = emptyReceiptFilters) => {
+    let normalized: string;
+    try { normalized = receiptSearchScope(query, filters); } catch (cause) { setReceiptsError((cause as Error).message); return; }
     const currentScope = receiptScopeRef.current;
     if (normalized === currentScope.query) {
       setPendingReceiptPage(null);
@@ -411,6 +441,16 @@ function OrdersTab() {
     setReceiptQuery(normalized);
     void loadReceipts(true, 'replace');
   }, [loadReceipts]);
+
+  const receiptStateRef = useRef<ReceiptWorkspaceState>({rows:receiptRows,scope:receiptScopeRef.current,paging:receiptPaging,input:receiptQueryInput,query:receiptQuery,filters:receiptFilters,timezone:receiptTimezone,selected:receiptView,scroll:cache?.scroll ?? 0});
+  receiptStateRef.current={...receiptStateRef.current,rows:receiptRows,scope:receiptScopeRef.current,paging:receiptPaging,input:receiptQueryInput,query:receiptQuery,filters:receiptFilters,timezone:receiptTimezone,selected:receiptView};
+  useEffect(()=>{if(workspaceGeneration===ownerWorkspaceGeneration())rememberOwnerWorkspace(scope,'receipt-history',receiptStateRef.current);},[scope,workspaceGeneration,receiptRows,receiptPaging,receiptQueryInput,receiptQuery,receiptFilters,receiptView,receiptTimezone]);
+  useEffect(()=>{
+    const main=document.querySelector('main');if(main)main.scrollTop=cache?.scroll ?? 0;
+    const save=()=>{receiptStateRef.current.scroll=main?.scrollTop ?? 0;if(workspaceGeneration===ownerWorkspaceGeneration())rememberOwnerWorkspace(scope,'receipt-history',receiptStateRef.current);};
+    main?.addEventListener('scroll',save,{passive:true});return()=>{save();main?.removeEventListener('scroll',save);};
+  },[scope,workspaceGeneration,cache?.scroll]);
+  useEffect(()=>{if(params.get('receipt_q'))changeReceiptQuery(params.get('receipt_q')!);},[params,changeReceiptQuery]);
 
   const beginRecovery = useCallback((order: OrderListItemDTO) => {
     if (!me?.protected_access || !isDirectOrderRecoveryEligible(order)) return;
@@ -479,13 +519,13 @@ function OrdersTab() {
         </button>
       </div>
 
-      <section className="card !p-0 overflow-hidden">
+      {receiptView&&!operationalLoading&&!operationalRows.length&&!operationalError ? <p className="rounded-xl border border-bg-border px-4 py-3 text-sm text-fg-muted">No open or held bills · finalized receipt investigation below.</p> : (      <section className="card !p-0 overflow-hidden">
         <div className="flex items-center justify-between gap-3 border-b border-bg-border px-4 py-3">
           <div>
             <h3 className="font-semibold">Open &amp; held orders</h3>
             <p className="text-xs text-fg-muted">Operational bills that have not been finalized.</p>
           </div>
-          <span className="chip border-accent-gold/30 text-accent-gold">{operationalRows.length} active</span>
+          <span className="chip border-accent-gold/30 text-fg">{operationalRows.length} active</span>
         </div>
         {operationalError && <InlineLoadError message={operationalError} onRetry={() => { void loadOperational(true); }}/>}
         {operationalLoading ? <div className="p-4"><SkeletonCard/></div> : !operationalRows.length && !operationalError ? (
@@ -500,13 +540,21 @@ function OrdersTab() {
           onView={setOperationalView}
           onRecover={beginRecovery}
         /> : null}
-      </section>
+      </section>)}
+
+
+      {receiptView && <ReceiptViewModal
+        key={receiptView.orderId}
+        orderId={receiptView.orderId}
+        invoiceNo={receiptView.invoiceNo}
+        onClose={() => setReceiptView(null)}
+      />}
 
       <section className="card !p-0 overflow-hidden">
         <div className="flex items-center justify-between gap-3 border-b border-bg-border px-4 py-3">
           <div>
             <h3 className="font-semibold">Receipt history</h3>
-            <p className="text-xs text-fg-muted">Finalized receipts from the shared server.</p>
+            <p className="text-xs text-fg-muted">Finalized receipts from the shared server. Invoice issued shop dates{receiptTimezone?` · ${receiptTimezone}`:' · timezone supplied by the server'}.</p>
           </div>
           <div className="text-right">
             <div className="text-xs text-fg-muted">Server history</div>
@@ -517,7 +565,7 @@ function OrdersTab() {
           className="flex flex-col gap-2 border-b border-bg-border px-4 py-3 sm:flex-row"
           onSubmit={(event) => {
             event.preventDefault();
-            changeReceiptQuery(receiptQueryInput);
+            changeReceiptQuery(receiptQueryInput, receiptFilters);
           }}
         >
           <label className="relative min-w-0 flex-1">
@@ -538,12 +586,22 @@ function OrdersTab() {
             <button
               type="button"
               className="btn btn-ghost"
-              onClick={() => { setReceiptQueryInput(''); changeReceiptQuery(''); }}
+              onClick={() => { setReceiptQueryInput(''); setReceiptFilters(emptyReceiptFilters); changeReceiptQuery(''); }}
             >
               <RotateCcw size={14}/> Clear
             </button>
           )}
         </form>
+        <details className="border-b border-bg-border px-4 py-3"><summary className="cursor-pointer text-sm font-medium">Narrow server receipt history</summary>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            <Field label="Invoice issued from (shop date)"><input type="date" className="input w-full" value={receiptFilters.date_from} onChange={event=>setReceiptFilters({...receiptFilters,date_from:event.target.value})}/></Field>
+            <Field label="Invoice issued through (shop date)"><input type="date" className="input w-full" value={receiptFilters.date_to} onChange={event=>setReceiptFilters({...receiptFilters,date_to:event.target.value})}/></Field>
+            <Field label="Exact invoice amount (₹)"><input className="input w-full" inputMode="decimal" value={receiptFilters.amount} onChange={event=>setReceiptFilters({...receiptFilters,amount:event.target.value})}/></Field>
+            <Field label="Effective payment method"><select className="input w-full" value={receiptFilters.method} onChange={event=>setReceiptFilters({...receiptFilters,method:event.target.value})}><option value="">All methods</option>{['cash','upi','card','qr','wallet'].map(method=><option key={method} value={method}>{method.toUpperCase()}</option>)}</select></Field>
+            <Field label="Station"><select className="input w-full" value={receiptFilters.station_id} onChange={event=>setReceiptFilters({...receiptFilters,station_id:event.target.value})}><option value="">All stations</option>{stationOptions.map(station=><option key={station.id} value={station.id}>{station.name}</option>)}</select></Field>
+            <Field label="Payment recorded by"><select className="input w-full" value={receiptFilters.staff_user_id} onChange={event=>setReceiptFilters({...receiptFilters,staff_user_id:event.target.value})}><option value="">All recorded staff</option>{staffOptions.map(user=><option key={user.id} value={user.id}>{user.name} (current profile)</option>)}</select></Field>
+          </div><p className="mt-2 text-xs text-fg-muted">These filters search retained server history, not only the loaded page. Unknown legacy staff remain unrecorded.</p><button className="btn btn-ghost mt-3" onClick={()=>changeReceiptQuery(receiptQueryInput,receiptFilters)} disabled={receiptsLoading}>Apply history filters</button>
+        </details>
         {pendingReceiptPage && (
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-accent/30 bg-accent/10 px-4 py-3 text-sm" role="status">
             <span>New receipts are available. Your loaded history stays in place until you choose to show them.</span>
@@ -586,11 +644,7 @@ function OrdersTab() {
         onRefresh={refreshAfterRecoveryFailure}
         onSubmit={(reason) => recoverDirectOrder(recoveryTarget, reason)}
       />}
-      {receiptView && <ReceiptViewModal
-        orderId={receiptView.orderId}
-        invoiceNo={receiptView.invoiceNo}
-        onClose={() => setReceiptView(null)}
-      />}
+
     </div>
   );
 }
@@ -615,7 +669,7 @@ export function OperationalOrderList({ rows, protectedAccess, onView, onRecover 
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
                   <span className="font-semibold">{order.source_label || orderTypeLabel(order.type)}</span>
-                  <span className={`chip text-[10px] ${order.status === 'held' ? 'border-accent-gold/40 text-accent-gold' : 'border-fg-muted/40 text-fg-muted'}`}>
+                  <span className={`chip text-[10px] ${order.status === 'held' ? 'border-accent-gold/40 text-fg' : 'border-fg-muted/40 text-fg-muted'}`}>
                     {order.status}
                   </span>
                 </div>
@@ -913,6 +967,7 @@ function ReceiptViewModal({ orderId, invoiceNo, onClose }: {
   onClose: () => void;
 }) {
   const [receipt, setReceipt] = useState<ReceiptHistoryDTO | null>(null);
+  const [investigation,setInvestigation] = useState<ReceiptInvestigationDTO | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const requestSequence = useRef(0);
@@ -934,8 +989,8 @@ function ReceiptViewModal({ orderId, invoiceNo, onClose }: {
     setLoading(true);
     setError(null);
     try {
-      const result = await receipts.get(orderId);
-      if (sequence === requestSequence.current) setReceipt(result);
+      const result = await receipts.investigate(orderId);
+      if (sequence === requestSequence.current) {setReceipt(result.receipt);setInvestigation(result);}
     } catch (cause) {
       if (sequence === requestSequence.current) setError((cause as Error).message);
     } finally {
@@ -947,7 +1002,7 @@ function ReceiptViewModal({ orderId, invoiceNo, onClose }: {
   useRealtimeRefresh({ resources: ['receipts'], refresh: load, enabled: LIVE_MODE });
 
   return (
-    <Modal open onClose={onClose} title={`Receipt ${invoiceNo}`} size="lg">
+    <section id="receipt-investigation" className="card space-y-4" aria-label="Receipt investigation"><header className="flex items-center justify-between gap-3"><h3 className="text-lg font-semibold">Receipt {receipt?.invoice_no ?? invoiceNo}</h3><button className="btn btn-ghost" onClick={onClose}><X size={14}/> Close receipt details</button></header>
       {loading && !receipt ? <SkeletonCard/> : error && !receipt ? (
         <InlineLoadError message={error} onRetry={() => { void load(); }}/>
       ) : receipt ? (
@@ -961,9 +1016,12 @@ function ReceiptViewModal({ orderId, invoiceNo, onClose }: {
               ? () => navigate(`/refunds?order_id=${encodeURIComponent(receipt.order_id)}`)
               : undefined}
           />
+          {investigation && <RetainedInvestigation details={investigation}/>}
+          {me?.audit_access && <Link className="btn btn-ghost" to={`/audit?reference=${encodeURIComponent(receipt.invoice_no)}`}>Open linked Audit activity</Link>}
+          {me?.audit_access && me.effective_permissions?.includes('finance.tender.correct') && receipt.payments.filter(payment=>payment.method==='cash'&&!payment.tender_correction_id).map(payment=><details key={payment.id} className="rounded-xl border border-bg-border p-4"><summary className="cursor-pointer text-sm font-semibold">Correct this Cash payment to UPI · {inr(payment.amount_minor)}</summary><div className="mt-3"><TenderCorrections paymentId={payment.id} onCommitted={()=>void load()}/></div></details>)}
         </>
       ) : null}
-    </Modal>
+    </section>
   );
 }
 
@@ -1086,7 +1144,7 @@ function ReceiptLines({ receipt }: { receipt: ReceiptHistoryDTO }) {
                     </div>
                     {customizations.length > 0 && <div className="mt-1 text-xs text-fg-muted">{customizations.join(' · ')}</div>}
                     <div className="mt-1 text-[11px] text-fg-muted">
-                      {line.hsn_or_sac ? `HSN/SAC ${line.hsn_or_sac} · ` : ''}Tax {exactQuantityLabel(line.tax_rate)}%
+                      {line.hsn_or_sac ? `HSN/SAC ${line.hsn_or_sac} · ` : ''}Configured rate {taxPercentage(line.tax_rate)} · Tax charged {inr(line.cgst_minor + line.sgst_minor + line.igst_minor + line.cess_minor)}
                     </div>
                     {line.note && <div className="mt-1 text-xs text-fg-muted">Note: {line.note}</div>}
                     {line.void_reason && (
@@ -1127,6 +1185,7 @@ function ReceiptPayments({ receipt }: { receipt: ReceiptHistoryDTO }) {
             </div>
             <div className="mt-2 space-y-1">
               <Row label="Paid" value={formatDateTime(payment.paid_at)}/>
+              {payment.tender_correction_id&&<><Row label="Original recorded method" value={paymentMethodLabel(payment.original_method??'cash')}/><Row label="Effective method after correction" value={paymentMethodLabel(payment.method)}/><Row label="Correction recorded" value={formatOptionalDateTime(payment.tender_correction_recorded_at??null)}/><p className="text-xs text-fg-muted">Owner-attested classification correction. Original payment and bill total retained.</p>{payment.original_tendered_minor!=null&&<Row label="Original cash tendered (historical)" value={inr(payment.original_tendered_minor)}/>} {payment.original_change_minor!=null&&<Row label="Original change (historical)" value={inr(payment.original_change_minor)}/>}</>}
               <Row label="Recorded by" value={actorLabel(payment.recorded_by_name, payment.recorded_by)}/>
               {payment.tendered_minor !== null && <Row label="Cash tendered" value={inr(payment.tendered_minor)}/>}
               {payment.change_minor !== null && <Row label="Change given" value={inr(payment.change_minor)}/>}
@@ -1242,7 +1301,7 @@ function GamingProvenance({ receipt }: { receipt: ReceiptHistoryDTO }) {
 
 function ReceiptStatus({ status }: { status: string }) {
   return (
-    <span className={`chip text-[10px] ${status === 'paid' ? 'border-accent-good/40 text-accent-good' : 'border-accent-gold/40 text-accent-gold'}`}>
+    <span className={`chip text-[10px] ${status === 'paid' ? 'border-accent-good/40 text-accent-good' : 'border-accent-gold/40 text-fg'}`}>
       {status}
     </span>
   );
@@ -1530,12 +1589,12 @@ export function OpenShiftStatusPanel({
               : 'Continue using this shared shift. When work is finished, count the drawer and close it here. Any staff member with Close shift access can close it; the closer is recorded under their own account.'}
           </p>
           {!canClose && !requiresOriginTablet && (
-            <p className="mt-2 text-xs text-accent-gold" role="status">
+            <p className="mt-2 text-xs text-fg" role="status">
               Your account can view this shift but cannot close it. Ask a staff member with Close shift access.
             </p>
           )}
           {requiresOriginTablet && !canRecover && (
-            <p className="mt-2 text-xs text-accent-gold" role="status">
+            <p className="mt-2 text-xs text-fg" role="status">
               If the tablet is stuck or unavailable, ask the protected audit owner to use the separate audited recovery flow.
             </p>
           )}
@@ -1634,7 +1693,7 @@ export function AndroidShiftRecoveryCandidatesPanel({
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="chip border-accent-bad/45 text-accent-bad">Other terminal</span>
                       {!candidate.terminal_is_active && (
-                        <span className="chip border-accent-gold/45 text-accent-gold">Workspace inactive</span>
+                        <span className="chip border-accent-gold/45 text-fg">Workspace inactive</span>
                       )}
                     </div>
                     <p className="mt-2 font-semibold text-fg">{candidate.terminal_name}</p>
@@ -1692,7 +1751,7 @@ export function ExistingShiftFeedback({
 }) {
   return (
     <div className="rounded-xl border border-accent-gold/40 bg-accent-gold/10 p-3 text-sm" role="status" aria-live="polite">
-      <p className="font-semibold text-accent-gold">A shift is already open</p>
+      <p className="font-semibold text-fg">A shift is already open</p>
       <p className="mt-1 text-fg">
         <strong>{shiftOpenerLabel(shift)}</strong> opened it {formatShiftBusinessDateTime(shift.opened_at)} on {workspaceName}.
       </p>
@@ -1920,7 +1979,7 @@ function ShiftsTab() {
 
       {rows.length >= 200 && (
         <div
-          className="mb-3 rounded-xl border border-accent-gold/35 bg-accent-gold/10 p-3 text-xs text-accent-gold"
+          className="mb-3 rounded-xl border border-accent-gold/35 bg-accent-gold/10 p-3 text-xs text-fg"
           role="status"
         >
           Showing the latest 200 shift records. Older records are still preserved, but the oldest business day shown here may be incomplete.
@@ -1934,7 +1993,7 @@ function ShiftsTab() {
       </div>}
       {!openShift && !scopeError && !canOpenShift && (
         <div className="card border-accent-gold/35 bg-accent-gold/5 text-sm mb-3">
-          <p className="font-medium text-accent-gold">Shift opening is view only for this account</p>
+          <p className="font-medium text-fg">Shift opening is view only for this account</p>
           <p className="mt-1 text-fg-muted">Ask a staff member with Open shift access. Nothing has been changed.</p>
         </div>
       )}
@@ -1987,7 +2046,7 @@ function ShiftsTab() {
                     {day.hasOpenShift
                       ? <span className="chip border-accent-good/40 text-accent-good">Open</span>
                       : day.hasIncompleteClose
-                        ? <span className="chip border-accent-gold/40 text-accent-gold">Needs review</span>
+                        ? <span className="chip border-accent-gold/40 text-fg">Needs review</span>
                         : <span className="chip border-fg-muted/40 text-fg-muted">Closed</span>}
                     {day.dateLabel}
                   </div>
@@ -1999,16 +2058,16 @@ function ShiftsTab() {
                     {day.hasOpenShift
                       ? <span className="text-accent-good">Still open</span>
                       : day.hasIncompleteClose
-                        ? <span className="text-accent-gold">Needs review · close time missing</span>
+                        ? <span className="text-fg">Needs review · close time missing</span>
                         : day.finalClosedAt
                       ? <>
                           Final close <strong className="text-fg">{formatShiftBusinessDateTime(day.finalClosedAt)}</strong>
                           {' '}by <strong className="text-fg">{shiftCloserLabel(day.finalShift)}</strong>
                         </>
-                      : <span className="text-accent-gold">Needs review · close time unavailable</span>}
+                      : <span className="text-fg">Needs review · close time unavailable</span>}
                   </p>
                 </div>
-                <span className="chip border-accent-gold/35 text-accent-gold">
+                <span className="chip border-accent-gold/35 text-fg">
                   {day.shifts.length} shift record{day.shifts.length === 1 ? '' : 's'}
                 </span>
               </div>
@@ -2029,7 +2088,7 @@ function ShiftsTab() {
               </div>
 
               <details className="mt-3 border-t border-bg-border/60 pt-3">
-                <summary className="cursor-pointer text-sm font-medium text-accent-gold">
+                <summary className="cursor-pointer text-sm font-medium text-fg">
                   Review {day.shifts.length} shift record{day.shifts.length === 1 ? '' : 's'} and drawer count{day.shifts.length === 1 ? '' : 's'}
                 </summary>
                 {day.shifts.length > 1 && (
@@ -2070,7 +2129,7 @@ function ShiftsTab() {
                             Workspace <span className="text-fg font-medium">{shiftWorkspaceLabel(s, terminalOptions)}</span>
                           </p>
                           {s.status !== 'open' && !s.closed_at && (
-                            <p className="mt-1 text-xs text-accent-gold">
+                            <p className="mt-1 text-xs text-fg">
                               Saved status is closed, but its close time is missing. Review this historical record; it is not an open shift.
                             </p>
                           )}
@@ -2117,6 +2176,7 @@ function ShiftsTab() {
                         <Stat label="Net collections" value={inr(s.net_collections_minor ?? 0)} tone="good"/>
                       </div>
                       <ShiftRailBreakdown shift={s}/>
+                      <ShiftTenderEvidence shift={s}/>
                       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3 pt-3 border-t border-bg-border/60">
                         <Stat label="Opening float" value={inr(s.opening_float_minor)}/>
                         <Stat label="Expected cash" value={s.expected_minor != null ? inr(s.expected_minor) : '—'}/>
@@ -2153,6 +2213,8 @@ function ShiftsTab() {
           currentUserId={me?.user_id}
           currentStaffName={me?.name || me?.email || 'Current employee'}
           workspaceName={shiftWorkspaceLabel(closing, terminalOptions)}
+          canReadOrders={me?.effective_permissions?.includes('pos.read') === true}
+          canReadGaming={me?.effective_permissions?.includes('gaming.read') === true}
           onClose={() => setClosing(null)}
           onSuccess={() => { setClosing(null); void load(false); }}
           onError={() => refreshAfterCloseFailure(closing.id)}
@@ -2283,11 +2345,13 @@ function OpenShiftForm({
 // denomination-breakdown entry mode below.
 const CASH_DENOMINATIONS = [500, 200, 100, 50, 20, 10, 5, 2, 1];
 
-function CloseShiftForm({
+export function CloseShiftForm({
   shift,
   currentUserId,
   currentStaffName,
   workspaceName,
+  canReadOrders = false,
+  canReadGaming = false,
   onClose,
   onSuccess,
   onError,
@@ -2296,6 +2360,8 @@ function CloseShiftForm({
   currentUserId: string | undefined;
   currentStaffName: string;
   workspaceName: string;
+  canReadOrders?: boolean;
+  canReadGaming?: boolean;
   onClose: () => void;
   onSuccess: () => void;
   onError: () => Promise<ShiftDTO | null>;
@@ -2303,11 +2369,48 @@ function CloseShiftForm({
   const notifications = useNotifications();
   const [mode, setMode] = useState<'total' | 'denomination'>('total');
   const [counted, setCounted] = useState('');
+  const [denominationsReviewed, setDenominationsReviewed] = useState(false);
+  const [reviewedShift, setReviewedShift] = useState(shift);
+  const [observations, setObservations] = useState<{ orders: number | null; games: number | null; capped: boolean; checkedAt: string } | null>(null);
+  const [checkingObservations, setCheckingObservations] = useState(false);
+  const [observationError, setObservationError] = useState<string | null>(null);
+  const observationSequence = useRef(0);
+  const checkObservations = useCallback(async () => {
+    const request = ++observationSequence.current;
+    setCheckingObservations(true);
+    setObservationError(null);
+    const checked = await Promise.allSettled([
+      canReadOrders ? orders.list({ status: ['open', 'held'], limit: 500 }) : Promise.resolve(null),
+      canReadGaming ? gaming.listOperationalSessions() : Promise.resolve(null),
+    ]);
+    if (request !== observationSequence.current) return;
+    const errors = checked.flatMap(value => value.status === 'rejected' ? [value.reason instanceof Error ? value.reason.message : 'A readiness observation could not load.'] : []);
+    if (errors.length) setObservationError(`${errors.join(' ')} Previous observations remain as of their displayed check.`);
+    else {
+      const orderRows = checked[0].status === 'fulfilled' ? checked[0].value : null;
+      const gameRows = checked[1].status === 'fulfilled' ? checked[1].value : null;
+      setObservations({ orders: orderRows?.length ?? null,
+        games: gameRows?.filter(row => row.shift_id === shift.id).length ?? null,
+        capped: orderRows?.length === 500 || gameRows?.length === 500,
+        checkedAt: new Date().toISOString() });
+    }
+    setCheckingObservations(false);
+  }, [canReadOrders, canReadGaming, shift.id]);
+  useEffect(() => {
+    void checkObservations();
+    return () => {
+      // This is a request generation, not a captured DOM ref: invalidate every
+      // observation still in flight when the reviewed shift changes or closes.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      ++observationSequence.current;
+    };
+  }, [checkObservations]);
   const [denomCounts, setDenomCounts] = useState<Record<number, string>>({
     500: '', 200: '', 100: '', 50: '', 20: '', 10: '', 5: '', 2: '', 1: '',
   });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [recordedConflict, setRecordedConflict] = useState<{ shift: ShiftDTO; attemptedCountedMinor: number } | null>(null);
   const [result, setResult] = useState<{
     variance_minor: number;
     closed_by?: string | null;
@@ -2346,13 +2449,13 @@ function CloseShiftForm({
     0,
   );
 
-  // Keep the free-text total field mirroring the breakdown while denomination
-  // mode is active, so what's on screen always matches what will be submitted.
-  useEffect(() => {
-    if (mode === 'denomination') setCounted((denomTotalMinor / 100).toFixed(2));
-  }, [mode, denomTotalMinor]);
+  // Keep the independently entered total when switching modes. A denomination draft
+  // is not a confirmed zero just because all note fields are initially empty.
+  const denominationInputValid = Object.values(denomCounts).every(value => value === '' || /^\d+$/.test(value))
+    && Number.isSafeInteger(denomTotalMinor) && denomTotalMinor >= 0;
 
   function setDenomCount(denom: number, value: string) {
+    setDenominationsReviewed(false);
     setDenomCounts((prev) => ({ ...prev, [denom]: value }));
   }
 
@@ -2366,7 +2469,7 @@ function CloseShiftForm({
     // free-text mode submits exactly as before (unchanged wire format).
     const countedMinor = ambiguousCountedMinor ?? (
       mode === 'denomination'
-        ? denomTotalMinor
+        ? denominationsReviewed && denominationInputValid ? denomTotalMinor : null
         : parseRupeesToMinor(counted)
     );
     if (countedMinor === null) {
@@ -2395,7 +2498,10 @@ function CloseShiftForm({
       // A close may commit even when its response is lost. Refresh the
       // authoritative row before telling staff to retry, so the same drawer
       // count is never accidentally submitted as a second operational intent.
-      const refreshedShift = await onError();
+      let refreshedShift: ShiftDTO | null = null;
+      try { refreshedShift = await onError(); } catch { /* Unavailable evidence cannot resolve an unknown write. */ }
+      if (refreshedShift?.id !== shift.id) refreshedShift = null;
+      if (refreshedShift) setReviewedShift(refreshedShift);
       const outcomeIsUnknown = isUnknownShiftMutationOutcome(error);
       if (
         refreshedShift?.status === 'closed'
@@ -2411,8 +2517,23 @@ function CloseShiftForm({
           'The response was interrupted, but a refresh confirmed that this shift closed with the same cash count.',
           { title: 'Shift closure confirmed' },
         );
+      } else if (
+        refreshedShift?.status === 'closed'
+        && typeof refreshedShift.counted_minor === 'number'
+        && Number.isSafeInteger(refreshedShift.counted_minor)
+        && refreshedShift.counted_minor >= 0
+        && refreshedShift.counted_minor !== countedMinor
+      ) {
+        // The same target has a terminal, immutable close with another count.
+        // Show that evidence without claiming this request succeeded or offering
+        // to replace the already recorded count with a new financial intent.
+        setAmbiguousCountedMinor(null);
+        setRecordedConflict({ shift: refreshedShift, attemptedCountedMinor: countedMinor });
+        setErr(null);
       } else {
-        if (outcomeIsUnknown && refreshedShift?.status !== 'closed') {
+        if (ambiguousCountedMinor !== null || (outcomeIsUnknown && refreshedShift?.status !== 'closed')) {
+          // A later refusal cannot establish what happened to an earlier write
+          // whose reply was lost. Only its matching authoritative result can.
           setAmbiguousCountedMinor(countedMinor);
         } else {
           setAmbiguousCountedMinor(null);
@@ -2431,6 +2552,23 @@ function CloseShiftForm({
     }
   }
 
+  if (recordedConflict) {
+    const recorded = recordedConflict.shift;
+    const acknowledge = () => { onClose(); onSuccess(); };
+    return <Modal open onClose={acknowledge} title="Shift already closed · cash count differs">
+      <div className="space-y-4" role="status">
+        <p className="text-sm text-fg-muted">This exact shift is already closed with a different cash count. Your earlier request is not marked successful. The recorded close below is preserved; nothing here changes it.</p>
+        <Row label="Your unconfirmed cash count" value={inr(recordedConflict.attemptedCountedMinor)}/>
+        <Row label="Recorded cash count" value={inr(recorded.counted_minor!)}/>
+        <Row label="Recorded closer" value={recorded.closed_by_name?.trim() || 'Name not retained'}/>
+        <Row label="Recorded close time" value={recorded.closed_at ? formatShiftBusinessDateTime(recorded.closed_at) : 'Not retained'}/>
+        <Row label="Recorded variance" value={recorded.variance_minor == null ? 'Unavailable' : signedMoney(recorded.variance_minor)} bold/>
+        <p className="text-xs text-fg-muted">Shift reference: <span className="font-mono break-all">{recorded.id}</span>. Review its retained history if the drawer count needs investigation.</p>
+        <button type="button" className="btn btn-primary w-full" onClick={acknowledge}>Acknowledge & refresh Shifts</button>
+      </div>
+    </Modal>;
+  }
+
   if (result) {
     const v = result.variance_minor;
     return (
@@ -2446,7 +2584,7 @@ function CloseShiftForm({
           </div>
           <div className={`p-4 rounded-xl ${
             v === 0 ? 'bg-accent-good/15 border border-accent-good/40 text-accent-good' :
-            Math.abs(v) < 5000 ? 'bg-accent-gold/15 border border-accent-gold/40 text-accent-gold' :
+            Math.abs(v) < 5000 ? 'bg-accent-gold/15 border border-accent-gold/40 text-fg' :
                                  'bg-accent-bad/15 border border-accent-bad/40 text-accent-bad'
           }`}>
             <div className="text-xs uppercase tracking-wider mb-1">Variance</div>
@@ -2466,8 +2604,9 @@ function CloseShiftForm({
   }
 
   return (
-    <Modal open onClose={close} title={`Close shift · ${workspaceName}`}>
-      <form onSubmit={submit} className="space-y-3">
+    <Modal open onClose={close} locked={busy || ambiguousCountedMinor !== null} size="xl" title={`Review & close shift · ${workspaceName}`}>
+      <form onSubmit={submit} className="grid gap-5 lg:grid-cols-[1.1fr_1fr]" aria-label="Shift review and physical count">
+        <section className="space-y-3" aria-label="Shift review">
         <div className="rounded-xl border border-bg-border bg-bg-raised/35 p-3 text-sm" role="status">
           <div className="flex items-center gap-2 font-semibold"><UserRound size={15}/> Shift responsibility</div>
           <div className="mt-2 space-y-1">
@@ -2486,16 +2625,33 @@ function CloseShiftForm({
         <div className="rounded-xl border border-bg-border bg-bg-raised/35 p-3 text-sm">
           <div className="font-semibold">Collection review</div>
           <div className="mt-2 grid grid-cols-2 gap-3">
-            <Stat label="Gross collections" value={inr(shift.gross_collections_minor)}/>
-            <Stat label="Refunds settled" value={inr(shift.total_refunds_minor)}/>
-            <Stat label="Net collections" value={inr(shift.net_collections_minor)} tone="good"/>
-            <Stat label="Expected cash" value={shift.expected_minor == null ? 'Pending server calculation' : inr(shift.expected_minor)}/>
+            <Stat label="Gross collections" value={inr(reviewedShift.gross_collections_minor)}/>
+            <Stat label="Refunds settled" value={inr(reviewedShift.total_refunds_minor)}/>
+            <Stat label="Net collections" value={inr(reviewedShift.net_collections_minor)} tone="good"/>
+            <Stat label="Expected cash" value={reviewedShift.expected_minor == null ? 'Pending server calculation' : inr(reviewedShift.expected_minor)}/>
           </div>
-          <ShiftRailBreakdown shift={shift}/>
+          <ShiftRailBreakdown shift={reviewedShift}/>
           <p className="mt-3 text-xs text-fg-muted">
             The server checks unpaid bills, running gaming sessions and other close blockers again when you submit this cash count.
           </p>
         </div>
+        <section className="rounded-xl border border-bg-border p-3 text-sm" aria-label="Closing readiness observations">
+          <div className="flex items-center justify-between gap-3"><h4 className="font-semibold">Before final close</h4><button type="button" className="btn btn-ghost !px-2 !py-1 text-xs" disabled={checkingObservations || busy || ambiguousCountedMinor !== null} onClick={() => {
+            void checkObservations();
+            void onError().then(row => { if (row?.id === shift.id) setReviewedShift(row); }).catch(cause => setObservationError(cause instanceof Error ? cause.message : 'Shift review could not refresh; retained values remain visible.'));
+          }}>{checkingObservations ? 'Checking…' : 'Refresh review'}</button></div>
+          {observationError && <p role="status" className="mt-2 text-xs text-fg-muted">{observationError}</p>}
+          <dl className="mt-3 space-y-2">
+            <div><dt className="text-xs text-fg-muted">Visible unfinished orders · authorized register scope</dt><dd>{observations?.orders == null ? 'Not verified with this account' : `${observations.orders} open or held`}</dd></div>
+            <div><dt className="text-xs text-fg-muted">Visible unbilled games linked to this shift</dt><dd>{observations?.games == null ? 'Not verified with this account' : `${observations.games} active, paused or awaiting billing`}</dd></div>
+          </dl>
+          {observations && <p className="mt-2 text-xs text-fg-muted">Observation read completed {observations.checkedAt} (browser clock). {observations.capped ? 'A list reached its 500-row limit; more work may exist.' : ''}</p>}
+          <p className="mt-3 text-xs text-fg-muted">These are partial observations, not an all-clear. Order-to-shift association is not included; private drafts and other saved work may be hidden. Tablet-local pending work is not verified here.</p>
+          <p className="mt-2 text-xs text-fg-muted">Final server checks: unpaid orders, kitchen cancellations, active or unbilled games, accepted membership payments, membership refund recovery and pending membership/POS refunds. Any refusal below includes the next action.</p>
+        </section>
+        </section>
+        <section className="space-y-3" aria-label="Physical cash count">
+        <h4 className="font-semibold">Physical cash count</h4>
         <p className="text-sm text-fg-muted">
           Count all the cash in the drawer (notes + coins), then enter the total below.
           The system compares it with the recorded opening float and cash drawer movements,
@@ -2517,7 +2673,7 @@ function CloseShiftForm({
           <button type="button"
             className={`flex-1 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
               mode === 'denomination' ? 'bg-bg-surface shadow text-fg' : 'text-fg-muted'}`}
-            onClick={() => setMode('denomination')}
+            onClick={() => { setMode('denomination'); setDenominationsReviewed(false); }}
             disabled={busy || ambiguousCountedMinor !== null}>
             Count denominations
           </button>
@@ -2526,7 +2682,7 @@ function CloseShiftForm({
         <Field label="Counted cash (₹) — what's actually in the drawer">
           <input type="number" required min={0} step="0.01" autoFocus={mode === 'total'}
             disabled={busy || mode === 'denomination' || ambiguousCountedMinor !== null}
-            className="input font-mono text-right text-xl disabled:opacity-80" value={counted}
+            className="input font-mono text-right text-xl disabled:opacity-80" value={mode === 'denomination' ? (denomTotalMinor / 100).toFixed(2) : counted}
             onChange={(e) => setCounted(e.target.value)}/>
         </Field>
 
@@ -2555,12 +2711,13 @@ function CloseShiftForm({
           </div>
         )}
 
+        {mode === 'denomination' && <label className="flex items-start gap-2 rounded-lg border border-bg-border p-3 text-sm"><input type="checkbox" className="mt-1" checked={denominationsReviewed} disabled={busy || ambiguousCountedMinor !== null || !denominationInputValid} onChange={event => setDenominationsReviewed(event.target.checked)}/><span>I counted these notes and coins: {inr(denomTotalMinor)}. An empty drawer is a deliberate ₹0 count.</span></label>}
         {err && (
           <ErrorRow text={err}/>
         )}
         {ambiguousCountedMinor !== null && (
           <div className="rounded-lg border border-accent-gold/40 bg-accent-gold/10 p-3 text-sm" role="status" aria-live="polite">
-            <div className="font-semibold text-accent-gold">Unconfirmed close · cash count locked</div>
+            <div className="font-semibold text-fg">Unconfirmed close · cash count locked</div>
             <p className="mt-1 text-fg-muted">
               Reconnect, then retry this exact {inr(ambiguousCountedMinor)} count. You cannot edit the count,
               dismiss this window, or open a different close while the first result is unknown.
@@ -2570,7 +2727,7 @@ function CloseShiftForm({
         <div className="flex justify-end gap-2 pt-2">
           <button type="button" className="btn btn-ghost" onClick={close}
             disabled={busy || ambiguousCountedMinor !== null}>Cancel</button>
-          <button type="submit" className="btn btn-primary" disabled={busy}>
+          <button type="submit" className="btn btn-primary" disabled={busy || (ambiguousCountedMinor === null && (mode === 'denomination' ? !denominationsReviewed || !denominationInputValid : parseRupeesToMinor(counted) === null))}>
             {busy ? <Loader2 className="animate-spin" size={14}/> : <Lock size={14}/>}
             {busy
               ? 'Checking shift…'
@@ -2579,6 +2736,7 @@ function CloseShiftForm({
                 : 'Close shift'}
           </button>
         </div>
+        </section>
       </form>
     </Modal>
   );
@@ -2710,8 +2868,8 @@ export function RecoverAndroidShiftForm({
       // ordinary Android close can have the same cash count without recording
       // this protected reason and quarantine attestation. Refresh the surfaces,
       // but confirm recovery only from this endpoint's idempotent response.
-      await onError();
-      const requiresExactReplay = recoveryFailureRequiresExactReplay(error);
+      try { await onError(); } catch { /* Keep the exact recovery when refresh is unavailable. */ }
+      const requiresExactReplay = ambiguousPayload !== null || recoveryFailureRequiresExactReplay(error);
       if (requiresExactReplay) setAmbiguousPayload(attempt.payload);
       else setAmbiguousPayload(null);
       const message = shiftActionErrorMessage(error, 'recovery-close');
@@ -2747,7 +2905,7 @@ export function RecoverAndroidShiftForm({
   }
 
   return (
-    <Modal open onClose={close} title={`Recover Android shift · ${workspaceName}`}>
+    <Modal open onClose={close} locked={busy || ambiguousPayload !== null} title={`Recover Android shift · ${workspaceName}`}>
       <form onSubmit={submit} className="space-y-4">
         <div className="rounded-xl border border-accent-bad/40 bg-accent-bad/10 p-3 text-sm">
           <p className="font-semibold text-accent-bad">Last-resort protected-owner recovery</p>
@@ -2821,7 +2979,7 @@ export function RecoverAndroidShiftForm({
             role="status"
             aria-live="polite"
           >
-            <p className="font-semibold text-accent-gold">To enable Recover &amp; close shift:</p>
+            <p className="font-semibold text-fg">To enable Recover &amp; close shift:</p>
             <ul className="mt-1 list-disc pl-5 text-fg-muted">
               {missingRequirements.map((requirement) => <li key={requirement}>{requirement}</li>)}
             </ul>
@@ -2829,7 +2987,7 @@ export function RecoverAndroidShiftForm({
         )}
         {ambiguousPayload && (
           <div className="rounded-xl border border-accent-gold/40 bg-accent-gold/10 p-3 text-sm" role="status" aria-live="polite">
-            <p className="font-semibold text-accent-gold">Unconfirmed recovery · details locked</p>
+            <p className="font-semibold text-fg">Unconfirmed recovery · details locked</p>
             <p className="mt-1 text-fg-muted">
               Keep the tablet isolated. Refresh, then retry the exact {inr(ambiguousPayload.counted_minor)}
               cash count and identical audit reason. Do not create a second recovery intent.
@@ -2900,7 +3058,7 @@ function Stat({ label, value, tone = 'default' }: {
 }) {
   const color =
     tone === 'good' ? 'text-accent-good' :
-    tone === 'gold' ? 'text-accent-gold' :
+    tone === 'gold' ? 'text-fg' :
     tone === 'bad' ? 'text-accent-bad' : 'text-fg';
   return (
     <div>
@@ -2908,4 +3066,20 @@ function Stat({ label, value, tone = 'default' }: {
       <div className={`font-mono font-bold ${color}`}>{value}</div>
     </div>
   );
+}
+
+export function ShiftTenderEvidence({shift}:{shift:ShiftDTO}) {
+  if(!shift.tender_correction_minor)return null;
+  return <section className="mt-3 rounded-xl border border-bg-border bg-bg-raised/30 p-3 text-sm" aria-label="Reconstructed bill tender"><h5 className="font-semibold">Recorded close preserved · reconstructed bill tender</h5><p className="mt-1 text-xs text-fg-muted">Original expected cash, physical count and variance stay unchanged. This includes identified bill corrections only; daily unallocated actuals are separate in Finance.</p><div className="mt-3 grid gap-3 sm:grid-cols-3"><Stat label="Reconstructed Cash collected" value={shift.reconstructed_cash_collections_minor==null?'Unavailable':inr(shift.reconstructed_cash_collections_minor)}/><Stat label="Reconstructed UPI collected" value={shift.reconstructed_upi_collections_minor==null?'Unavailable':inr(shift.reconstructed_upi_collections_minor)}/><Stat label="Reconstructed expected cash" value={shift.reconstructed_expected_minor==null?'Unavailable':inr(shift.reconstructed_expected_minor)}/></div></section>;
+}
+function RetainedInvestigation({details}:{details:ReceiptInvestigationDTO}) {
+  const retainedTime = (value: string) => `${shopTime(value, details.shop_timezone ?? 'UTC')} · ${details.shop_timezone ?? 'UTC (shop timezone unavailable)'}`;
+  return <section className="space-y-4 rounded-xl border border-bg-border p-4"><h4 className="font-semibold">Retained players, drinks & billing evidence</h4><p className="text-xs text-fg-muted">{details.historical_evidence_note}</p>{details.participant_intervals.length>0&&<div className="space-y-2"><h5 className="text-sm font-semibold">Joining / Leave / rejoin history</h5>{details.participant_intervals.map(interval=><div key={interval.id} className="rounded-lg bg-bg-raised/40 p-3 text-sm"><b>{interval.guest_name || (interval.customer_id?'Recorded customer':'Anonymous player')}</b><p className="mt-1 text-xs text-fg-muted">Joined {retainedTime(interval.joined_at)} · {interval.left_at?`Left ${retainedTime(interval.left_at)}`:'No retained Leave event'}</p><p className="mt-1 text-xs">Play position {Math.floor(interval.joined_play_elapsed_ms/60000)} min → {interval.left_play_elapsed_ms==null?'end of session':`${Math.floor(interval.left_play_elapsed_ms/60000)} min`}. {interval.settlement_line_id?'Charge is listed once per player below, including all rejoins.':'No retained settled player charge.'}</p></div>)}</div>}{details.participant_charges.length>0&&<div className="space-y-2"><h5 className="text-sm font-semibold">One settled charge per player</h5>{details.participant_charges.map(charge=><div key={charge.id} className="flex justify-between gap-3 text-sm"><span>{charge.interval_count} joining interval{charge.interval_count===1?'':'s'} · {Math.floor(charge.play_elapsed_ms/60000)} min accumulated</span><b className="tabular-nums">{inr(charge.charge_minor)}</b></div>)}</div>}{details.addons.length>0&&<div className="space-y-2"><h5 className="text-sm font-semibold">Confirmed drinks & snacks</h5>{details.addons.map(addon=><div key={addon.id} className="rounded-lg bg-bg-raised/40 p-3 text-sm"><div className="flex justify-between gap-3"><b>{addon.qty} × {addon.menu_item_name_snapshot}</b><span className="tabular-nums">{inr(addon.line_total_minor)}</span></div><p className="mt-1 text-xs text-fg-muted">Confirmed {retainedTime(addon.created_at)}{addon.voided_at?` · Voided ${retainedTime(addon.voided_at)} · ${addon.void_reason??'Reason not retained'}`:''}</p></div>)}</div>}{!details.participant_intervals.length&&!details.addons.length&&<p className="text-sm text-fg-muted">No retained player intervals or session add-ons for this receipt. Older missing proof is not reconstructed from the current catalogue.</p>}</section>;
+}
+
+/** Inline shift work preserves its caller's station selection and POS draft. */
+export function InlineShiftWorkspace({onClose}:{onClose:()=>void}) {
+  return <section className="mb-5 rounded-xl border border-bg-border bg-bg-surface p-4" aria-label="Shift workspace">
+    <header className="mb-4 flex items-center justify-between gap-3"><div><h3 className="font-semibold">Shift workspace</h3><p className="mt-1 text-sm text-fg-muted">Your current station and bill stay in place while you open or review the shift.</p></div><button type="button" className="btn btn-ghost" onClick={onClose}>Return to work</button></header><ShiftsTab/>
+  </section>;
 }

@@ -1,5 +1,7 @@
 package cloud.dcompany.erp.ui.screens.menu
 
+import cloud.dcompany.erp.ui.screens.configuredTaxPercent
+
 import cloud.dcompany.erp.ui.theme.operationalDanger
 import cloud.dcompany.erp.ui.theme.operationalDangerContainer
 import cloud.dcompany.erp.ui.theme.operationalGood
@@ -507,11 +509,7 @@ private fun ItemRowCard(
                 Text(item.basePriceMinor.asRupees(), color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 if (presentation.showsRestaurantOperations || item.taxRate != 0.0) {
                     Text(
-                        if (presentation.showsRestaurantOperations) {
-                            "${"%.0f".format(item.taxRate * 100)}% GST · ${if (item.priceIncludesTax) "tax included" else "tax added"}"
-                        } else {
-                            "${"%.0f".format(item.taxRate * 100)}% recorded tax · ${if (item.priceIncludesTax) "included" else "added"}"
-                        },
+                        "Configured tax ${configuredTaxPercent(item.taxRate.toString())} · ${if (item.priceIncludesTax) "price marked tax-inclusive" else "price marked tax-exclusive"}",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.labelSmall,
                     )

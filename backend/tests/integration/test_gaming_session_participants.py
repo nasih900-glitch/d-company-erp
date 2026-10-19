@@ -518,6 +518,17 @@ async def test_rejoin_rounds_once_extension_deleted_customer_stop_pos_and_paymen
     )
     assert paid.status_code == 201, paid.text
     assert paid.json()["bill_amount_minor"] == 24300
+    investigation = await client.get(
+        f"/api/v1/pos/receipts/{sent.json()['order_id']}/investigation",
+        headers=_headers(seed_owner, token),
+    )
+    assert investigation.status_code == 200, investigation.text
+    details = investigation.json()
+    assert len(details["participant_intervals"]) >= 3
+    assert sum(row["charge_minor"] for row in details["participant_charges"]) == 9000
+    assert len({row["participant_identity_id"] for row in details["participant_charges"]}) == len(details["participant_charges"])
+    assert any(row["left_at"] is not None for row in details["participant_intervals"])
+    assert str(session_id) in details["audit_source_references"]
     playtime = await client.get(
         f"/api/v1/customers/{friend_ids[0]}/playtime",
         headers=_headers(seed_owner, token),
@@ -561,6 +572,8 @@ async def test_rejoin_rounds_once_extension_deleted_customer_stop_pos_and_paymen
 async def test_capacity_revision_replay_cross_user_and_zero_duration_minimum(
     client, session, seed_owner,
 ) -> None:
+    from app.services.audit.recorder import install_audit_listeners
+    install_audit_listeners()
     token, shift_id, station, friends, packages = await _setup(client, session, seed_owner)
     started = await _start(client, seed_owner, token, shift_id, station, packages["standard-single-session-30m"])
     session_id = started["id"]
@@ -642,6 +655,9 @@ async def test_capacity_revision_replay_cross_user_and_zero_duration_minimum(
     )
     assert missing_revision.status_code == 409
     stop_key = "s" * 150 + uuid4().hex[:10]
+    from app.models import AuditLog, Shift
+    before_stop_shift = await session.get(Shift, shift_id)
+    original_expected = before_stop_shift.expected_minor
     stopped = await client.post(
         f"/api/v1/gaming/sessions/{session_id}/stop",
         json={"expected_participant_revision": 4},
@@ -650,6 +666,18 @@ async def test_capacity_revision_replay_cross_user_and_zero_duration_minimum(
     assert stopped.status_code == 200, stopped.text
     # Three late friends each incur the ₹30 minimum, including the zero-duration leave.
     assert stopped.json()["amount_minor"] == 17000
+    stop_replay = await client.post(
+        f"/api/v1/gaming/sessions/{session_id}/stop",
+        json={"expected_participant_revision": 4}, headers=_headers(seed_owner, token, stop_key),
+    )
+    assert stop_replay.status_code == 200 and stop_replay.json() == stopped.json()
+    stop_audit = await session.scalar(select(AuditLog).where(
+        AuditLog.entity_type == "GamingSession", AuditLog.entity_id == str(session_id),
+        AuditLog.action == "gaming_session_stopped").order_by(AuditLog.id.desc()))
+    assert stop_audit.operation_id == stop_key and len(stop_audit.operation_id) == 160
+    assert stop_audit.client_action_id == stop_key
+    await session.refresh(before_stop_shift)
+    assert before_stop_shift.expected_minor == original_expected
 
     second_station = Station(
         id=uuid4(),

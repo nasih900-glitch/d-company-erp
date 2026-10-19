@@ -2971,9 +2971,7 @@ async def test_legacy_outbox_recovers_authoritative_v27_package_start_for_every_
         sort_order=0,
         is_active=True,
     )
-    transferred_station = (
-        _station(seed_owner) if server_outcome == "transferred" else None
-    )
+    transferred_station = _station(seed_owner) if server_outcome == "transferred" else None
     session.add_all(
         [station, shift, package]
         + ([transferred_station] if transferred_station is not None else [])
@@ -3017,10 +3015,17 @@ async def test_legacy_outbox_recovers_authoritative_v27_package_start_for_every_
         .scalars()
         .all()
     )
-    assert len(start_audits) == 1, [
-        (row.action, row.entity_type, row.entity_id, row.client_action_id)
-        for row in start_audits
+    assert len(start_audits) == 2, [
+        (row.action, row.entity_type, row.entity_id, row.client_action_id) for row in start_audits
     ]
+    assert {row.action for row in start_audits} == {"create", "gaming_session_started"}
+    canonical_start = next(row for row in start_audits if row.action == "create")
+    semantic_start = next(row for row in start_audits if row.action == "gaming_session_started")
+    assert semantic_start.operation_id == original_start_key
+    assert semantic_start.request_id == canonical_start.request_id
+    assert semantic_start.actor_user_id == canonical_start.actor_user_id
+    assert semantic_start.terminal_id == canonical_start.terminal_id
+    original_start_audit_ids = {row.id for row in start_audits}
     server_session = await session.get(GamingSession, UUID(started.json()["id"]))
     assert server_session is not None
 
@@ -3073,9 +3078,7 @@ async def test_legacy_outbox_recovers_authoritative_v27_package_start_for_every_
         "station_id": str(station.id),
         "shift_id": str(shift.id),
         "captured_started_at": captured_start.isoformat(),
-        "captured_stopped_at": (
-            captured_stop.isoformat() if captured_stop is not None else None
-        ),
+        "captured_stopped_at": (captured_stop.isoformat() if captured_stop is not None else None),
         "package_id": str(package.id),
         "resolution": requested_resolution,
         "reference_order_id": (
@@ -3105,9 +3108,7 @@ async def test_legacy_outbox_recovers_authoritative_v27_package_start_for_every_
     assert body["server_session"]["id"] == started.json()["id"]
     assert body["server_session"]["shift_id"] == str(shift.id)
     assert body["server_session"]["station_id"] == (
-        str(transferred_station.id)
-        if transferred_station is not None
-        else str(station.id)
+        str(transferred_station.id) if transferred_station is not None else str(station.id)
     )
     await session.refresh(server_session)
     assert body["server_session"]["status"] == server_session.status
@@ -3172,9 +3173,7 @@ async def test_legacy_outbox_recovers_authoritative_v27_package_start_for_every_
     assert receipt.terminal_id == seed_owner["terminal"].id
     assert receipt.after["resolution_request_hash"]
     assert receipt.after["resolution_request"]["station_id"] == str(station.id)
-    assert receipt.after["resolution_receipt"]["server_session"]["id"] == started.json()[
-        "id"
-    ]
+    assert receipt.after["resolution_receipt"]["server_session"]["id"] == started.json()["id"]
     resolution_receipts = (
         (
             await session.execute(
@@ -3189,6 +3188,19 @@ async def test_legacy_outbox_recovers_authoritative_v27_package_start_for_every_
         .all()
     )
     assert len(resolution_receipts) == 1
+    retained_start_ids = set(
+        (
+            await session.execute(
+                select(AuditLog.id).where(
+                    AuditLog.company_id == seed_owner["company"].id,
+                    AuditLog.client_action_id == original_start_key,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert retained_start_ids == original_start_audit_ids
 
 
 @pytest.mark.asyncio
@@ -3355,11 +3367,23 @@ async def test_staff_start_is_recovered_only_by_protected_owner_with_actor_prove
                 AuditLog.entity_type == "GamingSession",
                 AuditLog.entity_id == str(server_session.id),
                 AuditLog.client_action_id == original_start_key,
+                AuditLog.action == "create",
             )
         )
     ).scalar_one()
     assert start_audit.actor_user_id == staff.id
     assert start_audit.after["opened_by"] == str(staff.id)
+    semantic_start = (await session.execute(select(AuditLog).where(
+        AuditLog.company_id == seed_owner["company"].id,
+        AuditLog.entity_type == "GamingSession",
+        AuditLog.entity_id == str(server_session.id),
+        AuditLog.client_action_id == original_start_key,
+        AuditLog.action == "gaming_session_started",
+    ))).scalar_one()
+    assert semantic_start.actor_user_id == staff.id
+    assert semantic_start.operation_id == original_start_key
+    assert semantic_start.request_id == start_audit.request_id
+    assert semantic_start.terminal_id == start_audit.terminal_id
 
     await _grant_protected_owner(session, seed_owner)
     owner_token = await _login(client, seed_owner)
@@ -4680,3 +4704,214 @@ async def test_legacy_outbox_no_play_validates_time_and_refuses_existing_server_
     assert valid.status_code == 201, valid.text
     assert valid.json()["resolution"] == "confirmed_no_play"
     assert valid.json()["reference_order_id"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mismatch",
+    [
+        "request_id",
+        "actor_user_id",
+        "terminal_id",
+        "operation_id",
+        "client_action_id",
+        "client_platform",
+        "client_version_code",
+        "client_reported_at",
+        "client_was_offline",
+        "snapshot",
+        "extra_snapshot",
+        "unknown_action",
+        "duplicate",
+        "duplicate_create",
+    ],
+)
+async def test_no_play_rejects_uncorroborated_or_duplicate_start_companion(
+    mismatch,
+    client,
+    session,
+    seed_owner,
+    monkeypatch,
+):
+    """The exemption is an exact original companion, not an action-name bypass."""
+    from app.api.v1.gaming import router as routes
+
+    captured = []
+    recorder = routes.record_operation
+
+    def without_initial_start(db, **kwargs):
+        if kwargs["action"] == "gaming_session_started":
+            captured.append(kwargs)
+            return None
+        return recorder(db, **kwargs)
+
+    monkeypatch.setattr(routes, "record_operation", without_initial_start)
+    captured_start = datetime.now(UTC) - timedelta(minutes=20)
+    station, shift, local_id, _, server_session = await _accepted_legacy_hourly_start(
+        client,
+        session,
+        seed_owner,
+        captured_start=captured_start,
+    )
+    assert len(captured) == 1
+    canonical = (
+        await session.execute(
+            select(AuditLog).where(
+                AuditLog.company_id == seed_owner["company"].id,
+                AuditLog.entity_id == str(server_session.id),
+                AuditLog.action == "create",
+            )
+        )
+    ).scalar_one()
+    facts = {
+        **captured[0],
+        "entity_id": str(server_session.id),
+        "request_id": canonical.request_id,
+        "client_platform": canonical.client_platform,
+        "client_version_code": canonical.client_version_code,
+        "client_action_id": canonical.client_action_id,
+        "client_reported_at": canonical.client_reported_at,
+        "client_was_offline": canonical.client_was_offline,
+    }
+    assert canonical.request_id
+    assert canonical.actor_user_id
+    assert canonical.terminal_id
+    if mismatch in {"request_id", "operation_id", "client_action_id"}:
+        facts[mismatch] = "different-original-action"
+    elif mismatch in {"actor_user_id", "terminal_id"}:
+        facts[mismatch] = uuid4()
+    elif mismatch == "client_platform":
+        facts[mismatch] = "web"
+    elif mismatch == "client_version_code":
+        facts[mismatch] += 1
+    elif mismatch == "client_reported_at":
+        facts[mismatch] += timedelta(seconds=1)
+    elif mismatch == "client_was_offline":
+        facts[mismatch] = False
+    elif mismatch == "snapshot":
+        facts["after"] = {**facts["after"], "amount_minor": 1}
+    elif mismatch == "extra_snapshot":
+        facts["after"] = {**facts["after"], "later_edit": True}
+    elif mismatch == "unknown_action":
+        facts["action"] = "unrecognized_later_activity"
+    session.add(AuditLog(**facts))
+    if mismatch == "duplicate":
+        session.add(AuditLog(**facts))
+    if mismatch == "duplicate_create":
+        session.add(AuditLog(**{**facts, "action": "create", "after": canonical.after}))
+    await session.commit()
+    await _grant_protected_owner(session, seed_owner)
+    token = await _login(client, seed_owner)
+    key = f"gaming-legacy-outbox-resolution:{local_id}"
+    response = await client.post(
+        "/api/v1/gaming/legacy-outbox-resolutions",
+        json={
+            "local_action_id": str(local_id),
+            "station_id": str(station.id),
+            "shift_id": str(shift.id),
+            "captured_started_at": captured_start.isoformat(),
+            "captured_stopped_at": None,
+            "package_id": None,
+            "expected_rate_per_hour_minor": station.rate_per_hour_minor,
+            "resolution": "confirmed_no_play",
+            "reference_order_id": None,
+            "reason": "Owner verifies uncorroborated retained evidence must refuse cancellation",
+        },
+        headers=_headers(seed_owner, token, key),
+    )
+    assert response.status_code == 409, response.text
+    await session.refresh(server_session)
+    assert server_session.status == "active"
+    assert server_session.order_id is None
+    assert await session.get(IdempotencyKey, key) is None
+
+
+@pytest.mark.asyncio
+async def test_original_stop_audit_survives_semantic_companion_and_durable_replay(
+    client,
+    session,
+    seed_owner,
+):
+    captured_start = datetime.now(UTC) - timedelta(minutes=20)
+    station, shift, local_id, _, server_session = await _accepted_legacy_hourly_start(
+        client,
+        session,
+        seed_owner,
+        captured_start=captured_start,
+    )
+    token = await _login(client, seed_owner)
+    captured_stop = datetime.now(UTC)
+    stop_key = f"gaming-session-stop:{local_id}"
+    stopped = await client.post(
+        f"/api/v1/gaming/sessions/{server_session.id}/stop",
+        headers=_offline_action_headers(
+            seed_owner, token, stop_key, captured_stop, version_code=39
+        ),
+    )
+    assert stopped.status_code == 200, stopped.text
+    assert datetime.fromisoformat(stopped.json()["end_at"].replace("Z", "+00:00")) != captured_stop
+    stop_audits = (
+        (
+            await session.execute(
+                select(AuditLog).where(
+                    AuditLog.company_id == seed_owner["company"].id,
+                    AuditLog.entity_id == str(server_session.id),
+                    AuditLog.client_action_id == stop_key,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert sorted(row.action for row in stop_audits) == ["gaming_session_stopped", "update"]
+    retained_stop_ids = {row.id for row in stop_audits}
+    await _grant_protected_owner(session, seed_owner)
+    token = await _login(client, seed_owner)
+    key = f"gaming-legacy-outbox-resolution:{local_id}"
+    payload = {
+        "local_action_id": str(local_id),
+        "station_id": str(station.id),
+        "shift_id": str(shift.id),
+        "captured_started_at": captured_start.isoformat(),
+        "captured_stopped_at": captured_stop.isoformat(),
+        "package_id": None,
+        "expected_rate_per_hour_minor": station.rate_per_hour_minor,
+        "resolution": "server_session_recovered",
+        "reference_order_id": None,
+        "reason": "Owner matches the original offline Stop to its retained canonical evidence",
+    }
+    first = await client.post(
+        "/api/v1/gaming/legacy-outbox-resolutions",
+        json=payload,
+        headers=_headers(seed_owner, token, key),
+    )
+    assert first.status_code == 201, first.text
+    receipt = await session.get(AuditLog, first.json()["receipt_id"])
+    assert receipt.after["captured_stop_outcome"] == "matched_original_stop_audit"
+    await session.delete(await session.get(IdempotencyKey, key))
+    await session.commit()
+    replay = await client.post(
+        "/api/v1/gaming/legacy-outbox-resolutions",
+        json=payload,
+        headers=_headers(seed_owner, token, key),
+    )
+    assert replay.status_code == 201
+    assert replay.json() == first.json()
+    assert (
+        set(
+            (
+                await session.execute(
+                    select(AuditLog.id).where(
+                        AuditLog.company_id == seed_owner["company"].id,
+                        AuditLog.entity_id == str(server_session.id),
+                        AuditLog.client_action_id == stop_key,
+                    )
+                )
+            ).scalars()
+        )
+        == retained_stop_ids
+    )
+    await session.refresh(server_session)
+    assert server_session.status == "ended"
+    assert server_session.amount_minor == stopped.json()["amount_minor"]
+    assert server_session.order_id is None

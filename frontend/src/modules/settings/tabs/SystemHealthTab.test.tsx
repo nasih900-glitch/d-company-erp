@@ -82,7 +82,8 @@ describe('Owner System Health presentation', () => {
     expect(markup).toContain('Backup proof');
     expect(markup).toContain('Not connected');
     expect(markup).toContain('Build 15');
-    expect(markup).toContain('2 outdated');
+    expect(markup).toContain('2 older builds among recent reports');
+    expect(markup).not.toContain('All current');
     expect(markup).toContain('Crashes');
     expect(markup).toContain('App not responding');
     expect(markup).toContain('API failures');

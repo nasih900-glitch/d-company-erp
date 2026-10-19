@@ -53,6 +53,11 @@ data class CanonicalReceiptPayment(
     @SerialName("recorded_by") val recordedBy: String? = null,
     @SerialName("recorded_by_name") val recordedByName: String? = null,
     @SerialName("created_at") val createdAt: String,
+    @SerialName("original_method") val originalMethod: String? = null,
+    @SerialName("original_tendered_minor") val originalTenderedMinor: Long? = null,
+    @SerialName("original_change_minor") val originalChangeMinor: Long? = null,
+    @SerialName("tender_correction_id") val tenderCorrectionId: String? = null,
+    @SerialName("tender_correction_recorded_at") val tenderCorrectionRecordedAt: String? = null,
 )
 
 @Serializable
@@ -193,4 +198,6 @@ data class CanonicalReceiptPage(
     val items: List<CanonicalReceipt>,
     @SerialName("next_cursor") val nextCursor: String? = null,
     @SerialName("has_more") val hasMore: Boolean,
+    @SerialName("date_filter_basis") val dateFilterBasis: String? = null,
+    @SerialName("shop_timezone") val shopTimezone: String? = null,
 )

@@ -1,3 +1,4 @@
+import { InlineShiftWorkspace } from '@/modules/pos/OrdersAndShiftsScreen';
 /**
  * Gaming screen — stations + sessions (live + demo).
  *
@@ -489,6 +490,19 @@ export function exactGamingCustomerIdForPhone(
   return requested && returned === requested ? customer!.id : null;
 }
 
+export function anonymousGamingPlayerLabel(friend: GamingParticipantDTO, participants: GamingParticipantDTO[]): string {
+  const firstJoins = new Map<string, string>();
+  for (const row of participants) {
+    if (row.customer_id) continue;
+    const identity = row.participant_identity_id ?? row.id;
+    const first = firstJoins.get(identity);
+    if (!first || row.joined_at < first) firstJoins.set(identity, row.joined_at);
+  }
+  const identities = [...firstJoins].sort((a, b) => a[1].localeCompare(b[1]) || a[0].localeCompare(b[0])).map(([id]) => id);
+  const ordinal = identities.indexOf(friend.participant_identity_id ?? friend.id);
+  return ordinal < 0 ? 'Added player · identity not retained' : `Added player ${ordinal + 1}`;
+}
+
 /** A live estimate only: Stop settles the authoritative charge on the server. */
 export function estimatedFriendControllerMinor(
   state: GamingParticipantStateDTO | undefined,
@@ -711,6 +725,7 @@ export default function GamingScreen() {
     }, gaming);
   }
   const [stations, setStations] = useState<StationDTO[]>([]);
+  const [inlineShift,setInlineShift]=useState(false);
   const [loading, setLoading] = useState(true);
   const [foregroundRefreshing, setForegroundRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1339,9 +1354,11 @@ export default function GamingScreen() {
   // disrupt the locally ticking countdown for sessions nothing happened to.
   useEffect(() => {
     if (!LIVE_MODE) return;
-    const unsubscribe = subscribeRealtime('gaming', () => { void loadRef.current('background'); });
+    const refreshBoard = () => { void loadRef.current('background'); };
+    const unsubscribe = subscribeRealtime('gaming', refreshBoard);
+    const unsubscribeShifts = subscribeRealtime('shifts', refreshBoard);
     const id = setInterval(() => { void loadRef.current('background'); }, GAMING_SESSIONS_POLL_MS);
-    return () => { unsubscribe(); clearInterval(id); };
+    return () => { unsubscribe(); unsubscribeShifts(); clearInterval(id); };
   }, []);
 
   // A transfer POST may commit even when its response is lost. Once a fresh
@@ -3554,9 +3571,9 @@ export default function GamingScreen() {
           className="mb-4 flex items-start gap-2 rounded-xl border border-accent-gold/40 bg-accent-gold/10 p-3 text-sm"
           role="status"
         >
-          <AlertCircle size={14} className="mt-0.5 shrink-0 text-accent-gold" />
+          <AlertCircle size={14} className="mt-0.5 shrink-0 text-fg" />
           <div>
-            <span className="font-semibold text-accent-gold">Latest refresh failed.</span>{' '}
+            <span className="font-semibold text-fg">Latest refresh failed.</span>{' '}
             <span className="text-fg-muted">
               {refreshFailure} The board verified at{' '}
               {new Date(lastVerifiedLoadAt).toLocaleString()} remains visible.
@@ -3577,9 +3594,9 @@ export default function GamingScreen() {
 
       {LIVE_MODE && addonCatalogError && (
         <div className="card mb-4 border-accent-gold/40 bg-accent-gold/10 text-sm flex items-start gap-2">
-          <AlertCircle size={14} className="mt-0.5 shrink-0 text-accent-gold"/>
+          <AlertCircle size={14} className="mt-0.5 shrink-0 text-fg"/>
           <div>
-            <div className="font-semibold text-accent-gold">Drinks and snacks are temporarily unavailable</div>
+            <div className="font-semibold text-fg">Drinks and snacks are temporarily unavailable</div>
             <div className="mt-1 text-fg-muted">
               {addonCatalogError} Existing sessions and saved items remain safe. Refresh before adding another item.
             </div>
@@ -3601,9 +3618,9 @@ export default function GamingScreen() {
 
       {!canManageStations && (
         <div className="card mb-4 border-accent-gold/40 bg-accent-gold/10 text-sm flex items-start gap-2">
-          <AlertCircle size={14} className="mt-0.5 shrink-0 text-accent-gold"/>
+          <AlertCircle size={14} className="mt-0.5 shrink-0 text-fg"/>
           <div>
-            <div className="font-semibold text-accent-gold">Gaming is view-only</div>
+            <div className="font-semibold text-fg">Gaming is view-only</div>
             <div className="mt-1 text-fg-muted">
               You can review stations and sessions, but this account does not have gaming.write. Ask an owner to enable the Gaming module for this role.
             </div>
@@ -3611,10 +3628,17 @@ export default function GamingScreen() {
         </div>
       )}
 
+      {inlineShift && <InlineShiftWorkspace onClose={() => {
+        setInlineShift(false);
+        // The child owns its own query state. Re-read this board's authoritative
+        // shift even when realtime delivery is unavailable; retain station drafts.
+        void loadRef.current('background');
+      }}/>}
+
       {LIVE_MODE && !loading && canManageStations && terminalReady
         && canStartOnSelectedTerminal && !currentShiftId && (
         <div className="card mb-4 border-accent-gold/40 bg-accent-gold/10 text-sm flex items-start gap-3" role="status">
-          <AlertCircle size={16} className="mt-0.5 shrink-0 text-accent-gold"/>
+          <AlertCircle size={16} className="mt-0.5 shrink-0 text-fg"/>
           <div className="min-w-0 flex-1">
             <div className="font-semibold text-fg">Open a shift before starting a session</div>
             <div className="mt-1 text-fg-muted">
@@ -3622,8 +3646,8 @@ export default function GamingScreen() {
             </div>
           </div>
           <button type="button" className="btn btn-ghost shrink-0 !py-1.5 text-xs"
-            onClick={() => navigate('/operations?tab=shifts')}>
-            Go to Shifts
+            onClick={() => setInlineShift(true)}>
+            Open shift here
           </button>
         </div>
       )}
@@ -3632,9 +3656,9 @@ export default function GamingScreen() {
         && GAMING_CENTRE_TERMINAL_POLICY.allowCrossTerminalPosHandoff
         && currentTerminal?.purpose === 'cafe_pos' && (
         <div className="card mb-4 border-accent-gold/40 bg-accent-gold/10 text-sm flex items-start gap-2">
-          <AlertCircle size={14} className="mt-0.5 shrink-0 text-accent-gold"/>
+          <AlertCircle size={14} className="mt-0.5 shrink-0 text-fg"/>
           <div>
-            <div className="font-semibold text-accent-gold">Gaming starts are unavailable on this device</div>
+            <div className="font-semibold text-fg">Gaming starts are unavailable on this device</div>
             <div className="mt-1 text-fg-muted">
               Sessions are monitored here, but this device is configured for counter sales. Ask an owner to enable Gaming or Combined mode before starting sessions.
             </div>
@@ -3669,9 +3693,9 @@ export default function GamingScreen() {
       {orphanPaidExtensionAttempts.length > 0 && (
         <div className="card mb-4 border-accent-gold/40 bg-accent-gold/10 text-sm">
           <div className="flex items-start gap-2">
-            <RefreshCw size={14} className="mt-0.5 shrink-0 text-accent-gold"/>
+            <RefreshCw size={14} className="mt-0.5 shrink-0 text-fg"/>
             <div className="min-w-0 flex-1">
-              <div className="font-semibold text-accent-gold">Saved paid extension awaiting confirmation</div>
+              <div className="font-semibold text-fg">Saved paid extension awaiting confirmation</div>
               <div className="mt-1 text-fg-muted">
                 The session is no longer on this board, but its immutable recovery receipt is still safe. Replay it once to confirm the original server result; no new charge or key will be created.
               </div>
@@ -3686,7 +3710,7 @@ export default function GamingScreen() {
                     </div>
                     <GamingMutationButton
                       canManageSessions={canManageStations}
-                      className="btn btn-ghost !py-1.5 border-accent-gold/50 text-accent-gold"
+                      className="btn btn-ghost !py-1.5 border-accent-gold/50 text-fg"
                       disabled={extendingSession !== null}
                       onClick={() => { void replayOrphanPaidExtension(attempt); }}
                     >
@@ -3704,7 +3728,7 @@ export default function GamingScreen() {
 
       {(savedGamingActions.error || savedGamingActions.attempts.length > 0) && (
         <div className="card mb-4 border-accent-gold/50 bg-accent-gold/10 text-sm">
-          <div className="font-semibold text-accent-gold">Gaming action needs confirmation</div>
+          <div className="font-semibold text-fg">Gaming action needs confirmation</div>
           {savedGamingActions.error ? (
             <p className="mt-1 text-accent-bad">{savedGamingActions.error} Do not clear browser data or start a replacement action.</p>
           ) : (
@@ -3921,14 +3945,14 @@ export default function GamingScreen() {
                 </div>
 
                 {session && (!sessionOwned || !canManageStations) && (
-                  <div className="mb-3 rounded-lg border border-accent-gold/30 bg-accent-gold/10 p-2.5 text-xs text-accent-gold flex items-start gap-1.5">
+                  <div className="mb-3 rounded-lg border border-accent-gold/30 bg-accent-gold/10 p-2.5 text-xs text-fg flex items-start gap-1.5">
                     <AlertCircle size={12} className="mt-0.5 shrink-0"/>
                     {sessionScopeMessage}
                   </div>
                 )}
 
                 {session && paidExtensionLifecycleBlocked && (
-                  <div className="mb-3 rounded-lg border border-accent-gold/40 bg-accent-gold/10 p-2.5 text-xs text-accent-gold">
+                  <div className="mb-3 rounded-lg border border-accent-gold/40 bg-accent-gold/10 p-2.5 text-xs text-fg">
                     <div className="flex items-start gap-1.5">
                       <AlertCircle size={12} className="mt-0.5 shrink-0"/>
                       <div className="min-w-0 flex-1">
@@ -3943,7 +3967,7 @@ export default function GamingScreen() {
                     {savedPaidExtension && (
                       <GamingMutationButton
                         canManageSessions={canManageStations}
-                        className="btn btn-ghost mt-2 w-full !py-1.5 border-accent-gold/50 text-accent-gold"
+                        className="btn btn-ghost mt-2 w-full !py-1.5 border-accent-gold/50 text-fg"
                         disabled={extendingSession !== null}
                         onClick={() => { void extendPackageSession(st, savedPaidExtension.packageId); }}
                       >
@@ -3994,7 +4018,7 @@ export default function GamingScreen() {
                         </div>
                       )}
                       {legacyBillingAmbiguous && (
-                        <div className="mt-2 pt-2 border-t border-bg-border text-xs text-accent-gold flex items-start gap-1.5">
+                        <div className="mt-2 pt-2 border-t border-bg-border text-xs text-fg flex items-start gap-1.5">
                           <AlertCircle size={12} className="mt-0.5 shrink-0"/>
                           Legacy billing mode could not be proven. The server preserves this locked total and will not infer any historical programme benefits.
                         </div>
@@ -4035,7 +4059,7 @@ export default function GamingScreen() {
                       }) || Boolean(me?.audit_access && !sessionOwned)) && (
                         <GamingMutationButton
                           canManageSessions={canManageStations}
-                          className="btn btn-ghost w-full border-accent-gold/50 text-accent-gold"
+                          className="btn btn-ghost w-full border-accent-gold/50 text-fg"
                           disabled={Boolean(
                             sendingToPos === st.id
                             || cancelling === st.id
@@ -4161,7 +4185,7 @@ export default function GamingScreen() {
                     )}
                     <div className="bg-bg-raised rounded-lg p-3 mb-3">
                       {session.status === 'paused' && (
-                        <div className="text-xs text-accent-gold flex items-center gap-1">
+                        <div className="text-xs text-fg flex items-center gap-1">
                           <Pause size={11}/> Paused
                         </div>
                       )}
@@ -4209,7 +4233,7 @@ export default function GamingScreen() {
                         const extensionOptions = eligiblePaidExtensions(packages, session, st.type);
                         return (
                           <div className={`mt-2 pt-2 border-t border-bg-border flex items-center justify-between gap-2 flex-wrap ${
-                            overtime ? 'text-accent-bad' : lowTime ? 'text-accent-gold' : 'text-fg-muted'
+                            overtime ? 'text-accent-bad' : lowTime ? 'text-fg' : 'text-fg-muted'
                           }`}>
                             <div className="flex items-center gap-1.5 text-sm font-mono font-bold">
                               <Timer size={13}/> {session.status === 'paused' ? 'Paused · ' : ''}{clock === null ? 'Clock unavailable' : overtime ? `+${clock} over` : `${clock} left`}
@@ -4224,13 +4248,13 @@ export default function GamingScreen() {
                                 </button>
                               )}
                               {session.billing_mode === 'legacy_ambiguous' ? (
-                                <span className="text-[10px] text-accent-gold">Owner review required</span>
+                                <span className="text-[10px] text-fg">Owner review required</span>
                               ) : session.billing_mode === 'package' ? (
                                 extensionOptions.length > 0 ? extensionOptions.map((ext) => (
                                   <GamingMutationButton
                                     canManageSessions={canManageStations}
                                     key={ext.id}
-                                    className="chip text-[10px] !border-accent-gold/50 text-accent-gold hover:!border-accent-gold"
+                                    className="chip text-[10px] !border-accent-gold/50 text-fg hover:!border-accent-gold"
                                     disabled={Boolean(
                                       extendingSession !== null
                                       || actionPending
@@ -4293,7 +4317,7 @@ export default function GamingScreen() {
                         <div className="mt-2 pt-2 border-t border-bg-border flex items-center justify-between gap-2 text-xs text-fg-muted">
                           <span className="flex items-center gap-1"><TimerOff size={12}/>{session.status === 'paused' ? 'Paused · no timer set' : 'No timer'}</span>
                           {session.billing_mode === 'legacy_ambiguous' ? (
-                            <span className="text-[10px] text-accent-gold">Owner review required</span>
+                            <span className="text-[10px] text-fg">Owner review required</span>
                           ) : (
                             <div className="flex gap-1">
                               {[30, 60, 120].map((m) => (
@@ -4320,7 +4344,7 @@ export default function GamingScreen() {
                           )}
                         </div>
                         {participantLoadError || !participantState ? (
-                          <p className="text-accent-gold">{participantLoadError ?? 'Friend attendance is loading. Refresh before changing it.'}</p>
+                          <p className="text-fg">{participantLoadError ?? 'Friend attendance is loading. Refresh before changing it.'}</p>
                         ) : (
                           <>
                             <div className="rounded-md bg-bg-raised px-2.5 py-2 text-fg-muted">
@@ -4338,8 +4362,8 @@ export default function GamingScreen() {
                               <div key={friend.id} className="flex items-start justify-between gap-2 rounded-md border border-bg-border px-2.5 py-2">
                                 <span className="min-w-0">
                                   <span className="block truncate font-medium">{friend.customer_id
-                                    ? (friendNames[friend.customer_id] ?? `Saved customer ${friend.customer_id.slice(0, 8)}`)
-                                    : (friend.guest_name?.trim() || `Guest player ${stableIdentity.slice(0, 4)}`)}</span>
+                                    ? (friendNames[friend.customer_id] ?? 'Saved customer · current name unavailable')
+                                    : (friend.guest_name?.trim() || anonymousGamingPlayerLabel(friend, participantState.participants))}</span>
                                   <span className="block text-[10px] text-fg-muted">
                                     Joined {formatShiftBusinessTime(friend.joined_at)}
                                     {friend.left_at ? ` · Left ${formatShiftBusinessTime(friend.left_at)}` : ' · Playing now'}
@@ -4369,12 +4393,12 @@ export default function GamingScreen() {
                               );
                             })}
                             {friendEstimate !== null && participantState.participants.length > 0 && (
-                              <p className="text-accent-gold">
+                              <p className="text-fg">
                                 Late-friend controller fee: {inr(friendEstimate)} at ₹30 per started cumulative hour, minimum ₹30 per friend · estimated combined session total: {amount === null ? 'unavailable' : inr(amount + friendEstimate)}. Paused play is excluded; End session confirms the final bill.
                               </p>
                             )}
                             {participantState.current_player_count >= participantState.max_player_count && (
-                              <p className="font-medium text-accent-gold">Capacity full: this PS5 session already has four players.</p>
+                              <p className="font-medium text-fg">Capacity full: this PS5 session already has four players.</p>
                             )}
                             {session.status === 'active'
                               && participantState.current_player_count < participantState.max_player_count && (
@@ -5285,7 +5309,7 @@ function StationForm({
     <Modal open onClose={onClose} title={isEdit ? `Edit ${station!.name}` : 'New gaming station'}>
       <form onSubmit={submit} className="space-y-3">
         {!hasPricingUnlock && LIVE_MODE && (
-          <div className="p-2.5 rounded-lg bg-accent-gold/10 border border-accent-gold/30 text-accent-gold text-xs">
+          <div className="p-2.5 rounded-lg bg-accent-gold/10 border border-accent-gold/30 text-fg text-xs">
             Station setup changes are pricing locked. Unlock pricing in Settings before creating, editing, or deleting stations.
           </div>
         )}

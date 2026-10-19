@@ -21,22 +21,10 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
 from app.models import (
-    Customer,
-    CustomerMembership,
-    MembershipPayment,
-    MembershipPaymentAttemptResolution,
-    MembershipPaymentCashCollection,
     MembershipPaymentCompletion,
-    MembershipPaymentProviderAction,
-    MembershipPaymentRequest,
-    MembershipRefund,
-    MembershipRefundAttemptRecovery,
-    MembershipRefundCashHandoff,
     MembershipRefundCompletion,
-    MembershipRefundProviderAction,
-    MembershipTier,
-    User,
 )
+from tests.integration.historical_seed import insert_historical
 
 _BACKEND_ROOT = Path(__file__).resolve().parents[2]
 
@@ -71,10 +59,7 @@ def _insert_schema_0034_branch(
 
     branch_id = uuid4()
     session.execute(
-        text(
-            "INSERT INTO branches (id, company_id, name) "
-            "VALUES (:id, :company_id, 'Main')"
-        ),
+        text("INSERT INTO branches (id, company_id, name) VALUES (:id, :company_id, 'Main')"),
         {"id": branch_id, "company_id": company_id},
     )
     return SimpleNamespace(id=branch_id)
@@ -107,9 +92,7 @@ def _disposable_database(prefix: str):
         pytest.skip("nested migration proof is restricted to local PostgreSQL")
     database_name = f"{prefix}_{uuid4().hex[:12]}"
     sync_source_url = source_url.set(drivername="postgresql+psycopg")
-    database_url = sync_source_url.set(database=database_name).render_as_string(
-        hide_password=False
-    )
+    database_url = sync_source_url.set(database=database_name).render_as_string(hide_password=False)
     admin_dsn = sync_source_url.set(
         drivername="postgresql",
         database="postgres",
@@ -130,9 +113,7 @@ def _disposable_database(prefix: str):
                     (database_name,),
                 )
                 admin.execute(
-                    sql.SQL("DROP DATABASE IF EXISTS {}").format(
-                        sql.Identifier(database_name)
-                    )
+                    sql.SQL("DROP DATABASE IF EXISTS {}").format(sql.Identifier(database_name))
                 )
         except Exception:
             pass
@@ -165,38 +146,53 @@ def _seed_base(session: Session) -> _Seed:
     session.flush()
     branch = _insert_schema_0034_branch(session, company_id=company.id)
     terminal_id = uuid4()
-    owner = User(
-        id=uuid4(),
-        company_id=company.id,
-        email=f"membership-guard-{uuid4().hex[:8]}@test.local",
-        name="Guard owner",
-        password_hash="not-used-by-migration-test",
-        status="active",
+    owner = insert_historical(
+        session,
+        "users",
+        {
+            "id": uuid4(),
+            "company_id": company.id,
+            "email": f"membership-guard-{uuid4().hex[:8]}@test.local",
+            "name": "Guard owner",
+            "password_hash": "not-used-by-migration-test",
+            "status": "active",
+            "failed_login_count": 0,
+        },
     )
-    customer = Customer(
-        id=uuid4(),
-        company_id=company.id,
-        name="Guard customer",
-        phone=f"6{uuid4().int % 10**9:09d}",
-        total_spent_minor=0,
+    customer = insert_historical(
+        session,
+        "customers",
+        {
+            "id": uuid4(),
+            "company_id": company.id,
+            "name": "Guard customer",
+            "phone": f"6{uuid4().int % 10**9:09d}",
+            "total_spent_minor": 0,
+            "visit_count": 0,
+            "loyalty_points": 0,
+            "lifetime_gaming_points_earned": 0,
+        },
     )
-    tier = MembershipTier(
-        id=uuid4(),
-        company_id=company.id,
-        code=f"G{uuid4().hex[:7].upper()}",
-        name="Guard monthly tier",
-        monthly_price_minor=199_900,
-        annual_price_minor=None,
-        food_discount_pct=0,
-        gaming_discount_pct=0,
-        hookah_discount_pct=0,
-        point_multiplier=1,
-        free_gaming_minutes_per_week=0,
-        free_hookah_per_month=0,
-        priority_booking=False,
-        sort_order=0,
+    tier = insert_historical(
+        session,
+        "membership_tiers",
+        {
+            "id": uuid4(),
+            "company_id": company.id,
+            "code": f"G{uuid4().hex[:7].upper()}",
+            "name": "Guard monthly tier",
+            "monthly_price_minor": 199_900,
+            "annual_price_minor": None,
+            "food_discount_pct": 0,
+            "gaming_discount_pct": 0,
+            "hookah_discount_pct": 0,
+            "point_multiplier": 1,
+            "free_gaming_minutes_per_week": 0,
+            "free_hookah_per_month": 0,
+            "priority_booking": False,
+            "sort_order": 0,
+        },
     )
-    session.add_all([owner, customer, tier])
     session.flush()
     # The current Terminal ORM includes ``purpose`` from revision 0052, while
     # these rollback proofs intentionally hold PostgreSQL at 0034/0035/0046.
@@ -254,41 +250,47 @@ def _write_cash_request_action(
     seed: _Seed,
     *,
     label: str,
-) -> tuple[MembershipPaymentRequest, MembershipPaymentCashCollection]:
-    request = MembershipPaymentRequest(
-        id=uuid4(),
-        company_id=seed.company_id,
-        customer_id=seed.customer_id,
-        tier_id=seed.tier_id,
-        branch_id=seed.branch_id,
-        terminal_id=seed.terminal_id,
-        shift_id=seed.shift_id,
-        billing_cycle="monthly",
-        method="cash",
-        amount_minor=199_900,
-        customer_name_snapshot="Guard customer",
-        customer_phone_snapshot="6000000000",
-        tier_code_snapshot="GUARD",
-        tier_name_snapshot="Guard monthly tier",
-        accepted_at=seed.now,
-        prepared_by=seed.owner_id,
-        client_action_id=f"{label}:prepare:{uuid4()}",
-        idempotency_key=f"{label}:prepare:{uuid4()}",
+) -> tuple[SimpleNamespace, SimpleNamespace]:
+    request = insert_historical(
+        session,
+        "membership_payment_requests",
+        {
+            "id": uuid4(),
+            "company_id": seed.company_id,
+            "customer_id": seed.customer_id,
+            "tier_id": seed.tier_id,
+            "branch_id": seed.branch_id,
+            "terminal_id": seed.terminal_id,
+            "shift_id": seed.shift_id,
+            "billing_cycle": "monthly",
+            "method": "cash",
+            "amount_minor": 199_900,
+            "customer_name_snapshot": "Guard customer",
+            "customer_phone_snapshot": "6000000000",
+            "tier_code_snapshot": "GUARD",
+            "tier_name_snapshot": "Guard monthly tier",
+            "accepted_at": seed.now,
+            "prepared_by": seed.owner_id,
+            "client_action_id": f"{label}:prepare:{uuid4()}",
+            "idempotency_key": f"{label}:prepare:{uuid4()}",
+        },
     )
-    session.add(request)
     session.flush()
-    action = MembershipPaymentCashCollection(
-        id=uuid4(),
-        company_id=seed.company_id,
-        request_id=request.id,
-        branch_id=seed.branch_id,
-        terminal_id=seed.terminal_id,
-        shift_id=seed.shift_id,
-        started_at=seed.now,
-        started_by=seed.owner_id,
-        idempotency_key=f"{label}:action:{uuid4()}",
+    action = insert_historical(
+        session,
+        "membership_payment_cash_collections",
+        {
+            "id": uuid4(),
+            "company_id": seed.company_id,
+            "request_id": request.id,
+            "branch_id": seed.branch_id,
+            "terminal_id": seed.terminal_id,
+            "shift_id": seed.shift_id,
+            "started_at": seed.now,
+            "started_by": seed.owner_id,
+            "idempotency_key": f"{label}:action:{uuid4()}",
+        },
     )
-    session.add(action)
     session.flush()
     return request, action
 
@@ -300,67 +302,76 @@ def _write_settled_cash_payment(
     label: str,
 ) -> _PaymentWorkflow:
     request, action = _write_cash_request_action(session, seed, label=label)
-    completion = MembershipPaymentCompletion(
-        id=uuid4(),
-        company_id=seed.company_id,
-        request_id=request.id,
-        cash_collection_id=action.id,
-        provider_action_id=None,
-        branch_id=seed.branch_id,
-        terminal_id=seed.terminal_id,
-        shift_id=seed.shift_id,
-        method="cash",
-        amount_minor=199_900,
-        completed_at=seed.now,
-        completed_by=seed.owner_id,
-        external_reference=None,
-        provider_evidence_reconciled=True,
-        evidence_occurred_at=seed.now,
-        evidence_time_untrusted=False,
-        action_takeover_confirmed=False,
-        action_takeover_reason=None,
-        idempotency_key=f"{label}:completion:{uuid4()}",
+    completion = insert_historical(
+        session,
+        "membership_payment_completions",
+        {
+            "id": uuid4(),
+            "company_id": seed.company_id,
+            "request_id": request.id,
+            "cash_collection_id": action.id,
+            "provider_action_id": None,
+            "branch_id": seed.branch_id,
+            "terminal_id": seed.terminal_id,
+            "shift_id": seed.shift_id,
+            "method": "cash",
+            "amount_minor": 199_900,
+            "completed_at": seed.now,
+            "completed_by": seed.owner_id,
+            "external_reference": None,
+            "provider_evidence_reconciled": True,
+            "evidence_occurred_at": seed.now,
+            "evidence_time_untrusted": False,
+            "action_takeover_confirmed": False,
+            "action_takeover_reason": None,
+            "idempotency_key": f"{label}:completion:{uuid4()}",
+        },
     )
-    session.add(completion)
     session.flush()
-    membership = CustomerMembership(
-        id=uuid4(),
-        customer_id=seed.customer_id,
-        tier_id=seed.tier_id,
-        billing_cycle="monthly",
-        starts_at=seed.now,
-        expires_at=seed.now + timedelta(days=30),
-        auto_renew=False,
-        amount_paid_minor=199_900,
+    membership = insert_historical(
+        session,
+        "customer_memberships",
+        {
+            "id": uuid4(),
+            "customer_id": seed.customer_id,
+            "tier_id": seed.tier_id,
+            "billing_cycle": "monthly",
+            "starts_at": seed.now,
+            "expires_at": seed.now + timedelta(days=30),
+            "auto_renew": False,
+            "amount_paid_minor": 199_900,
+        },
     )
-    session.add(membership)
     session.flush()
-    payment = MembershipPayment(
-        id=uuid4(),
-        company_id=seed.company_id,
-        membership_id=membership.id,
-        request_id=request.id,
-        completion_id=completion.id,
-        branch_id=seed.branch_id,
-        terminal_id=seed.terminal_id,
-        shift_id=seed.shift_id,
-        method="cash",
-        amount_minor=199_900,
-        paid_at=seed.now,
-        created_by=seed.owner_id,
-        idempotency_key=f"{label}:payment:{uuid4()}",
-        receipt_no=f"M/GUARD/26-27/{uuid4().hex[:8]}",
-        receipt_fiscal_year="2026-27",
-        receipt_issued_at=seed.now,
-        external_reference=None,
-        provider_evidence_reconciled=True,
-        evidence_occurred_at=seed.now,
-        evidence_time_untrusted=False,
-        customer_spend_reconciled=False,
-        action_takeover_confirmed=False,
-        action_takeover_reason=None,
+    payment = insert_historical(
+        session,
+        "membership_payments",
+        {
+            "id": uuid4(),
+            "company_id": seed.company_id,
+            "membership_id": membership.id,
+            "request_id": request.id,
+            "completion_id": completion.id,
+            "branch_id": seed.branch_id,
+            "terminal_id": seed.terminal_id,
+            "shift_id": seed.shift_id,
+            "method": "cash",
+            "amount_minor": 199_900,
+            "paid_at": seed.now,
+            "created_by": seed.owner_id,
+            "idempotency_key": f"{label}:payment:{uuid4()}",
+            "receipt_no": f"M/GUARD/26-27/{uuid4().hex[:8]}",
+            "receipt_fiscal_year": "2026-27",
+            "receipt_issued_at": seed.now,
+            "external_reference": None,
+            "provider_evidence_reconciled": True,
+            "evidence_occurred_at": seed.now,
+            "evidence_time_untrusted": False,
+            "customer_spend_reconciled": False,
+            "action_takeover_confirmed": False,
+            "action_takeover_reason": None,
+        },
     )
-    session.add(payment)
     session.flush()
     return _PaymentWorkflow(
         request_id=request.id,
@@ -377,104 +388,119 @@ def _write_settled_provider_payment(
     *,
     label: str,
 ) -> _PaymentWorkflow:
-    request = MembershipPaymentRequest(
-        id=uuid4(),
-        company_id=seed.company_id,
-        customer_id=seed.customer_id,
-        tier_id=seed.tier_id,
-        branch_id=seed.branch_id,
-        terminal_id=seed.terminal_id,
-        shift_id=seed.shift_id,
-        billing_cycle="monthly",
-        method="upi",
-        amount_minor=199_900,
-        customer_name_snapshot="Guard customer",
-        customer_phone_snapshot="6000000000",
-        tier_code_snapshot="GUARD",
-        tier_name_snapshot="Guard monthly tier",
-        accepted_at=seed.now,
-        prepared_by=seed.owner_id,
-        client_action_id=f"{label}:prepare:{uuid4()}",
-        idempotency_key=f"{label}:prepare:{uuid4()}",
+    request = insert_historical(
+        session,
+        "membership_payment_requests",
+        {
+            "id": uuid4(),
+            "company_id": seed.company_id,
+            "customer_id": seed.customer_id,
+            "tier_id": seed.tier_id,
+            "branch_id": seed.branch_id,
+            "terminal_id": seed.terminal_id,
+            "shift_id": seed.shift_id,
+            "billing_cycle": "monthly",
+            "method": "upi",
+            "amount_minor": 199_900,
+            "customer_name_snapshot": "Guard customer",
+            "customer_phone_snapshot": "6000000000",
+            "tier_code_snapshot": "GUARD",
+            "tier_name_snapshot": "Guard monthly tier",
+            "accepted_at": seed.now,
+            "prepared_by": seed.owner_id,
+            "client_action_id": f"{label}:prepare:{uuid4()}",
+            "idempotency_key": f"{label}:prepare:{uuid4()}",
+        },
     )
-    session.add(request)
     session.flush()
-    action = MembershipPaymentProviderAction(
-        id=uuid4(),
-        company_id=seed.company_id,
-        request_id=request.id,
-        branch_id=seed.branch_id,
-        terminal_id=seed.terminal_id,
-        shift_id=seed.shift_id,
-        method="upi",
-        started_at=seed.now,
-        started_by=seed.owner_id,
-        idempotency_key=f"{label}:action:{uuid4()}",
+    action = insert_historical(
+        session,
+        "membership_payment_provider_actions",
+        {
+            "id": uuid4(),
+            "company_id": seed.company_id,
+            "request_id": request.id,
+            "branch_id": seed.branch_id,
+            "terminal_id": seed.terminal_id,
+            "shift_id": seed.shift_id,
+            "method": "upi",
+            "started_at": seed.now,
+            "started_by": seed.owner_id,
+            "idempotency_key": f"{label}:action:{uuid4()}",
+        },
     )
-    session.add(action)
     session.flush()
     external_reference = f"UPI-{uuid4().hex}"
-    completion = MembershipPaymentCompletion(
-        id=uuid4(),
-        company_id=seed.company_id,
-        request_id=request.id,
-        cash_collection_id=None,
-        provider_action_id=action.id,
-        branch_id=seed.branch_id,
-        terminal_id=seed.terminal_id,
-        shift_id=seed.shift_id,
-        method="upi",
-        amount_minor=199_900,
-        completed_at=seed.now,
-        completed_by=seed.owner_id,
-        external_reference=external_reference,
-        provider_evidence_reconciled=True,
-        evidence_occurred_at=seed.now,
-        evidence_time_untrusted=False,
-        action_takeover_confirmed=False,
-        action_takeover_reason=None,
-        idempotency_key=f"{label}:completion:{uuid4()}",
+    completion = insert_historical(
+        session,
+        "membership_payment_completions",
+        {
+            "id": uuid4(),
+            "company_id": seed.company_id,
+            "request_id": request.id,
+            "cash_collection_id": None,
+            "provider_action_id": action.id,
+            "branch_id": seed.branch_id,
+            "terminal_id": seed.terminal_id,
+            "shift_id": seed.shift_id,
+            "method": "upi",
+            "amount_minor": 199_900,
+            "completed_at": seed.now,
+            "completed_by": seed.owner_id,
+            "external_reference": external_reference,
+            "provider_evidence_reconciled": True,
+            "evidence_occurred_at": seed.now,
+            "evidence_time_untrusted": False,
+            "action_takeover_confirmed": False,
+            "action_takeover_reason": None,
+            "idempotency_key": f"{label}:completion:{uuid4()}",
+        },
     )
-    session.add(completion)
     session.flush()
-    membership = CustomerMembership(
-        id=uuid4(),
-        customer_id=seed.customer_id,
-        tier_id=seed.tier_id,
-        billing_cycle="monthly",
-        starts_at=seed.now,
-        expires_at=seed.now + timedelta(days=30),
-        auto_renew=False,
-        amount_paid_minor=199_900,
+    membership = insert_historical(
+        session,
+        "customer_memberships",
+        {
+            "id": uuid4(),
+            "customer_id": seed.customer_id,
+            "tier_id": seed.tier_id,
+            "billing_cycle": "monthly",
+            "starts_at": seed.now,
+            "expires_at": seed.now + timedelta(days=30),
+            "auto_renew": False,
+            "amount_paid_minor": 199_900,
+        },
     )
-    session.add(membership)
     session.flush()
-    payment = MembershipPayment(
-        id=uuid4(),
-        company_id=seed.company_id,
-        membership_id=membership.id,
-        request_id=request.id,
-        completion_id=completion.id,
-        branch_id=seed.branch_id,
-        terminal_id=seed.terminal_id,
-        shift_id=seed.shift_id,
-        method="upi",
-        amount_minor=199_900,
-        paid_at=seed.now,
-        created_by=seed.owner_id,
-        idempotency_key=f"{label}:payment:{uuid4()}",
-        receipt_no=f"M/GUARD/26-27/{uuid4().hex[:8]}",
-        receipt_fiscal_year="2026-27",
-        receipt_issued_at=seed.now,
-        external_reference=external_reference,
-        provider_evidence_reconciled=True,
-        evidence_occurred_at=seed.now,
-        evidence_time_untrusted=False,
-        customer_spend_reconciled=False,
-        action_takeover_confirmed=False,
-        action_takeover_reason=None,
+    payment = insert_historical(
+        session,
+        "membership_payments",
+        {
+            "id": uuid4(),
+            "company_id": seed.company_id,
+            "membership_id": membership.id,
+            "request_id": request.id,
+            "completion_id": completion.id,
+            "branch_id": seed.branch_id,
+            "terminal_id": seed.terminal_id,
+            "shift_id": seed.shift_id,
+            "method": "upi",
+            "amount_minor": 199_900,
+            "paid_at": seed.now,
+            "created_by": seed.owner_id,
+            "idempotency_key": f"{label}:payment:{uuid4()}",
+            "receipt_no": f"M/GUARD/26-27/{uuid4().hex[:8]}",
+            "receipt_fiscal_year": "2026-27",
+            "receipt_issued_at": seed.now,
+            "external_reference": external_reference,
+            "provider_evidence_reconciled": True,
+            "evidence_occurred_at": seed.now,
+            "evidence_time_untrusted": False,
+            "customer_spend_reconciled": False,
+            "action_takeover_confirmed": False,
+            "action_takeover_reason": None,
+        },
     )
-    session.add(payment)
     session.flush()
     return _PaymentWorkflow(
         request_id=request.id,
@@ -486,114 +512,121 @@ def _write_settled_provider_payment(
 
 
 def _write_payment_request(session: Session, seed: _Seed) -> None:
-    session.add(
-        MembershipPaymentRequest(
-            id=uuid4(),
-            company_id=seed.company_id,
-            customer_id=seed.customer_id,
-            tier_id=seed.tier_id,
-            branch_id=seed.branch_id,
-            terminal_id=seed.terminal_id,
-            shift_id=seed.shift_id,
-            billing_cycle="monthly",
-            method="cash",
-            amount_minor=199_900,
-            customer_name_snapshot="Guard customer",
-            customer_phone_snapshot="6000000000",
-            tier_code_snapshot="GUARD",
-            tier_name_snapshot="Guard monthly tier",
-            accepted_at=seed.now,
-            prepared_by=seed.owner_id,
-            client_action_id=f"membership-prepare:{uuid4()}",
-            idempotency_key=f"membership-prepare:{uuid4()}",
-        )
+    insert_historical(
+        session,
+        "membership_payment_requests",
+        {
+            "id": uuid4(),
+            "company_id": seed.company_id,
+            "customer_id": seed.customer_id,
+            "tier_id": seed.tier_id,
+            "branch_id": seed.branch_id,
+            "terminal_id": seed.terminal_id,
+            "shift_id": seed.shift_id,
+            "billing_cycle": "monthly",
+            "method": "cash",
+            "amount_minor": 199_900,
+            "customer_name_snapshot": "Guard customer",
+            "customer_phone_snapshot": "6000000000",
+            "tier_code_snapshot": "GUARD",
+            "tier_name_snapshot": "Guard monthly tier",
+            "accepted_at": seed.now,
+            "prepared_by": seed.owner_id,
+            "client_action_id": f"membership-prepare:{uuid4()}",
+            "idempotency_key": f"membership-prepare:{uuid4()}",
+        },
     )
 
 
 def _write_attempt_resolution(session: Session, seed: _Seed) -> None:
-    session.add(
-        MembershipPaymentAttemptResolution(
-            id=uuid4(),
-            company_id=seed.company_id,
-            customer_id=seed.customer_id,
-            tier_id=seed.tier_id,
-            branch_id=seed.branch_id,
-            terminal_id=seed.terminal_id,
-            shift_id=seed.shift_id,
-            original_client_action_id=f"membership-subscribe:{uuid4()}",
-            paid_via="cash",
-            expected_amount_minor=199_900,
-            resolution="cash_returned",
-            reason="Rejected legacy attempt returned",
-            external_reference=None,
-            provider_evidence_reconciled=True,
-            cash_return_confirmed=True,
-            resolved_at=seed.now,
-            resolved_by=seed.owner_id,
-            idempotency_key=f"membership-attempt-resolution:{uuid4()}",
-        )
+    insert_historical(
+        session,
+        "membership_payment_attempt_resolutions",
+        {
+            "id": uuid4(),
+            "company_id": seed.company_id,
+            "customer_id": seed.customer_id,
+            "tier_id": seed.tier_id,
+            "branch_id": seed.branch_id,
+            "terminal_id": seed.terminal_id,
+            "shift_id": seed.shift_id,
+            "original_client_action_id": f"membership-subscribe:{uuid4()}",
+            "paid_via": "cash",
+            "expected_amount_minor": 199_900,
+            "resolution": "cash_returned",
+            "reason": "Rejected legacy attempt returned",
+            "external_reference": None,
+            "provider_evidence_reconciled": True,
+            "cash_return_confirmed": True,
+            "resolved_at": seed.now,
+            "resolved_by": seed.owner_id,
+            "idempotency_key": f"membership-attempt-resolution:{uuid4()}",
+        },
     )
 
 
 def _write_provider_refund_action(session: Session, seed: _Seed) -> None:
-    payment = _write_settled_provider_payment(
-        session, seed, label="downgrade-provider-refund"
+    payment = _write_settled_provider_payment(session, seed, label="downgrade-provider-refund")
+    refund = insert_historical(
+        session,
+        "membership_refunds",
+        {
+            "id": uuid4(),
+            "company_id": seed.company_id,
+            "payment_id": payment.payment_id,
+            "branch_id": seed.branch_id,
+            "terminal_id": seed.terminal_id,
+            "shift_id": seed.shift_id,
+            "method": "upi",
+            "amount_minor": 199_900,
+            "accepted_at": seed.now,
+            "approved_by": seed.owner_id,
+            "idempotency_key": f"membership-refund:{uuid4()}",
+            "reason": "Provider refund recovery proof",
+        },
     )
-    refund = MembershipRefund(
-        id=uuid4(),
-        company_id=seed.company_id,
-        payment_id=payment.payment_id,
-        branch_id=seed.branch_id,
-        terminal_id=seed.terminal_id,
-        shift_id=seed.shift_id,
-        method="upi",
-        amount_minor=199_900,
-        accepted_at=seed.now,
-        approved_by=seed.owner_id,
-        idempotency_key=f"membership-refund:{uuid4()}",
-        reason="Provider refund recovery proof",
-    )
-    session.add(refund)
     session.flush()
-    session.add(
-        MembershipRefundProviderAction(
-            id=uuid4(),
-            company_id=seed.company_id,
-            refund_id=refund.id,
-            branch_id=seed.branch_id,
-            terminal_id=seed.terminal_id,
-            shift_id=seed.shift_id,
-            method="upi",
-            started_at=seed.now,
-            started_by=seed.owner_id,
-            idempotency_key=f"membership-refund-provider-action:{uuid4()}",
-        )
+    insert_historical(
+        session,
+        "membership_refund_provider_actions",
+        {
+            "id": uuid4(),
+            "company_id": seed.company_id,
+            "refund_id": refund.id,
+            "branch_id": seed.branch_id,
+            "terminal_id": seed.terminal_id,
+            "shift_id": seed.shift_id,
+            "method": "upi",
+            "started_at": seed.now,
+            "started_by": seed.owner_id,
+            "idempotency_key": f"membership-refund-provider-action:{uuid4()}",
+        },
     )
 
 
 def _write_refund_attempt_recovery(session: Session, seed: _Seed) -> None:
-    payment = _write_settled_cash_payment(
-        session, seed, label="downgrade-refund-recovery"
-    )
-    session.add(
-        MembershipRefundAttemptRecovery(
-            id=uuid4(),
-            company_id=seed.company_id,
-            customer_id=seed.customer_id,
-            membership_id=payment.membership_id,
-            payment_id=payment.payment_id,
-            source_branch_id=seed.branch_id,
-            source_terminal_id=seed.terminal_id,
-            source_shift_id=seed.shift_id,
-            original_client_action_id=f"membership-refund:{uuid4()}",
-            paid_via="cash",
-            expected_amount_minor=199_900,
-            captured_at=seed.now,
-            captured_time_untrusted=False,
-            registered_at=seed.now,
-            registered_by=seed.owner_id,
-            idempotency_key=f"membership-refund-attempt-register:{uuid4()}",
-        )
+    payment = _write_settled_cash_payment(session, seed, label="downgrade-refund-recovery")
+    insert_historical(
+        session,
+        "membership_refund_attempt_recoveries",
+        {
+            "id": uuid4(),
+            "company_id": seed.company_id,
+            "customer_id": seed.customer_id,
+            "membership_id": payment.membership_id,
+            "payment_id": payment.payment_id,
+            "source_branch_id": seed.branch_id,
+            "source_terminal_id": seed.terminal_id,
+            "source_shift_id": seed.shift_id,
+            "original_client_action_id": f"membership-refund:{uuid4()}",
+            "paid_via": "cash",
+            "expected_amount_minor": 199_900,
+            "captured_at": seed.now,
+            "captured_time_untrusted": False,
+            "registered_at": seed.now,
+            "registered_by": seed.owner_id,
+            "idempotency_key": f"membership-refund-attempt-register:{uuid4()}",
+        },
     )
 
 
@@ -606,17 +639,20 @@ def test_0035_preserves_legacy_null_links_but_enforces_all_future_writes() -> No
         try:
             with Session(engine) as session:
                 seed = _seed_base(session)
-                legacy_membership = CustomerMembership(
-                    id=uuid4(),
-                    customer_id=seed.customer_id,
-                    tier_id=seed.tier_id,
-                    billing_cycle="monthly",
-                    starts_at=seed.now,
-                    expires_at=seed.now + timedelta(days=30),
-                    auto_renew=False,
-                    amount_paid_minor=199_900,
+                legacy_membership = insert_historical(
+                    session,
+                    "customer_memberships",
+                    {
+                        "id": uuid4(),
+                        "customer_id": seed.customer_id,
+                        "tier_id": seed.tier_id,
+                        "billing_cycle": "monthly",
+                        "starts_at": seed.now,
+                        "expires_at": seed.now + timedelta(days=30),
+                        "auto_renew": False,
+                        "amount_paid_minor": 199_900,
+                    },
                 )
-                session.add(legacy_membership)
                 session.flush()
                 legacy_payment_id = uuid4()
                 session.execute(
@@ -665,27 +701,31 @@ def test_0035_preserves_legacy_null_links_but_enforces_all_future_writes() -> No
                 ).one()
                 assert legacy_links.request_id is None
                 assert legacy_links.completion_id is None
-                assert session.scalar(
-                    text(
-                        "SELECT convalidated FROM pg_constraint "
-                        "WHERE conname = 'ck_membership_payment_workflow_linkage'"
+                assert (
+                    session.scalar(
+                        text(
+                            "SELECT convalidated FROM pg_constraint "
+                            "WHERE conname = 'ck_membership_payment_workflow_linkage'"
+                        )
                     )
-                ) is False
+                    is False
+                )
 
-                valid = _write_settled_cash_payment(
-                    session, seed, label="valid-linkage"
+                valid = _write_settled_cash_payment(session, seed, label="valid-linkage")
+                invalid_membership = insert_historical(
+                    session,
+                    "customer_memberships",
+                    {
+                        "id": uuid4(),
+                        "customer_id": seed.customer_id,
+                        "tier_id": seed.tier_id,
+                        "billing_cycle": "monthly",
+                        "starts_at": seed.now,
+                        "expires_at": seed.now + timedelta(days=30),
+                        "auto_renew": False,
+                        "amount_paid_minor": 199_900,
+                    },
                 )
-                invalid_membership = CustomerMembership(
-                    id=uuid4(),
-                    customer_id=seed.customer_id,
-                    tier_id=seed.tier_id,
-                    billing_cycle="monthly",
-                    starts_at=seed.now,
-                    expires_at=seed.now + timedelta(days=30),
-                    auto_renew=False,
-                    amount_paid_minor=199_900,
-                )
-                session.add(invalid_membership)
                 session.commit()
                 invalid_membership_id = invalid_membership.id
 
@@ -701,9 +741,7 @@ def test_0035_preserves_legacy_null_links_but_enforces_all_future_writes() -> No
                 )
                 connection.commit()
                 try:
-                    with pytest.raises(
-                        DBAPIError, match="ck_membership_payment_workflow_linkage"
-                    ):
+                    with pytest.raises(DBAPIError, match="ck_membership_payment_workflow_linkage"):
                         connection.execute(
                             text(
                                 """
@@ -807,151 +845,163 @@ def test_0035_completion_actions_must_match_their_guarded_roots() -> None:
                 payment_request_a, payment_action_a = _write_cash_request_action(
                     session, seed, label="payment-a"
                 )
-                _, payment_action_b = _write_cash_request_action(
-                    session, seed, label="payment-b"
-                )
+                _, payment_action_b = _write_cash_request_action(session, seed, label="payment-b")
                 payment_request_a_id = payment_request_a.id
                 payment_action_a_id = payment_action_a.id
                 payment_action_b_id = payment_action_b.id
                 session.commit()
 
             with Session(engine) as session:
-                session.add(
-                    MembershipPaymentCompletion(
-                        id=uuid4(),
-                        company_id=seed.company_id,
-                        request_id=payment_request_a_id,
-                        cash_collection_id=payment_action_b_id,
-                        provider_action_id=None,
-                        branch_id=seed.branch_id,
-                        terminal_id=seed.terminal_id,
-                        shift_id=seed.shift_id,
-                        method="cash",
-                        amount_minor=199_900,
-                        completed_at=seed.now,
-                        completed_by=seed.owner_id,
-                        external_reference=None,
-                        provider_evidence_reconciled=True,
-                        evidence_occurred_at=seed.now,
-                        evidence_time_untrusted=False,
-                        action_takeover_confirmed=False,
-                        action_takeover_reason=None,
-                        idempotency_key=f"cross-payment-action:{uuid4()}",
+                with pytest.raises(DBAPIError, match="inconsistent completion provenance"):
+                    insert_historical(
+                        session,
+                        "membership_payment_completions",
+                        {
+                            "id": uuid4(),
+                            "company_id": seed.company_id,
+                            "request_id": payment_request_a_id,
+                            "cash_collection_id": payment_action_b_id,
+                            "provider_action_id": None,
+                            "branch_id": seed.branch_id,
+                            "terminal_id": seed.terminal_id,
+                            "shift_id": seed.shift_id,
+                            "method": "cash",
+                            "amount_minor": 199_900,
+                            "completed_at": seed.now,
+                            "completed_by": seed.owner_id,
+                            "external_reference": None,
+                            "provider_evidence_reconciled": True,
+                            "evidence_occurred_at": seed.now,
+                            "evidence_time_untrusted": False,
+                            "action_takeover_confirmed": False,
+                            "action_takeover_reason": None,
+                            "idempotency_key": f"cross-payment-action:{uuid4()}",
+                        },
                     )
-                )
-                with pytest.raises(
-                    DBAPIError, match="inconsistent completion provenance"
-                ):
-                    session.commit()
                 session.rollback()
 
             with Session(engine) as session:
-                settled_a = _write_settled_cash_payment(
-                    session, seed, label="refund-payment-a"
+                settled_a = _write_settled_cash_payment(session, seed, label="refund-payment-a")
+                settled_b = _write_settled_cash_payment(session, seed, label="refund-payment-b")
+                refund_a = insert_historical(
+                    session,
+                    "membership_refunds",
+                    {
+                        "id": uuid4(),
+                        "company_id": seed.company_id,
+                        "payment_id": settled_a.payment_id,
+                        "branch_id": seed.branch_id,
+                        "terminal_id": seed.terminal_id,
+                        "shift_id": seed.shift_id,
+                        "method": "cash",
+                        "amount_minor": 199_900,
+                        "accepted_at": seed.now,
+                        "approved_by": seed.owner_id,
+                        "idempotency_key": f"refund-a:{uuid4()}",
+                        "reason": "Exact action pair regression A",
+                    },
                 )
-                settled_b = _write_settled_cash_payment(
-                    session, seed, label="refund-payment-b"
+                refund_b = insert_historical(
+                    session,
+                    "membership_refunds",
+                    {
+                        "id": uuid4(),
+                        "company_id": seed.company_id,
+                        "payment_id": settled_b.payment_id,
+                        "branch_id": seed.branch_id,
+                        "terminal_id": seed.terminal_id,
+                        "shift_id": seed.shift_id,
+                        "method": "cash",
+                        "amount_minor": 199_900,
+                        "accepted_at": seed.now,
+                        "approved_by": seed.owner_id,
+                        "idempotency_key": f"refund-b:{uuid4()}",
+                        "reason": "Exact action pair regression B",
+                    },
                 )
-                refund_a = MembershipRefund(
-                    id=uuid4(),
-                    company_id=seed.company_id,
-                    payment_id=settled_a.payment_id,
-                    branch_id=seed.branch_id,
-                    terminal_id=seed.terminal_id,
-                    shift_id=seed.shift_id,
-                    method="cash",
-                    amount_minor=199_900,
-                    accepted_at=seed.now,
-                    approved_by=seed.owner_id,
-                    idempotency_key=f"refund-a:{uuid4()}",
-                    reason="Exact action pair regression A",
-                )
-                refund_b = MembershipRefund(
-                    id=uuid4(),
-                    company_id=seed.company_id,
-                    payment_id=settled_b.payment_id,
-                    branch_id=seed.branch_id,
-                    terminal_id=seed.terminal_id,
-                    shift_id=seed.shift_id,
-                    method="cash",
-                    amount_minor=199_900,
-                    accepted_at=seed.now,
-                    approved_by=seed.owner_id,
-                    idempotency_key=f"refund-b:{uuid4()}",
-                    reason="Exact action pair regression B",
-                )
-                session.add_all([refund_a, refund_b])
                 session.flush()
-                handoff_a = MembershipRefundCashHandoff(
-                    id=uuid4(),
-                    company_id=seed.company_id,
-                    refund_id=refund_a.id,
-                    branch_id=seed.branch_id,
-                    terminal_id=seed.terminal_id,
-                    shift_id=seed.shift_id,
-                    started_at=seed.now,
-                    started_by=seed.owner_id,
-                    idempotency_key=f"refund-action-a:{uuid4()}",
+                handoff_a = insert_historical(
+                    session,
+                    "membership_refund_cash_handoffs",
+                    {
+                        "id": uuid4(),
+                        "company_id": seed.company_id,
+                        "refund_id": refund_a.id,
+                        "branch_id": seed.branch_id,
+                        "terminal_id": seed.terminal_id,
+                        "shift_id": seed.shift_id,
+                        "started_at": seed.now,
+                        "started_by": seed.owner_id,
+                        "idempotency_key": f"refund-action-a:{uuid4()}",
+                    },
                 )
-                handoff_b = MembershipRefundCashHandoff(
-                    id=uuid4(),
-                    company_id=seed.company_id,
-                    refund_id=refund_b.id,
-                    branch_id=seed.branch_id,
-                    terminal_id=seed.terminal_id,
-                    shift_id=seed.shift_id,
-                    started_at=seed.now,
-                    started_by=seed.owner_id,
-                    idempotency_key=f"refund-action-b:{uuid4()}",
+                handoff_b = insert_historical(
+                    session,
+                    "membership_refund_cash_handoffs",
+                    {
+                        "id": uuid4(),
+                        "company_id": seed.company_id,
+                        "refund_id": refund_b.id,
+                        "branch_id": seed.branch_id,
+                        "terminal_id": seed.terminal_id,
+                        "shift_id": seed.shift_id,
+                        "started_at": seed.now,
+                        "started_by": seed.owner_id,
+                        "idempotency_key": f"refund-action-b:{uuid4()}",
+                    },
                 )
-                session.add_all([handoff_a, handoff_b])
                 refund_a_id = refund_a.id
                 handoff_a_id = handoff_a.id
                 handoff_b_id = handoff_b.id
                 session.commit()
 
             with Session(engine) as session:
-                session.add(
-                    MembershipRefundCompletion(
-                        id=uuid4(),
-                        company_id=seed.company_id,
-                        refund_id=refund_a_id,
-                        cash_handoff_id=handoff_b_id,
-                        provider_action_id=None,
-                        legacy_attempt_resolution_id=None,
-                        branch_id=seed.branch_id,
-                        terminal_id=seed.terminal_id,
-                        shift_id=seed.shift_id,
-                        method="cash",
-                        amount_minor=199_900,
-                        completed_at=seed.now,
-                        completed_by=seed.owner_id,
-                        external_reference=None,
-                        provider_evidence_reconciled=True,
-                        evidence_occurred_at=seed.now,
-                        evidence_time_untrusted=False,
-                        action_takeover_confirmed=False,
-                        action_takeover_reason=None,
-                        idempotency_key=f"cross-refund-action:{uuid4()}",
+                with pytest.raises(DBAPIError, match="inconsistent completion provenance"):
+                    insert_historical(
+                        session,
+                        "membership_refund_completions",
+                        {
+                            "id": uuid4(),
+                            "company_id": seed.company_id,
+                            "refund_id": refund_a_id,
+                            "cash_handoff_id": handoff_b_id,
+                            "provider_action_id": None,
+                            "legacy_attempt_resolution_id": None,
+                            "branch_id": seed.branch_id,
+                            "terminal_id": seed.terminal_id,
+                            "shift_id": seed.shift_id,
+                            "method": "cash",
+                            "amount_minor": 199_900,
+                            "completed_at": seed.now,
+                            "completed_by": seed.owner_id,
+                            "external_reference": None,
+                            "provider_evidence_reconciled": True,
+                            "evidence_occurred_at": seed.now,
+                            "evidence_time_untrusted": False,
+                            "action_takeover_confirmed": False,
+                            "action_takeover_reason": None,
+                            "idempotency_key": f"cross-refund-action:{uuid4()}",
+                        },
                     )
-                )
-                with pytest.raises(
-                    DBAPIError, match="inconsistent completion provenance"
-                ):
-                    session.commit()
                 session.rollback()
 
             with Session(engine) as session:
-                assert session.scalar(
-                    select(func.count())
-                    .select_from(MembershipPaymentCompletion)
-                    .where(MembershipPaymentCompletion.request_id == payment_request_a_id)
-                ) == 0
-                assert session.scalar(
-                    select(func.count())
-                    .select_from(MembershipRefundCompletion)
-                    .where(MembershipRefundCompletion.refund_id == refund_a_id)
-                ) == 0
+                assert (
+                    session.scalar(
+                        select(func.count())
+                        .select_from(MembershipPaymentCompletion)
+                        .where(MembershipPaymentCompletion.request_id == payment_request_a_id)
+                    )
+                    == 0
+                )
+                assert (
+                    session.scalar(
+                        select(func.count())
+                        .select_from(MembershipRefundCompletion)
+                        .where(MembershipRefundCompletion.refund_id == refund_a_id)
+                    )
+                    == 0
+                )
                 # Keep the intended action IDs explicit so a future trigger
                 # refactor cannot accidentally validate only tenant/shift data.
                 assert payment_action_a_id != payment_action_b_id
@@ -1031,9 +1081,7 @@ def test_0035_downgrade_refuses_each_representative_workflow_fact(
                     (database_name,),
                 )
                 admin.execute(
-                    sql.SQL("DROP DATABASE IF EXISTS {}").format(
-                        sql.Identifier(database_name)
-                    )
+                    sql.SQL("DROP DATABASE IF EXISTS {}").format(sql.Identifier(database_name))
                 )
         except Exception:
             pass
@@ -1050,9 +1098,10 @@ def test_0035_unused_schema_downgrades_cleanly_to_0034() -> None:
         engine = create_engine(database_url)
         try:
             with engine.connect() as connection:
-                leftovers = connection.execute(
-                    text(
-                        """
+                leftovers = (
+                    connection.execute(
+                        text(
+                            """
                         SELECT table_name
                           FROM information_schema.tables
                          WHERE table_schema = 'public'
@@ -1069,8 +1118,11 @@ def test_0035_unused_schema_downgrades_cleanly_to_0034() -> None:
                                'membership_payment_refund_guards'
                            )
                         """
+                        )
                     )
-                ).scalars().all()
+                    .scalars()
+                    .all()
+                )
                 assert leftovers == []
                 added_columns = connection.execute(
                     text(
@@ -1103,17 +1155,20 @@ def test_0033_financial_history_survives_0035_round_trip_and_blocks_0032() -> No
         try:
             with Session(engine) as session:
                 seed = _seed_base(session)
-                membership = CustomerMembership(
-                    id=uuid4(),
-                    customer_id=seed.customer_id,
-                    tier_id=seed.tier_id,
-                    billing_cycle="monthly",
-                    starts_at=seed.now,
-                    expires_at=seed.now + timedelta(days=30),
-                    auto_renew=False,
-                    amount_paid_minor=199_900,
+                membership = insert_historical(
+                    session,
+                    "customer_memberships",
+                    {
+                        "id": uuid4(),
+                        "customer_id": seed.customer_id,
+                        "tier_id": seed.tier_id,
+                        "billing_cycle": "monthly",
+                        "starts_at": seed.now,
+                        "expires_at": seed.now + timedelta(days=30),
+                        "auto_renew": False,
+                        "amount_paid_minor": 199_900,
+                    },
                 )
-                session.add(membership)
                 session.flush()
                 payment_id = uuid4()
                 session.execute(

@@ -191,4 +191,9 @@ class ReportsPresentationPolicyTest {
         report = report,
         fetchedAtMillis = report?.let { 1L },
     )
+    @Test fun ownerAttestedEvidenceAloneMustNotBeHiddenAsAnEmptyReport() {
+        val row=TenderReclassification("id","branch","2026-10-17","Asia/Kolkata","unresolved",0,0,2000,"unallocated_owner_attestation","2026-10-19T10:00:00Z")
+        assertFalse(ReportData(tenderReclassifications=listOf(row)).hasNothing)
+    }
+
 }

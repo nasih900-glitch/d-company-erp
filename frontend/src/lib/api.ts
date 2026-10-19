@@ -471,7 +471,7 @@ export async function clearBrowserRefreshCookie(): Promise<void> {
 
 api.interceptors.response.use(
   (r) => r,
-  async (err: AxiosError<{ error?: { code: string; message: string } }>) => {
+  async (err: AxiosError<{ error?: { code: string; message: string; details?: Record<string, unknown> } }>) => {
     if ((err as ApiError)?.code === 'session_changed') return Promise.reject(err);
     if (isExpectedRequestCancellation(err)) return Promise.reject(err);
 
@@ -555,6 +555,7 @@ api.interceptors.response.use(
     const message = apiFailureMessage(serverMessage, err.response?.status);
     const enriched: ApiError = new Error(message);
     enriched.code = serverCode ?? 'network_error';
+    enriched.details = err.response?.data?.error?.details;
     // Callers need to tell "the server rejected this session" (401/403) apart
     // from "we never got an answer" (timeout/offline, no status at all) — only
     // the former may destroy a stored session.
@@ -569,4 +570,4 @@ api.interceptors.response.use(
   },
 );
 
-export type ApiError = Error & { code?: string; status?: number };
+export type ApiError = Error & { code?: string; status?: number; details?: Record<string, unknown> };

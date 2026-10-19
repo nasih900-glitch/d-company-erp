@@ -20,6 +20,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.test.captureToImage
@@ -232,6 +233,10 @@ class ShiftOverviewUiTest {
         compose.onNodeWithText("Review & close shift").performScrollTo().performClick()
         compose.waitForIdle()
         compose.onNodeWithText("Count cash").assertIsDisplayed().assertIsEnabled()
+        compose.onNodeWithText("Close shift").assertIsDisplayed().assertIsNotEnabled()
+        compose.onNodeWithText("Not counted yet").assertIsDisplayed()
+        compose.onNodeWithText("Count cash").performClick()
+        compose.onNodeWithText("Use drawer count").performScrollTo().performClick()
         compose.onNodeWithText("Close shift").assertIsDisplayed().assertIsEnabled()
     }
 

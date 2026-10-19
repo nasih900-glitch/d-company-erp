@@ -11,6 +11,8 @@ import cloud.dcompany.erp.core.db.store
 import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.ApiException
 import cloud.dcompany.erp.core.net.CostingCoverage
+import cloud.dcompany.erp.ui.screens.finance.TenderCorrectionNotices
+import cloud.dcompany.erp.ui.screens.finance.matchesOwnerKey
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -174,7 +176,16 @@ class ReportsViewModel : ViewModel() {
     private var inFlight: Job? = null
     private var requestSerial: Long = 0
 
-    init { load() }
+    init {
+        load()
+        viewModelScope.launch {
+            TenderCorrectionNotices.changes.collect { notice ->
+                val profile = DCompanyApp.instance.shiftCache.profile.value
+                val ownerKey = profile?.let { "${it.companyId}|${it.userId}|${it.branchId.orEmpty()}" }
+                if ("reports" in notice.resources && notice.matchesOwnerKey(ownerKey)) load()
+            }
+        }
+    }
 
     fun selectPeriod(period: ReportPeriod) {
         if (_state.value.period == period) return

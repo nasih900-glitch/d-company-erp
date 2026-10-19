@@ -128,3 +128,24 @@ def decode_token(token: str) -> dict[str, Any]:
         return jwt.decode(token, _verifying_key(), algorithms=[s.jwt_algorithm])
     except jwt.PyJWTError as exc:
         raise ValueError(f"invalid token: {exc}") from exc
+
+
+def issue_audit_page_cursor(claims: dict[str, Any]) -> str:
+    """A read cursor is not an access token or a substitute for owner unlock."""
+    s = get_settings()
+    now = datetime.now(timezone.utc)
+    return jwt.encode(
+        {**claims, "type": "audit_page", "iat": now, "exp": now + timedelta(minutes=15)},
+        _signing_key(), algorithm=s.jwt_algorithm,
+    )
+
+
+def issue_tender_token(*, user_id: UUID, company_id: UUID, branch_id: UUID,
+                       auth_version: int, scope: str) -> str:
+    """Five-minute purpose/branch/auth-version bound owner confirmation."""
+    settings = get_settings()
+    now = datetime.now(timezone.utc)
+    return jwt.encode({"sub": str(user_id), "company_id": str(company_id),
+        "branch_id": str(branch_id), "auth_version": auth_version,
+        "type": "tender_confirmation", "scope": scope, "iat": now,
+        "exp": now + timedelta(minutes=5)}, _signing_key(), algorithm=settings.jwt_algorithm)

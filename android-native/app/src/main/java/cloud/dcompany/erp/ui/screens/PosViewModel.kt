@@ -15,6 +15,8 @@ import cloud.dcompany.erp.core.checkout.HeldOrderClaimPolicy
 import cloud.dcompany.erp.core.checkout.PreparedHeldCheckoutAction
 import cloud.dcompany.erp.core.checkout.SplitPaymentPlan
 import cloud.dcompany.erp.core.checkout.SplitPaymentPolicy
+import cloud.dcompany.erp.core.auth.EffectivePermissions
+import cloud.dcompany.erp.core.auth.ErpPermission
 import cloud.dcompany.erp.core.auth.CacheScopeLease
 import cloud.dcompany.erp.core.auth.PosAccess
 import cloud.dcompany.erp.core.auth.VIEW_ONLY_MESSAGE
@@ -454,7 +456,11 @@ private val receiptUiSharing = SharingStarted.WhileSubscribed(5_000)
 enum class ReceiptSearchSource { NONE, ONLINE, CACHED }
 
 data class ReceiptSearchUiState(
-    val query: String = "",
+    val criteria: ReceiptHistoryFilters = ReceiptHistoryFilters(),
+    val appliedCriteria: ReceiptHistoryFilters? = null,
+    val shopTimezone: String? = null,
+    val dateFilterBasis: String? = null,
+    val viewportRevision: Long = 0,
     val receipts: List<CanonicalReceipt> = emptyList(),
     val nextCursor: String? = null,
     val hasMore: Boolean = false,
@@ -465,7 +471,10 @@ data class ReceiptSearchUiState(
     val detail: CanonicalReceipt? = null,
     val detailLoading: Boolean = false,
     val detailError: String? = null,
-)
+) {
+    val query: String get() = criteria.query
+    val isActive: Boolean get() = criteria.isActive || appliedCriteria?.isActive == true
+}
 
 internal fun ReceiptSearchUiState.withRefreshedDetail(receipt: CanonicalReceipt): ReceiptSearchUiState =
     copy(
@@ -633,10 +642,15 @@ class PosViewModel : ViewModel() {
 
     private val _receiptHistoryLoading = MutableStateFlow(false)
     val receiptHistoryLoading: StateFlow<Boolean> = _receiptHistoryLoading.asStateFlow()
-    private val _receiptSearch = MutableStateFlow(ReceiptSearchUiState())
-    val receiptSearch: StateFlow<ReceiptSearchUiState> = _receiptSearch.asStateFlow()
-    private var receiptSearchGeneration = 0L
-    private var receiptDetailGeneration = 0L
+    private val receiptSearchController = ReceiptHistorySearch(
+        tasks = viewModelScope, online = { app.connectivity.online.value },
+        lease = app.cacheIsolation::currentLease,
+        commit = { captured, update -> app.cacheIsolation.commitIfCurrent(captured) { update() } },
+        cached = { canonicalReceipts.value to receiptHistorySyncState.value?.fetchedAtMillis },
+        fetchPage = { filters, cursor -> ApiClient.api.filteredReceiptHistory(filters, cursor) },
+        fetchReceipt = { orderId -> ApiClient.api.receipt(orderId) },
+    )
+    val receiptSearch: StateFlow<ReceiptSearchUiState> = receiptSearchController.state
     private val _eligibleRewardCatalog = MutableStateFlow(EligibleRewardCatalogState())
     val eligibleRewardCatalog: StateFlow<EligibleRewardCatalogState> =
         _eligibleRewardCatalog.asStateFlow()
@@ -947,7 +961,30 @@ class PosViewModel : ViewModel() {
     }.flowOn(Dispatchers.Default)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), PosUiState())
 
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private val receiptChoiceStaff = app.shiftCache.profile.flatMapLatest { profile ->
+        if (profile != null && EffectivePermissions.from(profile).staffAccess().canReadDirectory) db.staffDao().observeCache()
+        else flowOf(emptyList())
+    }
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private val receiptChoiceStations = app.shiftCache.profile.flatMapLatest { profile ->
+        if (profile != null && EffectivePermissions.from(profile).has(ErpPermission.GamingRead)) db.gamingDao().observeStations()
+        else flowOf(emptyList())
+    }
+    val receiptFilterChoices: StateFlow<ReceiptFilterChoices> = combine(
+        app.shiftCache.profile, canonicalReceipts, receiptChoiceStations, receiptChoiceStaff,
+    ) { profile, receipts, stations, staff -> buildReceiptFilterChoices(profile, receipts, stations, staff) }
+        .stateIn(viewModelScope, receiptUiSharing, ReceiptFilterChoices())
+
     init {
+        viewModelScope.launch {
+            app.shiftCache.profile.collect { receiptSearchController.verifyScope() }
+        }
+        viewModelScope.launch {
+            combine(resolvedShift, app.shiftCache.profile) { shift, profile ->
+                shift?.canBill(profile?.let { ShiftActor(it.userId, it.protectedAccess) }) == true
+            }.distinctUntilChanged().collect { ready -> clearResolvedNoShiftNotice(notice, ready) }
+        }
         viewModelScope.launch {
             combine(
                 state.map { Triple(it.customerPhone, it.loyaltyProgramRevision, it.online) },
@@ -1161,60 +1198,8 @@ class PosViewModel : ViewModel() {
 
     fun refreshReceiptHistoryDetail(orderId: String) {
         if (orderId.isBlank()) return
-        val activeSearch = _receiptSearch.value
-        if (activeSearch.query.isNotBlank()) {
-            val lease = app.cacheIsolation.currentLease()
-            if (lease == null || !app.connectivity.online.value) {
-                _receiptSearch.value = activeSearch.copy(
-                    detailLoading = false,
-                    detailError = "Reconnect to refresh this exact receipt.",
-                )
-                return
-            }
-            val searchGeneration = receiptSearchGeneration
-            val detailGeneration = ++receiptDetailGeneration
-            val query = activeSearch.query
-            _receiptSearch.value = activeSearch.copy(
-                detailLoading = true,
-                detailError = null,
-            )
-            viewModelScope.launch {
-                try {
-                    val receipt = ApiClient.api.receipt(orderId)
-                    require(receipt.orderId == orderId) {
-                        "The server returned a different receipt. Reopen the requested bill."
-                    }
-                    require(
-                        receipt.companyId == lease.scope.companyId &&
-                            receipt.branchId == lease.scope.branchId
-                    ) { "This receipt belongs to another shop." }
-                    app.cacheIsolation.commitIfCurrent(lease) {
-                        val latest = _receiptSearch.value
-                        if (
-                            receiptSearchGeneration == searchGeneration &&
-                            receiptDetailGeneration == detailGeneration &&
-                            latest.query == query
-                        ) {
-                            _receiptSearch.value = latest.withRefreshedDetail(receipt)
-                        }
-                    }
-                } catch (cancelled: CancellationException) {
-                    throw cancelled
-                } catch (error: Exception) {
-                    val latest = _receiptSearch.value
-                    if (
-                        receiptSearchGeneration == searchGeneration &&
-                        receiptDetailGeneration == detailGeneration &&
-                        latest.query == query
-                    ) {
-                        _receiptSearch.value = latest.copy(
-                            detailLoading = false,
-                            detailError = error.message?.takeIf(String::isNotBlank)
-                                ?: "This exact receipt could not be refreshed.",
-                        )
-                    }
-                }
-            }
+        if (receiptSearch.value.isActive) {
+            receiptSearchController.detail(orderId)
             return
         }
         if (_receiptHistoryLoading.value) return
@@ -1228,107 +1213,9 @@ class PosViewModel : ViewModel() {
         }
     }
 
-    fun searchReceiptHistory(rawQuery: String) {
-        val query = rawQuery.trim().take(200)
-        val generation = ++receiptSearchGeneration
-        if (query.isEmpty()) {
-            _receiptSearch.value = ReceiptSearchUiState()
-            return
-        }
-        if (!app.connectivity.online.value) {
-            _receiptSearch.value = ReceiptSearchUiState(
-                query = query,
-                receipts = canonicalReceipts.value.filter { it.matchesCachedReceiptQuery(query) },
-                source = ReceiptSearchSource.CACHED,
-                cachedAtMillis = receiptHistorySyncState.value?.fetchedAtMillis,
-            )
-            return
-        }
-        val lease = app.cacheIsolation.currentLease()
-        if (lease == null) {
-            _receiptSearch.value = ReceiptSearchUiState(
-                query = query,
-                error = "This tablet's receipt workspace is not verified. Sign in online and try again.",
-            )
-            return
-        }
-        _receiptSearch.value = ReceiptSearchUiState(query = query, loading = true)
-        viewModelScope.launch {
-            try {
-                val page = ApiClient.api.receiptHistory(limit = RECEIPT_HISTORY_PAGE_SIZE, query = query)
-                app.cacheIsolation.commitIfCurrent(lease) {
-                    if (generation == receiptSearchGeneration && _receiptSearch.value.query == query) {
-                        _receiptSearch.value = ReceiptSearchUiState(
-                            query = query,
-                            receipts = page.items,
-                            nextCursor = page.nextCursor,
-                            hasMore = page.hasMore,
-                            source = ReceiptSearchSource.ONLINE,
-                        )
-                    }
-                }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Exception) {
-                if (generation == receiptSearchGeneration && _receiptSearch.value.query == query) {
-                    _receiptSearch.value = ReceiptSearchUiState(
-                        query = query,
-                        error = error.message?.takeIf(String::isNotBlank)
-                            ?: "Receipt search could not be completed. Check the connection and try again.",
-                    )
-                }
-            }
-        }
-    }
+    fun searchReceiptHistory(filters: ReceiptHistoryFilters) = receiptSearchController.find(filters)
 
-    fun loadMoreReceiptSearch() {
-        val current = _receiptSearch.value
-        val cursor = current.nextCursor
-        if (current.source != ReceiptSearchSource.ONLINE || current.loading || !current.hasMore || cursor == null) {
-            return
-        }
-        val lease = app.cacheIsolation.currentLease()
-        if (lease == null) {
-            _receiptSearch.value = current.copy(
-                loading = false,
-                error = "This tablet's receipt workspace is not verified. Sign in online and retry the search.",
-            )
-            return
-        }
-        val generation = receiptSearchGeneration
-        _receiptSearch.value = current.copy(loading = true, error = null)
-        viewModelScope.launch {
-            try {
-                val page = ApiClient.api.receiptHistory(
-                    cursor = cursor,
-                    limit = RECEIPT_HISTORY_PAGE_SIZE,
-                    query = current.query,
-                )
-                app.cacheIsolation.commitIfCurrent(lease) {
-                    val latest = _receiptSearch.value
-                    if (generation == receiptSearchGeneration && latest.query == current.query) {
-                        _receiptSearch.value = latest.copy(
-                            receipts = (latest.receipts + page.items).distinctBy(CanonicalReceipt::orderId),
-                            nextCursor = page.nextCursor,
-                            hasMore = page.hasMore,
-                            loading = false,
-                        )
-                    }
-                }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Exception) {
-                val latest = _receiptSearch.value
-                if (generation == receiptSearchGeneration && latest.query == current.query) {
-                    _receiptSearch.value = latest.copy(
-                        loading = false,
-                        error = error.message?.takeIf(String::isNotBlank)
-                            ?: "The next receipt search page could not be loaded.",
-                    )
-                }
-            }
-        }
-    }
+    fun loadMoreReceiptSearch() = receiptSearchController.more()
 
     /** Scroll/highlight only; opening a payment claim remains an explicit card tap. */
     fun focusHeldOrder(orderId: String) {
@@ -3987,7 +3874,7 @@ class PosViewModel : ViewModel() {
     private fun authorisedShiftId(): String? {
         val resolved = resolvedShift.value
         if (resolved == null) {
-            notice.value = "No shift is open. Open Shift before billing."
+            notice.value = POS_NO_OPEN_SHIFT_MESSAGE
             return null
         }
         val actor = app.shiftCache.profile.value?.let {
@@ -4167,3 +4054,9 @@ internal fun duplicateHeldPaymentNotice(payment: LocalHeldOrderPaymentEntity?): 
             "A payment for this order is already saved on this tablet. Do not collect again; " +
                 "review the saved-payment status."
     }
+
+internal const val POS_NO_OPEN_SHIFT_MESSAGE = "No shift is open. Open Shift before billing."
+
+internal fun clearResolvedNoShiftNotice(notice: MutableStateFlow<String?>, billingReady: Boolean) {
+    if (billingReady) notice.compareAndSet(POS_NO_OPEN_SHIFT_MESSAGE, null)
+}

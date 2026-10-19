@@ -42,7 +42,9 @@ data class BrandPalette(
     val SurfaceRaised: Color,
     val SurfaceHover: Color,
     val SurfaceOverlay: Color,
+    /** Legacy neutral-primary name; the actual brand gold has its own role. */
     val Gold: Color,
+    val BrandAccent: Color,
     val GoldBright: Color,
     val GoldMuted: Color,
     val Foreground: Color,
@@ -67,13 +69,14 @@ internal val NightPalette = BrandPalette(
     Background = Color(0xFF050505), BackgroundSecondary = Color(0xFF0B0B0B),
     Surface = Color(0xFF101010), SurfaceRaised = Color(0xFF191919),
     SurfaceHover = Color(0xFF242424), SurfaceOverlay = Color(0xFF303030),
-    Gold = Color(0xFFF5F5F5), GoldBright = Color(0xFFFFFFFF), GoldMuted = Color(0xFFC7C7C0),
+    Gold = Color(0xFFF5F5F1), BrandAccent = Color(0xFFC6A15B),
+    GoldBright = Color(0xFFDDDDD7), GoldMuted = Color(0xFFAAAAA2),
     Foreground = Color(0xFFF5F5F5), ForegroundMuted = Color(0xFFB0B0A8),
-    ForegroundFaint = Color(0xFF909089), Disabled = Color(0xFF6F6F69),
+    ForegroundFaint = Color(0xFF878780), Disabled = Color(0xFF6F6F69),
     Good = Color(0xFF52C37E), GoodMuted = Color(0xFF153722),
-    Warning = Color(0xFFF3A83B), WarningMuted = Color(0xFF3D2B12),
+    Warning = Color(0xFFDDDDD7), WarningMuted = Color(0xFF191919),
     Danger = Color(0xFFF4686E), DangerMuted = Color(0xFF471F25),
-    Information = Color(0xFF86B9F4), InformationMuted = Color(0xFF172D45),
+    Information = Color(0xFFAAAAA2), InformationMuted = Color(0xFF191919),
     Border = Color(0xFF303030), BorderSubtle = Color(0xFF303030),
     ControlBorder = Color(0xFF74746E), FocusRing = Color(0xFFF5F5F1),
 )
@@ -82,13 +85,14 @@ internal val DayPalette = BrandPalette(
     Background = Color(0xFFFAFAFA), BackgroundSecondary = Color(0xFFFFFFFF),
     Surface = Color(0xFFFFFFFF), SurfaceRaised = Color(0xFFF0F0F0),
     SurfaceHover = Color(0xFFE8E8E8), SurfaceOverlay = Color(0xFFFFFFFF),
-    Gold = Color(0xFF111111), GoldBright = Color(0xFF000000), GoldMuted = Color(0xFF4F4F4B),
+    Gold = Color(0xFF161615), BrandAccent = Color(0xFFC6A15B),
+    GoldBright = Color(0xFF31312E), GoldMuted = Color(0xFF53534F),
     Foreground = Color(0xFF111111), ForegroundMuted = Color(0xFF5B5B56),
-    ForegroundFaint = Color(0xFF74746E), Disabled = Color(0xFF9A9A94),
+    ForegroundFaint = Color(0xFF7A7A74), Disabled = Color(0xFF9A9A94),
     Good = Color(0xFF1B7E4B), GoodMuted = Color(0xFFDCEFE4),
-    Warning = Color(0xFF9A5900), WarningMuted = Color(0xFFFFE8C4),
+    Warning = Color(0xFF31312E), WarningMuted = Color(0xFFF0F0F0),
     Danger = Color(0xFFBE3236), DangerMuted = Color(0xFFF9DFE0),
-    Information = Color(0xFF2565A9), InformationMuted = Color(0xFFDCEAF8),
+    Information = Color(0xFF53534F), InformationMuted = Color(0xFFF0F0F0),
     Border = Color(0xFFDEDEDE), BorderSubtle = Color(0xFFDEDEDE),
     ControlBorder = Color(0xFF70706A), FocusRing = Color(0xFF111110),
 )
@@ -109,6 +113,9 @@ object Brand {
 
 private val ColorScheme.usesDayPalette: Boolean
     get() = background.luminance() > 0.5f
+
+val ColorScheme.brandAccent: Color
+    get() = if (usesDayPalette) DayPalette.BrandAccent else NightPalette.BrandAccent
 
 val ColorScheme.operationalGood: Color
     get() = if (usesDayPalette) DayPalette.Good else NightPalette.Good

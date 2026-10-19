@@ -88,6 +88,7 @@ import java.util.Date
 @Composable
 fun SettingsScreen(
     canManageSystem: Boolean,
+    statusProfile: cloud.dcompany.erp.core.net.MeResponse? = null,
     onPasswordChanged: () -> Unit = {},
     onReportProblem: () -> Unit = {},
     onStartHealthRecording: () -> Boolean = { false },
@@ -111,10 +112,12 @@ fun SettingsScreen(
         pendingTerminalCount = state.pendingTerminals.size,
         terminalManagementEnabled = !presentation.singleHybridTerminalOnly,
     )
-    val visibleTabs = if (canManageSystem) {
-        SettingsTab.entries.filter { it != SettingsTab.Terminals || showTerminalSettings }
-    } else {
-        listOf(SettingsTab.Account)
+    val statusAuthority = deviceHealthAuthority(statusProfile)
+    val visibleTabs = buildList {
+        if (canManageSystem) addAll(SettingsTab.entries.filter {
+            it != SettingsTab.Devices && (it != SettingsTab.Terminals || showTerminalSettings)
+        }) else add(SettingsTab.Account)
+        if (statusAuthority != null) add(SettingsTab.Devices)
     }
     val activeTab = state.tab.takeIf { it in visibleTabs } ?: SettingsTab.Account
     LaunchedEffect(activeTab) {
@@ -148,6 +151,7 @@ fun SettingsScreen(
                 SettingsTab.Branches -> BranchesTab(state, vm, presentation)
                 SettingsTab.Terminals -> TerminalsTab(state, vm, presentation)
                 SettingsTab.Points -> PointsTab(state, vm)
+                SettingsTab.Devices -> DeviceHealthPanel(statusProfile)
             }
         }
     }

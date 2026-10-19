@@ -91,6 +91,8 @@ import cloud.dcompany.erp.ui.screens.settings.bugReportConnectivity
 import cloud.dcompany.erp.ui.screens.settings.currentAndroidBugReportContext
 import cloud.dcompany.erp.ui.screens.staff.StaffScreen
 import cloud.dcompany.erp.ui.screens.gaming.GamingScreen
+import cloud.dcompany.erp.ui.screens.gaming.GamingDraftScope
+import cloud.dcompany.erp.ui.screens.gaming.gamingDraftAuthority
 import cloud.dcompany.erp.ui.screens.shift.ShiftScreen
 import cloud.dcompany.erp.ui.screens.LoginScreen
 import cloud.dcompany.erp.ui.screens.PosScreen
@@ -98,6 +100,7 @@ import cloud.dcompany.erp.ui.screens.PosViewModel
 import cloud.dcompany.erp.ui.screens.TerminalSelectionScreen
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.AppearancePreference
+import cloud.dcompany.erp.ui.theme.syncLaunchAppearance
 import cloud.dcompany.erp.ui.theme.AppearanceStore
 import cloud.dcompany.erp.ui.theme.DCompanyTheme
 import cloud.dcompany.erp.core.net.ClientCompatibilityState
@@ -118,6 +121,10 @@ import cloud.dcompany.erp.core.alarm.operationalTargetExistsInCurrentScope
 import cloud.dcompany.erp.core.remote.RemoteUiCommandHost
 import cloud.dcompany.erp.core.remote.remoteSemanticUiAdmission
 import cloud.dcompany.erp.core.sync.summarizeOutboxWork
+import cloud.dcompany.erp.core.sync.savedWorkUpdateGuidance
+import cloud.dcompany.erp.ui.screens.finance.TenderJournal
+import cloud.dcompany.erp.ui.screens.finance.TenderJournalReadiness
+import cloud.dcompany.erp.ui.screens.finance.privateTenderJournalStorage
 import cloud.dcompany.erp.core.sync.OutboxWorkStatus
 import cloud.dcompany.erp.core.diagnostics.AppHealthRecorder
 import cloud.dcompany.erp.ui.components.syncAvailabilityProblem
@@ -140,9 +147,11 @@ class MainActivity : ComponentActivity() {
         // older releases while also applying Compose insets risks divergent
         // (and, on some OEM builds, double-inset) tablet geometry.
         WindowCompat.setDecorFitsSystemWindows(window, false)
+        val appearanceStore = AppearanceStore(applicationContext)
+        val initialAppearance = appearanceStore.load()
+        syncLaunchAppearance(initialAppearance)
         setContent {
-            val appearanceStore = remember { AppearanceStore(applicationContext) }
-            var appearance by remember { mutableStateOf(appearanceStore.load()) }
+            var appearance by remember { mutableStateOf(initialAppearance) }
             CompositionLocalProvider(
                 LocalRemoteCapturePrivacyController provides
                     DCompanyApp.instance.remoteAssistance.privacy,
@@ -166,6 +175,7 @@ class MainActivity : ComponentActivity() {
                                 appearancePreference = appearance,
                                 onAppearancePreferenceChanged = { next ->
                                     appearanceStore.save(next)
+                                    syncLaunchAppearance(next)
                                     appearance = next
                                 },
                             )
@@ -298,8 +308,13 @@ private fun AppRoot(
     val unresolvedOutboxGroups by DCompanyApp.instance.db.outboxSafetyDao()
         .observeUnresolvedGroups()
         .collectAsStateWithLifecycle(initialValue = emptyList())
-    val outboxWorkStatus = remember(unresolvedOutboxGroups) {
-        summarizeOutboxWork(unresolvedOutboxGroups)
+    val protectedWorkFlow = remember { TenderJournal(privateTenderJournalStorage(DCompanyApp.instance)).observeReadiness() }
+    val protectedWork by protectedWorkFlow.collectAsStateWithLifecycle(initialValue = TenderJournalReadiness())
+    val outboxWorkStatus = remember(unresolvedOutboxGroups, protectedWork) {
+        summarizeOutboxWork(unresolvedOutboxGroups).copy(
+            protectedReviewCount = protectedWork.reviewCount,
+            protectedReviewUnknown = !protectedWork.verified,
+        )
     }
     val syncing by DCompanyApp.instance.sync.syncing.collectAsStateWithLifecycle()
     val state by session.state.collectAsStateWithLifecycle()
@@ -408,6 +423,8 @@ private fun AppRoot(
                         signingIn = signingIn,
                         error = loginError,
                         onSignIn = session::signIn,
+                        appearancePreference = appearancePreference,
+                        onAppearancePreferenceChanged = onAppearancePreferenceChanged,
                     )
                 }
                 if (pendingNotificationTarget != null) {
@@ -744,6 +761,7 @@ private fun AppRoot(
                                 val receiptHistoryError by
                                     pos.receiptHistoryError.collectAsStateWithLifecycle()
                                 val receiptSearch by pos.receiptSearch.collectAsStateWithLifecycle()
+                                val receiptFilterChoices by pos.receiptFilterChoices.collectAsStateWithLifecycle()
                                 val eligibleRewardCatalog by
                                     pos.eligibleRewardCatalog.collectAsStateWithLifecycle()
                                 val unacknowledgedPosReceipt by pos.unacknowledgedReceipt.collectAsStateWithLifecycle()
@@ -760,9 +778,11 @@ private fun AppRoot(
                                     receiptHistoryLoading = receiptHistoryLoading,
                                     receiptHistoryError = receiptHistoryError,
                                     receiptSearch = receiptSearch,
+                                    receiptFilterChoices = receiptFilterChoices,
                                     eligibleRewardCatalog = eligibleRewardCatalog,
                                     unacknowledgedReceipt = unacknowledgedPosReceipt,
                                     access = permissions.posAccess(),
+                                    shiftAccess = permissions.shiftAccess(),
                                     onAccessChanged = pos::updateAccess,
                                     onAdd = pos::add,
                                     onAddConfigured = pos::addConfigured,
@@ -820,18 +840,26 @@ private fun AppRoot(
                             Destination.Gaming -> {
                                 val gamingFocus = operationalFocus
                                     as? OperationalNotificationTarget.GamingSession
-                                GamingScreen(
-                                    access = permissions.gamingAccess().let { granted ->
-                                        granted.copy(
-                                            canReconcileLegacySessions =
-                                                granted.canReconcileLegacySessions &&
-                                                    s.me.protectedAccess && s.me.auditAccess,
-                                        )
-                                    },
-                                    focusSessionId = gamingFocus?.sessionId,
-                                    focusStationId = gamingFocus?.stationId,
-                                    onDismissFocus = { operationalFocus = null },
-                                )
+                                GamingDraftScope(
+                                    gamingDraftAuthority(
+                                        s.me, DCompanyApp.instance.cacheIsolation.currentLease(),
+                                        activeTerminal?.terminalId,
+                                    ),
+                                ) {
+                                    GamingScreen(
+                                        access = permissions.gamingAccess().let { granted ->
+                                            granted.copy(
+                                                canReconcileLegacySessions =
+                                                    granted.canReconcileLegacySessions &&
+                                                        s.me.protectedAccess && s.me.auditAccess,
+                                            )
+                                        },
+                                        shiftAccess = permissions.shiftAccess(),
+                                        focusSessionId = gamingFocus?.sessionId,
+                                        focusStationId = gamingFocus?.stationId,
+                                        onDismissFocus = { operationalFocus = null },
+                                    )
+                                }
                             }
                             Destination.Tables -> TablesScreen(access = permissions.tablesAccess())
                             Destination.Reservations -> ReservationsScreen(
@@ -876,6 +904,7 @@ private fun AppRoot(
                             Destination.AccessControl -> AccessControlScreen()
                             Destination.Settings -> SettingsScreen(
                                 canManageSystem = canManageSystemSettings(s.me),
+                                statusProfile = s.me,
                                 onPasswordChanged = session::expireAfterPasswordChange,
                                 onReportProblem = ::openSupport,
                                 onStartHealthRecording = onStartHealthRecording,
@@ -1294,9 +1323,14 @@ private fun RequiredUpdateScreen(
 private fun UpdateVersionAndNotes(notice: ClientUpdateNotice, compact: Boolean) {
     val version = notice.latestVersionName?.trim()?.take(80)?.takeIf(String::isNotEmpty)
     val notes = notice.releaseNotes?.trim()?.take(2_000)?.takeIf(String::isNotEmpty)
-    if (version != null) {
+    Text(
+        "Running ${BuildConfig.VERSION_NAME} · build ${BuildConfig.VERSION_CODE}",
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        style = MaterialTheme.typography.labelMedium,
+    )
+    if (version != null || notice.latestVersionCode != null) {
         Text(
-            "Release $version · build ${notice.latestVersionCode ?: "unknown"}",
+            "Offered ${version ?: "version not reported"} · build ${notice.latestVersionCode ?: "unknown"}",
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.labelMedium,
         )
@@ -1350,8 +1384,7 @@ private fun UpdateActionArea(
             shape = cloud.dcompany.erp.ui.theme.Radius.shapeSm,
         ) {
             Text(
-                "Keep this app installed: ${outboxWorkStatus.totalCount} saved or pending " +
-                    "item${if (outboxWorkStatus.totalCount == 1) "" else "s"} will be preserved and resumed after the in-place update.",
+                savedWorkUpdateGuidance(outboxWorkStatus),
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
                 color = MaterialTheme.colorScheme.operationalWarning,
                 style = MaterialTheme.typography.bodySmall,

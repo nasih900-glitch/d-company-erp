@@ -84,6 +84,8 @@ import java.util.UUID
 import kotlinx.serialization.json.JsonNull
 
 data class GamingUiState(
+    /** True only after all scoped Room reference queries emitted their first projection. */
+    val catalogueLoaded: Boolean = false,
     val stations: List<Station> = emptyList(),
     val packages: List<GamingPackage> = emptyList(),
     val sessions: List<GameSession> = emptyList(),
@@ -1266,6 +1268,7 @@ class GamingViewModel : ViewModel() {
             .filter { it.serverId == null || it.serverId !in cachedServerIds }
             .map { it.toGameSession() }
         GamingUiState(
+            catalogueLoaded = true,
             stations = references.stations.map { it.toStation() },
             packages = references.packages.map { it.toGamingPackage() },
             sessions = (cacheSessions + localOnly).map { session ->
@@ -1571,6 +1574,7 @@ class GamingViewModel : ViewModel() {
         timerMinutes: Int?,
         packageId: String? = null,
         extraControllers: Int = 0,
+        onCaptured: (String) -> Unit = {},
     ) {
         if (!requireWrite()) return
         if (!requireIdle()) return
@@ -1663,6 +1667,7 @@ class GamingViewModel : ViewModel() {
         notice.value = null
         viewModelScope.launch {
             try {
+                val localSessionId = UUID.randomUUID().toString()
                 var inserted = false
                 var shiftCaptureError: String? = null
                 val scopeStillCurrent = appCtx.cacheIsolation.commitIfCurrentOrNotifyStale(
@@ -1695,7 +1700,7 @@ class GamingViewModel : ViewModel() {
                         }
                         inserted = db.gamingDao().insertStartIfStationAvailable(
                             LocalGamingSessionEntity(
-                                localId = UUID.randomUUID().toString(),
+                                localId = localSessionId,
                                 stationId = station.id,
                                 shiftId = shift,
                                 customerId = customerId,
@@ -1731,6 +1736,9 @@ class GamingViewModel : ViewModel() {
                         "This station already has a saved session action. Finish or clear it before starting again."
                     return@launch
                 }
+                // The immutable local session now owns the submitted customer/retry facts.
+                // No callback is issued for a rejected, duplicate or stale-scope capture.
+                if (appCtx.cacheIsolation.currentLease() == scopeLease) onCaptured(localSessionId)
                 appCtx.sync.requestSync()
             } catch (_: Exception) {
                 error.value = "The session was not saved on this tablet. Check storage and try again."

@@ -52,6 +52,7 @@ PERMISSIONS: dict[str, str] = {
     # Finance
     "finance.read": "View P&L, ledger, partner balances",
     "finance.write": "Record expenses, capital, payments",
+    "finance.tender.correct": "Protected owner tender correction and actuals review",
     "finance.partner.write": "Modify partner / capital records",
     "finance.assets.write": "Add / depreciate assets",
     # OCR
@@ -198,6 +199,7 @@ AUDITOR_ACCESS = {
 # or "enable Staff" grant role administration. Overrides may still disable and
 # re-enable the safe subset already assigned to a role.
 HIGH_TRUST_PERMISSIONS = {
+    "finance.tender.correct",
     "pos.refund.reconcile",
     "pos.void",
     "pos.refund",
@@ -327,7 +329,7 @@ async def _has_permission(session, tenant: TenantContext, perm: str) -> bool:
     # support inbox, diagnostics, and consent-gated remote assistance without
     # inheriting Audit Log or release authority. Operational POS refund
     # evidence reconciliation is separately scoped too.
-    if perm in {"admin.audit.read", "admin.system"}:
+    if perm in {"admin.audit.read", "admin.system", "finance.tender.correct"}:
         return tenant.audit_access
     if tenant.protected_access:
         return True
@@ -377,7 +379,7 @@ async def effective_permissions(session, tenant: TenantContext) -> list[str]:
 
     out: list[str] = []
     for perm in PERMISSIONS:
-        if perm in {"admin.audit.read", "admin.system"}:
+        if perm in {"admin.audit.read", "admin.system", "finance.tender.correct"}:
             allowed = tenant.audit_access
         elif tenant.protected_access:
             allowed = True

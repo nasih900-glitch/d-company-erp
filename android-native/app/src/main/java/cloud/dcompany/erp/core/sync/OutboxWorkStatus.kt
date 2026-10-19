@@ -15,9 +15,12 @@ data class OutboxWorkStatus(
     val retryableCount: Int = 0,
     val actionRequiredCount: Int = 0,
     val savedDraftCount: Int = 0,
+    /** Online owner recovery, never an automatically uploaded outbox command. */
+    val protectedReviewCount: Int = 0,
+    val protectedReviewUnknown: Boolean = false,
 ) {
-    val totalCount: Int = retryableCount + actionRequiredCount + savedDraftCount
-    val isClear: Boolean = totalCount == 0
+    val totalCount: Int = retryableCount + actionRequiredCount + savedDraftCount + protectedReviewCount
+    val isClear: Boolean = totalCount == 0 && !protectedReviewUnknown
 }
 
 internal fun summarizeOutboxWork(
@@ -58,9 +61,11 @@ internal fun outboxWorkVisibleLabel(
     showDetail: Boolean,
 ): String? {
     if (status.isClear && !syncing) return null
-    if (!showDetail) return status.totalCount.takeIf { it > 0 }?.toString() ?: "Sync"
+    if (!showDetail) return status.totalCount.takeIf { it > 0 }?.toString() ?: if (status.protectedReviewUnknown) "Review" else "Sync"
 
     return buildList {
+        if (status.protectedReviewUnknown) add("Owner recovery unknown")
+        else if (status.protectedReviewCount > 0) add("${status.protectedReviewCount} owner review")
         if (status.actionRequiredCount > 0) add("${status.actionRequiredCount} review")
         if (status.retryableCount > 0) {
             add(
@@ -79,3 +84,12 @@ private val SAVED_POS_DRAFT_STATES = setOf(
     "preparing",
     "awaiting_payment",
 )
+
+/** In-place upgrades retain both classes of saved work; only queued Sync resumes automatically. */
+internal fun savedWorkUpdateGuidance(status: OutboxWorkStatus): String = buildList {
+    add("Keep this app installed. In-place updates preserve saved work.")
+    if (status.retryableCount > 0) add("Queued Sync can resume after updating.")
+    if (status.actionRequiredCount > 0 || status.savedDraftCount > 0) add("Saved drafts and review items still need staff action.")
+    if (status.protectedReviewUnknown) add("Protected recovery storage could not be verified; an owner must review it. Do not clear app storage.")
+    else if (status.protectedReviewCount > 0) add("${status.protectedReviewCount} protected correction request(s) require explicit owner recovery. They are never sent by automatic Sync.")
+}.joinToString(" ")

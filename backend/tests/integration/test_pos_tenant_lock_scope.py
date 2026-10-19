@@ -11,7 +11,7 @@ from sqlalchemy import delete, select
 
 from app.core.db import AsyncSessionLocal
 from app.core.security import issue_access_token
-from app.models import AuditLog, Branch, Company, Order, Shift, Terminal, User
+from app.models import Branch, Company, Order, Shift, Terminal, User
 
 
 @pytest.mark.integration
@@ -170,7 +170,7 @@ async def test_foreign_pos_rows_do_not_block_payment_or_shift_close_scope_checks
                 await blocker.rollback()
     finally:
         async with AsyncSessionLocal() as cleanup:
-            await cleanup.execute(delete(AuditLog).where(AuditLog.company_id == foreign_company.id))
+            # Retain immutable Audit evidence while removing disposable business fixtures.
             await cleanup.execute(
                 delete(Order).where(Order.id.in_([foreign_order.id, mismatched_shift_order.id]))
             )
@@ -178,5 +178,6 @@ async def test_foreign_pos_rows_do_not_block_payment_or_shift_close_scope_checks
             await cleanup.execute(delete(Terminal).where(Terminal.id == foreign_terminal.id))
             await cleanup.execute(delete(User).where(User.id == foreign_user.id))
             await cleanup.execute(delete(Branch).where(Branch.id == foreign_branch.id))
-            await cleanup.execute(delete(Company).where(Company.id == foreign_company.id))
+            # The persistent collection fence retains its tenant identity.
+            # Do not delete that provenance merely to remove a disposable company.
             await cleanup.commit()

@@ -28,6 +28,9 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Literal
 from uuid import UUID
 
+from app.services.finance.tender_corrections import effective_payment_method
+from app.models import DailyTenderReconciliation
+
 from sqlalchemy import case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -290,6 +293,7 @@ class PnLReport:
     # Authenticated Reports/Analytics endpoints always populate the selected
     # token branch so clients cannot mistake a branch view for company-wide.
     branch_id: UUID | None = None
+    tender_reclassifications: list[dict] = field(default_factory=list)
     # Paid/refunded legacy orders that have a settlement timestamp but no
     # immutable invoice timestamp. They remain in the operational report on
     # their closed_at cohort so payment/refund money is not silently omitted,
@@ -964,7 +968,7 @@ class ReportsAggregator:
         # ---------- Payments breakdown ----------
         pay_q = (
             select(
-                Payment.method,
+                effective_payment_method().label("method"),
                 func.coalesce(func.sum(Payment.amount_minor), 0).label("amount"),
             )
             .join(Order, Order.id == Payment.order_id)
@@ -975,7 +979,7 @@ class ReportsAggregator:
                 Payment.paid_at < end_at,
                 Order.status.in_(("paid", "refunded")),
             )
-            .group_by(Payment.method)
+            .group_by(effective_payment_method())
         )
         cash = upi = card = bank = qr = wallet = other_pay = 0
         for row in (await self.session.execute(pay_q)).all():
@@ -1242,6 +1246,19 @@ class ReportsAggregator:
             )
             expense_total += inventory_variance_minor
 
+        # Date-only owner reconciliation is not a gross payment or revenue.
+        daily_tender_rows = (await self.session.scalars(select(DailyTenderReconciliation).where(
+            DailyTenderReconciliation.company_id == company_id,
+            *branch_filter(DailyTenderReconciliation.branch_id),
+            DailyTenderReconciliation.business_date >= period_start,
+            DailyTenderReconciliation.business_date <= period_end,
+        ).order_by(DailyTenderReconciliation.business_date, DailyTenderReconciliation.id))).all()
+        tender_reclassifications = [{"id": str(row.id), "branch_id": str(row.branch_id),
+            "business_date": row.business_date.isoformat(), "business_timezone": row.business_timezone,
+            "kind": row.kind, "cash_delta_minor": row.cash_delta_minor, "upi_delta_minor": row.upi_delta_minor,
+            "total_difference_minor": row.total_difference_minor,
+            "basis": "unallocated_owner_attestation", "recorded_at": row.recorded_at.isoformat()}
+            for row in daily_tender_rows]
         return PnLReport(
             period=period,
             label=label or f"{period_start.isoformat()} → {period_end.isoformat()}",
@@ -1255,6 +1272,7 @@ class ReportsAggregator:
             revenue=revenue,
             tax_collected=tax,
             payments_received=payments,
+            tender_reclassifications=tender_reclassifications,
             branch_id=branch_id,
             tips_collected_minor=int(orders_row.tips or 0),
             refunds_issued_minor=refunds_issued,

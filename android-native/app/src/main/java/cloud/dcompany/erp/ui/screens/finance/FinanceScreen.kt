@@ -19,6 +19,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -30,6 +31,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -48,6 +51,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Block
@@ -73,6 +77,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
@@ -80,6 +87,7 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
+import cloud.dcompany.erp.DCompanyApp
 import cloud.dcompany.erp.core.auth.FinanceAccess
 import cloud.dcompany.erp.core.money.parseRupeesToMinor
 import cloud.dcompany.erp.core.net.asRupees
@@ -143,8 +151,15 @@ private fun FinanceContent(
     var tab by remember { mutableIntStateOf(0) }
     val tabs = listOf("Overview", "Expenses", "Collections", "Tip payouts", "Assets", "Partners")
 
+    val imeVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
+    val keyboard = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-        Header(state, onRefresh = vm::load)
+        if (!imeVisible) Header(state, onRefresh = vm::load)
+        else Row(Modifier.fillMaxWidth().padding(horizontal=Spacing.lg), verticalAlignment=Alignment.CenterVertically) {
+            Text("Finance · ${tabs[tab]}",style=MaterialTheme.typography.titleSmall,modifier=Modifier.weight(1f))
+            TextButton({ keyboard?.hide();focusManager.clearFocus() }) { Text("Finish text entry") }
+        }
         when (state.primaryContentState) {
             FinancePrimaryContentState.ERROR -> ErrorBlock(
                 state.error ?: financeLoadFailureMessage(
@@ -165,7 +180,7 @@ private fun FinanceContent(
             }
 
             FinancePrimaryContentState.DATA -> {
-                PremiumTabBar(
+                if (!imeVisible) PremiumTabBar(
                     options = tabs.mapIndexed { index, title ->
                         TabOption(index.toString(), title)
                     },
@@ -173,7 +188,7 @@ private fun FinanceContent(
                     onSelect = { selected -> tab = selected.toIntOrNull() ?: 0 },
                     modifier = Modifier.padding(horizontal = Spacing.lg),
                 )
-                FinanceStatusRegion(state = state, vm = vm, access = access)
+                FinanceStatusRegion(state = state, vm = vm, access = access, compact = imeVisible)
                 when (tab) {
                     0 -> OverviewTab(state, presentation)
                     1 -> ExpensesTab(state, vm, access.canRecordExpenses)
@@ -287,6 +302,7 @@ private fun FinanceStatusRegion(
     state: FinanceUiState,
     vm: FinanceViewModel,
     access: FinanceAccess,
+    compact: Boolean = false,
 ) {
     val hasPendingChanges = state.pendingExpenses.isNotEmpty() ||
         state.pendingExpenseReceipts.isNotEmpty() || state.pendingAssets.isNotEmpty() ||
@@ -294,19 +310,9 @@ private fun FinanceStatusRegion(
     val hasStatus = !state.online || (state.error != null && state.online) ||
         state.pendingOnlineWrite != null || state.notice != null || hasPendingChanges
 
-    Box(
-        Modifier
-            .fillMaxWidth()
-            .height(FINANCE_STATUS_REGION_HEIGHT)
-            .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
-    ) {
+    FinanceStatusViewport(compact = compact) {
         if (!hasStatus) {
-            Text(
-                "Finance records are online · no saved finance actions need attention",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.labelSmall,
-                modifier = Modifier.align(Alignment.CenterStart),
-            )
+            FinanceReadySummary(state.lastUpdatedAtMillis, compact)
         } else {
             Column(
                 Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
@@ -330,6 +336,56 @@ private fun FinanceStatusRegion(
             }
         }
     }
+}
+
+@Composable
+internal fun BoxScope.FinanceReadySummary(lastUpdatedAtMillis: Long?, compact: Boolean) {
+    if (compact) {
+        Text(
+            "Finance online · protected recovery is in saved work",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.align(Alignment.CenterStart),
+        )
+    } else {
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.spacedBy(Spacing.sm, Alignment.CenterVertically),
+        ) {
+            Text("Finance records online", style = MaterialTheme.typography.labelLarge)
+            val refreshedAt = lastUpdatedAtMillis?.let {
+                DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(it))
+            }
+            Text(
+                refreshedAt?.let { "Figures last refreshed: $it · device clock" }
+                    ?: "Last successful financial refresh is not retained.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.labelSmall,
+            )
+            Text(
+                "Protected corrections are checked separately in saved-work status; recovery is never automatic.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.labelSmall,
+            )
+        }
+    }
+}
+
+// Report content stays at the same position as network/status messages change.
+// The compact keyboard viewport has its own fixed rail, independent of status.
+@Composable
+internal fun FinanceStatusViewport(
+    compact: Boolean = false,
+    content: @Composable BoxScope.() -> Unit,
+) {
+    Box(
+        modifier = Modifier.fillMaxWidth()
+            .then(if (compact) Modifier.height(48.dp) else Modifier.height(FINANCE_STATUS_REGION_HEIGHT))
+            .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
+        content = content,
+    )
 }
 
 private val FINANCE_STATUS_REGION_HEIGHT = 132.dp
@@ -652,6 +708,12 @@ private fun ManualCollectionsTab(
     presentation: WorkspacePresentationPolicy,
 ) {
     val totals = state.collectionTotals
+    val owner by DCompanyApp.instance.shiftCache.profile.collectAsStateWithLifecycle()
+    val ownerKey = owner?.let { "${it.companyId}|${it.userId}|${it.branchId.orEmpty()}" }
+    val canCorrect = owner?.let { it.auditAccess && it.effectivePermissions?.contains("finance.tender.correct") == true } == true
+    var reviewActuals by remember(ownerKey) { mutableStateOf(false) }
+    var correctionDate by remember(ownerKey) { mutableStateOf("") }
+    var correctionBranch by remember(ownerKey) { mutableStateOf(owner?.branchId.orEmpty()) }
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
@@ -671,10 +733,21 @@ private fun ManualCollectionsTab(
                 ViewOnlyNotice("Manual collections are view only — ask an owner or manager to record or void one.")
             }
         }
+        if (canCorrect) item(key = "daily-tender-evidence") {
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                ErpButton(if (reviewActuals) "Hide daily actuals review" else "Review / correct daily Cash and UPI actuals", { reviewActuals = !reviewActuals }, intent = ActionIntent.Secondary)
+                if (reviewActuals) {
+                    Text("Use an identified receipt for a known Cash to UPI error. Daily actuals remain unallocated and never invent a source bill or drawer count.", style = MaterialTheme.typography.bodySmall)
+                    PickerField("Shop", state.branches.firstOrNull { it.id == correctionBranch }?.name ?: "Select shop", state.branches.map { it.id to it.name }, enabled = owner?.branchId == null) { correctionBranch = it }
+                    OutlinedTextField(correctionDate, { correctionDate = it.take(10) }, label = { Text("Shop date · YYYY-MM-DD") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    if (correctionBranch.isNotBlank() && correctionDate.length == 10) TenderWorkspace(TenderContext.Daily(correctionBranch, correctionDate))
+                }
+            }
+        }
         item {
             StatGrid(
                 listOf(
-                    StatSpec("Active total", totals.totalMinor.asRupees(), countLabel(totals.activeCount, "entry")),
+                    StatSpec("Active total", totals.totalMinor.asRupees(), countLabel(totals.activeCount, "entry", "entries")),
                     StatSpec("Cash", totals.cashMinor.asRupees()),
                     StatSpec("UPI", totals.upiMinor.asRupees()),
                     StatSpec(

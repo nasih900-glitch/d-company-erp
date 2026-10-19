@@ -19,11 +19,14 @@ To add a model to the audit trail, just add its class to TRACKED below.
 from __future__ import annotations
 
 import contextvars
-from datetime import UTC, datetime
+import hashlib
+import math
+from datetime import UTC, date, datetime
+from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import event
+from sqlalchemy import event, insert
 from sqlalchemy.inspection import inspect
 from sqlalchemy.orm import Session
 
@@ -45,6 +48,7 @@ from app.models import (
     EventTicket,
     Expense,
     ExpenseCategory,
+    FinanceSourceCorrection,
     Floor,
     GamingBooking,
     GamingPackage,
@@ -138,6 +142,7 @@ def set_actor(
     terminal_id: UUID | None = None,
     ip: str | None = None,
     user_agent: str | None = None,
+    actor_kind: str = "authenticated",
 ) -> None:
     actor_ctx.set(
         {
@@ -146,6 +151,7 @@ def set_actor(
             "terminal_id": terminal_id,
             "ip": ip,
             "user_agent": user_agent,
+            "actor_kind": actor_kind,
         }
     )
 
@@ -189,7 +195,11 @@ def clear_request_context() -> None:
 # ---------------------------------------------------------------------------
 # Tracked models — every write to one of these writes an audit row.
 # ---------------------------------------------------------------------------
+from app.models import DailyTenderReconciliation, PaymentTenderCorrection
+
 TRACKED: set[type] = {
+    PaymentTenderCorrection,
+    DailyTenderReconciliation,
     Account,
     Asset,
     Attendance,
@@ -205,6 +215,7 @@ TRACKED: set[type] = {
     Expense,
     ExpenseCategory,
     Floor,
+    FinanceSourceCorrection,
     GRN,
     GRNLine,
     GamingBooking,
@@ -289,6 +300,10 @@ _REDACT = {
     "password_hash",
     "payment_key_secret",
     "token_hash",
+    "password", "current_password", "new_password", "pending_password_hash",
+    "access_token", "refresh_token", "refresh_token_hash", "audit_token", "pricing_token",
+    "code_hash", "otp", "secret", "authorization", "cookie",
+    "jwt_secret", "jwt_private_key",
 }
 
 _REDACTION_MARKER = "***REDACTED***"
@@ -305,29 +320,47 @@ def _is_redacted_column(column: Any) -> bool:
     return column.key in _REDACT or column.info.get("audit_redact") is True
 
 
+def json_safe(value: Any, *, depth: int = 0) -> Any:
+    """Bounded typed JSON; nested credentials stay redacted before persistence."""
+    if depth > 8:
+        return "[depth limit]"
+    if value is None or isinstance(value, (bool, int)):
+        return value
+    if isinstance(value, str):
+        return value[:8000]
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, (UUID, Decimal)):
+        return str(value)
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {
+            str(key)[:120]: _REDACTION_MARKER
+            if str(key).lower() in _REDACT or str(key).lower().endswith("_secret_ciphertext")
+            or (str(key).lower() == "code" and any(
+                marker in value for marker in ("otp", "code_hash", "challenge_id", "password_reset")
+            ))
+            else json_safe(item, depth=depth + 1)
+            for key, item in list(value.items())[:200]
+        }
+    if isinstance(value, (list, tuple)):
+        return [json_safe(item, depth=depth + 1) for item in value[:200]]
+    return str(value)[:1000]
+
+
 def _serialize(obj: Any) -> dict | None:
-    """Snapshot the row's column values as JSON-safe dict."""
     if obj is None:
         return None
     try:
         mapper = inspect(obj.__class__)
     except Exception:
         return None
-    out: dict[str, Any] = {}
-    for col in mapper.columns:
-        if _is_redacted_column(col):
-            out[col.key] = _REDACTION_MARKER
-            continue
-        val = getattr(obj, col.key, None)
-        if isinstance(val, UUID):
-            out[col.key] = str(val)
-        elif isinstance(val, datetime):
-            out[col.key] = val.isoformat()
-        elif isinstance(val, (int, float, str, bool)) or val is None:
-            out[col.key] = val
-        else:
-            out[col.key] = str(val)
-    return out
+    return {
+        col.key: _REDACTION_MARKER if _is_redacted_column(col)
+        else json_safe(getattr(obj, col.key, None))
+        for col in mapper.columns
+    }
 
 
 def _captured_diff(obj: Any) -> dict[str, dict]:
@@ -357,14 +390,8 @@ def _captured_diff(obj: Any) -> dict[str, dict]:
         before = history.deleted[0] if history.deleted else None
         after = history.added[0] if history.added else getattr(obj, col.key, None)
 
-        def _safe(v):
-            if isinstance(v, UUID):
-                return str(v)
-            if isinstance(v, datetime):
-                return v.isoformat()
-            return v if isinstance(v, (int, float, str, bool)) or v is None else str(v)
+        out[col.key] = {"before": json_safe(before), "after": json_safe(after)}
 
-        out[col.key] = {"before": _safe(before), "after": _safe(after)}
     return out
 
 
@@ -436,9 +463,75 @@ def _audit_context_fields(obj: Any | None = None) -> dict[str, Any]:
 
 
 def _enrich_manual_audit_row(row: AuditLog) -> None:
+    from app.services.audit.catalogue import (
+        CATALOGUE_VERSION,
+        DETAIL_FIELDS,
+        category_for,
+        classify_values,
+        retained_reference,
+    )
+
     for field, value in _audit_context_fields(row).items():
         if getattr(row, field, None) is None and value is not None:
             setattr(row, field, value)
+    row.before = json_safe(row.before)
+    row.after = json_safe(row.after)
+    derived = classify_values(row.action, row.entity_type, row.before, row.after)
+    if derived:
+        row.action_code, row.stage, row.outcome = derived
+    row.category = category_for(row.action, row.entity_type, row.action_code)
+    row.catalogue_version = CATALOGUE_VERSION
+    row.source_reference = row.source_reference or retained_reference(row.before, row.after)
+    if row.action == "login_failed":
+        row.target_user_id = row.target_user_id or row.actor_user_id
+        row.actor_user_id = None
+        row.actor_kind = "unauthenticated"
+    elif row.action in {"otp_password_reset_success", "otp_account_created"}:
+        row.actor_kind = "otp_approved_requester" if row.actor_user_id else "otp_approved_unknown"
+    elif row.action.startswith("security_otp_"):
+        row.actor_kind = "requester_recorded" if row.actor_user_id else "unauthenticated"
+    elif row.action == "login_success":
+        row.actor_kind = "authenticated"
+    elif row.actor_kind is None and row.actor_user_id is not None:
+        context = actor_ctx.get() or {}
+        row.actor_kind = context.get("actor_kind", "recorded_actor") if (
+            context.get("user_id") == row.actor_user_id
+        ) else "recorded_actor"
+    elif row.actor_kind is None:
+        row.actor_kind = "unverified"
+    row.business_details = json_safe(row.business_details or {
+        key: value for key, value in (row.after or {}).items() if key in DETAIL_FIELDS
+    })
+    row.operation_id = row.operation_id or row.client_action_id or row.request_id
+    if row.operation_id and len(row.operation_id) > 160:
+        row.operation_id = "sha256:" + hashlib.sha256(row.operation_id.encode()).hexdigest()
+
+
+def _stock_details(obj: Any, session: Session) -> dict | None:
+    if not isinstance(obj, StockMovement):
+        return None
+    # Snapshot names/units and retained history while the authoritative source
+    # transaction still holds them. Never consult mutable catalogue rows later
+    # to reconstruct an older Audit event.
+    objects = [*session.identity_map.values(), *session.new]
+    batch = next((row for row in objects if isinstance(row, Batch) and row.id == obj.batch_id), None)
+    if batch is None:
+        return None
+    ingredient = next((row for row in objects if isinstance(row, Ingredient)
+                       and row.id == batch.ingredient_id), None)
+    if ingredient is None:
+        return None
+    history = inspect(ingredient).attrs.current_qty.history
+    details = {
+        "ingredient_id": str(ingredient.id), "ingredient_name": ingredient.name,
+        "unit": ingredient.base_unit, "qty_delta": json_safe(obj.qty_delta),
+        "batch_id": str(batch.id), "type": obj.type,
+        "ref_type": obj.ref_type, "ref_id": str(obj.ref_id) if obj.ref_id else None,
+    }
+    if history.deleted:
+        details["balance_before"] = json_safe(history.deleted[0])
+        details["balance_after"] = json_safe(ingredient.current_qty)
+    return details
 
 
 # ---------------------------------------------------------------------------
@@ -472,25 +565,17 @@ def install_audit_listeners() -> None:
             if isinstance(obj, AuditLog):
                 _enrich_manual_audit_row(obj)
 
-        # Inserts
+        # Preserve object references through flush; defaults/IDs exist afterwards.
+        pending = session.info.setdefault("audit_pending_inserts", [])
         for obj in list(session.new):
-            if type(obj) not in TRACKED:
-                continue
-            row_company = _company_id_of(obj) or company_id
-            if row_company is None:
-                continue
-            rows_to_add.append(
-                AuditLog(
-                    actor_user_id=actor_user,
-                    company_id=row_company,
-                    action="create",
-                    entity_type=_entity_type(obj),
-                    entity_id=_entity_id(obj),
-                    before=None,
-                    after=_serialize(obj),
-                    **_audit_context_fields(obj),
-                )
-            )
+            if type(obj) in TRACKED:
+                row_company = _company_id_of(obj) or company_id
+                if row_company is not None:
+                    context = _audit_context_fields(obj)
+                    stock_details = _stock_details(obj, session)
+                    if stock_details is not None:
+                        context["business_details"] = stock_details
+                    pending.append((obj, row_company, actor_user, context))
 
         # Updates
         for obj in list(session.dirty):
@@ -546,4 +631,26 @@ def install_audit_listeners() -> None:
             )
 
         for row in rows_to_add:
+            _enrich_manual_audit_row(row)
             session.add(row)
+
+    @event.listens_for(Session, "after_flush_postexec")
+    def _after_flush_postexec(session: Session, flush_context):
+        for obj, company_id, actor_user_id, context in session.info.pop("audit_pending_inserts", []):
+            row = AuditLog(
+                actor_user_id=actor_user_id, company_id=company_id, action="create",
+                entity_type=_entity_type(obj), entity_id=_entity_id(obj), before=None,
+                after=_serialize(obj), **context,
+            )
+            _enrich_manual_audit_row(row)
+            # Direct insert on this transaction's connection makes final-ID
+            # evidence visible immediately after one flush, even when the
+            # session intentionally disables autoflush. No recursive ORM row.
+            values = {column.key: getattr(row, column.key, None)
+                      for column in AuditLog.__table__.columns
+                      if column.key not in {"id", "created_at"}}
+            session.connection().execute(insert(AuditLog.__table__).values(**values))
+
+    @event.listens_for(Session, "after_soft_rollback")
+    def _after_rollback(session: Session, previous_transaction):
+        session.info.pop("audit_pending_inserts", None)

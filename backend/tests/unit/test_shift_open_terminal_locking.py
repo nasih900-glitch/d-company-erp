@@ -12,7 +12,7 @@ from pydantic import ValidationError as PydanticValidationError
 from app.api.v1.pos.router import ShiftOpenRequest, open_shift
 from app.core.errors import BusinessRuleError
 from app.core.tenant import TenantContext
-from app.models import Shift, User
+from app.models import AuditLog, Shift, User
 
 COMPANY_ID = UUID("11111111-1111-1111-1111-111111111111")
 BRANCH_ID = UUID("22222222-2222-2222-2222-222222222222")
@@ -93,8 +93,15 @@ async def test_shift_open_locks_branch_then_terminal_and_revalidates_scope() -> 
     result = await open_shift(ShiftOpenRequest(opening_float_minor=2500), session, _tenant())
 
     assert result["status"] == "open"
-    assert len(session.added) == 1
-    shift = session.added[0]
+    assert len(session.added) == 2
+    shift = next(row for row in session.added if isinstance(row, Shift))
+    event = next(row for row in session.added if isinstance(row, AuditLog))
+    assert event.action == "shift_opened"
+    assert event.company_id == COMPANY_ID
+    assert event.actor_user_id == USER_ID
+    assert event.terminal_id == TERMINAL_ID
+    assert event.entity_id == str(shift.id)
+    assert event.after["opening_float_minor"] == 2500
     assert isinstance(shift, Shift)
     assert shift.company_id == COMPANY_ID
     assert shift.branch_id == BRANCH_ID

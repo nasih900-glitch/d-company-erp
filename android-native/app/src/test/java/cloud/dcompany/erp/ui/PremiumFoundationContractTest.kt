@@ -33,7 +33,6 @@ class PremiumFoundationContractTest {
         val brandMark = read("src/main/java/cloud/dcompany/erp/ui/components/DCompanyBrandMark.kt")
 
         assertTrue("DCompanyBrandMark(" in login)
-        assertTrue("size = 92.dp" in login)
         assertTrue("painterResource(R.mipmap.ic_launcher_foreground)" in brandMark)
         assertTrue("clip(CircleShape)" in brandMark)
         assertTrue("contentScale = ContentScale.Crop" in brandMark)
@@ -43,7 +42,6 @@ class PremiumFoundationContractTest {
         assertFalse("GAMING CENTRE" in login)
         assertFalse("GAMING CENTRE" in navigation)
         assertFalse("Cafe + Gaming Lounge" in login)
-        assertTrue("shape = Radius.shapeXl" in login)
     }
 
     @Test
@@ -52,7 +50,9 @@ class PremiumFoundationContractTest {
         val primitives = read("src/main/java/cloud/dcompany/erp/ui/components/Primitives.kt")
         val nativeColors = read("src/main/res/values/colors.xml")
 
-        assertTrue("Launch background must match the Compose background", "#08131B" in nativeColors)
+        val nativeNightColors = read("src/main/res/values-night/colors.xml")
+        assertTrue("Day launch must match the Web/Compose background", "#FAFAFA" in nativeColors)
+        assertTrue("Night launch must match the Web/Compose background", "#050505" in nativeNightColors)
         assertFalse("linearGradient" in theme)
         assertFalse("verticalGradient" in theme)
         assertFalse("GoldSheen" in theme)

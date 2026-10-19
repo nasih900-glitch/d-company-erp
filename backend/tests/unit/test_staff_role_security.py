@@ -9,7 +9,7 @@ import pytest
 from app.api.v1.staff import router as staff_router
 from app.core.errors import BusinessRuleError, ForbiddenError
 from app.core.tenant import TenantContext
-from app.models import Role, User
+from app.models import AuditLog, Role, User, UserRole
 
 
 class _Result:
@@ -115,9 +115,13 @@ async def test_protected_owner_can_assign_co_owner() -> None:
 
     await staff_router._set_role(session, tenant, uuid4(), "co_owner")
 
-    assert len(session.added) == 1
-    assert session.added[0].role_id == role.id
-    assert session.added[0].granted_by == tenant.user_id
+    assignment = next(row for row in session.added if isinstance(row, UserRole))
+    evidence = next(row for row in session.added if isinstance(row, AuditLog))
+    assert assignment.role_id == role.id
+    assert assignment.granted_by == tenant.user_id
+    assert evidence.actor_user_id == tenant.user_id
+    assert evidence.before["before_roles"] == ["cashier"]
+    assert evidence.after["after_roles"] == ["co_owner"]
 
 
 @pytest.mark.asyncio
@@ -139,8 +143,10 @@ async def test_protected_owner_can_assign_public_owner() -> None:
 
     await staff_router._set_role(session, tenant, uuid4(), "owner")
 
-    assert len(session.added) == 1
-    assert session.added[0].role_id == role.id
+    assignment = next(row for row in session.added if isinstance(row, UserRole))
+    evidence = next(row for row in session.added if isinstance(row, AuditLog))
+    assert assignment.role_id == role.id
+    assert evidence.after["after_roles"] == ["owner"]
 
 
 @pytest.mark.asyncio
@@ -188,8 +194,11 @@ async def test_role_replacement_preserves_single_existing_branch() -> None:
 
     await staff_router._set_role(session, tenant, uuid4(), "manager")
 
-    assert len(session.added) == 1
-    assert session.added[0].branch_id == branch_id
+    assignment = next(row for row in session.added if isinstance(row, UserRole))
+    evidence = next(row for row in session.added if isinstance(row, AuditLog))
+    assert assignment.branch_id == branch_id
+    assert evidence.before["branch_id"] == str(branch_id)
+    assert evidence.after["branch_id"] == str(branch_id)
 
 
 @pytest.mark.asyncio

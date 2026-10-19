@@ -585,7 +585,7 @@ interface SyncMetaDao {
         LoyaltyProgramCacheEntity::class,
         LocalPointsRedemptionActionEntity::class,
     ],
-    version = 55,
+    version = 56,
     exportSchema = true,
 )
 @TypeConverters(

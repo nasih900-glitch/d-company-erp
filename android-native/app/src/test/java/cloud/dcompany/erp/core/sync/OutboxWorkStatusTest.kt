@@ -73,6 +73,19 @@ class OutboxWorkStatusTest {
         assertEquals(null, outboxWorkVisibleLabel(OutboxWorkStatus(), false, true))
     }
 
+
+    @Test fun `zero automatic queue does not hide protected recovery or unreadable storage`() {
+        val pending=OutboxWorkStatus(protectedReviewCount=1)
+        assertFalse(pending.isClear);assertEquals(0,pending.retryableCount)
+        assertEquals("1 owner review",outboxWorkVisibleLabel(pending,false,true))
+        assertTrue(savedWorkUpdateGuidance(pending).contains("never sent by automatic Sync"))
+        assertFalse(savedWorkUpdateGuidance(pending).contains("preserved and resumed"))
+        val unknown=OutboxWorkStatus(protectedReviewUnknown=true)
+        assertFalse(unknown.isClear);assertEquals("Review",outboxWorkVisibleLabel(unknown,false,false))
+        assertTrue(outboxWorkVisibleLabel(unknown,false,true)!!.contains("unknown"))
+        assertTrue(savedWorkUpdateGuidance(unknown).contains("Do not clear app storage"))
+    }
+
     private fun group(
         resource: String,
         state: String,

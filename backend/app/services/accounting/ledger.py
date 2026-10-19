@@ -74,6 +74,8 @@ from app.services.accounting.accounts import (
     UPI_CLEARING,
     WALLET_CLEARING,
 )
+from app.models import DailyTenderReconciliation, PaymentTenderCorrection
+from app.services.finance.tender_corrections import corrections_for_payments
 from app.services.accounting.depreciation import asset_depreciation_expense_minor
 from app.services.accounting.purchases import (
     received_line_total_minor,
@@ -702,9 +704,10 @@ async def build_operational_ledger(
         .order_by(Payment.paid_at, Payment.id)
     )
     payment_rows = (await session.execute(payment_stmt)).all()
+    corrections = await corrections_for_payments(session, [payment.id for payment, _ in payment_rows])
     payment_methods_by_order: dict[UUID, set[str]] = {}
     for payment, invoice_no in payment_rows:
-        payment_methods_by_order.setdefault(payment.order_id, set()).add(payment.method)
+        payment_methods_by_order.setdefault(payment.order_id, set()).add(corrections[payment.id].effective_method if payment.id in corrections else payment.method)
         if start_at is not None and payment.paid_at < start_at:
             continue
         memo = f"Payment for {invoice_no or payment.order_id.hex[:8]}"
@@ -728,6 +731,35 @@ async def build_operational_ledger(
                 ),
             ]
         )
+
+    # Preserve original payment journal lines and add a balancing classification
+    # pair in the SAME paid_at accounting cohort. Never remap both effects.
+    correction_stmt = select(PaymentTenderCorrection).where(
+        PaymentTenderCorrection.company_id == company_id,
+        PaymentTenderCorrection.accounting_at < end_exclusive)
+    if start_at is not None:
+        correction_stmt = correction_stmt.where(PaymentTenderCorrection.accounting_at >= start_at)
+    for row in await session.scalars(correction_stmt):
+        memo = f"Owner-attested Cash to UPI classification for {row.invoice_no}; recorded {row.recorded_at.isoformat()}"
+        lines.extend([
+            _line(occurred_at=row.accounting_at, ref_type="payment_tender_correction", ref_id=row.id,
+                account=UPI_CLEARING.ledger_tuple, debit=row.amount_minor, memo=memo),
+            _line(occurred_at=row.accounting_at, ref_type="payment_tender_correction", ref_id=row.id,
+                account=CASH.ledger_tuple, credit=row.amount_minor, memo=memo),
+        ])
+    for row in await session.scalars(select(DailyTenderReconciliation).where(
+        DailyTenderReconciliation.company_id == company_id, DailyTenderReconciliation.kind == "applied")):
+        # Accounting period anchor only, explicitly not a physical event time.
+        at = datetime.combine(row.business_date, datetime.min.time(), ZoneInfo(row.business_timezone))
+        if at >= end_exclusive or (start_at is not None and at < start_at):
+            continue
+        memo = f"Unallocated owner-attested tender classification for {row.business_date}; date-only period evidence"
+        lines.extend([
+            _line(occurred_at=at, ref_type="daily_tender_reconciliation", ref_id=row.id,
+                account=UPI_CLEARING.ledger_tuple, debit=row.upi_delta_minor, memo=memo),
+            _line(occurred_at=at, ref_type="daily_tender_reconciliation", ref_id=row.id,
+                account=CASH.ledger_tuple, credit=-row.cash_delta_minor, memo=memo),
+        ])
 
     timezone_name = await company_timezone(session, company_id)
     local_zone = ZoneInfo(timezone_name)

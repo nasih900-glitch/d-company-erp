@@ -452,8 +452,8 @@ async def test_expired_amendment_replay_locks_session_before_receipt(
     # while waiting here and could deadlock against Stop/Extend.
     url = make_url(os.environ["DATABASE_URL"])
     connection_args = dict(
-        host=url.host,
-        port=url.port,
+        host=url.query.get("host", url.host),
+        port=url.query.get("port", url.port),
         dbname=url.database,
         user=url.username,
         password=url.password,

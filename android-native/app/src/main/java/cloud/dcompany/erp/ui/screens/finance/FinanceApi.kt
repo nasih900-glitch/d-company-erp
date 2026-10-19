@@ -165,4 +165,41 @@ interface FinanceApi {
     /** Both expense and asset create need a least-privilege branch picker. */
     @GET("finance/branches")
     suspend fun branches(): List<Branch>
+    @POST("finance/tender-corrections/unlock")
+    suspend fun unlockTender(@Body body: TenderUnlockRequest): TenderUnlockResponse
+
+    @POST("finance/tender-corrections/payment/prepare")
+    suspend fun preparePaymentTender(
+        @Header("X-Tender-Token") token: String,
+        @Body body: PaymentTenderPrepare,
+    ): PaymentTenderPreview
+
+    @POST("finance/tender-corrections/daily/prepare")
+    suspend fun prepareDailyTender(
+        @Header("X-Tender-Token") token: String,
+        @Body body: DailyTenderPrepare,
+    ): DailyTenderPreview
+
+    @POST("finance/tender-corrections/payment/commit")
+    suspend fun commitPaymentTender(
+        @Header("X-Tender-Token") token: String,
+        @Header("Idempotency-Key") key: String,
+        @Body body: PaymentTenderCommit,
+    ): TenderReceipt
+
+    @POST("finance/tender-corrections/daily/commit")
+    suspend fun commitDailyTender(
+        @Header("X-Tender-Token") token: String,
+        @Header("Idempotency-Key") key: String,
+        @Body body: DailyTenderCommit,
+    ): TenderReceipt
+
+    @GET("finance/tender-corrections/history")
+    suspend fun tenderHistory(
+        @Header("X-Tender-Token") token: String,
+        @Query("branch_id") branchId: String,
+        @Query("business_date") businessDate: String? = null,
+        @Query("payment_id") paymentId: String? = null,
+        @Query("limit") limit: Int = 50,
+    ): List<TenderReceipt>
 }

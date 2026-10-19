@@ -1,0 +1,148 @@
+package cloud.dcompany.erp.ui.screens.finance
+
+import java.io.IOException
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.Files
+import java.nio.file.Path
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.collect
+import org.junit.Assert.*
+import org.junit.Rule
+import org.junit.Test
+import org.junit.rules.TemporaryFolder
+
+class FileTenderJournalStorageTest {
+    @get:Rule val temporary = TemporaryFolder()
+    private val scope = TenderScope("11111111-1111-1111-1111-111111111111", "22222222-2222-2222-2222-222222222222", "33333333-3333-3333-3333-333333333333")
+    private fun command() = paymentTenderCommand(scope,PaymentTenderCommit("44444444-4444-4444-4444-444444444444","a".repeat(64),"Confirmed source"),"retained-file-action",1000)
+    private fun folder(): Path = temporary.root.toPath().resolve("journal")
+    private fun storage(sync: (Path)->Unit = {}) = FileTenderJournalStorage({folder()},sync)
+    private fun onlyFile(): Path = Files.list(folder()).use { it.findFirst().get() }
+
+    @Test fun actualPrivateFileReopenPreservesExactIntentAcrossNewAdapterInstance() = runBlocking {
+        assertNull(TenderJournal(storage()).read(scope))
+        val command = TenderJournal(storage()).reserve(command())
+        assertEquals(command,TenderJournal(storage()).read(scope))
+        assertTrue(Files.size(onlyFile()) > 0)
+        assertTrue(TenderJournal(storage()).clearExact(command))
+        assertNull(TenderJournal(storage()).read(scope))
+    }
+
+    @Test fun malformedUnderlyingFileOnRestartIsNeverInterpretedAsMissing() = runBlocking {
+        TenderJournal(storage()).reserve(command())
+        val path=onlyFile()
+        val corrupt="{truncated financial recovery"
+        Files.write(path,corrupt.toByteArray())
+        val restarted=TenderJournal(storage())
+        assertTrue(runCatching { restarted.read(scope) }.isFailure)
+        assertTrue(runCatching { restarted.reserve(command().copy(idempotencyKey="new-action")) }.isFailure)
+        assertEquals(corrupt,String(Files.readAllBytes(path)))
+    }
+
+    @Test fun invalidUtf8AndSymlinkNeverBecomeAnEmptyStore() = runBlocking {
+        TenderJournal(storage()).reserve(command())
+        val path=onlyFile()
+        Files.write(path,byteArrayOf(0xC3.toByte()))
+        assertTrue(runCatching { TenderJournal(storage()).read(scope) }.isFailure)
+        Files.delete(path)
+        val target=temporary.root.toPath().resolve("outside.json")
+        Files.write(target,"{}".toByteArray())
+        Files.createSymbolicLink(path,target)
+        assertTrue(runCatching { TenderJournal(storage()).read(scope) }.isFailure)
+        assertEquals("{}",String(Files.readAllBytes(target)))
+    }
+
+    @Test fun failedDirectorySyncAfterRenameStillRequiresSuccessfulSyncBeforeSend() = runBlocking {
+        TenderJournal(storage()).reserve(command())
+        var fail=true
+        val journal=TenderJournal(storage { path -> if(fail && path == folder()) throw IOException("fsync failed after rename") })
+        assertTrue(runCatching { journal.reserve(command()) }.isFailure)
+        assertEquals(command(),TenderJournal(storage()).read(scope))
+        assertTrue(runCatching { journal.reserve(command()) }.isFailure)
+        fail=false
+        assertEquals(command(),journal.reserve(command()))
+    }
+
+    @Test fun failedContainingDirectorySyncCannotBeSkippedOnRetryAfterMkdir() = runBlocking {
+        var fail=true
+        var parentSyncs=0
+        val journal=TenderJournal(storage { path ->
+            if(path == folder().parent) {
+                parentSyncs++
+                if(fail) throw IOException("parent fsync failed after mkdir")
+            }
+        })
+        assertTrue(runCatching { journal.reserve(command()) }.isFailure)
+        assertTrue(Files.isDirectory(folder()))
+        assertTrue(runCatching { journal.reserve(command()) }.isFailure)
+        assertEquals(2,parentSyncs)
+        fail=false
+        assertEquals(command(),journal.reserve(command()))
+        assertEquals(3,parentSyncs)
+        assertEquals(command(),TenderJournal(storage()).read(scope))
+    }
+
+    @Test fun unsupportedAtomicMoveHasNoCopyFallbackAndRetainsCompletePreparationForExactRecovery() = runBlocking {
+        val failing=FileTenderJournalStorage({folder()},{},{from,to ->
+            throw AtomicMoveNotSupportedException(from.toString(),to.toString(),"unsupported")
+        })
+        assertTrue(runCatching { TenderJournal(failing).reserve(command()) }.isFailure)
+        assertTrue(onlyFile().fileName.toString().endsWith(".preparing"))
+        val restarted=TenderJournal(storage())
+        assertEquals(command(),restarted.read(scope))
+        assertEquals(command(),restarted.reserve(command()))
+        assertTrue(onlyFile().fileName.toString().endsWith(".json"))
+    }
+    @Test fun readinessDoesNotCreateStoreAndCountsOtherScopesWithoutExposingTheirDetails() = runBlocking {
+        val journal=TenderJournal(storage())
+        assertEquals(TenderJournalReadiness(verified=true),journal.readiness())
+        assertFalse(Files.exists(folder()))
+        val first=journal.reserve(command())
+        val other=command().copy(scope=scope.copy(ownerId="55555555-5555-5555-5555-555555555555"),idempotencyKey="other-owner-action")
+        journal.reserve(other)
+        val summary=journal.readiness()
+        assertTrue(summary.verified);assertFalse(summary.isClear);assertEquals(2,summary.reviewCount)
+        assertFalse(summary.toString().contains(other.scope.ownerId));assertFalse(summary.toString().contains(other.idempotencyKey))
+        journal.clearExact(first);assertEquals(1,journal.readiness().reviewCount)
+        assertEquals(other,TenderJournal(storage()).read(other.scope))
+    }
+
+    @Test fun readinessCountsInterruptedPreparationOnceAndLeavesExactBytesUntouched() = runBlocking {
+        val failing=FileTenderJournalStorage({folder()},{},{from,to->throw AtomicMoveNotSupportedException(from.toString(),to.toString(),"unsupported")})
+        runCatching { TenderJournal(failing).reserve(command()) }
+        val file=onlyFile();val before=Files.readAllBytes(file)
+        assertEquals(TenderJournalReadiness(1,true),TenderJournal(storage()).readiness())
+        assertArrayEquals(before,Files.readAllBytes(file));assertEquals(command(),TenderJournal(storage()).read(scope))
+    }
+
+    @Test fun malformedConflictingOrUnsafeStoreIsUnknownAndNeverClear() = runBlocking {
+        val journal=TenderJournal(storage());journal.reserve(command())
+        val path=onlyFile();val original=Files.readAllBytes(path)
+        Files.write(path,"{truncated".toByteArray())
+        assertFalse(journal.readiness().verified);assertFalse(journal.readiness().isClear)
+        assertEquals("{truncated",String(Files.readAllBytes(path)))
+        Files.write(path,original)
+        val extra=folder().resolve("unknown.data");Files.write(extra,"retained".toByteArray())
+        assertFalse(journal.readiness().verified);assertTrue(Files.exists(extra));Files.delete(extra)
+        Files.write(path.resolveSibling(path.fileName.toString()+".preparing"),"{}".toByteArray())
+        assertFalse(journal.readiness().verified);assertArrayEquals(original,Files.readAllBytes(path))
+    }
+
+    @Test fun readinessFlowUpdatesAfterDurableReserveAndExactCleanupWithoutSending() = runBlocking {
+        val journal=TenderJournal(storage())
+        val states=mutableListOf<TenderJournalReadiness>()
+        val collector=kotlinx.coroutines.CoroutineScope(coroutineContext).launch {
+            journal.observeReadiness().collect { states+=it }
+        }
+        try {
+            kotlinx.coroutines.withTimeout(3000){while(states.isEmpty())kotlinx.coroutines.delay(5)}
+            val saved=journal.reserve(command())
+            kotlinx.coroutines.withTimeout(3000){while(states.last().reviewCount!=1)kotlinx.coroutines.delay(5)}
+            journal.clearExact(saved)
+            kotlinx.coroutines.withTimeout(3000){while(!states.last().isClear)kotlinx.coroutines.delay(5)}
+            assertTrue(states.first().isClear);assertTrue(states.all{it.verified})
+        } finally {collector.cancel()}
+    }
+
+}

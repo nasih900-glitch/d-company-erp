@@ -1,18 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-
-    <!-- The launch theme only has to paint the brand background before Compose
-         takes over, so it deliberately inherits from a NoActionBar Material
-         parent rather than pulling in AppCompat. Compose owns everything after
-         setContent(); DCompanyTheme forces light system-bar icons there.
-
-         brandBackground here must match Brand.Background in Theme.kt — a
-         mismatch shows as a colour flash on cold start. -->
-    <style name="Theme.DCompany" parent="android:Theme.Material.NoActionBar">
+    <!-- The complete API26-compatible System launch surface. Higher API themes
+         inherit these attributes so the palette and status-bar behavior stay equal. -->
+    <style name="Base.Theme.DCompany" parent="android:Theme.Material.NoActionBar">
         <item name="android:windowBackground">@color/brandBackground</item>
         <item name="android:statusBarColor">@color/brandBackground</item>
         <item name="android:navigationBarColor">@color/brandBackground</item>
-        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightStatusBar">@bool/lightSystemBars</item>
     </style>
-
+    <style name="Theme.DCompany" parent="Base.Theme.DCompany" />
 </resources>

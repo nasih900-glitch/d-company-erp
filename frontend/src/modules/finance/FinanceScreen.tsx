@@ -14,7 +14,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   TrendingUp, TrendingDown, Receipt, Users, Plus, Trash2,
   Loader2, AlertCircle, Wallet, Banknote, RefreshCw, BookOpen,
-  Ban, Package, HandCoins, Camera, Upload, FileText, Eye,
+  Ban, Package, HandCoins, Camera, Upload, FileText, Eye, ShieldCheck,
 } from 'lucide-react';
 
 import { inr, inrShort } from '@/lib/inr';
@@ -42,6 +42,9 @@ import { useRealtimeRefresh } from '@/hooks/useRealtimeRefresh';
 import { useLatestRequest } from '@/hooks/useLatestRequest';
 import AssetsTab from './AssetsTab';
 import ManualCollectionsTab from './ManualCollectionsTab';
+import TenderCorrections from './TenderCorrections';
+import TenderAdjustments from './TenderAdjustments';
+import { useAuth } from '@/modules/auth/AuthContext';
 import TipPayoutsTab from './TipPayoutsTab';
 import { SkeletonCard } from '@/components/ui/Skeleton';
 import {
@@ -73,11 +76,12 @@ import {
   persistExpenseWithOptionalReceipt,
 } from './expense-receipts';
 
-type Tab = 'overview' | 'expenses' | 'collections' | 'tips' | 'partners' | 'assets';
+type Tab = 'tenders' | 'overview' | 'expenses' | 'collections' | 'tips' | 'partners' | 'assets';
 
 const TAX_COMPLIANCE_UI_ENABLED = GAMING_CENTRE_FEATURES.taxCompliance;
 
 export default function FinanceScreen() {
+  const { me } = useAuth();
   const [tab, setTab] = useState<Tab>('overview');
   return (
     <div>
@@ -107,8 +111,12 @@ export default function FinanceScreen() {
         <TabBtn active={tab === 'assets'} onClick={() => setTab('assets')}>
           <Package size={14}/> Fixed assets
         </TabBtn>
+        {me?.audit_access && me.effective_permissions?.includes('finance.tender.correct') && <TabBtn active={tab === 'tenders'} onClick={() => setTab('tenders')}>
+          <ShieldCheck size={14}/> Daily actuals & corrections
+        </TabBtn>}
       </div>
 
+      {tab === 'tenders' && <TenderCorrections/>}
       {tab === 'overview' && <OverviewTab/>}
       {tab === 'expenses' && <ExpensesTab/>}
       {tab === 'collections' && <ManualCollectionsTab/>}
@@ -183,6 +191,7 @@ function OverviewTab() {
 
   return (
     <>
+      <TenderAdjustments rows={data.tender_reclassifications ?? []}/>
       <div className="flex items-baseline justify-between mb-3 flex-wrap gap-2">
         <p className="text-xs text-fg-muted">
           Today · {data.orders_count} order{data.orders_count === 1 ? '' : 's'} · {data.tickets_count} ticket{data.tickets_count === 1 ? '' : 's'} · Avg {inr(data.avg_ticket_minor)}

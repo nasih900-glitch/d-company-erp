@@ -165,4 +165,9 @@ data class ShiftHistoryCacheEntity(
     val closedByName: String?,
     val closedByEmail: String?,
     val fetchedAtMillis: Long,
+    val collectionBasis: String? = null,
+    val tenderCorrectionMinor: Long? = null,
+    val reconstructedCashCollectionsMinor: Long? = null,
+    val reconstructedUpiCollectionsMinor: Long? = null,
+    val reconstructedExpectedMinor: Long? = null,
 )

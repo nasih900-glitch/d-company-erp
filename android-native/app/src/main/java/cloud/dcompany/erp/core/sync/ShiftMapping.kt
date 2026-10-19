@@ -75,5 +75,10 @@ internal fun ShiftDetail.toShiftHistoryCache(
     closedByUserId = closedByUserId,
     closedByName = closedByName,
     closedByEmail = closedByEmail,
+    collectionBasis = collectionBasis,
+    tenderCorrectionMinor = tenderCorrectionMinor,
+    reconstructedCashCollectionsMinor = reconstructedCashCollectionsMinor,
+    reconstructedUpiCollectionsMinor = reconstructedUpiCollectionsMinor,
+    reconstructedExpectedMinor = reconstructedExpectedMinor,
     fetchedAtMillis = fetchedAtMillis,
 )

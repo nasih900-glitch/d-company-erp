@@ -1321,7 +1321,7 @@ function RefundRequestModal({
             ) : rail.kind === 'single_provider' ? (
               <div className="grid grid-cols-2 gap-2">
                 <Choice active={mode === 'original'} onClick={() => setMode('original')}>
-                  Original {paymentMethodLabel(rail.methods[0])}
+                  Same {paymentMethodLabel(rail.methods[0])}
                 </Choice>
                 <Choice active={mode === 'cash'} onClick={() => setMode('cash')}>Cash instead</Choice>
               </div>
@@ -1331,7 +1331,7 @@ function RefundRequestModal({
                 <p className="mt-1 text-xs text-fg-muted">
                   {rail.kind === 'mixed'
                     ? `Mixed payment (${rail.methods.map(paymentMethodLabel).join(' + ')}) must use the explicit cash workflow.`
-                    : 'The original collection was cash, so this refund uses the guarded drawer workflow.'}
+                    : 'The receipt payment method is Cash, so this refund uses the guarded drawer workflow.'}
                 </p>
               </div>
             )}
@@ -1378,7 +1378,7 @@ function RefundRequestModal({
           <dl className="grid grid-cols-2 gap-3 rounded-xl bg-bg-raised p-4 text-sm">
             <Info label="Order" value={order.invoice_no || order.id}/>
             <Info label="Amount" value={inr(amountMinor ?? 0)} mono/>
-            <Info label="Payout" value={mode === 'cash' ? 'Cash' : `Original ${paymentMethodLabel(rail.methods[0])}`}/>
+            <Info label="Payout" value={mode === 'cash' ? 'Cash' : `Same ${paymentMethodLabel(rail.methods[0])}`}/>
             <Info label="Reason" value={reasonCode.replaceAll('_', ' ')}/>
           </dl>
           <div className="flex justify-end gap-2">
