@@ -228,7 +228,9 @@ class ShiftViewModel : ViewModel() {
                         // acknowledgement. Historical closed rows migrate as
                         // false and therefore never appear as a fresh success
                         // merely because the process was restarted.
-                        latestLocalClosed = local.firstOrNull { it.closeResultPending },
+                        latestLocalClosed = local.firstOrNull {
+                            it.closeResultPending && it.terminalId == terminalId
+                        },
                         lastSyncMillis = meta?.lastSyncMillis,
                     )
                 }
@@ -300,13 +302,12 @@ class ShiftViewModel : ViewModel() {
         val closeOrigin = currentOpen?.let {
             shiftCloseOriginDecision(it, app.updateTelemetry.installation.installationId())
         }
-        val justClosed = historyState.latestLocalClosed?.takeIf {
-            shouldShowShiftResult(
-                itemId = it.localId,
-                resultPending = it.closeResultPending,
-                dismissedId = interaction.dismissedClosedId,
-            )
-        }
+        val justClosed = visiblePendingShiftCloseResult(
+            result = historyState.latestLocalClosed,
+            currentShiftLoaded = scopedCurrent != null,
+            terminalId = session.terminalId,
+            dismissedId = interaction.dismissedClosedId,
+        )
         ShiftUiState(
             open = currentOpen,
             currentShiftLoaded = scopedCurrent != null,
@@ -763,14 +764,27 @@ class ShiftViewModel : ViewModel() {
         }
     }
 
-    fun dismissResult() {
-        val localId = state.value.closedResult?.localId ?: return
-        dismissedClosedId.value = localId
+    fun dismissResult(localId: String) {
+        val lease = app.cacheIsolation.currentLease() ?: return
+        val terminalId = app.terminalStore.confirmedTerminalId()
+        if (lease.scope.terminalId != terminalId ||
+            !canAcknowledgeShiftCloseResult(localId, state.value, terminalId)) return
         viewModelScope.launch {
             try {
-                db.shiftDao().acknowledgeCloseResult(localId)
+                app.cacheIsolation.commitIfCurrent(lease) {
+                    // The button belongs to the rendered receipt, never a newer result.
+                    val activeTerminalId = app.terminalStore.confirmedTerminalId()
+                    if (activeTerminalId == terminalId &&
+                        canAcknowledgeShiftCloseResult(localId, state.value, activeTerminalId) &&
+                        db.shiftDao().acknowledgeCloseResult(localId) == 1
+                    ) dismissedClosedId.value = localId
+                }
             } catch (_: Exception) {
-                operationError.value =
+                if (app.cacheIsolation.currentLease() == lease &&
+                    canAcknowledgeShiftCloseResult(
+                        localId, state.value, app.terminalStore.confirmedTerminalId(),
+                    )
+                ) operationError.value =
                     "The acknowledgement could not be saved. The close result may appear again after restart."
             }
         }
@@ -805,6 +819,26 @@ internal fun shouldShowShiftResult(
     resultPending: Boolean,
     dismissedId: String?,
 ): Boolean = resultPending && itemId != dismissedId
+
+/** History and current-shift flows may briefly belong to adjacent terminal emissions. */
+internal fun visiblePendingShiftCloseResult(
+    result: LocalShiftEntity?,
+    currentShiftLoaded: Boolean,
+    terminalId: String?,
+    dismissedId: String?,
+): LocalShiftEntity? = result?.takeIf {
+    currentShiftLoaded && !terminalId.isNullOrBlank() && it.terminalId == terminalId &&
+        it.state == ShiftState.CLOSED && shouldShowShiftResult(it.localId, it.closeResultPending, dismissedId)
+}
+
+internal fun canAcknowledgeShiftCloseResult(
+    renderedLocalId: String,
+    current: ShiftUiState,
+    terminalId: String?,
+): Boolean = current.closedResult?.localId == renderedLocalId &&
+    visiblePendingShiftCloseResult(
+        current.closedResult, current.currentShiftLoaded, terminalId, dismissedId = null,
+    ) != null
 
 internal enum class ShiftCloseResultKind { LOCAL_CONFIRMED, REMOTE_RECONCILED }
 

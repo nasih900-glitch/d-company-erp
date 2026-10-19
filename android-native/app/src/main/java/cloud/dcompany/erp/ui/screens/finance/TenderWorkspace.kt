@@ -13,6 +13,8 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -169,10 +171,12 @@ internal fun TenderWorkspace(
                 if (state.paymentPreview != null || state.dailyPreview != null) {
                     OutlinedTextField(state.reason, { vm.edit(reason = it) }, label = { Text("Reason · at least 3 characters") }, modifier = Modifier.fillMaxWidth(), enabled = !busy)
                     OutlinedTextField(state.evidenceReference, { vm.edit(evidence = it) }, label = { Text("Evidence / reference · optional") }, modifier = Modifier.fillMaxWidth(), enabled = !busy)
+                    val attestationLabel = if (context is TenderContext.Payment) "I confirm this identified payment was collected by UPI, and I have reviewed the source preview."
+                        else "I confirm these Cash and UPI collection actuals. Source bills are unallocated; this is not a verified bank statement or drawer count."
                     Row(Modifier.fillMaxWidth()) {
-                        Checkbox(state.confirmed, vm::confirm, enabled = !busy)
-                        Text(if (context is TenderContext.Payment) "I confirm this identified payment was collected by UPI, and I have reviewed the source preview."
-                            else "I confirm these Cash and UPI collection actuals. Source bills are unallocated; this is not a verified bank statement or drawer count.", modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                        Checkbox(state.confirmed, vm::confirm, enabled = !busy,
+                            modifier = Modifier.semantics { contentDescription = attestationLabel })
+                        Text(attestationLabel, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
                     }
                     val review = dailyActualsReview(state.dailyPreview,state.actualCash,state.actualUpi)
                     val ready = state.reason.trim().length >= 3 && state.confirmed && (state.paymentPreview != null || review?.let { it.totalDifference != 0L || it.supportedTransfer } == true)

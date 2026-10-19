@@ -365,12 +365,59 @@ internal fun voidDialogBodyMaxHeight(
 internal fun useGamingCommandWorkspace(widthDp: Int, heightDp: Int): Boolean =
     widthDp >= 980 && heightDp >= 600
 
+// A process-only namespace prevents restoring drafts from an earlier app process.
+// Neither the profile nor the lease is written to SavedState; Compose saves only
+// the existing non-customer selections under this authority's composition key.
+private val gamingDraftProcessNonce = java.util.UUID.randomUUID().toString()
+
+internal data class GamingDraftAuthority(
+    val lease: cloud.dcompany.erp.core.auth.CacheScopeLease,
+    val profile: cloud.dcompany.erp.core.net.MeResponse,
+    val processNonce: String = gamingDraftProcessNonce,
+)
+
+internal fun gamingDraftAuthority(
+    profile: cloud.dcompany.erp.core.net.MeResponse,
+    lease: cloud.dcompany.erp.core.auth.CacheScopeLease?,
+    validatedTerminalId: String?,
+): GamingDraftAuthority? {
+    val scope = lease?.scope ?: return null
+    val terminalId = validatedTerminalId?.trim()?.takeIf(String::isNotEmpty) ?: return null
+    if (scope.userId != profile.userId.trim() || scope.companyId != profile.companyId.trim() ||
+        scope.branchId != profile.branchId?.trim()?.takeIf(String::isNotEmpty) ||
+        scope.terminalId != terminalId
+    ) return null
+    return GamingDraftAuthority(lease, profile)
+}
+
+private val LocalGamingDraftAuthority =
+    androidx.compose.runtime.staticCompositionLocalOf<GamingDraftAuthority?> { null }
+
+/** Recreating an Activity must not change the authority of the same live workspace. */
+@Composable
+internal fun GamingDraftScope(authority: GamingDraftAuthority?, content: @Composable () -> Unit) {
+    if (authority == null) {
+        Text("Verifying Gaming workspace. Draft actions are unavailable.")
+        return
+    }
+    androidx.compose.runtime.key(authority) {
+        androidx.compose.runtime.CompositionLocalProvider(LocalGamingDraftAuthority provides authority) {
+            content()
+        }
+    }
+}
+
+internal fun resolveGamingFilterId(
+    filterIds: List<String>, currentFilterId: String, catalogueLoaded: Boolean,
+): String = if (!catalogueLoaded || currentFilterId in filterIds) currentFilterId else "all"
+
 /** Keeps selection deterministic across filtering and station refreshes. */
 internal fun resolveGamingCommandStationId(
     visibleStationIds: List<String>,
     currentStationId: String?,
-): String? = currentStationId?.takeIf(visibleStationIds::contains)
-    ?: visibleStationIds.firstOrNull()
+    catalogueLoaded: Boolean = true,
+): String? = if (!catalogueLoaded) currentStationId else
+    currentStationId?.takeIf(visibleStationIds::contains) ?: visibleStationIds.firstOrNull()
 
 /**
  * Compose 1.7 uses ADJUST_NOTHING for Dialog windows on Android 12+. The
@@ -488,8 +535,8 @@ fun GamingScreen(
     }
 
     val filters = remember(state.stations) { stationFilters(state.stations) }
-    LaunchedEffect(filters, selectedFilter) {
-        if (filters.none { it.id == selectedFilter }) selectedFilter = "all"
+    LaunchedEffect(filters, selectedFilter, state.catalogueLoaded) {
+        selectedFilter = resolveGamingFilterId(filters.map(StationFilter::id), selectedFilter, state.catalogueLoaded)
     }
     LaunchedEffect(focusStationId, state.stations) {
         // A notification/deep link takes precedence over the operator's saved
@@ -501,10 +548,11 @@ fun GamingScreen(
     val visibleStations = remember(state.stations, selectedFilter) {
         state.stations.filter { selectedFilter == "all" || stationFilterId(it.type) == selectedFilter }
     }
-    LaunchedEffect(visibleStations, selectedCommandStationId) {
+    LaunchedEffect(visibleStations, selectedCommandStationId, state.catalogueLoaded) {
         selectedCommandStationId = resolveGamingCommandStationId(
             visibleStationIds = visibleStations.map(Station::id),
             currentStationId = selectedCommandStationId,
+            catalogueLoaded = state.catalogueLoaded,
         )
     }
     LaunchedEffect(focusStationId, state.stations) {
@@ -552,8 +600,8 @@ fun GamingScreen(
     }
 
     Box(Modifier.fillMaxSize()) {
-        if (state.stations.isEmpty() && orphanedExtensionActions.isEmpty() &&
-            state.cleanupAcknowledgementsPending.isEmpty()
+        if (!state.catalogueLoaded || (state.stations.isEmpty() && orphanedExtensionActions.isEmpty() &&
+            state.cleanupAcknowledgementsPending.isEmpty())
         ) {
             GamingEmptyState(state = state, onRefresh = vm::load)
         } else {
@@ -1878,7 +1926,7 @@ internal fun GamingCommandWorkspace(
     }
 
     val controlPane: @Composable (Modifier) -> Unit = { paneModifier ->
-        val selectedHeroState = selectedSession?.let { current ->
+        val selectedHeroPresentation = selectedSession?.let { current ->
             stationPresentation(
                 station = selectedStation ?: return@let null,
                 session = current,
@@ -1888,8 +1936,9 @@ internal fun GamingCommandWorkspace(
                 hasActiveAddons = state.addonsFor(current).any {
                     !it.voided && !it.isRejectedLocalAdd()
                 },
-            ).state
+            )
         }
+        val selectedHeroState = selectedHeroPresentation?.state
         when {
             selectedStation == null -> DesignedEmptyState(
                 title = "Select a station", body = "Choose a station on the board.",
@@ -1952,10 +2001,10 @@ internal fun GamingCommandWorkspace(
                         if (selectedSession == null) {
                             "Available · select a published duration"
                         } else {
-                            selectedHeroState?.name?.replace('_', ' ')
-                                ?.lowercase()?.replaceFirstChar(Char::titlecase)
+                            selectedHeroPresentation?.statusLabel
                                 ?: selectedSession.status.replaceFirstChar(Char::titlecase)
                         },
+                        modifier = Modifier.testTag("gaming-selected-status"),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.labelMedium,
                     )
@@ -6353,7 +6402,8 @@ private fun ReconcileSessionDialog(
 internal fun rememberGamingStationStartSelections(
     stations: List<Station>,
     packages: List<GamingPackage>,
-    authorityKey: Any? = androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner.current,
+    authorityKey: Any? = LocalGamingDraftAuthority.current
+        ?: androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner.current,
 ): Map<String, GamingStartSelectionState> = stations.associate { station ->
     androidx.compose.runtime.key(authorityKey, station.id) {
         station.id to rememberGamingStartSelectionState(station,

@@ -91,6 +91,8 @@ import cloud.dcompany.erp.ui.screens.settings.bugReportConnectivity
 import cloud.dcompany.erp.ui.screens.settings.currentAndroidBugReportContext
 import cloud.dcompany.erp.ui.screens.staff.StaffScreen
 import cloud.dcompany.erp.ui.screens.gaming.GamingScreen
+import cloud.dcompany.erp.ui.screens.gaming.GamingDraftScope
+import cloud.dcompany.erp.ui.screens.gaming.gamingDraftAuthority
 import cloud.dcompany.erp.ui.screens.shift.ShiftScreen
 import cloud.dcompany.erp.ui.screens.LoginScreen
 import cloud.dcompany.erp.ui.screens.PosScreen
@@ -838,19 +840,26 @@ private fun AppRoot(
                             Destination.Gaming -> {
                                 val gamingFocus = operationalFocus
                                     as? OperationalNotificationTarget.GamingSession
-                                GamingScreen(
-                                    access = permissions.gamingAccess().let { granted ->
-                                        granted.copy(
-                                            canReconcileLegacySessions =
-                                                granted.canReconcileLegacySessions &&
-                                                    s.me.protectedAccess && s.me.auditAccess,
-                                        )
-                                    },
-                                    shiftAccess = permissions.shiftAccess(),
-                                    focusSessionId = gamingFocus?.sessionId,
-                                    focusStationId = gamingFocus?.stationId,
-                                    onDismissFocus = { operationalFocus = null },
-                                )
+                                GamingDraftScope(
+                                    gamingDraftAuthority(
+                                        s.me, DCompanyApp.instance.cacheIsolation.currentLease(),
+                                        activeTerminal?.terminalId,
+                                    ),
+                                ) {
+                                    GamingScreen(
+                                        access = permissions.gamingAccess().let { granted ->
+                                            granted.copy(
+                                                canReconcileLegacySessions =
+                                                    granted.canReconcileLegacySessions &&
+                                                        s.me.protectedAccess && s.me.auditAccess,
+                                            )
+                                        },
+                                        shiftAccess = permissions.shiftAccess(),
+                                        focusSessionId = gamingFocus?.sessionId,
+                                        focusStationId = gamingFocus?.stationId,
+                                        onDismissFocus = { operationalFocus = null },
+                                    )
+                                }
                             }
                             Destination.Tables -> TablesScreen(access = permissions.tablesAccess())
                             Destination.Reservations -> ReservationsScreen(

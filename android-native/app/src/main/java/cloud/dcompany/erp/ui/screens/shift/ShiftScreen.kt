@@ -308,33 +308,60 @@ fun ShiftScreen(
     }
 
     state.closedResult?.let { r ->
-        val remotelyReconciled = shiftCloseResultKind(r) == ShiftCloseResultKind.REMOTE_RECONCILED
+        val dismiss = { vm.dismissResult(r.localId) }
         AlertDialog(
             containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
             shape = cloud.dcompany.erp.ui.theme.Radius.shapeLg,
-            onDismissRequest = vm::dismissResult,
-            confirmButton = { TextButton(onClick = vm::dismissResult) { Text("OK") } },
-            title = {
-                Text(if (remotelyReconciled) "Shift closed elsewhere" else "Shift closed — server confirmed")
-            },
-            text = { Text(shiftCloseResultMessage(r)) },
+            onDismissRequest = dismiss,
+            confirmButton = { TextButton(onClick = dismiss) { Text("OK") } },
+            title = { Text(shiftCloseResultTitle(r, state.open)) },
+            text = { Text(shiftCloseResultMessage(r, state.open)) },
         )
     }
 }
 
-internal fun shiftCloseResultMessage(shift: LocalShiftEntity): String =
-    when {
+internal fun isPreviousShiftCloseResult(shift: LocalShiftEntity, current: ResolvedOpenShift?): Boolean =
+    current != null && current.shiftId != shift.localId && current.shiftId != shift.serverShiftId
+
+internal fun shiftCloseResultTitle(shift: LocalShiftEntity, current: ResolvedOpenShift?): String {
+    val previous = isPreviousShiftCloseResult(shift, current)
+    return when (shiftCloseResultKind(shift)) {
+        ShiftCloseResultKind.REMOTE_RECONCILED ->
+            if (previous) "Previous shift closed elsewhere" else "Shift closed elsewhere"
+        ShiftCloseResultKind.LOCAL_CONFIRMED ->
+            if (previous) "Previous shift closed — server confirmed" else "Shift closed — server confirmed"
+    }
+}
+
+internal fun shiftCloseResultMessage(
+    shift: LocalShiftEntity,
+    current: ResolvedOpenShift? = null,
+): String {
+    val previous = isPreviousShiftCloseResult(shift, current)
+    val subject = if (previous) "the previous shift" else "this shift"
+    val outcome = when {
         shiftCloseResultKind(shift) == ShiftCloseResultKind.REMOTE_RECONCILED ->
             shift.lastError ?: "Live server reconciliation confirmed that this shift closed elsewhere."
         shift.varianceMinor == null ->
-            "The server confirmed this shift is closed. Final variance is not available on this tablet yet; refresh shift history."
+            "The server confirmed $subject is closed. Final variance is not available on this tablet yet; refresh shift history."
         shift.varianceMinor == 0L ->
-            "The server confirmed this shift is closed. The drawer balanced exactly."
+            "The server confirmed $subject is closed. The drawer balanced exactly."
         shift.varianceMinor > 0 ->
-            "The server confirmed this shift is closed. Over by ${shift.varianceMinor.asRupees()} — more cash than expected."
+            "The server confirmed $subject is closed. Over by ${shift.varianceMinor.asRupees()} — more cash than expected."
         else ->
-            "The server confirmed this shift is closed. Short by ${(-shift.varianceMinor).asRupees()} — less cash than expected."
+            "The server confirmed $subject is closed. Short by ${(-shift.varianceMinor).asRupees()} — less cash than expected."
     }
+    return buildString {
+        appendLine(outcome)
+        appendLine("Shift ID: ${shift.serverShiftId ?: shift.localId}")
+        appendLine("Opened: ${formatHistoryDate(shift.openedAtMillis)}")
+        appendLine("Closed: ${shift.closedAtMillis?.let(::formatHistoryDate) ?: "time unavailable"}")
+        append("Counted cash: ${shift.countedMinor?.asRupees() ?: "not available"}")
+        if (previous) {
+            append("\n\nCurrent shift ${current?.shiftId} remains open. This receipt does not close it.")
+        }
+    }
+}
 
 /**
  * The target tablet is wide (1280dp) but only 800dp tall. The shell, summary
