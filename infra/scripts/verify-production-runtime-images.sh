@@ -119,11 +119,16 @@ candidate_images=$(python3 ops/runtime_release_parity.py candidate \
   --version-name "$APP_VERSION" --source-git-sha "$APP_REVISION" \
   --project-name "$PROJECT_NAME")
 
-# Build52's exact pending-data transition runs Alembic from the attested backend
+# Build52/53 exact pending-data transitions run Alembic from the attested backend
 # image before its normal entrypoint or any other application runtime starts.
 # Exercise that same Compose/image boundary here; the later full runtime check
 # remains the proof for the ordinary fresh-install startup path.
-if [ "$APP_VERSION" = 3.1.44 ]; then
+EXACT_MIGRATION_BUILD=""
+case "$APP_VERSION" in
+  3.1.44) EXACT_MIGRATION_BUILD=Build52 ;;
+  3.1.45) EXACT_MIGRATION_BUILD=Build53 ;;
+esac
+if [ -n "$EXACT_MIGRATION_BUILD" ]; then
   CANDIDATE_BACKEND_IMAGE_ID=$(python3 -c \
     'import json,sys; print(json.loads(sys.argv[1])["services"]["backend"]["image_id"])' \
     "$candidate_images")
@@ -131,7 +136,7 @@ if [ "$APP_VERSION" = 3.1.44 ]; then
      [ "$(docker image inspect --format '{{.Id}}' \
        "$CANDIDATE_BACKEND_IMAGE_ID" 2>/dev/null)" \
        != "$CANDIDATE_BACKEND_IMAGE_ID" ]; then
-    echo "Attested Build52 backend image is unavailable for migration proof." >&2
+    echo "Attested $EXACT_MIGRATION_BUILD backend image is unavailable for migration proof." >&2
     exit 1
   fi
   (umask 077
@@ -162,7 +167,7 @@ pinned = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
 expected = copy.deepcopy(base)
 expected["services"]["backend"]["image"] = sys.argv[3]
 if pinned != expected:
-    raise SystemExit("Build52 migration override changed more than the backend image")
+    raise SystemExit("exact migration override changed more than the backend image")
 PY
   assert_no_normal_application_runtime() {
     local service
@@ -170,7 +175,7 @@ PY
     for service in redis backend frontend; do
       containers=$("${compose[@]}" ps --all -q "$service")
       if [ -n "$containers" ]; then
-        echo "Build52 migration proof found an unexpected $service runtime." >&2
+        echo "$EXACT_MIGRATION_BUILD migration proof found an unexpected $service runtime." >&2
         return 1
       fi
     done
@@ -183,7 +188,7 @@ PY
     < <("${compose[@]}" ps --all --status running -q postgres)
   if [ "${#MIGRATION_POSTGRES_CONTAINERS[@]}" -ne 1 ] || \
      ! [[ "${MIGRATION_POSTGRES_CONTAINERS[0]}" =~ ^[0-9a-f]{64}$ ]]; then
-    echo "Build52 migration proof requires exactly one running PostgreSQL container." >&2
+    echo "$EXACT_MIGRATION_BUILD migration proof requires exactly one running PostgreSQL container." >&2
     exit 1
   fi
   "${migration_compose[@]}" run --pull never --rm --no-deps \
@@ -192,7 +197,7 @@ PY
   PRIOR_MIGRATION_HEAD=$(docker exec "${MIGRATION_POSTGRES_CONTAINERS[0]}" \
     psql -U erp -d erp -Atc 'SELECT version_num FROM alembic_version')
   if [ "$PRIOR_MIGRATION_HEAD" != 0089 ]; then
-    echo "Build52 image migration proof did not establish prior head 0089." >&2
+    echo "$EXACT_MIGRATION_BUILD image migration proof did not establish prior head 0089." >&2
     exit 1
   fi
   "${migration_compose[@]}" run --pull never --rm --no-deps \
@@ -201,7 +206,7 @@ PY
   MIGRATED_DATABASE_HEAD=$(docker exec "${MIGRATION_POSTGRES_CONTAINERS[0]}" \
     psql -U erp -d erp -Atc 'SELECT version_num FROM alembic_version')
   if [ "$MIGRATED_DATABASE_HEAD" != 0091 ]; then
-    echo "Build52 one-off image migration did not produce database head 0091." >&2
+    echo "$EXACT_MIGRATION_BUILD one-off image migration did not produce database head 0091." >&2
     exit 1
   fi
 fi

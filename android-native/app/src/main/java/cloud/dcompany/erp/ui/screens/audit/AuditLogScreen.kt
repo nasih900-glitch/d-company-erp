@@ -258,8 +258,10 @@ private fun AuditInlineDetail(entry:AuditEntry,zone:String?,ownerKey:String,stat
                 else->"Historical record · action not classified"
             })
             entry.matchExplanation?.let { add("Why this matched" to it) }
-            auditReadableSourceReference(entry)?.let { add("Business reference" to it) }
-            entry.linkedBillReference?.takeIf { it != auditReadableSourceReference(entry) }?.let {
+            val readableSourceReference = auditReadableSourceReference(entry)
+            add("Business reference" to (readableSourceReference
+                ?: if(entry.sourceReference.isNullOrBlank()) "Not retained" else "Technical reference retained"))
+            entry.linkedBillReference?.takeIf { it != readableSourceReference }?.let {
                 add("Current linked bill" to "$it · resolved from retained order identity")
             }
             auditBusinessFacts(entry).forEach { (key,value)->add(auditBusinessLabel(key) to auditBusinessValue(key,value,timezone)) }
@@ -285,6 +287,7 @@ private fun AuditInlineDetail(entry:AuditEntry,zone:String?,ownerKey:String,stat
         if(technical) {
             AuditFact("Event / operation","${entry.id} · ${entry.operationId ?: "Operation identity not retained"}")
             AuditFact("Source identity","${entry.entityType} · ${entry.entityId}")
+            AuditFact("Original source reference",entry.sourceReference ?: "Not retained")
             AuditFact("Actor kind",entry.actorKind)
             entry.actorUserId?.let{AuditFact("Actor identity",it)}
             entry.targetUserId?.let{AuditFact("Target account identity",it)}

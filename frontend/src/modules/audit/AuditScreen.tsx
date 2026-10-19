@@ -779,7 +779,7 @@ export function AuditDetail({
         />
         <Detail
           label="Source reference"
-          value={readableSourceReference ?? 'Not retained'}
+          value={readableSourceReference ?? (entry.source_reference ? 'Technical reference retained' : 'Not retained')}
         />
         {entry.linked_bill_reference && entry.linked_bill_reference !== readableSourceReference && (
           <Detail label="Current linked bill" value={`${entry.linked_bill_reference} · resolved from retained order identity`} />
@@ -861,6 +861,7 @@ export function AuditDetail({
             safeAuditValue({
               entity_type: entry.entity_type,
               entity_id: entry.entity_id,
+              original_source_reference: entry.source_reference,
               business_details: entry.business_details,
               before: entry.before,
               after: entry.after,

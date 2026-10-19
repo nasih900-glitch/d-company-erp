@@ -206,6 +206,7 @@ BUILD50_POST_MIGRATION_VERIFIER="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-buil
 BUILD51_POST_MIGRATION_VERIFIER="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-build51-post-migration-state.py"
 BUILD51_POST_MIGRATION_SQL="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-build51-post-migration-state.sql"
 BUILD52_PENDING_COMPATIBILITY_VERIFIER="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-build52-pending-compatibility.py"
+BUILD53_PENDING_COMPATIBILITY_VERIFIER="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-build53-pending-compatibility.py"
 BUILD52_TRANSITION_STATE_SQL="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-build52-transition-state.sql"
 WEB_PUBLIC_ASSET_VERIFIER="$CANDIDATE_BUILD_ROOT/ops/verify_web_public_assets.py"
 BUSINESS_QUIESCENCE_VERIFIER="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-production-business-quiescence.py"
@@ -223,7 +224,8 @@ for release_input in \
   "$BUILD48_PENDING_COMPATIBILITY_VERIFIER" \
   "$BUILD50_PENDING_COMPATIBILITY_VERIFIER" "$BUILD50_POST_MIGRATION_VERIFIER" \
   "$BUILD51_POST_MIGRATION_VERIFIER" "$BUILD51_POST_MIGRATION_SQL" \
-  "$BUILD52_PENDING_COMPATIBILITY_VERIFIER" "$BUILD52_TRANSITION_STATE_SQL" \
+  "$BUILD52_PENDING_COMPATIBILITY_VERIFIER" "$BUILD53_PENDING_COMPATIBILITY_VERIFIER" \
+  "$BUILD52_TRANSITION_STATE_SQL" \
   "$BUILD49_PENDING_COMPATIBILITY_VERIFIER" "$WEB_PUBLIC_ASSET_VERIFIER" \
   "$BUSINESS_QUIESCENCE_VERIFIER" "$BUSINESS_QUIESCENCE_SQL"; do
   if [ ! -f "$release_input" ] || [ -L "$release_input" ]; then
@@ -757,6 +759,14 @@ BUILD50_PENDING_CARRIED_UNRESOLVED=false
 BUILD52_PENDING_CARRIED_UNRESOLVED=false
 BUILD52_MIGRATION_RUNTIME_VERIFIED=false
 BUILD52_POST_PROOF_SUCCEEDED=false
+BUILD53_PENDING_CARRIED_UNRESOLVED=false
+BUILD53_MIGRATION_RUNTIME_VERIFIED=false
+BUILD53_POST_PROOF_SUCCEEDED=false
+EXACT_BUILD50_SUCCESSOR=""
+EXACT_BUILD50_VERIFIER=""
+EXACT_BUILD50_PENDING_CARRIED_UNRESOLVED=false
+EXACT_BUILD50_MIGRATION_RUNTIME_VERIFIED=false
+EXACT_BUILD50_POST_PROOF_SUCCEEDED=false
 BUILD52_PRE_HISTORY=""
 BUILD52_PRE_FLEET=""
 BUILD52_PRE_TRANSITION=""
@@ -972,11 +982,11 @@ handle_install_failure() {
           fi
         fi
         if [ "$rollback_succeeded" = true ] && \
-           [ "$BUILD52_PENDING_CARRIED_UNRESOLVED" = true ]; then
-          RESTORED_BUILD52_HISTORY="$UPGRADE_SNAPSHOT/build52-restored-history.json"
-          RESTORED_BUILD52_FLEET="$UPGRADE_SNAPSHOT/build52-restored-fleet.json"
-          RESTORED_BUILD52_TRANSITION="$UPGRADE_SNAPSHOT/build52-restored-transition.json"
-          RESTORED_BUILD52_REPORT="$UPGRADE_SNAPSHOT/build52-restored-verification.json"
+           [ "$EXACT_BUILD50_PENDING_CARRIED_UNRESOLVED" = true ]; then
+          RESTORED_BUILD52_HISTORY="$UPGRADE_SNAPSHOT/$exact_build50_slug-restored-history.json"
+          RESTORED_BUILD52_FLEET="$UPGRADE_SNAPSHOT/$exact_build50_slug-restored-fleet.json"
+          RESTORED_BUILD52_TRANSITION="$UPGRADE_SNAPSHOT/$exact_build50_slug-restored-transition.json"
+          RESTORED_BUILD52_REPORT="$UPGRADE_SNAPSHOT/$exact_build50_slug-restored-verification.json"
           for evidence_path in "$RESTORED_BUILD52_HISTORY" \
               "$RESTORED_BUILD52_FLEET" "$RESTORED_BUILD52_TRANSITION" \
               "$RESTORED_BUILD52_REPORT"; do
@@ -1001,7 +1011,7 @@ handle_install_failure() {
               "$RESTORED_BUILD52_TRANSITION"
           fi
           if [ "$rollback_succeeded" = true ] && \
-             ! (umask 077; python3 "$BUILD52_PENDING_COMPATIBILITY_VERIFIER" rollback \
+             ! (umask 077; python3 "$EXACT_BUILD50_VERIFIER" rollback \
                 --pre-historical-state "$BUILD52_PRE_HISTORY" \
                 --pre-fleet-state "$BUILD52_PRE_FLEET" \
                 --pre-transition-state "$BUILD52_PRE_TRANSITION" \
@@ -1447,27 +1457,36 @@ if [ -n "$EXISTING_POSTGRES_CONTAINER" ]; then
       chmod 600 "$PENDING_COMPATIBILITY_REPORT"
       BUILD42_PENDING_CARRIED_UNRESOLVED=true
       echo "==> Exact build41-to-build44 server compatibility verified; reported tablet pending count $pending_outbox_count is carried UNRESOLVED."
-    elif [ "$CANDIDATE_APP_VERSION" = 3.1.44 ] && \
+    elif { [ "$CANDIDATE_APP_VERSION" = 3.1.44 ] || \
+           [ "$CANDIDATE_APP_VERSION" = 3.1.45 ]; } && \
          [ "$PRIOR_APP_VERSION" = 3.1.42 ] && \
          [ "$PRIOR_REVISION" = 29e32b440ab8dc162b6c8f5d40f8283fad53ce04 ] && \
          [ "$PRIOR_DB_HEAD" = 0089 ]; then
       # One exact server transition carries the independently reviewed 13-row,
       # 2/2 fleet. Queue bodies remain opaque and unresolved. The raw 0089
       # evidence is never normalized to the historical helper's one-row scope.
+      if [ "$CANDIDATE_APP_VERSION" = 3.1.44 ]; then
+        EXACT_BUILD50_SUCCESSOR=Build52
+        EXACT_BUILD50_VERIFIER="$BUILD52_PENDING_COMPATIBILITY_VERIFIER"
+      else
+        EXACT_BUILD50_SUCCESSOR=Build53
+        EXACT_BUILD50_VERIFIER="$BUILD53_PENDING_COMPATIBILITY_VERIFIER"
+      fi
+      exact_build50_slug=$(printf '%s' "$EXACT_BUILD50_SUCCESSOR" | tr '[:upper:]' '[:lower:]')
       BUILD52_PRE_HISTORY="$RAW_PENDING_STATE"
-      BUILD52_PRE_FLEET="$UPGRADE_SNAPSHOT/build52-pending-fleet-before.json"
-      BUILD52_PRE_TRANSITION="$UPGRADE_SNAPSHOT/build52-transition-before.json"
-      PENDING_COMPATIBILITY_REPORT="$UPGRADE_SNAPSHOT/build52-pending-compatibility.json"
+      BUILD52_PRE_FLEET="$UPGRADE_SNAPSHOT/$exact_build50_slug-pending-fleet-before.json"
+      BUILD52_PRE_TRANSITION="$UPGRADE_SNAPSHOT/$exact_build50_slug-transition-before.json"
+      PENDING_COMPATIBILITY_REPORT="$UPGRADE_SNAPSHOT/$exact_build50_slug-pending-compatibility.json"
       PRIOR_RUNTIME_ENV="$UPGRADE_SNAPSHOT/build50-backend-environment.json"
-      CANDIDATE_IMAGE_ENV="$UPGRADE_SNAPSHOT/build52-backend-image-environment.json"
-      CANDIDATE_COMPOSE_CONFIG="$UPGRADE_SNAPSHOT/build52-compose-config.json"
-      CANDIDATE_BACKEND_MANIFEST="$UPGRADE_SNAPSHOT/build52-backend-source.sha256"
+      CANDIDATE_IMAGE_ENV="$UPGRADE_SNAPSHOT/$exact_build50_slug-backend-image-environment.json"
+      CANDIDATE_COMPOSE_CONFIG="$UPGRADE_SNAPSHOT/$exact_build50_slug-compose-config.json"
+      CANDIDATE_BACKEND_MANIFEST="$UPGRADE_SNAPSHOT/$exact_build50_slug-backend-source.sha256"
       for evidence_path in "$BUILD52_PRE_FLEET" "$BUILD52_PRE_TRANSITION" \
           "$PENDING_COMPATIBILITY_REPORT" "$PRIOR_RUNTIME_ENV" \
           "$CANDIDATE_IMAGE_ENV" "$CANDIDATE_COMPOSE_CONFIG" \
           "$CANDIDATE_BACKEND_MANIFEST"; do
         if [ -e "$evidence_path" ] || [ -L "$evidence_path" ]; then
-          echo "Refusing to overwrite existing Build52 transition evidence." >&2
+          echo "Refusing to overwrite existing $EXACT_BUILD50_SUCCESSOR transition evidence." >&2
           exit 1
         fi
       done
@@ -1496,7 +1515,12 @@ if [ -n "$EXISTING_POSTGRES_CONTAINER" ]; then
         echo "Candidate backend has no attested literal Python migration runtime." >&2
         exit 1
       fi
-      BUILD52_MIGRATION_RUNTIME_VERIFIED=true
+      EXACT_BUILD50_MIGRATION_RUNTIME_VERIFIED=true
+      if [ "$EXACT_BUILD50_SUCCESSOR" = Build52 ]; then
+        BUILD52_MIGRATION_RUNTIME_VERIFIED=true
+      else
+        BUILD53_MIGRATION_RUNTIME_VERIFIED=true
+      fi
       while IFS= read -r relative_path; do
         source_hash=$(sha256sum "$CANDIDATE_BUILD_ROOT/backend/$relative_path" \
           | awk '{print $1}')
@@ -1518,7 +1542,7 @@ if [ -n "$EXISTING_POSTGRES_CONTAINER" ]; then
          > "$CANDIDATE_COMPOSE_CONFIG")
       chmod 600 "$PRIOR_RUNTIME_ENV" "$CANDIDATE_IMAGE_ENV" \
         "$CANDIDATE_COMPOSE_CONFIG"
-      if ! (umask 077; python3 "$BUILD52_PENDING_COMPATIBILITY_VERIFIER" pre \
+      if ! (umask 077; python3 "$EXACT_BUILD50_VERIFIER" pre \
         --prior-source-root "$PRIOR_SOURCE_ROOT" \
         --candidate-source-root "$CANDIDATE_BUILD_ROOT" \
         --prior-revision "$PRIOR_REVISION" --prior-version "$PRIOR_APP_VERSION" \
@@ -1539,12 +1563,17 @@ if [ -n "$EXISTING_POSTGRES_CONTAINER" ]; then
         --candidate-image-env "$CANDIDATE_IMAGE_ENV" \
         --candidate-compose-config "$CANDIDATE_COMPOSE_CONFIG" \
         > "$PENDING_COMPATIBILITY_REPORT"); then
-        echo "Build52 compatibility proof failed; both tablet counters remain unresolved." >&2
+        echo "$EXACT_BUILD50_SUCCESSOR compatibility proof failed; both tablet counters remain unresolved." >&2
         exit 1
       fi
       chmod 600 "$PENDING_COMPATIBILITY_REPORT"
-      BUILD52_PENDING_CARRIED_UNRESOLVED=true
-      echo "==> Exact deployed-build50-to-build52 server transition verified; both tablet counters remain UNRESOLVED."
+      EXACT_BUILD50_PENDING_CARRIED_UNRESOLVED=true
+      if [ "$EXACT_BUILD50_SUCCESSOR" = Build52 ]; then
+        BUILD52_PENDING_CARRIED_UNRESOLVED=true
+      else
+        BUILD53_PENDING_CARRIED_UNRESOLVED=true
+      fi
+      echo "==> Exact deployed-build50-to-$exact_build50_slug server transition verified; both tablet counters remain UNRESOLVED."
     elif [ "$CANDIDATE_APP_VERSION" = 3.1.42 ] && \
          [ "$PRIOR_APP_VERSION" = 3.1.41 ] && \
          [ "$PRIOR_REVISION" = a834b63d32c45513ab5c8fd9d4de417acc0a96c6 ] && \
@@ -2056,6 +2085,7 @@ if [ -n "$EXISTING_POSTGRES_CONTAINER" ]; then
      [ "${BUILD49_PENDING_CARRIED_UNRESOLVED:-false}" = false ] && \
      [ "${BUILD50_PENDING_CARRIED_UNRESOLVED:-false}" = false ] && \
      [ "${BUILD52_PENDING_CARRIED_UNRESOLVED:-false}" = false ] && \
+     [ "${BUILD53_PENDING_CARRIED_UNRESOLVED:-false}" = false ] && \
      [ "$CODE30_2_POST_CLEANUP_STALE_OUTBOX_ACCEPTED" = \
        "$CODE30_2_STALE_OUTBOX_BRIDGE_USED" ]; then
     echo "Retained tablet outbox was not accepted by exactly one guarded path." >&2
@@ -2070,7 +2100,8 @@ if [ -n "$EXISTING_POSTGRES_CONTAINER" ]; then
       "${BUILD48_PENDING_CARRIED_UNRESOLVED:-false}" \
       "${BUILD49_PENDING_CARRIED_UNRESOLVED:-false}" \
       "${BUILD50_PENDING_CARRIED_UNRESOLVED:-false}" \
-      "${BUILD52_PENDING_CARRIED_UNRESOLVED:-false}"; do
+      "${BUILD52_PENDING_CARRIED_UNRESOLVED:-false}" \
+      "${BUILD53_PENDING_CARRIED_UNRESOLVED:-false}"; do
     if [ "$accepted_path" = true ]; then
       accepted_pending_paths=$((accepted_pending_paths + 1))
     fi
@@ -2145,21 +2176,21 @@ fi
 # which could perform legitimate writes before the quiesced preservation proof.
 # A failure in this block reaches the existing verified pg_dump rollback while
 # no candidate application writer has run.
-if [ "$BUILD52_PENDING_CARRIED_UNRESOLVED" = true ]; then
-  if [ "$BUILD52_MIGRATION_RUNTIME_VERIFIED" != true ] || \
+if [ "$EXACT_BUILD50_PENDING_CARRIED_UNRESOLVED" = true ]; then
+  if [ "$EXACT_BUILD50_MIGRATION_RUNTIME_VERIFIED" != true ] || \
      [ "$FRESH_INSTALL" = true ] || [ -z "$UPGRADE_SNAPSHOT" ]; then
-    echo "Build52 one-off migration has no exact verified predecessor proof." >&2
+    echo "$EXACT_BUILD50_SUCCESSOR one-off migration has no exact verified predecessor proof." >&2
     exit 1
   fi
   if [ "$(docker image inspect --format '{{.Id}}' \
       "$CANDIDATE_BACKEND_IMAGE_ID" 2>/dev/null)" \
       != "$CANDIDATE_BACKEND_IMAGE_ID" ]; then
-    echo "Attested Build52 backend image is missing before migration." >&2
+    echo "Attested $EXACT_BUILD50_SUCCESSOR backend image is missing before migration." >&2
     exit 1
   fi
-  BUILD52_MIGRATION_OVERRIDE="$UPGRADE_SNAPSHOT/build52-migration-image.yml"
-  BUILD52_MIGRATION_BASE_CONFIG="$UPGRADE_SNAPSHOT/build52-migration-base-compose.json"
-  BUILD52_MIGRATION_PINNED_CONFIG="$UPGRADE_SNAPSHOT/build52-migration-pinned-compose.json"
+  BUILD52_MIGRATION_OVERRIDE="$UPGRADE_SNAPSHOT/$exact_build50_slug-migration-image.yml"
+  BUILD52_MIGRATION_BASE_CONFIG="$UPGRADE_SNAPSHOT/$exact_build50_slug-migration-base-compose.json"
+  BUILD52_MIGRATION_PINNED_CONFIG="$UPGRADE_SNAPSHOT/$exact_build50_slug-migration-pinned-compose.json"
   for evidence_path in "$BUILD52_MIGRATION_OVERRIDE" \
       "$BUILD52_MIGRATION_BASE_CONFIG" "$BUILD52_MIGRATION_PINNED_CONFIG"; do
     if [ -e "$evidence_path" ] || [ -L "$evidence_path" ]; then
@@ -2200,7 +2231,7 @@ expected["services"]["backend"]["image"] = sys.argv[3]
 if pinned != expected:
     raise SystemExit("Build52 migration override changed more than the backend image")
 PY
-  echo "==> Starting only candidate PostgreSQL for the exact Build52 migration…"
+  echo "==> Starting only candidate PostgreSQL for the exact $EXACT_BUILD50_SUCCESSOR migration…"
   "${candidate_compose[@]}" --env-file .env \
     up -d --no-build --pull never postgres
   BUILD52_POSTGRES_CONTAINER=$(
@@ -2213,7 +2244,7 @@ PY
      ! [[ "$CANDIDATE_POSTGRES_IMAGE_ID" =~ ^sha256:[0-9a-f]{64}$ ]] || \
      [ "$(docker inspect --format '{{.Image}}' "$BUILD52_POSTGRES_CONTAINER")" \
        != "$CANDIDATE_POSTGRES_IMAGE_ID" ]; then
-    echo "Build52 migration PostgreSQL is not the attested candidate image." >&2
+    echo "$EXACT_BUILD50_SUCCESSOR migration PostgreSQL is not the attested candidate image." >&2
     exit 1
   fi
   BUILD52_POSTGRES_ATTEMPTS=0
@@ -2221,23 +2252,23 @@ PY
     >/dev/null 2>&1; do
     BUILD52_POSTGRES_ATTEMPTS=$((BUILD52_POSTGRES_ATTEMPTS + 1))
     if [ "$BUILD52_POSTGRES_ATTEMPTS" -gt 120 ]; then
-      echo "Build52 migration PostgreSQL did not become ready." >&2
+      echo "$EXACT_BUILD50_SUCCESSOR migration PostgreSQL did not become ready." >&2
       exit 1
     fi
     sleep 1
   done
-  echo "==> Running exact Build52 Alembic upgrade without the application entrypoint…"
+  echo "==> Running exact $EXACT_BUILD50_SUCCESSOR Alembic upgrade without the application entrypoint…"
   "${build52_migration_compose[@]}" --env-file .env run --pull never --rm --no-deps \
     --entrypoint python backend -m alembic upgrade head
 
   RAW_BUILD51_HISTORY="$UPGRADE_SNAPSHOT/build51-post-migration-history-raw.json"
-  RAW_BUILD52_POST_FLEET="$UPGRADE_SNAPSHOT/build52-pending-fleet-after.json"
-  RAW_BUILD52_POST_TRANSITION="$UPGRADE_SNAPSHOT/build52-transition-after.json"
-  BUILD51_HISTORY_REPORT="$UPGRADE_SNAPSHOT/build52-post-migration-verification.json"
+  RAW_BUILD52_POST_FLEET="$UPGRADE_SNAPSHOT/$exact_build50_slug-pending-fleet-after.json"
+  RAW_BUILD52_POST_TRANSITION="$UPGRADE_SNAPSHOT/$exact_build50_slug-transition-after.json"
+  BUILD51_HISTORY_REPORT="$UPGRADE_SNAPSHOT/$exact_build50_slug-post-migration-verification.json"
   for evidence_path in "$RAW_BUILD51_HISTORY" "$RAW_BUILD52_POST_FLEET" \
       "$RAW_BUILD52_POST_TRANSITION" "$BUILD51_HISTORY_REPORT"; do
     if [ -e "$evidence_path" ] || [ -L "$evidence_path" ]; then
-      echo "Refusing to overwrite existing Build52 post-migration evidence." >&2
+      echo "Refusing to overwrite existing $EXACT_BUILD50_SUCCESSOR post-migration evidence." >&2
       exit 1
     fi
   done
@@ -2245,7 +2276,7 @@ PY
     psql -X --no-psqlrc --quiet -U erp -d erp --tuples-only --no-align \
       --command "SELECT version_num FROM alembic_version")
   if [ "$migrated_history_head" != 0091 ]; then
-    echo "Build52 one-off migration did not reach exact head 0091." >&2
+    echo "$EXACT_BUILD50_SUCCESSOR one-off migration did not reach exact head 0091." >&2
     exit 1
   fi
   (umask 077
@@ -2260,7 +2291,7 @@ PY
      < "$BUILD52_TRANSITION_STATE_SQL" > "$RAW_BUILD52_POST_TRANSITION")
   chmod 600 "$RAW_BUILD51_HISTORY" "$RAW_BUILD52_POST_FLEET" \
     "$RAW_BUILD52_POST_TRANSITION"
-  if ! (umask 077; python3 "$BUILD52_PENDING_COMPATIBILITY_VERIFIER" post \
+  if ! (umask 077; python3 "$EXACT_BUILD50_VERIFIER" post \
       --pre-historical-state "$BUILD52_PRE_HISTORY" \
       --pre-fleet-state "$BUILD52_PRE_FLEET" \
       --pre-transition-state "$BUILD52_PRE_TRANSITION" \
@@ -2268,18 +2299,23 @@ PY
       --after-fleet-state "$RAW_BUILD52_POST_FLEET" \
       --after-transition-state "$RAW_BUILD52_POST_TRANSITION" \
       > "$BUILD51_HISTORY_REPORT"); then
-    echo "Build52 quiesced history, sequences, finance, or opaque fleet changed." >&2
+    echo "$EXACT_BUILD50_SUCCESSOR quiesced history, sequences, finance, or opaque fleet changed." >&2
     exit 1
   fi
   chmod 600 "$BUILD51_HISTORY_REPORT"
-  BUILD52_POST_PROOF_SUCCEEDED=true
-  echo "==> Exact Build52 post-migration preservation verified before normal writers."
+  EXACT_BUILD50_POST_PROOF_SUCCEEDED=true
+  if [ "$EXACT_BUILD50_SUCCESSOR" = Build52 ]; then
+    BUILD52_POST_PROOF_SUCCEEDED=true
+  else
+    BUILD53_POST_PROOF_SUCCEEDED=true
+  fi
+  echo "==> Exact $EXACT_BUILD50_SUCCESSOR post-migration preservation verified before normal writers."
 fi
 
 # ----- 4. Bring up the stack -----
-if [ "$BUILD52_PENDING_CARRIED_UNRESOLVED" = true ] && \
-   [ "$BUILD52_POST_PROOF_SUCCEEDED" != true ]; then
-  echo "BUILD52 normal writers require the in-process quiesced post proof." >&2
+if [ "$EXACT_BUILD50_PENDING_CARRIED_UNRESOLVED" = true ] && \
+   [ "$EXACT_BUILD50_POST_PROOF_SUCCEEDED" != true ]; then
+  echo "$EXACT_BUILD50_SUCCESSOR normal writers require the in-process quiesced post proof." >&2
   exit 1
 fi
 echo
@@ -2389,7 +2425,7 @@ fi
 # Route by the actual migrated schema, including an already0091 retry. This
 # verifies history only: no new50-to51 opaque pending-work exception is granted.
 if [ "$FRESH_INSTALL" = false ] && \
-   [ "$BUILD52_PENDING_CARRIED_UNRESOLVED" = false ]; then
+   [ "$EXACT_BUILD50_PENDING_CARRIED_UNRESOLVED" = false ]; then
   BUILD51_POSTGRES_IDS=()
   while IFS= read -r container_id; do
     [ -n "$container_id" ] && BUILD51_POSTGRES_IDS+=("$container_id")
