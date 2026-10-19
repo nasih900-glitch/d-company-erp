@@ -185,9 +185,12 @@ internal fun auditBusinessSummary(entry: AuditEntry): String {
         pieces += ((facts["menu_item_name"] ?: facts["ingredient_name_snapshot"] ?: facts["ingredient_name"]) as? JsonPrimitive)?.content ?: "Item name not retained"
         pieces += (((quantity as? JsonPrimitive)?.content ?: "Quantity not retained")+((facts["base_unit"] ?: facts["unit"]) as? JsonPrimitive)?.content?.let { " $it" }.orEmpty())
     }
-    if(facts["before_roles"] is JsonArray || facts["after_roles"] is JsonArray) pieces += "Roles: ${auditBusinessValue("before_roles",facts["before_roles"],ZoneId.of("UTC"))} → ${auditBusinessValue("after_roles",facts["after_roles"],ZoneId.of("UTC"))}"
+    if(facts["before_roles"] is JsonArray && facts["after_roles"] is JsonArray) pieces += "Roles: ${auditBusinessValue("before_roles",facts["before_roles"],ZoneId.of("UTC"))} → ${auditBusinessValue("after_roles",facts["after_roles"],ZoneId.of("UTC"))}"
+    else listOf("before_roles", "after_roles").filter { facts[it] is JsonArray }.forEach { key ->
+        pieces += "${auditBusinessLabel(key)}: ${auditBusinessValue(key,facts[key],ZoneId.of("UTC"))}"
+    }
     return pieces.takeIf { it.isNotEmpty() }?.joinToString(" · ")
-        ?: entry.summary.takeIf { it.isNotBlank() && it != entry.actionLabel }
+        ?: entry.summary.takeIf { it.isNotBlank() && it != entry.actionLabel && it != "${entry.entityType} ${entry.action}" }
         ?: "No additional business facts retained"
 }
 
@@ -197,11 +200,45 @@ internal fun auditOrderId(entry: AuditEntry): String? {
     return candidate?.takeIf { it.matches(Regex("[a-fA-F0-9-]{36}")) }
 }
 
+/** Source-defined mutations only. Observation/create/delete snapshots are facts, not changes. */
+private val mutationAuditActions = setOf(
+    "update", "staff_access_changed", "loyalty_program_publish", "gaming_timer_extended",
+    "gaming.session.pause", "gaming.session.resume", "gaming_session_package_amended",
+    "gaming_participant_left", "gaming_participants_settled", "gaming_session_addon_voided",
+    "gaming_session_legacy_pause_resolution", "gaming_session_billing_repair",
+    "gaming_session_handoff_to_pos", "gaming_session_reconcile_to_pos",
+    "gaming_legacy_server_session_no_play_cancel", "gaming_legacy_server_session_manual_bill_link",
+    "pos_direct_order_hold_for_checkout", "shift_closed", "shift_android_origin_recovery_close",
+    "payment_method_corrected", "daily_collections_reconciled", "expense_receipt_review",
+    "bug_report_status_change", "bug_report_resolution_note_change",
+)
+private fun businessSnapshotField(key: String): Boolean =
+    !technicalAuditField.containsMatchIn(key) && !secretAuditField.containsMatchIn(key) &&
+        key !in setOf("created_at", "updated_at", "auth_version", "token_version")
+
 internal fun auditBusinessChanges(entry: AuditEntry): List<Triple<String,JsonElement?,JsonElement?>> {
-    val before=entry.before.orEmpty()
-    val after=entry.after.orEmpty()
-    return (before.keys+after.keys).distinct().filterNot {
-        technicalAuditField.containsMatchIn(it) || secretAuditField.containsMatchIn(it) ||
-            it in setOf("created_at","updated_at","auth_version","token_version")
-    }.filter { before[it] != after[it] }.map { Triple(it,before[it],after[it]) }
+    if(entry.action !in mutationAuditActions) return emptyList()
+    val before=entry.before ?: return emptyList()
+    val after=entry.after ?: return emptyList()
+    val changes=mutableListOf<Triple<String,JsonElement?,JsonElement?>>()
+    if(entry.action == "staff_access_changed" && before["before_roles"] is JsonArray && after["after_roles"] is JsonArray && before["before_roles"] != after["after_roles"]) {
+        changes += Triple("roles",before["before_roles"],after["after_roles"])
+    }
+    // A missing key means missing evidence, not a recorded null or empty set.
+    changes += before.keys.intersect(after.keys).filter {
+        businessSnapshotField(it) && it !in setOf("before_roles", "after_roles") && before[it] != after[it]
+    }.map { Triple(it,before[it],after[it]) }
+    return changes
 }
+
+internal fun auditRetainedSnapshots(entry: AuditEntry): List<Triple<String,String,JsonElement>> {
+    val changes=auditBusinessChanges(entry).map { it.first }.toSet()
+    return listOf("Retained before action" to entry.before, "Retained after action" to entry.after).flatMap { (side,snapshot) ->
+        snapshot.orEmpty().filter { (key,_) -> businessSnapshotField(key) && key !in changes &&
+            !("roles" in changes && key in setOf("before_roles", "after_roles")) }.map { (key,value) -> Triple(side,key,value) }
+    }
+}
+
+internal fun auditStageResult(entry: AuditEntry): String =
+    if(entry.stage == "unknown" && entry.outcome == "unknown") "Stage / result not recorded"
+    else "${auditBusinessLabel(entry.stage)} · ${auditBusinessLabel(entry.outcome)}"

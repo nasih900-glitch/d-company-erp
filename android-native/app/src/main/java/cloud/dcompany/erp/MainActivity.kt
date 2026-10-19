@@ -118,6 +118,10 @@ import cloud.dcompany.erp.core.alarm.operationalTargetExistsInCurrentScope
 import cloud.dcompany.erp.core.remote.RemoteUiCommandHost
 import cloud.dcompany.erp.core.remote.remoteSemanticUiAdmission
 import cloud.dcompany.erp.core.sync.summarizeOutboxWork
+import cloud.dcompany.erp.core.sync.savedWorkUpdateGuidance
+import cloud.dcompany.erp.ui.screens.finance.TenderJournal
+import cloud.dcompany.erp.ui.screens.finance.TenderJournalReadiness
+import cloud.dcompany.erp.ui.screens.finance.privateTenderJournalStorage
 import cloud.dcompany.erp.core.sync.OutboxWorkStatus
 import cloud.dcompany.erp.core.diagnostics.AppHealthRecorder
 import cloud.dcompany.erp.ui.components.syncAvailabilityProblem
@@ -298,8 +302,13 @@ private fun AppRoot(
     val unresolvedOutboxGroups by DCompanyApp.instance.db.outboxSafetyDao()
         .observeUnresolvedGroups()
         .collectAsStateWithLifecycle(initialValue = emptyList())
-    val outboxWorkStatus = remember(unresolvedOutboxGroups) {
-        summarizeOutboxWork(unresolvedOutboxGroups)
+    val protectedWorkFlow = remember { TenderJournal(privateTenderJournalStorage(DCompanyApp.instance)).observeReadiness() }
+    val protectedWork by protectedWorkFlow.collectAsStateWithLifecycle(initialValue = TenderJournalReadiness())
+    val outboxWorkStatus = remember(unresolvedOutboxGroups, protectedWork) {
+        summarizeOutboxWork(unresolvedOutboxGroups).copy(
+            protectedReviewCount = protectedWork.reviewCount,
+            protectedReviewUnknown = !protectedWork.verified,
+        )
     }
     val syncing by DCompanyApp.instance.sync.syncing.collectAsStateWithLifecycle()
     val state by session.state.collectAsStateWithLifecycle()
@@ -1352,8 +1361,7 @@ private fun UpdateActionArea(
             shape = cloud.dcompany.erp.ui.theme.Radius.shapeSm,
         ) {
             Text(
-                "Keep this app installed: ${outboxWorkStatus.totalCount} saved or pending " +
-                    "item${if (outboxWorkStatus.totalCount == 1) "" else "s"} will be preserved and resumed after the in-place update.",
+                savedWorkUpdateGuidance(outboxWorkStatus),
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
                 color = MaterialTheme.colorScheme.operationalWarning,
                 style = MaterialTheme.typography.bodySmall,

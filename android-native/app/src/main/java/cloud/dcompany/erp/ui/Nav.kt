@@ -1012,12 +1012,14 @@ private fun OutboxWorkStatusPill(
     ) {
         if (visibleLabel != null) {
             val color = when {
-                status.actionRequiredCount > 0 -> MaterialTheme.colorScheme.operationalDanger
+                status.protectedReviewUnknown || status.protectedReviewCount > 0 || status.actionRequiredCount > 0 -> MaterialTheme.colorScheme.operationalDanger
                 syncing -> MaterialTheme.colorScheme.operationalInformation
                 status.retryableCount > 0 -> MaterialTheme.colorScheme.operationalWarning
                 else -> MaterialTheme.colorScheme.operationalInformation
             }
             val accessibilityDetail = buildList {
+                if (status.protectedReviewUnknown) add("protected recovery storage unknown; owner review required")
+                else if (status.protectedReviewCount > 0) add("${status.protectedReviewCount} protected requests need explicit owner recovery, not automatic Sync")
                 if (status.actionRequiredCount > 0) add("${status.actionRequiredCount} need review")
                 if (status.retryableCount > 0) add("${status.retryableCount} waiting to sync")
                 if (status.savedDraftCount > 0) add("${status.savedDraftCount} saved drafts")

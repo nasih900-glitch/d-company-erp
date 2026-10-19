@@ -5,6 +5,8 @@ import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.collect
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -92,4 +94,55 @@ class FileTenderJournalStorageTest {
         assertEquals(command(),restarted.reserve(command()))
         assertTrue(onlyFile().fileName.toString().endsWith(".json"))
     }
+    @Test fun readinessDoesNotCreateStoreAndCountsOtherScopesWithoutExposingTheirDetails() = runBlocking {
+        val journal=TenderJournal(storage())
+        assertEquals(TenderJournalReadiness(verified=true),journal.readiness())
+        assertFalse(Files.exists(folder()))
+        val first=journal.reserve(command())
+        val other=command().copy(scope=scope.copy(ownerId="55555555-5555-5555-5555-555555555555"),idempotencyKey="other-owner-action")
+        journal.reserve(other)
+        val summary=journal.readiness()
+        assertTrue(summary.verified);assertFalse(summary.isClear);assertEquals(2,summary.reviewCount)
+        assertFalse(summary.toString().contains(other.scope.ownerId));assertFalse(summary.toString().contains(other.idempotencyKey))
+        journal.clearExact(first);assertEquals(1,journal.readiness().reviewCount)
+        assertEquals(other,TenderJournal(storage()).read(other.scope))
+    }
+
+    @Test fun readinessCountsInterruptedPreparationOnceAndLeavesExactBytesUntouched() = runBlocking {
+        val failing=FileTenderJournalStorage({folder()},{},{from,to->throw AtomicMoveNotSupportedException(from.toString(),to.toString(),"unsupported")})
+        runCatching { TenderJournal(failing).reserve(command()) }
+        val file=onlyFile();val before=Files.readAllBytes(file)
+        assertEquals(TenderJournalReadiness(1,true),TenderJournal(storage()).readiness())
+        assertArrayEquals(before,Files.readAllBytes(file));assertEquals(command(),TenderJournal(storage()).read(scope))
+    }
+
+    @Test fun malformedConflictingOrUnsafeStoreIsUnknownAndNeverClear() = runBlocking {
+        val journal=TenderJournal(storage());journal.reserve(command())
+        val path=onlyFile();val original=Files.readAllBytes(path)
+        Files.write(path,"{truncated".toByteArray())
+        assertFalse(journal.readiness().verified);assertFalse(journal.readiness().isClear)
+        assertEquals("{truncated",String(Files.readAllBytes(path)))
+        Files.write(path,original)
+        val extra=folder().resolve("unknown.data");Files.write(extra,"retained".toByteArray())
+        assertFalse(journal.readiness().verified);assertTrue(Files.exists(extra));Files.delete(extra)
+        Files.write(path.resolveSibling(path.fileName.toString()+".preparing"),"{}".toByteArray())
+        assertFalse(journal.readiness().verified);assertArrayEquals(original,Files.readAllBytes(path))
+    }
+
+    @Test fun readinessFlowUpdatesAfterDurableReserveAndExactCleanupWithoutSending() = runBlocking {
+        val journal=TenderJournal(storage())
+        val states=mutableListOf<TenderJournalReadiness>()
+        val collector=kotlinx.coroutines.CoroutineScope(coroutineContext).launch {
+            journal.observeReadiness().collect { states+=it }
+        }
+        try {
+            kotlinx.coroutines.withTimeout(3000){while(states.isEmpty())kotlinx.coroutines.delay(5)}
+            val saved=journal.reserve(command())
+            kotlinx.coroutines.withTimeout(3000){while(states.last().reviewCount!=1)kotlinx.coroutines.delay(5)}
+            journal.clearExact(saved)
+            kotlinx.coroutines.withTimeout(3000){while(!states.last().isClear)kotlinx.coroutines.delay(5)}
+            assertTrue(states.first().isClear);assertTrue(states.all{it.verified})
+        } finally {collector.cancel()}
+    }
+
 }

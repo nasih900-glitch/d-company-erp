@@ -28,7 +28,7 @@ class SemanticAuditPresentationTest {
         assertEquals("Roles: Staff → Owner",auditBusinessSummary(roles))
     }
     @Test fun rawIdentitiesStayTechnicalButTypedBusinessChangesRemain() {
-        val row=entry(""", "business_details":{"order_id":"uuid","source_fingerprint":"hash","amount_minor":27000},"before":{"status":"open","order_id":"old","auth_version":1},"after":{"status":"closed","order_id":"new","auth_version":2}""")
+        val row=entry(""", "business_details":{"order_id":"uuid","source_fingerprint":"hash","amount_minor":27000},"before":{"status":"open","order_id":"old","auth_version":1},"after":{"status":"closed","order_id":"new","auth_version":2}""").copy(action="update")
         assertEquals(listOf("amount_minor"),auditBusinessFacts(row).map{it.first})
         assertEquals(listOf("status"),auditBusinessChanges(row).map{it.first})
         assertEquals("Quantity: 2",auditBusinessValue("item",Json.parseToJsonElement("""{"order_id":"private-id","qty":2}"""),ZoneId.of("UTC")))
@@ -41,4 +41,33 @@ class SemanticAuditPresentationTest {
         val safe=redactAuditValue(raw).toString()
         assertFalse(safe.contains("secret")); assertFalse(safe.contains("hide"));assertFalse(safe.contains("sensitive-key"));assertTrue(safe.contains("redacted"));assertTrue(safe.contains("qty"))
     }
+    @Test fun loginUnlockCreationAndDeletionSnapshotsNeverImplyNameOrRoleMutation() {
+        for(action in listOf("login_success","login_failed","audit_unlock_success","audit_unlock_failed","create")) {
+            val row=entry().copy(action=action,after=Json.parseToJsonElement("""{"name":"Retained staff","roles":["staff"]}""").jsonObject)
+            assertTrue(auditBusinessChanges(row).isEmpty())
+            assertEquals(setOf("name","roles"),auditRetainedSnapshots(row).map{it.second}.toSet())
+            assertTrue(auditRetainedSnapshots(row).all{it.first=="Retained after action"})
+        }
+        val deleted=entry().copy(action="delete",before=Json.parseToJsonElement("""{"name":"Deleted staff"}""").jsonObject)
+        assertTrue(auditBusinessChanges(deleted).isEmpty());assertEquals("Deleted staff",auditRetainedSnapshots(deleted).single().third.jsonPrimitive.content)
+    }
+
+    @Test fun explicitRolePairIsOneRealTransitionAndEmptyRolesAreKnownNotMissing() {
+        val row=entry().copy(action="staff_access_changed",before=Json.parseToJsonElement("""{"before_roles":[]}""").jsonObject,after=Json.parseToJsonElement("""{"after_roles":["owner"]}""").jsonObject)
+        val change=auditBusinessChanges(row).single();assertEquals("roles",change.first)
+        assertEquals("No roles",auditBusinessValue("roles",change.second,ZoneId.of("UTC")))
+        assertEquals("Owner",auditBusinessValue("roles",change.third,ZoneId.of("UTC")))
+        assertTrue(auditRetainedSnapshots(row).isEmpty())
+        val incomplete=row.copy(before=buildJsonObject{})
+        assertTrue(auditBusinessChanges(incomplete).isEmpty());assertEquals("after_roles",auditRetainedSnapshots(incomplete).single().second)
+    }
+
+    @Test fun missingUpdateFieldIsUnknownEvidenceRatherThanAnInventedTransition() {
+        val row=entry().copy(action="update",before=Json.parseToJsonElement("""{"status":"open"}""").jsonObject,after=Json.parseToJsonElement("""{"status":"closed","name":"Newly observed"}""").jsonObject)
+        assertEquals(listOf("status"),auditBusinessChanges(row).map{it.first})
+        assertEquals(listOf("name"),auditRetainedSnapshots(row).map{it.second})
+        assertFalse(auditBusinessSummary(entry(""", "business_details":{"after_roles":["owner"]}""")).contains("→"))
+        assertEquals("Stage / result not recorded",auditStageResult(entry()))
+    }
+
 }

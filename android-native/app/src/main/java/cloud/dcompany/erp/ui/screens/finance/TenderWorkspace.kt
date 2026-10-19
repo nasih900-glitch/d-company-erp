@@ -77,7 +77,7 @@ internal fun TenderWorkspace(
         }
         val pending = state.pending
         if (pending != null) {
-            Text("Saved request needs its final receipt", style = MaterialTheme.typography.titleSmall)
+            Text(if (state.receipt == null) "Saved request needs its final receipt" else "Receipt recorded · saved recovery cleanup needs review", style = MaterialTheme.typography.titleSmall)
             Text(pending.targetLabel(), style = MaterialTheme.typography.bodySmall)
             Text("Recover uses the exact saved body and action key. It does not create a second correction.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }

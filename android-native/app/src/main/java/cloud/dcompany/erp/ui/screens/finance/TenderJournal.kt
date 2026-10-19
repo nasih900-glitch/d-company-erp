@@ -5,7 +5,11 @@ import cloud.dcompany.erp.core.net.MeResponse
 import java.security.MessageDigest
 import java.time.LocalDate
 import java.util.UUID
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -106,11 +110,17 @@ private fun validateSource(fingerprint: String, reason: String, evidence: String
 
 internal val journalJson = Json { ignoreUnknownKeys = false; encodeDefaults = true; explicitNulls = false }
 
+internal data class TenderJournalReadiness(val reviewCount: Int = 0, val verified: Boolean = false) {
+    val isClear: Boolean get() = verified && reviewCount == 0
+}
+
 internal interface TenderJournalStorage {
     /** Implementations distinguish absent data from a read error. */
     fun read(key: String): String?
     fun put(key: String, value: String): Boolean
     fun remove(key: String): Boolean
+    /** Presence only across accounts; no command details leave the private store. */
+    fun inspectSavedWork(): TenderJournalReadiness = error("Saved correction presence cannot be verified.")
 }
 
 /** Resolve the app-private directory only when a journal IO operation runs. */
@@ -125,12 +135,22 @@ internal fun privateTenderJournalStorage(context: Context): TenderJournalStorage
  * changes never clear uncertain work belonging to another scope.
  */
 internal class TenderJournal(private val storage: TenderJournalStorage) {
+    fun observeReadiness() = readinessRevision.map { readiness() }
+
+    suspend fun readiness(): TenderJournalReadiness = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            try { storage.inspectSavedWork() }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { TenderJournalReadiness() }
+        }
+    }
+
     suspend fun read(scope: TenderScope): PendingTenderCommand? = withContext(Dispatchers.IO) {
         mutex.withLock { readLocked(scope) }
     }
 
     suspend fun reserve(command: PendingTenderCommand): PendingTenderCommand = withContext(Dispatchers.IO) {
-        mutex.withLock {
+        try { mutex.withLock {
             command.validate()
             val existing = readLocked(command.scope)
             check(existing == null || existing == command) {
@@ -142,18 +162,18 @@ internal class TenderJournal(private val storage: TenderJournalStorage) {
             check(storage.put(key(command.scope), raw)) { "Could not save correction safely. Nothing was sent." }
             check(storage.read(key(command.scope)) == raw) { "Correction save could not be verified. Nothing was sent." }
             command
-        }
+        } } finally { readinessRevision.update { it + 1 } }
     }
 
     suspend fun clearExact(command: PendingTenderCommand): Boolean = withContext(Dispatchers.IO) {
-        mutex.withLock {
+        try { mutex.withLock {
             command.validate()
             val current = readLocked(command.scope) ?: return@withLock false
             if (current != command) return@withLock false
             check(storage.remove(key(command.scope))) { "Result received; saved recovery could not be cleared." }
             check(storage.read(key(command.scope)) == null) { "Correction recovery clear could not be verified." }
             true
-        }
+        } } finally { readinessRevision.update { it + 1 } }
     }
 
     private fun readLocked(scope: TenderScope): PendingTenderCommand? {
@@ -166,12 +186,18 @@ internal class TenderJournal(private val storage: TenderJournalStorage) {
         }
     }
 
-    private fun key(scope: TenderScope): String = "pending:" + MessageDigest.getInstance("SHA-256")
-        .digest(journalJson.encodeToString(scope).toByteArray(Charsets.UTF_8))
-        .joinToString("") { "%02x".format(it) }
+    private fun key(scope: TenderScope): String = tenderJournalKey(scope)
 
-    private companion object { val mutex = Mutex() }
+    private companion object {
+        val mutex = Mutex()
+        val readinessRevision = MutableStateFlow(0L)
+    }
 }
+
+internal fun tenderJournalKey(scope: TenderScope): String = "pending:" + MessageDigest.getInstance("SHA-256")
+    .digest(journalJson.encodeToString(scope).toByteArray(Charsets.UTF_8))
+    .joinToString("") { "%02x".format(it) }
+
 
 internal fun paymentTenderCommand(
     scope: TenderScope,

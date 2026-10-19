@@ -117,13 +117,26 @@ fun AuditLogScreen(
                 items(state.entries, key = { it.id }) { entry ->
                     SectionCard(contentPadding = PaddingValues(Spacing.md)) {
                         TextButton({ if(state.selected?.id == entry.id) vm.dismissDetails() else vm.select(entry) }, modifier = Modifier.fillMaxWidth()) {
-                            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                Text(auditEntryTitle(entry), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)
-                                Text(auditBusinessSummary(entry), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Text("${auditActor(entry)} · ${auditBusinessLabel(entry.stage)} / ${auditBusinessLabel(entry.outcome)}",
-                                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Text("${formatAuditTimestamp(entry.createdAt, auditZone(page?.shopTimezone))} · ${page?.shopTimezone ?: "shop timezone unavailable"}",
-                                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            BoxWithConstraints(Modifier.fillMaxWidth()) {
+                                val title: @Composable (Modifier) -> Unit = { modifier ->
+                                    Column(modifier, verticalArrangement=Arrangement.spacedBy(4.dp)) {
+                                        Text(auditEntryTitle(entry), style=MaterialTheme.typography.titleSmall, color=MaterialTheme.colorScheme.onSurface)
+                                        val summary=auditBusinessSummary(entry)
+                                        if(summary != "No additional business facts retained") Text(summary, style=MaterialTheme.typography.bodyMedium,
+                                            fontWeight=FontWeight.Normal, color=MaterialTheme.colorScheme.onSurfaceVariant)
+                                        Text(auditActor(entry), style=MaterialTheme.typography.bodySmall, fontWeight=FontWeight.Normal, color=MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                }
+                                val context: @Composable (Modifier) -> Unit = { modifier ->
+                                    Column(modifier, verticalArrangement=Arrangement.spacedBy(4.dp)) {
+                                        Text("Recorded · ${formatAuditTimestamp(entry.createdAt,auditZone(page?.shopTimezone))}",style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)
+                                        Text(auditStageResult(entry),style=MaterialTheme.typography.bodySmall,fontWeight=FontWeight.Normal,color=MaterialTheme.colorScheme.onSurfaceVariant)
+                                        Text(page?.shopTimezone ?: "Shop timezone unavailable",style=MaterialTheme.typography.bodySmall,fontWeight=FontWeight.Normal,color=MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                }
+                                if(maxWidth >= 720.dp) Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(Spacing.lg)) {
+                                    title(Modifier.weight(1f));context(Modifier.width(270.dp))
+                                } else Column(verticalArrangement=Arrangement.spacedBy(Spacing.sm)) { title(Modifier.fillMaxWidth());context(Modifier.fillMaxWidth()) }
                             }
                         }
                         if(state.selected?.id == entry.id) AuditInlineDetail(entry, page?.shopTimezone, ownerKey.orEmpty(), state)
@@ -220,26 +233,30 @@ private fun AuditInlineDetail(entry:AuditEntry,zone:String?,ownerKey:String,stat
     val timezone=auditZone(zone)
     Column(verticalArrangement=Arrangement.spacedBy(Spacing.sm),modifier=Modifier.fillMaxWidth().padding(top=Spacing.sm)) {
         HorizontalDivider()
-        AuditFact("Action",entry.actionLabel)
-        AuditFact("Stage / result","${auditBusinessLabel(entry.stage)} · ${auditBusinessLabel(entry.outcome)}")
-        AuditFact("Actor",auditActor(entry))
-        AuditFact("Name provenance",auditBusinessLabel(entry.actorLabelSource))
-        entry.targetUserId?.let { target ->
-            AuditFact("Targeted account",state.staff.firstOrNull{it.id==target}?.name?.let{"$it · current account label"} ?: "Retained account identity; current label unavailable")
+        val facts=buildList {
+            add("Action" to entry.actionLabel)
+            add("Stage / result" to auditStageResult(entry))
+            add("Actor" to auditActor(entry))
+            add("Name provenance" to auditBusinessLabel(entry.actorLabelSource))
+            entry.targetUserId?.let { target -> add("Targeted account" to (state.staff.firstOrNull{it.id==target}?.name?.let{"$it · current account label"} ?: "Retained account identity; current label unavailable")) }
+            add("Classification" to when(entry.classificationSource){"recorded"->"Recorded at action time";"derived_legacy"->"Derived from retained legacy evidence";else->"Other / legacy · not classified"})
+            entry.matchExplanation?.let { add("Why this matched" to it) }
+            entry.sourceReference?.let { add("Business reference" to it) }
+            auditBusinessFacts(entry).forEach { (key,value)->add(auditBusinessLabel(key) to auditBusinessValue(key,value,timezone)) }
+            auditBusinessChanges(entry).take(12).forEach { (key,before,after) ->
+                add("${auditBusinessLabel(key)} · Before → After" to "${auditBusinessValue(key,before,timezone)} → ${auditBusinessValue(key,after,timezone)}")
+            }
+            auditRetainedSnapshots(entry).take(20).forEach { (side,key,value) -> add("$side · ${auditBusinessLabel(key)}" to auditBusinessValue(key,value,timezone)) }
+            entry.reason?.let { add("Reason" to it) }
+            add("Server recorded" to "${formatAuditTimestamp(entry.createdAt,timezone)} · ${zone ?: "timezone unavailable"}")
+            entry.clientReportedAt?.let { add("Client-reported occurrence" to "${formatAuditTimestamp(it,timezone)} · reported, not independently verified") }
+            entry.syncedAt?.let { add("Server received / synced" to "${formatAuditTimestamp(it,timezone)} · ${zone ?: "timezone unavailable"}") }
+            add("Capture evidence" to auditConnectionLabel(entry))
         }
-        AuditFact("Classification",when(entry.classificationSource){"recorded"->"Recorded at action time";"derived_legacy"->"Derived from retained legacy evidence";else->"Other / legacy · not classified"})
-        entry.matchExplanation?.let { AuditFact("Why this matched",it) }
-        entry.sourceReference?.let { AuditFact("Business reference",it) }
-        auditBusinessFacts(entry).forEach { (key,value)->AuditFact(auditBusinessLabel(key),auditBusinessValue(key,value,timezone)) }
-        auditBusinessChanges(entry).take(12).forEach { (key,before,after) ->
-            AuditFact("${auditBusinessLabel(key)} · Before → After", "${auditBusinessValue(key,before,timezone)} → ${auditBusinessValue(key,after,timezone)}")
-        }
-        if(auditBusinessChanges(entry).size > 12) Text("More retained fields are available in Technical details.",style=MaterialTheme.typography.bodySmall)
-        entry.reason?.let { AuditFact("Reason",it) }
-        AuditFact("Server recorded","${formatAuditTimestamp(entry.createdAt,timezone)} · ${zone ?: "timezone unavailable"}")
-        entry.clientReportedAt?.let { AuditFact("Client-reported occurrence","${formatAuditTimestamp(it,timezone)} · ${zone ?: "timezone unavailable"} · reported, not independently verified") }
-        entry.syncedAt?.let { AuditFact("Server received / synced","${formatAuditTimestamp(it,timezone)} · ${zone ?: "timezone unavailable"}") }
-        AuditFact("Capture evidence",auditConnectionLabel(entry))
+        AuditFactGrid(facts)
+        if(entry.before == null && entry.after != null) Text("Before state was not retained; no change is inferred from the after snapshot.",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+        if(entry.before != null && entry.after == null) Text("After state was not retained; the before snapshot is retained evidence only.",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+        if(auditBusinessChanges(entry).size > 12 || auditRetainedSnapshots(entry).size > 20) Text("More retained fields are available in Technical details.",style=MaterialTheme.typography.bodySmall)
         auditOrderId(entry)?.let { orderId ->
             TextButton({bill=!bill}) { Text(if(bill) "Hide linked bill" else "Investigate linked bill") }
             if(bill) ReceiptInvestigationPanel(orderId=orderId,ownerScopeKey=ownerKey,shopTimezone=zone)
@@ -260,6 +277,21 @@ private fun AuditInlineDetail(entry:AuditEntry,zone:String?,ownerKey:String,stat
             listOf("Business facts" to entry.businessDetails,"Before" to entry.before,"After" to entry.after).forEach{(label,value)->
                 Text(label,fontWeight=FontWeight.SemiBold)
                 Text(value?.let{prettyAuditJson(it)} ?: "Not recorded",style=MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
+}
+
+@Composable
+private fun AuditFactGrid(facts:List<Pair<String,String>>) {
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val columns=if(maxWidth >= 850.dp) 3 else if(maxWidth >= 570.dp) 2 else 1
+        Column(verticalArrangement=Arrangement.spacedBy(Spacing.md)) {
+            facts.chunked(columns).forEach { group ->
+                Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(Spacing.lg)) {
+                    group.forEach { (label,value)-> Box(Modifier.weight(1f)) { AuditFact(label,value) } }
+                    repeat(columns-group.size) { Spacer(Modifier.weight(1f)) }
+                }
             }
         }
     }

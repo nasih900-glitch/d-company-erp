@@ -3,6 +3,7 @@ package cloud.dcompany.erp.ui.screens.finance
 import android.system.Os
 import android.system.OsConstants
 import java.io.IOException
+import kotlinx.serialization.decodeFromString
 import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
 import java.nio.file.Files
@@ -19,7 +20,7 @@ import java.nio.file.attribute.BasicFileAttributes
 /**
  * A bounded private JSON intent file rather than SharedPreferences, whose XML
  * reader silently substitutes an empty map for a corrupt file. All calls run
- * under TenderJournal's shared mutex on IO. No migration/startup work is added.
+ * under TenderJournal's shared mutex on IO. Readiness inspection never creates files.
  */
 internal class FileTenderJournalStorage(
     private val directory: () -> Path,
@@ -39,6 +40,27 @@ internal class FileTenderJournalStorage(
         // A complete interrupted preparation retains its identity too. A partial
         // preparation is passed to the strict decoder and never overwritten.
         return stored ?: preparing
+    }
+
+    override fun inspectSavedWork(): TenderJournalReadiness {
+        val parent = checkedDirectory(create = false) ?: return TenderJournalReadiness(verified = true)
+        val keys = linkedSetOf<String>()
+        Files.newDirectoryStream(parent).use { entries ->
+            for (entry in entries) {
+                val name = entry.fileName.toString()
+                require(name.matches(Regex("pending_[a-f0-9]{64}\\.json(\\.preparing)?"))) {
+                    "Unrecognised saved correction data. Keep it for owner review."
+                }
+                keys += name.removeSuffix(".preparing").removeSuffix(".json").replaceFirst("pending_", "pending:")
+                require(keys.size <= 128) { "Saved correction inventory cannot be verified." }
+            }
+        }
+        for (key in keys) {
+            val raw = requireNotNull(read(key)) { "Saved correction changed while being inspected." }
+            val command = journalJson.decodeFromString<PendingTenderCommand>(raw).also { it.validate() }
+            require(tenderJournalKey(command.scope) == key) { "Saved correction scope does not match its retained file." }
+        }
+        return TenderJournalReadiness(reviewCount = keys.size, verified = true)
     }
 
     override fun put(key: String, value: String): Boolean {
