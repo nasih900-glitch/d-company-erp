@@ -48,7 +48,7 @@ class AuditSnapshotStateTest {
     private val staff=Proxy.newProxyInstance(StaffApi::class.java.classLoader,arrayOf(StaffApi::class.java)){_,method,_->
         if(method.name=="list") emptyList<StaffUser>() else error("Unexpected Staff call ${method.name}")
     } as StaffApi
-    private fun vm(api:Api,scope:CoroutineScope)=AuditLogViewModel(api,staff,scope).also{it.bindIdentity("owner","company","branch",true)}
+    private fun vm(api:Api,scope:CoroutineScope,clock:()->Long={System.nanoTime()/1_000_000})=AuditLogViewModel(api,staff,scope,clock).also{it.bindIdentity("owner","company","branch",true)}
 
     @Test fun activityCheckReusesCursorAndNeverReplacesLoadedPagesOrSelectedDetail() {
         val scope=CoroutineScope(SupervisorJob()+Dispatchers.Unconfined)
@@ -213,6 +213,41 @@ class AuditSnapshotStateTest {
             api.next=page(200);vm.unlock("current-account-input")
             vm.select(oldRow)
             assertNull(vm.state.value.selected);assertEquals(listOf(200L),vm.state.value.entries.map{it.id})
+        } finally { scope.cancel() }
+    }
+
+    @Test fun elapsedDeadlineExpiresDuringSleepWithoutAdvancingTheCoroutineTimer() {
+        val scope=CoroutineScope(SupervisorJob()+Dispatchers.Unconfined)
+        try {
+            var elapsed=1_000L
+            val api=Api().also{it.next=page(100,99,more=true)}
+            val vm=vm(api,scope){elapsed};vm.unlock("synthetic-password")
+            vm.select(vm.state.value.entries.last())
+            api.block=true;vm.loadMore()
+            val late=requireNotNull(api.blocked)
+            elapsed+=600_001
+            assertFalse(vm.verificationIsCurrent())
+            vm.checkVerification()
+            assertTrue(vm.state.value.locked);assertFalse(vm.state.value.loadingMore)
+            assertTrue(vm.state.value.entries.isEmpty());assertNull(vm.state.value.selected)
+            late.resume(page(12))
+            assertTrue(vm.state.value.locked);assertTrue(vm.state.value.entries.isEmpty())
+            api.next=page(200);vm.unlock("synthetic-password")
+            assertFalse(vm.state.value.locked)
+        } finally { scope.cancel() }
+    }
+
+    @Test fun elapsedDeadlineAlsoRefusesLateUnlockMetadataBeforeItCanRender() {
+        val scope=CoroutineScope(SupervisorJob()+Dispatchers.Unconfined)
+        try {
+            var elapsed=1_000L
+            val api=Api().also{it.next=page(100);it.metadataBlock=true}
+            val vm=vm(api,scope){elapsed};vm.unlock("synthetic-password")
+            val late=requireNotNull(api.metadata)
+            elapsed+=600_001
+            late.resume(api.catalogue())
+            assertTrue(vm.state.value.locked);assertFalse(vm.state.value.unlocking)
+            assertTrue(api.calls.isEmpty());assertTrue(vm.state.value.entries.isEmpty())
         } finally { scope.cancel() }
     }
 

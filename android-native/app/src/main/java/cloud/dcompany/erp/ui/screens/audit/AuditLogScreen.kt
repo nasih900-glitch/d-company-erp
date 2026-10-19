@@ -19,6 +19,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cloud.dcompany.erp.DCompanyApp
@@ -42,9 +45,21 @@ fun AuditLogScreen(
     val current by vm.state.collectAsStateWithLifecycle()
     val allowed = profile?.let { it.auditAccess && it.userId.isNotBlank() && it.companyId.isNotBlank() } == true
     val ownerKey = profile?.takeIf { allowed }?.let { "${it.companyId}|${it.userId}|${it.branchId.orEmpty()}" }
-    SideEffect { vm.bindIdentity(profile?.userId, profile?.companyId, profile?.branchId, allowed) }
-    // Do not render an earlier account's protected page while its bind effect runs.
-    val state = if (current.ownerScopeKey == ownerKey) current else AuditLogUiState(allowed = allowed)
+    SideEffect {
+        vm.bindIdentity(profile?.userId, profile?.companyId, profile?.branchId, allowed)
+        vm.checkVerification()
+    }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, ownerKey) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_START || event == Lifecycle.Event.ON_RESUME) vm.checkVerification()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    // Neither an earlier account nor an expired grant may be rendered while effects run.
+    val state = if (current.ownerScopeKey == ownerKey && (current.locked || vm.verificationIsCurrent())) current
+        else AuditLogUiState(allowed = allowed, unlockError = if (!current.locked) "Owner verification expired. Unlock to continue." else null)
     var password by remember(ownerKey) { mutableStateOf("") }
     var expandedFilters by remember(ownerKey) { mutableStateOf(false) }
     LaunchedEffect(ownerKey, initialReference) { initialReference?.let(vm::reference) }

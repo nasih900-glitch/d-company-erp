@@ -1,5 +1,6 @@
 package cloud.dcompany.erp.ui.screens.audit
 
+import android.os.SystemClock
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import cloud.dcompany.erp.core.net.ApiClient
@@ -61,12 +62,14 @@ class AuditLogViewModel(
     private val api: AuditLogApi = ApiClient.create(),
     private val staffApi: StaffApi = ApiClient.create(),
     private val suppliedScope: CoroutineScope? = null,
+    private val elapsedNow: () -> Long = { SystemClock.elapsedRealtime() },
 ) : ViewModel() {
     private val tasks: CoroutineScope get() = suppliedScope ?: viewModelScope
     private val _state = MutableStateFlow(AuditLogUiState())
     val state: StateFlow<AuditLogUiState> = _state.asStateFlow()
     private var identity: String? = null
     private var token: String? = null
+    private var grantDeadline: Long? = null
     private var generation = 0L
     private var request: Job? = null
     private var expiry: Job? = null
@@ -87,6 +90,7 @@ class AuditLogViewModel(
         val owner = identity ?: return
         if (owner != expectedOwnerScopeKey || !_state.value.allowed || !_state.value.locked || _state.value.unlocking || password.isBlank()) return
         val operation = ++generation
+        val requestedAt = elapsedNow()
         request?.cancel()
         _state.value = _state.value.copy(unlocking = true, unlockError = null)
         request = tasks.launch {
@@ -94,7 +98,12 @@ class AuditLogViewModel(
                 val grant = api.unlock(AuditUnlockRequest(password))
                 if (!current(operation, owner)) return@launch
                 token = grant.auditToken
-                scheduleExpiry(grant.auditToken, owner, grant.expiresIn)
+                grantDeadline = requestedAt + grant.expiresIn.coerceIn(1, 600) * 1000L
+                if (!grantIsCurrent()) {
+                    lockWithMessage("Owner verification expired. Unlock to continue.", keepHistory = true)
+                    return@launch
+                }
+                scheduleExpiry(grant.auditToken, owner)
                 val metadata = coroutineScope {
                     val catalogue = async { api.catalogue(grant.auditToken) }
                     val staff = async {
@@ -105,6 +114,10 @@ class AuditLogViewModel(
                     catalogue.await() to staff.await()
                 }
                 if (!current(operation, owner) || token != grant.auditToken) return@launch
+                if (!grantIsCurrent()) {
+                    lockWithMessage("Owner verification expired. Unlock to continue.", keepHistory = true)
+                    return@launch
+                }
                 val linked = requestedReference
                 val restored = retained ?: _state.value
                 _state.value = restored.copy(
@@ -120,6 +133,7 @@ class AuditLogViewModel(
             catch (failure: Exception) {
                 if (!current(operation, owner)) return@launch
                 token = null
+                grantDeadline = null
                 expiry?.cancel()
                 _state.value = _state.value.copy(locked = true, unlocking = false,
                     loading = false, loadingMore = false, checking = false,
@@ -141,12 +155,12 @@ class AuditLogViewModel(
     }
 
     fun changeFilters(update: (AuditFilters) -> AuditFilters) {
-        if (_state.value.locked || busy()) return
+        if (!requireVerification() || busy()) return
         _state.value = _state.value.copy(filters = update(_state.value.filters))
     }
 
     fun find() {
-        if (_state.value.locked || busy()) return
+        if (!requireVerification() || busy()) return
         val filters = _state.value.filters.let {
             it.copy(query = it.query.trim().take(200), reference = it.reference.trim().take(120),
                 dateFrom = it.dateFrom.trim(), dateTo = it.dateTo.trim())
@@ -175,17 +189,17 @@ class AuditLogViewModel(
     }
 
     fun refresh() {
-        if (_state.value.locked || busy()) return
+        if (!requireVerification() || busy()) return
         _state.value = _state.value.copy(scrollIndex = 0, scrollOffset = 0, viewportReset = _state.value.viewportReset + 1)
         load(Load.FIRST)
     }
     fun loadMore() = load(Load.MORE)
     fun checkActivity() = load(Load.CHECK)
     fun rememberViewport(index: Int, offset: Int) {
-        if (!_state.value.locked) _state.value = _state.value.copy(scrollIndex = index.coerceAtLeast(0), scrollOffset = offset.coerceAtLeast(0))
+        if (requireVerification()) _state.value = _state.value.copy(scrollIndex = index.coerceAtLeast(0), scrollOffset = offset.coerceAtLeast(0))
     }
     fun select(entry: AuditEntry) {
-        if (!_state.value.locked && _state.value.entries.any { it == entry }) _state.value = _state.value.copy(selected = entry)
+        if (requireVerification() && _state.value.entries.any { it == entry }) _state.value = _state.value.copy(selected = entry)
     }
     fun dismissDetails() { _state.value = _state.value.copy(selected = null) }
 
@@ -196,7 +210,7 @@ class AuditLogViewModel(
         val grant = token ?: return
         val owner = identity ?: return
         val before = _state.value
-        if (before.locked || busy()) return
+        if (!requireVerification() || busy()) return
         val cursor = when (mode) {
             Load.FIRST -> null
             Load.MORE -> before.page?.takeIf { it.hasMore }?.nextCursor ?: return
@@ -215,7 +229,7 @@ class AuditLogViewModel(
                     reference = filters.reference.takeIf(String::isNotBlank),
                     dateFrom = filters.dateFrom.takeIf(String::isNotBlank), dateTo = filters.dateTo.takeIf(String::isNotBlank),
                     query = filters.query.takeIf(String::isNotBlank))
-                if (!current(operation, owner) || token != grant) return@launch
+                if (!current(operation, owner) || token != grant || !requireVerification()) return@launch
                 val latest = _state.value
                 _state.value = when (mode) {
                     Load.CHECK -> latest.copy(checking = false, newEntriesAvailable = page.newEntriesAvailable)
@@ -228,7 +242,7 @@ class AuditLogViewModel(
                 applyQueuedReference()
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (failure: Exception) {
-                if (!current(operation, owner) || token != grant) return@launch
+                if (!current(operation, owner) || token != grant || !requireVerification()) return@launch
                 val apiFailure = failure as? ApiException
                 val expiredSnapshot = apiFailure?.status in setOf(409, 422) &&
                     apiFailure?.message?.contains("Audit history snapshot expired", ignoreCase = true) == true
@@ -244,15 +258,31 @@ class AuditLogViewModel(
         }
     }
 
-    private fun scheduleExpiry(grant: String, owner: String, seconds: Int) {
+    /** Pure read-side check also hides protected content before a resume effect can run. */
+    fun verificationIsCurrent(): Boolean = !_state.value.locked && grantIsCurrent()
+
+    /** elapsedRealtime includes deep sleep; Handler/coroutine delays alone do not. */
+    fun checkVerification() {
+        if (token != null && !grantIsCurrent()) {
+            lockWithMessage("Owner verification expired. Unlock to continue.", keepHistory = true)
+        }
+    }
+
+    private fun grantIsCurrent(): Boolean = token != null && grantDeadline?.let { elapsedNow() < it } == true
+    private fun requireVerification(): Boolean {
+        checkVerification()
+        return !_state.value.locked && grantIsCurrent()
+    }
+
+    private fun scheduleExpiry(grant: String, owner: String) {
         expiry?.cancel()
         expiry = tasks.launch {
-            delay(seconds.coerceIn(1, 600) * 1000L)
-            if (identity == owner && token == grant) lockWithMessage("Owner verification expired. Unlock to continue.", true)
+            delay(((grantDeadline ?: elapsedNow()) - elapsedNow()).coerceAtLeast(0))
+            if (identity == owner && token == grant) checkVerification()
         }
     }
 
     private fun current(operation: Long, owner: String) = operation == generation && identity == owner
-    private fun invalidate() { generation++; request?.cancel(); expiry?.cancel(); token = null }
+    private fun invalidate() { generation++; request?.cancel(); expiry?.cancel(); token = null; grantDeadline = null }
     override fun onCleared() { invalidate(); retained = null; super.onCleared() }
 }
