@@ -764,7 +764,7 @@ BUILD53_MIGRATION_RUNTIME_VERIFIED=false
 BUILD53_POST_PROOF_SUCCEEDED=false
 EXACT_BUILD50_SUCCESSOR=""
 EXACT_BUILD50_VERIFIER=""
-EXACT_BUILD50_PENDING_CARRIED_UNRESOLVED=false
+BUILD50_TO_SUCCESSOR_PENDING_PRESERVED=false
 EXACT_BUILD50_MIGRATION_RUNTIME_VERIFIED=false
 EXACT_BUILD50_POST_PROOF_SUCCEEDED=false
 BUILD52_PRE_HISTORY=""
@@ -982,7 +982,7 @@ handle_install_failure() {
           fi
         fi
         if [ "$rollback_succeeded" = true ] && \
-           [ "$EXACT_BUILD50_PENDING_CARRIED_UNRESOLVED" = true ]; then
+           [ "$BUILD50_TO_SUCCESSOR_PENDING_PRESERVED" = true ]; then
           RESTORED_BUILD52_HISTORY="$UPGRADE_SNAPSHOT/$exact_build50_slug-restored-history.json"
           RESTORED_BUILD52_FLEET="$UPGRADE_SNAPSHOT/$exact_build50_slug-restored-fleet.json"
           RESTORED_BUILD52_TRANSITION="$UPGRADE_SNAPSHOT/$exact_build50_slug-restored-transition.json"
@@ -1567,7 +1567,7 @@ if [ -n "$EXISTING_POSTGRES_CONTAINER" ]; then
         exit 1
       fi
       chmod 600 "$PENDING_COMPATIBILITY_REPORT"
-      EXACT_BUILD50_PENDING_CARRIED_UNRESOLVED=true
+      BUILD50_TO_SUCCESSOR_PENDING_PRESERVED=true
       if [ "$EXACT_BUILD50_SUCCESSOR" = Build52 ]; then
         BUILD52_PENDING_CARRIED_UNRESOLVED=true
       else
@@ -2176,7 +2176,7 @@ fi
 # which could perform legitimate writes before the quiesced preservation proof.
 # A failure in this block reaches the existing verified pg_dump rollback while
 # no candidate application writer has run.
-if [ "$EXACT_BUILD50_PENDING_CARRIED_UNRESOLVED" = true ]; then
+if [ "$BUILD50_TO_SUCCESSOR_PENDING_PRESERVED" = true ]; then
   if [ "$EXACT_BUILD50_MIGRATION_RUNTIME_VERIFIED" != true ] || \
      [ "$FRESH_INSTALL" = true ] || [ -z "$UPGRADE_SNAPSHOT" ]; then
     echo "$EXACT_BUILD50_SUCCESSOR one-off migration has no exact verified predecessor proof." >&2
@@ -2313,7 +2313,7 @@ PY
 fi
 
 # ----- 4. Bring up the stack -----
-if [ "$EXACT_BUILD50_PENDING_CARRIED_UNRESOLVED" = true ] && \
+if [ "$BUILD50_TO_SUCCESSOR_PENDING_PRESERVED" = true ] && \
    [ "$EXACT_BUILD50_POST_PROOF_SUCCEEDED" != true ]; then
   echo "$EXACT_BUILD50_SUCCESSOR normal writers require the in-process quiesced post proof." >&2
   exit 1
@@ -2425,7 +2425,7 @@ fi
 # Route by the actual migrated schema, including an already0091 retry. This
 # verifies history only: no new50-to51 opaque pending-work exception is granted.
 if [ "$FRESH_INSTALL" = false ] && \
-   [ "$EXACT_BUILD50_PENDING_CARRIED_UNRESOLVED" = false ]; then
+   [ "$BUILD50_TO_SUCCESSOR_PENDING_PRESERVED" = false ]; then
   BUILD51_POSTGRES_IDS=()
   while IFS= read -r container_id; do
     [ -n "$container_id" ] && BUILD51_POSTGRES_IDS+=("$container_id")
