@@ -1,11 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- A neutral System launch surface; Compose then applies the saved choice. -->
-    <style name="Theme.DCompany" parent="android:Theme.Material.NoActionBar">
+    <!-- The complete API26-compatible System launch surface. Higher API themes
+         inherit these attributes so the palette and status-bar behavior stay equal. -->
+    <style name="Base.Theme.DCompany" parent="android:Theme.Material.NoActionBar">
         <item name="android:windowBackground">@color/brandBackground</item>
         <item name="android:statusBarColor">@color/brandBackground</item>
         <item name="android:navigationBarColor">@color/brandBackground</item>
         <item name="android:windowLightStatusBar">@bool/lightSystemBars</item>
-        <item name="android:windowLightNavigationBar">@bool/lightSystemBars</item>
     </style>
+    <style name="Theme.DCompany" parent="Base.Theme.DCompany" />
 </resources>

@@ -50,6 +50,38 @@ class LaunchAppearanceTest {
     }
 
     @Test
+    fun `API27 navigation icons extend the complete API26 theme without replacing it`() {
+        fun styles(relative: String): Map<String, org.w3c.dom.Element> {
+            val nodes = DocumentBuilderFactory.newInstance().newDocumentBuilder()
+                .parse(root().resolve(relative).toFile()).getElementsByTagName("style")
+            return (0 until nodes.length).associate {
+                val element = nodes.item(it) as org.w3c.dom.Element
+                element.getAttribute("name") to element
+            }
+        }
+        fun values(style: org.w3c.dom.Element): Map<String, String> {
+            val nodes = style.getElementsByTagName("item")
+            return (0 until nodes.length).associate {
+                val element = nodes.item(it) as org.w3c.dom.Element
+                element.getAttribute("name") to element.textContent.trim()
+            }
+        }
+        val base = styles("src/main/res/values/themes.xml")
+        assertEquals("android:Theme.Material.NoActionBar", base.getValue("Base.Theme.DCompany").getAttribute("parent"))
+        assertEquals(mapOf(
+            "android:windowBackground" to "@color/brandBackground",
+            "android:statusBarColor" to "@color/brandBackground",
+            "android:navigationBarColor" to "@color/brandBackground",
+            "android:windowLightStatusBar" to "@bool/lightSystemBars",
+        ), values(base.getValue("Base.Theme.DCompany")))
+        assertEquals("Base.Theme.DCompany", base.getValue("Theme.DCompany").getAttribute("parent"))
+        assertTrue(values(base.getValue("Theme.DCompany")).isEmpty())
+        val api27 = styles("src/main/res/values-v27/themes.xml").getValue("Theme.DCompany")
+        assertEquals("Base.Theme.DCompany", api27.getAttribute("parent"))
+        assertEquals(mapOf("android:windowLightNavigationBar" to "@bool/lightSystemBars"), values(api27))
+    }
+
+    @Test
     fun `startup and selection sync only the application splash override`() {
         val activity = Files.newBufferedReader(root().resolve("src/main/java/cloud/dcompany/erp/MainActivity.kt")).use { it.readText() }
         assertTrue(activity.indexOf("syncLaunchAppearance(initialAppearance)") < activity.indexOf("setContent {"))

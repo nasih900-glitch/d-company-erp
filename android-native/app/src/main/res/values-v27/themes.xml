@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Light navigation-bar icons are configurable only from API27 onward. -->
+    <style name="Theme.DCompany" parent="Base.Theme.DCompany">
+        <item name="android:windowLightNavigationBar">@bool/lightSystemBars</item>
+    </style>
+</resources>

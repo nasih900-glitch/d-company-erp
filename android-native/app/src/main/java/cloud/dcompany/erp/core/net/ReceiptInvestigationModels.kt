@@ -64,4 +64,3 @@ data class ReceiptInvestigation(
     @SerialName("invoice_date_basis") val invoiceDateBasis: String,
     @SerialName("shop_timezone") val shopTimezone: String? = null,
 )
-

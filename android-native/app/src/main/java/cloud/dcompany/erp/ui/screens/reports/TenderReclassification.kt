@@ -16,4 +16,3 @@ data class TenderReclassification(
     val basis: String,
     @SerialName("recorded_at") val recordedAt: String,
 )
-

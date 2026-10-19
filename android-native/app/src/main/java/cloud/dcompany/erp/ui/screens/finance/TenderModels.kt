@@ -122,4 +122,3 @@ data class TenderReceipt(
     @SerialName("cash_delta_minor") val cashDeltaMinor: Long? = null,
     @SerialName("upi_delta_minor") val upiDeltaMinor: Long? = null,
 )
-
