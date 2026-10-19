@@ -1,3 +1,4 @@
+import { updateCoverageEvidence } from '@/lib/client-report-evidence';
 import IncidentReports from './IncidentReports';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
@@ -221,7 +222,7 @@ export function SystemHealthOverview({
         >
           <AlertTriangle className="mt-0.5 shrink-0 text-accent-gold" size={18} aria-hidden="true" />
           <div>
-            <p className="font-semibold text-accent-gold">Latest check could not finish</p>
+            <p className="font-semibold text-fg">Latest check could not finish</p>
             <p className="mt-1 text-sm text-fg-muted">
               {refreshError} The last successful server status remains visible and is marked as saved.
             </p>
@@ -341,14 +342,12 @@ export function SystemHealthOverview({
                 <p className="mt-1 text-xs text-fg-muted">Latest supported Android version code</p>
               </div>
               <StatusPill
-                label={health.devices.outdated_installations
-                  ? `${health.devices.outdated_installations} outdated`
-                  : 'All current'}
-                tone={health.devices.outdated_installations ? 'warning' : 'good'}
+                label={updateCoverageEvidence(health.devices).label}
+                tone={updateCoverageEvidence(health.devices).tone}
               />
             </div>
             <p className="mt-3 text-xs text-fg-subtle">
-              This is read-only health evidence. Offering or withdrawing an APK remains in Devices &amp; Updates and requires its separate release-control grant.
+              {health.devices.seen_last_24h} of {health.devices.total} tablets reported within 24 hours of this server check. Stale or missing reports do not establish the current build or crash status. This is read-only health evidence. Offering or withdrawing an APK remains in Devices &amp; Updates and requires its separate release-control grant.
             </p>
           </div>
         </div>
@@ -528,7 +527,7 @@ function IncidentCount({ label, value }: { label: string; value: number }) {
   return (
     <div className="rounded-xl border border-bg-border bg-bg-raised/35 p-3">
       <p className="text-xs text-fg-muted">{label}</p>
-      <p className={`mt-1 font-mono text-xl font-semibold tabular-nums ${value ? 'text-accent-gold' : 'text-accent-good'}`}>
+      <p className={`mt-1 font-mono text-xl font-semibold tabular-nums ${value ? 'text-fg' : 'text-accent-good'}`}>
         {value}
       </p>
     </div>
@@ -619,14 +618,14 @@ function StatusPill({ label, tone }: { label: string; tone: Tone }) {
 
 function toneSurface(tone: Tone): string {
   if (tone === 'good') return 'border-accent-good/35 bg-accent-good/10 text-accent-good';
-  if (tone === 'warning') return 'border-accent-gold/40 bg-accent-gold/10 text-accent-gold';
+  if (tone === 'warning') return 'border-accent-gold/40 bg-accent-gold/10 text-fg';
   if (tone === 'bad') return 'border-accent-bad/45 bg-accent-bad/10 text-accent-bad';
   return 'border-bg-border bg-bg-raised text-fg-muted';
 }
 
 function toneText(tone: Tone): string {
   if (tone === 'good') return 'text-accent-good';
-  if (tone === 'warning') return 'text-accent-gold';
+  if (tone === 'warning') return 'text-fg';
   if (tone === 'bad') return 'text-accent-bad';
   return 'text-fg';
 }

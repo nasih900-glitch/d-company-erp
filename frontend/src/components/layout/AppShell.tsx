@@ -161,8 +161,7 @@ export default function AppShell({ children }: { children?: ReactNode }) {
     saveAppearancePreference(next);
     setAppearance(next);
   };
-  const toggleDayNight = () => {
-    const next: AppearancePreference = resolvedNight ? 'day' : 'night';
+  const chooseAppearance = (next: AppearancePreference) => {
     saveAppearancePreference(next);
     setAppearance(next);
   };
@@ -267,7 +266,7 @@ export default function AppShell({ children }: { children?: ReactNode }) {
           </div>
         </div>
         <div className="flex items-center gap-1">
-          <button type="button" onClick={toggleDayNight}
+          <button type="button" onClick={cycleAppearance}
             className="tap-target grid place-items-center rounded-full text-fg-muted hover:bg-bg-raised hover:text-fg"
             aria-label={`Appearance: ${appearance}. Change appearance`} title={`Appearance: ${appearance}`}>
             <AppearanceIcon preference={appearance}/>
@@ -434,22 +433,13 @@ export default function AppShell({ children }: { children?: ReactNode }) {
         style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom))' }}
       >
         <div className="hidden h-12 items-start justify-end lg:flex">
-        <button
-          type="button"
-          onClick={toggleDayNight}
-          className="flex min-h-11 items-center gap-2 rounded-full border border-bg-border bg-bg-surface px-4 text-xs font-bold tracking-wide hover:bg-bg-raised"
-          aria-label={`Appearance: ${appearance}. Change between day and night`}
-          title={`Appearance: ${appearance}`}
-          data-testid="workspace-day-night-toggle"
-        >
-          <AppearanceIcon preference={appearance}/>
-          {resolvedNight ? 'Night mode' : 'Day mode'}
-        </button>
+          <WorkspaceAppearanceChooser appearance={appearance} resolvedNight={resolvedNight} onChange={chooseAppearance}/>
+
         </div>
         <ConnectivityBanner />
         {!terminalReady && terminalIssue && (
           <div className="card mb-4 border-accent-gold/40 bg-accent-gold/10 text-sm">
-            <div className="font-semibold text-accent-gold">Shared register setup needs attention</div>
+            <div className="font-semibold text-fg">Shared register setup needs attention</div>
             <p className="mt-1 text-fg-muted">{terminalIssue}</p>
             {GAMING_CENTRE_TERMINAL_POLICY.showRoutineSelector
               && terminalOptions.length > 1 && (
@@ -472,4 +462,25 @@ export default function AppShell({ children }: { children?: ReactNode }) {
       <SupportLauncher inboxUnread={hasSystemAccess ? supportUnread : 0} />
     </div>
   );
+}
+
+/** The desktop shortcut uses the same saved preference as the sidebar and OS listener. */
+export function WorkspaceAppearanceChooser({ appearance, resolvedNight, onChange }: {
+  appearance: AppearancePreference; resolvedNight: boolean; onChange: (value: AppearancePreference) => void;
+}) {
+  return <details className="relative z-20">
+    <summary className="flex min-h-11 cursor-pointer list-none items-center gap-2 rounded-full border border-bg-border bg-bg-surface px-4 text-xs font-bold tracking-wide hover:bg-bg-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fg-muted focus-visible:ring-offset-2 focus-visible:ring-offset-bg" aria-label={`Appearance: ${appearance}. Choose Day, Night or System`} data-testid="workspace-day-night-toggle">
+      <AppearanceIcon preference={appearance}/>
+      {appearance === 'system' ? `System · ${resolvedNight ? 'Night' : 'Day'}` : resolvedNight ? 'Night mode' : 'Day mode'}
+    </summary>
+    <div className="absolute right-0 mt-2 min-w-40 rounded-xl border border-bg-border bg-bg-surface p-1.5 shadow-lg" role="group" aria-label="Appearance options">
+      {(['day', 'night', 'system'] as const).map(value => <button key={value} type="button" aria-pressed={appearance === value}
+        className={`flex min-h-11 w-full items-center gap-2 rounded-lg px-3 text-left text-sm hover:bg-bg-raised ${appearance === value ? 'bg-bg-raised font-semibold' : ''}`}
+        onClick={event => {
+          onChange(value);
+          const details = event.currentTarget.closest('details');
+          if (details) { details.open = false; details.querySelector('summary')?.focus(); }
+        }}><AppearanceIcon preference={value}/>{value === 'system' ? 'System' : value === 'night' ? 'Night' : 'Day'}</button>)}
+    </div>
+  </details>;
 }

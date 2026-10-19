@@ -1,3 +1,4 @@
+import { taxPercentage } from './receipt-search';
 import { InlineShiftWorkspace } from '@/modules/pos/OrdersAndShiftsScreen';
 /**
  * Live POS — calls the FastAPI backend.
@@ -3866,7 +3867,7 @@ export default function LivePOSScreen() {
               <div className="text-fg-muted text-xs mt-1 flex items-center justify-between">
                 <span>{inr(item.base_price_minor)}</span>
                 {TAX_COMPLIANCE_UI_ENABLED && (
-                  <span className="chip !py-0 !px-2 !text-[10px]">{(item.tax_rate * 100).toFixed(0)}%</span>
+                  <span className="chip !py-0 !px-2 !text-[10px]">{taxPercentage(String(item.tax_rate))}</span>
                 )}
               </div>
             </button>

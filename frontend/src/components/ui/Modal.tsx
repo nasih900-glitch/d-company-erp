@@ -64,7 +64,7 @@ export interface ModalProps {
   onClose: () => void;
   title: string;
   children: React.ReactNode;
-  size?: 'sm' | 'md' | 'lg';
+  size?: 'sm' | 'md' | 'lg' | 'xl';
   locked?: boolean;
   contentClassName?: string;
   printMode?: 'receipt';
@@ -230,6 +230,7 @@ export default function Modal({
     sm: 'md:max-w-sm',
     md: 'md:max-w-lg',
     lg: 'md:max-w-2xl',
+    xl: 'md:max-w-5xl',
   }[size];
   const receiptPrint = printMode === 'receipt';
 

@@ -20,6 +20,7 @@ import {
 
 import { LIVE_MODE } from '@/lib/demo';
 import { inr } from '@/lib/inr';
+import { shopTime } from '@/modules/audit/audit-presentation';
 import { parseRupeesToMinor } from '@/lib/money-input';
 import { resolveOpenShift, shiftResolutionMessage } from '@/lib/operational-context';
 import { profileMembershipMoneyLabel } from '@/lib/product-profile';
@@ -524,7 +525,7 @@ function OrdersTab() {
             <h3 className="font-semibold">Open &amp; held orders</h3>
             <p className="text-xs text-fg-muted">Operational bills that have not been finalized.</p>
           </div>
-          <span className="chip border-accent-gold/30 text-accent-gold">{operationalRows.length} active</span>
+          <span className="chip border-accent-gold/30 text-fg">{operationalRows.length} active</span>
         </div>
         {operationalError && <InlineLoadError message={operationalError} onRetry={() => { void loadOperational(true); }}/>}
         {operationalLoading ? <div className="p-4"><SkeletonCard/></div> : !operationalRows.length && !operationalError ? (
@@ -668,7 +669,7 @@ export function OperationalOrderList({ rows, protectedAccess, onView, onRecover 
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
                   <span className="font-semibold">{order.source_label || orderTypeLabel(order.type)}</span>
-                  <span className={`chip text-[10px] ${order.status === 'held' ? 'border-accent-gold/40 text-accent-gold' : 'border-fg-muted/40 text-fg-muted'}`}>
+                  <span className={`chip text-[10px] ${order.status === 'held' ? 'border-accent-gold/40 text-fg' : 'border-fg-muted/40 text-fg-muted'}`}>
                     {order.status}
                   </span>
                 </div>
@@ -1300,7 +1301,7 @@ function GamingProvenance({ receipt }: { receipt: ReceiptHistoryDTO }) {
 
 function ReceiptStatus({ status }: { status: string }) {
   return (
-    <span className={`chip text-[10px] ${status === 'paid' ? 'border-accent-good/40 text-accent-good' : 'border-accent-gold/40 text-accent-gold'}`}>
+    <span className={`chip text-[10px] ${status === 'paid' ? 'border-accent-good/40 text-accent-good' : 'border-accent-gold/40 text-fg'}`}>
       {status}
     </span>
   );
@@ -1588,12 +1589,12 @@ export function OpenShiftStatusPanel({
               : 'Continue using this shared shift. When work is finished, count the drawer and close it here. Any staff member with Close shift access can close it; the closer is recorded under their own account.'}
           </p>
           {!canClose && !requiresOriginTablet && (
-            <p className="mt-2 text-xs text-accent-gold" role="status">
+            <p className="mt-2 text-xs text-fg" role="status">
               Your account can view this shift but cannot close it. Ask a staff member with Close shift access.
             </p>
           )}
           {requiresOriginTablet && !canRecover && (
-            <p className="mt-2 text-xs text-accent-gold" role="status">
+            <p className="mt-2 text-xs text-fg" role="status">
               If the tablet is stuck or unavailable, ask the protected audit owner to use the separate audited recovery flow.
             </p>
           )}
@@ -1692,7 +1693,7 @@ export function AndroidShiftRecoveryCandidatesPanel({
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="chip border-accent-bad/45 text-accent-bad">Other terminal</span>
                       {!candidate.terminal_is_active && (
-                        <span className="chip border-accent-gold/45 text-accent-gold">Workspace inactive</span>
+                        <span className="chip border-accent-gold/45 text-fg">Workspace inactive</span>
                       )}
                     </div>
                     <p className="mt-2 font-semibold text-fg">{candidate.terminal_name}</p>
@@ -1750,7 +1751,7 @@ export function ExistingShiftFeedback({
 }) {
   return (
     <div className="rounded-xl border border-accent-gold/40 bg-accent-gold/10 p-3 text-sm" role="status" aria-live="polite">
-      <p className="font-semibold text-accent-gold">A shift is already open</p>
+      <p className="font-semibold text-fg">A shift is already open</p>
       <p className="mt-1 text-fg">
         <strong>{shiftOpenerLabel(shift)}</strong> opened it {formatShiftBusinessDateTime(shift.opened_at)} on {workspaceName}.
       </p>
@@ -1978,7 +1979,7 @@ function ShiftsTab() {
 
       {rows.length >= 200 && (
         <div
-          className="mb-3 rounded-xl border border-accent-gold/35 bg-accent-gold/10 p-3 text-xs text-accent-gold"
+          className="mb-3 rounded-xl border border-accent-gold/35 bg-accent-gold/10 p-3 text-xs text-fg"
           role="status"
         >
           Showing the latest 200 shift records. Older records are still preserved, but the oldest business day shown here may be incomplete.
@@ -1992,7 +1993,7 @@ function ShiftsTab() {
       </div>}
       {!openShift && !scopeError && !canOpenShift && (
         <div className="card border-accent-gold/35 bg-accent-gold/5 text-sm mb-3">
-          <p className="font-medium text-accent-gold">Shift opening is view only for this account</p>
+          <p className="font-medium text-fg">Shift opening is view only for this account</p>
           <p className="mt-1 text-fg-muted">Ask a staff member with Open shift access. Nothing has been changed.</p>
         </div>
       )}
@@ -2045,7 +2046,7 @@ function ShiftsTab() {
                     {day.hasOpenShift
                       ? <span className="chip border-accent-good/40 text-accent-good">Open</span>
                       : day.hasIncompleteClose
-                        ? <span className="chip border-accent-gold/40 text-accent-gold">Needs review</span>
+                        ? <span className="chip border-accent-gold/40 text-fg">Needs review</span>
                         : <span className="chip border-fg-muted/40 text-fg-muted">Closed</span>}
                     {day.dateLabel}
                   </div>
@@ -2057,16 +2058,16 @@ function ShiftsTab() {
                     {day.hasOpenShift
                       ? <span className="text-accent-good">Still open</span>
                       : day.hasIncompleteClose
-                        ? <span className="text-accent-gold">Needs review · close time missing</span>
+                        ? <span className="text-fg">Needs review · close time missing</span>
                         : day.finalClosedAt
                       ? <>
                           Final close <strong className="text-fg">{formatShiftBusinessDateTime(day.finalClosedAt)}</strong>
                           {' '}by <strong className="text-fg">{shiftCloserLabel(day.finalShift)}</strong>
                         </>
-                      : <span className="text-accent-gold">Needs review · close time unavailable</span>}
+                      : <span className="text-fg">Needs review · close time unavailable</span>}
                   </p>
                 </div>
-                <span className="chip border-accent-gold/35 text-accent-gold">
+                <span className="chip border-accent-gold/35 text-fg">
                   {day.shifts.length} shift record{day.shifts.length === 1 ? '' : 's'}
                 </span>
               </div>
@@ -2087,7 +2088,7 @@ function ShiftsTab() {
               </div>
 
               <details className="mt-3 border-t border-bg-border/60 pt-3">
-                <summary className="cursor-pointer text-sm font-medium text-accent-gold">
+                <summary className="cursor-pointer text-sm font-medium text-fg">
                   Review {day.shifts.length} shift record{day.shifts.length === 1 ? '' : 's'} and drawer count{day.shifts.length === 1 ? '' : 's'}
                 </summary>
                 {day.shifts.length > 1 && (
@@ -2128,7 +2129,7 @@ function ShiftsTab() {
                             Workspace <span className="text-fg font-medium">{shiftWorkspaceLabel(s, terminalOptions)}</span>
                           </p>
                           {s.status !== 'open' && !s.closed_at && (
-                            <p className="mt-1 text-xs text-accent-gold">
+                            <p className="mt-1 text-xs text-fg">
                               Saved status is closed, but its close time is missing. Review this historical record; it is not an open shift.
                             </p>
                           )}
@@ -2212,6 +2213,8 @@ function ShiftsTab() {
           currentUserId={me?.user_id}
           currentStaffName={me?.name || me?.email || 'Current employee'}
           workspaceName={shiftWorkspaceLabel(closing, terminalOptions)}
+          canReadOrders={me?.effective_permissions?.includes('pos.read') === true}
+          canReadGaming={me?.effective_permissions?.includes('gaming.read') === true}
           onClose={() => setClosing(null)}
           onSuccess={() => { setClosing(null); void load(false); }}
           onError={() => refreshAfterCloseFailure(closing.id)}
@@ -2342,11 +2345,13 @@ function OpenShiftForm({
 // denomination-breakdown entry mode below.
 const CASH_DENOMINATIONS = [500, 200, 100, 50, 20, 10, 5, 2, 1];
 
-function CloseShiftForm({
+export function CloseShiftForm({
   shift,
   currentUserId,
   currentStaffName,
   workspaceName,
+  canReadOrders = false,
+  canReadGaming = false,
   onClose,
   onSuccess,
   onError,
@@ -2355,6 +2360,8 @@ function CloseShiftForm({
   currentUserId: string | undefined;
   currentStaffName: string;
   workspaceName: string;
+  canReadOrders?: boolean;
+  canReadGaming?: boolean;
   onClose: () => void;
   onSuccess: () => void;
   onError: () => Promise<ShiftDTO | null>;
@@ -2362,6 +2369,42 @@ function CloseShiftForm({
   const notifications = useNotifications();
   const [mode, setMode] = useState<'total' | 'denomination'>('total');
   const [counted, setCounted] = useState('');
+  const [denominationsReviewed, setDenominationsReviewed] = useState(false);
+  const [reviewedShift, setReviewedShift] = useState(shift);
+  const [observations, setObservations] = useState<{ orders: number | null; games: number | null; capped: boolean; checkedAt: string } | null>(null);
+  const [checkingObservations, setCheckingObservations] = useState(false);
+  const [observationError, setObservationError] = useState<string | null>(null);
+  const observationSequence = useRef(0);
+  const checkObservations = useCallback(async () => {
+    const request = ++observationSequence.current;
+    setCheckingObservations(true);
+    setObservationError(null);
+    const checked = await Promise.allSettled([
+      canReadOrders ? orders.list({ status: ['open', 'held'], limit: 500 }) : Promise.resolve(null),
+      canReadGaming ? gaming.listOperationalSessions() : Promise.resolve(null),
+    ]);
+    if (request !== observationSequence.current) return;
+    const errors = checked.flatMap(value => value.status === 'rejected' ? [value.reason instanceof Error ? value.reason.message : 'A readiness observation could not load.'] : []);
+    if (errors.length) setObservationError(`${errors.join(' ')} Previous observations remain as of their displayed check.`);
+    else {
+      const orderRows = checked[0].status === 'fulfilled' ? checked[0].value : null;
+      const gameRows = checked[1].status === 'fulfilled' ? checked[1].value : null;
+      setObservations({ orders: orderRows?.length ?? null,
+        games: gameRows?.filter(row => row.shift_id === shift.id).length ?? null,
+        capped: orderRows?.length === 500 || gameRows?.length === 500,
+        checkedAt: new Date().toISOString() });
+    }
+    setCheckingObservations(false);
+  }, [canReadOrders, canReadGaming, shift.id]);
+  useEffect(() => {
+    void checkObservations();
+    return () => {
+      // This is a request generation, not a captured DOM ref: invalidate every
+      // observation still in flight when the reviewed shift changes or closes.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      ++observationSequence.current;
+    };
+  }, [checkObservations]);
   const [denomCounts, setDenomCounts] = useState<Record<number, string>>({
     500: '', 200: '', 100: '', 50: '', 20: '', 10: '', 5: '', 2: '', 1: '',
   });
@@ -2405,13 +2448,13 @@ function CloseShiftForm({
     0,
   );
 
-  // Keep the free-text total field mirroring the breakdown while denomination
-  // mode is active, so what's on screen always matches what will be submitted.
-  useEffect(() => {
-    if (mode === 'denomination') setCounted((denomTotalMinor / 100).toFixed(2));
-  }, [mode, denomTotalMinor]);
+  // Keep the independently entered total when switching modes. A denomination draft
+  // is not a confirmed zero just because all note fields are initially empty.
+  const denominationInputValid = Object.values(denomCounts).every(value => value === '' || /^\d+$/.test(value))
+    && Number.isSafeInteger(denomTotalMinor) && denomTotalMinor >= 0;
 
   function setDenomCount(denom: number, value: string) {
+    setDenominationsReviewed(false);
     setDenomCounts((prev) => ({ ...prev, [denom]: value }));
   }
 
@@ -2425,7 +2468,7 @@ function CloseShiftForm({
     // free-text mode submits exactly as before (unchanged wire format).
     const countedMinor = ambiguousCountedMinor ?? (
       mode === 'denomination'
-        ? denomTotalMinor
+        ? denominationsReviewed && denominationInputValid ? denomTotalMinor : null
         : parseRupeesToMinor(counted)
     );
     if (countedMinor === null) {
@@ -2455,6 +2498,7 @@ function CloseShiftForm({
       // authoritative row before telling staff to retry, so the same drawer
       // count is never accidentally submitted as a second operational intent.
       const refreshedShift = await onError();
+      if (refreshedShift?.id === shift.id) setReviewedShift(refreshedShift);
       const outcomeIsUnknown = isUnknownShiftMutationOutcome(error);
       if (
         refreshedShift?.status === 'closed'
@@ -2505,7 +2549,7 @@ function CloseShiftForm({
           </div>
           <div className={`p-4 rounded-xl ${
             v === 0 ? 'bg-accent-good/15 border border-accent-good/40 text-accent-good' :
-            Math.abs(v) < 5000 ? 'bg-accent-gold/15 border border-accent-gold/40 text-accent-gold' :
+            Math.abs(v) < 5000 ? 'bg-accent-gold/15 border border-accent-gold/40 text-fg' :
                                  'bg-accent-bad/15 border border-accent-bad/40 text-accent-bad'
           }`}>
             <div className="text-xs uppercase tracking-wider mb-1">Variance</div>
@@ -2525,8 +2569,9 @@ function CloseShiftForm({
   }
 
   return (
-    <Modal open onClose={close} title={`Close shift · ${workspaceName}`}>
-      <form onSubmit={submit} className="space-y-3">
+    <Modal open onClose={close} locked={busy || ambiguousCountedMinor !== null} size="xl" title={`Review & close shift · ${workspaceName}`}>
+      <form onSubmit={submit} className="grid gap-5 lg:grid-cols-[1.1fr_1fr]" aria-label="Shift review and physical count">
+        <section className="space-y-3" aria-label="Shift review">
         <div className="rounded-xl border border-bg-border bg-bg-raised/35 p-3 text-sm" role="status">
           <div className="flex items-center gap-2 font-semibold"><UserRound size={15}/> Shift responsibility</div>
           <div className="mt-2 space-y-1">
@@ -2545,16 +2590,33 @@ function CloseShiftForm({
         <div className="rounded-xl border border-bg-border bg-bg-raised/35 p-3 text-sm">
           <div className="font-semibold">Collection review</div>
           <div className="mt-2 grid grid-cols-2 gap-3">
-            <Stat label="Gross collections" value={inr(shift.gross_collections_minor)}/>
-            <Stat label="Refunds settled" value={inr(shift.total_refunds_minor)}/>
-            <Stat label="Net collections" value={inr(shift.net_collections_minor)} tone="good"/>
-            <Stat label="Expected cash" value={shift.expected_minor == null ? 'Pending server calculation' : inr(shift.expected_minor)}/>
+            <Stat label="Gross collections" value={inr(reviewedShift.gross_collections_minor)}/>
+            <Stat label="Refunds settled" value={inr(reviewedShift.total_refunds_minor)}/>
+            <Stat label="Net collections" value={inr(reviewedShift.net_collections_minor)} tone="good"/>
+            <Stat label="Expected cash" value={reviewedShift.expected_minor == null ? 'Pending server calculation' : inr(reviewedShift.expected_minor)}/>
           </div>
-          <ShiftRailBreakdown shift={shift}/>
+          <ShiftRailBreakdown shift={reviewedShift}/>
           <p className="mt-3 text-xs text-fg-muted">
             The server checks unpaid bills, running gaming sessions and other close blockers again when you submit this cash count.
           </p>
         </div>
+        <section className="rounded-xl border border-bg-border p-3 text-sm" aria-label="Closing readiness observations">
+          <div className="flex items-center justify-between gap-3"><h4 className="font-semibold">Before final close</h4><button type="button" className="btn btn-ghost !px-2 !py-1 text-xs" disabled={checkingObservations || busy || ambiguousCountedMinor !== null} onClick={() => {
+            void checkObservations();
+            void onError().then(row => { if (row?.id === shift.id) setReviewedShift(row); }).catch(cause => setObservationError(cause instanceof Error ? cause.message : 'Shift review could not refresh; retained values remain visible.'));
+          }}>{checkingObservations ? 'Checking…' : 'Refresh review'}</button></div>
+          {observationError && <p role="status" className="mt-2 text-xs text-fg-muted">{observationError}</p>}
+          <dl className="mt-3 space-y-2">
+            <div><dt className="text-xs text-fg-muted">Visible unfinished orders · authorized register scope</dt><dd>{observations?.orders == null ? 'Not verified with this account' : `${observations.orders} open or held`}</dd></div>
+            <div><dt className="text-xs text-fg-muted">Visible unbilled games linked to this shift</dt><dd>{observations?.games == null ? 'Not verified with this account' : `${observations.games} active, paused or awaiting billing`}</dd></div>
+          </dl>
+          {observations && <p className="mt-2 text-xs text-fg-muted">Observation read completed {observations.checkedAt} (browser clock). {observations.capped ? 'A list reached its 500-row limit; more work may exist.' : ''}</p>}
+          <p className="mt-3 text-xs text-fg-muted">These are partial observations, not an all-clear. Order-to-shift association is not included; private drafts and other saved work may be hidden. Tablet-local pending work is not verified here.</p>
+          <p className="mt-2 text-xs text-fg-muted">Final server checks: unpaid orders, kitchen cancellations, active or unbilled games, accepted membership payments, membership refund recovery and pending membership/POS refunds. Any refusal below includes the next action.</p>
+        </section>
+        </section>
+        <section className="space-y-3" aria-label="Physical cash count">
+        <h4 className="font-semibold">Physical cash count</h4>
         <p className="text-sm text-fg-muted">
           Count all the cash in the drawer (notes + coins), then enter the total below.
           The system compares it with the recorded opening float and cash drawer movements,
@@ -2576,7 +2638,7 @@ function CloseShiftForm({
           <button type="button"
             className={`flex-1 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
               mode === 'denomination' ? 'bg-bg-surface shadow text-fg' : 'text-fg-muted'}`}
-            onClick={() => setMode('denomination')}
+            onClick={() => { setMode('denomination'); setDenominationsReviewed(false); }}
             disabled={busy || ambiguousCountedMinor !== null}>
             Count denominations
           </button>
@@ -2585,7 +2647,7 @@ function CloseShiftForm({
         <Field label="Counted cash (₹) — what's actually in the drawer">
           <input type="number" required min={0} step="0.01" autoFocus={mode === 'total'}
             disabled={busy || mode === 'denomination' || ambiguousCountedMinor !== null}
-            className="input font-mono text-right text-xl disabled:opacity-80" value={counted}
+            className="input font-mono text-right text-xl disabled:opacity-80" value={mode === 'denomination' ? (denomTotalMinor / 100).toFixed(2) : counted}
             onChange={(e) => setCounted(e.target.value)}/>
         </Field>
 
@@ -2614,12 +2676,13 @@ function CloseShiftForm({
           </div>
         )}
 
+        {mode === 'denomination' && <label className="flex items-start gap-2 rounded-lg border border-bg-border p-3 text-sm"><input type="checkbox" className="mt-1" checked={denominationsReviewed} disabled={busy || ambiguousCountedMinor !== null || !denominationInputValid} onChange={event => setDenominationsReviewed(event.target.checked)}/><span>I counted these notes and coins: {inr(denomTotalMinor)}. An empty drawer is a deliberate ₹0 count.</span></label>}
         {err && (
           <ErrorRow text={err}/>
         )}
         {ambiguousCountedMinor !== null && (
           <div className="rounded-lg border border-accent-gold/40 bg-accent-gold/10 p-3 text-sm" role="status" aria-live="polite">
-            <div className="font-semibold text-accent-gold">Unconfirmed close · cash count locked</div>
+            <div className="font-semibold text-fg">Unconfirmed close · cash count locked</div>
             <p className="mt-1 text-fg-muted">
               Reconnect, then retry this exact {inr(ambiguousCountedMinor)} count. You cannot edit the count,
               dismiss this window, or open a different close while the first result is unknown.
@@ -2629,7 +2692,7 @@ function CloseShiftForm({
         <div className="flex justify-end gap-2 pt-2">
           <button type="button" className="btn btn-ghost" onClick={close}
             disabled={busy || ambiguousCountedMinor !== null}>Cancel</button>
-          <button type="submit" className="btn btn-primary" disabled={busy}>
+          <button type="submit" className="btn btn-primary" disabled={busy || (ambiguousCountedMinor === null && (mode === 'denomination' ? !denominationsReviewed || !denominationInputValid : parseRupeesToMinor(counted) === null))}>
             {busy ? <Loader2 className="animate-spin" size={14}/> : <Lock size={14}/>}
             {busy
               ? 'Checking shift…'
@@ -2638,6 +2701,7 @@ function CloseShiftForm({
                 : 'Close shift'}
           </button>
         </div>
+        </section>
       </form>
     </Modal>
   );
@@ -2880,7 +2944,7 @@ export function RecoverAndroidShiftForm({
             role="status"
             aria-live="polite"
           >
-            <p className="font-semibold text-accent-gold">To enable Recover &amp; close shift:</p>
+            <p className="font-semibold text-fg">To enable Recover &amp; close shift:</p>
             <ul className="mt-1 list-disc pl-5 text-fg-muted">
               {missingRequirements.map((requirement) => <li key={requirement}>{requirement}</li>)}
             </ul>
@@ -2888,7 +2952,7 @@ export function RecoverAndroidShiftForm({
         )}
         {ambiguousPayload && (
           <div className="rounded-xl border border-accent-gold/40 bg-accent-gold/10 p-3 text-sm" role="status" aria-live="polite">
-            <p className="font-semibold text-accent-gold">Unconfirmed recovery · details locked</p>
+            <p className="font-semibold text-fg">Unconfirmed recovery · details locked</p>
             <p className="mt-1 text-fg-muted">
               Keep the tablet isolated. Refresh, then retry the exact {inr(ambiguousPayload.counted_minor)}
               cash count and identical audit reason. Do not create a second recovery intent.
@@ -2959,7 +3023,7 @@ function Stat({ label, value, tone = 'default' }: {
 }) {
   const color =
     tone === 'good' ? 'text-accent-good' :
-    tone === 'gold' ? 'text-accent-gold' :
+    tone === 'gold' ? 'text-fg' :
     tone === 'bad' ? 'text-accent-bad' : 'text-fg';
   return (
     <div>
@@ -2974,7 +3038,8 @@ export function ShiftTenderEvidence({shift}:{shift:ShiftDTO}) {
   return <section className="mt-3 rounded-xl border border-bg-border bg-bg-raised/30 p-3 text-sm" aria-label="Reconstructed bill tender"><h5 className="font-semibold">Recorded close preserved · reconstructed bill tender</h5><p className="mt-1 text-xs text-fg-muted">Original expected cash, physical count and variance stay unchanged. This includes identified bill corrections only; daily unallocated actuals are separate in Finance.</p><div className="mt-3 grid gap-3 sm:grid-cols-3"><Stat label="Reconstructed Cash collected" value={shift.reconstructed_cash_collections_minor==null?'Unavailable':inr(shift.reconstructed_cash_collections_minor)}/><Stat label="Reconstructed UPI collected" value={shift.reconstructed_upi_collections_minor==null?'Unavailable':inr(shift.reconstructed_upi_collections_minor)}/><Stat label="Reconstructed expected cash" value={shift.reconstructed_expected_minor==null?'Unavailable':inr(shift.reconstructed_expected_minor)}/></div></section>;
 }
 function RetainedInvestigation({details}:{details:ReceiptInvestigationDTO}) {
-  return <section className="space-y-4 rounded-xl border border-bg-border p-4"><h4 className="font-semibold">Retained players, drinks & billing evidence</h4><p className="text-xs text-fg-muted">{details.historical_evidence_note}</p>{details.participant_intervals.length>0&&<div className="space-y-2"><h5 className="text-sm font-semibold">Joining / Leave / rejoin history</h5>{details.participant_intervals.map(interval=><div key={interval.id} className="rounded-lg bg-bg-raised/40 p-3 text-sm"><b>{interval.guest_name || (interval.customer_id?'Recorded customer':'Anonymous player')}</b><p className="mt-1 text-xs text-fg-muted">Joined {formatDateTime(interval.joined_at)} · {interval.left_at?`Left ${formatDateTime(interval.left_at)}`:'No retained Leave event'}</p><p className="mt-1 text-xs">Play position {Math.floor(interval.joined_play_elapsed_ms/60000)} min → {interval.left_play_elapsed_ms==null?'end of session':`${Math.floor(interval.left_play_elapsed_ms/60000)} min`}. {interval.settlement_line_id?'Charge is listed once per player below, including all rejoins.':'No retained settled player charge.'}</p></div>)}</div>}{details.participant_charges.length>0&&<div className="space-y-2"><h5 className="text-sm font-semibold">One settled charge per player</h5>{details.participant_charges.map(charge=><div key={charge.id} className="flex justify-between gap-3 text-sm"><span>{charge.interval_count} joining interval{charge.interval_count===1?'':'s'} · {Math.floor(charge.play_elapsed_ms/60000)} min accumulated</span><b className="tabular-nums">{inr(charge.charge_minor)}</b></div>)}</div>}{details.addons.length>0&&<div className="space-y-2"><h5 className="text-sm font-semibold">Confirmed drinks & snacks</h5>{details.addons.map(addon=><div key={addon.id} className="rounded-lg bg-bg-raised/40 p-3 text-sm"><div className="flex justify-between gap-3"><b>{addon.qty} × {addon.menu_item_name_snapshot}</b><span className="tabular-nums">{inr(addon.line_total_minor)}</span></div><p className="mt-1 text-xs text-fg-muted">Confirmed {formatDateTime(addon.created_at)}{addon.voided_at?` · Voided ${formatDateTime(addon.voided_at)} · ${addon.void_reason??'Reason not retained'}`:''}</p></div>)}</div>}{!details.participant_intervals.length&&!details.addons.length&&<p className="text-sm text-fg-muted">No retained player intervals or session add-ons for this receipt. Older missing proof is not reconstructed from the current catalogue.</p>}</section>;
+  const retainedTime = (value: string) => `${shopTime(value, details.shop_timezone ?? 'UTC')} · ${details.shop_timezone ?? 'UTC (shop timezone unavailable)'}`;
+  return <section className="space-y-4 rounded-xl border border-bg-border p-4"><h4 className="font-semibold">Retained players, drinks & billing evidence</h4><p className="text-xs text-fg-muted">{details.historical_evidence_note}</p>{details.participant_intervals.length>0&&<div className="space-y-2"><h5 className="text-sm font-semibold">Joining / Leave / rejoin history</h5>{details.participant_intervals.map(interval=><div key={interval.id} className="rounded-lg bg-bg-raised/40 p-3 text-sm"><b>{interval.guest_name || (interval.customer_id?'Recorded customer':'Anonymous player')}</b><p className="mt-1 text-xs text-fg-muted">Joined {retainedTime(interval.joined_at)} · {interval.left_at?`Left ${retainedTime(interval.left_at)}`:'No retained Leave event'}</p><p className="mt-1 text-xs">Play position {Math.floor(interval.joined_play_elapsed_ms/60000)} min → {interval.left_play_elapsed_ms==null?'end of session':`${Math.floor(interval.left_play_elapsed_ms/60000)} min`}. {interval.settlement_line_id?'Charge is listed once per player below, including all rejoins.':'No retained settled player charge.'}</p></div>)}</div>}{details.participant_charges.length>0&&<div className="space-y-2"><h5 className="text-sm font-semibold">One settled charge per player</h5>{details.participant_charges.map(charge=><div key={charge.id} className="flex justify-between gap-3 text-sm"><span>{charge.interval_count} joining interval{charge.interval_count===1?'':'s'} · {Math.floor(charge.play_elapsed_ms/60000)} min accumulated</span><b className="tabular-nums">{inr(charge.charge_minor)}</b></div>)}</div>}{details.addons.length>0&&<div className="space-y-2"><h5 className="text-sm font-semibold">Confirmed drinks & snacks</h5>{details.addons.map(addon=><div key={addon.id} className="rounded-lg bg-bg-raised/40 p-3 text-sm"><div className="flex justify-between gap-3"><b>{addon.qty} × {addon.menu_item_name_snapshot}</b><span className="tabular-nums">{inr(addon.line_total_minor)}</span></div><p className="mt-1 text-xs text-fg-muted">Confirmed {retainedTime(addon.created_at)}{addon.voided_at?` · Voided ${retainedTime(addon.voided_at)} · ${addon.void_reason??'Reason not retained'}`:''}</p></div>)}</div>}{!details.participant_intervals.length&&!details.addons.length&&<p className="text-sm text-fg-muted">No retained player intervals or session add-ons for this receipt. Older missing proof is not reconstructed from the current catalogue.</p>}</section>;
 }
 
 /** Inline shift work preserves its caller's station selection and POS draft. */

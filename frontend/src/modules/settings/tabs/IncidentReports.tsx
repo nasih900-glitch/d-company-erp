@@ -5,12 +5,14 @@ import {
   type ClientDiagnosticEventDTO,
   type ClientDiagnosticEventType,
 } from '@/lib/erp-api';
+import { incidentBuildEvidence } from '@/lib/client-report-evidence';
 import { businessLabel, shopTime } from '@/modules/audit/audit-presentation';
 
 export default function IncidentReports() {
   const [type, setType] = useState<ClientDiagnosticEventType | ''>('');
   const [rows, setRows] = useState<ClientDiagnosticEventDTO[]>([]);
   const [total, setTotal] = useState<number | null>(null);
+  const [appliedType, setAppliedType] = useState<ClientDiagnosticEventType | ''>('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const controller = useRef<AbortController | null>(null);
@@ -29,6 +31,7 @@ export default function IncidentReports() {
       if (active.signal.aborted) return;
       setRows(result.items);
       setTotal(result.total);
+      setAppliedType(type);
     } catch (cause) {
       if (!active.signal.aborted)
         setError(
@@ -87,7 +90,8 @@ export default function IncidentReports() {
       {total !== null && (
         <p className="mb-3 text-xs text-fg-muted">
           {rows.length} latest reports loaded of {total} matching retained
-          reports. Times below are explicitly UTC.
+          reports. Applied filter: {appliedType ? businessLabel(appliedType === 'anr' ? 'app_not_responding' : appliedType) : 'All report types'}. Times below are explicitly UTC.
+          {type !== appliedType ? ' The requested filter has not replaced these results.' : ''}
         </p>
       )}
       {total === 0 && (
@@ -114,8 +118,7 @@ export function IncidentReport({ row }: { row: ClientDiagnosticEventDTO }) {
         · {businessLabel(row.component)}
       </h4>
       <p className="mt-1 text-fg-muted">
-        Build {row.version_code} · v{row.version_name} ·{' '}
-        {businessLabel(row.severity)}
+        {incidentBuildEvidence(row)} · {businessLabel(row.severity)}
       </p>
       <dl className="mt-3 space-y-2">
         <div>

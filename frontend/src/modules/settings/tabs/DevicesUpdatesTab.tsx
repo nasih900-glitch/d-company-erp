@@ -63,7 +63,7 @@ const UPDATE_STATES: Record<ClientUpdateState, { label: string; className: strin
   idle: { label: 'No update in progress', className: 'border-bg-border bg-bg-raised text-fg-muted' },
   update_available: {
     label: 'Update available',
-    className: 'border-accent-gold/40 bg-accent-gold/10 text-accent-gold',
+    className: 'border-accent-gold/40 bg-accent-gold/10 text-fg',
   },
   downloading: {
     label: 'Downloading',
@@ -111,7 +111,7 @@ const RELEASE_STATUS: Record<AndroidReleaseStatus, { label: string; className: s
   },
   staged: {
     label: 'Staged',
-    className: 'border-accent-gold/40 bg-accent-gold/10 text-accent-gold',
+    className: 'border-accent-gold/40 bg-accent-gold/10 text-fg',
   },
   withdrawn: {
     label: 'Withdrawn',
@@ -452,7 +452,7 @@ function SummaryCard({
 }) {
   const toneClass = tone === 'good'
     ? 'text-accent-good'
-    : tone === 'warning' ? 'text-accent-gold' : 'text-fg-muted';
+    : tone === 'warning' ? 'text-fg' : 'text-fg-muted';
   return (
     <div className="card min-w-0 !p-4">
       <div className={`flex items-center gap-2 text-xs font-medium ${toneClass}`}>
@@ -513,7 +513,7 @@ export function InstallationCard({
         </div>
         <div className="flex flex-wrap justify-end gap-2">
           <StatusPill
-            label={installation.is_stale ? 'Not reporting' : 'Recently online'}
+            label={installation.is_stale ? 'Stale report at check' : 'Recent report at check'}
             className={installation.is_stale
               ? 'border-accent-bad/40 bg-accent-bad/10 text-accent-bad'
               : 'border-accent-good/40 bg-accent-good/10 text-accent-good'}
@@ -522,11 +522,12 @@ export function InstallationCard({
         </div>
       </div>
 
+      <p className="mt-3 text-xs text-fg-muted">Report snapshot checked {formatDate(serverTime)} (browser time). Freshness and stages refer to this check, not a live connection.</p>
       <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
         <InfoItem label="Last reported app version" value={`v${installation.version_name} · build ${installation.version_code}`} mono />
         <InfoItem
           label="Last report received"
-          value={`${relativeTime(installation.last_seen_at, serverTime)} · ${formatDate(installation.last_seen_at)} (browser time)`}
+          value={`${relativeTime(installation.last_seen_at, serverTime)} at check · ${formatDate(installation.last_seen_at)} (browser time)`}
         />
         <InfoItem
           label="Last successful Sync"
@@ -535,7 +536,7 @@ export function InstallationCard({
             : 'Not reported yet'}
         />
         <InfoItem
-          label={installation.is_stale ? 'Last reported queue' : 'Saved actions waiting'}
+          label="Automatic outbox at last report"
           value={installation.pending_outbox_count
             ? installation.is_stale
               ? `${installation.pending_outbox_count} last reported`
@@ -543,7 +544,7 @@ export function InstallationCard({
             : installation.is_stale ? '0 last reported · current queue unknown' : '0 pending at last report'}
           valueClass={installation.is_stale
             ? 'text-fg-muted'
-            : installation.pending_outbox_count ? 'text-accent-gold' : 'text-accent-good'}
+            : installation.pending_outbox_count ? 'text-fg' : 'text-accent-good'}
           mono
         />
         {installation.is_stale ? (
@@ -552,7 +553,10 @@ export function InstallationCard({
           </p>
         ) : null}
         <InfoItem label="Last reported employee (current name)" value={installation.last_user_name || 'Not reported'} />
-        <InfoItem label="Workspace" value={installation.terminal_name || 'No workspace header'} />
+        <InfoItem label="Workspace (current label)" value={installation.terminal_name || 'No workspace header'} />
+        <InfoItem label="Last app launch" value="Not reported" />
+        <InfoItem label="Post-update health" value="Not reported" />
+        <p className="col-span-2 text-xs text-fg-muted">Download target build is not retained in this heartbeat. An offer, ready download or installer launch does not prove installation or a healthy app launch.</p>
       </dl>
 
       {installation.update_error_code ? (

@@ -32,7 +32,7 @@ describe('Build 51 truthful evidence labels', () => {
         }
       />,
     );
-    expect(markup).toContain('Build 50');
+    expect(markup).toContain('Reported build 50');
     expect(markup).toContain('unverified device clock');
     expect(markup).toContain('Server received');
     expect(markup).toContain('17 Oct');

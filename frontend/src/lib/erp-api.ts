@@ -3125,6 +3125,7 @@ export interface ReceiptFiltersDTO {
   method?: PosPaymentMethodDTO; staff_user_id?: string;
 }
 export interface ReceiptInvestigationDTO {
+  shop_timezone?: string | null;
   receipt: ReceiptHistoryDTO;
   participant_intervals: Array<{id: string; gaming_session_id: string; participant_identity_id: string;
     customer_id: string | null; guest_name: string | null; joined_at: string; joined_play_elapsed_ms: number;
