@@ -143,6 +143,18 @@ textarea:focus-visible {
   .btn-primary { @apply bg-accent text-bg hover:bg-accent/90; }
   .btn-danger  { @apply bg-accent-bad text-bg hover:bg-accent-bad/90; }
   .btn-ghost   { @apply bg-transparent border border-bg-border; }
+  /* Disabled actions stay readable and visually separate from enabled primary
+     actions. Hover/press must not imply that a gated action can be submitted. */
+  button.btn:disabled,
+  button.btn:disabled:hover,
+  button.btn:disabled:active {
+    @apply bg-bg-raised text-fg-muted border border-bg-border;
+    opacity: 1;
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
+    transition: none;
+  }
 
   .card {
     @apply rounded-2xl bg-bg-surface/95 border border-bg-border p-5;

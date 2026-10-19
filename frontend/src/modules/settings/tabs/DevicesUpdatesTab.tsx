@@ -233,7 +233,6 @@ export default function DevicesUpdatesTab() {
   }
 
   const liveInstallations = installations.items.filter((item) => !item.is_stale).length;
-  const pendingOutbox = currentPendingOutboxCount(installations.items);
   const activeRelease = releases.find((release) => release.status === 'active') ?? null;
   const stagedReleases = releases.filter((release) => release.status === 'staged');
   const withdrawnReleases = releases.filter((release) => release.status === 'withdrawn');
@@ -289,18 +288,12 @@ export default function DevicesUpdatesTab() {
         />
         <SummaryCard
           icon={<Cloud size={18} aria-hidden="true" />}
-          label="Recently online"
+          label="Recent reports at check"
           value={String(liveInstallations)}
-          detail={installations.items.length ? 'Authenticated heartbeat received' : 'No heartbeat yet'}
+          detail={installations.items.length ? 'Loaded reports only · as of the displayed check' : 'No heartbeat yet · current coverage unknown'}
           tone={liveInstallations > 0 ? 'good' : 'neutral'}
         />
-        <SummaryCard
-          icon={<HardDrive size={18} aria-hidden="true" />}
-          label="Waiting to sync"
-          value={String(pendingOutbox)}
-          detail={pendingOutbox ? 'Saved tablet actions still pending' : 'Reported queues are clear'}
-          tone={pendingOutbox ? 'warning' : 'good'}
-        />
+        <ReportedQueueSummary installations={installations}/>
         <SummaryCard
           icon={<PackageCheck size={18} aria-hidden="true" />}
           label="Active release"
@@ -435,6 +428,27 @@ function DevicesUpdatesSkeleton() {
       <SkeletonCard lines={5} />
     </div>
   );
+}
+
+export function ReportedQueueSummary({ installations }: { installations: ClientInstallationListDTO }) {
+  const recent = installations.items.filter(item => !item.is_stale);
+  const pending = currentPendingOutboxCount(recent);
+  const stale = installations.items.length - recent.length;
+  const missing = Math.max(0, installations.total - installations.items.length);
+  const partial = stale > 0 || missing > 0;
+  const coverage = [
+    stale ? `${stale} loaded stale report${stale === 1 ? '' : 's'} excluded` : null,
+    missing ? `${missing} additional tablet${missing === 1 ? '' : 's'} not loaded` : null,
+  ].filter(Boolean).join('; ');
+  return <SummaryCard
+    icon={<HardDrive size={18} aria-hidden="true"/>}
+    label="Reported automatic queue"
+    value={recent.length ? String(pending) : 'Unknown'}
+    detail={recent.length
+      ? `${recent.length} loaded recent report${recent.length === 1 ? '' : 's'} only, at check. ${coverage ? `${coverage}. ` : ''}Protected owner recovery is separate; current queues are not verified.`
+      : `No recent reports in the loaded list; current queues unknown. ${coverage ? `${coverage}. ` : ''}Protected owner recovery is separate.`}
+    tone={!recent.length ? 'neutral' : pending ? 'warning' : partial ? 'neutral' : 'good'}
+  />;
 }
 
 function SummaryCard({

@@ -2497,8 +2497,10 @@ export function CloseShiftForm({
       // A close may commit even when its response is lost. Refresh the
       // authoritative row before telling staff to retry, so the same drawer
       // count is never accidentally submitted as a second operational intent.
-      const refreshedShift = await onError();
-      if (refreshedShift?.id === shift.id) setReviewedShift(refreshedShift);
+      let refreshedShift: ShiftDTO | null = null;
+      try { refreshedShift = await onError(); } catch { /* Unavailable evidence cannot resolve an unknown write. */ }
+      if (refreshedShift?.id !== shift.id) refreshedShift = null;
+      if (refreshedShift) setReviewedShift(refreshedShift);
       const outcomeIsUnknown = isUnknownShiftMutationOutcome(error);
       if (
         refreshedShift?.status === 'closed'
@@ -2515,7 +2517,9 @@ export function CloseShiftForm({
           { title: 'Shift closure confirmed' },
         );
       } else {
-        if (outcomeIsUnknown && refreshedShift?.status !== 'closed') {
+        if (ambiguousCountedMinor !== null || (outcomeIsUnknown && refreshedShift?.status !== 'closed')) {
+          // A later refusal cannot establish what happened to an earlier write
+          // whose reply was lost. Only its matching authoritative result can.
           setAmbiguousCountedMinor(countedMinor);
         } else {
           setAmbiguousCountedMinor(null);
@@ -2833,8 +2837,8 @@ export function RecoverAndroidShiftForm({
       // ordinary Android close can have the same cash count without recording
       // this protected reason and quarantine attestation. Refresh the surfaces,
       // but confirm recovery only from this endpoint's idempotent response.
-      await onError();
-      const requiresExactReplay = recoveryFailureRequiresExactReplay(error);
+      try { await onError(); } catch { /* Keep the exact recovery when refresh is unavailable. */ }
+      const requiresExactReplay = ambiguousPayload !== null || recoveryFailureRequiresExactReplay(error);
       if (requiresExactReplay) setAmbiguousPayload(attempt.payload);
       else setAmbiguousPayload(null);
       const message = shiftActionErrorMessage(error, 'recovery-close');
@@ -2870,7 +2874,7 @@ export function RecoverAndroidShiftForm({
   }
 
   return (
-    <Modal open onClose={close} title={`Recover Android shift · ${workspaceName}`}>
+    <Modal open onClose={close} locked={busy || ambiguousPayload !== null} title={`Recover Android shift · ${workspaceName}`}>
       <form onSubmit={submit} className="space-y-4">
         <div className="rounded-xl border border-accent-bad/40 bg-accent-bad/10 p-3 text-sm">
           <p className="font-semibold text-accent-bad">Last-resort protected-owner recovery</p>
