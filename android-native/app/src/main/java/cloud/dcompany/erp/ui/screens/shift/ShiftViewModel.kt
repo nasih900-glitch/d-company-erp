@@ -23,6 +23,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
@@ -248,6 +249,7 @@ class ShiftViewModel : ViewModel() {
     private val busy = MutableStateFlow(false)
     private val operationError = MutableStateFlow<String?>(null)
     private val operationNotice = MutableStateFlow<String?>(null)
+    private val openingNotice = MutableStateFlow<ShiftOpeningNotice?>(null)
 
     val state: StateFlow<ShiftUiState> = combine(
         resolvedShift,
@@ -340,6 +342,14 @@ class ShiftViewModel : ViewModel() {
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ShiftUiState())
 
     init {
+        viewModelScope.launch {
+            combine(resolvedShift, openingNotice) { current, captured -> current?.open to captured }
+                .collect { (current, captured) ->
+                    if (clearConfirmedShiftOpeningNotice(current, captured, operationNotice)) {
+                        openingNotice.compareAndSet(captured, null)
+                    }
+                }
+        }
         app.sync.requestSync()
     }
 
@@ -423,13 +433,15 @@ class ShiftViewModel : ViewModel() {
                     return@launchShiftOpeningCapture
                 }
                 operationError.value = null
-                operationNotice.value = if (state.value.offlineGamingSupported) {
+                val openingMessage = if (state.value.offlineGamingSupported) {
                     "Shift saved on this tablet. Gaming and supported POS work can continue offline. Saved work will sync in order; review any server conflict before taking payment again."
                 } else if (state.value.online) {
                     "Shift saved on this tablet. POS work can be saved locally; wait for server confirmation before starting Gaming."
                 } else {
                     "Shift saved offline. POS work can be saved locally. Reconnect to confirm this shift before starting Gaming; pending work will sync automatically."
                 }
+                operationNotice.value = openingMessage
+                openingNotice.value = ShiftOpeningNotice(localId, assignedTerminalId, openingMessage)
                 app.sync.requestSync()
             } catch (_: Exception) {
                 operationError.value =
@@ -802,3 +814,15 @@ internal fun shiftCloseResultKind(shift: LocalShiftEntity): ShiftCloseResultKind
     } else {
         ShiftCloseResultKind.REMOTE_RECONCILED
     }
+
+/** Only retire the exact local-open notice once that same durable command is server-confirmed. */
+internal data class ShiftOpeningNotice(val localId: String, val terminalId: String, val message: String)
+internal fun clearConfirmedShiftOpeningNotice(
+    current: ResolvedOpenShift?, captured: ShiftOpeningNotice?, notice: MutableStateFlow<String?>,
+): Boolean {
+    val saved = current?.local ?: return false
+    if (captured == null || saved.localId != captured.localId || saved.terminalId != captured.terminalId ||
+        saved.state != ShiftState.OPEN_SYNCED || saved.serverShiftId.isNullOrBlank()) return false
+    notice.compareAndSet(captured.message, null)
+    return true
+}
