@@ -16,9 +16,9 @@ Separately reviewed corrections after that inventory must be recorded before
 updating those literal pins. A source hash is review evidence, not deployment,
 physical-tablet acceptance, signing approval or a substitute for runtime tests.
 
-## Separately reviewed post-inventory native correction
+## Initial post-inventory native correction
 
-The final overlay also includes exactly three native paths for the real full-shell
+The initial follow-up included exactly three native paths for the real full-shell
 inline Shift clipping defect found after the initial inventory:
 
 - `android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingScreen.kt`
@@ -47,6 +47,60 @@ input25, soft Done, one explicit Open submit, server acknowledgement and Return
 to the retained station2/Dual/four-player/60-minute₹210 draft with unchanged ring
 bounds. This synthetic test is not physical-tablet acceptance or proof that all
 font-scale/configuration behavior is complete.
+
+## Final separately reviewed product source
+
+The final product source is
+`6863c5be741cacd30f64756081a19974a4fc5d0e`. Its explicit Build 50→51 inventory
+contains 232 ordinary hash-pinned paths plus the same three freeze controls.
+The earlier 229-path inventory is extended by exactly three new test sources;
+no existing path is removed and no control exception is added. This review
+record is itself an ordinary pinned path. The checked-in literal map, rather
+than a digest of the running checkout, remains the authority for every file.
+
+The reviewed product changes after `ea2970f` are limited to these follow-ups:
+
+- `MainActivity.kt`, `GamingScreen.kt`, `GamingViewModel.kt` and the new
+  `GamingDraftAuthorityTest.kt`/`GamingDraftRecreationUiTest.kt` preserve only
+  nonsecret booking selections through Activity recreation. A process-bound,
+  full user/cache-generation/validated-terminal authority controls the actual
+  keyed composition; a missing or blank terminal fails closed. Initial empty
+  Room projection is distinguished from a loaded catalogue that removed a
+  station. Customer identity remains in memory. The header uses the existing
+  readable “Payment due” label. The final recreation fixture mounts its initial
+  and recreated content at the same real Activity content call site, retaining
+  all assertions without explicit saveable keys or copied state.
+- `ShiftScreen.kt`, `ShiftViewModel.kt` and the new `ShiftResultContextTest.kt`
+  identify a previous unacknowledged close receipt by its original Shift ID,
+  time and count, and explicitly distinguish a different currently open shift.
+  Unknown or mismatched terminal state defers presentation. Dismissal captures
+  the rendered receipt ID and rechecks its exact cache lease and pending/closed
+  row before acknowledgement; it cannot acknowledge a newer receipt instead.
+  No receipt is automatically acknowledged or erased.
+- `TenderWorkspace.kt` adds the existing attestation text as the checkbox's
+  accessibility description. Its value, enablement and mutation callback are
+  unchanged.
+- `AuditLogPresentation.kt`, `SemanticAuditPresentationTest.kt`, Web
+  `audit-presentation.ts` and `audit-presentation.test.ts` give five known
+  field/value pairs readable evidence labels and use “Cash”/“UPI” headings.
+  Unknown values and free-text notes pass through unchanged; technical evidence,
+  backend history, amounts, filtering and outcomes are not rewritten or inferred.
+
+The booking/Shift/accessibility follow-ups were committed at `3e388118`; the
+final display-only Audit vocabulary and recreation-fixture correction are
+committed at `6863c5be`. All prior inline Shift body, readable title, permanent
+dial/footer geometry, tariff and command guards remain in the final source.
+
+The final-source native host record has 1,350 tests in 224 JUnit suites with zero
+failures, errors or skips; app/test APK compilation and lint also passed (zero
+lint errors, 35 warnings). These are local development artifacts, not release
+signatures. The byte-identical final Web source passed all 760 tests in 132
+files, type checking, lint, production build and asset verification. Four
+compiled Chrome Audit display-fixture cases cover both modes at 1280px and
+768px, readable facts, unchanged technical values and Return focus. Fixtures
+are not production authentication or business-write acceptance. Final native
+component/Activity-recreation and normal-flow execution are recorded separately;
+host results do not substitute for those checks or physical-tablet acceptance.
 
 ## Historical and current checks
 
