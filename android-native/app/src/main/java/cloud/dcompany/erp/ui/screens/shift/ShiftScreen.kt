@@ -937,7 +937,7 @@ private fun OpenShiftCard(state: ShiftUiState, vm: ShiftViewModel, canOpen: Bool
             Box(Modifier.weight(1f)) { opening() }
             Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(Spacing.md)) {
                 ShiftSummaryRow(state)
-                PastShiftsPanel(state,Modifier.fillMaxWidth().height(240.dp))
+                PastShiftsPanel(state,Modifier.fillMaxWidth().height(400.dp))
             }
         } else Column(Modifier.fillMaxWidth(),verticalArrangement=Arrangement.spacedBy(Spacing.md)) {
             ShiftSummaryRow(state)
