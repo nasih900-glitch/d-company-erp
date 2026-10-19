@@ -268,23 +268,27 @@ class GamingBoardUiTest {
         val selected = mutableStateOf("single-30")
         compose.setContent {
             DCompanyTheme(preference = AppearancePreference.Night) {
-                Box(Modifier.width(420.dp).height(420.dp).testTag("dial-hover-fixture")) {
-                    GamingDurationDial(
-                        choices = listOf(
-                            GamingDurationChoice("single-30", 30, 8_000),
-                            GamingDurationChoice("single-60", 60, 12_000),
-                        ),
-                        selectedPackageId = selected.value,
-                        onSelect = { selected.value = it },
-                        dialSize = 344.dp,
-                        showChoiceChips = false,
-                    )
+                Surface(color = MaterialTheme.colorScheme.background) {
+                    Box(Modifier.width(420.dp).height(420.dp).testTag("dial-hover-fixture")) {
+                        GamingDurationDial(
+                            choices = listOf(
+                                GamingDurationChoice("single-30", 30, 8_000),
+                                GamingDurationChoice("single-60", 60, 12_000),
+                            ),
+                            selectedPackageId = selected.value,
+                            onSelect = { selected.value = it },
+                            dialSize = 344.dp,
+                            showChoiceChips = false,
+                        )
+                    }
                 }
             }
         }
 
         val sixtyMinutePrice = compose.onNodeWithContentDescription("Choose 60 minutes, ₹120.00")
+        capture("gaming-duration-price-before-hover.png", "dial-hover-fixture")
         sixtyMinutePrice.performMouseInput { enter() }
+        capture("gaming-duration-price-hover.png", "dial-hover-fixture")
         compose.runOnIdle { assertEquals("single-30", selected.value) }
         val marker = sixtyMinutePrice.fetchSemanticsNode().boundsInRoot
         val fixture = compose.onNodeWithTag("dial-hover-fixture").fetchSemanticsNode().boundsInRoot
@@ -309,7 +313,6 @@ class GamingBoardUiTest {
         } finally {
             hovered.recycle()
         }
-        capture("gaming-duration-price-hover.png", "dial-hover-fixture")
         sixtyMinutePrice.performClick()
         compose.runOnIdle { assertEquals("single-60", selected.value) }
     }
@@ -962,10 +965,14 @@ class GamingBoardUiTest {
         compose.onNodeWithText("Start 15 min · ₹70.00").performClick()
         compose.runOnIdle { assertEquals("racing-1" to "racing-15", confirmed) }
 
-        // An unsent mode or customer choice belongs to the station where it
-        // was entered; switching stations must restore that station's defaults.
+        // An unsent choice belongs to its station. Returning must retain the
+        // exact Dual tariff and added player without changing another station.
         compose.onNodeWithTag("gaming-station-ps5-2").performScrollTo().performClick()
-        compose.onNodeWithText("Start 30 min · ₹80.00").assertIsDisplayed()
+        compose.onNodeWithText("Start 30 min · ₹130.00").assertIsDisplayed().performClick()
+        compose.runOnIdle {
+            assertEquals("ps5-2" to "dual-30", confirmed)
+            assertEquals(1, confirmedExtraControllers)
+        }
 
         compose.runOnIdle {
             selectedId.value = "ps5-1"
