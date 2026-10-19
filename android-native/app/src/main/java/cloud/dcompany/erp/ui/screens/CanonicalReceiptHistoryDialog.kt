@@ -23,6 +23,15 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.height
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
+import cloud.dcompany.erp.DCompanyApp
+import cloud.dcompany.erp.ui.screens.audit.AuditLogScreen
+import cloud.dcompany.erp.ui.screens.audit.AuditLogViewModel
+import cloud.dcompany.erp.ui.screens.finance.TenderContext
+import cloud.dcompany.erp.ui.screens.finance.TenderWorkspace
+import cloud.dcompany.erp.ui.screens.finance.tenderScope
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -40,6 +49,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -422,6 +432,12 @@ private fun CanonicalReceiptDetail(
     onRefundReceipt: ((CanonicalReceipt) -> Unit)?,
 ) {
     val clipboard = LocalClipboardManager.current
+    val account by DCompanyApp.instance.shiftCache.profile.collectAsStateWithLifecycle()
+    val ownerKey = account?.let { "${it.companyId}|${it.userId}|${it.branchId.orEmpty()}" }.orEmpty()
+    val canCorrect = account?.tenderScope(receipt.branchId) != null
+    var correctedPayment by remember(receipt.orderId, ownerKey) { mutableStateOf<String?>(null) }
+    var investigate by remember(receipt.orderId, ownerKey) { mutableStateOf(false) }
+    var linkedAudit by remember(receipt.orderId, ownerKey) { mutableStateOf<String?>(null) }
     Column {
         ReceiptDialogHeader(
             title = receipt.invoiceNo,
@@ -511,6 +527,30 @@ private fun CanonicalReceiptDetail(
                         receipt.payments.forEachIndexed { index, payment ->
                             if (index > 0) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                             ReceiptPaymentRow(payment)
+                            if (canCorrect && (payment.method == "cash" || payment.tenderCorrectionId != null)) {
+                                TextButton({ correctedPayment = if (correctedPayment == payment.id) null else payment.id }) {
+                                    Text(if (correctedPayment == payment.id) "Hide payment evidence" else if (payment.tenderCorrectionId != null) "View protected correction evidence" else "Correct this Cash payment to UPI")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            correctedPayment?.let { paymentId -> receipt.payments.firstOrNull { it.id == paymentId }?.let { payment ->
+                item(key = "protected-payment-workspace") {
+                    TenderWorkspace(TenderContext.Payment(receipt.branchId, payment.id, receipt.invoiceNo),
+                        onCommitted = { onRefresh() }, allowNewPreparation = payment.method == "cash" && payment.tenderCorrectionId == null)
+                }
+            } }
+            item(key = "consolidated-investigation") {
+                Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                    TextButton({ investigate = !investigate }) { Text(if (investigate) "Hide consolidated bill investigation" else "Investigate players, drinks, payments and related activity") }
+                    if (investigate) ReceiptInvestigationPanel(receipt.orderId, ownerKey, onAuditReference =
+                        if (account?.auditAccess == true) ({ reference -> linkedAudit = reference }) else null)
+                    linkedAudit?.let { reference ->
+                        TextButton({ linkedAudit = null }) { Text("Close linked protected Audit") }
+                        Box(Modifier.fillMaxWidth().height(640.dp)) {
+                            AuditLogScreen(vm = viewModel<AuditLogViewModel>(key = "receipt-linked-audit"), initialReference = reference)
                         }
                     }
                 }

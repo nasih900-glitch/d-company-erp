@@ -80,6 +80,7 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
+import cloud.dcompany.erp.DCompanyApp
 import cloud.dcompany.erp.core.auth.FinanceAccess
 import cloud.dcompany.erp.core.money.parseRupeesToMinor
 import cloud.dcompany.erp.core.net.asRupees
@@ -652,6 +653,12 @@ private fun ManualCollectionsTab(
     presentation: WorkspacePresentationPolicy,
 ) {
     val totals = state.collectionTotals
+    val owner by DCompanyApp.instance.shiftCache.profile.collectAsStateWithLifecycle()
+    val ownerKey = owner?.let { "${it.companyId}|${it.userId}|${it.branchId.orEmpty()}" }
+    val canCorrect = owner?.let { it.auditAccess && it.effectivePermissions?.contains("finance.tender.correct") == true } == true
+    var reviewActuals by remember(ownerKey) { mutableStateOf(false) }
+    var correctionDate by remember(ownerKey) { mutableStateOf("") }
+    var correctionBranch by remember(ownerKey) { mutableStateOf(owner?.branchId.orEmpty()) }
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
@@ -669,6 +676,17 @@ private fun ManualCollectionsTab(
         if (!canWrite) {
             item {
                 ViewOnlyNotice("Manual collections are view only — ask an owner or manager to record or void one.")
+            }
+        }
+        if (canCorrect) item(key = "daily-tender-evidence") {
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                ErpButton(if (reviewActuals) "Hide daily actuals review" else "Review / correct daily Cash and UPI actuals", { reviewActuals = !reviewActuals }, intent = ActionIntent.Secondary)
+                if (reviewActuals) {
+                    Text("Use an identified receipt for a known Cash to UPI error. Daily actuals remain unallocated and never invent a source bill or drawer count.", style = MaterialTheme.typography.bodySmall)
+                    PickerField("Shop", state.branches.firstOrNull { it.id == correctionBranch }?.name ?: "Select shop", state.branches.map { it.id to it.name }, enabled = owner?.branchId == null) { correctionBranch = it }
+                    OutlinedTextField(correctionDate, { correctionDate = it.take(10) }, label = { Text("Shop date · YYYY-MM-DD") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    if (correctionBranch.isNotBlank() && correctionDate.length == 10) TenderWorkspace(TenderContext.Daily(correctionBranch, correctionDate))
+                }
             }
         }
         item {
