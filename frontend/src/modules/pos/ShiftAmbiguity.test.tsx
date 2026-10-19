@@ -202,4 +202,35 @@ describe("Unknown Shift outcomes survive later refusals", () => {
     expect(cash().disabled).toBe(true);
     expect(cash().value).toBe("75");
   });
+  it("resolves the same-target terminal different-count outcome as read-only evidence", async () => {
+    vi.mocked(shifts.close)
+      .mockRejectedValueOnce(new Error("Reply lost"))
+      .mockRejectedValueOnce(forbidden());
+    refresh
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({
+        ...shift,
+        status: "closed",
+        counted_minor: 8000,
+        closed_by_name: "Another closer",
+        variance_minor: 8000,
+      });
+    await render();
+    enter(cash(), "75");
+    await submit();
+    await submit();
+    expect(document.querySelector("input[type=number]")).toBeNull();
+    expect(document.body.textContent).toContain(
+      "Your earlier request is not marked successful",
+    );
+    expect(document.body.textContent).toContain("₹75.00");
+    expect(document.body.textContent).toContain("₹80.00");
+    expect(document.body.textContent).toContain("Another closer");
+    act(() => button("Acknowledge & refresh Shifts").click());
+    expect(dismissed).toHaveBeenCalledOnce();
+    expect(vi.mocked(shifts.close).mock.calls).toEqual([
+      [shift.id, 7500],
+      [shift.id, 7500],
+    ]);
+  });
 });

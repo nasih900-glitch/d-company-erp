@@ -2410,6 +2410,7 @@ export function CloseShiftForm({
   });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [recordedConflict, setRecordedConflict] = useState<{ shift: ShiftDTO; attemptedCountedMinor: number } | null>(null);
   const [result, setResult] = useState<{
     variance_minor: number;
     closed_by?: string | null;
@@ -2516,6 +2517,19 @@ export function CloseShiftForm({
           'The response was interrupted, but a refresh confirmed that this shift closed with the same cash count.',
           { title: 'Shift closure confirmed' },
         );
+      } else if (
+        refreshedShift?.status === 'closed'
+        && typeof refreshedShift.counted_minor === 'number'
+        && Number.isSafeInteger(refreshedShift.counted_minor)
+        && refreshedShift.counted_minor >= 0
+        && refreshedShift.counted_minor !== countedMinor
+      ) {
+        // The same target has a terminal, immutable close with another count.
+        // Show that evidence without claiming this request succeeded or offering
+        // to replace the already recorded count with a new financial intent.
+        setAmbiguousCountedMinor(null);
+        setRecordedConflict({ shift: refreshedShift, attemptedCountedMinor: countedMinor });
+        setErr(null);
       } else {
         if (ambiguousCountedMinor !== null || (outcomeIsUnknown && refreshedShift?.status !== 'closed')) {
           // A later refusal cannot establish what happened to an earlier write
@@ -2536,6 +2550,23 @@ export function CloseShiftForm({
       submissionInFlight.current = false;
       setBusy(false);
     }
+  }
+
+  if (recordedConflict) {
+    const recorded = recordedConflict.shift;
+    const acknowledge = () => { onClose(); onSuccess(); };
+    return <Modal open onClose={acknowledge} title="Shift already closed · cash count differs">
+      <div className="space-y-4" role="status">
+        <p className="text-sm text-fg-muted">This exact shift is already closed with a different cash count. Your earlier request is not marked successful. The recorded close below is preserved; nothing here changes it.</p>
+        <Row label="Your unconfirmed cash count" value={inr(recordedConflict.attemptedCountedMinor)}/>
+        <Row label="Recorded cash count" value={inr(recorded.counted_minor!)}/>
+        <Row label="Recorded closer" value={recorded.closed_by_name?.trim() || 'Name not retained'}/>
+        <Row label="Recorded close time" value={recorded.closed_at ? formatShiftBusinessDateTime(recorded.closed_at) : 'Not retained'}/>
+        <Row label="Recorded variance" value={recorded.variance_minor == null ? 'Unavailable' : signedMoney(recorded.variance_minor)} bold/>
+        <p className="text-xs text-fg-muted">Shift reference: <span className="font-mono break-all">{recorded.id}</span>. Review its retained history if the drawer count needs investigation.</p>
+        <button type="button" className="btn btn-primary w-full" onClick={acknowledge}>Acknowledge & refresh Shifts</button>
+      </div>
+    </Modal>;
   }
 
   if (result) {
