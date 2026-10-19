@@ -891,6 +891,7 @@ private fun AppRoot(
                             Destination.AccessControl -> AccessControlScreen()
                             Destination.Settings -> SettingsScreen(
                                 canManageSystem = canManageSystemSettings(s.me),
+                                statusProfile = s.me,
                                 onPasswordChanged = session::expireAfterPasswordChange,
                                 onReportProblem = ::openSupport,
                                 onStartHealthRecording = onStartHealthRecording,
