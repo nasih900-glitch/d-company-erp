@@ -154,10 +154,13 @@ export function auditBusinessSummary(entry: BusinessAuditEntryDTO): string {
       `${typeof qty === 'number' && qty > 0 && facts.qty_delta !== undefined ? '+' : ''}${String(qty)}${typeof unit === 'string' ? ` ${unit}` : ''}`,
     );
   }
-  if (Array.isArray(facts.before_roles) || Array.isArray(facts.after_roles))
+  if (Array.isArray(facts.before_roles) && Array.isArray(facts.after_roles))
     pieces.push(
       `Roles: ${businessValue('before_roles', facts.before_roles)} → ${businessValue('after_roles', facts.after_roles)}`,
     );
+  else for (const key of ['before_roles', 'after_roles']) {
+    if (Array.isArray(facts[key])) pieces.push(`${businessLabel(key)}: ${businessValue(key, facts[key])}`);
+  }
   if (typeof facts.duration_minutes === 'number')
     pieces.push(`${facts.duration_minutes} min`);
   return pieces.length
@@ -165,4 +168,38 @@ export function auditBusinessSummary(entry: BusinessAuditEntryDTO): string {
     : entry.summary === entry.action_label
       ? 'No additional business facts retained'
       : entry.summary;
+}
+
+const mutationActions = new Set([
+  'update', 'staff_access_changed', 'loyalty_program_publish', 'gaming_timer_extended',
+  'gaming.session.pause', 'gaming.session.resume', 'gaming_session_package_amended',
+  'gaming_participant_left', 'gaming_participants_settled', 'gaming_session_addon_voided',
+  'gaming_session_legacy_pause_resolution', 'gaming_session_billing_repair',
+  'gaming_session_handoff_to_pos', 'gaming_session_reconcile_to_pos',
+  'gaming_legacy_server_session_no_play_cancel', 'gaming_legacy_server_session_manual_bill_link',
+  'pos_direct_order_hold_for_checkout', 'shift_closed', 'shift_android_origin_recovery_close',
+  'payment_method_corrected', 'daily_collections_reconciled', 'expense_receipt_review',
+  'bug_report_status_change', 'bug_report_resolution_note_change',
+]);
+function businessSnapshotField(key: string): boolean {
+  return !/(^id$|_id$|_ids$|fingerprint|hash|password|secret|token|otp|authorization|cookie|private.?key|api.?key|access.?key|email|phone|client_action|request_id)/i.test(key) &&
+    !['created_at', 'updated_at', 'auth_version', 'token_version'].includes(key);
+}
+/** Two-sided source-defined mutation evidence only; absent is never a recorded null. */
+export function auditBusinessChanges(entry: BusinessAuditEntryDTO): Array<{key: string; before: unknown; after: unknown}> {
+  if (!mutationActions.has(entry.action) || !entry.before || !entry.after) return [];
+  const before = entry.before, after = entry.after;
+  const changes: Array<{key: string; before: unknown; after: unknown}> = [];
+  if (entry.action === 'staff_access_changed' && Array.isArray(before.before_roles) && Array.isArray(after.after_roles) && JSON.stringify(before.before_roles) !== JSON.stringify(after.after_roles))
+    changes.push({key: 'roles', before: before.before_roles, after: after.after_roles});
+  for (const key of Object.keys(before)) {
+    if (Object.prototype.hasOwnProperty.call(after, key) && businessSnapshotField(key) && !['before_roles','after_roles'].includes(key) && JSON.stringify(before[key]) !== JSON.stringify(after[key]))
+      changes.push({key, before: before[key], after: after[key]});
+  }
+  return changes;
+}
+export function auditRetainedSnapshots(entry: BusinessAuditEntryDTO): Array<{side: string; key: string; value: unknown}> {
+  const changed = new Set(auditBusinessChanges(entry).map(item => item.key));
+  return ([['Retained before action', entry.before], ['Retained after action', entry.after]] as const).flatMap(([side,snapshot]) =>
+    Object.entries(snapshot ?? {}).filter(([key]) => businessSnapshotField(key) && !changed.has(key) && !(changed.has('roles') && ['before_roles','after_roles'].includes(key))).map(([key,value]) => ({side,key,value})));
 }

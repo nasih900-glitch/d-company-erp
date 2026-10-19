@@ -326,4 +326,41 @@ describe('Retained Audit workspace', () => {
     expect(host.textContent).toContain('1 loaded');
   });
 
+  it('presents login snapshots as retained facts and a real role pair as one transition', async () => {
+    const observed={...row(10),action:'login_success',action_label:'Signed in',summary:'Sign-in observed',before:null,after:{name:'Retained staff',roles:['staff']}};
+    await act(async()=>root.render(<MemoryRouter><AuditDetail entry={observed} zone="Asia/Kolkata" onClose={()=>{}} /></MemoryRouter>));
+    expect(host.textContent).not.toContain('Recorded Before → After');
+    expect(host.textContent).toContain('Before state was not retained');
+    expect(host.textContent).toContain('Retained after action · Name');
+    expect(host.textContent).toContain('Retained staff');
+    const changed={...observed,action:'staff_access_changed',before:{before_roles:[]},after:{after_roles:['owner']}};
+    await act(async()=>root.render(<MemoryRouter><AuditDetail entry={changed} zone="Asia/Kolkata" onClose={()=>{}} /></MemoryRouter>));
+    expect(host.textContent).toContain('No roles → Owner');
+    expect(host.textContent).not.toContain('Roles before');
+    expect(host.textContent).not.toContain('Roles after');
+    expect(host.querySelectorAll('summary')[0].textContent).toBe('Recorded Before → After');
+  });
+  it('focuses selected inline evidence and returns to the exact loaded list position', async () => {
+    const previous=Object.getOwnPropertyDescriptor(HTMLElement.prototype,'scrollIntoView');
+    const scroll=vi.fn();Object.defineProperty(HTMLElement.prototype,'scrollIntoView',{configurable:true,value:scroll});
+    try {
+      mocks.events.mockResolvedValueOnce(page([row(3),row(2)]));
+      await act(async()=>root.render(<MemoryRouter><main><AuditScreen /></main></MemoryRouter>));await unlock();
+      const main=host.querySelector('main')!, list=host.querySelector('table')!.parentElement!;
+      main.scrollTop=30;list.scrollTop=84;
+      const source=host.querySelector<HTMLButtonElement>('tbody button')!;
+      await act(async()=>source.click());
+      expect(document.activeElement?.getAttribute('aria-label')).toBe('Selected activity evidence');
+      expect(scroll).toHaveBeenCalledWith({block:'nearest'});
+      expect(source.getAttribute('aria-expanded')).toBe('true');
+      main.scrollTop=1005;
+      await click('Return to loaded activity');
+      expect(main.scrollTop).toBe(30);expect(list.scrollTop).toBe(84);expect(document.activeElement).toBe(source);
+      expect(host.querySelectorAll('tbody tr')).toHaveLength(2);expect(mocks.events).toHaveBeenCalledTimes(1);
+    } finally {
+      if(previous) Object.defineProperty(HTMLElement.prototype,'scrollIntoView',previous);
+      else Reflect.deleteProperty(HTMLElement.prototype,'scrollIntoView');
+    }
+  });
+
 });

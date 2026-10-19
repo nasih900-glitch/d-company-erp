@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   auditBusinessSummary,
+  auditBusinessChanges,
+  auditRetainedSnapshots,
   businessValue,
   auditActor,
 } from './audit-presentation';
@@ -70,5 +72,32 @@ describe('Source-backed business language', () => {
     expect(auditBusinessSummary(event({}))).toBe(
       'No additional business facts retained',
     );
+  });
+});
+
+describe('Snapshot evidence versus genuine mutations', () => {
+  it('does not turn observed login, unlock, create or delete facts into a rename or role change', () => {
+    for (const action of ['login_success','login_failed','audit_unlock_success','audit_unlock_failed','create']) {
+      const row = {...event({}),action,before:null,after:{name:'Recorded staff',roles:['staff']}};
+      expect(auditBusinessChanges(row)).toEqual([]);
+      expect(auditRetainedSnapshots(row).map(item=>item.key)).toEqual(['name','roles']);
+    }
+    const row={...event({}),action:'delete',before:{name:'Deleted staff'},after:null};
+    expect(auditBusinessChanges(row)).toEqual([]);
+    expect(auditRetainedSnapshots(row)[0].value).toBe('Deleted staff');
+  });
+  it('normalizes the explicit role pair once and preserves known empty versus missing', () => {
+    const row={...event({}),action:'staff_access_changed',before:{before_roles:[]},after:{after_roles:['owner']}};
+    expect(auditBusinessChanges(row)).toEqual([{key:'roles',before:[],after:['owner']}]);
+    expect(businessValue('roles',auditBusinessChanges(row)[0].before)).toBe('No roles');
+    expect(auditRetainedSnapshots(row)).toEqual([]);
+    expect(auditBusinessChanges({...row,before:{}})).toEqual([]);
+    expect(auditRetainedSnapshots({...row,before:{}})[0].key).toBe('after_roles');
+    expect(auditBusinessSummary(event({after_roles:['owner']}))).not.toContain('→');
+  });
+  it('shows only two-sided update fields as transitions and retains unmatched facts', () => {
+    const row={...event({}),action:'update',before:{status:'open'},after:{status:'closed',name:'Observed'}};
+    expect(auditBusinessChanges(row)).toEqual([{key:'status',before:'open',after:'closed'}]);
+    expect(auditRetainedSnapshots(row)).toEqual([{side:'Retained after action',key:'name',value:'Observed'}]);
   });
 });

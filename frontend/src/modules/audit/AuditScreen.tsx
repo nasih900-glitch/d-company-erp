@@ -32,6 +32,8 @@ import {
 import {
   auditActor,
   auditBusinessSummary,
+  auditBusinessChanges,
+  auditRetainedSnapshots,
   auditOrderId,
   businessLabel,
   businessValue,
@@ -95,6 +97,34 @@ function AuditWorkspace({ scope }: { scope: string }) {
   const requests = useLatestRequest();
   const busyRef = useRef(false);
   const list = useRef<HTMLDivElement>(null);
+  const detail = useRef<HTMLDivElement>(null);
+  const detailFocusRequested = useRef(false);
+  const detailReturn = useRef<{main: HTMLElement | null; mainScroll: number; listScroll: number; button: HTMLButtonElement} | null>(null);
+  function openDetails(entry: BusinessAuditEntryDTO, button: HTMLButtonElement) {
+    const main = list.current?.closest('main') ?? null;
+    detailReturn.current = { main, mainScroll: main?.scrollTop ?? 0, listScroll: list.current?.scrollTop ?? 0, button };
+    detailFocusRequested.current = true;
+    setSelected(entry);
+  }
+  function closeDetails() {
+    const position = detailReturn.current;
+    detailFocusRequested.current = false;
+    setSelected(null);
+    if (position) {
+      if (position.main) position.main.scrollTop = position.mainScroll;
+      if (list.current) list.current.scrollTop = position.listScroll;
+      if (position.button.isConnected) position.button.focus({preventScroll: true});
+    }
+    detailReturn.current = null;
+  }
+  useEffect(() => {
+    if (selected && detailFocusRequested.current && detail.current) {
+      detailFocusRequested.current = false;
+      detail.current.focus({preventScroll: true});
+      detail.current.scrollIntoView?.({block: 'nearest'});
+    }
+  }, [selected]);
+
   const rowsRef = useRef(rows);
   rowsRef.current = rows;
   const stateRef = useRef<AuditState>({
@@ -601,7 +631,9 @@ function AuditWorkspace({ scope }: { scope: string }) {
                         </td>
                         <td className="p-3">
                           <button
-                            onClick={() => setSelected(entry)}
+                            onClick={(event) => openDetails(entry, event.currentTarget)}
+                            aria-expanded={selected?.id === entry.id}
+                            aria-controls={selected?.id === entry.id ? `audit-detail-${entry.id}` : undefined}
                             className="w-full text-left"
                           >
                             <span className="mr-2 font-mono text-xs text-fg-muted">
@@ -669,11 +701,10 @@ function AuditWorkspace({ scope }: { scope: string }) {
               )}
             </section>
             {selected && (
-              <AuditDetail
-                entry={selected}
-                zone={zone}
-                onClose={() => setSelected(null)}
-              />
+              <div ref={detail} id={`audit-detail-${selected.id}`} tabIndex={-1} className="min-w-0" aria-label="Selected activity evidence">
+                <AuditDetail entry={selected} zone={zone} onClose={closeDetails} />
+                <button className="btn btn-ghost mt-3" onClick={closeDetails}>Return to loaded activity</button>
+              </div>
             )}
           </div>
         </>
@@ -698,18 +729,8 @@ export function AuditDetail({
   const details = Object.entries(entry.business_details ?? {}).filter(([key]) =>
     isBusinessField(key),
   );
-  const changes = [
-    ...new Set([
-      ...Object.keys(entry.before ?? {}),
-      ...Object.keys(entry.after ?? {}),
-    ]),
-  ].filter(
-    (key) =>
-      isBusinessField(key) &&
-      !['updated_at', 'created_at'].includes(key) &&
-      JSON.stringify(entry.before?.[key]) !==
-        JSON.stringify(entry.after?.[key]),
-  );
+  const changes = auditBusinessChanges(entry);
+  const snapshots = auditRetainedSnapshots(entry);
   return (
     <aside className="card min-w-0 space-y-4" aria-label="Activity details">
       <header className="flex items-start justify-between gap-3">
@@ -728,7 +749,7 @@ export function AuditDetail({
         </button>
       </header>
       <p className="text-sm">{auditBusinessSummary(entry)}</p>
-      <dl className="space-y-2 text-sm">
+      <dl className="grid gap-3 text-sm sm:grid-cols-2 2xl:grid-cols-1">
         <Detail label="Recorded actor" value={auditActor(entry)} />
         <Detail
           label="Actor provenance"
@@ -792,16 +813,20 @@ export function AuditDetail({
             Recorded Before → After
           </summary>
           <dl className="mt-3 space-y-2 text-sm">
-            {changes.map((key) => (
-              <Detail
-                key={key}
-                label={businessLabel(key)}
-                value={`${businessValue(key, safeAuditValue(entry.before?.[key]), zone)} → ${businessValue(key, safeAuditValue(entry.after?.[key]), zone)}`}
-              />
+            {changes.map(({key, before, after}) => (
+              <Detail key={key} label={businessLabel(key)}
+                value={`${businessValue(key, safeAuditValue(before), zone)} → ${businessValue(key, safeAuditValue(after), zone)}`} />
             ))}
           </dl>
         </details>
       )}
+      {snapshots.length > 0 && <section aria-label="Retained action snapshots" className="space-y-3">
+        <h4 className="text-sm font-semibold">Retained action snapshots</h4>
+        {!entry.before && entry.after && <p className="text-xs text-fg-muted">Before state was not retained; no change is inferred from the after snapshot.</p>}
+        {entry.before && !entry.after && <p className="text-xs text-fg-muted">After state was not retained; the before snapshot is retained evidence only.</p>}
+        <dl className="grid gap-3 text-sm sm:grid-cols-2 2xl:grid-cols-1">{snapshots.map(({side,key,value}) =>
+          <Detail key={`${side}:${key}`} label={`${side} · ${businessLabel(key)}`} value={businessValue(key,safeAuditValue(value),zone)} />)}</dl>
+      </section>}
       <details>
         <summary className="cursor-pointer text-sm text-fg-muted">
           Technical details
