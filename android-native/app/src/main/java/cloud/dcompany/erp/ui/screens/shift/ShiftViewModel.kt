@@ -18,6 +18,7 @@ import cloud.dcompany.erp.core.db.observeShiftForManagement
 import cloud.dcompany.erp.core.net.MeResponse
 import cloud.dcompany.erp.core.sync.RejectedShiftOpenVerificationStatus
 import cloud.dcompany.erp.ui.screens.businessDateTime
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -137,6 +138,23 @@ private fun historyAgeLabel(ageMillis: Long): String = when {
     ageMillis < 3_600_000L -> "${ageMillis / 60_000L} min ago"
     ageMillis < 86_400_000L -> "${ageMillis / 3_600_000L} hr ago"
     else -> "${ageMillis / 86_400_000L} day${if (ageMillis / 86_400_000L == 1L) "" else "s"} ago"
+}
+
+/** The identity is allocated inside [save], only after the shared busy gate wins. */
+internal fun launchShiftOpeningCapture(
+    scope: CoroutineScope,
+    busy: MutableStateFlow<Boolean>,
+    save: suspend () -> Unit,
+): Boolean {
+    if (!busy.compareAndSet(false, true)) return false
+    scope.launch {
+        try {
+            save()
+        } finally {
+            busy.value = false
+        }
+    }
+    return true
 }
 
 /**
@@ -381,8 +399,7 @@ class ShiftViewModel : ViewModel() {
                 "The signed-in account is still being verified. Wait a moment, then open the shift again."
             return
         }
-        busy.value = true
-        viewModelScope.launch {
+        val started = launchShiftOpeningCapture(viewModelScope, busy) {
             try {
                 val localId = UUID.randomUUID().toString()
                 if (!app.cacheIsolation.commitIfCurrent(scopeLease) {
@@ -403,7 +420,7 @@ class ShiftViewModel : ViewModel() {
                 ) {
                     operationError.value =
                         "The signed-in account changed before the shift was saved. Nothing was opened; review Shift again."
-                    return@launch
+                    return@launchShiftOpeningCapture
                 }
                 operationError.value = null
                 operationNotice.value = if (state.value.offlineGamingSupported) {
@@ -417,10 +434,9 @@ class ShiftViewModel : ViewModel() {
             } catch (_: Exception) {
                 operationError.value =
                     "The shift could not be saved on this tablet. Try again; if it continues, ask an owner for help."
-            } finally {
-                busy.value = false
             }
         }
+        if (!started) operationNotice.value = "Shift opening is already being saved. Wait for the current result."
     }
 
     fun closeShift(countedMinor: Long) {

@@ -14,7 +14,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
 import cloud.dcompany.erp.core.auth.ShiftAccess
 import cloud.dcompany.erp.core.db.ShiftState
 import cloud.dcompany.erp.ui.theme.Spacing
@@ -24,7 +23,7 @@ import cloud.dcompany.erp.ui.theme.Spacing
 internal fun InlineShiftOpeningWorkspace(
     access: ShiftAccess,
     onReturn: () -> Unit,
-    vm: ShiftViewModel = viewModel(key = "inline-shift-opening"),
+    vm: ShiftViewModel = sharedShiftViewModel(),
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
     SideEffect { vm.updateAccess(access) }

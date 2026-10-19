@@ -169,11 +169,15 @@ internal fun shiftLegacyMoneyRows(
 internal fun ShiftAccountingBreakdown.hasLegacyPrepaidMoney(): Boolean =
     membershipCollectionsMinor != 0L || settledMembershipRefundsMinor != 0L
 
+/** Normal Shift and inline entry points share one command/busy owner for this login. */
+@Composable
+internal fun sharedShiftViewModel(): ShiftViewModel = viewModel()
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ShiftScreen(
     access: ShiftAccess = ShiftAccess(),
-    vm: ShiftViewModel = viewModel(),
+    vm: ShiftViewModel = sharedShiftViewModel(),
     presentation: WorkspacePresentationPolicy = WorkspaceFeatureProfiles.Active.presentationPolicy(),
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
