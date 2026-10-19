@@ -55,10 +55,10 @@ class GamingNextActionUiTest {
             }
         }
         compose.onNodeWithText("Start 60 min · ₹210.00").assertIsDisplayed()
-        compose.onNodeWithTag("gaming-booked-player-count").assertTextEquals("4/4")
+        compose.onNodeWithTag("gaming-booked-player-count").assertTextEquals("4/4").assertIsDisplayed()
         compose.runOnIdle { portrait.value = true }
         compose.onNodeWithText("Start 60 min · ₹210.00").assertIsDisplayed()
-        compose.onNodeWithTag("gaming-booked-player-count").assertTextEquals("4/4")
+        compose.onNodeWithTag("gaming-booked-player-count").assertTextEquals("4/4").assertIsDisplayed()
         compose.runOnIdle {
             assertEquals("Synthetic draft", observed.getValue("ps5-2").customerQuery.value)
             selected.value = "ps5-1"
@@ -66,7 +66,7 @@ class GamingNextActionUiTest {
         compose.onNodeWithText("Start 30 min · ₹80.00").assertIsDisplayed()
         compose.runOnIdle { selected.value = "ps5-2" }
         compose.onNodeWithText("Start 60 min · ₹210.00").assertIsDisplayed()
-        compose.onNodeWithTag("gaming-booked-player-count").assertTextEquals("4/4")
+        compose.onNodeWithTag("gaming-booked-player-count").assertTextEquals("4/4").assertIsDisplayed()
     }
 
     @Test fun nextShiftActionsStayVisibleAndDoNotMoveThePrimaryButtonBaseline() {
@@ -97,4 +97,17 @@ class GamingNextActionUiTest {
         val after = compose.onNodeWithTag("gaming-primary-action-host").getUnclippedBoundsInRoot()
         assertEquals(before, after)
     }
+    @Test fun changingAuthenticatedOwnerDiscardsCustomerDraftEvenWithIdenticalStationIds() {
+        val authority=mutableStateOf("company|owner-a|branch")
+        val station=Station("same-station","PS5-1","PS5 Station 1","ps5",12000)
+        var observed:Map<String,GamingStartSelectionState> = emptyMap()
+        compose.setContent {
+            val selections=rememberGamingStationStartSelections(listOf(station),emptyList(),authority.value)
+            SideEffect {observed=selections}
+        }
+        compose.runOnIdle {observed.getValue(station.id).customerQuery.value="Owner A private draft"}
+        compose.runOnIdle {authority.value="company|owner-b|branch"}
+        compose.runOnIdle {assertEquals("",observed.getValue(station.id).customerQuery.value)}
+    }
+
 }

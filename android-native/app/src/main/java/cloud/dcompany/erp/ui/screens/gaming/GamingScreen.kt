@@ -588,8 +588,8 @@ fun GamingScreen(
                         vm.refreshCustomersForStart()
                         starting = it
                     },
-                    onConfirmStart = { station, customerId, name, phone, minutes, packageId, extraControllers ->
-                        vm.start(station, customerId, name, phone, minutes, packageId, extraControllers)
+                    onConfirmStart = { station, customerId, name, phone, minutes, packageId, extraControllers, captured ->
+                        vm.start(station, customerId, name, phone, minutes, packageId, extraControllers, captured)
                     },
                     onPrepareStart = vm::refreshCustomersForStart,
                     onSearchCustomer = vm::searchCustomersForStart,
@@ -1762,7 +1762,7 @@ internal fun GamingCommandWorkspace(
     onOpenAttention: () -> Unit,
     onRefresh: () -> Unit,
     onStart: (Station) -> Unit,
-    onConfirmStart: (Station, String?, String?, String?, Int?, String?, Int) -> Unit,
+    onConfirmStart: (Station, String?, String?, String?, Int?, String?, Int, (String) -> Unit) -> Unit,
     onPrepareStart: () -> Unit = {},
     onSearchCustomer: (String) -> Unit = {},
     onStop: (Station, GameSession) -> Unit,
@@ -2045,7 +2045,7 @@ internal fun GamingCommandWorkspace(
                                 if (startBlockMessage == null) {
                                     onConfirmStart(
                                         selectedStation, customerId, name, phone, minutes,
-                                        packageId, extraControllers,
+                                        packageId, extraControllers, startSelection.customerCaptureReceipt(),
                                     )
                                 }
                             },
@@ -6349,8 +6349,9 @@ private fun ReconcileSessionDialog(
 internal fun rememberGamingStationStartSelections(
     stations: List<Station>,
     packages: List<GamingPackage>,
+    authorityKey: Any? = androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner.current,
 ): Map<String, GamingStartSelectionState> = stations.associate { station ->
-    androidx.compose.runtime.key(station.id) {
+    androidx.compose.runtime.key(authorityKey, station.id) {
         station.id to rememberGamingStartSelectionState(station,
             packages.filter { it.stationType == station.type && it.kind == "base" })
     }
@@ -6390,17 +6391,47 @@ private fun rememberGamingStartSelectionState(
     }
 }
 
-internal data class GamingStartSelectionState(
+internal class GamingStartSelectionState(
     val selectedVariant: MutableState<String?>,
     val playerCount: MutableIntState,
     val selectedPackageId: MutableState<String?>,
-    // Customer entry stays session-memory only, while selection has its existing saveable fields.
-    val customerName: MutableState<String> = mutableStateOf(""),
-    val customerPhone: MutableState<String> = mutableStateOf(""),
-    val customerMode: MutableState<String> = mutableStateOf("search"),
-    val customerQuery: MutableState<String> = mutableStateOf(""),
-    val customer: MutableState<GamingCustomerOption?> = mutableStateOf(null),
-)
+) {
+    private var customerRevision = 0L
+    private var captureAttempt = 0L
+    // These stay in session memory. Every edit invalidates an older capture acknowledgement.
+    val customerName: MutableState<String> = GamingCustomerDraftField("") { customerRevision++ }
+    val customerPhone: MutableState<String> = GamingCustomerDraftField("") { customerRevision++ }
+    val customerMode: MutableState<String> = GamingCustomerDraftField("search") { customerRevision++ }
+    val customerQuery: MutableState<String> = GamingCustomerDraftField("") { customerRevision++ }
+    val customer: MutableState<GamingCustomerOption?> = GamingCustomerDraftField(null) { customerRevision++ }
+
+    /** Only the matching successful local insert consumes this customer's exact submitted draft. */
+    fun customerCaptureReceipt(): (String) -> Unit {
+        val attempt = ++captureAttempt
+        val revision = customerRevision
+        return { localSessionId ->
+            if (localSessionId.isNotBlank() && attempt == captureAttempt && revision == customerRevision) {
+                ++captureAttempt
+                customerName.value = ""
+                customerPhone.value = ""
+                customerMode.value = "search"
+                customerQuery.value = ""
+                customer.value = null
+            }
+        }
+    }
+}
+
+private class GamingCustomerDraftField<T>(initial: T, private val edited: () -> Unit) : MutableState<T> {
+    private val backing = mutableStateOf(initial)
+    override var value: T
+        get() = backing.value
+        set(value) {
+            if (backing.value != value) { edited(); backing.value = value }
+        }
+    override fun component1(): T = value
+    override fun component2(): (T) -> Unit = { value = it }
+}
 
 private fun gamingDurationChoices(
     station: Station,

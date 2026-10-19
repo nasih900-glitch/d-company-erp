@@ -847,7 +847,7 @@ class GamingBoardUiTest {
                             onSelectFilter = {}, onSelectStation = { selectedId.value = it },
                             onBackToBoard = {}, onOpenAttention = {}, onRefresh = {},
                             onStart = {},
-                            onConfirmStart = { station, _, _, _, _, packageId, extraControllers ->
+                            onConfirmStart = { station, _, _, _, _, packageId, extraControllers, _ ->
                                 confirmed = station.id to packageId
                                 confirmedExtraControllers = extraControllers
                             },
@@ -1103,7 +1103,7 @@ class GamingBoardUiTest {
                     attentionCount = 0,
                     onSelectFilter = {}, onSelectStation = {}, onBackToBoard = {},
                     onOpenAttention = {}, onRefresh = {}, onStart = {},
-                    onConfirmStart = { _, _, _, _, _, _, _ -> },
+                    onConfirmStart = { _, _, _, _, _, _, _, _ -> },
                     onStop = { _, _ -> }, onSend = {}, onCancelUnbilled = {},
                     onExtendTimer = {}, onExtendPackage = { _, _ -> fallbackDialogs++ },
                     onTransfer = {}, onPauseResume = {}, onReconcile = {},
@@ -1220,7 +1220,7 @@ class GamingBoardUiTest {
                             attentionCount = 0,
                             onSelectFilter = {}, onSelectStation = {}, onBackToBoard = {},
                             onOpenAttention = {}, onRefresh = {}, onStart = {},
-                            onConfirmStart = { _, _, _, _, _, _, _ -> },
+                            onConfirmStart = { _, _, _, _, _, _, _, _ -> },
                             onStop = { _, _ -> }, onSend = {}, onCancelUnbilled = {},
                             onExtendTimer = {}, onExtendPackage = { _, _ -> },
                             onTransfer = {}, onPauseResume = {}, onReconcile = {},
@@ -1286,7 +1286,7 @@ class GamingBoardUiTest {
                             attentionCount = 0,
                             onSelectFilter = {}, onSelectStation = {}, onBackToBoard = {},
                             onOpenAttention = {}, onRefresh = {}, onStart = {},
-                            onConfirmStart = { _, _, _, _, _, packageId, _ ->
+                            onConfirmStart = { _, _, _, _, _, packageId, _, _ ->
                                 submittedPackageId = packageId
                             },
                             onStop = { _, _ -> }, onSend = {}, onCancelUnbilled = {},
@@ -1375,7 +1375,7 @@ class GamingBoardUiTest {
                             attentionCount = 0,
                             onSelectFilter = {}, onSelectStation = {}, onBackToBoard = {},
                             onOpenAttention = {}, onRefresh = {}, onStart = {},
-                            onConfirmStart = { _, _, _, _, _, packageId, _ ->
+                            onConfirmStart = { _, _, _, _, _, packageId, _, _ ->
                                 submittedPackageId = packageId
                             },
                             onStop = { _, _ -> }, onSend = {}, onCancelUnbilled = {},
@@ -1479,7 +1479,7 @@ class GamingBoardUiTest {
                             attentionCount = attentionCount.value,
                             onSelectFilter = {}, onSelectStation = {},
                             onBackToBoard = {}, onOpenAttention = {}, onRefresh = {},
-                            onStart = {}, onConfirmStart = { _, _, _, _, _, packageId, _ ->
+                            onStart = {}, onConfirmStart = { _, _, _, _, _, packageId, _, _ ->
                                 submittedPackageId = packageId
                             },
                             onStop = { _, _ -> }, onSend = {}, onCancelUnbilled = {},
@@ -1985,7 +1985,7 @@ class GamingBoardUiTest {
                         wallClock = remember { mutableLongStateOf(1_779_989_200_000L) },
                         attentionCount = 0, onSelectFilter = {}, onSelectStation = {},
                         onBackToBoard = {}, onOpenAttention = {}, onRefresh = {},
-                        onStart = {}, onConfirmStart = { _, _, _, _, _, _, _ ->
+                        onStart = {}, onConfirmStart = { _, _, _, _, _, _, _, _ ->
                             throw AssertionError("Missing tariff must never start")
                         },
                         onStop = { _, _ -> }, onSend = {}, onCancelUnbilled = {},
@@ -2049,7 +2049,7 @@ class GamingBoardUiTest {
                         attentionCount = 1,
                         onSelectFilter = {}, onSelectStation = {}, onBackToBoard = {},
                         onOpenAttention = {}, onRefresh = {}, onStart = {},
-                        onConfirmStart = { _, _, _, _, _, _, _ -> startRequests++ },
+                        onConfirmStart = { _, _, _, _, _, _, _, _ -> startRequests++ },
                         onStop = { _, _ -> }, onSend = {}, onCancelUnbilled = {},
                         onExtendTimer = {}, onExtendPackage = { _, _ -> },
                         onTransfer = {}, onPauseResume = {}, onReconcile = {},
