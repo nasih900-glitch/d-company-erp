@@ -44,8 +44,8 @@ class AuditLogPresentationTest {
             """.trimIndent(),
         )
 
-        assertEquals("Protected Owner", auditActor(entry))
-        assertEquals("Payment created", auditEntryTitle(entry))
+        assertEquals("Unverified legacy attribution · Protected Owner", auditActor(entry))
+        assertEquals("Payment · Created (legacy / technical)", auditEntryTitle(entry))
         assertEquals("Captured offline and later synced", auditConnectionLabel(entry))
         assertEquals("Android build 2", auditClientLabel(entry))
         assertEquals("25 Aug, 12:34:56", formatAuditTimestamp(entry.createdAt, ZoneOffset.UTC, Locale.UK))
@@ -72,7 +72,7 @@ class AuditLogPresentationTest {
             """.trimIndent(),
         )
 
-        assertEquals("System / script", auditActor(entry))
+        assertEquals("Requester not verified", auditActor(entry))
         assertEquals("Legacy / server activity", auditConnectionLabel(entry))
         assertEquals(null, auditClientLabel(entry))
         assertEquals("not-a-date", formatAuditTimestamp(entry.createdAt, ZoneOffset.UTC, Locale.UK))

@@ -69,3 +69,16 @@ unknown pending payment unchanged while all five reconstruction fields stayed
 NULL; the actual Android file adapter completed fsync/atomic rename, reopened
 its exact intent, and refused truncated underlying data without replacing it.
 The debug app was installed in place with `-r`; no uninstall/storage clearing.
+
+
+## Native Audit and retained bill investigation
+
+The Audit workspace consumes the shared server catalogue and `/admin/audit/events` snapshot contract. Every page and activity check carries the complete applied filter tuple. Checks use the retained `activity_cursor`, including the signed empty-snapshot cursor, and never allocate or replace a loaded snapshot. New activity is announced for explicit refresh. Expired snapshots and network failures retain loaded evidence; a changed search cannot relabel old rows as its results.
+
+Protected grants, loaded rows, filters, selection and viewport are scoped in memory to company, current user and branch. Lock or grant expiry cancels the request generation and resets busy state immediately. A later completion cannot unlock or replace a newer account's data. Re-verification by the same account can restore its private return state; logout, account/branch change or authorization refusal clears it. Passwords are used only for the unlock request and are not saved. Current staff labels are explicitly current labels, while OTP-approved requesters and unverified legacy attribution remain distinct from authenticated actors.
+
+Activity expands inline into business facts, Before → After, recorded timestamps and an optional read-only bill investigation. Raw IDs, source fingerprints and recursively redacted JSON remain behind Technical details. Bill investigation uses the server's retained receipt, participant intervals, one-charge identity, add-on confirmation/void facts and related Audit references. Missing historical names and absent timing evidence stay unknown; current catalogue names are not presented as historical snapshots. When shop timezone is unavailable, UTC is explicitly a display fallback.
+
+This slice does not yet implement the protected tender workspace or finish receipt-history filter controls, Shift/Reports explanations, device-status wording or final palette validation. Those remain tracked work; this is not release or physical-tablet acceptance.
+
+The focused Audit slice run passed 24 host tests (12 request-generation/scope/snapshot lifecycle, five existing DTO/presentation, five semantic presentation and two real Retrofit contract cases) and compiled Android-test Kotlin against the isolated 8022 API. The lifecycle tests include lock and expiry during deferred work, access revocation, old-account callback refusal, stable empty-snapshot checks, full cursor-bound filters, explicit refresh, linked-reference queuing and same-owner return state. This is component/contract evidence; the actual Audit screen still requires emulator rendering and interaction checks.

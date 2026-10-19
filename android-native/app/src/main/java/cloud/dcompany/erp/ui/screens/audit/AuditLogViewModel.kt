@@ -4,334 +4,255 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.ApiException
+import cloud.dcompany.erp.ui.screens.staff.StaffApi
+import cloud.dcompany.erp.ui.screens.staff.StaffUser
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
-data class AuditArea(val value: String?, val label: String)
-
-val AUDIT_AREAS = listOf(
-    AuditArea(null, "All"),
-    AuditArea("login", "Login"),
-    AuditArea("pos", "POS & payments"),
-    AuditArea("operations", "Operations"),
-    AuditArea("finance", "Finance"),
-    AuditArea("staff", "Staff"),
-    AuditArea("inventory", "Inventory"),
-    AuditArea("system", "System"),
+/** Complete tuple is sent with every cursor; no current-page-only filtering. */
+data class AuditFilters(
+    val view: String = "business",
+    val category: String? = null,
+    val code: String? = null,
+    val outcome: String? = null,
+    val actorUserId: String? = null,
+    val targetUserId: String? = null,
+    val reference: String = "",
+    val dateFrom: String = "",
+    val dateTo: String = "",
+    val query: String = "",
 )
 
 data class AuditLogUiState(
+    val ownerScopeKey: String? = null,
+    val allowed: Boolean = false,
     val locked: Boolean = true,
     val unlocking: Boolean = false,
-    val unlockError: String? = null,
     val loading: Boolean = false,
     val loadingMore: Boolean = false,
+    val checking: Boolean = false,
     val error: String? = null,
+    val unlockError: String? = null,
+    val filters: AuditFilters = AuditFilters(),
+    val appliedFilters: AuditFilters = AuditFilters(),
+    val catalogue: AuditCatalogue? = null,
+    val staff: List<StaffUser> = emptyList(),
+    val staffError: String? = null,
     val entries: List<AuditEntry> = emptyList(),
-    val area: String? = null,
-    val queryDraft: String = "",
-    val appliedQuery: String? = null,
-    val entityType: String? = null,
-    val action: String? = null,
-    val facets: AuditFacets = AuditFacets(),
-    val facetsLoading: Boolean = false,
-    val facetsError: String? = null,
-    val endReached: Boolean = false,
+    val page: AuditEventsPage? = null,
     val selected: AuditEntry? = null,
+    val newEntriesAvailable: Boolean = false,
+    val snapshotExpired: Boolean = false,
+    val scrollIndex: Int = 0,
+    val scrollOffset: Int = 0,
+    val viewportReset: Long = 0,
 )
 
-/**
- * Protected-owner audit reader. The short-lived unlock token is deliberately
- * memory-only and belongs to this authenticated ViewModel store, which is
- * destroyed on logout/account switch by SessionViewModelScope.
- */
+/** Auth-scoped memory only. SessionViewModelScope also disposes this on logout. */
 class AuditLogViewModel(
-    private val api: AuditLogApi = ApiClient.create<AuditLogApi>(),
+    private val api: AuditLogApi = ApiClient.create(),
+    private val staffApi: StaffApi = ApiClient.create(),
+    private val suppliedScope: CoroutineScope? = null,
 ) : ViewModel() {
-
+    private val tasks: CoroutineScope get() = suppliedScope ?: viewModelScope
     private val _state = MutableStateFlow(AuditLogUiState())
     val state: StateFlow<AuditLogUiState> = _state.asStateFlow()
+    private var identity: String? = null
+    private var token: String? = null
+    private var generation = 0L
+    private var request: Job? = null
+    private var expiry: Job? = null
+    private var retained: AuditLogUiState? = null
+    private var requestedReference: String? = null
 
-    private var auditToken: String? = null
-    private var expiryJob: Job? = null
-    private var loadJob: Job? = null
-    private var facetsJob: Job? = null
+    fun bindIdentity(userId: String?, companyId: String?, branchId: String?, allowed: Boolean) {
+        val next = if (!userId.isNullOrBlank() && !companyId.isNullOrBlank() && allowed) "$companyId|$userId|${branchId.orEmpty()}" else null
+        if (identity == next && _state.value.allowed == allowed) return
+        invalidate()
+        identity = next
+        retained = null
+        requestedReference = null
+        _state.value = AuditLogUiState(ownerScopeKey = next, allowed = next != null)
+    }
 
-    fun unlock(password: String) {
-        if (_state.value.unlocking) return
-        if (password.isBlank()) {
-            _state.value = _state.value.copy(
-                unlockError = "Enter your account password to continue.",
-            )
-            return
-        }
+    fun unlock(password: String, expectedOwnerScopeKey: String? = identity) {
+        val owner = identity ?: return
+        if (owner != expectedOwnerScopeKey || !_state.value.allowed || !_state.value.locked || _state.value.unlocking || password.isBlank()) return
+        val operation = ++generation
+        request?.cancel()
         _state.value = _state.value.copy(unlocking = true, unlockError = null)
-        viewModelScope.launch {
+        request = tasks.launch {
             try {
-                val response = api.unlock(AuditUnlockRequest(password))
-                auditToken = response.auditToken
-                _state.value = _state.value.copy(
-                    locked = false,
-                    unlocking = false,
-                    unlockError = null,
-                    entries = emptyList(),
-                    error = null,
-                    endReached = false,
-                    facetsLoading = true,
+                val grant = api.unlock(AuditUnlockRequest(password))
+                if (!current(operation, owner)) return@launch
+                token = grant.auditToken
+                scheduleExpiry(grant.auditToken, owner, grant.expiresIn)
+                val metadata = coroutineScope {
+                    val catalogue = async { api.catalogue(grant.auditToken) }
+                    val staff = async {
+                        try { staffApi.list() to null }
+                        catch (cancelled: CancellationException) { throw cancelled }
+                        catch (_: Exception) { emptyList<StaffUser>() to "Current staff choices could not load. Retained event identities remain available." }
+                    }
+                    catalogue.await() to staff.await()
+                }
+                if (!current(operation, owner) || token != grant.auditToken) return@launch
+                val linked = requestedReference
+                val restored = retained ?: _state.value
+                _state.value = restored.copy(
+                    allowed = true, locked = false, unlocking = false, loading = false,
+                    loadingMore = false, checking = false, error = null, unlockError = null,
+                    catalogue = metadata.first, staff = metadata.second.first,
+                    staffError = metadata.second.second,
+                    filters = linked?.let { AuditFilters(reference = it) } ?: restored.filters,
                 )
-                scheduleExpiry(response.expiresIn)
-                loadFacets(response.auditToken)
-                loadFirstPage(clearEntries = true)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                _state.value = _state.value.copy(
-                    unlocking = false,
-                    unlockError = (e as? ApiException)?.message
-                        ?: "Could not unlock the Audit Log. Check the connection and try again.",
-                )
+                if (linked != null) { requestedReference = null; find() }
+                else if (_state.value.page == null) load(Load.FIRST) else checkActivity()
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (failure: Exception) {
+                if (!current(operation, owner)) return@launch
+                token = null
+                expiry?.cancel()
+                _state.value = _state.value.copy(locked = true, unlocking = false,
+                    loading = false, loadingMore = false, checking = false,
+                    unlockError = failure.message ?: "Could not verify the owner. Check the connection.")
             }
         }
     }
 
-    fun lock() {
-        expiryJob?.cancel()
-        loadJob?.cancel()
-        facetsJob?.cancel()
-        auditToken = null
-        _state.value = AuditLogUiState()
+    fun lock() = lockWithMessage(null, keepHistory = true)
+
+    private fun lockWithMessage(message: String?, keepHistory: Boolean) {
+        val current = _state.value
+        if (keepHistory && !current.locked) retained = current.copy(
+            loading = false, loadingMore = false, checking = false, unlocking = false,
+        ) else if (!keepHistory) retained = null
+        invalidate()
+        _state.value = AuditLogUiState(ownerScopeKey = identity, allowed = identity != null, unlockError = message,
+            filters = current.filters, appliedFilters = current.appliedFilters)
+    }
+
+    fun changeFilters(update: (AuditFilters) -> AuditFilters) {
+        if (_state.value.locked || busy()) return
+        _state.value = _state.value.copy(filters = update(_state.value.filters))
+    }
+
+    fun find() {
+        if (_state.value.locked || busy()) return
+        val filters = _state.value.filters.let {
+            it.copy(query = it.query.trim().take(200), reference = it.reference.trim().take(120),
+                dateFrom = it.dateFrom.trim(), dateTo = it.dateTo.trim())
+        }
+        val changed = filters != _state.value.appliedFilters
+        _state.value = _state.value.copy(filters = filters, appliedFilters = filters, selected = null,
+            entries = if (changed) emptyList() else _state.value.entries,
+            page = if (changed) null else _state.value.page,
+            newEntriesAvailable = if (changed) false else _state.value.newEntriesAvailable,
+            scrollIndex = 0, scrollOffset = 0, viewportReset = _state.value.viewportReset + 1,
+            snapshotExpired = if (changed) false else _state.value.snapshotExpired)
+        load(Load.FIRST)
+    }
+
+    fun reference(value: String) {
+        requestedReference = value.take(120)
+        applyQueuedReference()
+    }
+
+    private fun applyQueuedReference() {
+        val reference = requestedReference ?: return
+        if (_state.value.locked || busy()) return
+        requestedReference = null
+        _state.value = _state.value.copy(filters = AuditFilters(reference = reference))
+        find()
     }
 
     fun refresh() {
-        val token = auditToken ?: return
-        if (_state.value.facetsError != null) {
-            _state.value = _state.value.copy(facetsLoading = true, facetsError = null)
-            loadFacets(token)
-        }
-        loadFirstPage(clearEntries = false)
+        if (_state.value.locked || busy()) return
+        _state.value = _state.value.copy(scrollIndex = 0, scrollOffset = 0, viewportReset = _state.value.viewportReset + 1)
+        load(Load.FIRST)
     }
-
-    fun selectArea(area: String?) {
-        if (_state.value.locked || area == _state.value.area) return
-        _state.value = _state.value.copy(area = area, entries = emptyList(), endReached = false)
-        loadFirstPage(clearEntries = true)
+    fun loadMore() = load(Load.MORE)
+    fun checkActivity() = load(Load.CHECK)
+    fun rememberViewport(index: Int, offset: Int) {
+        if (!_state.value.locked) _state.value = _state.value.copy(scrollIndex = index.coerceAtLeast(0), scrollOffset = offset.coerceAtLeast(0))
     }
-
-    fun queryChanged(value: String) {
-        _state.value = _state.value.copy(queryDraft = value.take(MAX_QUERY_LENGTH))
-    }
-
-    fun applyQuery() {
-        if (_state.value.locked) return
-        val normalized = _state.value.queryDraft.trim().takeIf(String::isNotEmpty)
-        if (normalized == _state.value.appliedQuery) return
-        _state.value = _state.value.copy(
-            appliedQuery = normalized,
-            entries = emptyList(),
-            endReached = false,
-        )
-        loadFirstPage(clearEntries = true)
-    }
-
-    fun selectEntityType(value: String?) = selectFacet(entityType = value, action = _state.value.action)
-
-    fun selectAction(value: String?) = selectFacet(entityType = _state.value.entityType, action = value)
-
-    fun clearDetailedFilters() {
-        if (_state.value.locked) return
-        val current = _state.value
-        if (current.queryDraft.isEmpty() && current.appliedQuery == null &&
-            current.entityType == null && current.action == null
-        ) return
-        _state.value = current.copy(
-            queryDraft = "",
-            appliedQuery = null,
-            entityType = null,
-            action = null,
-            entries = emptyList(),
-            endReached = false,
-        )
-        loadFirstPage(clearEntries = true)
-    }
-
-    private fun selectFacet(entityType: String?, action: String?) {
-        if (_state.value.locked ||
-            (entityType == _state.value.entityType && action == _state.value.action)
-        ) return
-        _state.value = _state.value.copy(
-            entityType = entityType,
-            action = action,
-            entries = emptyList(),
-            endReached = false,
-        )
-        loadFirstPage(clearEntries = true)
-    }
-
-    fun loadMore() {
-        val snapshot = _state.value
-        val token = auditToken ?: return
-        if (snapshot.loading || snapshot.loadingMore || snapshot.endReached) return
-        val beforeId = snapshot.entries.lastOrNull()?.id ?: return
-        _state.value = snapshot.copy(loadingMore = true, error = null)
-        loadJob = viewModelScope.launch {
-            try {
-                val rows = api.list(
-                    auditToken = token,
-                    limit = PAGE_SIZE,
-                    beforeId = beforeId,
-                    area = snapshot.area,
-                    entityType = snapshot.entityType,
-                    action = snapshot.action,
-                    query = snapshot.appliedQuery,
-                )
-                if (token != auditToken) return@launch
-                _state.value = _state.value.copy(
-                    loadingMore = false,
-                    entries = _state.value.entries + rows,
-                    endReached = rows.size < PAGE_SIZE,
-                )
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                handleLoadFailure(e, loadingMore = true)
-            }
-        }
-    }
-
     fun select(entry: AuditEntry) {
-        _state.value = _state.value.copy(selected = entry)
+        if (!_state.value.locked && _state.value.entries.any { it == entry }) _state.value = _state.value.copy(selected = entry)
     }
+    fun dismissDetails() { _state.value = _state.value.copy(selected = null) }
 
-    fun dismissDetails() {
-        _state.value = _state.value.copy(selected = null)
-    }
+    private enum class Load { FIRST, MORE, CHECK }
+    private fun busy() = _state.value.let { it.loading || it.loadingMore || it.unlocking || it.checking }
 
-    private fun loadFirstPage(clearEntries: Boolean) {
-        val token = auditToken ?: return
-        loadJob?.cancel()
-        val snapshot = _state.value
-        _state.value = snapshot.copy(
-            loading = true,
-            loadingMore = false,
-            error = null,
-            entries = if (clearEntries) emptyList() else snapshot.entries,
-            endReached = false,
-        )
-        val area = _state.value.area
-        val entityType = _state.value.entityType
-        val action = _state.value.action
-        val query = _state.value.appliedQuery
-        loadJob = viewModelScope.launch {
-            try {
-                val rows = api.list(
-                    auditToken = token,
-                    limit = PAGE_SIZE,
-                    area = area,
-                    entityType = entityType,
-                    action = action,
-                    query = query,
-                )
-                if (token != auditToken) return@launch
-                _state.value = _state.value.copy(
-                    loading = false,
-                    entries = rows,
-                    endReached = rows.size < PAGE_SIZE,
-                )
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                handleLoadFailure(e, loadingMore = false)
-            }
+    private fun load(mode: Load) {
+        val grant = token ?: return
+        val owner = identity ?: return
+        val before = _state.value
+        if (before.locked || busy()) return
+        val cursor = when (mode) {
+            Load.FIRST -> null
+            Load.MORE -> before.page?.takeIf { it.hasMore }?.nextCursor ?: return
+            Load.CHECK -> before.page?.activityCursor ?: return
         }
-    }
-
-    private fun handleLoadFailure(error: Exception, loadingMore: Boolean) {
-        val apiError = error as? ApiException
-        if (apiError?.status == 401 || apiError?.status == 403) {
-            expireAuditAccess(
-                if (apiError.status == 403) {
-                    "Audit access is no longer permitted for this account."
-                } else {
-                    "Audit access expired. Re-enter your password to continue."
-                },
-            )
-            return
-        }
-        _state.value = _state.value.copy(
-            loading = false,
-            loadingMore = false,
-            error = apiError?.message ?: if (loadingMore) {
-                "Could not load older audit entries. Try again."
-            } else {
-                "Could not load the Audit Log. Check the connection and try again."
-            },
-        )
-    }
-
-    private fun loadFacets(token: String) {
-        facetsJob?.cancel()
-        facetsJob = viewModelScope.launch {
+        val operation = ++generation
+        val filters = before.appliedFilters
+        _state.value = before.copy(loading = mode == Load.FIRST, loadingMore = mode == Load.MORE,
+            checking = mode == Load.CHECK, error = if (mode == Load.CHECK) before.error else null)
+        request = tasks.launch {
             try {
-                val facets = api.facets(token)
-                if (token != auditToken) return@launch
-                _state.value = _state.value.copy(
-                    facets = facets,
-                    facetsLoading = false,
-                    facetsError = null,
-                )
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Exception) {
-                val apiError = error as? ApiException
-                if (apiError?.status == 401 || apiError?.status == 403) {
-                    expireAuditAccess(
-                        if (apiError.status == 403) {
-                            "Audit access is no longer permitted for this account."
-                        } else {
-                            "Audit access expired. Re-enter your password to continue."
-                        },
-                    )
-                    return@launch
+                val page = api.events(auditToken = grant, limit = 50, cursor = cursor,
+                    view = filters.view, code = filters.code, category = filters.category,
+                    outcome = filters.outcome, actorUserId = filters.actorUserId,
+                    targetUserId = filters.targetUserId,
+                    reference = filters.reference.takeIf(String::isNotBlank),
+                    dateFrom = filters.dateFrom.takeIf(String::isNotBlank), dateTo = filters.dateTo.takeIf(String::isNotBlank),
+                    query = filters.query.takeIf(String::isNotBlank))
+                if (!current(operation, owner) || token != grant) return@launch
+                val latest = _state.value
+                _state.value = when (mode) {
+                    Load.CHECK -> latest.copy(checking = false, newEntriesAvailable = page.newEntriesAvailable)
+                    Load.FIRST -> latest.copy(loading = false, entries = page.entries, page = page,
+                        selected = null, newEntriesAvailable = false, snapshotExpired = false)
+                    Load.MORE -> latest.copy(loadingMore = false,
+                        entries = (latest.entries + page.entries).distinctBy { it.id }, page = page,
+                        newEntriesAvailable = latest.newEntriesAvailable || page.newEntriesAvailable)
                 }
-                if (token == auditToken) {
-                    _state.value = _state.value.copy(
-                        facetsLoading = false,
-                        facetsError = apiError?.message
-                            ?: "Advanced filters could not load. Area and search filters still work.",
-                    )
+                applyQueuedReference()
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (failure: Exception) {
+                if (!current(operation, owner) || token != grant) return@launch
+                val apiFailure = failure as? ApiException
+                val expiredSnapshot = apiFailure?.status in setOf(409, 422) &&
+                    apiFailure?.message?.contains("Audit history snapshot expired", ignoreCase = true) == true
+                when (apiFailure?.status) {
+                    401 -> lockWithMessage("Owner verification expired. Unlock to continue.", keepHistory = true)
+                    403 -> lockWithMessage("Audit access is no longer allowed.", keepHistory = false)
+                    else -> _state.value = _state.value.copy(loading = false, loadingMore = false, checking = false,
+                        snapshotExpired = _state.value.snapshotExpired || expiredSnapshot,
+                        error = if (expiredSnapshot) "This history snapshot expired. Loaded rows are retained; refresh to start a new snapshot."
+                            else failure.message ?: "History could not be checked. Loaded rows are unchanged.")
                 }
             }
         }
     }
 
-    private fun scheduleExpiry(expiresInSeconds: Int) {
-        expiryJob?.cancel()
-        expiryJob = viewModelScope.launch {
-            delay(expiresInSeconds.coerceAtLeast(1) * 1_000L)
-            expireAuditAccess("Audit access expired. Re-enter your password to continue.")
+    private fun scheduleExpiry(grant: String, owner: String, seconds: Int) {
+        expiry?.cancel()
+        expiry = tasks.launch {
+            delay(seconds.coerceIn(1, 600) * 1000L)
+            if (identity == owner && token == grant) lockWithMessage("Owner verification expired. Unlock to continue.", true)
         }
     }
 
-    private fun expireAuditAccess(message: String) {
-        loadJob?.cancel()
-        expiryJob?.cancel()
-        facetsJob?.cancel()
-        auditToken = null
-        _state.value = AuditLogUiState(unlockError = message)
-    }
-
-    override fun onCleared() {
-        auditToken = null
-        super.onCleared()
-    }
-
-    private companion object {
-        const val PAGE_SIZE = 50
-        const val MAX_QUERY_LENGTH = 200
-    }
+    private fun current(operation: Long, owner: String) = operation == generation && identity == owner
+    private fun invalidate() { generation++; request?.cancel(); expiry?.cancel(); token = null }
+    override fun onCleared() { invalidate(); retained = null; super.onCleared() }
 }

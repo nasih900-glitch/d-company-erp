@@ -1,613 +1,262 @@
 package cloud.dcompany.erp.ui.screens.audit
 
-import cloud.dcompany.erp.ui.theme.operationalDanger
-import cloud.dcompany.erp.ui.theme.operationalDangerContainer
-import cloud.dcompany.erp.ui.theme.operationalGood
-import cloud.dcompany.erp.ui.theme.operationalGoodContainer
-import cloud.dcompany.erp.ui.theme.operationalInformation
-import cloud.dcompany.erp.ui.theme.operationalInformationContainer
-import cloud.dcompany.erp.ui.theme.operationalWarning
-import cloud.dcompany.erp.ui.theme.operationalWarningContainer
-
 import androidx.compose.foundation.background
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.FactCheck
-import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.History
-import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Security
-import androidx.compose.material.icons.filled.VpnKey
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import cloud.dcompany.erp.ui.components.ActionIntent
-import cloud.dcompany.erp.ui.components.ActionBar
-import cloud.dcompany.erp.ui.components.AdaptiveStatGrid
-import cloud.dcompany.erp.ui.components.CompactStatCard
-import cloud.dcompany.erp.ui.components.DataListRow
-import cloud.dcompany.erp.ui.components.DesignedEmptyState
-import cloud.dcompany.erp.ui.components.ErpButton
-import cloud.dcompany.erp.ui.components.InfoRow
-import cloud.dcompany.erp.ui.components.OperationalBanner
-import cloud.dcompany.erp.ui.components.OperationalStatusBadge
-import cloud.dcompany.erp.ui.components.PanelDivider
-import cloud.dcompany.erp.ui.components.PremiumTabBar
-import cloud.dcompany.erp.ui.components.SectionCard
-import cloud.dcompany.erp.ui.components.TabOption
-import cloud.dcompany.erp.ui.components.UiTone
-import cloud.dcompany.erp.ui.theme.Brand
+import cloud.dcompany.erp.DCompanyApp
+import cloud.dcompany.erp.ui.components.*
+import cloud.dcompany.erp.ui.screens.ReceiptInvestigationPanel
 import cloud.dcompany.erp.ui.theme.Spacing
+import java.time.ZoneId
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.collect
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 
 @Composable
-fun AuditLogScreen(vm: AuditLogViewModel = viewModel()) {
-    val state by vm.state.collectAsStateWithLifecycle()
-    var password by remember { mutableStateOf("") }
-
-    LaunchedEffect(state.locked) {
-        // Never retain the owner's password after unlock or expiry.
-        password = ""
+fun AuditLogScreen(
+    vm: AuditLogViewModel = viewModel(),
+    initialReference: String? = null,
+) {
+    val profile by DCompanyApp.instance.shiftCache.profile.collectAsStateWithLifecycle()
+    val current by vm.state.collectAsStateWithLifecycle()
+    val allowed = profile?.let { it.auditAccess && it.userId.isNotBlank() && it.companyId.isNotBlank() } == true
+    val ownerKey = profile?.takeIf { allowed }?.let { "${it.companyId}|${it.userId}|${it.branchId.orEmpty()}" }
+    SideEffect { vm.bindIdentity(profile?.userId, profile?.companyId, profile?.branchId, allowed) }
+    // Do not render an earlier account's protected page while its bind effect runs.
+    val state = if (current.ownerScopeKey == ownerKey) current else AuditLogUiState(allowed = allowed)
+    var password by remember(ownerKey) { mutableStateOf("") }
+    var expandedFilters by remember(ownerKey) { mutableStateOf(false) }
+    LaunchedEffect(ownerKey, initialReference) { initialReference?.let(vm::reference) }
+    LaunchedEffect(state.locked) { password = "" }
+    LaunchedEffect(ownerKey, state.locked) {
+        if (!state.locked) while (true) { delay(30_000); vm.checkActivity() }
     }
-
-    Column(
-        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
-            .padding(horizontal = Spacing.lgPlus, vertical = Spacing.lg),
-        verticalArrangement = Arrangement.spacedBy(Spacing.md),
-    ) {
+    val busy = state.loading || state.loadingMore || state.unlocking || state.checking
+    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
+        .padding(Spacing.lg), verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
         if (state.locked) {
-            Column(
-                modifier = Modifier.weight(1f).fillMaxWidth()
-                    .verticalScroll(rememberScrollState()).imePadding(),
-                verticalArrangement = Arrangement.spacedBy(Spacing.md),
-            ) {
-                AdaptiveStatGrid(count = 3) { index, modifier ->
-                    when (index) {
-                        0 -> CompactStatCard(
-                            label = "Access",
-                            value = "Locked",
-                            detail = "Protected owner only",
-                            icon = Icons.Default.Lock,
-                            tone = UiTone.Neutral,
-                            modifier = modifier,
-                        )
-                        1 -> CompactStatCard(
-                            label = "Auto-lock",
-                            value = "10 min",
-                            detail = "Short-lived audit session",
-                            icon = Icons.Default.History,
-                            tone = UiTone.Information,
-                            modifier = modifier,
-                        )
-                        else -> CompactStatCard(
-                            label = "Credential storage",
-                            value = "None",
-                            detail = "Password is never saved",
-                            icon = Icons.Default.Security,
-                            tone = UiTone.Success,
-                            modifier = modifier,
-                        )
+            Column(Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()).imePadding(),
+                verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
+                Text("Activity you can trace", style = MaterialTheme.typography.headlineSmall)
+                Text("Business actions, their results and the evidence behind them.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                SectionCard(title = "Protected owner verification", modifier = Modifier.widthIn(max = 560.dp)) {
+                    Text(if (allowed) "Use your current account password. Verification stays only in memory and locks automatically."
+                        else "This account does not have protected Audit access.")
+                    if (allowed) {
+                        OutlinedTextField(value = password, onValueChange = { password = it },
+                            label = { Text("Owner password") }, visualTransformation = PasswordVisualTransformation(),
+                            singleLine = true, enabled = !state.unlocking, modifier = Modifier.fillMaxWidth(),
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                            keyboardActions = KeyboardActions(onDone = { val value=password; password=""; vm.unlock(value, ownerKey) }))
+                        state.unlockError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                        ErpButton("Unlock activity", { val value=password; password=""; vm.unlock(value, ownerKey) },
+                            enabled = password.isNotBlank() && !state.unlocking, busy = state.unlocking)
                     }
                 }
-                OperationalBanner(
-                    title = "Owner verification required",
-                    detail = "Re-enter the current account password. The temporary audit token stays only in memory and expires automatically.",
-                    tone = UiTone.Information,
-                    icon = Icons.Default.Security,
-                )
-                AuditUnlockPanel(
-                    modifier = Modifier.fillMaxWidth(),
-                    password = password,
-                    onPasswordChange = { password = it },
-                    unlocking = state.unlocking,
-                    error = state.unlockError,
-                    onUnlock = { vm.unlock(password) },
-                )
             }
         } else {
-            val selectedArea = AUDIT_AREAS.firstOrNull { it.value == state.area }?.label ?: "All"
-            ActionBar(
-                leading = {
-                    Text(
-                        "Audit session controls",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        style = MaterialTheme.typography.labelLarge,
-                    )
-                },
-                trailing = {
-                    ErpButton(
-                        text = "Lock",
-                        onClick = vm::lock,
-                        intent = ActionIntent.Secondary,
-                        leadingIcon = Icons.Default.Lock,
-                    )
-                    ErpButton(
-                        text = if (state.loading) "Refreshing…" else "Refresh",
-                        onClick = vm::refresh,
-                        enabled = !state.loading && !state.loadingMore,
-                        busy = state.loading,
-                        leadingIcon = Icons.Default.Refresh,
-                    )
-                },
-            )
-            AdaptiveStatGrid(count = 3) { index, modifier ->
-                when (index) {
-                    0 -> CompactStatCard(
-                        label = "Loaded activity",
-                        value = state.entries.size.toString(),
-                        detail = if (state.endReached) "Complete selected history" else "Older activity available",
-                        icon = Icons.AutoMirrored.Filled.FactCheck,
-                        tone = UiTone.Information,
-                        modifier = modifier,
-                    )
-                    1 -> CompactStatCard(
-                        label = "Current area",
-                        value = selectedArea,
-                        detail = "Server-authoritative filter",
-                        icon = Icons.Default.History,
-                        tone = UiTone.Neutral,
-                        modifier = modifier,
-                    )
-                    else -> CompactStatCard(
-                        label = "Protection",
-                        value = "Unlocked",
-                        detail = "Locks automatically after 10 min",
-                        icon = Icons.Default.VpnKey,
-                        tone = UiTone.Success,
-                        modifier = modifier,
-                    )
-                }
+            AuditHeader(state, vm, busy)
+            AuditSearch(state, vm, busy, expandedFilters) { expandedFilters = !expandedFilters }
+            if (state.newEntriesAvailable) OperationalBanner("New matching activity", "Your loaded history is unchanged. Refresh when you are ready to review a new snapshot.",
+                UiTone.Neutral, Icons.Default.History, action = { TextButton(vm::refresh, enabled = !busy) { Text("Refresh history") } })
+            state.error?.let { OperationalBanner("History needs attention", it, UiTone.Neutral, Icons.Default.History) }
+            val page = state.page
+            Text(if (page == null) "Results will use server-recorded shop dates."
+                else "${state.entries.size} loaded of ${page.matchingCount} events in this snapshot · ${page.shopTimezone} · server-recorded shop dates",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            val list = rememberLazyListState(state.scrollIndex, state.scrollOffset)
+            LaunchedEffect(list, ownerKey) {
+                snapshotFlow { list.firstVisibleItemIndex to list.firstVisibleItemScrollOffset }
+                    .distinctUntilChanged().collect { (index,offset) -> vm.rememberViewport(index,offset) }
             }
-            AuditAreaFilters(selected = state.area, onSelect = vm::selectArea)
-            AuditDetailedFilters(state = state, vm = vm)
-            OperationalBanner(
-                title = "Audit export is not available yet",
-                detail = "Filtering and review are live, but neither Android nor the web ERP currently has a complete server-authoritative export endpoint. The app will not create a misleading partial export from only the loaded page.",
-                tone = UiTone.Information,
-                icon = Icons.Default.Security,
-            )
-            SectionCard(
-                modifier = Modifier.weight(1f),
-                title = "Activity history",
-                subtitle = "Tap a row for identifiers, connection evidence, reason, and server timestamps",
-                icon = Icons.AutoMirrored.Filled.FactCheck,
-                elevated = true,
-                contentPadding = PaddingValues(0.dp),
-            ) {
-                AuditEntries(
-                    modifier = Modifier.weight(1f),
-                    state = state,
-                    onRetry = vm::refresh,
-                    onLoadMore = vm::loadMore,
-                    onSelect = vm::select,
-                )
+            LaunchedEffect(state.viewportReset) { list.scrollToItem(state.scrollIndex, state.scrollOffset) }
+            LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = list, verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                if (state.loading && state.entries.isEmpty()) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
+                if (!state.loading && state.entries.isEmpty()) item {
+                    SectionCard(title = if(state.error == null) "No matching activity" else "Results unavailable") {
+                        Text(if(state.error == null) "Try a different shop date, action, staff member or reference. This is an event count, not revenue."
+                            else "Check the message above and retry. A service error is not an empty history.")
+                    }
+                }
+                items(state.entries, key = { it.id }) { entry ->
+                    SectionCard(contentPadding = PaddingValues(Spacing.md)) {
+                        TextButton({ if(state.selected?.id == entry.id) vm.dismissDetails() else vm.select(entry) }, modifier = Modifier.fillMaxWidth()) {
+                            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text(auditEntryTitle(entry), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)
+                                Text(auditBusinessSummary(entry), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text("${auditActor(entry)} · ${auditBusinessLabel(entry.stage)} / ${auditBusinessLabel(entry.outcome)}",
+                                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text("${formatAuditTimestamp(entry.createdAt, auditZone(page?.shopTimezone))} · ${page?.shopTimezone ?: "shop timezone unavailable"}",
+                                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                        if(state.selected?.id == entry.id) AuditInlineDetail(entry, page?.shopTimezone, ownerKey.orEmpty(), state)
+                    }
+                }
+                item {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Spacing.md)) {
+                        if(page?.hasMore == true) ErpButton("Load older activity", vm::loadMore, enabled = !busy && !state.snapshotExpired, busy = state.loadingMore)
+                        else if(page != null) Text("End of this selected history snapshot.", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
             }
         }
     }
+}
 
-    state.selected?.let { entry ->
-        AuditEntryDialog(entry = entry, onDismiss = vm::dismissDetails)
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun AuditHeader(state: AuditLogUiState, vm: AuditLogViewModel, busy: Boolean) {
+    FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Spacing.sm), verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+        Column(Modifier.weight(1f)) {
+            Text("Business activity", style = MaterialTheme.typography.titleLarge)
+            Text("${state.page?.scope?.let(::auditBusinessLabel) ?: "Protected owner"} · names are current account labels", style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        ErpButton("Refresh", vm::refresh, intent = ActionIntent.Secondary, enabled = !busy, busy = state.loading)
+        ErpButton("Lock", vm::lock, intent = ActionIntent.Secondary, leadingIcon = Icons.Default.Lock)
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun AuditDetailedFilters(state: AuditLogUiState, vm: AuditLogViewModel) {
+private fun AuditSearch(state: AuditLogUiState, vm: AuditLogViewModel, busy: Boolean, expanded: Boolean, toggle: () -> Unit) {
+    val f=state.filters
     Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
         BoxWithConstraints(Modifier.fillMaxWidth()) {
-            if (maxWidth >= 720.dp) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    AuditSearch(state, vm, Modifier.weight(1f))
-                    AuditFacetMenu(
-                        label = "Entity",
-                        selected = state.entityType,
-                        options = state.facets.entityTypes,
-                        loading = state.facetsLoading,
-                        display = ::auditEntityLabel,
-                        onSelect = vm::selectEntityType,
-                    )
-                    AuditFacetMenu(
-                        label = "Action",
-                        selected = state.action,
-                        options = state.facets.actions,
-                        loading = state.facetsLoading,
-                        display = ::auditActionLabel,
-                        onSelect = vm::selectAction,
-                    )
+            val queryField: @Composable (Modifier) -> Unit = { fieldModifier ->
+                OutlinedTextField(f.query,{ value -> vm.changeFilters { it.copy(query=value.take(200)) } },
+                    label={Text("Search code, action or retained facts")}, modifier=fieldModifier, singleLine=true, enabled=!busy,
+                    keyboardOptions=KeyboardOptions(imeAction=ImeAction.Search),keyboardActions=KeyboardActions(onSearch={vm.find()}))
+            }
+            val actions: @Composable () -> Unit = {
+                ErpButton("Find",vm::find,enabled=!busy)
+                ErpButton(if(expanded) "Fewer filters" else "Filters",toggle,intent=ActionIntent.Secondary)
+            }
+            if(maxWidth < 650.dp) Column(verticalArrangement=Arrangement.spacedBy(Spacing.sm)) {
+                queryField(Modifier.fillMaxWidth())
+                FlowRow(horizontalArrangement=Arrangement.spacedBy(Spacing.sm)) { actions() }
+            } else Row(Modifier.fillMaxWidth(), horizontalArrangement=Arrangement.spacedBy(Spacing.sm)) {
+                queryField(Modifier.weight(1f)); actions()
+            }
+        }
+        if(f != state.appliedFilters) Text("Press Find to apply these filters.",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+        if(expanded) {
+            Column(Modifier.heightIn(max=260.dp).verticalScroll(rememberScrollState()), verticalArrangement=Arrangement.spacedBy(Spacing.sm)) {
+            FlowRow(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(Spacing.sm),verticalArrangement=Arrangement.spacedBy(Spacing.sm)) {
+                AuditChoice("View",f.view,listOf("business" to "Business actions","all" to "All, including technical"),!busy) { value -> vm.changeFilters { it.copy(view=value ?: "business") } }
+                AuditChoice("Category",f.category,listOf(null to "All categories")+state.catalogue?.categories.orEmpty().map { it to auditBusinessLabel(it) },!busy) { value -> vm.changeFilters { it.copy(category=value,code=null) } }
+                AuditChoice("Action",f.code,listOf(null to "All actions")+state.catalogue?.actions.orEmpty().filter { f.category==null || it.category==f.category }.map { it.code to "${it.code} · ${it.label}" },!busy) { value -> vm.changeFilters { it.copy(code=value) } }
+                AuditChoice("Result",f.outcome,listOf(null to "All results")+state.catalogue?.outcomes.orEmpty().map { it to auditBusinessLabel(it) },!busy) { value -> vm.changeFilters { it.copy(outcome=value) } }
+                val staff=listOf(null to "All accounts")+state.staff.map { it.id to "${it.name} · current account" }
+                AuditChoice("Actor",f.actorUserId,staff,!busy) { value -> vm.changeFilters { it.copy(actorUserId=value) } }
+                AuditChoice("Target account",f.targetUserId,staff,!busy) { value -> vm.changeFilters { it.copy(targetUserId=value) } }
+            }
+            BoxWithConstraints(Modifier.fillMaxWidth()) {
+                val narrow=maxWidth < 700.dp
+                val fields: @Composable (Modifier) -> Unit = { fieldModifier ->
+                    OutlinedTextField(f.reference,{value->vm.changeFilters{it.copy(reference=value.take(120))}},label={Text("Exact bill / receipt reference")},singleLine=true,enabled=!busy,modifier=fieldModifier)
+                    OutlinedTextField(f.dateFrom,{value->vm.changeFilters{it.copy(dateFrom=value.take(10))}},label={Text("From · YYYY-MM-DD")},singleLine=true,enabled=!busy,modifier=fieldModifier)
+                    OutlinedTextField(f.dateTo,{value->vm.changeFilters{it.copy(dateTo=value.take(10))}},label={Text("To · YYYY-MM-DD")},singleLine=true,enabled=!busy,modifier=fieldModifier)
                 }
-            } else {
-                Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                    AuditSearch(state, vm, Modifier.fillMaxWidth())
-                    Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                        AuditFacetMenu(
-                            label = "Entity",
-                            selected = state.entityType,
-                            options = state.facets.entityTypes,
-                            loading = state.facetsLoading,
-                            display = ::auditEntityLabel,
-                            onSelect = vm::selectEntityType,
-                            modifier = Modifier.weight(1f),
-                        )
-                        AuditFacetMenu(
-                            label = "Action",
-                            selected = state.action,
-                            options = state.facets.actions,
-                            loading = state.facetsLoading,
-                            display = ::auditActionLabel,
-                            onSelect = vm::selectAction,
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
-                }
+                if(narrow) Column(verticalArrangement=Arrangement.spacedBy(Spacing.sm)) { fields(Modifier.fillMaxWidth()) }
+                else Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(Spacing.sm)) { fields(Modifier.weight(1f)) }
             }
-        }
-        state.facetsError?.let { message ->
-            Text(message, color = MaterialTheme.colorScheme.operationalWarning, style = MaterialTheme.typography.labelSmall)
-        }
-    }
-}
-
-@Composable
-private fun AuditSearch(state: AuditLogUiState, vm: AuditLogViewModel, modifier: Modifier) {
-    Row(modifier, horizontalArrangement = Arrangement.spacedBy(Spacing.sm), verticalAlignment = Alignment.CenterVertically) {
-        OutlinedTextField(
-            value = state.queryDraft,
-            onValueChange = vm::queryChanged,
-            label = { Text("Search audit details") },
-            supportingText = { Text("Reason, request ID, client action ID, and before/after values") },
-            singleLine = true,
-            enabled = !state.loading && !state.loadingMore,
-            leadingIcon = { androidx.compose.material3.Icon(Icons.Default.Search, contentDescription = null) },
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-            keyboardActions = KeyboardActions(onSearch = { vm.applyQuery() }),
-            modifier = Modifier.weight(1f),
-        )
-        ErpButton(
-            text = "Search",
-            onClick = vm::applyQuery,
-            enabled = !state.loading && !state.loadingMore,
-            intent = ActionIntent.Secondary,
-            leadingIcon = Icons.Default.Search,
-        )
-        if (state.appliedQuery != null || state.entityType != null || state.action != null) {
-            TextButton(onClick = vm::clearDetailedFilters) { Text("Clear") }
-        }
-    }
-}
-
-@Composable
-private fun AuditFacetMenu(
-    label: String,
-    selected: String?,
-    options: List<String>,
-    loading: Boolean,
-    display: (String) -> String,
-    onSelect: (String?) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    var expanded by remember { mutableStateOf(false) }
-    Box(modifier.widthIn(min = 148.dp, max = 210.dp)) {
-        ErpButton(
-            text = if (loading) "$label…" else "$label: ${selected?.let(display) ?: "All"}",
-            onClick = { expanded = true },
-            enabled = !loading,
-            intent = ActionIntent.Secondary,
-            leadingIcon = Icons.Default.FilterList,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            DropdownMenuItem(
-                text = { Text("All $label values") },
-                onClick = { expanded = false; onSelect(null) },
-            )
-            options.forEach { value ->
-                DropdownMenuItem(
-                    text = { Text(display(value)) },
-                    onClick = { expanded = false; onSelect(value) },
-                )
+            state.staffError?.let { Text(it,style=MaterialTheme.typography.bodySmall) }
             }
         }
     }
 }
 
 @Composable
-private fun AuditUnlockPanel(
-    modifier: Modifier,
-    password: String,
-    onPasswordChange: (String) -> Unit,
-    unlocking: Boolean,
-    error: String?,
-    onUnlock: () -> Unit,
-) {
-    Box(modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-        SectionCard(
-            modifier = Modifier.widthIn(max = 480.dp).fillMaxWidth(),
-            title = "Unlock protected history",
-            subtitle = "Verify the signed-in owner's account before any activity is shown",
-            icon = Icons.Default.VpnKey,
-            action = { OperationalStatusBadge("Locked", UiTone.Warning, icon = Icons.Default.Lock) },
-            elevated = true,
-        ) {
-            InfoRow("Access scope", "Audit history only")
-            InfoRow("Session lifetime", "10 minutes")
-            OutlinedTextField(
-                value = password,
-                onValueChange = onPasswordChange,
-                label = { Text("Account password") },
-                singleLine = true,
-                enabled = !unlocking,
-                visualTransformation = PasswordVisualTransformation(),
-                keyboardOptions = KeyboardOptions(
-                    keyboardType = KeyboardType.Password,
-                    imeAction = ImeAction.Done,
-                ),
-                keyboardActions = KeyboardActions(
-                    onDone = { if (!unlocking && password.isNotBlank()) onUnlock() },
-                ),
-                modifier = Modifier.fillMaxWidth(),
-            )
-            if (error != null) {
-                OperationalBanner(
-                    title = "Could not unlock Audit Log",
-                    detail = error,
-                    tone = UiTone.Danger,
-                    icon = Icons.Default.CloudOff,
-                )
-            }
-            ErpButton(
-                text = if (unlocking) "Verifying…" else "Unlock Audit Log",
-                onClick = onUnlock,
-                enabled = !unlocking && password.isNotBlank(),
-                busy = unlocking,
-                modifier = Modifier.fillMaxWidth(),
-                leadingIcon = Icons.Default.VpnKey,
-            )
-        }
+internal fun AuditChoice(label:String,value:String?,options:List<Pair<String?,String>>,enabled:Boolean=true,onSelect:(String?)->Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        OutlinedButton({open=true},enabled=enabled) { Text("$label · ${options.firstOrNull{it.first==value}?.second ?: "Retained account identity"}") }
+        DropdownMenu(open,{open=false}) { options.forEach { (key,text) -> DropdownMenuItem(text={Text(text)},onClick={open=false;onSelect(key)}) } }
     }
 }
 
 @Composable
-private fun AuditAreaFilters(selected: String?, onSelect: (String?) -> Unit) {
-    PremiumTabBar(
-        options = AUDIT_AREAS.map { TabOption(it.value ?: "__all__", it.label) },
-        selectedId = selected ?: "__all__",
-        onSelect = { id -> onSelect(id.takeUnless { it == "__all__" }) },
-    )
-}
-
-@Composable
-private fun AuditEntries(
-    modifier: Modifier,
-    state: AuditLogUiState,
-    onRetry: () -> Unit,
-    onLoadMore: () -> Unit,
-    onSelect: (AuditEntry) -> Unit,
-) {
-    when {
-        state.loading && state.entries.isEmpty() -> Box(modifier.fillMaxWidth(), Alignment.Center) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(Spacing.md),
-            ) {
-                CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-                Text("Loading audit activity…", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
+private fun AuditInlineDetail(entry:AuditEntry,zone:String?,ownerKey:String,state:AuditLogUiState) {
+    var technical by remember(entry.id) { mutableStateOf(false) }
+    var bill by remember(entry.id) { mutableStateOf(false) }
+    val timezone=auditZone(zone)
+    Column(verticalArrangement=Arrangement.spacedBy(Spacing.sm),modifier=Modifier.fillMaxWidth().padding(top=Spacing.sm)) {
+        HorizontalDivider()
+        AuditFact("Action",entry.actionLabel)
+        AuditFact("Stage / result","${auditBusinessLabel(entry.stage)} · ${auditBusinessLabel(entry.outcome)}")
+        AuditFact("Actor",auditActor(entry))
+        AuditFact("Name provenance",auditBusinessLabel(entry.actorLabelSource))
+        entry.targetUserId?.let { target ->
+            AuditFact("Targeted account",state.staff.firstOrNull{it.id==target}?.name?.let{"$it · current account label"} ?: "Retained account identity; current label unavailable")
         }
-        state.error != null && state.entries.isEmpty() -> DesignedEmptyState(
-            modifier = modifier,
-            title = "Could not load audit activity",
-            body = state.error,
-            icon = Icons.Default.CloudOff,
-            primaryLabel = "Try again",
-            onPrimary = onRetry,
-        )
-        state.entries.isEmpty() -> DesignedEmptyState(
-            modifier = modifier,
-            title = "No activity in this area",
-            body = "Server-authoritative events for the selected area will appear here when an auditable action occurs.",
-            icon = Icons.AutoMirrored.Filled.FactCheck,
-            primaryLabel = "Check again",
-            onPrimary = onRetry,
-        )
-        else -> LazyColumn(
-            modifier = modifier.fillMaxWidth(),
-        ) {
-            if (state.error != null) {
-                item("load-error") {
-                    OperationalBanner(
-                        title = "Audit refresh needs attention",
-                        detail = state.error,
-                        tone = UiTone.Danger,
-                        icon = Icons.Default.CloudOff,
-                        modifier = Modifier.padding(Spacing.md),
-                        action = {
-                            ErpButton(
-                                text = "Try again",
-                                onClick = onRetry,
-                                intent = ActionIntent.Secondary,
-                            )
-                        },
-                    )
-                }
-            }
-            itemsIndexed(state.entries, key = { _, entry -> "audit-${entry.id}" }) { index, entry ->
-                AuditEntryCard(entry = entry, onClick = { onSelect(entry) })
-                if (index != state.entries.lastIndex) PanelDivider()
-            }
-            item("load-more") {
-                Box(Modifier.fillMaxWidth().padding(Spacing.md), Alignment.Center) {
-                    when {
-                        state.loadingMore -> CircularProgressIndicator(
-                            modifier = Modifier.heightIn(max = 24.dp),
-                            strokeWidth = 2.dp,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
-                        !state.endReached -> ErpButton(
-                            text = "Load older activity",
-                            onClick = onLoadMore,
-                            intent = ActionIntent.Secondary,
-                            leadingIcon = Icons.Default.History,
-                        )
-                        else -> Text("End of audit activity", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                }
+        AuditFact("Classification",when(entry.classificationSource){"recorded"->"Recorded at action time";"derived_legacy"->"Derived from retained legacy evidence";else->"Other / legacy · not classified"})
+        entry.matchExplanation?.let { AuditFact("Why this matched",it) }
+        entry.sourceReference?.let { AuditFact("Business reference",it) }
+        auditBusinessFacts(entry).forEach { (key,value)->AuditFact(auditBusinessLabel(key),auditBusinessValue(key,value,timezone)) }
+        auditBusinessChanges(entry).take(12).forEach { (key,before,after) ->
+            AuditFact("${auditBusinessLabel(key)} · Before → After", "${auditBusinessValue(key,before,timezone)} → ${auditBusinessValue(key,after,timezone)}")
+        }
+        if(auditBusinessChanges(entry).size > 12) Text("More retained fields are available in Technical details.",style=MaterialTheme.typography.bodySmall)
+        entry.reason?.let { AuditFact("Reason",it) }
+        AuditFact("Server recorded","${formatAuditTimestamp(entry.createdAt,timezone)} · ${zone ?: "timezone unavailable"}")
+        entry.clientReportedAt?.let { AuditFact("Client-reported occurrence","${formatAuditTimestamp(it,timezone)} · ${zone ?: "timezone unavailable"} · reported, not independently verified") }
+        entry.syncedAt?.let { AuditFact("Server received / synced","${formatAuditTimestamp(it,timezone)} · ${zone ?: "timezone unavailable"}") }
+        AuditFact("Capture evidence",auditConnectionLabel(entry))
+        auditOrderId(entry)?.let { orderId ->
+            TextButton({bill=!bill}) { Text(if(bill) "Hide linked bill" else "Investigate linked bill") }
+            if(bill) ReceiptInvestigationPanel(orderId=orderId,ownerScopeKey=ownerKey,shopTimezone=zone)
+        }
+        TextButton({technical=!technical}) { Text(if(technical) "Hide technical details" else "Technical details") }
+        if(technical) {
+            AuditFact("Event / operation","${entry.id} · ${entry.operationId ?: "Operation identity not retained"}")
+            AuditFact("Source identity","${entry.entityType} · ${entry.entityId}")
+            AuditFact("Actor kind",entry.actorKind)
+            entry.actorUserId?.let{AuditFact("Actor identity",it)}
+            entry.targetUserId?.let{AuditFact("Target account identity",it)}
+            entry.ip?.let{AuditFact("Recorded network address",it)}
+            entry.userAgent?.let{AuditFact("Recorded user agent",it)}
+            AuditFact("Reported client",auditClientLabel(entry) ?: "No client identity retained")
+            entry.requestId?.let{AuditFact("Request",it)}
+            entry.clientActionId?.let{AuditFact("Client action",it)}
+            entry.terminalId?.let{AuditFact("Terminal",it)}
+            listOf("Business facts" to entry.businessDetails,"Before" to entry.before,"After" to entry.after).forEach{(label,value)->
+                Text(label,fontWeight=FontWeight.SemiBold)
+                Text(value?.let{prettyAuditJson(it)} ?: "Not recorded",style=MaterialTheme.typography.bodySmall)
             }
         }
     }
 }
 
 @Composable
-private fun AuditEntryCard(entry: AuditEntry, onClick: () -> Unit) {
-    val client = auditClientLabel(entry)
-    DataListRow(
-        onClick = onClick,
-        leading = {
-            OperationalStatusBadge(
-                label = auditConnectionLabel(entry),
-                tone = if (entry.clientWasOffline == true) UiTone.Warning else UiTone.Information,
-                icon = Icons.AutoMirrored.Filled.FactCheck,
-            )
-        },
-        content = {
-            Text(
-                auditEntryTitle(entry),
-                color = MaterialTheme.colorScheme.onSurface,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                "${auditActor(entry)} · ${auditEntityLabel(entry.entityType)} · ${shortAuditId(entry.entityId)}",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.labelMedium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                listOfNotNull(client, entry.reason?.takeIf(String::isNotBlank)?.let { "Reason: $it" })
-                    .joinToString(" · ").ifBlank { "Server-recorded audit event" },
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.labelSmall,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        },
-        trailing = {
-            Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
-                OperationalStatusBadge(
-                    label = auditActionLabel(entry.action),
-                    tone = auditActionTone(entry.action),
-                    icon = Icons.AutoMirrored.Filled.FactCheck,
-                )
-                Text(
-                    formatAuditTimestamp(entry.createdAt),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.labelSmall,
-                )
-            }
-        },
-    )
-}
-
-@Composable
-private fun AuditEntryDialog(entry: AuditEntry, onDismiss: () -> Unit) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(auditEntryTitle(entry)) },
-        text = {
-            Column(
-                modifier = Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(9.dp),
-            ) {
-                AuditDetailRow("Action", auditActionLabel(entry.action))
-                AuditDetailRow("When", formatAuditTimestamp(entry.createdAt))
-                AuditDetailRow("Who", auditActor(entry))
-                entry.actorEmail?.let { AuditDetailRow("Account", it) }
-                AuditDetailRow("Record", "${auditEntityLabel(entry.entityType)} · ${entry.entityId}")
-                AuditDetailRow("Connection", auditConnectionLabel(entry))
-                auditClientLabel(entry)?.let { AuditDetailRow("Client", it) }
-                entry.terminalId?.let { AuditDetailRow("Terminal", it) }
-                entry.clientReportedAt?.let {
-                    AuditDetailRow("Device-reported time", "${formatAuditTimestamp(it)} (not authoritative)")
-                }
-                entry.syncedAt?.let { AuditDetailRow("Accepted by server", formatAuditTimestamp(it)) }
-                entry.reason?.takeIf { it.isNotBlank() }?.let { AuditDetailRow("Reason", it) }
-                entry.clientActionId?.let { AuditDetailRow("Client action ID", it) }
-                entry.requestId?.let { AuditDetailRow("Request ID", it) }
-                entry.ip?.let { AuditDetailRow("Source IP", it) }
-                entry.userAgent?.let { AuditDetailRow("User agent", it) }
-            }
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
-        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-        titleContentColor = MaterialTheme.colorScheme.onSurface,
-        textContentColor = MaterialTheme.colorScheme.onSurface,
-    )
-}
-
-@Composable
-private fun AuditDetailRow(label: String, value: String) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text(
-            label,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            style = MaterialTheme.typography.labelMedium,
-            modifier = Modifier.widthIn(min = 120.dp),
-        )
-        Text(
-            value,
-            color = MaterialTheme.colorScheme.onSurface,
-            style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.weight(1f),
-        )
+private fun AuditFact(label:String,value:String) {
+    Column(Modifier.fillMaxWidth(),verticalArrangement=Arrangement.spacedBy(2.dp)) {
+        Text(label,style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(value,style=MaterialTheme.typography.bodyMedium)
     }
 }
-
-private fun auditActionTone(action: String): UiTone = when {
-    action == "create" || action.endsWith("_success") -> UiTone.Success
-    action == "delete" || action.endsWith("_failed") -> UiTone.Danger
-    else -> UiTone.Neutral
-}
+private fun auditZone(value:String?):ZoneId=runCatching{ZoneId.of(value ?: "UTC")}.getOrDefault(ZoneId.of("UTC"))
+private val prettyAuditFormat=Json{prettyPrint=true}
+private fun prettyAuditJson(value:JsonObject):String=prettyAuditFormat.encodeToString(JsonElement.serializer(),redactAuditValue(value))
