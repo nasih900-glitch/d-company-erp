@@ -17,8 +17,8 @@ const report = {
   connectivity: "offline",
   occurred_at: "2026-10-17T10:00:00Z",
   received_at: "2026-10-19T10:00:00Z",
-  version_code: 52,
-  version_name: "3.1.44",
+  version_code: 51,
+  version_name: "3.1.43",
 } as ClientDiagnosticEventDTO;
 const load = () => document.querySelector<HTMLButtonElement>("button")!;
 beforeEach(() => {
