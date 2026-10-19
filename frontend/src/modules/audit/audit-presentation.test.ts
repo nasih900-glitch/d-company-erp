@@ -4,6 +4,8 @@ import {
   auditBusinessChanges,
   auditRetainedSnapshots,
   businessValue,
+  businessLabel,
+  safeAuditValue,
   auditActor,
 } from './audit-presentation';
 import type { BusinessAuditEntryDTO } from '@/lib/erp-api';
@@ -99,5 +101,46 @@ describe('Snapshot evidence versus genuine mutations', () => {
     const row={...event({}),action:'update',before:{status:'open'},after:{status:'closed',name:'Observed'}};
     expect(auditBusinessChanges(row)).toEqual([{key:'status',before:'open',after:'closed'}]);
     expect(auditRetainedSnapshots(row)).toEqual([{side:'Retained after action',key:'name',value:'Observed'}]);
+  });
+});
+
+
+describe('Retained finance evidence vocabulary', () => {
+  it('labels only known field and value pairs without changing their meaning', () => {
+    const pairs = [
+      ['source_allocation', 'unallocated_owner_attestation', 'Owner-confirmed totals; not linked to an individual payment'],
+      ['source_allocation', 'identified_payment', 'Linked to an identified payment'],
+      ['evidence_kind', 'owner_attestation', 'Owner confirmation'],
+      ['kind', 'applied', 'Applied'],
+      ['kind', 'unresolved', 'Unresolved'],
+    ];
+    for (const [key, value, label] of pairs) {
+      expect(businessValue(key, value)).toBe(label);
+      expect(businessValue('note', value)).toBe(value);
+    }
+    expect(businessLabel('cash_minor')).toBe('Cash');
+    expect(businessLabel('upi_minor')).toBe('UPI');
+  });
+
+  it('preserves unknown values and distinguishes missing evidence', () => {
+    expect(businessValue('source_allocation', 'future_allocation')).toBe('future_allocation');
+    expect(businessValue('evidence_kind', 'identified_payment')).toBe('identified_payment');
+    expect(businessValue('kind', 'future_result')).toBe('future_result');
+    expect(businessValue('source_allocation', null)).toBe('Not recorded');
+    expect(businessValue('evidence_kind', undefined)).toBe('Not recorded');
+    expect(businessValue('kind', '')).toBe('Not recorded');
+  });
+
+  it('keeps the retained technical values after business formatting', () => {
+    const raw = {
+      source_allocation: 'unallocated_owner_attestation',
+      evidence_kind: 'owner_attestation',
+      kind: 'applied',
+      before: { cash_minor: 3000, upi_minor: 0 },
+    };
+    const original = JSON.stringify(raw);
+    expect(businessValue('facts', raw)).toContain('Owner confirmation');
+    expect(JSON.stringify(raw)).toBe(original);
+    expect(JSON.stringify(safeAuditValue(raw))).toBe(original);
   });
 });

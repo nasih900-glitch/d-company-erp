@@ -70,4 +70,39 @@ class SemanticAuditPresentationTest {
         assertEquals("Stage / result not recorded",auditStageResult(entry()))
     }
 
+    @Test fun knownFinanceEvidenceUsesFieldSpecificBusinessLabels() {
+        val zone = ZoneId.of("UTC")
+        val pairs = listOf(
+            Triple("source_allocation", "unallocated_owner_attestation", "Owner-confirmed totals; not linked to an individual payment"),
+            Triple("source_allocation", "identified_payment", "Linked to an identified payment"),
+            Triple("evidence_kind", "owner_attestation", "Owner confirmation"),
+            Triple("kind", "applied", "Applied"),
+            Triple("kind", "unresolved", "Unresolved"),
+        )
+        for ((key, value, label) in pairs) {
+            assertEquals(label, auditBusinessValue(key, JsonPrimitive(value), zone))
+            assertEquals(value, auditBusinessValue("note", JsonPrimitive(value), zone))
+        }
+        assertEquals("Cash", auditBusinessLabel("cash_minor"))
+        assertEquals("UPI", auditBusinessLabel("upi_minor"))
+    }
+
+    @Test fun unknownFinanceValuesStayVerbatimAndMissingEvidenceStaysMissing() {
+        val zone = ZoneId.of("UTC")
+        assertEquals("future_allocation", auditBusinessValue("source_allocation", JsonPrimitive("future_allocation"), zone))
+        assertEquals("identified_payment", auditBusinessValue("evidence_kind", JsonPrimitive("identified_payment"), zone))
+        assertEquals("future_result", auditBusinessValue("kind", JsonPrimitive("future_result"), zone))
+        assertEquals("Not recorded", auditBusinessValue("source_allocation", JsonNull, zone))
+        assertEquals("Not recorded", auditBusinessValue("evidence_kind", null, zone))
+        assertEquals("Not recorded", auditBusinessValue("kind", JsonPrimitive(""), zone))
+    }
+
+    @Test fun businessFormattingLeavesRawFinanceEvidenceIntact() {
+        val raw = Json.parseToJsonElement("""{"source_allocation":"unallocated_owner_attestation","evidence_kind":"owner_attestation","kind":"applied","before":{"cash_minor":3000,"upi_minor":0}}""")
+        val original = raw.toString()
+        assertTrue(auditBusinessValue("facts", raw, ZoneId.of("UTC")).contains("Owner confirmation"))
+        assertEquals(original, raw.toString())
+        assertEquals(original, redactAuditValue(raw).toString())
+    }
+
 }

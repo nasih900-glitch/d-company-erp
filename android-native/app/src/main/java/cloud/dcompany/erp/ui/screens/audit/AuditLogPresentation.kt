@@ -130,6 +130,8 @@ internal fun auditBusinessLabel(value: String): String = when (value) {
     "actual_upi_minor" -> "Owner-confirmed UPI"
     "cash_delta_minor" -> "Cash classification change"
     "upi_delta_minor" -> "UPI classification change"
+    "cash_minor" -> "Cash"
+    "upi_minor" -> "UPI"
     "source_allocation" -> "Allocation evidence"
     "evidence_kind" -> "Evidence basis"
     else -> value.removeSuffix("_minor").replace('_',' ').replaceFirstChar { it.titlecase(Locale.ROOT) }
@@ -164,6 +166,15 @@ internal fun auditBusinessValue(key: String,value: JsonElement?,zone: ZoneId): S
         return "${seconds/3600} hr ${(seconds/60)%60} min ${seconds%60} sec playing time"
     }
     if(key in setOf("method","payment_method","original_method","effective_method")) return primitive.content.uppercase(Locale.ROOT)
+    if (primitive.isString) {
+        when (key to primitive.content) {
+            "source_allocation" to "unallocated_owner_attestation" -> return "Owner-confirmed totals; not linked to an individual payment"
+            "source_allocation" to "identified_payment" -> return "Linked to an identified payment"
+            "evidence_kind" to "owner_attestation" -> return "Owner confirmation"
+            "kind" to "applied" -> return "Applied"
+            "kind" to "unresolved" -> return "Unresolved"
+        }
+    }
     return primitive.content.takeIf(String::isNotBlank) ?: "Not recorded"
 }
 

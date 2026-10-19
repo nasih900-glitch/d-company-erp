@@ -46,6 +46,8 @@ export function businessLabel(value: string): string {
     actual_upi_minor: 'Owner-confirmed UPI',
     cash_delta_minor: 'Cash classification change',
     upi_delta_minor: 'UPI classification change',
+    cash_minor: 'Cash',
+    upi_minor: 'UPI',
     source_allocation: 'Allocation evidence',
     evidence_kind: 'Evidence basis',
   };
@@ -116,6 +118,14 @@ export function businessValue(
           `${businessLabel(field)}: ${businessValue(field, item, zone)}`,
       )
       .join('; ');
+  if (key === 'source_allocation' && value === 'unallocated_owner_attestation')
+    return 'Owner-confirmed totals; not linked to an individual payment';
+  if (key === 'source_allocation' && value === 'identified_payment')
+    return 'Linked to an identified payment';
+  if (key === 'evidence_kind' && value === 'owner_attestation')
+    return 'Owner confirmation';
+  if (key === 'kind' && value === 'applied') return 'Applied';
+  if (key === 'kind' && value === 'unresolved') return 'Unresolved';
   return String(value);
 }
 export function auditOrderId(entry: BusinessAuditEntryDTO): string | null {

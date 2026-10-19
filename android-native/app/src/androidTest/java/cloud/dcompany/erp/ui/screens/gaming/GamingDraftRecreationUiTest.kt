@@ -105,6 +105,12 @@ class GamingDraftRecreationUiTest {
         compose.runOnIdle { assertEquals("ps5-2", selectedId) }
     }
 
+    // Use the same composition ancestry on both Activity instances, as onCreate does.
+    // Different setContent lambda callsites have different implicit rememberSaveable keys.
+    private fun installFixtureContent(activity: ComponentActivity) {
+        activity.setContent { Fixture() }
+    }
+
     private fun recreateWithInitialEmpty(authority: GamingDraftAuthority?) {
         val previousActivity = compose.activity
         compose.activityRule.scenario.recreate()
@@ -112,12 +118,12 @@ class GamingDraftRecreationUiTest {
             assertNotSame(previousActivity, activity)
             currentAuthority.value = authority
             projection.value = GamingUiState()
-            activity.setContent { Fixture() }
+            installFixtureContent(activity)
         }
     }
 
     @Test fun realActivityRecreationRestoresStationAndTariffAfterInitialEmptyCatalogue() {
-        compose.setContent { Fixture() }
+        compose.activityRule.scenario.onActivity(::installFixtureContent)
         chooseDualFourSixty()
         recreateWithInitialEmpty(authority())
         compose.onNodeWithText("Loading scoped catalogue").assertIsDisplayed()
@@ -133,7 +139,7 @@ class GamingDraftRecreationUiTest {
     }
 
     @Test fun recreationWithNewLoginGenerationCannotRestoreOldStationOrTariff() {
-        compose.setContent { Fixture() }; chooseDualFourSixty()
+        compose.activityRule.scenario.onActivity(::installFixtureContent); chooseDualFourSixty()
         recreateWithInitialEmpty(authority(generation = 2))
         compose.runOnIdle { projection.value = loaded }
         compose.onNodeWithText("Start 30 min · ₹80.00").assertIsDisplayed()
@@ -141,7 +147,7 @@ class GamingDraftRecreationUiTest {
     }
 
     @Test fun changedProfileAndTerminalResetWhileMissingLeaseExposesNoDraftAction() {
-        compose.setContent { Fixture() }; chooseDualFourSixty()
+        compose.activityRule.scenario.onActivity(::installFixtureContent); chooseDualFourSixty()
         recreateWithInitialEmpty(authority(profile = me.copy(effectivePermissions = emptyList()), terminal = "other-till"))
         compose.runOnIdle { projection.value = loaded }
         compose.onNodeWithText("Start 30 min · ₹80.00").assertIsDisplayed()
@@ -155,7 +161,7 @@ class GamingDraftRecreationUiTest {
             id = "ended", stationId = "ps5-1", shiftId = "fixture-shift", status = "ended",
             startAt = "2026-10-19T00:00:00Z", endAt = "2026-10-19T00:30:00Z", amountMinor = 8_000,
         )))
-        compose.setContent { Fixture() }
+        compose.activityRule.scenario.onActivity(::installFixtureContent)
         compose.onNodeWithText("Paymentdue").assertDoesNotExist()
         compose.onNodeWithTag("gaming-selected-status").assertIsDisplayed().assertTextEquals("Payment due")
     }
