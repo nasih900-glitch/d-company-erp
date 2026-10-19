@@ -205,10 +205,13 @@ internal class ReceiptHistorySearch(
         val filters = before.appliedCriteria ?: return
         val captured = lease() ?: return
         if (!online()) { mutable.value = before.copy(detailError = "Reconnect to refresh this exact receipt."); return }
-        val operation = generation
+        // An exact bill read owns the newer source view. A previously started page refresh
+        // must not restore its older tender/refund snapshot after this read is accepted.
+        val operation = ++generation
+        request?.cancel()
         val detailOperation = ++detailGeneration
         detailRequest?.cancel()
-        mutable.value = before.copy(detailLoading = true, detailError = null)
+        mutable.value = before.copy(loading = false, detailLoading = true, detailError = null)
         detailRequest = tasks.launch {
             try {
                 val receipt = fetchReceipt(orderId)

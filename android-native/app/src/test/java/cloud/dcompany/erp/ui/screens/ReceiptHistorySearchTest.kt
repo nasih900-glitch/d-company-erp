@@ -205,4 +205,24 @@ class ReceiptHistorySearchTest {
         assertTrue(allowed.stations.single().label.contains("disabled"));assertTrue(allowed.stations.single().label.contains("current"))
     }
 
+    @Test fun olderWindowReplyCannotUndoNewerExactCorrectedReceiptOrFilteredMembership()=runBlocking {
+        val tasks=CoroutineScope(coroutineContext+SupervisorJob())
+        try {
+            val cash=CanonicalReceiptPayment("p","shift","cash",27000,paidAt="2026-10-17T20:00:00Z",createdAt="2026-10-17T20:00:00Z")
+            val original=receipt().copy(payments=listOf(cash))
+            val corrected=original.copy(payments=listOf(cash.copy(method="upi",originalMethod="cash",tenderCorrectionId="correction")))
+            val olderReply=CompletableDeferred<Unit>();var reads=0
+            val search=ReceiptHistorySearch(tasks,{true},{owner},{_,write->write();true},{emptyList<CanonicalReceipt>() to null},
+                {_,_->if(++reads>1) withContext(NonCancellable){olderReply.await();page(original)} else page(original)}, {corrected})
+            search.find(ReceiptHistoryFilters(method="cash"));idle(search)
+            search.find(ReceiptHistoryFilters(method="cash"));yield()
+            search.detail(original.orderId);idle(search)
+            assertEquals("upi",search.state.value.detail?.payments?.single()?.method)
+            assertTrue(search.state.value.receipts.isEmpty())
+            olderReply.complete(Unit);yield();delay(5)
+            assertEquals(corrected,search.state.value.detail);assertTrue(search.state.value.receipts.isEmpty())
+            assertFalse(search.state.value.loading)
+        } finally {tasks.cancel()}
+    }
+
 }
