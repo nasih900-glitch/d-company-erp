@@ -96,6 +96,7 @@ class LoginWorkspaceUiTest {
         compose.onNodeWithTag("login-email").performTextReplacement("synthetic@example.test")
         compose.onNodeWithTag("login-password").performTextReplacement("temporary-secret")
         compose.onNodeWithTag("login-appearance").performClick()
+        compose.onNodeWithTag("appearance-option-Night").performClick()
         compose.runOnIdle { assertEquals(AppearancePreference.Night, appearance.value) }
         compose.onNodeWithTag("login-email").assertTextEquals("synthetic@example.test")
         compose.onNodeWithContentDescription("Show password").performClick()
@@ -171,6 +172,7 @@ class LoginWorkspaceUiTest {
         compose.onNodeWithTag("login-submit").assertIsDisplayed()
         capture("login51-day-landscape")
         compose.onNodeWithTag("login-appearance").performClick()
+        compose.onNodeWithTag("appearance-option-Night").performClick()
         compose.onNodeWithTag("login-submit").assertIsDisplayed()
         capture("login51-night-landscape")
         compose.runOnIdle { portrait.value = true }

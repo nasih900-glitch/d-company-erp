@@ -57,6 +57,7 @@ class GamingCentreNavigationUiTest {
         compose.onNodeWithTag("workspace-day-night-toggle").assertIsDisplayed()
         compose.onNodeWithText("Day mode").assertIsDisplayed()
         compose.onNodeWithTag("workspace-day-night-toggle").performClick()
+        compose.onNodeWithTag("appearance-option-Night").performClick()
         compose.runOnIdle { assertEquals(AppearancePreference.Night, appearance.value) }
         compose.onNodeWithContentDescription(
             "${Destination.Pos.label}. ${Destination.Pos.description}",
@@ -65,7 +66,11 @@ class GamingCentreNavigationUiTest {
         compose.onNodeWithText("Current: POS").assertIsDisplayed()
         compose.onNodeWithText("Night mode").assertIsDisplayed()
         compose.onNodeWithTag("workspace-day-night-toggle").performClick()
+        compose.onNodeWithTag("appearance-option-Day").performClick()
         compose.runOnIdle { assertEquals(AppearancePreference.Day, appearance.value) }
+        compose.onNodeWithTag("workspace-day-night-toggle").performClick()
+        compose.onNodeWithTag("appearance-option-System").performClick()
+        compose.runOnIdle { assertEquals(AppearancePreference.System, appearance.value) }
     }
 
     @Test

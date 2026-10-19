@@ -1307,9 +1307,14 @@ private fun RequiredUpdateScreen(
 private fun UpdateVersionAndNotes(notice: ClientUpdateNotice, compact: Boolean) {
     val version = notice.latestVersionName?.trim()?.take(80)?.takeIf(String::isNotEmpty)
     val notes = notice.releaseNotes?.trim()?.take(2_000)?.takeIf(String::isNotEmpty)
-    if (version != null) {
+    Text(
+        "Running ${BuildConfig.VERSION_NAME} · build ${BuildConfig.VERSION_CODE}",
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        style = MaterialTheme.typography.labelMedium,
+    )
+    if (version != null || notice.latestVersionCode != null) {
         Text(
-            "Release $version · build ${notice.latestVersionCode ?: "unknown"}",
+            "Offered ${version ?: "version not reported"} · build ${notice.latestVersionCode ?: "unknown"}",
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.labelMedium,
         )

@@ -2627,7 +2627,7 @@ internal fun GamingCommandAttentionBar(
     val tone = when {
         danger -> UiTone.Danger
         warning -> UiTone.Warning
-        else -> UiTone.Success
+        else -> UiTone.Neutral
     }
     val accent = statusColor(tone)
     val details = buildList {
@@ -7218,6 +7218,21 @@ internal fun currentGamingParticipantRows(
         )
     }
 
+/** The first retained join orders people, not attendance intervals or raw database IDs. */
+internal fun gamingParticipantDisplayName(
+    participant: GamingParticipantUi,
+    participants: List<GamingParticipantUi>,
+): String {
+    participant.name?.takeIf(String::isNotBlank)?.let { return it }
+    if (participant.customerId != null) return "Saved customer · name not retained"
+    val identities = participants.groupBy(GamingParticipantUi::participantIdentityId)
+        .entries.sortedWith(compareBy<Map.Entry<String, List<GamingParticipantUi>>> {
+            it.value.mapNotNull(GamingParticipantUi::joinedAtMillis).minOrNull() ?: Long.MAX_VALUE
+        }.thenBy { it.key })
+    val ordinal = identities.indexOfFirst { it.key == participant.participantIdentityId }
+    return if (ordinal >= 0) "Added player ${ordinal + 1}" else "Added player · identity not retained"
+}
+
 internal fun gamingParticipantStateLabel(participant: GamingParticipantUi): String = when {
     participant.lastError != null -> "Needs review"
     participant.pending && participant.active -> "Waiting to sync Join"
@@ -7258,7 +7273,7 @@ internal fun GamingInlineParticipantEditor(
     }
     SectionCard(
         title = "Players · ${basePlayers + active.size}/4",
-        subtitle = "${active.size} joined during session · capacity four",
+        subtitle = "${active.size} added ${if (active.size == 1) "player" else "players"} playing now · $basePlayers booked",
         modifier = modifier.testTag("gaming-player-inline"),
         contentPadding = PaddingValues(horizontal = Spacing.md, vertical = Spacing.sm),
         contentFillsAvailableHeight = pinConfirmAction,
@@ -7278,10 +7293,7 @@ internal fun GamingInlineParticipantEditor(
             ) {
                 Column(Modifier.weight(1f)) {
                     Text(
-                        participant.name?.takeIf(String::isNotBlank)
-                            ?: if (participant.customerId == null) {
-                                "Guest player ${participant.participantIdentityId.take(4)}"
-                            } else "Saved customer",
+                        gamingParticipantDisplayName(participant, participants),
                         style = MaterialTheme.typography.labelLarge,
                     )
                     Text(
@@ -7842,9 +7854,7 @@ internal fun GamingParticipantsDialog(
                 } else {
                     items(participants, key = GamingParticipantUi::reference) { participant ->
                         SectionCard(
-                            title = participant.name?.takeIf(String::isNotBlank)
-                                ?: if (participant.customerId != null) "Saved customer"
-                                else "Guest player ${participant.participantIdentityId.take(4)}",
+                            title = gamingParticipantDisplayName(participant, participants),
                             subtitle = listOfNotNull(
                                 participant.phone?.takeIf(String::isNotBlank),
                                 when {

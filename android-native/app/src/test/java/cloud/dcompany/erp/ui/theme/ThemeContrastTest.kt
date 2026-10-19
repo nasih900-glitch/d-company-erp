@@ -17,8 +17,27 @@ class ThemeContrastTest {
         assertEquals(Color(0xFF101010), NightPalette.Surface)
         assertEquals(Color(0xFFF5F5F5), NightPalette.Foreground)
         assertEquals(Color(0xFFFAFAFA), DayPalette.Background)
-        assertEquals(Color(0xFF111111), DayPalette.Gold)
+        assertEquals(Color(0xFF161615), DayPalette.Gold)
+        assertEquals(Color(0xFFF5F5F1), NightPalette.Gold)
+        assertEquals(Color(0xFFC6A15B), DayPalette.BrandAccent)
+        assertEquals(DayPalette.BrandAccent, NightPalette.BrandAccent)
+        assertEquals(Color(0xFF7A7A74), DayPalette.ForegroundFaint)
+        assertEquals(Color(0xFF878780), NightPalette.ForegroundFaint)
         assertEquals(Color(0xFF111111), DayPalette.Foreground)
+    }
+
+    @Test
+    fun `routine warnings and information use readable Web neutral roles`() {
+        assertEquals(Color(0xFF31312E), DayPalette.Warning)
+        assertEquals(Color(0xFF53534F), DayPalette.Information)
+        assertEquals(Color(0xFFDDDDD7), NightPalette.Warning)
+        assertEquals(Color(0xFFAAAAA2), NightPalette.Information)
+        listOf(NightPalette, DayPalette).forEach { palette ->
+            assertEquals(palette.SurfaceRaised, palette.WarningMuted)
+            assertEquals(palette.SurfaceRaised, palette.InformationMuted)
+            assertTrue(contrastRatio(palette.Warning, palette.WarningMuted) >= 4.5f)
+            assertTrue(contrastRatio(palette.Information, palette.InformationMuted) >= 4.5f)
+        }
     }
 
     @Test

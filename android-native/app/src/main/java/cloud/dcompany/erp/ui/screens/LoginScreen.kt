@@ -2,7 +2,6 @@ package cloud.dcompany.erp.ui.screens
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -19,15 +18,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.CheckCircleOutline
-import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.ErrorOutline
-import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.Button
@@ -69,6 +65,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.verticalScroll
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import cloud.dcompany.erp.ui.components.AppearanceControl
 import cloud.dcompany.erp.ui.components.DCompanyBrandMark
 import cloud.dcompany.erp.ui.theme.AppearancePreference
 import cloud.dcompany.erp.ui.theme.Radius
@@ -126,8 +123,6 @@ internal fun LoginWorkspace(
     var password by remember { mutableStateOf("") }
     var showPassword by remember { mutableStateOf(false) }
     val focus = LocalFocusManager.current
-    val night = appearancePreference == AppearancePreference.Night ||
-        (appearancePreference == AppearancePreference.System && isSystemInDarkTheme())
 
     LaunchedEffect(successfulEmail) { successfulEmail?.let { email = it } }
     val canSubmit = email.isNotBlank() && password.isNotBlank() && !signingIn
@@ -154,30 +149,12 @@ internal fun LoginWorkspace(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            Surface(
-                shape = Radius.shapePill,
-                color = MaterialTheme.colorScheme.surface,
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-                modifier = Modifier.testTag("login-appearance").toggleable(
-                    value = night,
-                    role = Role.Switch,
-                    onValueChange = {
-                        onAppearancePreferenceChanged(if (night) AppearancePreference.Day else AppearancePreference.Night)
-                    },
-                ).semantics {
-                    contentDescription = "Day and night appearance"
-                    stateDescription = if (night) "Night mode" else "Day mode"
-                },
-            ) {
-                Row(
-                    Modifier.heightIn(min = 48.dp).padding(horizontal = 16.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Icon(if (night) Icons.Filled.DarkMode else Icons.Filled.LightMode, null, Modifier.size(18.dp))
-                    Text(if (night) "Night" else "Day", style = MaterialTheme.typography.labelLarge)
-                }
-            }
+            AppearanceControl(
+                preference = appearancePreference,
+                onChange = onAppearancePreferenceChanged,
+                modifier = Modifier.testTag("login-appearance"),
+                compactLabel = true,
+            )
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {

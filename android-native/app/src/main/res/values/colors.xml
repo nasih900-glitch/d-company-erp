@@ -1,8 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- D Company launch background. This value was already referenced by
-         styles.xml but was never defined here, so it silently resolved to
-         capacitor-android's library defaults (a light blue/teal) — which is
-         why the status bar rendered white above a near-black app. -->
-    <color name="brandBackground">#08131B</color>
+    <!-- System appearance before Compose reads the saved preference. -->
+    <color name="brandBackground">#FAFAFA</color>
+    <bool name="lightSystemBars">true</bool>
 </resources>

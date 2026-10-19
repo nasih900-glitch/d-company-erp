@@ -16,6 +16,23 @@ class GamingParticipantAmendmentPolicyTest {
     private val startedAt = Instant.parse("2026-09-24T12:00:00Z").toEpochMilli()
 
     @Test
+    fun `anonymous labels follow retained first joins and survive leave rejoin and row order`() {
+        val first = GamingParticipantUi(reference = "interval-1", participantIdentityId = "identity-a",
+            customerId = null, name = null, phone = null, active = false, pending = false,
+            joinedAtMillis = startedAt, leftAtMillis = startedAt + 1_000L)
+        val second = first.copy(reference = "interval-2", participantIdentityId = "identity-b",
+            active = true, joinedAtMillis = startedAt + 2_000L, leftAtMillis = null)
+        val rejoin = first.copy(reference = "interval-3", active = true,
+            joinedAtMillis = startedAt + 3_000L, leftAtMillis = null)
+        val rows = listOf(second, rejoin, first)
+        assertEquals("Added player 1", gamingParticipantDisplayName(rejoin, rows))
+        assertEquals("Added player 2", gamingParticipantDisplayName(second, rows.reversed()))
+        assertEquals("Retained name", gamingParticipantDisplayName(second.copy(name = "Retained name"), rows))
+        assertEquals("Saved customer · name not retained",
+            gamingParticipantDisplayName(second.copy(customerId = "customer-1"), rows))
+    }
+
+    @Test
     fun `remaining trace is bounded without changing booked duration`() {
         assertEquals(1f, requireNotNull(gamingDurationRemainingFraction(3_600_000L, 0L)), 0.001f)
         assertEquals(0.5f, requireNotNull(gamingDurationRemainingFraction(3_600_000L, 1_800_000L)), 0.001f)
