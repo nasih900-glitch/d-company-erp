@@ -965,12 +965,11 @@ internal fun OpenShiftForm(
     val floatMinor = parsedFloat ?: 0L
     val validFloat = float.isBlank() || parsedFloat != null
 
-    SectionCard(
-        title = "Open shift",
-        subtitle = "Record the drawer cash before accepting the first payment.",
-        icon = Icons.Filled.AccountBalanceWallet,
-        modifier = Modifier.widthIn(max = 520.dp).fillMaxWidth(),
-        action = {
+    BoxWithConstraints(Modifier.widthIn(max = 520.dp).fillMaxWidth()) {
+        // The inline Gaming pane cannot fit an icon, readable title and the
+        // submit action in one row. Keep the normal wide-screen header intact.
+        val compact = maxWidth < 440.dp
+        val submit: @Composable () -> Unit = {
             ErpButton(
                 text = "Open shift with ${floatMinor.asRupees()}",
                 onClick = {
@@ -983,33 +982,42 @@ internal fun OpenShiftForm(
                 },
                 enabled = canOpen && validFloat && !blockedByRejectedShift,
                 busy = busy,
-                modifier = Modifier.focusRequester(submitFocusRequester),
-            )
-        },
-    ) {
-        Text(
-            "Billing remains blocked until the shift is open. The opening float may be ₹0.00 when the drawer starts empty.",
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        if (!online) {
-            Text(
-                if (offlineGamingSupported) {
-                    "No connection — this verified workspace supports saving the shift and Gaming in order for automatic sync."
-                } else {
-                    "No connection — the shift can be saved, but reconnect to confirm it before starting Gaming."
-                },
-                color = MaterialTheme.colorScheme.operationalInformation,
-                style = MaterialTheme.typography.labelMedium,
+                modifier = Modifier.focusRequester(submitFocusRequester)
+                    .then(if (compact) Modifier.fillMaxWidth() else Modifier),
             )
         }
-        TouchMoneyEntry(
-            value = float,
-            onValueChange = { float = it },
-            label = "Opening float (₹)",
-            enabled = canOpen && !busy && !blockedByRejectedShift,
-            presetsMinor = listOf(0L, 50_000L, 100_000L),
+        SectionCard(
+            title = "Open shift",
+            subtitle = "Record the drawer cash before accepting the first payment.",
+            icon = Icons.Filled.AccountBalanceWallet,
             modifier = Modifier.fillMaxWidth(),
-        )
+            action = if (compact) null else { { submit() } },
+        ) {
+            Text(
+                "Billing remains blocked until the shift is open. The opening float may be ₹0.00 when the drawer starts empty.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (!online) {
+                Text(
+                    if (offlineGamingSupported) {
+                        "No connection — this verified workspace supports saving the shift and Gaming in order for automatic sync."
+                    } else {
+                        "No connection — the shift can be saved, but reconnect to confirm it before starting Gaming."
+                    },
+                    color = MaterialTheme.colorScheme.operationalInformation,
+                    style = MaterialTheme.typography.labelMedium,
+                )
+            }
+            TouchMoneyEntry(
+                value = float,
+                onValueChange = { float = it },
+                label = "Opening float (₹)",
+                enabled = canOpen && !busy && !blockedByRejectedShift,
+                presetsMinor = listOf(0L, 50_000L, 100_000L),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            if (compact) submit()
+        }
     }
 }
 

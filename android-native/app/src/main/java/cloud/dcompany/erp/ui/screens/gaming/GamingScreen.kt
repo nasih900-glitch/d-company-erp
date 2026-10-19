@@ -1786,6 +1786,9 @@ internal fun GamingCommandWorkspace(
     onLeaveParticipant: (GameSession, String) -> Unit = { _, _ -> },
     onConfirmExtension: ((PackageExtensionReview) -> String?)? = null,
     shiftAccess: ShiftAccess = ShiftAccess(),
+    inlineShiftContent: @Composable (ShiftAccess, () -> Unit) -> Unit = { shift, onReturn ->
+        InlineShiftOpeningWorkspace(shift, onReturn = onReturn)
+    },
 ) {
     // Selection changes the control pane; it never removes the station board.
     // `showDetail`/`onBackToBoard` remain as compatibility inputs for deep-link
@@ -2062,8 +2065,9 @@ internal fun GamingCommandWorkspace(
                                 }
                             },
                             blockerContent = {
-                                if (inlineShiftOpen) InlineShiftOpeningWorkspace(shiftAccess, onReturn = { inlineShiftOpen = false })
+                                if (inlineShiftOpen) inlineShiftContent(shiftAccess) { inlineShiftOpen = false }
                             },
+                            showInlineBlocker = inlineShiftOpen,
                             selectionState = startSelection,
                             externallyHostedDial = true,
                             pinActions = fixedTabletWorkspace,
@@ -6478,6 +6482,7 @@ internal fun StartSessionEditor(
     blockerContent: (@Composable () -> Unit)? = null,
     selectionState: GamingStartSelectionState? = null,
     externallyHostedDial: Boolean = false,
+    showInlineBlocker: Boolean = false,
     pinActions: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
@@ -7017,14 +7022,17 @@ internal fun StartSessionEditor(
                     Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(Spacing.xs),
                 ) {
-                    optionsContent()
+                    // Keep the editor and its draft state mounted, but give the
+                    // inline Shift form the bounded scroll pane. Appending it
+                    // after all session options leaves only its heading visible.
+                    if (showInlineBlocker) blockerContent?.invoke() else optionsContent()
                 }
             } else {
                 Column(
                     Modifier.fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(Spacing.xs),
                 ) {
-                    optionsContent()
+                    if (showInlineBlocker) blockerContent?.invoke() else optionsContent()
                 }
             }
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
