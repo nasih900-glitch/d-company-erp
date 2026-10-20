@@ -115,20 +115,9 @@ def test_protected_source_and_backend_manifest_match_reviewed_worktree(
     subprocess.run(["tar", "-xf", archive, "-C", prior], check=True)
     candidate = tmp_path / "candidate"
     candidate.mkdir()
-    release_paths = subprocess.run(
-        ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
-        cwd=ROOT,
-        check=True,
-        capture_output=True,
-    ).stdout.split(b"\0")
-    for raw_path in release_paths:
-        if not raw_path:
-            continue
-        relative = Path(raw_path.decode("utf-8"))
-        source = ROOT / relative
-        destination = candidate / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, destination, follow_symlinks=False)
+    with (tmp_path / "build53.tar").open("wb") as output:
+        subprocess.run(["git", "archive", "--format=tar", "8506c7abdf15c92029226849f42b1b71fd6878d6"], cwd=ROOT, stdout=output, check=True)
+    subprocess.run(["tar", "-xf", str(tmp_path / "build53.tar"), "-C", str(candidate)], check=True)
     build50, _, _ = verifier._load_modules(ROOT)
     proof = verifier._verify_sources(build50, prior, candidate)
     assert proof["prior_protected_path_count"] == 1217
@@ -190,7 +179,7 @@ def test_installer_selects_build53_without_a_version_range():
 
 
 def test_runtime_gate_names_only_build52_and_build53():
-    source = RUNTIME_IMAGE_VERIFIER.read_text(encoding="utf-8")
+    source = subprocess.run(["git", "show", "8506c7abdf15c92029226849f42b1b71fd6878d6:infra/scripts/verify-production-runtime-images.sh"], cwd=ROOT, check=True, capture_output=True, text=True).stdout
     assert "3.1.44) EXACT_MIGRATION_BUILD=Build52" in source
     assert "3.1.45) EXACT_MIGRATION_BUILD=Build53" in source
     assert "3.1.46)" not in source

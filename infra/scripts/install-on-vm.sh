@@ -207,6 +207,7 @@ BUILD51_POST_MIGRATION_VERIFIER="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-buil
 BUILD51_POST_MIGRATION_SQL="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-build51-post-migration-state.sql"
 BUILD52_PENDING_COMPATIBILITY_VERIFIER="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-build52-pending-compatibility.py"
 BUILD53_PENDING_COMPATIBILITY_VERIFIER="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-build53-pending-compatibility.py"
+BUILD54_PENDING_COMPATIBILITY_VERIFIER="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-build54-pending-compatibility.py"
 BUILD52_TRANSITION_STATE_SQL="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-build52-transition-state.sql"
 WEB_PUBLIC_ASSET_VERIFIER="$CANDIDATE_BUILD_ROOT/ops/verify_web_public_assets.py"
 BUSINESS_QUIESCENCE_VERIFIER="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-production-business-quiescence.py"
@@ -225,6 +226,7 @@ for release_input in \
   "$BUILD50_PENDING_COMPATIBILITY_VERIFIER" "$BUILD50_POST_MIGRATION_VERIFIER" \
   "$BUILD51_POST_MIGRATION_VERIFIER" "$BUILD51_POST_MIGRATION_SQL" \
   "$BUILD52_PENDING_COMPATIBILITY_VERIFIER" "$BUILD53_PENDING_COMPATIBILITY_VERIFIER" \
+  "$BUILD54_PENDING_COMPATIBILITY_VERIFIER" \
   "$BUILD52_TRANSITION_STATE_SQL" \
   "$BUILD49_PENDING_COMPATIBILITY_VERIFIER" "$WEB_PUBLIC_ASSET_VERIFIER" \
   "$BUSINESS_QUIESCENCE_VERIFIER" "$BUSINESS_QUIESCENCE_SQL"; do
@@ -762,6 +764,9 @@ BUILD52_POST_PROOF_SUCCEEDED=false
 BUILD53_PENDING_CARRIED_UNRESOLVED=false
 BUILD53_MIGRATION_RUNTIME_VERIFIED=false
 BUILD53_POST_PROOF_SUCCEEDED=false
+BUILD54_PENDING_CARRIED_UNRESOLVED=false
+BUILD54_MIGRATION_RUNTIME_VERIFIED=false
+BUILD54_POST_PROOF_SUCCEEDED=false
 EXACT_BUILD50_SUCCESSOR=""
 EXACT_BUILD50_VERIFIER=""
 BUILD50_TO_SUCCESSOR_PENDING_PRESERVED=false
@@ -1458,7 +1463,8 @@ if [ -n "$EXISTING_POSTGRES_CONTAINER" ]; then
       BUILD42_PENDING_CARRIED_UNRESOLVED=true
       echo "==> Exact build41-to-build44 server compatibility verified; reported tablet pending count $pending_outbox_count is carried UNRESOLVED."
     elif { [ "$CANDIDATE_APP_VERSION" = 3.1.44 ] || \
-           [ "$CANDIDATE_APP_VERSION" = 3.1.45 ]; } && \
+           [ "$CANDIDATE_APP_VERSION" = 3.1.45 ] || \
+           [ "$CANDIDATE_APP_VERSION" = 3.1.46 ]; } && \
          [ "$PRIOR_APP_VERSION" = 3.1.42 ] && \
          [ "$PRIOR_REVISION" = 29e32b440ab8dc162b6c8f5d40f8283fad53ce04 ] && \
          [ "$PRIOR_DB_HEAD" = 0089 ]; then
@@ -1468,9 +1474,12 @@ if [ -n "$EXISTING_POSTGRES_CONTAINER" ]; then
       if [ "$CANDIDATE_APP_VERSION" = 3.1.44 ]; then
         EXACT_BUILD50_SUCCESSOR=Build52
         EXACT_BUILD50_VERIFIER="$BUILD52_PENDING_COMPATIBILITY_VERIFIER"
-      else
+      elif [ "$CANDIDATE_APP_VERSION" = 3.1.45 ]; then
         EXACT_BUILD50_SUCCESSOR=Build53
         EXACT_BUILD50_VERIFIER="$BUILD53_PENDING_COMPATIBILITY_VERIFIER"
+      else
+        EXACT_BUILD50_SUCCESSOR=Build54
+        EXACT_BUILD50_VERIFIER="$BUILD54_PENDING_COMPATIBILITY_VERIFIER"
       fi
       exact_build50_slug=$(printf '%s' "$EXACT_BUILD50_SUCCESSOR" | tr '[:upper:]' '[:lower:]')
       BUILD52_PRE_HISTORY="$RAW_PENDING_STATE"
@@ -1518,8 +1527,10 @@ if [ -n "$EXISTING_POSTGRES_CONTAINER" ]; then
       EXACT_BUILD50_MIGRATION_RUNTIME_VERIFIED=true
       if [ "$EXACT_BUILD50_SUCCESSOR" = Build52 ]; then
         BUILD52_MIGRATION_RUNTIME_VERIFIED=true
-      else
+      elif [ "$EXACT_BUILD50_SUCCESSOR" = Build53 ]; then
         BUILD53_MIGRATION_RUNTIME_VERIFIED=true
+      else
+        BUILD54_MIGRATION_RUNTIME_VERIFIED=true
       fi
       while IFS= read -r relative_path; do
         source_hash=$(sha256sum "$CANDIDATE_BUILD_ROOT/backend/$relative_path" \
@@ -1570,8 +1581,10 @@ if [ -n "$EXISTING_POSTGRES_CONTAINER" ]; then
       BUILD50_TO_SUCCESSOR_PENDING_PRESERVED=true
       if [ "$EXACT_BUILD50_SUCCESSOR" = Build52 ]; then
         BUILD52_PENDING_CARRIED_UNRESOLVED=true
-      else
+      elif [ "$EXACT_BUILD50_SUCCESSOR" = Build53 ]; then
         BUILD53_PENDING_CARRIED_UNRESOLVED=true
+      else
+        BUILD54_PENDING_CARRIED_UNRESOLVED=true
       fi
       echo "==> Exact deployed-build50-to-$exact_build50_slug server transition verified; both tablet counters remain UNRESOLVED."
     elif [ "$CANDIDATE_APP_VERSION" = 3.1.42 ] && \
@@ -2086,6 +2099,7 @@ if [ -n "$EXISTING_POSTGRES_CONTAINER" ]; then
      [ "${BUILD50_PENDING_CARRIED_UNRESOLVED:-false}" = false ] && \
      [ "${BUILD52_PENDING_CARRIED_UNRESOLVED:-false}" = false ] && \
      [ "${BUILD53_PENDING_CARRIED_UNRESOLVED:-false}" = false ] && \
+     [ "${BUILD54_PENDING_CARRIED_UNRESOLVED:-false}" = false ] && \
      [ "$CODE30_2_POST_CLEANUP_STALE_OUTBOX_ACCEPTED" = \
        "$CODE30_2_STALE_OUTBOX_BRIDGE_USED" ]; then
     echo "Retained tablet outbox was not accepted by exactly one guarded path." >&2
@@ -2101,7 +2115,8 @@ if [ -n "$EXISTING_POSTGRES_CONTAINER" ]; then
       "${BUILD49_PENDING_CARRIED_UNRESOLVED:-false}" \
       "${BUILD50_PENDING_CARRIED_UNRESOLVED:-false}" \
       "${BUILD52_PENDING_CARRIED_UNRESOLVED:-false}" \
-      "${BUILD53_PENDING_CARRIED_UNRESOLVED:-false}"; do
+      "${BUILD53_PENDING_CARRIED_UNRESOLVED:-false}" \
+      "${BUILD54_PENDING_CARRIED_UNRESOLVED:-false}"; do
     if [ "$accepted_path" = true ]; then
       accepted_pending_paths=$((accepted_pending_paths + 1))
     fi
@@ -2306,8 +2321,10 @@ PY
   EXACT_BUILD50_POST_PROOF_SUCCEEDED=true
   if [ "$EXACT_BUILD50_SUCCESSOR" = Build52 ]; then
     BUILD52_POST_PROOF_SUCCEEDED=true
-  else
+  elif [ "$EXACT_BUILD50_SUCCESSOR" = Build53 ]; then
     BUILD53_POST_PROOF_SUCCEEDED=true
+  else
+    BUILD54_POST_PROOF_SUCCEEDED=true
   fi
   echo "==> Exact $EXACT_BUILD50_SUCCESSOR post-migration preservation verified before normal writers."
 fi

@@ -119,7 +119,7 @@ candidate_images=$(python3 ops/runtime_release_parity.py candidate \
   --version-name "$APP_VERSION" --source-git-sha "$APP_REVISION" \
   --project-name "$PROJECT_NAME")
 
-# Build52/53 exact pending-data transitions run Alembic from the attested backend
+# Build52/53/54 exact pending-data transitions run Alembic from the attested backend
 # image before its normal entrypoint or any other application runtime starts.
 # Exercise that same Compose/image boundary here; the later full runtime check
 # remains the proof for the ordinary fresh-install startup path.
@@ -127,6 +127,7 @@ EXACT_MIGRATION_BUILD=""
 case "$APP_VERSION" in
   3.1.44) EXACT_MIGRATION_BUILD=Build52 ;;
   3.1.45) EXACT_MIGRATION_BUILD=Build53 ;;
+  3.1.46) EXACT_MIGRATION_BUILD=Build54 ;;
 esac
 if [ -n "$EXACT_MIGRATION_BUILD" ]; then
   CANDIDATE_BACKEND_IMAGE_ID=$(python3 -c \
