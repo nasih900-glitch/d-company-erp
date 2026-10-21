@@ -2310,7 +2310,9 @@ PYIDENTITY
       CODE30_2_STALE_OUTBOX_BRIDGE_USED=true
     fi
   fi
+  fi
   # Preserve the original legacy-path guard unless an exact compatibility proof passed.
+  if [ "${BUILD55_EXACT_TRANSITION:-false}" != true ]; then
   if [ "$pending_outbox_count" -ne 0 ] && \
      [ "$BUILD42_PENDING_CARRIED_UNRESOLVED" = false ] && \
      [ "${BUILD45_PENDING_CARRIED_UNRESOLVED:-false}" = false ] && \

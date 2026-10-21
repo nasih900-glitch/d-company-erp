@@ -1335,3 +1335,58 @@ def test_build55_exact_guard_refuses_mutations_after_positive_baseline(
     errors: list[str] = []
     _verify_code30_4_exact_delta(candidate, errors)
     assert expected in errors
+
+
+@pytest.mark.parametrize(
+    "path",
+    ("tests/test_build53_pending_compatibility.py", "tests/test_build54_pending_compatibility.py"),
+)
+def test_build55_historical_source_guards_only_fix_immutable_release_endpoints(path: str) -> None:
+    expected = _git_object_bytes(CODE30_4_BUILD54_BASE, path).decode("utf-8")
+    if path.endswith("test_build53_pending_compatibility.py"):
+        replacements = (
+            (
+                '                "f78d567b2093671992be289133af22637e6d7b0d",\n                "--",\n',
+                '                "f78d567b2093671992be289133af22637e6d7b0d",\n'
+                '                "8506c7abdf15c92029226849f42b1b71fd6878d6",\n                "--",\n',
+            ),
+            (
+                '    changed.update(\n'
+                '        subprocess.run(\n'
+                '            ["git", "diff", "--name-only", "--", "backend/app"],\n'
+                '            cwd=ROOT,\n'
+                '            check=True,\n'
+                '            capture_output=True,\n'
+                '            text=True,\n'
+                '        ).stdout.splitlines()\n'
+                '    )\n',
+                "",
+            ),
+        )
+    else:
+        replacements = (
+            (
+                '                "8506c7abdf15c92029226849f42b1b71fd6878d6",\n                "--",\n',
+                '                "8506c7abdf15c92029226849f42b1b71fd6878d6",\n'
+                '                "5ad146ae076f5178acc2c8e4cb840ecbb0d0343a",\n                "--",\n',
+            ),
+            (
+                '    assert (ROOT / "backend/app/__init__.py").read_text() == before.replace(\n',
+                '    after = subprocess.run(\n'
+                '        [\n'
+                '            "git",\n'
+                '            "show",\n'
+                '            "5ad146ae076f5178acc2c8e4cb840ecbb0d0343a:backend/app/__init__.py",\n'
+                '        ],\n'
+                '        cwd=ROOT,\n'
+                '        check=True,\n'
+                '        capture_output=True,\n'
+                '        text=True,\n'
+                '    ).stdout\n'
+                '    assert after == before.replace(\n',
+            ),
+        )
+    for before, after in replacements:
+        assert expected.count(before) == 1
+        expected = expected.replace(before, after)
+    assert (ROOT / path).read_text(encoding="utf-8") == expected

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
 from copy import deepcopy
 from pathlib import Path
 from uuid import UUID
@@ -552,6 +553,81 @@ def test_main_installer_orders_preservation_before_any_writer_and_never_reopens_
     assert '"$BUILD55_AUTH_TOOL" internal-probe' in source
     assert '< "$BUILD55_ACCEPTANCE_CREDENTIAL_FILE"' not in source
     assert 'sha256sum "$BUILD55_ACCEPTANCE_CREDENTIAL_FILE"' not in source
+
+
+def test_installer_and_extractable_legacy_guard_have_complete_shell_syntax(tmp_path):
+    installer = ROOT / "infra/scripts/install-on-vm.sh"
+    source = installer.read_text()
+    start = source.index("  # Preserve the original legacy-path guard")
+    end = source.index(
+        '  echo "==> Creating final quiesced pre-upgrade PostgreSQL backup', start
+    )
+    fragment = tmp_path / "legacy-pending-guard.sh"
+    fragment.write_text(source[start:end])
+    for path in (installer, fragment):
+        result = subprocess.run(["bash", "-n", str(path)], capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize(
+    ("exact55", "legacy42", "expected_success"),
+    ((True, False, True), (False, True, True), (False, False, False)),
+)
+def test_installer_legacy_guard_is_separate_from_the_exact55_proof(
+    exact55, legacy42, expected_success
+):
+    source = (ROOT / "infra/scripts/install-on-vm.sh").read_text()
+    start = source.index("  # Preserve the original legacy-path guard")
+    end = source.index(
+        '  echo "==> Creating final quiesced pre-upgrade PostgreSQL backup', start
+    )
+    prefix = (
+        "set -eu\npending_outbox_count=3\n"
+        f"BUILD55_EXACT_TRANSITION={str(exact55).lower()}\n"
+        "CODE30_2_POST_CLEANUP_STALE_OUTBOX_ACCEPTED=false\n"
+        "CODE30_2_STALE_OUTBOX_BRIDGE_USED=false\n"
+        f"BUILD42_PENDING_CARRIED_UNRESOLVED={str(legacy42).lower()}\n"
+    )
+    result = subprocess.run(
+        ["bash", "-c", prefix + source[start:end]], capture_output=True, text=True
+    )
+    assert (result.returncode == 0) is expected_success, result.stderr
+    assert "syntax error" not in result.stderr
+
+
+def test_build55_backend_write_surface_is_bounded_to_reviewed_corrections(verifier):
+    assert verifier.PRIOR_REVISION == "5ad146ae076f5178acc2c8e4cb840ecbb0d0343a"
+    changed = set(
+        subprocess.run(
+            [
+                "git", "diff", "--name-only", verifier.PRIOR_REVISION,
+                "--", "backend/app", "backend/alembic",
+            ],
+            cwd=ROOT, check=True, capture_output=True, text=True,
+        ).stdout.splitlines()
+    )
+    changed.update(
+        subprocess.run(
+            [
+                "git", "ls-files", "--others", "--exclude-standard",
+                "--", "backend/app", "backend/alembic",
+            ],
+            cwd=ROOT, check=True, capture_output=True, text=True,
+        ).stdout.splitlines()
+    )
+    assert changed == {
+        "backend/app/__init__.py",
+        "backend/app/api/v1/client_updates/router.py",
+        "backend/app/api/v1/gaming/router.py",
+        "backend/app/api/v1/public/router.py",
+        "backend/app/core/middleware.py",
+        "backend/app/main.py",
+        "backend/app/models/__init__.py",
+        "backend/app/models/client_update.py",
+        "backend/app/services/audit/catalogue.py",
+        "backend/app/services/client_updates/policy.py",
+        "backend/alembic/versions/0092_android_update_policy.py",
+    }
 
 
 def _catalogue_hash(verifier, document):

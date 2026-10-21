@@ -1794,8 +1794,8 @@ REVIEWED_CODE30_4_BUILD55_SHA256 = {'.env.production.example': 'b45aa3dc9492aa07
  'docs/SERVER_DRIVEN_ANDROID_UPDATES.md': '1bb9745df4b5778eeb5fc82397c21376a427090f8a9056f1aa4f9b34c1ee0c1c',
  'docs/V3_1_47_RELEASE_CANDIDATE.md': '52bb659a8f6ae49d17eb4033609df2121dc52acabc311b9a29f1d8e1a9c7ce6b',
  'frontend/.env.example': '25ecc546c19ab44b9638397be1944adffeb12fe673c9228cc2e1496349d0115f',
- 'frontend/package-lock.json': '8282b508ed5cb22dba6b78e85fe8c9ee42f87a861e26504d9e1511bb777c1ffb',
- 'frontend/package.json': 'd51ab3e52d0776229307dcc1c3cf69afef4864f6a89499aee912a45e19200e12',
+ 'frontend/package-lock.json': '01e096f2d803cf7aa7969aacba7cae50335df4c3ff3832d6f8a1725bca1d9bf8',
+ 'frontend/package.json': 'bb3abab9171cd8fb3440ad4f485dcb5e8e5399bab4365398b1bbd9575ca2a359',
  'frontend/src/lib/erp-api.ts': '97c90fc1a0b444ccf1e307e3e2b739506410dadaa7f02a9c1e989877ddb04449',
  'frontend/src/modules/audit/audit-presentation.test.ts': '4066609b294c7535b63e6e76e335ad5f7b8b317c4618b86fe8c8506c7c9133de',
  'frontend/src/modules/audit/audit-presentation.ts': 'a77f388154268f1e863aa1e94b3fdbcf9b897ca78ff4a0fae64e13886fb75918',
@@ -1807,12 +1807,14 @@ REVIEWED_CODE30_4_BUILD55_SHA256 = {'.env.production.example': 'b45aa3dc9492aa07
  'frontend/src/modules/settings/tabs/AndroidUpdatePolicyPanel.tsx': 'f8270db937469511028c3e3de05eca5dbb45a7416b38f770baa65a8ed49882bc',
  'frontend/src/modules/settings/tabs/DevicesUpdatesTab.tsx': '3219df29ac30de2ae5fdf18fe1b073d20b3e2ad4a25e271ba8190c0dbbd3f547',
  'infra/scripts/capture-build55-runtime.py': '0dd1b4474229b5a57ab640a8399f9231bc0ff90f03cb6780823e61016e07a00a',
- 'infra/scripts/install-on-vm.sh': '0774993ca4f3cbb3ee2aa60198eb3258b1e8bead1bb6c10d8ffb1b2c2bd37c7f',
+ 'infra/scripts/install-on-vm.sh': '2dc40a5bc93a53aaa278407e70a237c755b9954776bd2fd51c2eb7e96f5afc4b',
  'infra/scripts/verify-build55-authenticated-acceptance.py': 'f4d59c7f967b6cc7cc4176bf3f6729fbd70f321007185697dd9fcea84401b417',
- 'infra/scripts/verify-build55-pending-compatibility.py': '8e3f57bc082cbfb69eebb5d809bb514b4f192c93ddd3c7be172ae56fedb7ae1e',
+ 'infra/scripts/verify-build55-pending-compatibility.py': '17cadea993efc6290e099214f6538325a9b1b1d6a80e4c7f287a96fb074347a6',
  'infra/scripts/verify-build55-transition-state.sql': '0e7a5b6a0aa636ad9792c4855d437528b7f8c54cefa178e5662d4f3c474fe0b1',
+ 'tests/test_build53_pending_compatibility.py': '68301cf1e8eafe8b3c3258f956c41022a53edf00296f169d98c5383d438e182f',
+ 'tests/test_build54_pending_compatibility.py': '7e80fa9dc3d27f9975af59856b33bfce944f88720fb2e9661384cdf6ba45cab2',
  'tests/test_build55_authenticated_acceptance.py': '8d8e8239ac42d019e9b2c9b919dfae20ebb77e14c89a4952fa4134837f824923',
- 'tests/test_build55_pending_compatibility.py': '2fb99cb6c8772f31cd04f4748c1dccc2c812aa9abe142761dc20205299c18a1c',
+ 'tests/test_build55_pending_compatibility.py': 'dfd3e28518987816e3c6ed527a0c4d904a5f235fa9132960cc33928cc584b52c',
  'tests/test_code26_physical_audit_lane.py': '9706544d6bde4b4f07e717dd5be6bdd6bd3a5bca5207e19c20111b218e774fbe'}
 
 REVIEWED_CODE30_4_PRODUCTION_PATHS = frozenset(
