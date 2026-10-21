@@ -209,9 +209,7 @@ class ClientInstallation(Base, TimestampMixin, TenantMixin):
     # installation has never advertised the constrained support protocol.
     remote_support_protocol_version: Mapped[int | None] = mapped_column(Integer)
     remote_support_capability: Mapped[str | None] = mapped_column(String(32))
-    remote_support_last_seen_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True)
-    )
+    remote_support_last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class ClientUpdateEvent(Base, TenantMixin):
@@ -399,6 +397,39 @@ class AndroidRelease(Base, TimestampMixin):
     )
 
 
+class AndroidUpdatePolicy(Base, TimestampMixin):
+    """Global direct-install policy; only the protected deployment controller writes it."""
+
+    __tablename__ = "android_update_policy"
+    __table_args__ = (
+        CheckConstraint("id = 1", name="ck_android_update_policy_singleton"),
+        CheckConstraint("mode IN ('optional', 'required')", name="ck_android_update_policy_mode"),
+        CheckConstraint(
+            "revision BETWEEN 1 AND 2147483647", name="ck_android_update_policy_revision"
+        ),
+        CheckConstraint(
+            "(mode = 'optional' AND release_id IS NULL AND release_fingerprint IS NULL) OR "
+            "(mode = 'required' AND release_id IS NOT NULL AND "
+            "release_fingerprint IS NOT NULL AND release_fingerprint ~ '^[a-f0-9]{64}$')",
+            name="ck_android_update_policy_target",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) BETWEEN 3 AND 500", name="ck_android_update_policy_reason"
+        ),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    mode: Mapped[str] = mapped_column(String(20), nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    release_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("android_releases.id", ondelete="RESTRICT")
+    )
+    release_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    reason: Mapped[str] = mapped_column(String(500), nullable=False)
+    updated_by: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+
+
 @event.listens_for(ClientUpdateEvent, "before_update")
 @event.listens_for(ClientUpdateEvent, "before_delete")
 def _guard_immutable_client_update_event(*_args: object, **_kwargs: object) -> None:
@@ -461,6 +492,7 @@ __all__ = [
     "CLIENT_UPDATE_EVENTS_MAX_PER_USER",
     "CLIENT_UPDATE_STATES",
     "AndroidRelease",
+    "AndroidUpdatePolicy",
     "ClientInstallation",
     "ClientUpdateEvent",
 ]

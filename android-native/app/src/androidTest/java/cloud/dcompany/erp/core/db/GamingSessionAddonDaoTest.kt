@@ -192,6 +192,61 @@ class GamingSessionAddonDaoTest {
         )
     }
 
+    @Test
+    fun cancellationGuardsCountLeftPlayerHistoryAndOnlyUnvoidedItemsInTheExactSession() = runBlocking {
+        dao.insertLocalSession(localSession())
+        dao.upsertParticipantCache(listOf(
+            GamingSessionParticipantCacheEntity(
+                id = "left-player", gamingSessionId = "server-session-1",
+                joinedAtMillis = 1_000, joinedPlayElapsedMs = 0,
+                leftAtMillis = 2_000, leftPlayElapsedMs = 1_000,
+                joinRevision = 1, leaveRevision = 2,
+            ),
+            GamingSessionParticipantCacheEntity(
+                id = "other-session-player", gamingSessionId = "server-session-2",
+                joinedAtMillis = 1_000, joinedPlayElapsedMs = 0, joinRevision = 1,
+            ),
+        ))
+        assertEquals(1, dao.participantEvidenceCount("server-session-1"))
+        assertEquals(1, dao.participantEvidenceCount("server-session-2"))
+        assertEquals(0, dao.participantEvidenceCount("unrelated-session"))
+
+        val captured = addonAction(
+            actionId = "77777777-7777-4777-8777-777777777777",
+            clientLineId = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+            ownerUserId = "employee-a",
+        )
+        val active = GamingSessionAddonCacheEntity(
+            id = "active-item", gamingSessionId = "server-session-1",
+            clientLineId = captured.clientLineId, menuItemId = captured.menuItemId,
+            menuItemName = captured.menuItemName, menuItemType = captured.menuItemType,
+            variantId = captured.variantId, modifiersJson = captured.modifierSelectionsJson,
+            qty = captured.qty, catalogUnitPriceMinor = captured.expectedUnitPriceMinor,
+            unitPriceMinor = captured.expectedUnitPriceMinor,
+            lineTotalMinor = captured.expectedUnitPriceMinor * captured.qty,
+            discountMinor = 0, taxRate = 0.0,
+            taxableValueMinor = captured.expectedUnitPriceMinor * captured.qty,
+            cgstMinor = 0, sgstMinor = 0, igstMinor = 0, cessMinor = 0,
+            createdBy = captured.ownerUserId, createdTerminalId = captured.terminalId,
+            createdAtMillis = captured.createdAtMillis,
+        )
+        dao.upsertSessionAddonCache(listOf(
+            active,
+            active.copy(id = "voided-item", clientLineId = "voided-line", voidedAtMillis = 2_000,
+                voidedBy = "employee-a", voidReason = "Entered by mistake"),
+            active.copy(id = "other-session-item", clientLineId = "other-line", gamingSessionId = "server-session-2"),
+        ))
+        assertEquals(1, dao.activeSessionAddonCount("server-session-1"))
+        assertEquals(1, dao.activeSessionAddonCount("server-session-2"))
+        assertEquals(0, dao.activeSessionAddonCount("unrelated-session"))
+        dao.upsertSessionAddonCache(listOf(active.copy(voidedAtMillis = 2_100,
+            voidedBy = "employee-a", voidReason = "Entered by mistake")))
+        assertEquals(0, dao.activeSessionAddonCount("server-session-1"))
+        assertEquals(2_100L, dao.sessionAddonCacheById(active.id)?.voidedAtMillis)
+        assertEquals(1, dao.activeSessionAddonCount("server-session-2"))
+        assertEquals(1, dao.participantEvidenceCount("server-session-1"))
+    }
+
     private fun localSession(
         serverId: String? = "server-session-1",
         state: String = GamingSessionState.START_SYNCED,

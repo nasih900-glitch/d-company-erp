@@ -30,9 +30,9 @@ import androidx.core.view.WindowCompat
 /**
  * D Company executive palette.
  *
- * The interface uses the same monochrome foundation as the Web ERP. The
- * original gold company mark remains the brand accent; semantic colours are
- * reserved for operational state and always accompany text or an icon.
+ * The classic navy and brass identity restores the Build 45 palette while
+ * retaining the current layout and appearance controls. Semantic colours
+ * accompany operational labels or icons; the original company mark is unchanged.
  */
 @Immutable
 data class BrandPalette(
@@ -42,7 +42,7 @@ data class BrandPalette(
     val SurfaceRaised: Color,
     val SurfaceHover: Color,
     val SurfaceOverlay: Color,
-    /** Legacy neutral-primary name; the actual brand gold has its own role. */
+    /** Primary action/text accent; BrandAccent retains the original logo gold. */
     val Gold: Color,
     val BrandAccent: Color,
     val GoldBright: Color,
@@ -66,35 +66,37 @@ data class BrandPalette(
 )
 
 internal val NightPalette = BrandPalette(
-    Background = Color(0xFF050505), BackgroundSecondary = Color(0xFF0B0B0B),
-    Surface = Color(0xFF101010), SurfaceRaised = Color(0xFF191919),
-    SurfaceHover = Color(0xFF242424), SurfaceOverlay = Color(0xFF303030),
-    Gold = Color(0xFFF5F5F1), BrandAccent = Color(0xFFC6A15B),
-    GoldBright = Color(0xFFDDDDD7), GoldMuted = Color(0xFFAAAAA2),
-    Foreground = Color(0xFFF5F5F5), ForegroundMuted = Color(0xFFB0B0A8),
-    ForegroundFaint = Color(0xFF878780), Disabled = Color(0xFF6F6F69),
-    Good = Color(0xFF52C37E), GoodMuted = Color(0xFF153722),
-    Warning = Color(0xFFDDDDD7), WarningMuted = Color(0xFF191919),
-    Danger = Color(0xFFF4686E), DangerMuted = Color(0xFF471F25),
-    Information = Color(0xFFAAAAA2), InformationMuted = Color(0xFF191919),
-    Border = Color(0xFF303030), BorderSubtle = Color(0xFF303030),
-    ControlBorder = Color(0xFF74746E), FocusRing = Color(0xFFF5F5F1),
+    Background = Color(0xFF08131B), BackgroundSecondary = Color(0xFF0B1821),
+    Surface = Color(0xFF0F1D26), SurfaceRaised = Color(0xFF162832),
+    SurfaceHover = Color(0xFF1A2E39), SurfaceOverlay = Color(0xFF1D333F),
+    Gold = Color(0xFFC6A15B), BrandAccent = Color(0xFFC6A15B),
+    GoldBright = Color(0xFFD2B675), GoldMuted = Color(0xFFB99A5F),
+    Foreground = Color(0xFFF4F6F7), ForegroundMuted = Color(0xFF9BA8B0),
+    ForegroundFaint = Color(0xFF8D9AA2), Disabled = Color(0xFF65727A),
+    Good = Color(0xFF43D17A), GoodMuted = Color(0xFF123826),
+    Warning = Color(0xFFF3A83B), WarningMuted = Color(0xFF3D2B12),
+    Danger = Color(0xFFFF6B70), DangerMuted = Color(0xFF471F25),
+    Information = Color(0xFF5AA7FF), InformationMuted = Color(0xFF142F4B),
+    Border = Color(0xFF314752), BorderSubtle = Color(0xFF223640),
+    ControlBorder = Color(0xFF527483), FocusRing = Color(0xFFC6A15B),
 )
 
+// Build 45 had a dark palette only. The retained Day option uses the same brass
+// identity with darker text/control accents so small labels remain readable.
 internal val DayPalette = BrandPalette(
-    Background = Color(0xFFFAFAFA), BackgroundSecondary = Color(0xFFFFFFFF),
+    Background = Color(0xFFF7F7F7), BackgroundSecondary = Color(0xFFFFFFFF),
     Surface = Color(0xFFFFFFFF), SurfaceRaised = Color(0xFFF0F0F0),
     SurfaceHover = Color(0xFFE8E8E8), SurfaceOverlay = Color(0xFFFFFFFF),
-    Gold = Color(0xFF161615), BrandAccent = Color(0xFFC6A15B),
-    GoldBright = Color(0xFF31312E), GoldMuted = Color(0xFF53534F),
-    Foreground = Color(0xFF111111), ForegroundMuted = Color(0xFF5B5B56),
-    ForegroundFaint = Color(0xFF7A7A74), Disabled = Color(0xFF9A9A94),
-    Good = Color(0xFF1B7E4B), GoodMuted = Color(0xFFDCEFE4),
-    Warning = Color(0xFF31312E), WarningMuted = Color(0xFFF0F0F0),
+    Gold = Color(0xFF87621F), BrandAccent = Color(0xFFC6A15B),
+    GoldBright = Color(0xFF77561B), GoldMuted = Color(0xFF715B37),
+    Foreground = Color(0xFF111111), ForegroundMuted = Color(0xFF525252),
+    ForegroundFaint = Color(0xFF686868), Disabled = Color(0xFF888888),
+    Good = Color(0xFF176F43), GoodMuted = Color(0xFFDCEFE4),
+    Warning = Color(0xFF8A570B), WarningMuted = Color(0xFFFFF0D6),
     Danger = Color(0xFFBE3236), DangerMuted = Color(0xFFF9DFE0),
-    Information = Color(0xFF53534F), InformationMuted = Color(0xFFF0F0F0),
-    Border = Color(0xFFDEDEDE), BorderSubtle = Color(0xFFDEDEDE),
-    ControlBorder = Color(0xFF70706A), FocusRing = Color(0xFF111110),
+    Information = Color(0xFF1B5F9E), InformationMuted = Color(0xFFDFECF7),
+    Border = Color(0xFFD8D8D8), BorderSubtle = Color(0xFFD8D8D8),
+    ControlBorder = Color(0xFF686868), FocusRing = Color(0xFF87621F),
 )
 
 private val LocalBrandPalette = staticCompositionLocalOf { NightPalette }
@@ -181,7 +183,7 @@ object Motion {
 private fun companyColorScheme(palette: BrandPalette, dark: Boolean) =
     (if (dark) darkColorScheme() else lightColorScheme()).copy(
         primary = palette.Gold, onPrimary = palette.Background,
-        primaryContainer = palette.SurfaceRaised, onPrimaryContainer = palette.Foreground,
+        primaryContainer = palette.Gold.copy(alpha = 0.16f), onPrimaryContainer = palette.GoldBright,
         secondary = palette.GoldMuted, onSecondary = palette.Background,
         secondaryContainer = palette.SurfaceHover, onSecondaryContainer = palette.Foreground,
         tertiary = palette.Information, onTertiary = palette.Background,

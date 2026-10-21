@@ -3,6 +3,8 @@ package cloud.dcompany.erp.ui.theme
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.luminance
+import cloud.dcompany.erp.ui.screens.customers.LeaderboardIdentityTintAlpha
+import cloud.dcompany.erp.ui.screens.customers.LeaderboardRowTintAlpha
 import cloud.dcompany.erp.ui.screens.customers.LeaderboardBronzeAccent
 import cloud.dcompany.erp.ui.screens.customers.LeaderboardSilverAccent
 import org.junit.Assert.assertEquals
@@ -11,32 +13,38 @@ import org.junit.Test
 
 class ThemeContrastTest {
     @Test
-    fun `night and day palettes keep the approved monochrome foundation`() {
-        assertEquals(Color(0xFF050505), NightPalette.Background)
-        assertEquals(Color(0xFF0B0B0B), NightPalette.BackgroundSecondary)
-        assertEquals(Color(0xFF101010), NightPalette.Surface)
-        assertEquals(Color(0xFFF5F5F5), NightPalette.Foreground)
-        assertEquals(Color(0xFFFAFAFA), DayPalette.Background)
-        assertEquals(Color(0xFF161615), DayPalette.Gold)
-        assertEquals(Color(0xFFF5F5F1), NightPalette.Gold)
+    fun `classic night palette restores Build 45 identity and keeps the original mark`() {
+        assertEquals(Color(0xFF08131B), NightPalette.Background)
+        assertEquals(Color(0xFF0B1821), NightPalette.BackgroundSecondary)
+        assertEquals(Color(0xFF0F1D26), NightPalette.Surface)
+        assertEquals(Color(0xFF162832), NightPalette.SurfaceRaised)
+        assertEquals(Color(0xFFF4F6F7), NightPalette.Foreground)
+        assertEquals(Color(0xFFC6A15B), NightPalette.Gold)
+        assertEquals(Color(0xFFD2B675), NightPalette.GoldBright)
         assertEquals(Color(0xFFC6A15B), DayPalette.BrandAccent)
         assertEquals(DayPalette.BrandAccent, NightPalette.BrandAccent)
-        assertEquals(Color(0xFF7A7A74), DayPalette.ForegroundFaint)
-        assertEquals(Color(0xFF878780), NightPalette.ForegroundFaint)
-        assertEquals(Color(0xFF111111), DayPalette.Foreground)
     }
 
     @Test
-    fun `routine warnings and information use readable Web neutral roles`() {
-        assertEquals(Color(0xFF31312E), DayPalette.Warning)
-        assertEquals(Color(0xFF53534F), DayPalette.Information)
-        assertEquals(Color(0xFFDDDDD7), NightPalette.Warning)
-        assertEquals(Color(0xFFAAAAA2), NightPalette.Information)
+    fun `classic semantic colours stay readable on their paired containers`() {
+        assertEquals(Color(0xFFF3A83B), NightPalette.Warning)
+        assertEquals(Color(0xFF5AA7FF), NightPalette.Information)
         listOf(NightPalette, DayPalette).forEach { palette ->
-            assertEquals(palette.SurfaceRaised, palette.WarningMuted)
-            assertEquals(palette.SurfaceRaised, palette.InformationMuted)
             assertTrue(contrastRatio(palette.Warning, palette.WarningMuted) >= 4.5f)
             assertTrue(contrastRatio(palette.Information, palette.InformationMuted) >= 4.5f)
+            val goodContrast = contrastRatio(palette.Good, palette.GoodMuted)
+            assertTrue("Success text/container contrast is $goodContrast, requires 4.5:1", goodContrast >= 4.5f)
+            assertTrue(contrastRatio(palette.Danger, palette.DangerMuted) >= 4.5f)
+        }
+    }
+
+    @Test
+    fun `brass actions and selected labels remain readable in both appearances`() {
+        listOf(NightPalette, DayPalette).forEach { palette ->
+            assertTrue(contrastRatio(palette.Gold, palette.Background) >= 4.5f)
+            val selectedSurface = palette.Gold.copy(alpha = 0.16f).compositeOver(palette.Surface)
+            assertTrue(contrastRatio(palette.GoldBright, selectedSurface) >= 4.5f)
+            assertTrue(contrastRatio(palette.GoldMuted, palette.Background) >= 4.5f)
         }
     }
 
@@ -80,10 +88,11 @@ class ThemeContrastTest {
     fun `leaderboard primary text stays readable across medal tinted rows in day and night`() {
         listOf(NightPalette, DayPalette).forEach { palette ->
             listOf(LeaderboardSilverAccent, LeaderboardBronzeAccent).forEach { medal ->
-                val rowStart = medal.copy(alpha = 0.17f).compositeOver(palette.Surface)
-                val identityBadge = medal.copy(alpha = 0.20f).compositeOver(rowStart)
+                val rowStart = medal.copy(alpha = LeaderboardRowTintAlpha).compositeOver(palette.Surface)
+                val identityBadge = medal.copy(alpha = LeaderboardIdentityTintAlpha).compositeOver(rowStart)
                 assertTrue(contrastRatio(palette.Foreground, rowStart) >= 7f)
-                assertTrue(contrastRatio(palette.Foreground, identityBadge) >= 7f)
+                val badgeContrast = contrastRatio(palette.Foreground, identityBadge)
+                assertTrue("Medal badge text contrast is $badgeContrast, requires 7:1", badgeContrast >= 7f)
             }
         }
     }

@@ -24,9 +24,12 @@ documentation. Code30.4 adds reviewed PS5 friend participation and 60-to-30
 package amendment at Alembic 0083-0085 and Room 53, paid non-PS5 extensions,
 local app-health capture and a bounded Gaming refresh. Build 42 adds the
 reviewed Android control-deck polish and coordinated release identity.
-The immutable Code30.2 through Code30.4 build-41 bytes are read from their
+The immutable Code30.2 through Code30.4 build-54 bytes are read from their
 release commits; the current working tree is checked against a separate
-build-42 map. No release layer
+build-55 map covering the reviewed Gaming/workflow corrections, Android-only
+older palette, protected update policy and guarded preservation profile.
+Source admission does not assert signing, deployment or tablet acceptance.
+No release layer
 may delete, disable, reorder, or rewrite an existing test
 outside the exact fixture-only normalization or exact reviewed-test hashes below.
 The sole reviewed audit-reader locator migration below preserves every
@@ -211,6 +214,8 @@ CODE30_4_BUILD51_BASE = "a44397d53d94fb4c83b3fc9ffe696dbf4dce3168"
 CODE30_4_BUILD52_BASE = "f78d567b2093671992be289133af22637e6d7b0d"
 # Signed Build53 deployment refused before migration; immutable predecessor source.
 CODE30_4_BUILD53_BASE = "8506c7abdf15c92029226849f42b1b71fd6878d6"
+# Signed/deployed v3.1.46 / build54; immutable predecessor for build55.
+CODE30_4_BUILD54_BASE = "5ad146ae076f5178acc2c8e4cb840ecbb0d0343a"
 CODE30_2_FREEZE_CONTROL_PATHS = frozenset({
     "scripts/verify_code26_regression_freeze.py",
     "tests/test_code26_regression_freeze.py",
@@ -1696,6 +1701,120 @@ REVIEWED_CODE30_4_BUILD54_SHA256 = {
  'tests/test_code26_physical_audit_lane.py': '65998d03ee6f60e6744f2d1ec719cfe951864a0c2a32cd86c99b06fc40ef5665',
 }
 
+# Build55 is a separate reviewed candidate overlay. This does not admit a
+# deployment or replace any historical map/signing/physical-tablet evidence.
+REVIEWED_CODE30_4_BUILD55_SHA256 = {'.env.production.example': 'b45aa3dc9492aa07c83ac9ba7960a93b67bd14b4eedee8753ced79d5722a58d5',
+ 'PROJECT_STATE.md': '4413405f5d85df1c5f6796b1d02bc6b121c2b96dec0a76ddf50365dc72049bc1',
+ 'README.md': '17757126db2b6105350847bf3b8c7e747cfe1cb557ffde70de1dd8a87f9e5c10',
+ 'android-native/app/build.gradle.kts': 'cd86d0c541e9b684e7063729645532565478a6f6b5dcd53cc309b69884c7c4d1',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/core/db/GamingSessionAddonDaoTest.kt': 'f31f845f8f8136da4efc50fdae0aecbc06380eb687b7ec66f3243dded2b785ec',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/core/db/ShiftCloseSafetyDaoTest.kt': '3817213d1be5f1b070049ed040f10db6477b5661a669009a48d20a4f1a0335c1',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/core/net/ClientPolicyPersistenceTest.kt': '72943cb3f42f9b70ffcc15281e16bfd0c584820a7ab38bfb5e09cec9315c314a',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/OptionalUpdateBannerUiTest.kt': '9152e694860c9b887c65fee69a7e25fef7acc85f56fced40d0c8dee64602eae2',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/PosEmptyCatalogueUiTest.kt': 'c68c1f53fcdcdc9617d2e83180b6d1637c0d59cf2521a6d17d05381ebdc632da',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingBoardUiTest.kt': '2eff07461032a2b9101c01f8c9df47d951a27aaac186210ee22907754719ceed',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingDialogUiTest.kt': '5cb1aa5a4e3ace3a6f03a3a45109c8416e0bcd0d6ff0478927238312026c15d6',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingDraftRecreationUiTest.kt': '9c91a39b6e329d01be11c3e0cf77dd88e6d2566432f2224995e0d8e51c96d9b8',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingInlineShiftWorkspaceUiTest.kt': 'eb650740d3629d5fbb911777add886d68b70b44849c9d403782e29ae947db456',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingRejectedSessionAttentionUiTest.kt': 'ffa53bd3413aa99d7ff176f8ebf4b1ac740d26438f38834aa5eca0f29ef28f0d',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/shift/ShiftOverviewUiTest.kt': 'f7537b87185f6aae42a7a9356ab01fbcc20608a812b5b3029babb49edd33ae19',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/DCompanyApp.kt': 'cf983855629ef350fd595a8eb43be7b8c6cecef94ab3f0caaa416936eac0a238',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/MainActivity.kt': '534e42f1894748fc7f39c729bb605915e0c43c0e2760ceec257f6537368668cc',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/core/db/GamingDao.kt': 'f466ab3ccffe9c30fd5d2c695e0c84bcccf943f1db674983876d90936a3f26b7',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/core/db/ShiftCloseSafetyDao.kt': 'fcc97e2daef5249c2406765ce4128a1543933ea54687c24c0ed0fa5b5d4e5e87',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/core/net/ClientCompatibility.kt': '4be5aece9d7c4871be27b38cb6479147f30ff390e93e095f0b8feb2fce8727ac',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/core/net/ClientUpdateRequirementStore.kt': 'bac6e8db48564d844ced608074578aec7ee937fd8cff31be29dcd1704eefa5a6',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/core/net/Dtos.kt': '7a464d2baf20453e137abcc3e931f5312d53b7ebbced3b94c1b7a4f118663bb0',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/core/net/ForegroundCompatibilityPoller.kt': '89ce867d330ff7aa64f5b31f588590c88276d8f473180c37d47f2e6449383ffa',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/PosScreen.kt': 'c916d9fb5760b10d68b53d9f8b3dab055fa362bf10fc2a2990b0d7b221c43a7f',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/audit/AuditLogPresentation.kt': '0b0610cdbeabc42c1f00f135e5d079b34ac483c1ba96e11eb00ea7f85df9e353',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/customers/CustomersScreen.kt': 'eb607baeae1c62c86cbae0d0d497aeaa7c7ef7737faafdf1851094a034abb63e',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingAlarmPermissionCard.kt': '988d73f6c036510859ddd4a721505995ef3fd5e74fdbb3b868d95058e35db458',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingApi.kt': 'cc245f39f4879396d6d3e4fd2623335923d77f08dbea9675741774a2af7d71ac',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingDurationDial.kt': '6c46e9fa71d17d9875e663ca86b6faaf4e33613bb70e54f9e367495205f40ec8',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingScreen.kt': '6e404a81aef3e0f2e04d29a1a4286fb5721691d8e0e6b6675bf2a9e4293674b6',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingViewModel.kt': '4779b956a64de32705ca3db7c488849080f546c5f13c31ef2395a9cb2d76d2c4',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/settings/AndroidUpdatePolicy.kt': 'd2bf5a4fc449146579272791b87170445d642b757f2db4c8a3db86d921339ab2',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/settings/DeviceHealthPanel.kt': '8efb513d8de5e18ff404b59e370d0c8583d25065040e669e27f08a37fc574130',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/settings/SettingsScreen.kt': 'a81605419df19ff67985c5057c62bb2147caf829a2ac5e49aaf4bcca3b2053de',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/shift/ShiftCloseReviewPresentation.kt': 'aa9eb9353b4094c63e38ef1cb9640b75cac0ae330ff7823fdbe567f4dabedd25',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/shift/ShiftScreen.kt': 'ee8942c460f601acf54955649aa2f399e80d8e1e0e4f4164c8974aa7e5fceb0b',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/shift/ShiftViewModel.kt': 'f4548849e626b493bb0658485d465a2fb689b4b9e2ef6ae3ec60cd7864a26a5d',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/theme/Theme.kt': '6768f52eb06a5d82317c1cdbede86d160af9f477e334654f147279fb77ce9215',
+ 'android-native/app/src/main/res/values-night/colors.xml': '27317dd7a62f68e64c483e78d8e02ad6c23ecdd521965c623e83ff6904e77d77',
+ 'android-native/app/src/main/res/values-v31/launch_themes.xml': '14d838e0a803452808e3aa1309b4b2ff7e57a309015bece89b44b39e5b1b9875',
+ 'android-native/app/src/main/res/values/colors.xml': '69b8d2499e49710410e33ee358cf07ae5a30c94f31a22972a087d80dc9c9fc2b',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt': 'be71330e492e057345f07bbaaf0b07855b94b13ffd2fc96506ce582bfa48486f',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/core/net/ClientCompatibilityTest.kt': 'a7197144e4c0fddc500b195ae8c657b4eb9b32b60d6f0eef654f6a19d290ab20',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/core/net/ClientPolicyMonotonicTest.kt': 'd820f1ad1d362c9a6e75fff1070d590e490ee8b6fa84d4b8030f9cebcf4c1033',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/core/net/ForegroundCompatibilityPollerTest.kt': 'a47f7e9aec7cb7309fa85959527e3f7913d787136a05cfe23fb62b65c84dbf66',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/AndroidPerformanceOwnershipContractTest.kt': '12f94b32ff0b35b0b44a2c53cf8e223f08ef1da7beae603cf98c4171ac274c00',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/OptionalUpdateInteractionContractTest.kt': 'e63e689b4ef81f7f89f356e82b80240b8cf847953d4cf3816e8c7eafb0ba9d4f',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/PremiumFoundationContractTest.kt': '5799d8cfb6f0b1b7972eb5708f2129efd161fec8067d1163a8f7db6d4c08c6d9',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/PosReceiptPrintTest.kt': 'e331836b2effdf4e151240d34d0c18e115bdb72aa7189672bc27b427fe503056',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/audit/SemanticAuditPresentationTest.kt': '35ff2d4af1853af9f870bbafb23cda5fdcdd58144f6d7a9d76c58f325f2062da',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/gaming/GamingDurationDialHitTest.kt': '814398f6e1dd49e878359ba94c1f1327b5481a7b54dfe59c088433440391862d',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/gaming/GamingParticipantAmendmentPolicyTest.kt': '05516bae8d1c686d3876a3b3c58f052701ab437c8950122938bdc7c31864d14d',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/gaming/GamingViewModelRecoveryTest.kt': '87f16cdcd80fb2cdcdbb4be941f5b63400619fbdfe00e4cdfa118f902bb9dacd',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/settings/AndroidUpdatePolicyViewModelTest.kt': 'a6ab543eb40183b47a90e9f556687dd9b2084c635a632757346edc62132196e1',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/shift/ShiftCloseReviewPresentationTest.kt': 'a62bbda88daa9f7f39352fe45e23f3e2f3513c3bc485267c7230e17fe42af9dc',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/theme/LaunchAppearanceTest.kt': '3578ea9971b14192f5c257c32973edaebc3a57fdf84091a469a452c315b53448',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/theme/ThemeContrastTest.kt': 'f34c8be9c4c4fcae57ff1fc5386754a147eea3ebda0965f615f6530730ff8533',
+ 'backend/alembic/versions/0092_android_update_policy.py': '788375ba2354f1f4ad5c9cacfe696022e7ffb7e2e7b7ca9e31cd41e48e7ae477',
+ 'backend/app/__init__.py': 'a02f7b68b18f91b52bfd121da83f32af5b31cb9382edaf653e6b1d73344ac1aa',
+ 'backend/app/api/v1/client_updates/router.py': 'ef875b833be5af3a7a8726518a4fb78cac15bcad4dd46a9a53168ec7189ac721',
+ 'backend/app/api/v1/gaming/router.py': 'c0964766588be29c6ce652e5358c9dd874d114a01649c256a17bcd3578b759f4',
+ 'backend/app/api/v1/public/router.py': 'af2331e48f7ab202140579d71921519d72e72f6a3734467f3863a90b6916cbd8',
+ 'backend/app/core/middleware.py': '945ba916e341be6f6bfe4814c48ae0d816191e9070c4f3d60d9b66629bf9255e',
+ 'backend/app/main.py': '9f72611cf14ffe149de53493f61f1140d58ed0b4a9db427d327df70fa91f9fa2',
+ 'backend/app/models/__init__.py': '002553bbbe5c0f43d2f2bbfc592ca3ad42d6c481166ab8cda687cdba3ec1ab28',
+ 'backend/app/models/client_update.py': '30e4dc949f33261b3d097834db7a6a0fc6cc13d1e8d015a1d5175ce936082c0a',
+ 'backend/app/services/audit/catalogue.py': '47d6685342ace7f64f5eba1d72702593daac2bea8ae9a2a9c792ad01af9f0e3d',
+ 'backend/app/services/client_updates/policy.py': '0862e7f44a6c04f70af5078093ce8e85a05a62e7f18dfe835cce86f51cf4fdb2',
+ 'backend/pyproject.toml': '19cf01583da18b8cec0eb4aac7f5340b18653c478cd27f6a0eee987ee180ea67',
+ 'backend/tests/integration/test_android_update_policy.py': 'fe4cc44ddad198ebfacbb848b8d230f0f209ffe8417291bcebb707043065e3e2',
+ 'backend/tests/integration/test_android_update_policy_migration.py': '127429bbfd0138246024d8bcd06f75662d906e7d4b533ce757a8ececd75d039c',
+ 'backend/tests/integration/test_audit_business_events.py': '5724ada0510314695d0c844e81ee7748118487f1a696154c3a968fc5ebc23a09',
+ 'backend/tests/integration/test_build51_history_bridge.py': '17a86e5a7ada89c0511ea7847f340acdbaa2adc2a6eaef79ef442d3feb729d1a',
+ 'backend/tests/integration/test_build52_transition_state_query.py': '8ed39e673fb07bde740fc579b33c5bc8a60682e0d6a0f08d1b1cf2cd76ec5c6b',
+ 'backend/tests/integration/test_build55_transition_state_query.py': '36e1eeb042eb11f7203b877e2f55940f5842736c86dbdef07c3b2e9d1722e749',
+ 'backend/tests/integration/test_gaming_participant_void.py': 'edb6af934d0c2aaa6a7ce686c70459b74a8edcbb90c83bddcfddd09eddbdf4ca',
+ 'backend/tests/integration/test_tender_correction_migration.py': '3568620720787d92e71455daef2ac22879c6f51600b6fa8e88b8f06124aeb3ee',
+ 'backend/tests/unit/test_android_update_policy.py': '0d9c0ca03789e6e1efc333c31f3e755d0721e154419bfa6f57bebef46f171fc0',
+ 'backend/tests/unit/test_audit_business_catalogue.py': '9b93d156415ad44f1a49aba0a900ff4f3e1f95f73d5e2d3483e3ad0276021a94',
+ 'backend/tests/unit/test_client_compatibility.py': '9710b9136c58bf962814a9b2f7b03b53ab596bb888104844eff686379eeca70c',
+ 'backend/tests/unit/test_gaming_reconciliation.py': '3d56b0522a545c46a654b6f06ca33ca541c4a78762a875a75d2439944cc244ee',
+ 'backend/tests/unit/test_operational_route_integrity.py': '569480d93aee33c47172aa95ad25860dd92dc712c2a307849ee92b51eaf81d16',
+ 'backend/tests/unit/test_release_contracts.py': '0e335e02943780c4a24034714f759b65be1c805f65ec672c5b68b3c2b7e0bf2e',
+ 'backend/tests/unit/test_remote_assistance_contract.py': 'aee97434ba24ee30641d71a1895428fa025976fca5b6e1a26b900f3d8201e9a1',
+ 'backend/tests/unit/test_runtime_release_parity.py': 'dce44ab147f28bd95da7fe2ba8380abef9214c3340a07190acbc2dbaaf866e28',
+ 'docker-compose.prod.yml': '07c6c619e450a85a60aac2c5269bd9c194b3487744908a1115eeb023e5f4629c',
+ 'docs/BUILD55_ACCEPTANCE.md': 'a09edb810141a10f75b9fdad9624e5a36dee8f9c7f608d880f5e32732c359a97',
+ 'docs/BUILD55_GUARDED_DEPLOYMENT.md': 'd826ee7d6cb6f0c456754ca1f34a11b7c46449b855073d01c2dc48d663c155cc',
+ 'docs/SERVER_DRIVEN_ANDROID_UPDATES.md': '1bb9745df4b5778eeb5fc82397c21376a427090f8a9056f1aa4f9b34c1ee0c1c',
+ 'docs/V3_1_47_RELEASE_CANDIDATE.md': '52bb659a8f6ae49d17eb4033609df2121dc52acabc311b9a29f1d8e1a9c7ce6b',
+ 'frontend/.env.example': '25ecc546c19ab44b9638397be1944adffeb12fe673c9228cc2e1496349d0115f',
+ 'frontend/package-lock.json': '8282b508ed5cb22dba6b78e85fe8c9ee42f87a861e26504d9e1511bb777c1ffb',
+ 'frontend/package.json': 'd51ab3e52d0776229307dcc1c3cf69afef4864f6a89499aee912a45e19200e12',
+ 'frontend/src/lib/erp-api.ts': '97c90fc1a0b444ccf1e307e3e2b739506410dadaa7f02a9c1e989877ddb04449',
+ 'frontend/src/modules/audit/audit-presentation.test.ts': '4066609b294c7535b63e6e76e335ad5f7b8b317c4618b86fe8c8506c7c9133de',
+ 'frontend/src/modules/audit/audit-presentation.ts': 'a77f388154268f1e863aa1e94b3fdbcf9b897ca78ff4a0fae64e13886fb75918',
+ 'frontend/src/modules/gaming/GamingCancellation.test.ts': '138769912918ab3f93ee14c8b55bfe4354c5a7c7f1fac42c25835c6bf69e2b0d',
+ 'frontend/src/modules/gaming/GamingCancellation.ts': '7fe102c751e0889aae42534461fff68d1e9ff6b2b3c9079e5c1218ff62a8c474',
+ 'frontend/src/modules/gaming/GamingInlineShift.test.tsx': '390e30e268363428ca7e811bcff7a9a282d0554128245d6b294c83926233c792',
+ 'frontend/src/modules/gaming/GamingScreen.tsx': '38eae86dc82975ed4d4d14e74c683dc5f7138c67865c816f47c18af8f4cb2eb7',
+ 'frontend/src/modules/settings/tabs/AndroidUpdatePolicyPanel.test.tsx': '4e030444b5bd4e9db67a0b57216a6b6a6dfc83fa29c160ac8e6138b9e7fed20f',
+ 'frontend/src/modules/settings/tabs/AndroidUpdatePolicyPanel.tsx': 'f8270db937469511028c3e3de05eca5dbb45a7416b38f770baa65a8ed49882bc',
+ 'frontend/src/modules/settings/tabs/DevicesUpdatesTab.tsx': '3219df29ac30de2ae5fdf18fe1b073d20b3e2ad4a25e271ba8190c0dbbd3f547',
+ 'infra/scripts/capture-build55-runtime.py': '0dd1b4474229b5a57ab640a8399f9231bc0ff90f03cb6780823e61016e07a00a',
+ 'infra/scripts/install-on-vm.sh': '0774993ca4f3cbb3ee2aa60198eb3258b1e8bead1bb6c10d8ffb1b2c2bd37c7f',
+ 'infra/scripts/verify-build55-authenticated-acceptance.py': 'f4d59c7f967b6cc7cc4176bf3f6729fbd70f321007185697dd9fcea84401b417',
+ 'infra/scripts/verify-build55-pending-compatibility.py': '8e3f57bc082cbfb69eebb5d809bb514b4f192c93ddd3c7be172ae56fedb7ae1e',
+ 'infra/scripts/verify-build55-transition-state.sql': '0e7a5b6a0aa636ad9792c4855d437528b7f8c54cefa178e5662d4f3c474fe0b1',
+ 'tests/test_build55_authenticated_acceptance.py': '8d8e8239ac42d019e9b2c9b919dfae20ebb77e14c89a4952fa4134837f824923',
+ 'tests/test_build55_pending_compatibility.py': '2fb99cb6c8772f31cd04f4748c1dccc2c812aa9abe142761dc20205299c18a1c',
+ 'tests/test_code26_physical_audit_lane.py': '9706544d6bde4b4f07e717dd5be6bdd6bd3a5bca5207e19c20111b218e774fbe'}
+
 REVIEWED_CODE30_4_PRODUCTION_PATHS = frozenset(
     path
     for path in (
@@ -1715,13 +1834,14 @@ REVIEWED_CODE30_4_PRODUCTION_PATHS = frozenset(
         | REVIEWED_CODE30_4_BUILD52_SHA256
         | REVIEWED_CODE30_4_BUILD53_SHA256
         | REVIEWED_CODE30_4_BUILD54_SHA256
+        | REVIEWED_CODE30_4_BUILD55_SHA256
     )
     if path.startswith(("backend/app/", "frontend/src/", "android-native/app/src/main/"))
 )
 
 
 def _current_code30_4_sha256(path: str, fallback: str | None = None) -> str | None:
-    return REVIEWED_CODE30_4_BUILD54_SHA256.get(path) or REVIEWED_CODE30_4_BUILD53_SHA256.get(path) or REVIEWED_CODE30_4_BUILD52_SHA256.get(path) or REVIEWED_CODE30_4_BUILD51_SHA256.get(path) or REVIEWED_CODE30_4_BUILD50_SHA256.get(path) or REVIEWED_CODE30_4_BUILD49_SHA256.get(path) or REVIEWED_CODE30_4_BUILD48_SHA256.get(path) or REVIEWED_CODE30_4_BUILD47_SHA256.get(path) or REVIEWED_CODE30_4_BUILD46_SHA256.get(path) or REVIEWED_CODE30_4_BUILD45_SHA256.get(path) or REVIEWED_CODE30_4_BUILD44_SHA256.get(path) or REVIEWED_CODE30_4_BUILD43_SHA256.get(path) or REVIEWED_CODE30_4_BUILD42_SHA256.get(
+    return REVIEWED_CODE30_4_BUILD55_SHA256.get(path) or REVIEWED_CODE30_4_BUILD54_SHA256.get(path) or REVIEWED_CODE30_4_BUILD53_SHA256.get(path) or REVIEWED_CODE30_4_BUILD52_SHA256.get(path) or REVIEWED_CODE30_4_BUILD51_SHA256.get(path) or REVIEWED_CODE30_4_BUILD50_SHA256.get(path) or REVIEWED_CODE30_4_BUILD49_SHA256.get(path) or REVIEWED_CODE30_4_BUILD48_SHA256.get(path) or REVIEWED_CODE30_4_BUILD47_SHA256.get(path) or REVIEWED_CODE30_4_BUILD46_SHA256.get(path) or REVIEWED_CODE30_4_BUILD45_SHA256.get(path) or REVIEWED_CODE30_4_BUILD44_SHA256.get(path) or REVIEWED_CODE30_4_BUILD43_SHA256.get(path) or REVIEWED_CODE30_4_BUILD42_SHA256.get(
         path,
         REVIEWED_CODE30_4_BUILD41_SHA256.get(
             path,
@@ -1936,6 +2056,7 @@ def _normalise_release_identity(path: str, text: str) -> str:
         return text
     normalised = text
     for current, baseline in (
+        ("3.1.47", "3.1.14"),
         ("3.1.46", "3.1.14"),
         ("3.1.45", "3.1.14"),
         ("3.1.44", "3.1.14"),
@@ -2026,10 +2147,10 @@ def _normalise_release_identity(path: str, text: str) -> str:
     ):
         normalised = normalised.replace(current, baseline)
     normalised = re.sub(
-        r"version_code\s*=\s*(?:26|27|28|29|30|31|32|33|34|35|36|37|38|39|40|41|42|43|44|45|46|47|48|49|50|51|52|53|54)\b", "version_code=25", normalised
+        r"version_code\s*=\s*(?:26|27|28|29|30|31|32|33|34|35|36|37|38|39|40|41|42|43|44|45|46|47|48|49|50|51|52|53|54|55)\b", "version_code=25", normalised
     )
     normalised = re.sub(
-        r"assertEquals\((?:26|27|28|29|30|31|32|33|34|35|36|37|38|39|40|41|42|43|44|45|46|47|48|49|50|51|52|53|54),\s*BuildConfig\.VERSION_CODE\)",
+        r"assertEquals\((?:26|27|28|29|30|31|32|33|34|35|36|37|38|39|40|41|42|43|44|45|46|47|48|49|50|51|52|53|54|55),\s*BuildConfig\.VERSION_CODE\)",
         "assertEquals(25, BuildConfig.VERSION_CODE)",
         normalised,
     )
@@ -2216,7 +2337,11 @@ def _code30_4_build53_delta_paths(root: Path) -> set[str]:
 
 
 def _code30_4_build54_delta_paths(root: Path) -> set[str]:
-    changed = set(_git(root, "diff", "--name-only", CODE30_4_BUILD53_BASE).splitlines())
+    return set(_git(root, "diff", "--name-only", CODE30_4_BUILD53_BASE, CODE30_4_BUILD54_BASE).splitlines())
+
+
+def _code30_4_build55_delta_paths(root: Path) -> set[str]:
+    changed = set(_git(root, "diff", "--name-only", CODE30_4_BUILD54_BASE).splitlines())
     changed.update(_git(root, "ls-files", "--others", "--exclude-standard").splitlines())
     return {path for path in changed if path}
 
@@ -2529,6 +2654,15 @@ def _verify_code30_4_exact_delta(root: Path, errors: list[str]) -> None:
         if hashlib.sha256(frozen_bytes).hexdigest() != expected_sha256:
             errors.append(f"Code30.4 build-53 file differs from reviewed bytes: {path}")
 
+    for path, expected_sha256 in REVIEWED_CODE30_4_BUILD54_SHA256.items():
+        try:
+            frozen_bytes = _git_bytes(root, "show", f"{CODE30_4_BUILD54_BASE}:{path}")
+        except subprocess.CalledProcessError:
+            errors.append(f"Code30.4 build-54 file absent from immutable base: {path}")
+            continue
+        if hashlib.sha256(frozen_bytes).hexdigest() != expected_sha256:
+            errors.append(f"Code30.4 build-54 file differs from reviewed bytes: {path}")
+
     expected_build42_paths = set(REVIEWED_CODE30_4_BUILD42_SHA256) | set(
         CODE30_4_FREEZE_CONTROL_PATHS
     )
@@ -2622,6 +2756,13 @@ def _verify_code30_4_exact_delta(root: Path, errors: list[str]) -> None:
     for path in sorted(current_build54_paths - expected_build54_paths):
         errors.append(f"unreviewed path entered the Code30.4 build-54 delta: {path}")
 
+    expected_build55_paths = set(REVIEWED_CODE30_4_BUILD55_SHA256) | set(CODE30_4_FREEZE_CONTROL_PATHS)
+    current_build55_paths = _code30_4_build55_delta_paths(root)
+    for path in sorted(expected_build55_paths - current_build55_paths):
+        errors.append(f"reviewed Code30.4 build-55 delta path disappeared: {path}")
+    for path in sorted(current_build55_paths - expected_build55_paths):
+        errors.append(f"unreviewed path entered the Code30.4 build-55 delta: {path}")
+
     # Post-release Code30.3 maintenance tools are pinned by their own map.
     expected_paths = set(REVIEWED_CODE30_4_SHA256) | set(
         CODE30_4_FREEZE_CONTROL_PATHS
@@ -2631,7 +2772,7 @@ def _verify_code30_4_exact_delta(root: Path, errors: list[str]) -> None:
         REVIEWED_CODE30_4_BUILD41_SHA256
     ) | set(
         REVIEWED_CODE30_4_BUILD42_SHA256
-    ) | set(REVIEWED_CODE30_4_BUILD43_SHA256) | set(REVIEWED_CODE30_4_BUILD44_SHA256) | set(REVIEWED_CODE30_4_BUILD45_SHA256) | set(REVIEWED_CODE30_4_BUILD46_SHA256) | set(REVIEWED_CODE30_4_BUILD47_SHA256) | set(REVIEWED_CODE30_4_BUILD48_SHA256) | set(REVIEWED_CODE30_4_BUILD49_SHA256) | set(REVIEWED_CODE30_4_BUILD50_SHA256) | set(REVIEWED_CODE30_4_BUILD51_SHA256) | set(REVIEWED_CODE30_4_BUILD52_SHA256) | set(REVIEWED_CODE30_4_BUILD53_SHA256) | set(REVIEWED_CODE30_4_BUILD54_SHA256)
+    ) | set(REVIEWED_CODE30_4_BUILD43_SHA256) | set(REVIEWED_CODE30_4_BUILD44_SHA256) | set(REVIEWED_CODE30_4_BUILD45_SHA256) | set(REVIEWED_CODE30_4_BUILD46_SHA256) | set(REVIEWED_CODE30_4_BUILD47_SHA256) | set(REVIEWED_CODE30_4_BUILD48_SHA256) | set(REVIEWED_CODE30_4_BUILD49_SHA256) | set(REVIEWED_CODE30_4_BUILD50_SHA256) | set(REVIEWED_CODE30_4_BUILD51_SHA256) | set(REVIEWED_CODE30_4_BUILD52_SHA256) | set(REVIEWED_CODE30_4_BUILD53_SHA256) | set(REVIEWED_CODE30_4_BUILD54_SHA256) | set(REVIEWED_CODE30_4_BUILD55_SHA256)
     current_paths = _code30_4_delta_paths(root)
     for path in sorted(expected_paths - current_paths):
         errors.append(f"reviewed Code30.4 delta path disappeared: {path}")
@@ -2655,6 +2796,7 @@ def _verify_code30_4_exact_delta(root: Path, errors: list[str]) -> None:
         | REVIEWED_CODE30_4_BUILD52_SHA256
         | REVIEWED_CODE30_4_BUILD53_SHA256
         | REVIEWED_CODE30_4_BUILD54_SHA256
+        | REVIEWED_CODE30_4_BUILD55_SHA256
     )
     for path, expected_sha256 in current_hashes.items():
         # These files define the freeze itself and cannot carry a current-tree
@@ -2721,6 +2863,7 @@ def verify_repository(root: Path, baseline: str = CODE25_BASE) -> RegressionFree
     _git(root, "cat-file", "-e", f"{CODE30_4_BUILD51_BASE}^{{commit}}")
     _git(root, "cat-file", "-e", f"{CODE30_4_BUILD52_BASE}^{{commit}}")
     _git(root, "cat-file", "-e", f"{CODE30_4_BUILD53_BASE}^{{commit}}")
+    _git(root, "cat-file", "-e", f"{CODE30_4_BUILD54_BASE}^{{commit}}")
     _verify_code30_2_exact_delta(root, errors)
     _verify_code30_3_exact_delta(root, errors)
     _verify_code30_4_exact_delta(root, errors)
@@ -2745,7 +2888,8 @@ def verify_repository(root: Path, baseline: str = CODE25_BASE) -> RegressionFree
             path, candidate_normalised
         )
         reviewed_test_sha256 = (
-            REVIEWED_CODE30_4_BUILD54_SHA256.get(path)
+            REVIEWED_CODE30_4_BUILD55_SHA256.get(path)
+            or REVIEWED_CODE30_4_BUILD54_SHA256.get(path)
             or REVIEWED_CODE30_4_BUILD53_SHA256.get(path)
             or REVIEWED_CODE30_4_BUILD52_SHA256.get(path)
             or REVIEWED_CODE30_4_BUILD51_SHA256.get(path)

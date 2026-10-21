@@ -1,6 +1,7 @@
 package cloud.dcompany.erp.ui.screens
 
 import cloud.dcompany.erp.core.db.PosReceiptEntity
+import cloud.dcompany.erp.core.db.PosReceiptSource
 import cloud.dcompany.erp.core.checkout.SplitPaymentLeg
 import cloud.dcompany.erp.core.checkout.SplitPaymentPolicy
 import cloud.dcompany.erp.core.net.OrderLine
@@ -8,11 +9,21 @@ import cloud.dcompany.erp.core.net.OrderModifierSnapshot
 import cloud.dcompany.erp.core.net.OrderVariantSnapshot
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PosReceiptPrintTest {
+
+    @Test
+    fun zeroCompletionUsesExplicitReceiptSourceRatherThanInferringAPayment() {
+        listOf(PosReceiptSource.ZERO_DIRECT, PosReceiptSource.ZERO_HELD).forEach { source ->
+            assertEquals("Bill completed — no payment due", posReceiptConfirmationTitle(source))
+        }
+        listOf(PosReceiptSource.DIRECT, PosReceiptSource.HELD, PosReceiptSource.OFFLINE_DIRECT, "unknown")
+            .forEach { source -> assertEquals("Payment confirmed", posReceiptConfirmationTitle(source)) }
+    }
 
     @Test
     fun printableReceiptKeepsFinancialAndCustomizationEvidenceAndEscapesText() {

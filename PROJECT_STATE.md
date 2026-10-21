@@ -1,6 +1,21 @@
 # D Company ERP — current project state
 
-## Current quality candidate (updated 2026-10-11)
+## Current local candidate (updated 2026-10-22)
+
+The owner approved the corrected local emulator workflows and appearance.
+The coordinated candidate is **v3.1.47 / Android build 55**, documented in
+[`docs/V3_1_47_RELEASE_CANDIDATE.md`](docs/V3_1_47_RELEASE_CANDIDATE.md).
+Room remains 56. Alembic 0092 adds an initially empty protected update-policy
+table; existing financial history and tablet queues remain intact. The approved
+layouts and original logo are preserved. Android uses the restored navy/brass
+theme and Web styling remains unchanged. The deployment controller's global
+Optional/Required control is in the existing Devices & Updates workspace.
+Final release identity/CI, guarded compatibility, signing, signed upgrade and
+download checks, deployment and update offer remain separate gates. This local
+checkpoint is not a live-server or physical-tablet status claim. Read current
+source and release evidence before acting; do not reuse older freeze receipts.
+
+## Historical quality candidate (updated 2026-10-11)
 
 ### Latest completion checkpoint
 

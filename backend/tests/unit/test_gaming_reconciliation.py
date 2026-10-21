@@ -7,6 +7,8 @@ from inspect import signature
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
+from starlette.requests import Request
+
 import pytest
 from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy.dialects import postgresql
@@ -856,6 +858,7 @@ async def test_send_cancel_and_reconcile_fail_closed_for_missing_ended_amount() 
                 _Result(0),
                 entities={(Station, station.id): station},
             ),
+            Request({"type": "http", "headers": []}),
             tenant,
         )
 

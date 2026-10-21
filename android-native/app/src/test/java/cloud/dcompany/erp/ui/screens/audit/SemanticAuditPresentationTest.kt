@@ -9,6 +9,14 @@ import org.junit.Test
 
 class SemanticAuditPresentationTest {
     private fun entry(extra:String="")=ApiClient.json.decodeFromString<AuditEntry>("""{"id":1,"actor_user_id":"retained-actor","actor_name":"Current name","action":"recorded","entity_type":"Payment","entity_id":"payment","created_at":"2026-10-18T10:00:00Z"$extra}""")
+    @Test fun participantVoidSeparatesOriginalChargeFromZeroDueAndRetainsAttendance() {
+        val row = entry(""", "action_code":"GAM-VOID","business_details":{"voided_amount_minor":18000,"amount_after_void_minor":0,"original_billable_minutes":12,"added_player_interval_count":2,"attendance_retained":true}""")
+            .copy(action = "gaming_session_voided")
+        assertEquals("Voided ₹180.00 · Amount after void ₹0.00 · Attendance retained", auditBusinessSummary(row))
+        assertEquals("Added-player attendance records", auditBusinessLabel("added_player_interval_count"))
+        assertEquals("Original recorded billable minutes", auditBusinessLabel("original_billable_minutes"))
+    }
+
     @Test fun semanticCodeLabelAmountAndMethodHaveDistinctPurpose() {
         val row=entry(""", "action_code":"POS-PAY","action_label":"Payment recorded","business_details":{"amount_minor":27000,"method":"upi"},"summary":"Payment recorded" """)
         assertEquals("POS-PAY · Payment recorded",auditEntryTitle(row))
@@ -103,6 +111,12 @@ class SemanticAuditPresentationTest {
         assertTrue(auditBusinessValue("facts", raw, ZoneId.of("UTC")).contains("Owner confirmation"))
         assertEquals(original, raw.toString())
         assertEquals(original, redactAuditValue(raw).toString())
+    }
+
+    @Test fun updatePolicyFactsDescribeGlobalSupportedFloor() {
+        val row=entry(""", "business_details":{"update_mode_before":"required","update_mode_after":"optional","policy_revision":6,"minimum_supported_build":54,"global_installations":true,"reason":"Reviewed supported builds"}""").copy(action="android_update_policy_changed",actionCode="UPD-POL")
+        assertEquals("Optional updates · Minimum supported build 54 · All direct Android installations",auditBusinessSummary(row))
+        assertEquals("Deployment safety floor",auditBusinessLabel("environment_safety_floor"))
     }
 
 }

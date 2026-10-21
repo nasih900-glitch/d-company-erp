@@ -1463,6 +1463,7 @@ export interface AndroidReleaseDTO {
   withdrawn_at: string | null;
   withdrawn_by: string | null;
   updated_at: string;
+  policy_fingerprint?: string;
 }
 
 export interface AndroidReleaseListDTO {
@@ -3514,6 +3515,9 @@ export interface GameSessionDTO {
   rate_per_hour_minor: number | null;
   order_id: string | null;
   cancel_reason: string | null;
+  cancellation_receipt_id?: string | null;
+  cancellation_idempotency_key?: string | null;
+  cancellation_request_hash?: string | null;
   billing_mode: 'hourly' | 'package' | 'legacy_ambiguous';
   package_id: string | null;
   package_price_minor_snapshot: number | null;
@@ -3531,6 +3535,22 @@ export interface GameSessionDTO {
   effective_package_variant?: string | null;
   effective_package_station_type?: string | null;
   effective_package_pricing_tier?: 'standard' | 'premium' | null;
+}
+
+export interface GamingSessionCancelReview {
+  idempotencyKey: string;
+  expected_participant_revision: number;
+  expected_billing_revision: number;
+  expected_amount_minor: number;
+}
+
+export function gamingSessionCancelBody(reason: string, review?: GamingSessionCancelReview) {
+  return review ? {
+    reason,
+    expected_participant_revision: review.expected_participant_revision,
+    expected_billing_revision: review.expected_billing_revision,
+    expected_amount_minor: review.expected_amount_minor,
+  } : { reason };
 }
 
 export interface GamingParticipantDTO {
@@ -3884,8 +3904,9 @@ export const gaming = {
   }, {
     headers: { 'Idempotency-Key': idempotencyKey },
   }).then((r) => r.data),
-  cancelSession: (id: string, reason: string) =>
-    api.post<GameSessionDTO>(`/gaming/sessions/${id}/cancel`, { reason }).then((r) => r.data),
+  cancelSession: (id: string, reason: string, review?: GamingSessionCancelReview) =>
+    api.post<GameSessionDTO>(`/gaming/sessions/${id}/cancel`, gamingSessionCancelBody(reason, review),
+      review ? { headers: { 'Idempotency-Key': review.idempotencyKey } } : undefined).then((r) => r.data),
   sendToPos: (id: string) =>
     api.post<{ order_id: string; amount_minor: number }>(`/gaming/sessions/${id}/send-to-pos`)
       .then((r) => r.data),
@@ -4008,6 +4029,21 @@ export const clientInstallations = {
     { expected_candidate_sha256: expectedCandidateSha256, reason },
     { headers: { 'Idempotency-Key': idempotencyKey } },
   ).then((r) => r.data),
+};
+
+export interface AndroidUpdatePolicyDTO {
+  mode: 'inherit' | 'optional' | 'required'; revision: number;
+  environment_minimum_version_code: number; minimum_supported_version_code: number;
+  required_release_id: string | null; required_release_fingerprint: string | null;
+  active_release: AndroidReleaseDTO | null; reason: string | null; updated_at: string | null;
+}
+export interface AndroidUpdatePolicyWriteDTO {
+  mode: 'optional' | 'required'; expected_revision: number; reason: string;
+  release_id?: string; expected_release_fingerprint?: string;
+}
+export const androidUpdatePolicy = {
+  get: () => api.get<AndroidUpdatePolicyDTO>('/client-updates/android/policy').then(r => r.data),
+  set: (body: AndroidUpdatePolicyWriteDTO) => api.put<AndroidUpdatePolicyDTO>('/client-updates/android/policy', body).then(r => r.data),
 };
 
 export const androidReleases = {

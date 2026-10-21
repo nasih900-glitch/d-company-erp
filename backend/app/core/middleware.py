@@ -16,6 +16,8 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from app.core.config import get_settings
+from app.core.errors import ServiceUnavailableError
 from app.core.logging import get_logger
 from app.core.security import decode_token
 from app.services.audit.recorder import (
@@ -23,6 +25,7 @@ from app.services.audit.recorder import (
     clear_request_context,
     set_request_context,
 )
+from app.services.client_updates.policy import AndroidPolicySnapshot, resolve_android_update_policy
 from app.services.realtime import manager, resources_for_path
 
 log = get_logger(__name__)
@@ -86,12 +89,14 @@ class ClientCompatibilityMiddleware(BaseHTTPMiddleware):
         android_apk_sha256: str | None = None,
         android_apk_size_bytes: int | None = None,
         android_apk_signing_cert_sha256: str | None = None,
+        resolve_android_policy: bool = False,
     ) -> None:
         super().__init__(app)
         self.versions = {
             "android": (android_minimum, android_latest, android_update_url),
             "ios": (ios_minimum, ios_latest, ios_update_url),
         }
+        self.resolve_android_policy = resolve_android_policy
         self.policy_revision = policy_revision
         self.require_native_headers = require_native_headers
         self.message = message
@@ -108,10 +113,45 @@ class ClientCompatibilityMiddleware(BaseHTTPMiddleware):
         request: Request,
         call_next: Callable[[Request], Awaitable[Response]],
     ) -> Response:
-        if request.url.path.endswith("/public/client-compatibility"):
+        public_compatibility = request.url.path.endswith("/public/client-compatibility")
+        declared_platform = request.headers.get("X-Client-Platform", "").strip().lower()
+        distribution_channel = (
+            request.headers.get("X-Client-Distribution-Channel", "direct").strip().lower()
+            or "direct"
+        )
+        policy = None
+        if (
+            self.resolve_android_policy
+            and distribution_channel == "direct"
+            and (
+                (public_compatibility and request.query_params.get("platform") == "android")
+                or (not public_compatibility and declared_platform == "android")
+                or (
+                    not public_compatibility
+                    and not declared_platform
+                    and self.require_native_headers
+                    and "okhttp/" in request.headers.get("user-agent", "").lower()
+                )
+            )
+        ):
+            try:
+                policy = await resolve_android_update_policy(get_settings())
+                request.state.android_update_policy = policy
+            except ServiceUnavailableError as exc:
+                return JSONResponse(
+                    status_code=503,
+                    headers={"Cache-Control": "no-store", "Retry-After": "1"},
+                    content={
+                        "error": {"code": "update_policy_unavailable", "message": exc.message}
+                    },
+                )
+        if public_compatibility:
             response = await call_next(request)
             response.headers["Cache-Control"] = "no-store"
-            response.headers["X-Client-Compatibility-Policy-Revision"] = str(self.policy_revision)
+            response.headers.setdefault(
+                "X-Client-Compatibility-Policy-Revision",
+                str(policy.revision if policy is not None else self.policy_revision),
+            )
             return response
 
         platform = request.headers.get("X-Client-Platform", "").strip().lower()
@@ -131,6 +171,7 @@ class ClientCompatibilityMiddleware(BaseHTTPMiddleware):
                         "Install the current D Company ERP app before continuing."
                     ),
                     distribution_channel="direct",
+                    policy=policy,
                 )
             return await call_next(request)
 
@@ -151,26 +192,33 @@ class ClientCompatibilityMiddleware(BaseHTTPMiddleware):
                 code="client_version_invalid",
                 message="This app could not prove its build version. Update before continuing.",
                 distribution_channel=distribution_channel,
+                policy=policy,
             )
 
         minimum, latest, _ = self.versions[platform]
+        if platform == "android" and policy is not None:
+            minimum = policy.minimum
+            latest = max(minimum, policy.release["version_code"] if policy.release else latest)
         if version_code < minimum:
             return self._reject(
                 platform=platform,
                 code="client_update_required",
-                message=self.message
+                message=(None if policy is not None and policy.mode == "required" else self.message)
                 or (
                     "This app version is no longer compatible with the ERP server. "
                     "Update before continuing; saved offline work will remain on this device."
                 ),
                 current=version_code,
                 distribution_channel=distribution_channel,
+                policy=policy,
             )
 
         response = await call_next(request)
         response.headers["X-Minimum-Supported-Version-Code"] = str(minimum)
         response.headers["X-Latest-Version-Code"] = str(latest)
-        response.headers["X-Client-Compatibility-Policy-Revision"] = str(self.policy_revision)
+        response.headers["X-Client-Compatibility-Policy-Revision"] = str(
+            policy.revision if policy is not None else self.policy_revision
+        )
         return response
 
     def _reject(
@@ -181,17 +229,38 @@ class ClientCompatibilityMiddleware(BaseHTTPMiddleware):
         message: str,
         current: int | None = None,
         distribution_channel: str = "direct",
+        policy: AndroidPolicySnapshot | None = None,
     ) -> JSONResponse:
         minimum, latest, update_url = self.versions[platform]
+        revision = self.policy_revision
+        if platform == "android" and policy is not None:
+            minimum, revision = policy.minimum, policy.revision
+            latest = max(minimum, policy.release["version_code"] if policy.release else latest)
+            if policy.release:
+                update_url = policy.release["update_url"]
         direct_android = platform == "android" and distribution_channel == "direct"
         if platform == "android" and not direct_android:
             update_url = None
         release_details = self.android_release if direct_android else {}
+        if direct_android and policy is not None and policy.release:
+            release_details = {
+                "latest_version_name": policy.release["version_name"],
+                **{
+                    key: policy.release[key]
+                    for key in (
+                        "release_notes",
+                        "apk_sha256",
+                        "apk_size_bytes",
+                        "apk_signing_cert_sha256",
+                    )
+                },
+            }
+
         return JSONResponse(
             status_code=426,
             headers={
                 "Cache-Control": "no-store",
-                "X-Client-Compatibility-Policy-Revision": str(self.policy_revision),
+                "X-Client-Compatibility-Policy-Revision": str(revision),
             },
             content={
                 "error": {
@@ -202,7 +271,7 @@ class ClientCompatibilityMiddleware(BaseHTTPMiddleware):
                         "current_version_code": current,
                         "minimum_supported_version_code": minimum,
                         "latest_version_code": latest,
-                        "policy_revision": self.policy_revision,
+                        "policy_revision": revision,
                         "update_url": update_url,
                         **release_details,
                     },

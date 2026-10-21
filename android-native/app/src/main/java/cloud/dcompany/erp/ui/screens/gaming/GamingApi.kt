@@ -99,6 +99,10 @@ data class GameSession(
     @SerialName("customer_name") val customerName: String? = null,
     @SerialName("customer_phone") val customerPhone: String? = null,
     @SerialName("order_id") val orderId: String? = null,
+    @SerialName("cancel_reason") val cancelReason: String? = null,
+    @SerialName("cancellation_receipt_id") val cancellationReceiptId: String? = null,
+    @SerialName("cancellation_idempotency_key") val cancellationIdempotencyKey: String? = null,
+    @SerialName("cancellation_request_hash") val cancellationRequestHash: String? = null,
     /** Local outbox metadata; absent on server DTOs. */
     val localState: String? = null,
     val lastError: String? = null,
@@ -535,7 +539,12 @@ data class SessionPosHandoffResult(
 )
 
 @Serializable
-data class SessionCancelBody(val reason: String)
+data class SessionCancelBody(
+    val reason: String,
+    @SerialName("expected_participant_revision") val expectedParticipantRevision: Int? = null,
+    @SerialName("expected_billing_revision") val expectedBillingRevision: Int? = null,
+    @SerialName("expected_amount_minor") val expectedAmountMinor: Long? = null,
+)
 
 @Serializable
 data class SessionReconcileBody(
@@ -781,11 +790,12 @@ internal interface GamingApi {
         @Header("Idempotency-Key") key: String,
     ): GameSession
 
-    /** Natural idempotency: cancelling an already-cancelled session returns it unchanged. */
+    /** Participant Void binds one reviewed body to a stable session key and immutable receipt. */
     @POST("gaming/sessions/{id}/cancel")
     suspend fun cancel(
         @Path("id") id: String,
         @Body body: SessionCancelBody,
+        @Header("Idempotency-Key") key: String? = null,
         @HeaderMap provenance: Map<String, String> = emptyMap(),
     ): GameSession
 

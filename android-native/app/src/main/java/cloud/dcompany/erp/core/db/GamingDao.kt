@@ -127,6 +127,12 @@ interface GamingDao {
     @Query("SELECT * FROM gaming_session_participant_cache ORDER BY joinedAtMillis, id")
     fun observeParticipantCache(): Flow<List<GamingSessionParticipantCacheEntity>>
 
+    @Query("SELECT COUNT(*) FROM gaming_session_participant_cache WHERE gamingSessionId = :sessionId")
+    suspend fun participantEvidenceCount(sessionId: String): Int
+
+    @Query("SELECT COUNT(*) FROM gaming_session_addon_cache WHERE gamingSessionId = :sessionId AND voidedAtMillis IS NULL")
+    suspend fun activeSessionAddonCount(sessionId: String): Int
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertParticipantCache(rows: List<GamingSessionParticipantCacheEntity>)
 

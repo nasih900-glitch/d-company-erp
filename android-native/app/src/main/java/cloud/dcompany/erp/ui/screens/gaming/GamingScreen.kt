@@ -115,6 +115,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.mapSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.structuralEqualityPolicy
@@ -880,6 +881,9 @@ fun GamingScreen(
                         session = stationSession,
                         packageExtensionAction = stationSession?.let { state.packageExtensionFor(it.id) },
                         sessionAddons = stationSession?.let(state::addonsFor).orEmpty(),
+                        cancellationBlockMessage = stationSession?.let {
+                            state.cancellationBlockFor(it, access.canReconcileLegacySessions)
+                        },
                         wallClock = wallClock,
                         actionInProgress = state.busyStationId != null,
                         busyHere = state.busyStationId == station.id,
@@ -1211,6 +1215,7 @@ fun GamingScreen(
         CancelUnbilledSessionDialog(
             stationName = stationName,
             amountMinor = session.amountMinor ?: 0L,
+            activeSession = session.status in setOf("active", "paused"),
             onDismiss = { cancelling = null },
             onConfirm = { reason ->
                 cancelling = null
@@ -1710,6 +1715,18 @@ internal fun rejectedSessionReviewStationId(
     ) && it in stationIds
 }
 
+internal fun gamingSessionHasStopped(session: GameSession): Boolean =
+    session.status in setOf("ended", "stopped", "completed") || session.endAt != null
+
+internal fun gamingSessionTimingDetail(session: GameSession, playedMillis: Long): String {
+    val bookedMillis = session.timerMinutes?.takeIf { it > 0 }?.times(60_000L)
+        ?: return "Open-ended session"
+    if (gamingSessionHasStopped(session)) return "Booked ${formatElapsed(bookedMillis)}"
+    val remainingMillis = bookedMillis - playedMillis
+    return if (remainingMillis <= 0L) "+${formatElapsed(-remainingMillis)} overtime"
+    else "${formatElapsed(remainingMillis)} remaining"
+}
+
 @Composable
 private fun GamingPermanentSessionDial(
     session: GameSession?,
@@ -1729,7 +1746,6 @@ private fun GamingPermanentSessionDial(
     val dialNow = if (ticking) wallClock.value else frozenNow
     val sessionReadout = session?.let { current ->
         val playedMillis = sessionPlayElapsedMillis(current, dialNow)
-        val bookedMillis = current.timerMinutes?.takeIf { it > 0 }?.times(60_000L)
         when {
             current.status == "start_failed" -> GamingDurationDialReadout(
                 primary = "--:--:--",
@@ -1742,26 +1758,21 @@ private fun GamingPermanentSessionDial(
                 detail = "Review session timing",
             )
             else -> {
-                val remainingMillis = bookedMillis?.minus(playedMillis)
                 GamingDurationDialReadout(
                     primary = formatElapsed(playedMillis),
                     label = when {
                         current.status == "paused" -> "PAUSED"
                         current.status == "stopping" -> "STOPPING"
-                        current.status in setOf("ended", "stopped", "completed") ||
-                            current.endAt != null -> "STOPPED"
+                        gamingSessionHasStopped(current) -> "PLAYED"
                         current.status == "starting" -> "STARTING"
                         else -> "ELAPSED TIME"
                     },
-                    detail = remainingMillis?.let { remaining ->
-                        if (remaining <= 0L) "+${formatElapsed(-remaining)} overtime"
-                        else "${formatElapsed(remaining)} remaining"
-                    } ?: "Open-ended session",
+                    detail = gamingSessionTimingDetail(current, playedMillis),
                 )
             }
         }
     }
-    val remainingFraction = session?.let { current ->
+    val remainingFraction = session?.takeUnless(::gamingSessionHasStopped)?.let { current ->
         val bookedMillis = current.timerMinutes?.takeIf { it > 0 }?.times(60_000L) ?: return@let null
         val playedMillis = sessionPlayElapsedMillis(current, dialNow) ?: return@let null
         gamingDurationRemainingFraction(bookedMillis, playedMillis)
@@ -2231,6 +2242,9 @@ internal fun GamingCommandWorkspace(
             state.packageExtensionFor(it.id)
         },
         sessionAddons = selectedSession?.let(state::addonsFor).orEmpty(),
+        cancellationBlockMessage = selectedSession?.let {
+            state.cancellationBlockFor(it, access.canReconcileLegacySessions)
+        },
         wallClock = wallClock,
         actionInProgress = state.busyStationId != null,
         busyHere = state.busyStationId == selectedStation.id,
@@ -2348,26 +2362,31 @@ internal fun GamingCommandWorkspace(
                 if (state.cleanupAcknowledgementsPending.isNotEmpty()) {
                     GamingCleanupAcknowledgementBanner(state, onRefresh)
                 }
-                // Keep one useful status row present in both healthy and attention states.
-                // Its content can change after Stop without moving the station board or dial.
-                GamingCommandAttentionBar(
-                    state = state, access = access,
-                    terminalBlocked = startTerminalBlockMessage != null,
-                    focusRequested = focusRequested,
-                    orphanedExtensionCount = state.orphanedPackageExtensionActions().size,
-                    attentionCount = attentionCount, onOpen = onOpenAttention,
-                    onRefresh = onRefresh,
-                )
             }
+            val attentionAction: (@Composable () -> Unit)? = if (attentionCount > 0) {
+                {
+                    GamingCommandAttentionBar(
+                        state = state, access = access,
+                        terminalBlocked = startTerminalBlockMessage != null,
+                        focusRequested = focusRequested,
+                        orphanedExtensionCount = state.orphanedPackageExtensionActions().size,
+                        attentionCount = attentionCount, onOpen = onOpenAttention,
+                        onRefresh = onRefresh, compact = true,
+                        modifier = Modifier.width(300.dp),
+                    )
+                }
+            } else null
             if (compactHeightGrid) {
                 GamingCompactBoardHeader(
                     state = state,
                     filters = filters,
                     selected = selectedFilter,
                     onSelect = onSelectFilter,
+                    onRefresh = onRefresh,
+                    attentionAction = attentionAction,
                 )
             } else {
-                GamingBoardHeadline(state, onRefresh)
+                GamingBoardHeadline(state, onRefresh, attentionAction)
                 GamingFilterRow(
                     filters = filters, stations = state.stations,
                     selected = selectedFilter, onSelect = onSelectFilter,
@@ -2507,7 +2526,11 @@ private fun GamingStationSelectionGrid(
 }
 
 @Composable
-private fun GamingBoardHeadline(state: GamingUiState, onRefresh: () -> Unit) {
+private fun GamingBoardHeadline(
+    state: GamingUiState,
+    onRefresh: () -> Unit,
+    attentionAction: (@Composable () -> Unit)? = null,
+) {
     val active = operationalActiveGamingSessionCount(state.sessions)
     val available = state.stations.count { it.isActive && state.activeFor(it.id) == null }
     val shift = gamingShiftSummary(
@@ -2561,7 +2584,7 @@ private fun GamingBoardHeadline(state: GamingUiState, onRefresh: () -> Unit) {
                 )
             }
         }
-        TextButton(onClick = onRefresh, enabled = !state.refreshing) {
+        if (attentionAction != null) attentionAction() else TextButton(onClick = onRefresh, enabled = !state.refreshing) {
             Icon(Icons.Filled.Refresh, contentDescription = null)
             Text(if (state.refreshing) "Refreshing" else "Refresh")
         }
@@ -2685,8 +2708,11 @@ internal fun GamingCommandAttentionBar(
     orphanedExtensionCount: Int,
     attentionCount: Int,
     onOpen: () -> Unit,
-    onRefresh: () -> Unit,
+    @Suppress("UNUSED_PARAMETER") onRefresh: () -> Unit,
+    compact: Boolean = false,
+    modifier: Modifier = Modifier,
 ) {
+    if (attentionCount == 0) return
     val danger = state.needsCancellation.isNotEmpty() ||
         state.rejectedSessionsForReview.isNotEmpty() ||
         state.orphanedPackageExtensionActions().any {
@@ -2712,26 +2738,43 @@ internal fun GamingCommandAttentionBar(
         if (!access.canManageSessions) add("view only")
         if (focusRequested) add("session alert")
     }
-    val healthy = attentionCount == 0
-    val statusTitle = when {
-        healthy && state.refreshing -> "Refreshing Gaming board"
-        healthy -> "Gaming board ready"
-        danger || warning -> "Action centre · $attentionCount to review"
-        else -> "Gaming activity · $attentionCount update${if (attentionCount == 1) "" else "s"}"
-    }
-    val statusDetail = when {
-        healthy && state.refreshing -> "Checking server · saved controls remain available"
-        healthy && state.online -> "Live · no action needs attention"
-        healthy -> "Saved data available · reconnect to refresh"
-        else -> details.joinToString(" · ")
+    val statusTitle = if (danger || warning) "Action centre · $attentionCount to review"
+        else "Gaming activity · $attentionCount update${if (attentionCount == 1) "" else "s"}"
+    val statusDetail = details.joinToString(" · ").ifEmpty { "$attentionCount updates to review" }
+    if (compact) {
+        Row(
+            modifier.height(48.dp).testTag("gaming-attention-bar")
+                .semantics { contentDescription = "$statusTitle. $statusDetail"; liveRegion = LiveRegionMode.Polite },
+            horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                if (danger) Icons.Filled.Error else Icons.Filled.Warning,
+                contentDescription = null, tint = accent, modifier = Modifier.size(18.dp),
+            )
+            Text(
+                statusDetail,
+                modifier = Modifier.weight(1f),
+                color = MaterialTheme.colorScheme.onSurface,
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            ErpButton(
+                "Review", onOpen,
+                intent = if (danger) ActionIntent.Warning else ActionIntent.Secondary,
+                contentPadding = PaddingValues(horizontal = Spacing.sm),
+            )
+        }
+        return
     }
     Row(
-        Modifier.fillMaxWidth().heightIn(min = 64.dp)
+        modifier.fillMaxWidth().heightIn(min = 56.dp)
             .clip(Radius.shapeLg)
             .background(MaterialTheme.colorScheme.surface)
             .border(
                 1.dp,
-                if (healthy) MaterialTheme.colorScheme.outlineVariant else accent.copy(alpha = 0.58f),
+                accent.copy(alpha = 0.58f),
                 Radius.shapeLg,
             )
             .testTag("gaming-attention-bar")
@@ -2772,12 +2815,10 @@ internal fun GamingCommandAttentionBar(
             )
         }
         ErpButton(
-            text = if (healthy && state.refreshing) "Refreshing…" else if (healthy) "Refresh" else "Review",
-            onClick = if (healthy) onRefresh else onOpen,
+            text = "Review",
+            onClick = onOpen,
             intent = if (danger) ActionIntent.Warning else ActionIntent.Secondary,
-            enabled = !healthy || !state.refreshing,
-            busy = healthy && state.refreshing,
-            leadingIcon = if (healthy) Icons.Filled.Refresh else Icons.Filled.Visibility,
+            leadingIcon = Icons.Filled.Visibility,
         )
     }
 }
@@ -2867,18 +2908,14 @@ private fun GamingStationHero(
         val bookedMillis = elapsedSession.timerMinutes
             ?.takeIf { it > 0 }
             ?.times(60_000L)
-        val remainingMillis = bookedMillis?.minus(playedMillis)
         Box(
             modifier.fillMaxWidth(),
             contentAlignment = Alignment.TopCenter,
         ) {
             GamingElapsedRing(
                 clock = formatElapsed(playedMillis),
-                clockLabel = "ELAPSED TIME",
-                detail = remainingMillis?.let { remaining ->
-                    if (remaining <= 0L) "+${formatElapsed(-remaining)} overtime"
-                    else "${formatElapsed(remaining)} remaining"
-                },
+                clockLabel = if (gamingSessionHasStopped(elapsedSession)) "PLAYED" else "ELAPSED TIME",
+                detail = gamingSessionTimingDetail(elapsedSession, playedMillis),
                 progress = bookedMillis?.let { booked ->
                     (playedMillis.toFloat() / booked.toFloat()).coerceIn(0f, 1f)
                 },
@@ -2919,7 +2956,6 @@ private fun GamingStationHero(
                 val bookedMillis = elapsedSession.timerMinutes
                     ?.takeIf { it > 0 }
                     ?.times(60_000L)
-                val remainingMillis = bookedMillis?.minus(playedMillis)
                 Box(
                     Modifier.weight(0.62f)
                         .then(if (compactWorkspace) Modifier.offset(x = (-3).dp) else Modifier),
@@ -2927,11 +2963,8 @@ private fun GamingStationHero(
                 ) {
                 GamingElapsedRing(
                     clock = formatElapsed(playedMillis),
-                    clockLabel = "ELAPSED TIME",
-                    detail = remainingMillis?.let { remaining ->
-                        if (remaining <= 0L) "+${formatElapsed(-remaining)} overtime"
-                        else "${formatElapsed(remaining)} remaining"
-                    },
+                    clockLabel = if (gamingSessionHasStopped(elapsedSession)) "PLAYED" else "ELAPSED TIME",
+                    detail = gamingSessionTimingDetail(elapsedSession, playedMillis),
                     progress = bookedMillis?.let { booked ->
                         (playedMillis.toFloat() / booked.toFloat()).coerceIn(0f, 1f)
                     },
@@ -3190,7 +3223,12 @@ internal fun GamingStationTile(
                     it,
                     gamingSessionAddonBillableTotalMinor(sessionAddons),
                 )
-                "Estimated ${combined.asRupees()}"
+                if (running.isPackageBilling()) {
+                    val label = if (hasActiveAddons) "Booked + drinks" else "Booked session"
+                    "$label ${combined.asRupees()}"
+                } else {
+                    "Estimated ${combined.asRupees()}"
+                }
             }
         } ?: "Session in progress"
         StationVisualState.PaymentDue,
@@ -3586,14 +3624,16 @@ private fun GamingCompactBoardHeader(
     filters: List<StationFilter>,
     selected: String,
     onSelect: (String) -> Unit,
+    onRefresh: () -> Unit,
+    attentionAction: (@Composable () -> Unit)? = null,
 ) {
     val active = operationalActiveGamingSessionCount(state.sessions)
     Row(
-        Modifier.fillMaxWidth().heightIn(min = 48.dp),
+        Modifier.fillMaxWidth().height(48.dp).testTag("gaming-board-header"),
         horizontalArrangement = Arrangement.spacedBy(Spacing.md),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(
+        if (attentionAction != null) attentionAction() else Row(
             horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -3618,6 +3658,13 @@ private fun GamingCompactBoardHeader(
             onSelect = onSelect,
             modifier = Modifier.weight(1f),
         )
+        if (attentionAction == null) TextButton(
+            onClick = onRefresh, enabled = !state.refreshing,
+            modifier = Modifier.heightIn(min = 48.dp),
+        ) {
+            Icon(Icons.Filled.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+            Text(if (state.refreshing) "Refreshing…" else "Refresh")
+        }
     }
 }
 
@@ -3638,6 +3685,7 @@ internal fun GamingStationCard(
     activeShiftAllowsQueuedStart: Boolean = false,
     startTerminalBlockMessage: String? = null,
     online: Boolean = true,
+    cancellationBlockMessage: String? = null,
     packages: List<GamingPackage>,
     hasTransferTarget: Boolean,
     onStart: () -> Unit,
@@ -3729,7 +3777,11 @@ internal fun GamingStationCard(
     val unresolvedAddonActions = sessionAddons.filter {
         it.localState !in setOf(null, GamingSessionAddonActionState.CONFIRMED)
     }
-    val cancellationAddonBlock = sessionCancellationAddonBlockMessage(sessionAddons)
+    val cancellationAddonBlock = cancellationBlockMessage
+        ?: (if (session != null && session.participantRevision > 0 && session.status != "ended") {
+            participantCancellationGuidance(session.status)
+        } else null)
+        ?: sessionCancellationAddonBlockMessage(sessionAddons)
         ?: if (unresolvedAddonActions.isNotEmpty()) {
             "Saved Gaming item actions must finish syncing or be reviewed before voiding the whole session."
         } else {
@@ -3757,6 +3809,7 @@ internal fun GamingStationCard(
                             session = session,
                             packageExtensionAction = packageExtensionAction,
                             sessionAddons = sessionAddons,
+                            cancellationBlockMessage = cancellationBlockMessage,
                             wallClock = wallClock,
                             actionInProgress = actionInProgress,
                             busyHere = busyHere,
@@ -3830,6 +3883,8 @@ internal fun GamingStationCard(
                         onPauseResume = onPauseResume,
                         onStop = onStop,
                         onManageParticipants = onManageParticipants,
+                        onCancelSession = onCancelUnbilled,
+                        cancellationBlockMessage = cancellationAddonBlock,
                         showStopAction = showActiveStopAction,
                         modifier = Modifier.fillMaxWidth().padding(top = Spacing.sm),
                     )
@@ -3846,6 +3901,7 @@ internal fun GamingStationCard(
                         session = session,
                         packageExtensionAction = packageExtensionAction,
                         sessionAddons = sessionAddons,
+                        cancellationBlockMessage = cancellationBlockMessage,
                         wallClock = wallClock,
                         actionInProgress = actionInProgress,
                         busyHere = busyHere,
@@ -4090,6 +4146,8 @@ internal fun GamingStationCard(
                             onPauseResume = onPauseResume,
                             onStop = onStop,
                             onManageParticipants = onManageParticipants,
+                            onCancelSession = onCancelUnbilled,
+                            cancellationBlockMessage = cancellationAddonBlock,
                             showStopAction = showActiveStopAction,
                         )
                     }
@@ -4151,7 +4209,8 @@ internal fun GamingStationCard(
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.operationalDanger),
                         contentPadding = PaddingValues(horizontal = Spacing.sm),
                         modifier = Modifier.weight(0.8f).heightIn(min = 48.dp),
-                    ) { Text("Void", maxLines = 1) }
+                        shape = Radius.shapeMd,
+                    ) { Text("Void", style = MaterialTheme.typography.labelLarge, maxLines = 1) }
                     ErpButton(
                         text = when {
                             ownsSession && presentation.state == StationVisualState.SendRejected -> "Retry send"
@@ -4310,6 +4369,8 @@ private fun GamingActiveSessionActions(
     onPauseResume: (GameSession) -> Unit,
     onStop: (GameSession) -> Unit,
     onManageParticipants: (GameSession) -> Unit,
+    onCancelSession: (GameSession) -> Unit,
+    cancellationBlockMessage: String?,
     showStopAction: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
@@ -4359,13 +4420,14 @@ private fun GamingActiveSessionActions(
             )
         }
         BoxWithConstraints(Modifier.fillMaxWidth()) {
-            // Three controls share one row. Narrow grid cards keep complete
-            // words instead of spending their text width on decorative icons;
-            // wide command panels retain the icons.
-            val compactActions = maxWidth < 360.dp
+            // Four controls need two rows on narrow station cards. Keep their
+            // full labels and touch targets; the primary Stop footer stays pinned.
+            val compactActions = maxWidth < 480.dp
+            val showCancel = session.status in setOf("active", "paused") && session.orderId == null
+            val columns = if (showCancel && maxWidth < 360.dp) 2 else if (showCancel) 4 else 3
             val actionSpacing = if (compactActions) Spacing.xs else Spacing.sm
-            Row(horizontalArrangement = Arrangement.spacedBy(actionSpacing)) {
-                ErpButton(
+            val actions = listOf<@Composable (Modifier) -> Unit>(
+                { actionModifier -> ErpButton(
                     text = if (compactActions || session.isPackageBilling()) "Extend" else "+30 min",
                     onClick = {
                         if (session.isPackageBilling()) onExtendPackage(session, matchingExtensions)
@@ -4378,18 +4440,18 @@ private fun GamingActiveSessionActions(
                     intent = ActionIntent.Secondary,
                     leadingIcon = if (compactActions) null else Icons.Filled.Add,
                     contentPadding = PaddingValues(horizontal = actionSpacing),
-                    modifier = Modifier.weight(1f),
-                )
-                ErpButton(
+                    modifier = actionModifier,
+                ) },
+                { actionModifier -> ErpButton(
                     text = "Transfer",
                     onClick = { onTransfer(session) },
                     enabled = actionsEnabled && ownsSession && hasTransferTarget,
                     intent = ActionIntent.Secondary,
                     leadingIcon = if (compactActions) null else Icons.Filled.SwapHoriz,
                     contentPadding = PaddingValues(horizontal = actionSpacing),
-                    modifier = Modifier.weight(1f),
-                )
-                ErpButton(
+                    modifier = actionModifier,
+                ) },
+                { actionModifier -> ErpButton(
                     text = if (session.status == "paused") "Resume" else "Pause",
                     onClick = { onPauseResume(session) },
                     enabled = actionsEnabled && ownsSession && online &&
@@ -4398,10 +4460,29 @@ private fun GamingActiveSessionActions(
                     leadingIcon = if (compactActions) null
                     else if (session.status == "paused") Icons.Filled.PlayArrow else Icons.Filled.PauseCircle,
                     contentPadding = PaddingValues(horizontal = actionSpacing),
-                    modifier = Modifier.weight(1f),
-                )
+                    modifier = actionModifier,
+                ) },
+            ) + if (showCancel) listOf<@Composable (Modifier) -> Unit>(
+                { actionModifier -> OutlinedButton(
+                        onClick = { onCancelSession(session) },
+                        enabled = actionsEnabled && ownsSession && online &&
+                            session.canCancelUnbilled() && cancellationBlockMessage == null,
+                        contentPadding = PaddingValues(horizontal = actionSpacing),
+                        modifier = actionModifier.heightIn(min = 48.dp)
+                            .testTag("gaming-cancel-active-session")
+                            .semantics { contentDescription = "Cancel session" },
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                    ) { Text("Cancel", fontWeight = FontWeight.SemiBold, maxLines = 1) } },
+            ) else emptyList()
+            Column(verticalArrangement = Arrangement.spacedBy(actionSpacing)) {
+                actions.chunked(columns).forEach { rowActions ->
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(actionSpacing)) {
+                        rowActions.forEach { action -> action(Modifier.weight(1f)) }
+                    }
+                }
             }
         }
+        val actionSupportMessage = cancellationBlockMessage ?: pauseSupportMessage
         if (showStopAction) {
             Column(Modifier.fillMaxWidth()) {
                 GamingStopSessionAction(
@@ -4413,7 +4494,7 @@ private fun GamingActiveSessionActions(
                     modifier = Modifier.fillMaxWidth(),
                 )
                 GamingPrimaryActionSupportArea {
-                    pauseSupportMessage?.let { message ->
+                    actionSupportMessage?.let { message ->
                         Text(
                             message,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -4425,9 +4506,9 @@ private fun GamingActiveSessionActions(
                     }
                 }
             }
-        } else if (pauseSupportMessage != null) {
+        } else if (actionSupportMessage != null) {
             Text(
-                pauseSupportMessage,
+                actionSupportMessage,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelSmall,
             )
@@ -4739,7 +4820,7 @@ private fun StationBody(
                         }
                     }
                     else -> if (session?.isPackageBilling() == true) {
-                        "${gamingPackageSelectionLabel(session) ?: "Fixed package"} · total locked at start."
+                        "Booked package price is locked; added players and drinks are extra."
                     } else {
                         "Server calculates the final elapsed-time charge when stopped."
                     }
@@ -4774,7 +4855,7 @@ private fun StationBody(
                 if (currentAmount != null) {
                     Text(
                         if (running.isPackageBilling()) {
-                            "Package total · ${currentAmount.asRupees()}"
+                            "Booked package · ${currentAmount.asRupees()}"
                         } else {
                             "Estimated now · ${currentAmount.asRupees()}"
                         },
@@ -4978,7 +5059,7 @@ internal fun unbilledSessionDetail(state: StationVisualState, session: GameSessi
             StationVisualState.SendPending -> "POS handoff saved and waiting for confirmation."
             StationVisualState.SendRejected -> session?.lastError?.takeIf(String::isNotBlank)
                 ?: "POS refused the handoff. Check the shift and connection, then retry."
-            else -> "Send to POS before the next session."
+            else -> "Send to POS or Void this unpaid session here before starting again."
         }
         StationVisualState.CancellationRequired -> "No billable amount. Cancel with a reason before reuse."
         else -> "Review this session before continuing."
@@ -5383,6 +5464,7 @@ internal fun CancelUnbilledSessionDialog(
     amountMinor: Long,
     onDismiss: () -> Unit,
     onConfirm: (String) -> Unit,
+    activeSession: Boolean = false,
 ) {
     var selectedReasonId by rememberSaveable(stationName) { mutableStateOf<String?>(null) }
     var customReason by rememberSaveable(stationName) { mutableStateOf("") }
@@ -5391,6 +5473,7 @@ internal fun CancelUnbilledSessionDialog(
     val contentMaxHeight = voidDialogBodyMaxHeight(screenHeightDp, selectedReasonId)
     val normalized = resolvedVoidReason(selectedReasonId, customReason)
     val hasBillableAmount = amountMinor > 0L
+    val actionLabel = if (activeSession) "Cancel session" else "Void session"
 
     AlertDialog(
         containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
@@ -5406,7 +5489,7 @@ internal fun CancelUnbilledSessionDialog(
             .navigationBarsPadding()
             .imePadding(),
         properties = gamingImeAwareDialogProperties,
-        title = { Text("Void session · $stationName") },
+        title = { Text("$actionLabel · $stationName") },
         text = {
             if (compactCustomLayout) {
                 VoidReasonInput(
@@ -5425,7 +5508,7 @@ internal fun CancelUnbilledSessionDialog(
                                 .heightIn(min = 48.dp),
                         ) { Text("Keep session", maxLines = 1) }
                         ErpButton(
-                            text = "Void session",
+                            text = actionLabel,
                             onClick = { onConfirm(normalized) },
                             enabled = normalized.isNotEmpty(),
                             intent = ActionIntent.Destructive,
@@ -5443,9 +5526,12 @@ internal fun CancelUnbilledSessionDialog(
                     verticalArrangement = Arrangement.spacedBy(Spacing.md),
                 ) {
                     Text(
-                        if (hasBillableAmount) {
-                            "This stopped session is worth ${amountMinor.asRupees()}. Voiding removes it from POS collection, " +
-                                "but preserves the original amount, employee and reason in the audit trail."
+                        if (activeSession) {
+                            "Cancel this mistaken session without creating a POS bill. The original session, employee " +
+                                "and required reason stay in the audit trail. Use Stop and POS for actual customer play."
+                        } else if (hasBillableAmount) {
+                            "Void this ${amountMinor.asRupees()} stopped session before POS. The original amount, attendance, " +
+                                "settlement, employee and reason stay in the audit trail. No POS bill is required."
                         } else {
                             "This session has no billable amount and cannot be sent to POS. Cancellation is still recorded in the audit trail."
                         },
@@ -5463,7 +5549,7 @@ internal fun CancelUnbilledSessionDialog(
         confirmButton = {
             if (!compactCustomLayout) {
                 ErpButton(
-                    text = "Void session",
+                    text = actionLabel,
                     onClick = { onConfirm(normalized) },
                     enabled = normalized.isNotEmpty(),
                     intent = ActionIntent.Destructive,
@@ -7379,6 +7465,30 @@ internal fun GamingInlineParticipantEditor(
     modifier: Modifier = Modifier,
     pinConfirmAction: Boolean = false,
 ) {
+    // rememberSaveable inputs reset live state, but do not validate restored inputs.
+    // Player identity and registration drafts belong to the exact session, not just its station.
+    androidx.compose.runtime.key(session.id) {
+        GamingInlineParticipantEditorContent(
+            session = session, participants = participants, customers = customers,
+            wallClock = wallClock, busy = busy, onJoin = onJoin, onLeave = onLeave,
+            onClose = onClose, modifier = modifier, pinConfirmAction = pinConfirmAction,
+        )
+    }
+}
+
+@Composable
+private fun GamingInlineParticipantEditorContent(
+    session: GameSession,
+    participants: List<GamingParticipantUi>,
+    customers: List<GamingCustomerOption>,
+    wallClock: State<Long>,
+    busy: Boolean,
+    onJoin: (String?, String?, String?, String?) -> Unit,
+    onLeave: (String) -> Unit,
+    onClose: () -> Unit,
+    modifier: Modifier = Modifier,
+    pinConfirmAction: Boolean = false,
+) {
     var savedCustomerMode by rememberSaveable(session.id) { mutableStateOf(false) }
     var registerCustomerMode by rememberSaveable(session.id) { mutableStateOf(false) }
     var query by rememberSaveable(session.id) { mutableStateOf("") }
@@ -7389,7 +7499,9 @@ internal fun GamingInlineParticipantEditor(
     val currentParticipants = remember(participants) { currentGamingParticipantRows(participants) }
     val activeIdentityIds = active.map(GamingParticipantUi::participantIdentityId).toSet()
     val basePlayers = gamingBookedPlayerCount(session)
-    val canAdd = session.status == "active" && gamingLateJoinHasCapacity(session, active.size)
+    val pendingStart = session.isLocallyPendingPs5PackageStart()
+    val canAdd = (session.status == "active" || pendingStart) &&
+        gamingLateJoinHasCapacity(session, active.size)
     val frozenNow = remember(session.id, session.status) { System.currentTimeMillis() }
     val nowMillis = if (session.status in setOf("active", "starting")) wallClock.value else frozenNow
     val playElapsedMs = sessionPlayElapsedMillis(session, nowMillis) ?: 0L
@@ -7410,6 +7522,12 @@ internal fun GamingInlineParticipantEditor(
         },
     ) {
         val editorBody: @Composable () -> Unit = {
+        if (pendingStart) Text(
+            "Start and player changes are saved on this tablet and sync in order. Final charges are confirmed at Stop.",
+            color = MaterialTheme.colorScheme.operationalWarning,
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.testTag("gaming-player-pending-start-guidance"),
+        )
         currentParticipants.forEach { participant ->
             Row(
                 Modifier.fillMaxWidth().padding(vertical = Spacing.xs),
@@ -7579,8 +7697,12 @@ internal fun GamingInlineParticipantEditor(
             }
         } else {
             Text(
-                if (session.status != "active") "Resume the session before adding a player."
-                else "All four player places are assigned. A player must leave before another can join.",
+                when {
+                    session.status == "paused" -> "Resume the session before adding a player."
+                    session.status == "active" || pendingStart ->
+                        "All four player places are assigned. A player must leave before another can join."
+                    else -> "Resolve this session's saved Start or Stop before adding a player."
+                },
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelSmall,
             )
@@ -7624,6 +7746,38 @@ internal fun GamingInlineParticipantEditor(
 internal fun gamingInlineJoinPhone(registerCustomerMode: Boolean, rawPhone: String): String? =
     rawPhone.trim().takeIf { registerCustomerMode && it.length in 4..20 }
 
+/** Preserve the reviewed entity across tab changes, never rebind it to a live catalogue row. */
+private val GamingDrinkReviewSaver = mapSaver<MenuItemEntity?>(
+    save = { reviewed ->
+        reviewed?.let { item ->
+            mapOf(
+                "id" to item.id, "categoryId" to item.categoryId, "sku" to item.sku,
+                "name" to item.name, "type" to item.type, "basePriceMinor" to item.basePriceMinor,
+                "taxRate" to item.taxRate, "hsnCode" to item.hsnCode,
+                "priceIncludesTax" to item.priceIncludesTax, "isAvailable" to item.isAvailable,
+                "description" to item.description,
+            )
+        } ?: emptyMap()
+    },
+    restore = { saved ->
+        runCatching {
+            if (saved.isEmpty()) null else MenuItemEntity(
+                id = saved.getValue("id") as String,
+                categoryId = saved.getValue("categoryId") as String,
+                sku = saved.getValue("sku") as String,
+                name = saved.getValue("name") as String,
+                type = saved.getValue("type") as String,
+                basePriceMinor = saved.getValue("basePriceMinor") as Long,
+                taxRate = saved.getValue("taxRate") as Double,
+                hsnCode = saved["hsnCode"] as String?,
+                priceIncludesTax = saved.getValue("priceIncludesTax") as Boolean,
+                isAvailable = saved.getValue("isAvailable") as Boolean,
+                description = saved["description"] as String?,
+            )
+        }.getOrNull()
+    },
+)
+
 @Composable
 internal fun GamingInlineDrinkEditor(
     session: GameSession,
@@ -7636,11 +7790,39 @@ internal fun GamingInlineDrinkEditor(
     modifier: Modifier = Modifier,
     pinActions: Boolean = false,
 ) {
-    var selectedId by rememberSaveable(session.id) { mutableStateOf<String?>(null) }
+    // rememberSaveable inputs reset live state, but do not validate restored inputs.
+    // A replacement session at the same station must never restore another session's reviewed item or quantity.
+    androidx.compose.runtime.key(session.id) {
+        GamingInlineDrinkEditorContent(
+            session = session, items = items, configurableItemIds = configurableItemIds,
+            busy = busy, onConfirm = onConfirm, onConfigure = onConfigure,
+            onClose = onClose, modifier = modifier, pinActions = pinActions,
+        )
+    }
+}
+
+@Composable
+private fun GamingInlineDrinkEditorContent(
+    session: GameSession,
+    items: List<MenuItemEntity>,
+    configurableItemIds: Set<String>,
+    busy: Boolean,
+    onConfirm: (MenuItemEntity, Int) -> Unit,
+    onConfigure: (MenuItemEntity) -> Unit,
+    onClose: () -> Unit,
+    modifier: Modifier = Modifier,
+    pinActions: Boolean = false,
+) {
+    var selected by rememberSaveable(session.id, stateSaver = GamingDrinkReviewSaver) {
+        mutableStateOf<MenuItemEntity?>(null)
+    }
     var quantity by rememberSaveable(session.id) { mutableIntStateOf(1) }
     var query by rememberSaveable(session.id) { mutableStateOf("") }
     var selectedType by rememberSaveable(session.id) { mutableStateOf<String?>(null) }
-    val selected = items.firstOrNull { it.id == selectedId }
+    val selectionCurrent = selected?.let { reviewed ->
+        reviewed.isAvailable && items.firstOrNull { it.id == reviewed.id } == reviewed &&
+            reviewed.id !in configurableItemIds
+    } ?: true
     val types = remember(items) { items.map(MenuItemEntity::type).distinct().sorted() }
     val visibleItems = remember(items, query, selectedType) {
         val normalizedQuery = query.trim().lowercase(Locale.ROOT)
@@ -7663,7 +7845,7 @@ internal fun GamingInlineDrinkEditor(
             ) { Text("Close") }
         },
     ) {
-        if (items.isEmpty()) {
+        if (items.isEmpty() && selected == null) {
             Text(
                 "No session items are available. Refresh the menu or enable products in Menu.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -7673,7 +7855,8 @@ internal fun GamingInlineDrinkEditor(
             modifier = if (pinActions) Modifier.fillMaxSize() else Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(Spacing.xs),
         ) {
-            if (selected == null) {
+            val reviewed = selected
+            if (reviewed == null) {
                 // The real tablet side pane is short once the permanent timer
                 // and action footer are accounted for. Search, categories and
                 // results therefore share one scroll owner instead of letting
@@ -7689,7 +7872,7 @@ internal fun GamingInlineDrinkEditor(
                             value = query,
                             onValueChange = {
                                 query = it.take(100)
-                                selectedId = null
+                                selected = null
                                 quantity = 1
                             },
                             label = { Text("Search drinks & snacks") },
@@ -7704,7 +7887,7 @@ internal fun GamingInlineDrinkEditor(
                                     selected = selectedType == null,
                                     onClick = {
                                         selectedType = null
-                                        selectedId = null
+                                        selected = null
                                         quantity = 1
                                     },
                                     label = { Text("All") },
@@ -7716,7 +7899,7 @@ internal fun GamingInlineDrinkEditor(
                                     selected = selectedType == type,
                                     onClick = {
                                         selectedType = type
-                                        selectedId = null
+                                        selected = null
                                         quantity = 1
                                     },
                                     label = { Text(type.replaceFirstChar { it.titlecase(Locale.ROOT) }) },
@@ -7753,7 +7936,7 @@ internal fun GamingInlineDrinkEditor(
                                     onClick = {
                                         if (item.id in configurableItemIds) onConfigure(item)
                                         else {
-                                            selectedId = item.id
+                                            selected = item
                                             quantity = 1
                                         }
                                     },
@@ -7779,7 +7962,7 @@ internal fun GamingInlineDrinkEditor(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Column(Modifier.weight(1f)) {
-                            Text("Review ${selected.name}", fontWeight = FontWeight.SemiBold)
+                            Text("Review ${reviewed.name}", fontWeight = FontWeight.SemiBold)
                             Text(
                                 "No bill line is created until Confirm add.",
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -7787,27 +7970,36 @@ internal fun GamingInlineDrinkEditor(
                             )
                         }
                         OutlinedButton(
-                            enabled = quantity > 1 && !busy,
+                            enabled = quantity > 1 && !busy && selectionCurrent,
                             onClick = { quantity = (quantity - 1).coerceAtLeast(1) },
                         ) { Text("−") }
                         Text("$quantity", fontWeight = FontWeight.Bold)
                         OutlinedButton(
-                            enabled = quantity < 20 && !busy,
+                            enabled = quantity < 20 && !busy && selectionCurrent,
                             onClick = { quantity = (quantity + 1).coerceAtMost(20) },
                         ) { Text("+") }
                     }
+                    if (!selectionCurrent) Text(
+                        "This item changed or is no longer available. Choose it again to review the current name and price.",
+                        color = MaterialTheme.colorScheme.operationalWarning,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.testTag("gaming-drinks-review-stale"),
+                    )
                     TextButton(
-                        onClick = { selectedId = null; quantity = 1 },
+                        onClick = { selected = null; quantity = 1 },
                         enabled = !busy,
                     ) { Text("Choose another item") }
                 }
                 ErpButton(
-                    text = "Confirm add · ${Math.multiplyExact(selected.basePriceMinor, quantity.toLong()).asRupees()}",
-                    enabled = !busy,
+                    text = "Confirm add · ${Math.multiplyExact(reviewed.basePriceMinor, quantity.toLong()).asRupees()}",
+                    enabled = !busy && selectionCurrent,
                     onClick = {
-                        onConfirm(selected, quantity)
-                        selectedId = null
-                        quantity = 1
+                        if (selectionCurrent && selected == reviewed) {
+                            val confirmedQuantity = quantity
+                            selected = null
+                            quantity = 1
+                            onConfirm(reviewed, confirmedQuantity)
+                        }
                     },
                     modifier = Modifier.fillMaxWidth().testTag("gaming-drinks-inline-confirm"),
                 )

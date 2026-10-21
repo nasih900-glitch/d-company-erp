@@ -77,7 +77,9 @@ CATALOGUE: tuple[ActionDefinition, ...] = (
     ActionDefinition("GAM-JOIN", "Player joined", "operations", ("joined", "player", "controller")),
     ActionDefinition("GAM-LEAVE", "Player left", "operations", ("left", "leave")),
     ActionDefinition("GAM-ADD", "Gaming add-on added", "operations", ("drink", "addon", "add-on")),
-    ActionDefinition("GAM-VOID", "Gaming add-on removed", "operations", ("void", "removed")),
+    ActionDefinition(
+        "GAM-VOID", "Gaming charge voided", "operations", ("void", "removed", "session void")
+    ),
     ActionDefinition(
         "GAM-POS", "Gaming session sent to POS", "operations", ("handoff", "checkout")
     ),
@@ -108,9 +110,15 @@ CATALOGUE: tuple[ActionDefinition, ...] = (
         ("pending", "failed", "completed"),
     ),
     ActionDefinition("SEC-ROL", "Staff access changed", "staff", ("role", "access", "permission")),
+    ActionDefinition(
+        "UPD-POL",
+        "Android update policy changed",
+        "system",
+        ("optional update", "required update", "update policy"),
+    ),
 )
 BY_CODE = {definition.code: definition for definition in CATALOGUE}
-assert len(BY_CODE) == len(CATALOGUE) == 27
+assert len(BY_CODE) == len(CATALOGUE) == 28
 
 # This is also used for old unmapped technical records. Unknown is not System.
 AREA_TYPES: dict[str, tuple[str, ...]] = {
@@ -221,13 +229,12 @@ OUTCOMES = ("completed", "failed", "pending", "withdrawn", "reversed", "unresolv
 # ORM rows emitted as implementation companions to a source-defined operation.
 # They remain immutable and available in All activity, but a newly recorded,
 # uncoded CRUD row is not itself a second business action.
-TECHNICAL_COMPANION_ENTITIES = (
-    "OrderCheckoutClaim",
-)
+TECHNICAL_COMPANION_ENTITIES = ("OrderCheckoutClaim",)
 TECHNICAL_COMPANION_ACTIONS = ("create", "update", "delete")
 
 # Codes that can be established from an explicit operation (not arbitrary CRUD).
 EXPLICIT = {
+    "android_update_policy_changed": ("UPD-POL", "committed", "completed"),
     "gaming_session_started": ("GAM-STA", "committed", "completed"),
     "gaming_session_start_rejected": ("GAM-STA", "rejected", "failed"),
     "gaming_session_stopped": ("GAM-STP", "committed", "completed"),
@@ -238,6 +245,7 @@ EXPLICIT = {
     "gaming_participant_left": ("GAM-LEAVE", "committed", "completed"),
     "gaming_session_addon_added": ("GAM-ADD", "committed", "completed"),
     "gaming_session_addon_voided": ("GAM-VOID", "committed", "completed"),
+    "gaming_session_voided": ("GAM-VOID", "committed", "completed"),
     "gaming_session_handoff_to_pos": ("GAM-POS", "committed", "completed"),
     "gaming_session_sent_to_pos": ("GAM-POS", "committed", "completed"),
     "shift_android_origin_recovery_close": ("SHF-REC", "committed", "completed"),
@@ -280,9 +288,20 @@ REFUNDS = {
 }
 REFERENCE_FIELDS = ("invoice_no", "reference", "source_reference", "receipt_no", "ref_id")
 DETAIL_FIELDS = (
-    "payment_id", "correction_id", "original_method", "effective_method", "evidence_kind",
-    "before_cash_minor", "before_upi_minor", "actual_cash_minor", "actual_upi_minor",
-    "cash_delta_minor", "upi_delta_minor", "total_difference_minor", "source_allocation", "kind",
+    "payment_id",
+    "correction_id",
+    "original_method",
+    "effective_method",
+    "evidence_kind",
+    "before_cash_minor",
+    "before_upi_minor",
+    "actual_cash_minor",
+    "actual_upi_minor",
+    "cash_delta_minor",
+    "upi_delta_minor",
+    "total_difference_minor",
+    "source_allocation",
+    "kind",
     "amount_minor",
     "total_minor",
     "line_total_minor",
@@ -518,14 +537,16 @@ def describe(row: AuditLog) -> dict[str, Any]:
     )
     return {
         "action_code": code,
-        "action_label": definition.label if definition else (
-            "Technical record" if technical else (
-                "Unclassified record" if row.catalogue_version else "Other / legacy activity"
-            )
+        "action_label": definition.label
+        if definition
+        else (
+            "Technical record"
+            if technical
+            else ("Unclassified record" if row.catalogue_version else "Other / legacy activity")
         ),
-        "category": "system" if technical else (
-            row.category or category_for(row.action, row.entity_type, code)
-        ),
+        "category": "system"
+        if technical
+        else (row.category or category_for(row.action, row.entity_type, code)),
         "stage": stage,
         "outcome": outcome,
         "classification_source": classification_source,

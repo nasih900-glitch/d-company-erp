@@ -26,7 +26,7 @@ class LaunchAppearanceTest {
     }
 
     @Test
-    fun `starting styles preserve neutral palette and original manifest icon`() {
+    fun `starting styles match Android day and classic night surfaces and preserve the original icon`() {
         val styles = DocumentBuilderFactory.newInstance().newDocumentBuilder()
             .parse(root().resolve("src/main/res/values-v31/launch_themes.xml").toFile())
             .getElementsByTagName("style")
@@ -41,7 +41,7 @@ class LaunchAppearanceTest {
                 item.getAttribute("name") to item.textContent.trim()
             }
             for (name in listOf("windowSplashScreenBackground", "windowBackground", "statusBarColor", "navigationBarColor")) {
-                assertEquals(if (night) "#050505" else "#FAFAFA", values["android:$name"])
+                assertEquals(if (night) "#08131B" else "#F7F7F7", values["android:$name"])
             }
             assertEquals((!night).toString(), values["android:windowLightStatusBar"])
             assertEquals((!night).toString(), values["android:windowLightNavigationBar"])

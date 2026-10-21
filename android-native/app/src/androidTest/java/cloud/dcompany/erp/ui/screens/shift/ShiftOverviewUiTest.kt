@@ -12,18 +12,29 @@ import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.junit4.StateRestorationTester
@@ -34,16 +45,23 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Density
 import androidx.test.platform.app.InstrumentationRegistry
 import cloud.dcompany.erp.core.db.LocalShiftEntity
+import cloud.dcompany.erp.core.db.ShiftCloseBlockerCounts
 import cloud.dcompany.erp.core.db.ResolvedOpenShift
 import cloud.dcompany.erp.core.db.ShiftSource
 import cloud.dcompany.erp.core.db.ShiftState
+import cloud.dcompany.erp.core.sync.OutboxWorkStatus
+import cloud.dcompany.erp.ui.Destination
 import cloud.dcompany.erp.ui.WorkspaceFeatureProfiles
+import cloud.dcompany.erp.ui.WorkspaceScaffold
+import cloud.dcompany.erp.ui.components.SyncAvailabilityProblem
 import cloud.dcompany.erp.ui.presentationPolicy
 import cloud.dcompany.erp.ui.theme.DCompanyTheme
 import java.io.File
 import kotlinx.coroutines.launch
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -90,6 +108,42 @@ class ShiftOverviewUiTest {
     }
 
     @Test
+    fun readinessAndReviewAreVisibleBeforeCollectionDetailsOnCompactTablet() {
+        compose.setContent { ShiftFixture(width = 872, height = 400, onReview = {}) }
+        val readiness = compose.onNodeWithText("Close review").assertIsDisplayed().getUnclippedBoundsInRoot()
+        val review = compose.onNodeWithText("Review & close shift").assertIsDisplayed().getUnclippedBoundsInRoot()
+        val collections = compose.onNodeWithText("Net collections").getUnclippedBoundsInRoot()
+        assertTrue(readiness.top < review.top)
+        assertTrue("The next action precedes financial detail", review.bottom <= collections.top)
+    }
+
+    @OptIn(ExperimentalFoundationApi::class)
+    @Test
+    fun uncountedDrawerIsNeutralAndCloseExplainsTheRequiredNextAction() {
+        var neutral = Color.Unspecified
+        compose.setContent {
+            DCompanyTheme {
+                neutral = MaterialTheme.colorScheme.onSurfaceVariant
+                val state = shiftFixtureState()
+                Box(Modifier.width(900.dp).height(620.dp)) {
+                    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+                        CloseShiftCard(state, true, true, true, remember { BringIntoViewRequester() },
+                            ShiftCloseCallbacks({}, {}, {}, {}, {},
+                                { state.open?.let(::shiftCloseUiIdentity) }, {}))
+                    }
+                }
+            }
+        }
+        val layouts = mutableListOf<TextLayoutResult>()
+        compose.onNodeWithText("Not counted yet").performScrollTo().performSemanticsAction(
+            SemanticsActions.GetTextLayoutResult,
+        ) { it(layouts) }
+        assertEquals(neutral, layouts.single().layoutInput.style.color)
+        compose.onNodeWithTag("shift-close-next-action").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Close shift").assertIsNotEnabled()
+    }
+
+    @Test
     fun viewerCanReviewWithoutBeingPromisedShiftClosure() {
         compose.setContent {
             ShiftFixture(width = 872, height = 400, canClose = false, onReview = {})
@@ -112,7 +166,7 @@ class ShiftOverviewUiTest {
 
         compose.onNodeWithText("Close from the opening app").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("Review closing device").performScrollTo().assertIsDisplayed()
-        compose.onAllNodesWithText("Ready to count cash and review").assertCountEquals(0)
+        compose.onAllNodesWithText("Count cash · server review still required").assertCountEquals(0)
         compose.onAllNodesWithText("Review & close shift").assertCountEquals(0)
     }
 
@@ -172,8 +226,9 @@ class ShiftOverviewUiTest {
             ShiftFixture(width = 872, height = 400, accountingAvailable = false, onReview = {})
         }
 
-        compose.onNodeWithText("Collection breakdown is unavailable", substring = true)
-            .assertIsDisplayed()
+        compose.onNodeWithText("Reconnect to verify collections. No payment total is assumed.")
+            .performScrollTo().assertIsDisplayed()
+        compose.onAllNodesWithText("Unavailable").assertCountEquals(2)
         compose.onAllNodesWithText("—").assertCountEquals(2)
     }
 
@@ -242,18 +297,75 @@ class ShiftOverviewUiTest {
 
     @OptIn(ExperimentalFoundationApi::class)
     @Test
-    fun unfinishedDrawerCountSurvivesNavigationAndSavedStateRecreation() {
+    fun cachedHeldBlockerStaysReadableAndDisablesOnlyFinalCloseUntilClearedAtLargeText() {
+        val empty = ShiftCloseBlockerCounts(0, 0, 0, 0, 0, 0)
+        val state = mutableStateOf(shiftFixtureState().copy(closeBlockers = empty.copy(serverHeldOrderCount = 1)))
+        var reviewed = false
+        compose.setContent {
+            DCompanyTheme {
+                val density = LocalDensity.current
+                CompositionLocalProvider(LocalDensity provides Density(density.density, 1.3f)) {
+                    Box(Modifier.width(872.dp).height(400.dp).testTag("shift-blocker-review-viewport")) {
+                        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+                            ShiftDashboardOverview(state.value, onRefresh = {}, onReview = { reviewed = true })
+                            CloseShiftCard(state.value, true, true, true,
+                                remember { BringIntoViewRequester() },
+                                ShiftCloseCallbacks({}, {}, {}, {}, {},
+                                    { state.value.open?.let(::shiftCloseUiIdentity) }, {}))
+                        }
+                    }
+                }
+            }
+        }
+        compose.onNodeWithText("1 saved task needs review").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("shift-cached-close-blockers").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Review & close shift").performScrollTo().assertIsEnabled().performClick()
+        compose.runOnIdle { assertTrue(reviewed) }
+        compose.onNodeWithText("Not counted yet").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Close shift").assertIsNotEnabled()
+        compose.onNodeWithText("Count cash").performScrollTo().assertIsEnabled().performClick()
+        compose.onNodeWithText("Use drawer count").performScrollTo().performClick()
+        compose.onNodeWithTag("shift-close-next-action").performScrollTo().assertIsDisplayed()
+        val close = compose.onNodeWithText("Close shift").performScrollTo().assertIsDisplayed()
+            .assertIsNotEnabled().getUnclippedBoundsInRoot()
+        val viewport = compose.onNodeWithTag("shift-blocker-review-viewport").getUnclippedBoundsInRoot()
+        assertTrue(close.top >= viewport.top && close.bottom <= viewport.bottom)
+        assertTrue(close.bottom - close.top >= 48.dp)
+        compose.runOnIdle { state.value = state.value.copy(closeBlockers = empty) }
+        // The deliberate empty-drawer count survives; clearing a blocker never invents a count.
+        compose.onNodeWithText("Not counted yet").assertDoesNotExist()
+        compose.onNodeWithText("Close shift").performScrollTo().assertIsDisplayed().assertIsEnabled()
+        compose.onNodeWithText("Count cash · server review still required").performScrollTo().assertIsDisplayed()
+    }
+
+    @OptIn(ExperimentalFoundationApi::class)
+    @Test
+    fun unfinishedDrawerCountSurvivesRealWorkspaceTabsAndSavedStateRecreation() {
         val restoration = StateRestorationTester(compose)
         val state = shiftFixtureState()
-        val showShift = mutableStateOf(true)
+        val destination = mutableStateOf(Destination.Shift)
 
         restoration.setContent {
             DCompanyTheme {
-                val stateHolder = rememberSaveableStateHolder()
                 Box(Modifier.width(900.dp).height(620.dp)) {
-                    if (showShift.value) {
-                        stateHolder.SaveableStateProvider("shift-route") {
-                            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+                    WorkspaceScaffold(
+                        destinations = listOf(Destination.Shift, Destination.Gaming),
+                        currentDestination = destination.value,
+                        employeeName = "Fixture closer",
+                        locationLabel = "Fixture till",
+                        connectivityProblem = SyncAvailabilityProblem.NONE,
+                        outboxWorkStatus = OutboxWorkStatus(),
+                        syncing = false,
+                        canChangeTill = false,
+                        onOpenSupport = {},
+                        onChangeTill = {},
+                        onSignOut = {},
+                        onDestinationChanged = { destination.value = it },
+                    ) { activeDestination, _ ->
+                        when (activeDestination) {
+                            Destination.Shift -> Column(
+                                Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+                            ) {
                                 CloseShiftCard(
                                     state = state,
                                     canClosePermission = true,
@@ -273,9 +385,11 @@ class ShiftOverviewUiTest {
                                     ),
                                 )
                             }
+                            Destination.Gaming -> Box(
+                                Modifier.fillMaxSize().testTag("workspace-away-from-shift"),
+                            )
+                            else -> error("Unexpected fixture destination: $activeDestination")
                         }
-                    } else {
-                        Column { androidx.compose.material3.Text("Gaming workspace") }
                     }
                 }
             }
@@ -289,11 +403,21 @@ class ShiftOverviewUiTest {
         compose.onNodeWithText("Use drawer count").performScrollTo().performClick()
         compose.onNodeWithText("₹1,000.00").performScrollTo().assertIsDisplayed()
 
-        compose.runOnIdle { showShift.value = false }
-        compose.onNodeWithText("Gaming workspace").assertIsDisplayed()
-        compose.runOnIdle { showShift.value = true }
+        compose.onNodeWithContentDescription("Gaming. Manage stations and sessions").performClick()
+        compose.onNodeWithTag("workspace-away-from-shift").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Shift. Open, review and close today's shift").performClick()
         compose.onNodeWithText("Edit cash count").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("₹1,000.00").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Edit cash count").performClick()
+        compose.onNodeWithContentDescription("Count of ₹500 notes")
+            .performScrollTo()
+            .assert(
+                SemanticsMatcher.expectValue(
+                    SemanticsProperties.EditableText,
+                    AnnotatedString("2"),
+                ),
+            )
+        compose.onNodeWithText("Cancel").performClick()
 
         restoration.emulateSavedInstanceStateRestore()
         compose.onNodeWithText("Edit cash count").performScrollTo().assertIsDisplayed()

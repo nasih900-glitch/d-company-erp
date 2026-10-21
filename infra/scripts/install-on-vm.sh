@@ -43,6 +43,7 @@ fi
 shift
 
 MAINTENANCE_CONFIRMED=false
+BUILD55_ACCEPTANCE_CREDENTIAL_FILE=""
 LEGACY_CODE14_REVISION=""
 LEGACY_CODE16_REVISION=""
 KNOWN_CODE14_REVISION="e5e90df5781e93681b8e9dcdd1ae9a6a5fb6a0b9"
@@ -53,6 +54,13 @@ while [ "$#" -gt 0 ]; do
     --maintenance-confirmed)
       MAINTENANCE_CONFIRMED=true
       shift
+      ;;
+    --build55-acceptance-credential-file)
+      if [ "$#" -lt 2 ] || [[ "$2" != /* ]]; then
+        echo "Build55 acceptance requires an absolute private credential file path." >&2; exit 1
+      fi
+      BUILD55_ACCEPTANCE_CREDENTIAL_FILE=$2
+      shift 2
       ;;
     --legacy-code16-revision)
       if [ "$#" -lt 2 ]; then
@@ -209,6 +217,10 @@ BUILD52_PENDING_COMPATIBILITY_VERIFIER="$CANDIDATE_BUILD_ROOT/infra/scripts/veri
 BUILD53_PENDING_COMPATIBILITY_VERIFIER="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-build53-pending-compatibility.py"
 BUILD54_PENDING_COMPATIBILITY_VERIFIER="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-build54-pending-compatibility.py"
 BUILD52_TRANSITION_STATE_SQL="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-build52-transition-state.sql"
+BUILD55_VERIFIER="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-build55-pending-compatibility.py"
+BUILD55_TRANSITION_SQL="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-build55-transition-state.sql"
+BUILD55_RUNTIME_CAPTURE="$CANDIDATE_BUILD_ROOT/infra/scripts/capture-build55-runtime.py"
+BUILD55_AUTH_TOOL="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-build55-authenticated-acceptance.py"
 WEB_PUBLIC_ASSET_VERIFIER="$CANDIDATE_BUILD_ROOT/ops/verify_web_public_assets.py"
 BUSINESS_QUIESCENCE_VERIFIER="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-production-business-quiescence.py"
 BUSINESS_QUIESCENCE_SQL="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-production-business-quiescence.sql"
@@ -227,7 +239,8 @@ for release_input in \
   "$BUILD51_POST_MIGRATION_VERIFIER" "$BUILD51_POST_MIGRATION_SQL" \
   "$BUILD52_PENDING_COMPATIBILITY_VERIFIER" "$BUILD53_PENDING_COMPATIBILITY_VERIFIER" \
   "$BUILD54_PENDING_COMPATIBILITY_VERIFIER" \
-  "$BUILD52_TRANSITION_STATE_SQL" \
+  "$BUILD52_TRANSITION_STATE_SQL" "$BUILD55_VERIFIER" "$BUILD55_TRANSITION_SQL" \
+  "$BUILD55_RUNTIME_CAPTURE" "$BUILD55_AUTH_TOOL" \
   "$BUILD49_PENDING_COMPATIBILITY_VERIFIER" "$WEB_PUBLIC_ASSET_VERIFIER" \
   "$BUSINESS_QUIESCENCE_VERIFIER" "$BUSINESS_QUIESCENCE_SQL"; do
   if [ ! -f "$release_input" ] || [ -L "$release_input" ]; then
@@ -302,6 +315,17 @@ inspection_compose=(
 # backend, an exact database head, a source-verified immutable backend image,
 # the prior Compose file, and durable rollback tags for every service image.
 UPGRADE_SNAPSHOT=""
+BUILD55_EXACT_TRANSITION=false
+BUILD55_APP_WRITERS_STARTED=false
+BUILD55_POST_PROOF_SUCCEEDED=false
+BUILD55_RUNTIME_OVERRIDE=""
+BUILD55_PRIOR_IMAGE_OVERRIDE=""
+BUILD55_PRE_TRANSITION=""
+BUILD55_PRE_FLEET=""
+BUILD55_PRE_TRANSITION_SHA256=""
+BUILD55_PRE_FLEET_SHA256=""
+BUILD55_BASELINE_MANIFEST_SHA256=""
+BUILD55_CREDENTIAL_SHA256=""
 PRIOR_SOURCE_ROOT=""
 EXISTING_POSTGRES_CONTAINER=""
 EXISTING_BACKEND_CONTAINER=""
@@ -650,6 +674,39 @@ YAML
       exit 1
     fi
   fi
+  if grep -qx 'APP_VERSION=3.1.47' "$CANDIDATE_BUILD_ROOT/.env.production.example"; then
+    if [ "$PRIOR_REVISION" != 5ad146ae076f5178acc2c8e4cb840ecbb0d0343a ] || \
+       [ "$PRIOR_APP_VERSION" != 3.1.46 ] || [ "$PRIOR_DB_HEAD" != 0091 ] || \
+       [ -n "$LEGACY_MINIO_CONTAINER" ] || [ -z "$BUILD55_ACCEPTANCE_CREDENTIAL_FILE" ]; then
+      echo "Build55 requires the exact54/0091 runtime and a normal-login private acceptance input." >&2
+      exit 1
+    fi
+    BUILD55_EXACT_TRANSITION=true
+    BUILD55_RUNTIME_JOURNAL="$UPGRADE_SNAPSHOT/build55-prior-runtime.json"
+    BUILD55_RUNTIME_OVERRIDE="$UPGRADE_SNAPSHOT/build55-runtime.override.json"
+    docker inspect "${CONTAINER_IDS[@]}" > "$UPGRADE_SNAPSHOT/build55-container-inspect.json"
+    chmod 600 "$UPGRADE_SNAPSHOT/build55-container-inspect.json"
+    python3 "$BUILD55_RUNTIME_CAPTURE" --container-inspect "$UPGRADE_SNAPSHOT/build55-container-inspect.json" \
+    > "$BUILD55_RUNTIME_JOURNAL"
+    chmod 600 "$BUILD55_RUNTIME_JOURNAL"
+    python3 "$BUILD55_VERIFIER" runtime --runtime-journal "$BUILD55_RUNTIME_JOURNAL" \
+    > "$BUILD55_RUNTIME_OVERRIDE"
+    chmod 600 "$BUILD55_RUNTIME_OVERRIDE"
+    BUILD55_PRIOR_IMAGE_OVERRIDE="$UPGRADE_SNAPSHOT/build55-prior-images.override.json"
+    python3 - "$UPGRADE_SNAPSHOT/build55-container-inspect.json" <<'PYPRIORIMAGES' > "$BUILD55_PRIOR_IMAGE_OVERRIDE"
+import json
+from pathlib import Path
+import sys
+records = json.loads(Path(sys.argv[1]).read_bytes())
+services = {row["Config"]["Labels"]["com.docker.compose.service"]: {"image": row["Image"]} for row in records}
+if set(services) != {"backend", "caddy", "frontend", "postgres", "redis"} or len(records) != 5:
+    raise SystemExit("Build55 prior image inventory changed")
+print(json.dumps({"services": services}, sort_keys=True))
+PYPRIORIMAGES
+    chmod 600 "$BUILD55_PRIOR_IMAGE_OVERRIDE"
+  elif [ -n "$BUILD55_ACCEPTANCE_CREDENTIAL_FILE" ]; then
+    echo "The typed Build55 acceptance input cannot select another release path." >&2; exit 1
+  fi
   ROLLBACK_STATE_MANIFEST="$UPGRADE_SNAPSHOT/rollback-state.sha256"
   (
     cd "$UPGRADE_SNAPSHOT"
@@ -659,6 +716,10 @@ YAML
   ) > "$ROLLBACK_STATE_MANIFEST"
   if [ -f "$UPGRADE_SNAPSHOT/fresh-lineage-origin.json" ]; then
     (cd "$UPGRADE_SNAPSHOT" && sha256sum fresh-lineage-origin.json) >> "$ROLLBACK_STATE_MANIFEST"
+  fi
+  if [ "$BUILD55_EXACT_TRANSITION" = true ]; then
+    (cd "$UPGRADE_SNAPSHOT" && sha256sum build55-container-inspect.json build55-prior-runtime.json \
+      build55-runtime.override.json build55-prior-images.override.json) >> "$ROLLBACK_STATE_MANIFEST"
   fi
   chmod 400 "$ROLLBACK_STATE_MANIFEST"
   ROLLBACK_STATE_MANIFEST_DIGEST=$(sha256sum "$ROLLBACK_STATE_MANIFEST" \
@@ -708,10 +769,19 @@ candidate_compose=(
   --project-directory "$CANDIDATE_BUILD_ROOT"
   -f "$RELEASE_COMPOSE_FILE"
 )
+if [ "$BUILD55_EXACT_TRANSITION" = true ]; then
+  candidate_compose+=(-f "$BUILD55_RUNTIME_OVERRIDE")
+fi
 printf -v OPERATIONS_COMPOSE_COMMAND \
   'docker compose -p %q --project-directory %q -f %q --env-file %q' \
   "$DEPLOY_PROJECT_NAME" "$CANDIDATE_BUILD_ROOT" \
   "$RELEASE_COMPOSE_FILE" "$REPO_DIR/.env"
+if [ "$BUILD55_EXACT_TRANSITION" = true ]; then
+  printf -v OPERATIONS_COMPOSE_COMMAND \
+    'docker compose -p %q --project-directory %q -f %q -f %q --env-file %q' \
+    "$DEPLOY_PROJECT_NAME" "$CANDIDATE_BUILD_ROOT" "$RELEASE_COMPOSE_FILE" \
+    "$BUILD55_RUNTIME_OVERRIDE" "$REPO_DIR/.env"
+fi
 
 # ----- 2. Firewall (Oracle Cloud's gotcha) -----
 # Oracle Linux/Ubuntu images ship with an iptables INPUT REJECT rule that
@@ -743,6 +813,48 @@ fi
 # never overwrites a real value. The live .env is not touched until every
 # security/Compose preflight and required database backup succeeds.
 ENV_CANDIDATE="$REPO_DIR/.env.code17.candidate.$$"
+capture_build55_actual_runtime() {
+  local context=$1 output=$2 service ids container_id
+  local -a containers=()
+  for service in backend caddy frontend postgres redis; do
+    if [ "$context" = candidate ]; then
+      ids=$("${candidate_compose[@]}" --env-file .env ps -a -q "$service")
+    elif [ "$context" = prior ]; then
+      ids=$("${prior_compose[@]}" ps -a -q "$service")
+    else
+      echo "Invalid Build55 runtime capture context." >&2; return 1
+    fi
+    if ! [[ "$ids" =~ ^[a-f0-9]{64}$ ]]; then
+      echo "Build55 requires exactly one actual container for every service." >&2; return 1
+    fi
+    containers+=("$ids")
+  done
+  docker inspect "${containers[@]}" > "$output.array"
+  chmod 600 "$output.array"
+  python3 - "$output.array" <<'PYACTUAL55' > "$output"
+import json
+from pathlib import Path
+import sys
+records = json.loads(Path(sys.argv[1]).read_bytes())
+result = {row["Config"]["Labels"]["com.docker.compose.service"]: row for row in records}
+if len(records) != 5 or set(result) != {"backend", "caddy", "frontend", "postgres", "redis"}:
+    raise SystemExit("Build55 actual runtime inventory changed")
+print(json.dumps(result, sort_keys=True))
+PYACTUAL55
+  chmod 600 "$output"
+}
+
+verify_build55_baseline_seal() {
+  if ! [[ "$BUILD55_BASELINE_MANIFEST_SHA256" =~ ^[a-f0-9]{64}$ ]] || \
+     ! [[ "$BUILD55_PRE_TRANSITION_SHA256" =~ ^[a-f0-9]{64}$ ]] || \
+     ! [[ "$BUILD55_PRE_FLEET_SHA256" =~ ^[a-f0-9]{64}$ ]] || \
+     [ "$(sha256sum "$UPGRADE_SNAPSHOT/build55-baseline.sha256" | awk '{print $1}')" != "$BUILD55_BASELINE_MANIFEST_SHA256" ] || \
+     ! sha256sum -c "$UPGRADE_SNAPSHOT/build55-baseline.sha256" >/dev/null; then
+    echo "Build55 stopped baseline seal changed; preserve current DB and hold ingress." >&2
+    return 1
+  fi
+}
+
 VERIFY_DATABASE=""
 if [ -e "$ENV_CANDIDATE" ]; then
   echo "Refusing to overwrite unexpected candidate file: $ENV_CANDIDATE" >&2
@@ -788,7 +900,11 @@ handle_install_failure() {
     docker exec "$EXISTING_POSTGRES_CONTAINER" \
       dropdb -U erp --if-exists "$VERIFY_DATABASE" >/dev/null 2>&1 || true
   fi
-  if [ "$PROMOTION_COMPLETE" = true ] && \
+  if [ "$BUILD55_EXACT_TRANSITION" = true ] && [ "$BUILD55_APP_WRITERS_STARTED" = true ]; then
+    "${candidate_compose[@]}" --env-file .env stop -t 30 caddy backend >/dev/null 2>&1 || true
+    echo "Build55 candidate writers started; current DB is preserved and ingress remains closed." >&2
+    echo "Do not restore the old54 dump or run its history projection. Use forward repair." >&2
+  elif [ "$PROMOTION_COMPLETE" = true ] && \
      [ "$CODE30_2_CLEANUP_WINDOW_ACTIVE" = true ] && \
      [ "$CODE30_2_CLEANUP_SUCCEEDED" != true ]; then
     # This exact one-time bridge cannot put either the migrated candidate or
@@ -812,6 +928,9 @@ handle_install_failure() {
       install -m 0600 .env "$UPGRADE_SNAPSHOT/.env.failed-code17"
     fi
     rollback_succeeded=true
+    if [ "$BUILD55_EXACT_TRANSITION" = true ]; then
+      verify_build55_baseline_seal || rollback_succeeded=false
+    fi
     if ! [[ "$ROLLBACK_STATE_MANIFEST_DIGEST" =~ ^[0-9a-f]{64}$ ]] || \
        [ "$(sha256sum "$UPGRADE_SNAPSHOT/rollback-state.sha256" 2>/dev/null \
           | awk '{print $1}')" != "$ROLLBACK_STATE_MANIFEST_DIGEST" ] || \
@@ -902,6 +1021,12 @@ handle_install_failure() {
         -f "$UPGRADE_SNAPSHOT/docker-compose.rollback-live-data.yml"
         --env-file .env
       )
+      if [ "$BUILD55_EXACT_TRANSITION" = true ]; then
+        prior_compose=(docker compose -p "$PRIOR_PROJECT_NAME" --project-directory "$PRIOR_SOURCE_ROOT"
+          -f "$UPGRADE_SNAPSHOT/docker-compose.prior.yml"
+          -f "$UPGRADE_SNAPSHOT/docker-compose.rollback-live-data.yml"
+          -f "$BUILD55_RUNTIME_OVERRIDE" -f "$BUILD55_PRIOR_IMAGE_OVERRIDE" --env-file .env)
+      fi
       "${prior_compose[@]}" up -d --no-build --pull never \
         --force-recreate postgres \
         || rollback_succeeded=false
@@ -955,6 +1080,20 @@ handle_install_failure() {
           2>/dev/null || true)
         if [ "$restored_head" != "$PRIOR_DB_HEAD" ]; then
           rollback_succeeded=false
+        fi
+        if [ "$rollback_succeeded" = true ] && [ "$BUILD55_EXACT_TRANSITION" = true ]; then
+          docker exec -i "$rollback_postgres" psql -X --no-psqlrc --quiet -U erp -d erp --tuples-only --no-align \
+    < "$BUILD55_TRANSITION_SQL" > "$UPGRADE_SNAPSHOT/build55-rollback-transition.json" || rollback_succeeded=false
+          docker exec -i "$rollback_postgres" psql -X --no-psqlrc --quiet -U erp -d erp --tuples-only --no-align \
+    < "$BUILD45_PENDING_STATE_SQL" > "$UPGRADE_SNAPSHOT/build55-rollback-fleet.json" || rollback_succeeded=false
+          chmod 600 "$UPGRADE_SNAPSHOT/build55-rollback-transition.json" "$UPGRADE_SNAPSHOT/build55-rollback-fleet.json"
+          verify_build55_baseline_seal && python3 "$BUILD55_VERIFIER" rollback \
+      --pre-transition-sha256 "$BUILD55_PRE_TRANSITION_SHA256" \
+      --pre-fleet-sha256 "$BUILD55_PRE_FLEET_SHA256" --pre-transition-state "$BUILD55_PRE_TRANSITION" \
+            --pre-fleet-state "$BUILD55_PRE_FLEET" \
+    --after-transition-state "$UPGRADE_SNAPSHOT/build55-rollback-transition.json" \
+    --after-fleet-state "$UPGRADE_SNAPSHOT/build55-rollback-fleet.json" \
+    > "$UPGRADE_SNAPSHOT/build55-rollback-report.json" || rollback_succeeded=false
         fi
         if [ "$rollback_succeeded" = true ] && [ -n "$BUILD51_CURRENT_BASELINE" ]; then
           RESTORED_CURRENT_STATE="$UPGRADE_SNAPSHOT/current-restored-history-raw.json"
@@ -1080,10 +1219,18 @@ handle_install_failure() {
         sleep 1
       done
     fi
+    if [ "$rollback_succeeded" = true ] && [ "$BUILD55_EXACT_TRANSITION" = true ]; then
+      "${prior_compose[@]}" create --no-build --pull never caddy || rollback_succeeded=false
+      capture_build55_actual_runtime prior "$UPGRADE_SNAPSHOT/build55-restored-runtime.json" || rollback_succeeded=false
+      python3 "$BUILD55_VERIFIER" running-runtime --prior \
+        --runtime-journal "$BUILD55_RUNTIME_JOURNAL" \
+    --actual-runtime "$UPGRADE_SNAPSHOT/build55-restored-runtime.json" \
+    --identity "$UPGRADE_SNAPSHOT/build55-identity.json" \
+    > "$UPGRADE_SNAPSHOT/build55-restored-runtime-verification.json" || rollback_succeeded=false
+    fi
     if [ "$rollback_succeeded" = true ]; then
       "${prior_compose[@]}" up -d --no-build --pull never \
-        --force-recreate caddy \
-        || rollback_succeeded=false
+        --force-recreate caddy || rollback_succeeded=false
     fi
     if [ "$rollback_succeeded" = true ]; then
       if ! restored_caddy_output=$("${prior_compose[@]}" ps -q caddy 2>/dev/null); then
@@ -1103,6 +1250,14 @@ handle_install_failure() {
           fi
         fi
       fi
+    fi
+    if [ "$rollback_succeeded" = true ] && [ "$BUILD55_EXACT_TRANSITION" = true ]; then
+      capture_build55_actual_runtime prior "$UPGRADE_SNAPSHOT/build55-restored-runtime-final.json" || rollback_succeeded=false
+      python3 "$BUILD55_VERIFIER" running-runtime --prior \
+        --runtime-journal "$BUILD55_RUNTIME_JOURNAL" \
+        --actual-runtime "$UPGRADE_SNAPSHOT/build55-restored-runtime-final.json" \
+        --identity "$UPGRADE_SNAPSHOT/build55-identity.json" \
+        > "$UPGRADE_SNAPSHOT/build55-restored-runtime-final-verification.json" || rollback_succeeded=false
     fi
     if [ "$rollback_succeeded" = true ]; then
       echo "==> Prior release and final quiesced database backup restored." >&2
@@ -1310,6 +1465,15 @@ if [ "$(docker image inspect --format '{{.Id}}' \
   exit 1
 fi
 
+if [ "$BUILD55_EXACT_TRANSITION" = true ]; then
+  python3 "$BUILD55_AUTH_TOOL" public --domain "$DOMAIN" \
+    --credential-file "$BUILD55_ACCEPTANCE_CREDENTIAL_FILE" \
+    > "$UPGRADE_SNAPSHOT/build55-auth-before.json"
+  chmod 600 "$UPGRADE_SNAPSHOT/build55-auth-before.json"
+  BUILD55_CREDENTIAL_SHA256=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["credential_input_sha256"])' \
+    "$UPGRADE_SNAPSHOT/build55-auth-before.json")
+fi
+
 # A deployed database gets one final verified snapshot only after ingress and
 # writers are stopped. This prevents post-backup payments/shifts from being
 # silently lost if the dump becomes the rollback source.
@@ -1334,6 +1498,64 @@ if [ -n "$EXISTING_POSTGRES_CONTAINER" ]; then
     echo "Reported tablet outbox state is invalid; refusing migration." >&2
     exit 1
   fi
+  if [ "$BUILD55_EXACT_TRANSITION" = true ]; then
+    BUILD55_PRE_TRANSITION="$UPGRADE_SNAPSHOT/build55-transition-before.json"
+    BUILD55_PRE_FLEET="$UPGRADE_SNAPSHOT/build55-fleet-before.json"
+    docker exec -i "$EXISTING_POSTGRES_CONTAINER" psql -X --no-psqlrc --quiet -U erp -d erp --tuples-only --no-align \
+    < "$BUILD55_TRANSITION_SQL" > "$BUILD55_PRE_TRANSITION"
+    docker exec -i "$EXISTING_POSTGRES_CONTAINER" psql -X --no-psqlrc --quiet -U erp -d erp --tuples-only --no-align \
+    < "$BUILD45_PENDING_STATE_SQL" > "$BUILD55_PRE_FLEET"
+    chmod 600 "$BUILD55_PRE_TRANSITION" "$BUILD55_PRE_FLEET"
+    BUILD55_CANDIDATE_IMAGES="$UPGRADE_SNAPSHOT/build55-candidate-images.json"
+    BUILD55_IMAGE_INSPECT="$UPGRADE_SNAPSHOT/build55-candidate-image-inspect.json"
+    printf '%s\n' "$CANDIDATE_IMAGE_ATTESTATION" > "$BUILD55_CANDIDATE_IMAGES"
+    BUILD55_IMAGE_IDS=()
+    while IFS= read -r image_id; do BUILD55_IMAGE_IDS+=("$image_id"); done < <(
+      python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print("\n".join(d["services"][s]["image_id"] for s in sorted(d["services"])))' "$BUILD55_CANDIDATE_IMAGES")
+    docker image inspect "${BUILD55_IMAGE_IDS[@]}" > "$UPGRADE_SNAPSHOT/build55-image-inspect-array.json"
+    python3 - "$BUILD55_CANDIDATE_IMAGES" "$UPGRADE_SNAPSHOT/build55-image-inspect-array.json" <<'PYIMAGE' > "$BUILD55_IMAGE_INSPECT"
+import json,sys
+attestation=json.load(open(sys.argv[1]))
+images={row["Id"]:row for row in json.load(open(sys.argv[2]))}
+print(json.dumps({service:images[row["image_id"]] for service,row in attestation["services"].items()},sort_keys=True))
+PYIMAGE
+    "${candidate_compose[@]}" --env-file "$ENV_CANDIDATE" config --format json > "$UPGRADE_SNAPSHOT/build55-candidate-compose.json"
+    python3 - "$PRIOR_REVISION" "$CURRENT_REVISION" "$PRIOR_SOURCE_ARCHIVE_SHA256" \
+      "$CANDIDATE_SOURCE_ARCHIVE_SHA256" "$SOURCE_MANIFEST_DIGEST" "$BUILD55_CANDIDATE_IMAGES" \
+      "$CANDIDATE_BUILD_ROOT" <<'PYIDENTITY' > "$UPGRADE_SNAPSHOT/build55-identity.json"
+import hashlib,json,pathlib,sys
+prior,revision,archive,candidate_archive,manifest,images=sys.argv[1:7]
+# Backend manifest covers the exact archive used by the existing image attestor.
+root=pathlib.Path(sys.argv[7])
+manifest_rows=[]
+for path in sorted((root/"backend").rglob("*")):
+ if path.is_file(): manifest_rows.append(hashlib.sha256(path.read_bytes()).hexdigest()+"\t"+path.relative_to(root/"backend").as_posix()+"\n")
+candidate_manifest=hashlib.sha256("".join(manifest_rows).encode()).hexdigest()
+attestation=json.load(open(images))
+print(json.dumps({"prior_revision":prior,"prior_version":"3.1.46","prior_database_head":"0091",
+ "candidate_revision":revision,"candidate_version":"3.1.47","candidate_database_head":"0092",
+ "prior_source_archive_sha256":archive,"candidate_source_archive_sha256":candidate_archive,
+ "prior_backend_manifest_sha256":manifest,
+ "candidate_backend_manifest_sha256":candidate_manifest,
+ "prior_images":{'backend': 'sha256:936db8ea9033b5eebe049a89f536c5dbe924be6cf308425fc5c1e1c40925ea74', 'caddy': 'sha256:00e645ae268a194c01682ca1704ea4719dd7add48301bcc90fe9daeff2caba20', 'frontend': 'sha256:e96276203ef3d429a5b276735f5e19344385c192b82cdb67ead0dd2a755762d8', 'postgres': 'sha256:1cda7bf6d3a9aa1f6f6d80be010bc6f04673057a2b608b7a46e0d0fa9dc07b9a', 'redis': 'sha256:dbcb980813ceb17ff0eddac4a31ce9c9ff7f5f5b5433a3f8e71be444abcc8401'},
+ "candidate_images":{service:row["image_id"] for service,row in attestation["services"].items()}},sort_keys=True))
+PYIDENTITY
+    chmod 600 "$BUILD55_CANDIDATE_IMAGES" "$BUILD55_IMAGE_INSPECT" "$UPGRADE_SNAPSHOT/build55-image-inspect-array.json" \
+    "$UPGRADE_SNAPSHOT/build55-candidate-compose.json" "$UPGRADE_SNAPSHOT/build55-identity.json"
+    BUILD55_PRE_VERIFICATION=$(python3 "$BUILD55_VERIFIER" pre --pre-transition-state "$BUILD55_PRE_TRANSITION" --pre-fleet-state "$BUILD55_PRE_FLEET" \
+      --runtime-journal "$BUILD55_RUNTIME_JOURNAL" --prior-source-root "$PRIOR_SOURCE_ROOT" \
+      --candidate-source-root "$CANDIDATE_BUILD_ROOT" --identity "$UPGRADE_SNAPSHOT/build55-identity.json" \
+      --prior-env "$UPGRADE_SNAPSHOT/.env" --live-env "$REPO_DIR/.env" --candidate-env "$ENV_CANDIDATE" \
+      --candidate-image-inspect "$BUILD55_IMAGE_INSPECT" --candidate-compose-config "$UPGRADE_SNAPSHOT/build55-candidate-compose.json")
+    printf '%s\n' "$BUILD55_PRE_VERIFICATION" > "$UPGRADE_SNAPSHOT/build55-pre-verification.json"
+    BUILD55_PRE_TRANSITION_SHA256=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["pre_transition_sha256"])' <<< "$BUILD55_PRE_VERIFICATION")
+    BUILD55_PRE_FLEET_SHA256=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["pre_fleet_sha256"])' <<< "$BUILD55_PRE_VERIFICATION")
+    printf '%s  %s\n%s  %s\n' "$BUILD55_PRE_TRANSITION_SHA256" "$BUILD55_PRE_TRANSITION" \
+      "$BUILD55_PRE_FLEET_SHA256" "$BUILD55_PRE_FLEET" > "$UPGRADE_SNAPSHOT/build55-baseline.sha256"
+    chmod 400 "$UPGRADE_SNAPSHOT/build55-baseline.sha256"
+    BUILD55_BASELINE_MANIFEST_SHA256=$(sha256sum "$UPGRADE_SNAPSHOT/build55-baseline.sha256" | awk '{print $1}')
+    sha256sum -c "$UPGRADE_SNAPSHOT/build55-baseline.sha256" >/dev/null
+  else
   if [ "$PRIOR_DB_HEAD" = 0091 ]; then
     BUILD51_CURRENT_BASELINE="$UPGRADE_SNAPSHOT/build51-current-history-before.json"
     (umask 077; docker exec -i -e "PGOPTIONS=-c dcompany.build51_fresh_lineage=true" \
@@ -2125,6 +2347,7 @@ if [ -n "$EXISTING_POSTGRES_CONTAINER" ]; then
     echo "Retained tablet outbox was not accepted by exactly one guarded path." >&2
     exit 1
   fi
+  fi
   echo "==> Creating final quiesced pre-upgrade PostgreSQL backup…"
   DATABASE_BACKUP="$UPGRADE_SNAPSHOT/database.dump"
   docker exec "$EXISTING_POSTGRES_CONTAINER" \
@@ -2152,6 +2375,19 @@ if [ -n "$EXISTING_POSTGRES_CONTAINER" ]; then
   fi
   verified_head=$(docker exec "$EXISTING_POSTGRES_CONTAINER" \
     psql -U erp -d "$VERIFY_DATABASE" -Atc "SELECT version_num FROM alembic_version")
+  if [ "$BUILD55_EXACT_TRANSITION" = true ]; then
+    docker exec -i "$EXISTING_POSTGRES_CONTAINER" psql -X --no-psqlrc --quiet -U erp -d "$VERIFY_DATABASE" --tuples-only --no-align \
+    < "$BUILD55_TRANSITION_SQL" > "$UPGRADE_SNAPSHOT/build55-restored-transition.json"
+    docker exec -i "$EXISTING_POSTGRES_CONTAINER" psql -X --no-psqlrc --quiet -U erp -d "$VERIFY_DATABASE" --tuples-only --no-align \
+    < "$BUILD45_PENDING_STATE_SQL" > "$UPGRADE_SNAPSHOT/build55-restored-fleet.json"
+    chmod 600 "$UPGRADE_SNAPSHOT/build55-restored-transition.json" "$UPGRADE_SNAPSHOT/build55-restored-fleet.json"
+    verify_build55_baseline_seal
+    python3 "$BUILD55_VERIFIER" restore \
+      --pre-transition-sha256 "$BUILD55_PRE_TRANSITION_SHA256" \
+      --pre-fleet-sha256 "$BUILD55_PRE_FLEET_SHA256" --pre-transition-state "$BUILD55_PRE_TRANSITION" --pre-fleet-state "$BUILD55_PRE_FLEET" \
+    --after-transition-state "$UPGRADE_SNAPSHOT/build55-restored-transition.json" \
+    --after-fleet-state "$UPGRADE_SNAPSHOT/build55-restored-fleet.json" > "$UPGRADE_SNAPSHOT/build55-restore-verification.json"
+  fi
   docker exec "$EXISTING_POSTGRES_CONTAINER" \
     dropdb -U erp --if-exists "$VERIFY_DATABASE" >/dev/null
   VERIFY_DATABASE=""
@@ -2184,6 +2420,67 @@ if [ -n "$LEGACY_MINIO_CONTAINER" ]; then
   docker stop -t 30 "$LEGACY_MINIO_CONTAINER" >/dev/null
   docker rm "$LEGACY_MINIO_CONTAINER" >/dev/null
   echo "==> Retired unused legacy MinIO runtime; preserved its named volume."
+fi
+
+if [ "$BUILD55_EXACT_TRANSITION" = true ]; then
+  verify_build55_baseline_seal
+  BUILD55_MIGRATION_OVERRIDE="$UPGRADE_SNAPSHOT/build55-pinned-images.override.json"
+  BUILD55_MIGRATION_BASE="$UPGRADE_SNAPSHOT/build55-migration-base-compose.json"
+  BUILD55_MIGRATION_PINNED="$UPGRADE_SNAPSHOT/build55-migration-pinned-compose.json"
+  # Resolve every reviewed tag again, then execute only those digest IDs. A tag
+  # can never substitute unscanned bytes between admission and the first DDL.
+  for service in "${EXPECTED_SERVICES[@]}"; do
+    expected_id=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["candidate_images"][sys.argv[2]])' \
+    "$UPGRADE_SNAPSHOT/build55-identity.json" "$service")
+    if [ "$(docker image inspect --format '{{.Id}}' "d-company-erp-$service:$CURRENT_REVISION")" != "$expected_id" ]; then
+      echo "Build55 candidate image tag drifted before migration." >&2; exit 1
+    fi
+  done
+  python3 - "$UPGRADE_SNAPSHOT/build55-identity.json" <<'PYPIN55' > "$BUILD55_MIGRATION_OVERRIDE"
+import json
+from pathlib import Path
+import sys
+identity = json.loads(Path(sys.argv[1]).read_bytes())
+print(json.dumps({"services": {name: {"image": image} for name, image in identity["candidate_images"].items()}}, sort_keys=True))
+PYPIN55
+  "${candidate_compose[@]}" --env-file .env config --format json > "$BUILD55_MIGRATION_BASE"
+  build55_pinned_compose=("${candidate_compose[@]}" -f "$BUILD55_MIGRATION_OVERRIDE")
+  "${build55_pinned_compose[@]}" --env-file .env config --format json > "$BUILD55_MIGRATION_PINNED"
+  chmod 600 "$BUILD55_MIGRATION_OVERRIDE" "$BUILD55_MIGRATION_BASE" "$BUILD55_MIGRATION_PINNED"
+  python3 "$BUILD55_VERIFIER" migration-runtime --base-compose "$BUILD55_MIGRATION_BASE" \
+    --pinned-compose "$BUILD55_MIGRATION_PINNED" --identity "$UPGRADE_SNAPSHOT/build55-identity.json" \
+    > "$UPGRADE_SNAPSHOT/build55-migration-runtime-verification.json"
+  # Keep the same digest-only configuration for subsequent normal services.
+  candidate_compose=("${build55_pinned_compose[@]}")
+  printf -v OPERATIONS_COMPOSE_COMMAND \
+    'docker compose -p %q --project-directory %q -f %q -f %q -f %q --env-file %q' \
+    "$DEPLOY_PROJECT_NAME" "$CANDIDATE_BUILD_ROOT" "$RELEASE_COMPOSE_FILE" \
+    "$BUILD55_RUNTIME_OVERRIDE" "$BUILD55_MIGRATION_OVERRIDE" "$REPO_DIR/.env"
+  "${candidate_compose[@]}" --env-file .env up -d --no-build --pull never postgres
+  BUILD55_POSTGRES=$("${candidate_compose[@]}" --env-file .env ps -q postgres)
+  expected_postgres=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["candidate_images"]["postgres"])' \
+    "$UPGRADE_SNAPSHOT/build55-identity.json")
+  if ! [[ "$BUILD55_POSTGRES" =~ ^[0-9a-f]{64}$ ]] ||      [ "$(docker inspect --format '{{.Image}}' "$BUILD55_POSTGRES")" != "$expected_postgres" ]; then
+    echo "Build55 migration PostgreSQL is not the attested image." >&2; exit 1
+  fi
+  for attempt in $(seq 1 120); do
+    if docker exec "$BUILD55_POSTGRES" pg_isready -U erp -d erp >/dev/null 2>&1; then break; fi
+    if [ "$attempt" -eq 120 ]; then echo "Build55 PostgreSQL not ready; no app writer started." >&2; exit 1; fi
+    sleep 1
+  done
+  "${candidate_compose[@]}" --env-file .env run --pull never --rm --no-deps --entrypoint python backend -m alembic upgrade head
+  docker exec -i "$BUILD55_POSTGRES" psql -X --no-psqlrc --quiet -U erp -d erp --tuples-only --no-align \
+    < "$BUILD55_TRANSITION_SQL" > "$UPGRADE_SNAPSHOT/build55-transition-after.json"
+  docker exec -i "$BUILD55_POSTGRES" psql -X --no-psqlrc --quiet -U erp -d erp --tuples-only --no-align \
+    < "$BUILD45_PENDING_STATE_SQL" > "$UPGRADE_SNAPSHOT/build55-fleet-after.json"
+  chmod 600 "$UPGRADE_SNAPSHOT/build55-transition-after.json" "$UPGRADE_SNAPSHOT/build55-fleet-after.json"
+  verify_build55_baseline_seal
+  python3 "$BUILD55_VERIFIER" post \
+      --pre-transition-sha256 "$BUILD55_PRE_TRANSITION_SHA256" \
+      --pre-fleet-sha256 "$BUILD55_PRE_FLEET_SHA256" --pre-transition-state "$BUILD55_PRE_TRANSITION" --pre-fleet-state "$BUILD55_PRE_FLEET" \
+    --after-transition-state "$UPGRADE_SNAPSHOT/build55-transition-after.json" --after-fleet-state "$UPGRADE_SNAPSHOT/build55-fleet-after.json" \
+    > "$UPGRADE_SNAPSHOT/build55-post-verification.json"
+  BUILD55_POST_PROOF_SUCCEEDED=true
 fi
 
 # The exact Build50-to-Build52 path migrates with the scanned backend image but
@@ -2337,6 +2634,12 @@ if [ "$BUILD50_TO_SUCCESSOR_PENDING_PRESERVED" = true ] && \
 fi
 echo
 echo "==> Starting internal services while public ingress remains closed…"
+if [ "$BUILD55_EXACT_TRANSITION" = true ]; then
+  if [ "$BUILD55_POST_PROOF_SUCCEEDED" != true ]; then echo "Build55 writers require full post proof." >&2; exit 1; fi
+  BUILD55_APP_WRITERS_STARTED=true
+  # From the first candidate process, rollback is forward-only even before ingress.
+  trap handle_post_ingress_failure EXIT
+fi
 "${candidate_compose[@]}" --env-file .env \
   up -d --no-build --pull never postgres redis backend frontend
 
@@ -2442,6 +2745,7 @@ fi
 # Route by the actual migrated schema, including an already0091 retry. This
 # verifies history only: no new50-to51 opaque pending-work exception is granted.
 if [ "$FRESH_INSTALL" = false ] && \
+   [ "$BUILD55_EXACT_TRANSITION" = false ] && \
    [ "$BUILD50_TO_SUCCESSOR_PENDING_PRESERVED" = false ]; then
   BUILD51_POSTGRES_IDS=()
   while IFS= read -r container_id; do
@@ -2531,9 +2835,11 @@ python3 "$WEB_PUBLIC_ASSET_VERIFIER" --container "$CANDIDATE_FRONTEND_CONTAINER"
 echo "==> Auditing the owner-approved Gaming Centre tariff…"
 "${candidate_compose[@]}" --env-file .env exec -T backend \
   python -m scripts.ensure_gaming_tariff --dry-run
-echo "==> Applying the owner-approved Gaming Centre tariff…"
-"${candidate_compose[@]}" --env-file .env exec -T backend \
-  python -m scripts.ensure_gaming_tariff
+if [ "$BUILD55_EXACT_TRANSITION" != true ]; then
+  echo "==> Applying the owner-approved Gaming Centre tariff…"
+  "${candidate_compose[@]}" --env-file .env exec -T backend \
+    python -m scripts.ensure_gaming_tariff
+fi
 echo "==> Gaming Centre tariff accepted."
 
 if [ "$CODE30_2_STALE_OUTBOX_BRIDGE_USED" = true ]; then
@@ -2752,6 +3058,20 @@ with urllib.request.urlopen(protected_request, timeout=10) as response:
   fi
 fi
 
+if [ "$BUILD55_EXACT_TRANSITION" = true ]; then
+  # Create but do not start ingress, allowing all five actual effective runtime
+  # contracts to be verified before any public request can reach the app.
+  "${candidate_compose[@]}" --env-file .env create --no-build --pull never caddy
+  capture_build55_actual_runtime candidate "$UPGRADE_SNAPSHOT/build55-runtime-before-ingress.json"
+  python3 "$BUILD55_VERIFIER" running-runtime --runtime-journal "$BUILD55_RUNTIME_JOURNAL" \
+    --actual-runtime "$UPGRADE_SNAPSHOT/build55-runtime-before-ingress.json" \
+    --identity "$UPGRADE_SNAPSHOT/build55-identity.json" > "$UPGRADE_SNAPSHOT/build55-runtime-before-ingress-verification.json"
+  BUILD55_BACKEND=$("${candidate_compose[@]}" --env-file .env ps -q backend)
+  python3 "$BUILD55_AUTH_TOOL" internal-probe --container-id "$BUILD55_BACKEND" \
+    --credential-file "$BUILD55_ACCEPTANCE_CREDENTIAL_FILE" --expected-sha256 "$BUILD55_CREDENTIAL_SHA256" \
+    > "$UPGRADE_SNAPSHOT/build55-auth-after.json"
+  chmod 600 "$UPGRADE_SNAPSHOT/build55-auth-after.json"
+fi
 echo "==> Backend acceptance passed; reopening public ingress…"
 if [ -n "$UPGRADE_SNAPSHOT" ]; then
   # The quiesced dump is a safe automatic rollback point only while ingress is
@@ -2789,6 +3109,12 @@ python3 "$CANDIDATE_PARITY_TOOL" running \
   --version-name "$CANDIDATE_APP_VERSION" --source-git-sha "$CURRENT_REVISION" \
   --project-name "$DEPLOY_PROJECT_NAME" \
   --expected-images-json "$CANDIDATE_IMAGE_ATTESTATION"
+if [ "$BUILD55_EXACT_TRANSITION" = true ]; then
+  capture_build55_actual_runtime candidate "$UPGRADE_SNAPSHOT/build55-runtime-after-ingress.json"
+  python3 "$BUILD55_VERIFIER" running-runtime --runtime-journal "$BUILD55_RUNTIME_JOURNAL" \
+    --actual-runtime "$UPGRADE_SNAPSHOT/build55-runtime-after-ingress.json" \
+    --identity "$UPGRADE_SNAPSHOT/build55-identity.json" > "$UPGRADE_SNAPSHOT/build55-runtime-after-ingress-verification.json"
+fi
 trap - EXIT
 
 # ----- 7. Done -----

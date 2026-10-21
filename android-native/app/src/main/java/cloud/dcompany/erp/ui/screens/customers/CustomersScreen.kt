@@ -833,7 +833,7 @@ private fun CustomerLeaderboardRow(
             .background(
                 when {
                     rankColor != null -> Brush.horizontalGradient(
-                        listOf(rankColor.copy(alpha = 0.17f), MaterialTheme.colorScheme.surface, MaterialTheme.colorScheme.surface),
+                        listOf(rankColor.copy(alpha = LeaderboardRowTintAlpha), MaterialTheme.colorScheme.surface, MaterialTheme.colorScheme.surface),
                     )
                     else -> Brush.horizontalGradient(listOf(MaterialTheme.colorScheme.surface, MaterialTheme.colorScheme.surface))
                 },
@@ -868,7 +868,7 @@ private fun CustomerLeaderboardRow(
         ) {
             Box(
                 Modifier.size(38.dp).clip(CircleShape)
-                    .background((rankColor ?: MaterialTheme.colorScheme.primary).copy(alpha = 0.20f))
+                    .background((rankColor ?: MaterialTheme.colorScheme.primary).copy(alpha = LeaderboardIdentityTintAlpha))
                     .border(
                         1.dp,
                         (rankColor ?: MaterialTheme.colorScheme.primary).copy(alpha = if (rankColor == null) 0.22f else 0.68f),
@@ -924,6 +924,9 @@ private fun leaderboardRankColor(rank: Int?): Color? = when (rank) {
     else -> null
 }
 
+// The identity badge layers over the row tint; cap their combined contrast cost.
+internal const val LeaderboardRowTintAlpha = 0.17f
+internal const val LeaderboardIdentityTintAlpha = 0.16f
 internal val LeaderboardSilverAccent = Color(0xFFB9C7D2)
 internal val LeaderboardBronzeAccent = Color(0xFFD7A176)
 

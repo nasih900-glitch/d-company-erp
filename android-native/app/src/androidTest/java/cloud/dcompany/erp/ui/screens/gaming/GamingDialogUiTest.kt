@@ -96,6 +96,7 @@ private val PINNED_ACTIVE_ACTION_LABELS = listOf(
     "Extend",
     "Transfer",
     "Pause",
+    "Cancel",
     "Stop & calculate",
 )
 
@@ -475,7 +476,7 @@ class GamingDialogUiTest {
                         onStart = {},
                         onStop = { actions += "stop" },
                         onSend = {},
-                        onCancelUnbilled = {},
+                        onCancelUnbilled = { actions += "cancel" },
                         onExtendTimer = { actions += "extend" },
                         onExtendPackage = { _, _ -> },
                         onTransfer = { actions += "transfer" },
@@ -536,18 +537,19 @@ class GamingDialogUiTest {
             )
         }
 
-        listOf("Extend", "Transfer", "Pause", "Stop & calculate").forEach { label ->
+        listOf("Extend", "Transfer", "Pause", "Cancel", "Stop & calculate").forEach { label ->
             assertCompleteAction(label)
             compose.onNodeWithText(label).performClick()
         }
         compose.runOnIdle {
-            assertEquals(listOf("extend", "transfer", "pause", "stop"), actions)
+            assertEquals(listOf("extend", "transfer", "pause", "cancel", "stop"), actions)
             session.value = session.value.copy(
                 status = "paused",
                 pausedAt = "2026-08-26T17:05:00Z",
                 pauseVersion = 1,
             )
         }
+        assertCompleteAction("Cancel")
         assertCompleteAction("Resume")
         compose.onNodeWithText("Resume").performClick()
         compose.onNodeWithText("Stop & calculate").assertIsDisplayed()
@@ -662,8 +664,11 @@ class GamingDialogUiTest {
         }
 
         PINNED_ACTIVE_ACTION_LABELS.forEach { label ->
-            assertPinnedActionInsideViewport(label, enabled = true)
+            assertPinnedActionInsideViewport(label, enabled = label != "Cancel")
         }
+        compose.onNodeWithText(
+            "Void 1 active Gaming item above with a reason before voiding the whole session.",
+        ).assertIsDisplayed()
         compose.onAllNodesWithText("00:05:00").assertCountEquals(0)
         compose.onNodeWithTag("gaming-primary-action-host").assertIsDisplayed()
         compose.onAllNodesWithText("+30 min").assertCountEquals(0)
@@ -674,8 +679,11 @@ class GamingDialogUiTest {
         // Reassert every command afterwards so a future parent-scroll change
         // cannot move a critical action partly or completely off-screen.
         PINNED_ACTIVE_ACTION_LABELS.forEach { label ->
-            assertPinnedActionInsideViewport(label, enabled = true)
+            assertPinnedActionInsideViewport(label, enabled = label != "Cancel")
         }
+        compose.onNodeWithText(
+            "Void 1 active Gaming item above with a reason before voiding the whole session.",
+        ).assertIsDisplayed()
     }
 
     @Test
@@ -768,7 +776,7 @@ class GamingDialogUiTest {
         }
 
         PINNED_ACTIVE_ACTION_LABELS.forEach { label ->
-            assertPinnedActionInsideViewport(label, enabled = label != "Pause")
+            assertPinnedActionInsideViewport(label, enabled = label !in setOf("Pause", "Cancel"))
         }
         compose.onNodeWithText("Reconnect to pause or resume safely across devices.")
             .assertIsDisplayed()
@@ -915,7 +923,7 @@ class GamingDialogUiTest {
 
         compose.onNodeWithText("PENDING SYNC").assertIsDisplayed()
         compose.onNodeWithText("00:15:00").assertIsDisplayed()
-        compose.onNodeWithText("Package total · ₹180.00").assertIsDisplayed()
+        compose.onNodeWithText("Booked package · ₹180.00").assertIsDisplayed()
         compose.onAllNodesWithText("+30 min").assertCountEquals(0)
         compose.onAllNodesWithText("Transfer").assertCountEquals(0)
         compose.onNodeWithText("Players").assertIsDisplayed().performClick()
@@ -2066,31 +2074,37 @@ class GamingDialogUiTest {
         compose.onNodeWithContentDescription("Session duration dial")
             .bringIntoViewIfNeeded()
             .performTouchInput {
-                swipe(
-                    start = Offset(width * 0.83f, height * 0.31f),
-                    end = Offset(width * 0.83f, height * 0.80f),
-                    durationMillis = 300,
-                )
+                down(Offset(width * 0.50f, height * 0.90f))
+                repeat(12) { step ->
+                    val radians = Math.toRadians((90f + (step + 1) * 15f).toDouble())
+                    moveTo(Offset(width * (0.5f + 0.4f * kotlin.math.cos(radians).toFloat()),
+                        height * (0.5f + 0.4f * kotlin.math.sin(radians).toFloat())), delayMillis = 16)
+                }
+                up()
             }
         compose.onNodeWithText("Start 60 min · ₹120.00").assertIsDisplayed()
         compose.onNodeWithContentDescription("Session duration dial")
             .bringIntoViewIfNeeded()
             .performTouchInput {
-                swipe(
-                    start = Offset(width * 0.83f, height * 0.31f),
-                    end = Offset(width * 0.17f, height * 0.31f),
-                    durationMillis = 300,
-                )
+                down(Offset(width * 0.50f, height * 0.10f))
+                repeat(12) { step ->
+                    val radians = Math.toRadians((270f - (step + 1) * 15f).toDouble())
+                    moveTo(Offset(width * (0.5f + 0.4f * kotlin.math.cos(radians).toFloat()),
+                        height * (0.5f + 0.4f * kotlin.math.sin(radians).toFloat())), delayMillis = 16)
+                }
+                up()
             }
         compose.onNodeWithText("Start 30 min · ₹80.00").assertIsDisplayed()
         compose.onNodeWithContentDescription("Session duration dial")
             .bringIntoViewIfNeeded()
             .performTouchInput {
-                swipe(
-                    start = Offset(width * 0.17f, height * 0.31f),
-                    end = Offset(width * 0.83f, height * 0.31f),
-                    durationMillis = 300,
-                )
+                down(Offset(width * 0.50f, height * 0.90f))
+                repeat(12) { step ->
+                    val radians = Math.toRadians((90f + (step + 1) * 15f).toDouble())
+                    moveTo(Offset(width * (0.5f + 0.4f * kotlin.math.cos(radians).toFloat()),
+                        height * (0.5f + 0.4f * kotlin.math.sin(radians).toFloat())), delayMillis = 16)
+                }
+                up()
             }
         compose.onNodeWithText("Start 60 min · ₹120.00")
             .bringIntoViewIfNeeded()
@@ -2119,7 +2133,13 @@ class GamingDialogUiTest {
         val dial = compose.onNodeWithContentDescription("Session duration dial")
             .bringIntoViewIfNeeded()
         dial.performTouchInput {
-            click(Offset(width * 0.83f, height * 0.31f))
+down(Offset(width * 0.50f, height * 0.90f))
+                repeat(12) { step ->
+                    val radians = Math.toRadians((90f + (step + 1) * 15f).toDouble())
+                    moveTo(Offset(width * (0.5f + 0.4f * kotlin.math.cos(radians).toFloat()),
+                        height * (0.5f + 0.4f * kotlin.math.sin(radians).toFloat())), delayMillis = 16)
+                }
+                up()
         }
         compose.onNodeWithText("Start 60 min · ₹120.00")
             .bringIntoViewIfNeeded()
@@ -2160,7 +2180,7 @@ class GamingDialogUiTest {
         compose.onNodeWithText("VR Racing Sim").performClick()
         compose.onNodeWithContentDescription("Session duration dial")
             .bringIntoViewIfNeeded()
-            .performTouchInput { click(Offset(width * 0.83f, height * 0.31f)) }
+            .performTouchInput { click(Offset(width * 0.50f, height * 0.90f)) }
         compose.onNodeWithContentDescription("Expected finish if started now", substring = true)
             .bringIntoViewIfNeeded()
             .assertIsDisplayed()
