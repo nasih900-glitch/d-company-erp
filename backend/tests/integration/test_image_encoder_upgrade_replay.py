@@ -61,7 +61,7 @@ async def test_original_upload_replays_after_encoder_changes_canonical_bytes(
     assert replay.json() == original
     retained = (await session.execute(select(BugReportAttachment).where(
         BugReportAttachment.company_id == seed_owner["company"].id,
-        BugReportAttachment.report_id == UUID(report_id),
+        BugReportAttachment.bug_report_id == UUID(report_id),
     ))).scalars().all()
     assert len(retained) == 1
     assert retained[0].sha256 == original["sha256"]
