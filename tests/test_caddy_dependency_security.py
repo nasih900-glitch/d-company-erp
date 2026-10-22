@@ -505,6 +505,37 @@ def test_frontend_image_changes_only_reviewed_security_controls() -> None:
         "    && find /usr/share/nginx/html -type d -exec chmod 0755 {} + \\\n"
         "    && find /usr/share/nginx/html -type f -exec chmod 0644 {} +\n",
     )
+    # Build55 upgrades only the signed nginx APK; retain the pinned base,
+    # r0 zlib overlay and full inherited-file equality. No scan exception.
+    expected = _replace_once(
+        expected,
+        'FROM nginx:alpine-slim@sha256:3b171d7224b669faa3cc2137fea0a65301791df1ec1f271ebd2a2b7461f7fade\n'
+        'ARG APP_VERSION=dev\n',
+        'FROM nginx:alpine-slim@sha256:3b171d7224b669faa3cc2137fea0a65301791df1ec1f271ebd2a2b7461f7fade\n'
+        'ENV NGINX_VERSION=1.31.8\n'
+        'ARG APP_VERSION=dev\n',
+    )
+    expected = _replace_once(
+        expected,
+        "      'pcre2=10.49-r0'; \\\n"
+        '    installed_packages="$(apk info -v)"; \\\n',
+        "      'pcre2=10.49-r0'; \\\n"
+        '    test "$(apk --print-arch)" = \'x86_64\'; \\\n'
+        "    printf '%s\\n' 'e09fa32f0a0eab2b879ccbbc4d0e4fb9751486eedda75e35fac65802cc9faa266425edf83e261137a2f4d16281ce2c1a5f4502930fe75154723da014214f0655  /etc/apk/keys/nginx_signing.rsa.pub' | sha512sum -c -; \\\n"
+        "    wget -T 30 -qO /tmp/dcompany-nginx-1.31.8-r1.apk 'https://nginx.org/packages/mainline/alpine/v3.24/main/x86_64/nginx-1.31.8-r1.apk'; \\\n"
+        "    printf '%s\\n' '51bb8ca7072b422c9355656e45a1aafec24eb1606adb3a84c562f80731d3f848  /tmp/dcompany-nginx-1.31.8-r1.apk' | sha256sum -c -; \\\n"
+        '    apk add --no-cache --no-network --upgrade --repositories-file /dev/null /tmp/dcompany-nginx-1.31.8-r1.apk; \\\n'
+        '    rm /tmp/dcompany-nginx-1.31.8-r1.apk; \\\n'
+        '    installed_packages="$(apk info -v)"; \\\n',
+    )
+    expected = _replace_once(
+        expected,
+        '    printf \'%s\\n\' "$installed_packages" | grep -Fx \'pcre2-10.49-r0\'; \\\n',
+        '    printf \'%s\\n\' "$installed_packages" | grep -Fx \'pcre2-10.49-r0\'; \\\n'
+        '    printf \'%s\\n\' "$installed_packages" | grep -Fx \'nginx-1.31.8-r1\'; \\\n'
+        '    test "$NGINX_VERSION" = \'1.31.8\'; \\\n'
+        "    nginx -v 2>&1 | grep -Fx 'nginx version: nginx/1.31.8'; \\\n",
+    )
     assert FRONTEND_DOCKERFILE.read_text(encoding="utf-8") == expected
 
 
