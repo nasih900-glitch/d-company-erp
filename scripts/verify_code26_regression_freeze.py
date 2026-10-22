@@ -1716,7 +1716,7 @@ REVIEWED_CODE30_4_BUILD55_SHA256 = {
     'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/OptionalUpdateBannerUiTest.kt': '9152e694860c9b887c65fee69a7e25fef7acc85f56fced40d0c8dee64602eae2',
     'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/PosEmptyCatalogueUiTest.kt': 'c68c1f53fcdcdc9617d2e83180b6d1637c0d59cf2521a6d17d05381ebdc632da',
     'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingBoardUiTest.kt': '2eff07461032a2b9101c01f8c9df47d951a27aaac186210ee22907754719ceed',
-    'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingDialogUiTest.kt': 'd38a1e7ef2430423f7ae86a6824f318cc923b4639d49d74343200ab805ce3b26',
+    'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingDialogUiTest.kt': '930097bb6964a70f77bda2865204d8eeedfd4d865ae01b5c2b15c7eb911c008c',
     'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingDraftRecreationUiTest.kt': '9c91a39b6e329d01be11c3e0cf77dd88e6d2566432f2224995e0d8e51c96d9b8',
     'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingInlineShiftWorkspaceUiTest.kt': 'eb650740d3629d5fbb911777add886d68b70b44849c9d403782e29ae947db456',
     'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingRejectedSessionAttentionUiTest.kt': 'ffa53bd3413aa99d7ff176f8ebf4b1ac740d26438f38834aa5eca0f29ef28f0d',

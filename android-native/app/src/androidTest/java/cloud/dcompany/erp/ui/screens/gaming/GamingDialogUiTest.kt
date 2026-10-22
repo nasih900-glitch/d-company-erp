@@ -91,6 +91,7 @@ private fun rememberedWallClock(epochMillis: Long): MutableLongState =
     remember(epochMillis) { mutableLongStateOf(epochMillis) }
 
 private const val PINNED_ACTION_VIEWPORT_TAG = "pinned-gaming-action-viewport"
+private const val COMPACT_INPUT_FIXTURE_TAG = "compact-gaming-input-fixture"
 private val PINNED_ACTIVE_ACTION_LABELS = listOf(
     "Players",
     "Add drinks",
@@ -1930,7 +1931,7 @@ class GamingDialogUiTest {
         var starts = 0
         compose.setContent {
             DCompanyTheme {
-                Box(Modifier.width(600.dp).height(viewportHeight.value)) {
+                Box(Modifier.width(600.dp).height(viewportHeight.value).testTag(COMPACT_INPUT_FIXTURE_TAG)) {
                     StartSessionEditor(
                         station = testStation().copy(type = "streaming"),
                         embedded = true,
@@ -1954,6 +1955,7 @@ class GamingDialogUiTest {
             search.performScrollTo().performAndroidScreenTouchWithOptionalIme().assertIsFocused()
                 .performTextReplacement("A guest")
             compose.runOnIdle { viewportHeight.value = 342.dp }
+            assertMeasuredCompactInputFixtureHeight()
             // No test scroll after shrinking: the focused field must relocate
             // itself, including the outline and its complete touch target.
             search.assertIsFocused().performAndroidScreenTouch().assertIsFocused()
@@ -1964,6 +1966,7 @@ class GamingDialogUiTest {
             name.performScrollTo().performAndroidScreenTouchWithOptionalIme().assertIsFocused()
                 .performTextReplacement("Booking guest")
             compose.runOnIdle { viewportHeight.value = 342.dp }
+            assertMeasuredCompactInputFixtureHeight()
             name.assertIsFocused().performAndroidScreenTouch().assertIsFocused()
 
             compose.runOnIdle { viewportHeight.value = 520.dp }
@@ -1971,6 +1974,7 @@ class GamingDialogUiTest {
             phone.performScrollTo().performAndroidScreenTouch().assertIsFocused()
                 .performTextReplacement("+91 98765 43210")
             compose.runOnIdle { viewportHeight.value = 342.dp }
+            assertMeasuredCompactInputFixtureHeight()
             phone.assertIsFocused().performAndroidScreenTouch().assertIsFocused()
             compose.runOnIdle { assertEquals(0, starts) }
             compose.onNodeWithTag("gaming-start-action")
@@ -1998,7 +2002,7 @@ class GamingDialogUiTest {
         )
         restoration.setContent {
             DCompanyTheme {
-                if (visible.value) Box(Modifier.width(600.dp).height(viewportHeight.value)) {
+                if (visible.value) Box(Modifier.width(600.dp).height(viewportHeight.value).testTag(COMPACT_INPUT_FIXTURE_TAG)) {
                     StartSessionEditor(
                         station = testStation().copy(type = "streaming"),
                         customers = listOf(customer),
@@ -2022,6 +2026,7 @@ class GamingDialogUiTest {
             name.performScrollTo().performAndroidScreenTouchWithOptionalIme().assertIsFocused()
                 .performTextReplacement("Unlinked note")
             compose.runOnIdle { viewportHeight.value = 342.dp }
+            assertMeasuredCompactInputFixtureHeight()
             name.assertIsFocused().performAndroidScreenTouch()
 
             compose.onNodeWithText("Saved customer").bringIntoViewIfNeeded().performClick()
@@ -2033,6 +2038,7 @@ class GamingDialogUiTest {
             compose.onNodeWithText("QA Customer").bringIntoViewIfNeeded().performClick()
             compose.onNodeWithContentDescription("Search saved customers by name or phone").assertDoesNotExist()
             compose.runOnIdle { viewportHeight.value = 342.dp }
+            assertMeasuredCompactInputFixtureHeight()
             compose.onNodeWithText("Change").bringIntoViewIfNeeded().performClick()
             compose.onNodeWithContentDescription("Search saved customers by name or phone")
                 .assertIsNotFocused()
@@ -2458,6 +2464,22 @@ down(Offset(width * 0.50f, height * 0.90f))
             fullyInside,
         )
         return this
+    }
+
+    private fun assertMeasuredCompactInputFixtureHeight() {
+        val node = compose.onNodeWithTag(COMPACT_INPUT_FIXTURE_TAG, useUnmergedTree = true)
+            .assertIsDisplayed().fetchSemanticsNode()
+        val density = (node.root as ViewRootForTest).view.resources.displayMetrics.density
+        val heightPx = node.size.height
+        val heightDp = heightPx / density
+        Log.i("GamingDialogTouch", "Measured compact input fixture: " +
+            "heightPx=$heightPx heightDp=$heightDp density=$density widthPx=${node.size.width}")
+        assertTrue("Compact fixture must have a positive measured height: $heightPx px", heightPx > 0)
+        assertTrue(
+            "Compact fixture must be at most 342dp after parent constraints: " +
+                "$heightDp dp ($heightPx px, density=$density)",
+            heightPx <= 342f * density + 1f,
+        )
     }
 
     private fun SemanticsNodeInteraction.bringIntoViewIfNeeded(): SemanticsNodeInteraction =
